@@ -38,23 +38,24 @@ struct ReceiverTargets {
 }
 
 [[nodiscard]] inline Float target_at(const Context &ctx, const ReservoirVar &candidate, const Surface &surface,
-                                     const MaterialEvaluator &bsdf, const Float3 &wo) {
+                                     const MaterialEvaluator &bsdf, const Float3 &wo,
+                                     const SampledWavelengths &swl) {
     Float target = 0.f;
     $if(valid_reservoir(candidate)) {
-        const LightSample sample = sample_triangle(load_light(ctx, candidate.light_index), surface, candidate->uv());
-        $if(sample.pdf > 0.f && finite(sample.pdf)) {
+        const TriangleSample sample = sample_light(ctx, candidate.light_index, surface, candidate->uv(), swl);
+        $if(sample.pdf > 0.f) {
             target = target_weight(bsdf.evaluate(wo, sample.direction, MaterialEvalMode::F), sample);
         };
     };
     return target;
 }
 
-[[nodiscard]] inline Float history_target(const Context &ctx, const Light &light, const Float2 &uv,
+[[nodiscard]] inline Float history_target(const Context &ctx, const Uint &light_id, const LightEvalContext &point,
                                           const HistoryInput &history, const SampledWavelengths &swl, bool trace) {
     return outline("Falcor DI history target", [&] {
-        const LightSample sample = sample_triangle(light, history.surface, uv);
+        const TriangleSample sample = evaluate_light_point(light_id, point, history.surface, swl);
         Float target = 0.f;
-        $if(sample.pdf > 0.f && finite(sample.pdf)) {
+        $if(sample.pdf > 0.f) {
             const auto hit = Toolkit::frame_buffer().prev_visibility_buffer_var(ctx.frame).read(history.pixel_index);
             $if(hit->is_hit()) {
                 auto &camera = Toolkit::scene().sensor();
@@ -106,17 +107,17 @@ struct ReceiverTargets {
 
     $if(valid_reservoir(output)) {
         // Re-evaluate the winner on each admitted history receiver to normalize against its support.
-        const Light winner = load_light(ctx, output.light_index);
-        const Float2 uv = output->uv();
+        const LightTriangleGeometryVar triangle = ctx.light_geometry.read(output.light_index, false);
+        const LightEvalContext point = load_light_point(ctx, output.light_index, triangle, output->uv());
         Float numerator = output.target;
         Float denominator = current.count * output.target;
         $if(temporal.reservoir.count > 0.f) {
-            const Float target = history_target(ctx, winner, uv, temporal, swl, trace);
+            const Float target = history_target(ctx, triangle.light_id, point, temporal, swl, trace);
             numerator = select(selected_source == 1u, target, numerator);
             denominator += temporal.reservoir.count * target;
         };
         $if(spatial.reservoir.count > 0.f) {
-            const Float target = history_target(ctx, winner, uv, spatial, swl, trace);
+            const Float target = history_target(ctx, triangle.light_id, point, spatial, swl, trace);
             numerator = select(selected_source == 2u, target, numerator);
             denominator += spatial.reservoir.count * target;
         };
@@ -137,8 +138,10 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
     $if(!(neighbor.count <= 0.f)) {
         Float target_current_at_neighbor = 0.f;
         $if(valid_reservoir(canonical)) {
+            const LightTriangleGeometryVar triangle = ctx.light_geometry.read(canonical.light_index, false);
             target_current_at_neighbor = history_target(
-                ctx, load_light(ctx, canonical.light_index), canonical_uv, history, swl, false);
+                ctx, triangle.light_id, load_light_point(ctx, canonical.light_index, triangle, canonical_uv),
+                history, swl, false);
         };
         const Float neighbor_confidence = pair_count * neighbor.count;
         const Float neighbor_mis = pair_balance(neighbor_confidence * neighbor.target,
@@ -228,8 +231,8 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
             auto it = Toolkit::geometry().compute_surface_interaction(hit, ray);
             Toolkit::scene().materials().dispatch(it.material_id(), [&](const Material *material) {
                 const auto bsdf = material->create_evaluator(it, swl);
-                targets.temporal = target_at(ctx, temporal.reservoir, receiver, bsdf, it.wo);
-                targets.spatial = target_at(ctx, spatial.reservoir, receiver, bsdf, it.wo);
+                targets.temporal = target_at(ctx, temporal.reservoir, receiver, bsdf, it.wo, swl);
+                targets.spatial = target_at(ctx, spatial.reservoir, receiver, bsdf, it.wo, swl);
             });
         };
 

@@ -30,7 +30,8 @@ inline void presample_light(const Context &ctx, const Uint2 &position) {
 }
 
 [[nodiscard]] inline ReservoirVar sample_initial(const Context &ctx, const Uint2 &pixel, const Surface &surface,
-                                              const MaterialEvaluator &bsdf, const Float3 &wo, TSampler &sampler) {
+                                                const MaterialEvaluator &bsdf, const Float3 &wo,
+                                                const SampledWavelengths &swl, TSampler &sampler) {
     ReservoirVar reservoir;
     Float2 winner_uv = make_float2(0.f);
     // The reservoir represents a continuous area-light sample, so a material
@@ -39,8 +40,8 @@ inline void presample_light(const Context &ctx, const Uint2 &position) {
     const auto offer_candidate = [&](const Uint &light_index, const Float2 &uv, const Float &light_probability,
                                      const Float &u, const Float *sampled_pdf = nullptr) {
         $if(light_index != InvalidUI32) {
-            const LightSample light = sample_triangle(load_light(ctx, light_index), surface, uv);
-            $if(light.pdf > 0.f && finite(light.pdf)) {
+            const TriangleSample light = sample_light(ctx, light_index, surface, uv, swl);
+            $if(light.pdf > 0.f) {
                 const auto eval = bsdf.evaluate(
                     wo, light.direction, sampled_pdf ? MaterialEvalMode::F : MaterialEvalMode::All);
                 const Float target = target_weight(eval, light);

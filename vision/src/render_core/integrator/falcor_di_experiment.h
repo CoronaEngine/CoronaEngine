@@ -21,9 +21,12 @@ class FalcorDIExperiment final : private Toolkit {
     Buffer<uint2> ris_;
     Buffer<float2> neighbors_;
     Buffer<falcor_di::Reservoir> reservoirs_;
-    Buffer<float4> lights_, shade_direction_, shade_radiance_;
+    Buffer<uint4> light_primitives_;
+    Buffer<falcor_di::LightTriangleGeometry> light_geometry_;
+    Buffer<float4> shade_direction_, shade_radiance_;
     Buffer<float> probabilities_;
     Buffer<uint> light_bases_;
+    Shader<void()> prepare_light_geometry_;
     Shader<void(uint)> prepare_surface_, presample_, evaluate_material_;
     Shader<void(uint, uint)> candidates_, visibility_, shade_;
     Shader<void(uint, uint3, uint)> reuse_;
@@ -38,7 +41,7 @@ class FalcorDIExperiment final : private Toolkit {
     void prepare_lights() {
         const auto &instances = scene().instances();
         vector<uint> bases(instances.size(), InvalidUI32);
-        vector<float4> triangles;
+        vector<uint4> primitives;
         vector<float> probabilities;
         const auto *environment = scene().light_manager().env_light();
         if (environment && (environment->impl_type() != "spherical" || any(environment->average() != make_float3(0.f))))
@@ -50,18 +53,12 @@ class FalcorDIExperiment final : private Toolkit {
             if (light->impl_type() != "area" || light->source_desc()["two_sided"].as_bool(false) || !light->color_ ||
                 (light->color_->impl_type() != "number" && light->color_->impl_type() != "constant"))
                 throw std::runtime_error("Falcor DI experiment requires constant one-sided area lights");
-            const auto &mesh = *shape->mesh();
-            const auto transform = shape->o2w();
-            const auto emission = light->average();
+            const auto areas = shape->surface_areas();
+            const auto emission_luminance = luminance(light->average());
             bases[i] = static_cast<uint>(probabilities.size());
-            for (const auto &tri : mesh.triangles()) {
-                auto point = [&](uint vertex) { return transform_point<H>(transform, mesh.vertices()[vertex].position()); };
-                const float3 a = point(tri.i), b = point(tri.j), c = point(tri.k);
-                triangles.push_back(make_float4(a, 0.f));
-                triangles.push_back(make_float4(b, 0.f));
-                triangles.push_back(make_float4(c, 0.f));
-                triangles.push_back(make_float4(emission, 0.f));
-                probabilities.push_back(0.5f * length(cross(b - a, c - a)) * luminance(emission));
+            for (uint prim_id = 0; prim_id < areas.size(); ++prim_id) {
+                primitives.push_back(make_uint4(i, prim_id, shape->handle().light_id, 0u));
+                probabilities.push_back(areas[prim_id] * emission_luminance);
             }
         }
         float power = 0.f;
@@ -71,7 +68,9 @@ class FalcorDIExperiment final : private Toolkit {
         for (auto &value : probabilities) value /= power;
         light_count_ = static_cast<uint>(probabilities.size());
         if (light_count_ != 8u) throw std::runtime_error("Falcor DI experiment uses the eight-triangle Kitchen light PDF");
-        lights_ = uploaded(triangles, "Falcor DI emitter triangles");
+        light_primitives_ = uploaded(primitives, "Falcor DI emitter primitive IDs");
+        light_geometry_ = device().create_buffer<falcor_di::LightTriangleGeometry>(
+            light_count_, "Falcor DI emitter geometry cache");
         probabilities_ = uploaded(probabilities, "Falcor DI light probabilities");
         light_bases_ = uploaded(bases, "Falcor DI emitter offsets");
     }
@@ -120,6 +119,31 @@ class FalcorDIExperiment final : private Toolkit {
         auto &fb = frame_buffer();
         auto &materials = scene().materials();
         auto &lights = renderer().light_sampler();
+        Kernel prepare_light_geometry = [&] {
+            const Uint index = dispatch_id();
+            const Uint4 primitive = light_primitives_.read(index, false);
+            const auto p0 = geo.compute_light_eval_context(primitive.x, primitive.y, make_float2(1.f, 0.f));
+            const auto p1 = geo.compute_light_eval_context(primitive.x, primitive.y, make_float2(0.f, 1.f));
+            const auto p2 = geo.compute_light_eval_context(primitive.x, primitive.y, make_float2(0.f));
+            falcor_di::LightTriangleGeometryVar triangle;
+            triangle.p0.set(p0.pos);
+            triangle.p1.set(p1.pos);
+            triangle.p2.set(p2.pos);
+            triangle.ng.set(p0.ng);
+            triangle.uv0 = p0.uv;
+            triangle.uv1 = p1.uv;
+            triangle.uv2 = p2.uv;
+            // The authored normal is interpolated by the framework. When the
+            // corner hemispheres disagree, let it resolve the sampled point.
+            const Bool cacheable = p0.PDF_pos > 0.f && falcor_di::finite(p0.PDF_pos) &&
+                                   all(p0.ng == p1.ng) && all(p0.ng == p2.ng);
+            triangle.pdf_pos = select(cacheable, p0.PDF_pos, 0.f);
+            triangle.light_id = primitive.z;
+            light_geometry_.write(index, triangle, false);
+        };
+        prepare_light_geometry.function()->set_block_dim(32u);
+        prepare_light_geometry_ = device().compile(prepare_light_geometry, "Falcor DI light geometry preparation");
+
         Kernel prepare = [&](Uint frame) {
             const Uint index = dispatch_id();
             const Uint offset = (frame & 1u) * pixels + index;
@@ -146,7 +170,8 @@ class FalcorDIExperiment final : private Toolkit {
 
         const auto context = [&](const Uint &frame, const Bool &has_history) {
             return falcor_di::Context{extent_, frame, has_history, light_count_, surfaces0_, surface_normals_,
-                                     reservoirs_, neighbors_, lights_, probabilities_, light_bases_, ris_};
+                                     reservoirs_, neighbors_, light_primitives_, light_geometry_,
+                                     probabilities_, light_bases_, ris_};
         };
         Kernel presample = [&](Uint frame) {
             falcor_di::presample_light(context(frame, Bool{false}), dispatch_idx().xy());
@@ -170,7 +195,7 @@ class FalcorDIExperiment final : private Toolkit {
                 auto it = geo.compute_surface_interaction(hit, ray);
                 materials.dispatch(it.material_id(), [&](const Material *material) {
                     const auto bsdf = material->create_evaluator(it, swl);
-                    reservoir = falcor_di::sample_initial(ctx, pixel, surface, bsdf, it.wo, sampler);
+                    reservoir = falcor_di::sample_initial(ctx, pixel, surface, bsdf, it.wo, swl, sampler);
                 });
             };
             falcor_di::store_reservoir(ctx, pixel, slice, reservoir);
@@ -185,8 +210,8 @@ class FalcorDIExperiment final : private Toolkit {
             const auto reservoir = falcor_di::load_reservoir(ctx, pixel, slice);
             $if(falcor_di::valid_reservoir(reservoir)) {
                 const auto surface = falcor_di::load_surface(ctx, make_int2(pixel), false);
-                const auto light = falcor_di::load_light(ctx, reservoir.light_index);
-                const auto sample = falcor_di::sample_triangle(light, surface, reservoir->uv());
+                const auto swl = spec->sample_wavelength(sampler);
+                const auto sample = falcor_di::sample_light(ctx, reservoir.light_index, surface, reservoir->uv(), swl);
                 $if(!falcor_di::visible(surface, sample)) {
                     // Keep this receiver in the estimate count when its contribution is zero.
                     falcor_di::ReservoirVar rejected;
@@ -225,8 +250,8 @@ class FalcorDIExperiment final : private Toolkit {
             Float4 direction_distance = make_float4(0.f);
             Float3 weighted_radiance = make_float3(0.f);
             $if(falcor_di::valid_surface(surface) && falcor_di::valid_reservoir(reservoir)) {
-                const auto light = falcor_di::load_light(ctx, reservoir.light_index);
-                const auto sample = falcor_di::sample_triangle(light, surface, reservoir->uv());
+                const auto swl = spec->sample_wavelength(sampler);
+                const auto sample = falcor_di::sample_light(ctx, reservoir.light_index, surface, reservoir->uv(), swl);
                 direction_distance = make_float4(sample.direction, sample.distance);
                 weighted_radiance = sample.radiance * reservoir.weight;
             };
@@ -293,6 +318,7 @@ public:
         const uint history = previous_frame_ != InvalidUI32 && frame > 0u && previous_frame_ + 1u == frame;
         previous_frame_ = frame;
         CommandBatch batch;
+        batch << prepare_light_geometry_().dispatch(light_count_);
         batch << prepare_surface_(frame).dispatch(extent_);
         batch << presample_(frame).dispatch(make_uint2(falcor_di::tile_size, falcor_di::tile_count));
         batch << candidates_(frame, slices.x).dispatch(extent_);

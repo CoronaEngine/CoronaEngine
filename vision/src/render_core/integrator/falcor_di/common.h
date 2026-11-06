@@ -32,6 +32,7 @@
 #pragma once
 
 #include "base/mgr/geometry.h"
+#include "base/mgr/renderer.h"
 #include "base/mgr/scene.h"
 #include "base/sensor/frame_buffer.h"
 #include "math/util.h"
@@ -48,6 +49,15 @@ struct Reservoir {
 
 static_assert(sizeof(Reservoir) == 20u);
 
+struct LightTriangleGeometry {
+    array_float3 p0, p1, p2, ng;
+    float2 uv0, uv1, uv2;
+    float pdf_pos;
+    uint light_id;
+};
+
+static_assert(sizeof(LightTriangleGeometry) == 80u);
+
 } // namespace vision::falcor_di
 
 OC_STRUCT(vision::falcor_di, Reservoir, light_index, packed_uv, count, target, weight) {
@@ -60,6 +70,8 @@ OC_STRUCT(vision::falcor_di, Reservoir, light_index, packed_uv, count, target, w
         packed_uv = bits.x | (bits.y << 16u);
     }
 };
+
+OC_STRUCT(vision::falcor_di, LightTriangleGeometry, p0, p1, p2, ng, uv0, uv1, uv2, pdf_pos, light_id) {};
 
 namespace vision::falcor_di {
 
@@ -77,7 +89,8 @@ struct Context {
     const Buffer<uint> &surface_normals;
     Buffer<Reservoir> &reservoirs;
     const Buffer<float2> &neighbors;
-    const Buffer<float4> &lights;
+    const Buffer<uint4> &light_primitives;
+    const Buffer<LightTriangleGeometry> &light_geometry;
     const Buffer<float> &probabilities;
     const Buffer<uint> &light_bases;
     Buffer<uint2> &ris;
@@ -89,14 +102,7 @@ struct Surface {
     Float depth{-1.f};
 };
 
-struct Light {
-    Float3 vertex{make_float3(0.f)};
-    Float3 edge0{make_float3(0.f)};
-    Float3 edge1{make_float3(0.f)};
-    Float3 radiance{make_float3(0.f)};
-};
-
-struct LightSample {
+struct TriangleSample {
     Float3 direction{make_float3(0.f)};
     Float distance{0.f};
     Float3 radiance{make_float3(0.f)};
@@ -144,50 +150,50 @@ struct LightSample {
     return -Toolkit::frame_buffer().motion_vectors().read(index);
 }
 
-[[nodiscard]] inline Float quantize_edge(const Float &value) {
-    return ocarina::f16tof32(ocarina::f32tof16(value));
-}
-
-[[nodiscard]] inline Float3 quantize_edge(const Float3 &edge) {
-    return make_float3(quantize_edge(edge.x), quantize_edge(edge.y), quantize_edge(edge.z));
-}
-
-[[nodiscard]] inline Light load_light(const Context &ctx, const Uint &index) {
-    Light light;
-    $if(index < ctx.light_count) {
-        const Uint base = index * 4u;
-        light.vertex = ctx.lights.read(base, false).xyz();
-        light.edge0 = quantize_edge(ctx.lights.read(base + 1u, false).xyz() - light.vertex);
-        light.edge1 = quantize_edge(ctx.lights.read(base + 2u, false).xyz() - light.vertex);
-        light.radiance = ctx.lights.read(base + 3u, false).xyz();
-    };
-    return light;
-}
-
-[[nodiscard]] inline LightSample sample_triangle(const Light &light, const Surface &surface,
-                                                 const Float2 &u) {
-    LightSample sample;
+[[nodiscard]] inline LightEvalContext load_light_point(const Context &ctx, const Uint &index,
+                                                       const LightTriangleGeometryVar &triangle, const Float2 &u) {
     const Float2 uv = select(u.x + u.y <= 1.f, u, 1.f - u);
-    const Float3 normal = cross(light.edge0, light.edge1);
-    const Float normal_length = length(normal);
-    $if(normal_length > 0.f) {
-        constexpr float min_positive = 1.175494351e-38f;
-        const Float area = 0.5f * normal_length;
-        const Float3 position = light.vertex + uv.x * light.edge0 + uv.y * light.edge1;
-        const Float3 to_light = position - surface.position;
-        const Float distance_squared = max(min_positive, dot(to_light, to_light));
-        const Float distance = sqrt(distance_squared);
-        const Float3 direction = to_light / distance;
-        const Float cosine = dot(normal / normal_length, -direction);
-        $if(cosine > 0.f) {
-            const Float denominator = max(min_positive, cosine * area);
-            sample.direction = direction;
-            sample.distance = distance;
-            sample.radiance = light.radiance * (denominator / distance_squared);
-            sample.pdf = distance_squared / denominator;
-        };
+    // The reservoir stores weights for vertices 1 and 2; geometry takes 0 and 1.
+    const Float2 bary = make_float2(1.f - uv.x - uv.y, uv.x);
+    LightEvalContext point;
+    $if(triangle.pdf_pos > 0.f) {
+        point.pos = triangle_lerp(bary, triangle.p0.as_vec3(), triangle.p1.as_vec3(), triangle.p2.as_vec3());
+        point.ng = triangle.ng.as_vec3();
+        point.uv = triangle_lerp(bary, triangle.uv0, triangle.uv1, triangle.uv2);
+        point.PDF_pos = triangle.pdf_pos;
+    } $else {
+        const Uint4 primitive = ctx.light_primitives.read(index, false);
+        point = Toolkit::geometry().compute_light_eval_context(primitive.x, primitive.y, bary);
+    };
+    return point;
+}
+
+[[nodiscard]] inline TriangleSample evaluate_light_point(const Uint &light_id, const LightEvalContext &point,
+                                                        const Surface &surface, const SampledWavelengths &swl) {
+    TriangleSample sample;
+    const Float3 to_light = point.pos - surface.position;
+    $if(dot(to_light, point.ng) < 0.f) {
+        LightSampleContext ref;
+        ref.pos = surface.position;
+        Toolkit::renderer().light_sampler()->dispatch_light(light_id, [&](const Light *light) {
+            if (!light->match(LightType::Area)) return;
+            // RIS already accounts for selecting this triangle. Use its conditional PDF.
+            const auto eval = light->evaluate_wi(ref, point, swl, LightEvalMode::All);
+            $if(eval.pdf > 0.f && finite(eval.pdf)) {
+                sample.distance = length(to_light);
+                sample.direction = to_light / sample.distance;
+                sample.radiance = eval.L.vec3() / eval.pdf;
+                sample.pdf = eval.pdf;
+            };
+        });
     };
     return sample;
+}
+
+[[nodiscard]] inline TriangleSample sample_light(const Context &ctx, const Uint &index, const Surface &surface,
+                                                const Float2 &uv, const SampledWavelengths &swl) {
+    const LightTriangleGeometryVar triangle = ctx.light_geometry.read(index, false);
+    return evaluate_light_point(triangle.light_id, load_light_point(ctx, index, triangle, uv), surface, swl);
 }
 
 [[nodiscard]] inline RayVar make_light_ray(const Float3 &origin, const Float3 &direction,
@@ -198,7 +204,7 @@ struct LightSample {
     return ray;
 }
 
-[[nodiscard]] inline Bool visible(const Surface &surface, const LightSample &sample) {
+[[nodiscard]] inline Bool visible(const Surface &surface, const TriangleSample &sample) {
     const Float t_max = sample.distance - ray_epsilon;
     Bool unoccluded = false;
     $if(t_max > 0.f) {
