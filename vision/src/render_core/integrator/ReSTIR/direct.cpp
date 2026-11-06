@@ -428,11 +428,28 @@ DIReservoirVar ReSTIRDI::combine_temporal(const DIReservoirVar &cur_rsv,
         // The previous receiver can differ in position, normal and material;
         // changing only wo at the current receiver is not its source target.
         Interaction prev_it = geom.compute_surface_interaction(other_surf.hit, prev_view_pos);
-        p_hat_c_at_n = compute_p_hat(prev_it, nullptr, cur_rsv.sample);
-        p_hat_n_at_n = compute_p_hat(prev_it, nullptr, other_rsv.sample);
+        if (renderer().spectrum()->impl_type() == "srgb") {
+            // Only sRGB can move evaluator creation before both light evaluations
+            // without changing when secondary wavelengths are invalidated.
+            auto evaluate_pair = [&](const Interaction &receiver, Float &current, Float &other) {
+                scene().materials().dispatch(receiver.material_id(), [&](const Material *material) {
+                    Interaction bsdf_it = receiver;
+                    const auto &swl = sampled_wavelengths();
+                    auto bsdf = material->create_evaluator(bsdf_it, swl);
+                    swl.check_dispersive(renderer().spectrum(), bsdf);
+                    current = compute_p_hat(receiver, &bsdf, cur_rsv.sample);
+                    other = compute_p_hat(receiver, &bsdf, other_rsv.sample);
+                });
+            };
+            evaluate_pair(prev_it, p_hat_c_at_n, p_hat_n_at_n);
+            evaluate_pair(it, p_hat_c_at_c, p_hat_n_at_c);
+        } else {
+            p_hat_c_at_n = compute_p_hat(prev_it, nullptr, cur_rsv.sample);
+            p_hat_n_at_n = compute_p_hat(prev_it, nullptr, other_rsv.sample);
 
-        p_hat_c_at_c = compute_p_hat(it, nullptr, cur_rsv.sample);
-        p_hat_n_at_c = compute_p_hat(it, nullptr, other_rsv.sample);
+            p_hat_c_at_c = compute_p_hat(it, nullptr, cur_rsv.sample);
+            p_hat_n_at_c = compute_p_hat(it, nullptr, other_rsv.sample);
+        }
 
         mis_cur = MIS_weight_n(cur_rsv.C, p_hat_c_at_c, other_rsv.C, p_hat_c_at_n);
         mis_prev = MIS_weight_n(other_rsv.C, p_hat_n_at_n, cur_rsv.C, p_hat_n_at_c);
@@ -520,12 +537,18 @@ DIReservoirVar ReSTIRDI::temporal_reuse(DIReservoirVar rsv, const SurfaceDataVar
 
 SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interaction &it,
                                      SurfaceExtendVar &surf_ext, const Bool &stable_planes) const noexcept {
+    return compute_hit_impl(std::move(rs), hit, it, surf_ext, stable_planes, nullptr);
+}
+
+SurfaceDataVar ReSTIRDI::compute_hit_impl(RayState rs, TriangleHitVar &hit, Interaction &it,
+                                          SurfaceExtendVar &surf_ext, const Bool &stable_planes,
+                                          const TriangleHitVar *primary_hit) const noexcept {
     TSensor &camera = scene().sensor();
     const Geometry &geometry = pipeline()->geometry();
     RayVar camera_ray = rs.ray;
     surf_ext.view_pos.set(rs.origin());
 
-    hit = pipeline()->geometry().trace_closest(rs.ray);
+    hit = primary_hit ? *primary_hit : geometry.trace_closest(rs.ray);
 
     SurfaceDataVar cur_surf;
     Uint counter = 0;
@@ -708,7 +731,13 @@ void ReSTIRDI::compile_shader0() noexcept {
             $if(hit->is_hit()) { it = geometry.compute_surface_interaction(hit, surf_ext.view_pos.as_vec3()); };
         }
         $else {
-            cur_surf = compute_hit(rs, hit, it, surf_ext, false);
+            if (frame_buffer().impl_type() == "normal") {
+                // The normal GBuffer traces and records the hit for this stored ray.
+                auto primary_hit = frame_buffer().cur_visibility_buffer_var(frame_index).read(dispatch_id());
+                cur_surf = compute_hit_impl(rs, hit, it, surf_ext, false, &primary_hit);
+            } else {
+                cur_surf = compute_hit(rs, hit, it, surf_ext, false);
+            }
             cur_surfaces().write(dispatch_id(), cur_surf);
             $if(cur_surf.is_replaced) {
                 cur_surface_extends().write(dispatch_id(), surf_ext);
@@ -725,6 +754,7 @@ void ReSTIRDI::compile_shader0() noexcept {
         rsv = temporal_reuse(rsv, cur_surf, motion_vec, ss, param);
         passthrough_reservoirs().write(dispatch_id(), rsv);
     };
+    kernel.function()->set_block_dim(16u, 16u, 1u);
     shader0_ = device().compile(kernel, "ReSTIR direct initial candidates and temporal reuse");
 }
 

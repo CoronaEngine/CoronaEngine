@@ -77,6 +77,10 @@ private:
     bool compact_radiance_{};
     bool radiance_prepared_{};
 
+    [[nodiscard]] SurfaceDataVar compute_hit_impl(RayState rs, TriangleHitVar &hit, Interaction &it,
+                                                   SurfaceExtendVar &surf_ext, const Bool &stable_planes,
+                                                   const TriangleHitVar *primary_hit) const noexcept;
+
 protected:
     [[nodiscard]] static TSampler &sampler() noexcept { return renderer().sampler(); }
 
