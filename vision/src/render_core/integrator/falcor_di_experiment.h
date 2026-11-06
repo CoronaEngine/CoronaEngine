@@ -7,6 +7,7 @@
 #include "falcor_di/reuse.h"
 #include <cmath>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace vision {
@@ -16,8 +17,10 @@ class FalcorDIExperiment final : private Toolkit {
     uint2 extent_{};
     uint light_count_{};
     uint previous_frame_{InvalidUI32};
+    std::string mode_;
+    bool publish_gi_{};
     Buffer<uint4> surfaces0_;
-    Buffer<uint> surface_normals_;
+    Buffer<uint2> surface_normals_;
     Buffer<uint2> ris_;
     Buffer<float2> neighbors_;
     Buffer<falcor_di::Reservoir> reservoirs_;
@@ -80,7 +83,7 @@ class FalcorDIExperiment final : private Toolkit {
         const auto pixels = extent_.x * extent_.y;
         const auto pitch = ((extent_.x + 15u) / 16u) * ((extent_.y + 15u) / 16u) * 256u;
         surfaces0_ = device().create_buffer<uint4>(2u * pixels, "Falcor DI surface position and depth");
-        surface_normals_ = device().create_buffer<uint>(2u * pixels, "Falcor DI surface normals");
+        surface_normals_ = device().create_buffer<uint2>(2u * pixels, "Falcor DI surface normals");
         reservoirs_ = device().create_buffer<falcor_di::Reservoir>(3u * pitch, "Falcor DI packed reservoir");
         ris_ = device().create_buffer<uint2>(falcor_di::tile_count * falcor_di::tile_size, "Falcor DI RIS tiles");
         shade_direction_ = device().create_buffer<float4>(pixels, "Falcor DI selected direction and distance");
@@ -149,21 +152,36 @@ class FalcorDIExperiment final : private Toolkit {
             const Uint offset = (frame & 1u) * pixels + index;
             auto hit = fb.cur_visibility_buffer_var(frame).read(index);
             Float4 position_depth = make_float4(0.f, 0.f, 0.f, -1.f);
-            Uint normal = 0u;
+            Uint2 normals = make_uint2(0u);
             camera->load_data();
             const auto swl = spec->sample_wavelength(sampler);
+            SurfaceDataVar gi_surface;
+            if (publish_gi_) gi_surface.hit = hit;
             $if(hit->is_hit()) {
                 auto ray = fb.rays().read(index)->to_ray_state().ray;
                 auto it = geo.compute_surface_interaction(hit, ray);
                 materials.dispatch(it.material_id(), [&](const Material *material) {
+                    if (publish_gi_) {
+                        Interaction guide_it = it;
+                        guide_it.wo = guide_it.ng;
+                        auto guide = material->create_evaluator(guide_it, swl);
+                        set_reuse_material_guides(gi_surface, guide, *spec, swl);
+                    }
                     auto bsdf = material->create_evaluator(it, swl);
-                    const Float3 position = it.robust_position();
-                    position_depth = make_float4(position, length(position - camera->device_position()));
-                    normal = encode_normal(bsdf.shading_frame().normal());
+                    position_depth = make_float4(it.pos, length(it.pos - camera->device_position()));
+                    normals = make_uint2(encode_normal(bsdf.shading_frame().normal()), encode_normal(it.ng));
+                    if (publish_gi_) {
+                        gi_surface.flag = bsdf.flag();
+                        gi_surface->set_diffuse_factor(bsdf.diffuse_factor());
+                        gi_surface->set_position(it.pos);
+                        gi_surface->set_normal(it.shading.normal());
+                        gi_surface->set_depth(camera->linear_depth(ray->at(ray->t_max())));
+                    }
                 });
             };
+            if (publish_gi_) fb.cur_surfaces_var(frame).write(index, gi_surface);
             surfaces0_.write(offset, as<uint4>(position_depth));
-            surface_normals_.write(offset, normal);
+            surface_normals_.write(offset, normals);
         };
         prepare.function()->set_block_dim(16u, 16u);
         prepare_surface_ = device().compile(prepare, "Falcor DI surface preparation");
@@ -189,6 +207,7 @@ class FalcorDIExperiment final : private Toolkit {
             sampler->set_seed(pixel, frame, Dimension::ReSTIR_RIS);
             const auto swl = spec->sample_wavelength(sampler);
             falcor_di::ReservoirVar reservoir;
+            HitBSDFVar gi_proposal;
             $if(falcor_di::valid_surface(surface)) {
                 const Uint index = dispatch_id();
                 const auto hit = fb.cur_visibility_buffer_var(frame).read(index);
@@ -196,10 +215,12 @@ class FalcorDIExperiment final : private Toolkit {
                 auto it = geo.compute_surface_interaction(hit, ray);
                 materials.dispatch(it.material_id(), [&](const Material *material) {
                     const auto bsdf = material->create_evaluator(it, swl);
-                    reservoir = falcor_di::sample_initial(ctx, pixel, surface, bsdf, it.wo, swl, sampler);
+                    reservoir = falcor_di::sample_initial(ctx, pixel, surface, bsdf, it.wo, swl, sampler,
+                                                          publish_gi_ ? addressof(gi_proposal) : nullptr);
                 });
             };
             falcor_di::store_reservoir(ctx, pixel, slice, reservoir);
+            if (publish_gi_) fb.hit_bsdfs().write(dispatch_id(), gi_proposal);
         };
         candidates.function()->set_block_dim(16u, 16u);
         candidates_ = device().compile(candidates, "Falcor DI initial candidates");
@@ -224,8 +245,12 @@ class FalcorDIExperiment final : private Toolkit {
         visibility.function()->set_block_dim(16u, 16u);
         visibility_ = device().compile(visibility, "Falcor DI initial visibility");
 
+        const auto reuse_settings = direct.settings();
+        const bool use_temporal = reuse_settings["temporal"]["open"].get<bool>();
+        const bool use_spatial = reuse_settings["spatial"]["open"].get<bool>();
+        OC_INFO_FORMAT("Falcor DI reuse settings: temporal={}, spatial={}", use_temporal, use_spatial);
         Kernel reuse = [&](Uint frame, Uint3 slices, Uint history) {
-            if (bias_mode == 3u) {
+            if (bias_mode == 2u || bias_mode == 3u) {
                 Function::current()->require_ray_query_compute_workgroups();
             }
             sampler->load_data();
@@ -236,7 +261,8 @@ class FalcorDIExperiment final : private Toolkit {
             $if(falcor_di::valid_surface(surface)) {
                 const auto candidate = falcor_di::load_reservoir(ctx, pixel, slices.x);
                 const auto swl = spec->sample_wavelength(sampler);
-                reservoir = falcor_di::reuse_direct(ctx, pixel, surface, candidate, slices.y, swl, bias_mode, sampler);
+                reservoir = falcor_di::reuse_direct(ctx, pixel, surface, candidate, slices.y, swl, bias_mode, sampler,
+                                                     use_temporal, use_spatial);
             };
             falcor_di::store_reservoir(ctx, pixel, slices.z, reservoir);
         };
@@ -299,7 +325,8 @@ class FalcorDIExperiment final : private Toolkit {
     }
 
 public:
-    FalcorDIExperiment(ReSTIRDI &direct, std::string_view mode) {
+    FalcorDIExperiment(ReSTIRDI &direct, std::string_view mode, bool publish_gi)
+        : mode_{mode}, publish_gi_{publish_gi} {
         uint bias_mode = 0u;
         if (mode == "basic") bias_mode = 1u;
         else if (mode == "pairwise") bias_mode = 2u;
@@ -312,7 +339,9 @@ public:
                        light_count_, extent_.x, extent_.y);
     }
 
-    [[nodiscard]] bool matches(uint2 extent) const noexcept { return extent.x == extent_.x && extent.y == extent_.y; }
+    [[nodiscard]] bool matches(uint2 extent, std::string_view mode, bool publish_gi) const noexcept {
+        return extent.x == extent_.x && extent.y == extent_.y && mode == mode_ && publish_gi == publish_gi_;
+    }
 
     [[nodiscard]] CommandBatch dispatch(uint frame) {
         const uint current = 1u + (frame & 1u);

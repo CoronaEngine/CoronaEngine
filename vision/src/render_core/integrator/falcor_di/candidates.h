@@ -31,7 +31,8 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
 
 [[nodiscard]] inline ReservoirVar sample_initial(const Context &ctx, const Uint2 &pixel, const Surface &surface,
                                                 const MaterialEvaluator &bsdf, const Float3 &wo,
-                                                const SampledWavelengths &swl, TSampler &sampler) {
+                                                const SampledWavelengths &swl, TSampler &sampler,
+                                                HitBSDFVar *gi_proposal) {
     ReservoirVar reservoir;
     Float2 winner_uv = make_float2(0.f);
     // The reservoir represents a continuous area-light sample, so a material
@@ -86,11 +87,20 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
         bsdf_replacement = light_sampler->next_1d();
     });
 
-    $if(use_bsdf) {
+    $if(gi_proposal ? Bool{true} : use_bsdf) {
         const auto sample = bsdf.sample(wo, sampler);
         const Float pdf = sample.eval.pdf();
-        $if(pdf > 0.f && finite(pdf) && dot(surface.normal, sample.wi) > 0.f) {
-            const Uint4 hit = trace_light(ctx, surface.position, sample.wi, ray_epsilon, 3.402823466e38f);
+        if (gi_proposal) {
+            // GI consumes the proposal before the DI light-hit and hemisphere tests.
+            gi_proposal->wi.set(sample.wi);
+            gi_proposal->bsdf.set(sample.eval.f.vec3());
+            gi_proposal->pdf = pdf;
+        }
+        const Bool eligible_for_di = gi_proposal ? use_bsdf : Bool{true};
+        $if(eligible_for_di && pdf > 0.f && finite(pdf) && dot(surface.normal, sample.wi) > 0.f) {
+            const Float3 origin = Interaction::custom_offset_ray_origin(surface.position, surface.geometric_normal,
+                                                                        sample.wi);
+            const Uint4 hit = trace_light(ctx, origin, sample.wi, ray_epsilon, 3.402823466e38f);
             $if(hit.y != InvalidUI32 && hit.x != InvalidUI32) {
                 // The folded-square sampler accepts the native triangle hit weights.
                 offer_candidate(hit.x, make_float2(as<float>(hit.z), as<float>(hit.w)),

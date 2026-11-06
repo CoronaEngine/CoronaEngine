@@ -96,6 +96,8 @@ private:
     mutable float2 denoiser_factors_{make_float2(-1.f)};
     Shader<void(uint, Buffer<SurfaceData>)> path_tracing_;
     mutable std::unique_ptr<FalcorDIExperiment> falcor_di_;
+    mutable bool falcor_di_needs_compile_{true};
+    mutable bool falcor_di_was_active_{};
 
 public:
     RealTimeIntegrator() = default;
@@ -125,6 +127,7 @@ public:
     }
 
     void update_resolution(ocarina::uint2 res) noexcept override {
+        falcor_di_needs_compile_ = true;
         direct_->update_resolution(res);
         indirect_->update_resolution(res);
         if (!denoiser_runtime_disabled() && denoiser_ &&
@@ -230,6 +233,7 @@ public:
         pipeline()->stream() << synchronize() << commit();
         const bool recompile_direct = direct_->set_settings(candidate["direct"]);
         const bool recompile_indirect = indirect_->set_settings(candidate["indirect"]);
+        falcor_di_needs_compile_ = true;
         auto transport = candidate;
         transport["max_depth"] = candidate["max_depth"].get<uint>() - 1u;
         apply_illumination_settings(transport);
@@ -248,6 +252,7 @@ public:
 
     void compile() noexcept override {
         switch_profile::Scope profile{"integrator.compile", "compile"};
+        falcor_di_needs_compile_ = true;
         direct_->compile();
         indirect_->compile();
         stable_planes_->set_max_recursion(direct_->max_recursion());
@@ -407,6 +412,7 @@ public:
             stream << synchronize() << commit();
             direct_->set_compact_radiance(compact);
             indirect_->set_compact_radiance(compact);
+            falcor_di_needs_compile_ = true;
             pipeline()->upload_bindless_array();
             Global::SceneGpuContextScope scene_gpu_context{
                 scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
@@ -457,22 +463,37 @@ public:
             submit(stable_planes_->fill(frame_index_, direct_->factor(), indirect_->factor(), raw_stable_outputs), &cur_stage_profile_.stable_fill_ms);
         }
         const char *falcor_mode = std::getenv("VISION_FALCOR_DI_MODE");
-        const bool falcor_requested = falcor_mode && *falcor_mode && direct_->open() && !indirect_->open() &&
+        const bool gi_enabled = indirect_->open();
+        const bool falcor_requested = falcor_mode && *falcor_mode && direct_->open() &&
             !denoiser_enabled && !stable_planes_enabled() && !jitter_primary_samples() &&
-            suffix_depth() == 0u && direct_->max_recursion() == 1u && spectrum()->impl_type() == "srgb" &&
+            (gi_enabled ? suffix_depth() > 0u : suffix_depth() == 0u) && direct_->max_recursion() == 1u &&
+            spectrum()->impl_type() == "srgb" && frame_buffer().impl_type() == "normal" &&
             !pipeline()->geometry().process_mediums();
-        if (falcor_requested) {
-            if (!falcor_di_ || !falcor_di_->matches(rp->resolution())) {
-                stream << synchronize() << commit();
-                Global::SceneGpuContextScope scene_gpu_context{
-                    scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
-                try {
-                    falcor_di_ = std::make_unique<FalcorDIExperiment>(*direct_, falcor_mode);
-                } catch (const std::exception &error) {
-                    OC_ERROR_FORMAT("Falcor DI experiment: {}", error.what());
-                }
+        const bool prepare_falcor = falcor_requested && (falcor_di_needs_compile_ ||
+            (falcor_di_ && !falcor_di_->matches(rp->resolution(), falcor_mode, gi_enabled)));
+        if (prepare_falcor) {
+            stream << synchronize() << commit();
+            Global::SceneGpuContextScope scene_gpu_context{
+                scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
+            falcor_di_needs_compile_ = false;
+            falcor_di_.reset();
+            try {
+                falcor_di_ = std::make_unique<FalcorDIExperiment>(*direct_, falcor_mode, gi_enabled);
+            } catch (const std::exception &error) {
+                OC_WARNING_FORMAT("Falcor DI unavailable, using native ReSTIR DI: {}", error.what());
             }
-            submit(falcor_di_->dispatch(frame_index_), &cur_stage_profile_.restir_di_ms);
+        }
+        const bool use_falcor = falcor_requested && falcor_di_;
+        if (prepare_falcor || use_falcor != falcor_di_was_active_) {
+            direct_->invalidate_history();
+            indirect_->invalidate_history();
+        }
+        falcor_di_was_active_ = use_falcor;
+        submit(use_falcor ? falcor_di_->dispatch(frame_index_) : direct_->dispatch(frame_index_, precise_lobes),
+               &cur_stage_profile_.restir_di_ms);
+        const bool direct_only = suffix_depth() == 0u && !denoiser_enabled && !stable_planes_enabled() &&
+            (!denoiser_ || !denoiser_->requires_lobe_signals()) && frame_buffer().impl_type() == "normal";
+        if (!gi_enabled && (use_falcor || direct_only)) {
             if (indirect_->compact_radiance()) {
                 submit(rp->reset_buffer(indirect_->raw_radiance().view(), make_uint2(0u), "ReSTIR indirect clear"),
                        &cur_stage_profile_.restir_gi_ms);
@@ -481,7 +502,6 @@ public:
                        &cur_stage_profile_.restir_gi_ms);
             }
         } else {
-            submit(direct_->dispatch(frame_index_, precise_lobes), &cur_stage_profile_.restir_di_ms);
             submit(indirect_->dispatch(frame_index_, precise_lobes, stable_planes_enabled(),
                                       direct_->factor(), indirect_->factor(), direct_->open()), &cur_stage_profile_.restir_gi_ms);
         }

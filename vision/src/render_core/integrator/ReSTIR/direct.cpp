@@ -555,14 +555,7 @@ SurfaceDataVar ReSTIRDI::compute_hit(RayState rs, TriangleHitVar &hit, Interacti
                     guide_swl = renderer().spectrum()->sample_wavelength(renderer().sampler());
                 });
                 auto guide_bsdf = material->create_evaluator(guide_it, guide_swl);
-                SampledSpectrum diffuse{guide_swl.dimension()};
-                SampledSpectrum specular{guide_swl.dimension()};
-                Float2 roughness;
-                guide_bsdf.reuse_material(diffuse, specular, roughness);
-                cur_surf.diffuse_roughness = make_float4(
-                    renderer().spectrum()->linear_srgb(diffuse, guide_swl), roughness.x);
-                cur_surf.specular_roughness = make_float4(
-                    renderer().spectrum()->linear_srgb(specular, guide_swl), roughness.y);
+                set_reuse_material_guides(cur_surf, guide_bsdf, *renderer().spectrum(), guide_swl);
             };
             // Ask the evaluated scattering model whether the existing delta
             // sampler has one deterministic reflection branch. Geometry remains

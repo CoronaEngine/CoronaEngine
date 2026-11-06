@@ -85,7 +85,7 @@ struct Context {
     Bool has_history;
     uint light_count;
     const Buffer<uint4> &surfaces0;
-    const Buffer<uint> &surface_normals;
+    const Buffer<uint2> &surface_normals;
     Buffer<Reservoir> &reservoirs;
     const Buffer<float2> &neighbors;
     const Buffer<uint4> &light_primitives;
@@ -98,6 +98,7 @@ struct Context {
 struct Surface {
     Float3 position{make_float3(0.f)};
     Float3 normal{make_float3(0.f)};
+    Float3 geometric_normal{make_float3(0.f)};
     Float depth{-1.f};
 };
 
@@ -138,7 +139,9 @@ struct TriangleSample {
         const Float4 position_depth = as<float4>(ctx.surfaces0.read(index, false));
         $if(position_depth.w >= 0.f) {
             surface.position = position_depth.xyz();
-            surface.normal = unpack_normal(ctx.surface_normals.read(index, false));
+            const Uint2 normals = ctx.surface_normals.read(index, false);
+            surface.normal = unpack_normal(normals.x);
+            surface.geometric_normal = unpack_normal(normals.y);
             surface.depth = position_depth.w;
         };
     };
@@ -204,11 +207,16 @@ struct TriangleSample {
 }
 
 [[nodiscard]] inline Bool visible(const Surface &surface, const TriangleSample &sample) {
-    const Float t_max = sample.distance - ray_epsilon;
     Bool unoccluded = false;
-    $if(t_max > 0.f) {
-        unoccluded = !Toolkit::geometry().trace_occlusion(
-            make_light_ray(surface.position, sample.direction, Float{0.f}, t_max));
+    $if(sample.distance > ray_epsilon) {
+        const Float3 origin = Interaction::custom_offset_ray_origin(surface.position, surface.geometric_normal,
+                                                                    sample.direction);
+        const Float3 segment = sample.direction * sample.distance + (surface.position - origin);
+        const Float distance = length(segment);
+        $if(distance > ray_epsilon) {
+            unoccluded = !Toolkit::geometry().trace_occlusion(
+                make_light_ray(origin, segment / distance, Float{0.f}, distance - ray_epsilon));
+        };
     };
     return unoccluded;
 }

@@ -33,13 +33,16 @@ struct ReceiverTargets {
 
 [[nodiscard]] inline Float target_at(const Context &ctx, const ReservoirVar &candidate, const Surface &surface,
                                      const MaterialEvaluator &bsdf, const Float3 &wo,
-                                     const SampledWavelengths &swl) {
+                                     const SampledWavelengths &swl, bool trace) {
     Float target = 0.f;
     $if(valid_reservoir(candidate)) {
         const TriangleSample sample = sample_light(ctx, candidate.light_index, surface, candidate->uv(), swl);
         $if(sample.pdf > 0.f) {
             target = target_weight(bsdf.evaluate(wo, sample.direction, MaterialEvalMode::F), sample);
         };
+        if (trace) {
+            $if(target > 0.f) { target = select(visible(surface, sample), target, 0.f); };
+        }
     };
     return target;
 }
@@ -135,7 +138,7 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
             const LightTriangleGeometryVar triangle = ctx.light_geometry.read(canonical.light_index, false);
             target_current_at_neighbor = history_target(
                 ctx, triangle.light_id, load_light_point(ctx, canonical.light_index, triangle, canonical_uv),
-                history, swl, false);
+                history, swl, true);
         };
         const Float neighbor_confidence = pair_count * neighbor.count;
         const Float neighbor_mis = pair_balance(neighbor_confidence * neighbor.target,
@@ -175,8 +178,10 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
 
 [[nodiscard]] inline ReservoirVar reuse_direct(const Context &ctx, const Uint2 &pixel, const Surface &receiver,
                                             const ReservoirVar &current, const Uint &history_slice,
-                                            const SampledWavelengths &swl, uint bias_mode, TSampler &sampler) {
+                                            const SampledWavelengths &swl, uint bias_mode, TSampler &sampler,
+                                            bool use_temporal, bool use_spatial) {
     ReservoirVar output = current;
+    if (!use_temporal && !use_spatial) return output;
     $if(ctx.has_history) {
         sampler->set_seed(pixel, ctx.frame, Dimension::FalcorDI_reuse);
         const Float2 motion_vector = motion(pixel_index(pixel, ctx.extent));
@@ -197,25 +202,29 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
             const Int2 previous_pixel = reprojected + offset;
             const Surface previous = load_surface(ctx, previous_pixel, true);
             $if(reuse_similar(receiver, previous)) {
-                temporal.surface = previous;
-                temporal.pixel_index = pixel_index(make_uint2(previous_pixel), ctx.extent);
-                temporal.reservoir = read_history(ctx, previous_pixel, history_slice, history_limit);
+                if (use_temporal) {
+                    temporal.surface = previous;
+                    temporal.pixel_index = pixel_index(make_uint2(previous_pixel), ctx.extent);
+                    temporal.reservoir = read_history(ctx, previous_pixel, history_slice, history_limit);
+                }
                 temporal_pixel = previous_pixel;
                 $break;
             };
         };
 
         // One spatial neighbor from the previous frame keeps reads and writes in separate slices.
-        const Uint neighbor_index = cast<uint>(sampler->next_1d() * float(neighbor_count));
-        const Int2 spatial_pixel = reprojected + cast<int2>(30.f * ctx.neighbors.read(neighbor_index, false));
-        $if(any(spatial_pixel != temporal_pixel)) {
-            const Surface neighbor = load_surface(ctx, spatial_pixel, true);
-            $if(reuse_similar(receiver, neighbor)) {
-                spatial.surface = neighbor;
-                spatial.pixel_index = pixel_index(make_uint2(spatial_pixel), ctx.extent);
-                spatial.reservoir = read_history(ctx, spatial_pixel, history_slice, history_limit);
+        if (use_spatial) {
+            const Uint neighbor_index = cast<uint>(sampler->next_1d() * float(neighbor_count));
+            const Int2 spatial_pixel = reprojected + cast<int2>(30.f * ctx.neighbors.read(neighbor_index, false));
+            $if(any(spatial_pixel != temporal_pixel)) {
+                const Surface neighbor = load_surface(ctx, spatial_pixel, true);
+                $if(reuse_similar(receiver, neighbor)) {
+                    spatial.surface = neighbor;
+                    spatial.pixel_index = pixel_index(make_uint2(spatial_pixel), ctx.extent);
+                    spatial.reservoir = read_history(ctx, spatial_pixel, history_slice, history_limit);
+                };
             };
-        };
+        }
 
         ReceiverTargets targets;
         $if(valid_reservoir(temporal.reservoir) || valid_reservoir(spatial.reservoir)) {
@@ -226,8 +235,10 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
             auto it = Toolkit::geometry().compute_surface_interaction(hit, ray);
             Toolkit::scene().materials().dispatch(it.material_id(), [&](const Material *material) {
                 const auto bsdf = material->create_evaluator(it, swl);
-                targets.temporal = target_at(ctx, temporal.reservoir, receiver, bsdf, it.wo, swl);
-                targets.spatial = target_at(ctx, spatial.reservoir, receiver, bsdf, it.wo, swl);
+                // Pairwise cached self targets already exclude invisible samples. Cross targets must use the same support.
+                const bool trace = bias_mode == 2u;
+                targets.temporal = target_at(ctx, temporal.reservoir, receiver, bsdf, it.wo, swl, trace);
+                targets.spatial = target_at(ctx, spatial.reservoir, receiver, bsdf, it.wo, swl, trace);
             });
         };
 

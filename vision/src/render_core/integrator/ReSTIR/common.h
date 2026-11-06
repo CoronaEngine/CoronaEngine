@@ -7,7 +7,7 @@
 #include "core/stl.h"
 #include "dsl/dsl.h"
 #include "base/import/parameter_set.h"
-#include "base/scattering/interaction.h"
+#include "base/scattering/material.h"
 #include "base/encoded_object.h"
 #include "base/mgr/pipeline.h"
 #include "core/concurrency/thread_pool.h"
@@ -130,6 +130,15 @@ namespace vision {
                              diff_threshold, another_surface->depth());
 }
 
+inline void set_reuse_material_guides(SurfaceDataVar &surface, const MaterialEvaluator &guide,
+                                      const Spectrum &spectrum, const SampledWavelengths &swl) noexcept {
+    SampledSpectrum diffuse{swl.dimension()}, specular{swl.dimension()};
+    Float2 roughness;
+    guide.reuse_material(diffuse, specular, roughness);
+    surface.diffuse_roughness = make_float4(spectrum.linear_srgb(diffuse, swl), roughness.x);
+    surface.specular_roughness = make_float4(spectrum.linear_srgb(specular, swl), roughness.y);
+}
+
 class ReSTIR : public Toolkit, public RenderEnv, public GUI, public RuntimeObject {
 protected:
     SpatialResamplingParam spatial_{};
@@ -156,6 +165,7 @@ public:
                            max_age_, diff_factor_, integrator_)
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_SETTER(integrator)
+    void invalidate_history() noexcept { history_ = {}; }
     [[nodiscard]] DataWrap settings() const {
         return {{"open", open_}, {"max_age", max_age_}, {"diffuse_factor", diff_factor_},
                 {"temporal", {{"open", temporal_.open}, {"history_limit", temporal_.limit},
