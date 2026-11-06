@@ -35,6 +35,7 @@
 #include "base/mgr/renderer.h"
 #include "base/mgr/scene.h"
 #include "base/sensor/frame_buffer.h"
+#include "math/warp.h"
 
 namespace vision::falcor_di {
 
@@ -49,13 +50,11 @@ struct Reservoir {
 static_assert(sizeof(Reservoir) == 20u);
 
 struct LightTriangleGeometry {
-    array_float3 p0, p1, p2, ng;
-    float2 uv0, uv1, uv2;
+    array_float3 p0, p1, p2, ng, emission;
     float pdf_pos;
-    uint light_id;
 };
 
-static_assert(sizeof(LightTriangleGeometry) == 80u);
+static_assert(sizeof(LightTriangleGeometry) == 64u);
 
 } // namespace vision::falcor_di
 
@@ -70,7 +69,7 @@ OC_STRUCT(vision::falcor_di, Reservoir, light_index, packed_uv, count, target, w
     }
 };
 
-OC_STRUCT(vision::falcor_di, LightTriangleGeometry, p0, p1, p2, ng, uv0, uv1, uv2, pdf_pos, light_id) {};
+OC_STRUCT(vision::falcor_di, LightTriangleGeometry, p0, p1, p2, ng, emission, pdf_pos) {};
 
 namespace vision::falcor_di {
 
@@ -161,7 +160,6 @@ struct TriangleSample {
     $if(triangle.pdf_pos > 0.f) {
         point.pos = triangle_lerp(bary, triangle.p0.as_vec3(), triangle.p1.as_vec3(), triangle.p2.as_vec3());
         point.ng = triangle.ng.as_vec3();
-        point.uv = triangle_lerp(bary, triangle.uv0, triangle.uv1, triangle.uv2);
         point.PDF_pos = triangle.pdf_pos;
     } $else {
         const Uint4 primitive = ctx.light_primitives.read(index, false);
@@ -170,32 +168,27 @@ struct TriangleSample {
     return point;
 }
 
-[[nodiscard]] inline TriangleSample evaluate_light_point(const Uint &light_id, const LightEvalContext &point,
-                                                        const Surface &surface, const SampledWavelengths &swl) {
+[[nodiscard]] inline TriangleSample evaluate_light_point(const Float3 &emission, const LightEvalContext &point,
+                                                        const Surface &surface) {
     TriangleSample sample;
     const Float3 to_light = point.pos - surface.position;
     $if(dot(to_light, point.ng) < 0.f) {
-        LightSampleContext ref;
-        ref.pos = surface.position;
-        Toolkit::renderer().light_sampler()->dispatch_light(light_id, [&](const Light *light) {
-            if (!light->match(LightType::Area)) return;
-            // RIS already accounts for selecting this triangle. Use its conditional PDF.
-            const auto eval = light->evaluate_wi(ref, point, swl, LightEvalMode::All);
-            $if(eval.pdf > 0.f && finite(eval.pdf)) {
-                sample.distance = length(to_light);
-                sample.direction = to_light / sample.distance;
-                sample.radiance = eval.L.vec3() / eval.pdf;
-                sample.pdf = eval.pdf;
-            };
-        });
+        // RIS accounts for selecting the triangle. Use the framework's conditional area-light PDF.
+        const Float pdf = vision::PDF_wi(point.PDF_pos, point.ng, surface.position - point.pos);
+        $if(pdf > 0.f && finite(pdf)) {
+            sample.distance = length(to_light);
+            sample.direction = to_light / sample.distance;
+            sample.radiance = emission / pdf;
+            sample.pdf = pdf;
+        };
     };
     return sample;
 }
 
 [[nodiscard]] inline TriangleSample sample_light(const Context &ctx, const Uint &index, const Surface &surface,
-                                                const Float2 &uv, const SampledWavelengths &swl) {
+                                                const Float2 &uv) {
     const LightTriangleGeometryVar triangle = ctx.light_geometry.read(index, false);
-    return evaluate_light_point(triangle.light_id, load_light_point(ctx, index, triangle, uv), surface, swl);
+    return evaluate_light_point(triangle.emission.as_vec3(), load_light_point(ctx, index, triangle, uv), surface);
 }
 
 [[nodiscard]] inline RayVar make_light_ray(const Float3 &origin, const Float3 &direction,

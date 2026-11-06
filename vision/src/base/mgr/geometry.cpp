@@ -225,6 +225,7 @@ void Geometry::update_instances(const vector<SP<ShapeInstance>> &instances) {
 void Geometry::update_accel(Stream &stream) {
     TIMER(update_accel);
     auto &resource = *gpu_resource_;
+    resource.record_visibility_change();
     auto &geometry_data = resource.data();
     auto &accel = resource.accel();
     auto &accel_mesh_ids = resource.accel_mesh_ids();
@@ -250,6 +251,7 @@ void Geometry::update_accel(Stream &stream) {
 void Geometry::build_accel(Stream &stream) {
     TIMER(build_accel);
     auto &resource = *gpu_resource_;
+    resource.record_visibility_change();
     rebuild_accel(resource.data(), resource.device(), resource.bindless_array(), stream, resource.accel());
     resource.accel_mesh_ids() = collect_instance_mesh_ids(resource.data());
     resource.record_build();
@@ -278,6 +280,7 @@ void Geometry::clear() noexcept {
     if (!gpu_resource_) {
         return;
     }
+    gpu_resource_->record_visibility_change();
     gpu_resource_->data().clear_all();
     gpu_resource_->accel().clear();
     gpu_resource_->accel_mesh_ids().clear();

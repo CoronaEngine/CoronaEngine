@@ -64,6 +64,7 @@ private:
     ocarina::Accel accel_;
     vector<uint> accel_mesh_ids_;
     uint64_t build_count_{0};
+    uint64_t visibility_revision_{0};
 
 public:
     explicit GeometryGpuResource(Device &device) noexcept;
@@ -85,6 +86,8 @@ public:
     [[nodiscard]] const vector<uint> &accel_mesh_ids() const noexcept { return accel_mesh_ids_; }
     [[nodiscard]] uint64_t build_count() const noexcept { return build_count_; }
     void record_build() noexcept { ++build_count_; }
+    [[nodiscard]] uint64_t visibility_revision() const noexcept { return visibility_revision_; }
+    void record_visibility_change() noexcept { ++visibility_revision_; }
 };
 
 class Geometry {

@@ -14,9 +14,13 @@ namespace vision {
 
 // Static RGB, pinhole, area-light ReSTIR DI experiment.
 class FalcorDIExperiment final : private Toolkit {
+    static constexpr uint has_history_bit = 1u;
+    static constexpr uint same_geometry_bit = 2u;
     uint2 extent_{};
     uint light_count_{};
     uint previous_frame_{InvalidUI32};
+    WP<const GeometryGpuResource> previous_geometry_;
+    uint64_t previous_geometry_revision_{};
     std::string mode_;
     bool publish_gi_{};
     Buffer<uint4> surfaces0_;
@@ -26,12 +30,11 @@ class FalcorDIExperiment final : private Toolkit {
     Buffer<falcor_di::Reservoir> reservoirs_;
     Buffer<uint4> light_primitives_;
     Buffer<falcor_di::LightTriangleGeometry> light_geometry_;
-    Buffer<float4> shade_direction_, shade_radiance_;
     Buffer<float> probabilities_;
     Buffer<uint> light_bases_;
     Shader<void()> prepare_light_geometry_;
-    Shader<void(uint)> prepare_surface_, presample_, evaluate_material_;
-    Shader<void(uint, uint)> candidates_, visibility_, shade_;
+    Shader<void(uint)> prepare_surface_, presample_;
+    Shader<void(uint, uint)> candidates_, shade_;
     Shader<void(uint, uint3, uint)> reuse_;
 
     template<typename T>
@@ -86,8 +89,6 @@ class FalcorDIExperiment final : private Toolkit {
         surface_normals_ = device().create_buffer<uint2>(2u * pixels, "Falcor DI surface normals");
         reservoirs_ = device().create_buffer<falcor_di::Reservoir>(3u * pitch, "Falcor DI packed reservoir");
         ris_ = device().create_buffer<uint2>(falcor_di::tile_count * falcor_di::tile_size, "Falcor DI RIS tiles");
-        shade_direction_ = device().create_buffer<float4>(pixels, "Falcor DI selected direction and distance");
-        shade_radiance_ = device().create_buffer<float4>(pixels, "Falcor DI selected radiance");
         vector<float2> offsets;
         offsets.reserve(falcor_di::neighbor_count);
         constexpr float step = 1.f / 1.3247179572447f;
@@ -133,15 +134,19 @@ class FalcorDIExperiment final : private Toolkit {
             triangle.p1.set(p1.pos);
             triangle.p2.set(p2.pos);
             triangle.ng.set(p0.ng);
-            triangle.uv0 = p0.uv;
-            triangle.uv1 = p1.uv;
-            triangle.uv2 = p2.uv;
             // The authored normal is interpolated by the framework. When the
             // corner hemispheres disagree, let it resolve the sampled point.
             const Bool cacheable = p0.PDF_pos > 0.f && falcor_di::finite(p0.PDF_pos) &&
                                    all(p0.ng == p1.ng) && all(p0.ng == p2.ng);
             triangle.pdf_pos = select(cacheable, p0.PDF_pos, 0.f);
-            triangle.light_id = primitive.z;
+            // This route accepts only constant one-sided emitters in RGB.
+            const auto swl = spec->sample_wavelength(sampler);
+            Float3 emission = make_float3(0.f);
+            lights->dispatch_light(primitive.z, [&](const Light *light) {
+                if (!light->match(LightType::Area)) return;
+                emission = light->color_.eval_illumination_spectrum(p0.uv, swl).sample.vec3() * light->scale();
+            });
+            triangle.emission.set(emission);
             light_geometry_.write(index, triangle, false);
         };
         prepare_light_geometry.function()->set_block_dim(32u);
@@ -215,7 +220,7 @@ class FalcorDIExperiment final : private Toolkit {
                 auto it = geo.compute_surface_interaction(hit, ray);
                 materials.dispatch(it.material_id(), [&](const Material *material) {
                     const auto bsdf = material->create_evaluator(it, swl);
-                    reservoir = falcor_di::sample_initial(ctx, pixel, surface, bsdf, it.wo, swl, sampler,
+                    reservoir = falcor_di::sample_initial(ctx, pixel, surface, bsdf, it.wo, sampler,
                                                           publish_gi_ ? addressof(gi_proposal) : nullptr);
                 });
             };
@@ -225,76 +230,41 @@ class FalcorDIExperiment final : private Toolkit {
         candidates.function()->set_block_dim(16u, 16u);
         candidates_ = device().compile(candidates, "Falcor DI initial candidates");
 
-        Kernel visibility = [&](Uint frame, Uint slice) {
-            Function::current()->require_ray_query_compute_workgroups();
-            const auto ctx = context(frame, Bool{false});
-            const Uint2 pixel = dispatch_idx().xy();
-            const auto reservoir = falcor_di::load_reservoir(ctx, pixel, slice);
-            $if(falcor_di::valid_reservoir(reservoir)) {
-                const auto surface = falcor_di::load_surface(ctx, make_int2(pixel), false);
-                const auto swl = spec->sample_wavelength(sampler);
-                const auto sample = falcor_di::sample_light(ctx, reservoir.light_index, surface, reservoir->uv(), swl);
-                $if(!falcor_di::visible(surface, sample)) {
-                    // Keep this receiver in the estimate count when its contribution is zero.
-                    falcor_di::ReservoirVar rejected;
-                    rejected.count = reservoir.count;
-                    falcor_di::store_reservoir(ctx, pixel, slice, rejected);
-                };
-            };
-        };
-        visibility.function()->set_block_dim(16u, 16u);
-        visibility_ = device().compile(visibility, "Falcor DI initial visibility");
-
         const auto reuse_settings = direct.settings();
         const bool use_temporal = reuse_settings["temporal"]["open"].get<bool>();
         const bool use_spatial = reuse_settings["spatial"]["open"].get<bool>();
         OC_INFO_FORMAT("Falcor DI reuse settings: temporal={}, spatial={}", use_temporal, use_spatial);
         Kernel reuse = [&](Uint frame, Uint3 slices, Uint history) {
-            if (bias_mode == 2u || bias_mode == 3u) {
-                Function::current()->require_ray_query_compute_workgroups();
-            }
+            Function::current()->require_ray_query_compute_workgroups();
             sampler->load_data();
-            const auto ctx = context(frame, history != 0u);
+            const auto ctx = context(frame, (history & has_history_bit) != 0u);
             const Uint2 pixel = dispatch_idx().xy();
             const auto surface = falcor_di::load_surface(ctx, make_int2(pixel), false);
             falcor_di::ReservoirVar reservoir;
             $if(falcor_di::valid_surface(surface)) {
-                const auto candidate = falcor_di::load_reservoir(ctx, pixel, slices.x);
+                auto candidate = falcor_di::load_reservoir(ctx, pixel, slices.x);
+                $if(falcor_di::valid_reservoir(candidate)) {
+                    const auto sample = falcor_di::sample_light(ctx, candidate.light_index, surface, candidate->uv());
+                    $if(!falcor_di::visible(surface, sample)) {
+                        // Keep the candidate count even when the selected light is blocked.
+                        falcor_di::ReservoirVar rejected;
+                        rejected.count = candidate.count;
+                        candidate = rejected;
+                    };
+                };
                 const auto swl = spec->sample_wavelength(sampler);
                 reservoir = falcor_di::reuse_direct(ctx, pixel, surface, candidate, slices.y, swl, bias_mode, sampler,
-                                                     use_temporal, use_spatial);
+                                                     use_temporal, use_spatial, (history & same_geometry_bit) != 0u);
             };
             falcor_di::store_reservoir(ctx, pixel, slices.z, reservoir);
         };
         reuse.function()->set_block_dim(16u, 16u);
-        reuse_ = device().compile(reuse, "Falcor DI spatiotemporal reuse");
+        reuse_ = device().compile(reuse, "Falcor DI visibility and spatiotemporal reuse");
 
         Kernel shade = [&](Uint frame, Uint slice) {
             const auto ctx = context(frame, Bool{false});
-            const Uint index = dispatch_id();
-            const Uint2 pixel = dispatch_idx().xy();
-            const auto surface = falcor_di::load_surface(ctx, make_int2(pixel), false);
-            const auto reservoir = falcor_di::load_reservoir(ctx, pixel, slice);
-            Float4 direction_distance = make_float4(0.f);
-            Float3 weighted_radiance = make_float3(0.f);
-            $if(falcor_di::valid_surface(surface) && falcor_di::valid_reservoir(reservoir)) {
-                const auto swl = spec->sample_wavelength(sampler);
-                const auto sample = falcor_di::sample_light(ctx, reservoir.light_index, surface, reservoir->uv(), swl);
-                direction_distance = make_float4(sample.direction, sample.distance);
-                weighted_radiance = sample.radiance * reservoir.weight;
-            };
-            shade_direction_.write(index, direction_distance);
-            shade_radiance_.write(index, make_float4(weighted_radiance, 0.f));
-        };
-        shade.function()->set_block_dim(16u, 16u);
-        shade_ = device().compile(shade, "Falcor DI final shading");
-
-        Kernel evaluate_material = [&](Uint frame) {
             const Uint i = dispatch_id();
-            const Float4 endpoint = shade_direction_.read(i);
-            const Float3 direction = endpoint.xyz();
-            const Float distance = endpoint.w;
-            const Float3 weighted_radiance = shade_radiance_.read(i).xyz();
+            const Uint2 pixel = dispatch_idx().xy();
             auto hit = fb.cur_visibility_buffer_var(frame).read(i);
             Float3 value = make_float3(0.f);
             const auto swl = spec->sample_wavelength(sampler);
@@ -308,20 +278,28 @@ class FalcorDIExperiment final : private Toolkit {
                         ref.pos = primary.org_min.xyz();
                         value = light->evaluate_wi(ref, it, swl, LightEvalMode::L).L.vec3();
                     });
-                } $elif(distance > 0.f && any(weighted_radiance > make_float3(0.f))) {
-                    auto shadow = it.spawn_ray(direction, max(0.f, distance - 1e-4f));
-                    $if(!geo.trace_occlusion(shadow)) {
-                        materials.dispatch(it.material_id(), [&](const Material *material) {
-                            auto bsdf = material->create_evaluator(it, swl);
-                            value = bsdf.evaluate(it.wo, direction).f.vec3() * weighted_radiance;
-                        });
+                } $else {
+                    const auto surface = falcor_di::load_surface(ctx, make_int2(pixel), false);
+                    const auto reservoir = falcor_di::load_reservoir(ctx, pixel, slice);
+                    $if(falcor_di::valid_surface(surface) && falcor_di::valid_reservoir(reservoir)) {
+                        const auto sample = falcor_di::sample_light(ctx, reservoir.light_index, surface, reservoir->uv());
+                        const Float3 weighted_radiance = sample.radiance * reservoir.weight;
+                        $if(sample.distance > 0.f && any(weighted_radiance > make_float3(0.f))) {
+                            auto shadow = it.spawn_ray(sample.direction, max(0.f, sample.distance - 1e-4f));
+                            $if(!geo.trace_occlusion(shadow)) {
+                                materials.dispatch(it.material_id(), [&](const Material *material) {
+                                    auto bsdf = material->create_evaluator(it, swl);
+                                    value = bsdf.evaluate(it.wo, sample.direction).f.vec3() * weighted_radiance;
+                                });
+                            };
+                        };
                     };
                 };
             };
             direct.write_radiance(i, make_float4(value, 1.f));
         };
-        evaluate_material.function()->set_block_dim(16u, 16u);
-        evaluate_material_ = device().compile(evaluate_material, "Falcor DI material evaluation");
+        shade.function()->set_block_dim(16u, 16u);
+        shade_ = device().compile(shade, "Falcor DI final shading");
     }
 
 public:
@@ -346,17 +324,25 @@ public:
     [[nodiscard]] CommandBatch dispatch(uint frame) {
         const uint current = 1u + (frame & 1u);
         const uint3 slices = make_uint3(0u, 3u - current, current);
-        const uint history = previous_frame_ != InvalidUI32 && frame > 0u && previous_frame_ + 1u == frame;
+        const bool has_history = previous_frame_ != InvalidUI32 && frame > 0u && previous_frame_ + 1u == frame;
+        uint history = has_history ? has_history_bit : 0u;
+        if (mode_ == "pairwise") {
+            const auto resource = geometry().gpu_resource();
+            const uint64_t revision = resource->visibility_revision();
+            if (has_history && previous_geometry_.lock() == resource && previous_geometry_revision_ == revision) {
+                history |= same_geometry_bit;
+            }
+            previous_geometry_ = resource;
+            previous_geometry_revision_ = revision;
+        }
         previous_frame_ = frame;
         CommandBatch batch;
         batch << prepare_light_geometry_().dispatch(light_count_);
         batch << prepare_surface_(frame).dispatch(extent_);
         batch << presample_(frame).dispatch(make_uint2(falcor_di::tile_size, falcor_di::tile_count));
         batch << candidates_(frame, slices.x).dispatch(extent_);
-        batch << visibility_(frame, slices.x).dispatch(extent_);
         batch << reuse_(frame, slices, history).dispatch(extent_);
         batch << shade_(frame, slices.z).dispatch(extent_);
-        batch << evaluate_material_(frame).dispatch(extent_);
         return batch;
     }
 };

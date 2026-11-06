@@ -31,7 +31,7 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
 
 [[nodiscard]] inline ReservoirVar sample_initial(const Context &ctx, const Uint2 &pixel, const Surface &surface,
                                                 const MaterialEvaluator &bsdf, const Float3 &wo,
-                                                const SampledWavelengths &swl, TSampler &sampler,
+                                                TSampler &sampler,
                                                 HitBSDFVar *gi_proposal) {
     ReservoirVar reservoir;
     Float2 winner_uv = make_float2(0.f);
@@ -41,7 +41,7 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
     const auto offer_candidate = [&](const Uint &light_index, const Float2 &uv, const Float &light_probability,
                                      const Float &u, const Float *sampled_pdf = nullptr) {
         $if(light_index != InvalidUI32) {
-            const TriangleSample light = sample_light(ctx, light_index, surface, uv, swl);
+            const TriangleSample light = sample_light(ctx, light_index, surface, uv);
             $if(light.pdf > 0.f) {
                 const auto eval = bsdf.evaluate(
                     wo, light.direction, sampled_pdf ? MaterialEvalMode::F : MaterialEvalMode::All);
