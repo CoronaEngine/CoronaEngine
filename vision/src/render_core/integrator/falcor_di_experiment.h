@@ -166,7 +166,20 @@ class FalcorDIExperiment final : private Toolkit {
             const auto ctx = context(frame, Bool{false});
             const Uint2 pixel = dispatch_idx().xy();
             const auto surface = falcor_di::load_surface(ctx, make_int2(pixel), false);
-            const auto reservoir = falcor_di::sample_initial(ctx, pixel, surface);
+            sampler->load_data();
+            sampler->set_seed(pixel, frame, Dimension::ReSTIR_RIS);
+            const auto swl = spec->sample_wavelength(sampler);
+            falcor_di::Reservoir reservoir;
+            $if(falcor_di::valid_surface(surface)) {
+                const Uint index = dispatch_id();
+                const auto hit = fb.cur_visibility_buffer_var(frame).read(index);
+                auto ray = fb.rays().read(index)->to_ray_state().ray;
+                auto it = geo.compute_surface_interaction(hit, ray);
+                materials.dispatch(it.material_id(), [&](const Material *material) {
+                    const auto bsdf = material->create_evaluator(it, swl);
+                    reservoir = falcor_di::sample_initial(ctx, pixel, surface, bsdf, it.wo, sampler);
+                });
+            };
             falcor_di::store_reservoir(ctx, pixel, slice, reservoir);
         };
         candidates.function()->set_block_dim(16u, 16u);
