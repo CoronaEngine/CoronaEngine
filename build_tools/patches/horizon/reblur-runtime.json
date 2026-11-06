@@ -1,6 +1,6 @@
 {
   "source_url": "https://github.com/CoronaEngine/Horizon.git",
-  "base_commit": "fc35ba8b79d354f446dd7a4e6c2b02e22cbf323e",
+  "base_commit": "b6b74845d391a340542b2c41a9eb505c74438e6e",
   "patch_sha256": "77943f4fc460d6d4998ff013ea2fa66e99fc1edd7b8aab8bb1de0d265f6112b6",
   "files": {
     "src/backends/vulkan_compute/vk_command_visitor.cpp": {

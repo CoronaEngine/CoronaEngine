@@ -4,15 +4,7 @@
 
 namespace vision::falcor_di {
 
-struct Reservoir {
-    Uint light_index{InvalidUI32};
-    Float2 uv{make_float2(0.f)};
-    Float weight{0.f};
-    Float target{0.f};
-    Float count{0.f};
-};
-
-[[nodiscard]] inline Bool valid_reservoir(const Reservoir &reservoir) {
+[[nodiscard]] inline Bool valid_reservoir(const ReservoirVar &reservoir) {
     return reservoir.light_index != InvalidUI32 && reservoir.weight > 0.f && reservoir.target > 0.f;
 }
 
@@ -25,38 +17,26 @@ struct Reservoir {
            + local.y * 16u + local.x;
 }
 
-[[nodiscard]] inline Reservoir load_reservoir(const Context &ctx, const Uint2 &pixel, const Uint &slice) {
-    Reservoir reservoir;
+[[nodiscard]] inline ReservoirVar load_reservoir(const Context &ctx, const Uint2 &pixel, const Uint &slice) {
+    ReservoirVar reservoir;
     $if(!any(pixel >= ctx.extent) && slice < 3u) {
         const Uint index = reservoir_index(ctx.extent, pixel, slice);
-        const PackedReservoirVar packed = ctx.reservoirs.read(index, false);
-        reservoir.light_index = packed.light_index;
-        reservoir.uv = cast<float2>(make_uint2(packed.packed_uv & 65535u, packed.packed_uv >> 16u)) / 65535.f;
-        reservoir.count = as<float>(packed.count_bits);
-        reservoir.target = packed.target;
-        reservoir.weight = packed.weight;
+        reservoir = ctx.reservoirs.read(index, false);
     };
     return reservoir;
 }
 
 inline void store_reservoir(const Context &ctx, const Uint2 &pixel, const Uint &slice,
-                            const Reservoir &reservoir) {
-    const Uint2 uv = cast<uint2>(saturate(reservoir.uv) * 65535.f + 0.5f);
-    const Uint packed_uv = uv.x | (uv.y << 16u);
+                            const ReservoirVar &reservoir) {
     const Uint index = reservoir_index(ctx.extent, pixel, slice);
-    PackedReservoirVar packed;
-    packed.light_index = reservoir.light_index;
-    packed.packed_uv = packed_uv;
-    packed.count_bits = as<uint>(reservoir.count);
-    packed.target = reservoir.target;
-    packed.weight = reservoir.weight;
-    ctx.reservoirs.write(index, packed, false);
+    ctx.reservoirs.write(index, reservoir, false);
 }
 
 // Weighted reservoir sampling and RIS normalization, Bitterli et al. (2020).
-inline Bool stream_reservoir(Reservoir &reservoir, const Uint &light_index, const Float2 &uv,
-                             const Float &target, const Float &candidate_weight, const Float &count,
-                             const Float &u) {
+template<typename SelectUV>
+inline Bool stream_candidate(ReservoirVar &reservoir, const Uint &light_index, const Float &target,
+                             const Float &candidate_weight, const Float &count, const Float &u,
+                             SelectUV &&select_uv) {
     reservoir.count += count;
     Bool selected = false;
     $if(candidate_weight > 0.f && finite(candidate_weight) && target > 0.f && finite(target) &&
@@ -65,14 +45,22 @@ inline Bool stream_reservoir(Reservoir &reservoir, const Uint &light_index, cons
         selected = !(u * reservoir.weight >= candidate_weight);
         $if(selected) {
             reservoir.light_index = light_index;
-            reservoir.uv = uv;
+            select_uv();
             reservoir.target = target;
         };
     };
     return selected;
 }
 
-inline void finalize_reservoir(Reservoir &reservoir, const Float &numerator, const Float &denominator) {
+inline Bool stream_reservoir(ReservoirVar &reservoir, const Uint &light_index, const Uint &packed_uv,
+                             const Float &target, const Float &candidate_weight, const Float &count,
+                             const Float &u) {
+    return stream_candidate(reservoir, light_index, target, candidate_weight, count, u, [&] {
+        reservoir.packed_uv = packed_uv;
+    });
+}
+
+inline void finalize_reservoir(ReservoirVar &reservoir, const Float &numerator, const Float &denominator) {
     const Float divisor = reservoir.target * denominator;
     Float weight = 0.f;
     $if(divisor > 0.f) {

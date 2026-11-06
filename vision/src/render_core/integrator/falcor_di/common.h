@@ -38,19 +38,28 @@
 
 namespace vision::falcor_di {
 
-struct PackedReservoir {
-    uint light_index;
-    uint packed_uv;
-    uint count_bits;
-    float target;
-    float weight;
+struct Reservoir {
+    uint light_index{InvalidUI32};
+    uint packed_uv{};
+    float count{};
+    float target{};
+    float weight{};
 };
 
-static_assert(sizeof(PackedReservoir) == 20u);
+static_assert(sizeof(Reservoir) == 20u);
 
 } // namespace vision::falcor_di
 
-OC_STRUCT(vision::falcor_di, PackedReservoir, light_index, packed_uv, count_bits, target, weight) {};
+OC_STRUCT(vision::falcor_di, Reservoir, light_index, packed_uv, count, target, weight) {
+    [[nodiscard]] Float2 uv() const {
+        return cast<float2>(make_uint2(packed_uv & 65535u, packed_uv >> 16u)) / 65535.f;
+    }
+
+    void set_uv(const Float2 &uv) {
+        const Uint2 bits = cast<uint2>(saturate(uv) * 65535.f + 0.5f);
+        packed_uv = bits.x | (bits.y << 16u);
+    }
+};
 
 namespace vision::falcor_di {
 
@@ -66,7 +75,7 @@ struct Context {
     uint light_count;
     const Buffer<uint4> &surfaces0;
     const Buffer<uint> &surface_normals;
-    Buffer<PackedReservoir> &reservoirs;
+    Buffer<Reservoir> &reservoirs;
     const Buffer<float2> &neighbors;
     const Buffer<float4> &lights;
     const Buffer<float> &probabilities;
@@ -136,7 +145,7 @@ struct LightSample {
 }
 
 [[nodiscard]] inline Float quantize_edge(const Float &value) {
-    return ocarina::call<float>("f16tof32", ocarina::call<uint>("f32tof16", value));
+    return ocarina::f16tof32(ocarina::f32tof16(value));
 }
 
 [[nodiscard]] inline Float3 quantize_edge(const Float3 &edge) {

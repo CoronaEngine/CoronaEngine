@@ -29,9 +29,10 @@ inline void presample_light(const Context &ctx, const Uint2 &position) {
     ctx.ris.write(position.y * tile_size + position.x, make_uint2(selected, as<uint>(selected_probability)), false);
 }
 
-[[nodiscard]] inline Reservoir sample_initial(const Context &ctx, const Uint2 &pixel, const Surface &surface,
+[[nodiscard]] inline ReservoirVar sample_initial(const Context &ctx, const Uint2 &pixel, const Surface &surface,
                                               const MaterialEvaluator &bsdf, const Float3 &wo, TSampler &sampler) {
-    Reservoir reservoir;
+    ReservoirVar reservoir;
+    Float2 winner_uv = make_float2(0.f);
     // The reservoir represents a continuous area-light sample, so a material
     // with a discrete lobe uses only the light proposal.
     const Bool use_bsdf = !BxDFFlag::is_specular(bsdf.flag());
@@ -58,7 +59,9 @@ inline void presample_light(const Context &ctx, const Uint2 &position) {
                     $if(mixture_pdf > 0.f && finite(mixture_pdf)) {
                         const Float candidate_weight = target / mixture_pdf;
                         $if(finite(candidate_weight)) {
-                            stream_reservoir(reservoir, light_index, uv, target, candidate_weight, 1.f, u);
+                            stream_candidate(reservoir, light_index, target, candidate_weight, 1.f, u, [&] {
+                                winner_uv = uv;
+                            });
                         };
                     };
                 };
@@ -92,6 +95,7 @@ inline void presample_light(const Context &ctx, const Uint2 &position) {
         };
     };
 
+    reservoir->set_uv(winner_uv);
     finalize_reservoir(reservoir, 1.f, float(initial_candidate_count));
     // Reuse receives one finalized estimate. Null draws still occupy their mixture slots.
     reservoir.count = 1.f;
