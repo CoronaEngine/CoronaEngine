@@ -65,7 +65,7 @@ struct Context {
     Bool has_history;
     uint light_count;
     const Buffer<uint4> &surfaces0;
-    const Buffer<uint2> &surfaces1;
+    const Buffer<uint> &surface_normals;
     Buffer<PackedReservoir> &reservoirs;
     const Buffer<float2> &neighbors;
     const Buffer<float4> &lights;
@@ -77,11 +77,7 @@ struct Context {
 struct Surface {
     Float3 position{make_float3(0.f)};
     Float3 normal{make_float3(0.f)};
-    Float3 view_dir{make_float3(0.f)};
     Float depth{-1.f};
-    Float roughness{0.f};
-    Float specular{0.f};
-    Float diffuse_prob{0.f};
 };
 
 struct Light {
@@ -121,23 +117,15 @@ struct LightSample {
 
 [[nodiscard]] inline Surface load_surface(const Context &ctx, const Int2 &pixel, bool previous) {
     Surface surface;
-    auto &camera = Toolkit::scene().sensor();
-    camera->load_data();
-    const Float3 camera_position = previous ? camera->prev_device_position() : camera->device_position();
     const Bool in_bounds = all(pixel >= make_int2(0)) && all(pixel < make_int2(ctx.extent));
     $if(in_bounds && (previous ? ctx.has_history : Bool{true})) {
         const Uint slot = (ctx.frame & 1u) ^ uint(previous);
         const Uint index = slot * (ctx.extent.x * ctx.extent.y) + pixel_index(make_uint2(pixel), ctx.extent);
         const Float4 position_depth = as<float4>(ctx.surfaces0.read(index, false));
         $if(position_depth.w >= 0.f) {
-            const Uint2 guide = ctx.surfaces1.read(index, false);
             surface.position = position_depth.xyz();
-            surface.normal = unpack_normal(guide.x);
-            surface.view_dir = normalize(camera_position - surface.position);
+            surface.normal = unpack_normal(ctx.surface_normals.read(index, false));
             surface.depth = position_depth.w;
-            surface.roughness = cast<float>((guide.y >> 16u) & 255u) * (1.f / 255.f);
-            surface.specular = cast<float>((guide.y >> 8u) & 255u) * (1.f / 255.f);
-            surface.diffuse_prob = cast<float>(guide.y >> 24u) * (1.f / 255.f);
         };
     };
     return surface;
@@ -168,7 +156,7 @@ struct LightSample {
 }
 
 [[nodiscard]] inline LightSample sample_triangle(const Light &light, const Surface &surface,
-                                                 const Float2 &u, bool scalar_radiance) {
+                                                 const Float2 &u) {
     LightSample sample;
     const Float2 uv = select(u.x + u.y <= 1.f, u, 1.f - u);
     const Float3 normal = cross(light.edge0, light.edge1);
@@ -184,12 +172,9 @@ struct LightSample {
         const Float cosine = dot(normal / normal_length, -direction);
         $if(cosine > 0.f) {
             const Float denominator = max(min_positive, cosine * area);
-            const Float3 radiance = scalar_radiance
-                ? make_float3(dot(light.radiance, make_float3(0.2126f, 0.7152f, 0.0722f)))
-                : light.radiance;
             sample.direction = direction;
             sample.distance = distance;
-            sample.radiance = radiance * (denominator / distance_squared);
+            sample.radiance = light.radiance * (denominator / distance_squared);
             sample.pdf = distance_squared / denominator;
         };
     };

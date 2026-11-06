@@ -2,7 +2,6 @@
 
 #include "brdf.h"
 #include "reservoir.h"
-#include "base/scattering/material.h"
 
 namespace vision::falcor_di {
 
@@ -39,16 +38,18 @@ inline void presample_light(const Context &ctx, const Uint2 &position) {
     const auto offer_candidate = [&](const Uint &light_index, const Float2 &uv, const Float &light_probability,
                                      const Float &u, const Float *sampled_pdf = nullptr) {
         $if(light_index != InvalidUI32) {
-            const LightSample light = sample_triangle(load_light(ctx, light_index), surface, uv, true);
+            const LightSample light = sample_triangle(load_light(ctx, light_index), surface, uv);
             $if(light.pdf > 0.f && finite(light.pdf)) {
-                const Float target = target_pdf(light, surface);
-                $if(target > 0.f && finite(target)) {
+                const auto eval = bsdf.evaluate(
+                    wo, light.direction, sampled_pdf ? MaterialEvalMode::F : MaterialEvalMode::All);
+                const Float target = target_weight(eval, light);
+                $if(target > 0.f) {
                     Float bsdf_probability = 0.f;
                     if (sampled_pdf) {
                         bsdf_probability = *sampled_pdf;
                     } else {
                         $if(use_bsdf && light.distance >= ray_epsilon && dot(surface.normal, light.direction) > 0.f) {
-                            bsdf_probability = bsdf.evaluate(wo, light.direction, MaterialEvalMode::PDF).pdf();
+                            bsdf_probability = eval.pdf();
                         };
                     }
                     // Convert the solid-angle density to the same triangle measure as the light proposal.
