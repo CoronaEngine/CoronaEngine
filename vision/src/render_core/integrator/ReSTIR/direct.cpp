@@ -239,7 +239,26 @@ DIReservoirVar ReSTIRDI::RIS(const Bool &hit, const Interaction &it, const Var<D
     };
 
     $if(hit) {
-        if (integrator()->separate()) {
+        if (!integrator()->separate() && spectrum->impl_type() == "srgb") {
+            scene().materials().dispatch(it.material_id(), [&](const Material *material) {
+                // Keep all candidates in the material dispatch scope so the DSL
+                // lobe values remain valid. Preserve the receiver's original
+                // frame for light sampling, PDF conversion and shadow rays.
+                Interaction copy = it;
+                auto bsdf = material->create_evaluator(copy, swl);
+                swl.check_dispersive(spectrum, bsdf);
+                if (M_light_ > 0u) {
+                    $for(i, M_light) {
+                        sample_light(addressof(bsdf));
+                    };
+                }
+                if (M_bsdf_ > 0u) {
+                    $for(i, M_bsdf) {
+                        sample_bsdf(addressof(bsdf));
+                    };
+                }
+            });
+        } else if (integrator()->separate()) {
             MaterialEvaluator bsdf(it, swl);
             scene().materials().dispatch(it.material_id(), [&](const Material *material) {
                 material->build_evaluator(bsdf, it, swl);
