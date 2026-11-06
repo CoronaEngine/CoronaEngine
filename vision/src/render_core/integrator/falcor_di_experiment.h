@@ -17,17 +17,19 @@ class FalcorDIExperiment final : private Toolkit {
     static constexpr uint has_history_bit = 1u;
     static constexpr uint same_geometry_bit = 2u;
     uint2 extent_{};
+    FrameBuffer *frame_buffer_{};
     uint light_count_{};
     uint previous_frame_{InvalidUI32};
     WP<const GeometryGpuResource> previous_geometry_;
     uint64_t previous_geometry_revision_{};
     std::string mode_;
     bool publish_gi_{};
+    // Non-owning typed descriptors captured by the compiled shaders.
     Buffer<uint4> surfaces0_;
     Buffer<uint2> surface_normals_;
+    Buffer<falcor_di::Reservoir> reservoirs_;
     Buffer<uint2> ris_;
     Buffer<float2> neighbors_;
-    Buffer<falcor_di::Reservoir> reservoirs_;
     Buffer<uint4> light_primitives_;
     Buffer<falcor_di::LightTriangleGeometry> light_geometry_;
     Buffer<float> probabilities_;
@@ -81,13 +83,18 @@ class FalcorDIExperiment final : private Toolkit {
         light_bases_ = uploaded(bases, "Falcor DI emitter offsets");
     }
 
-    void prepare_buffers() {
-        extent_ = pipeline()->resolution();
-        const auto pixels = extent_.x * extent_.y;
-        const auto pitch = ((extent_.x + 15u) / 16u) * ((extent_.y + 15u) / 16u) * 256u;
-        surfaces0_ = device().create_buffer<uint4>(2u * pixels, "Falcor DI surface position and depth");
-        surface_normals_ = device().create_buffer<uint2>(2u * pixels, "Falcor DI surface normals");
-        reservoirs_ = device().create_buffer<falcor_di::Reservoir>(3u * pitch, "Falcor DI packed reservoir");
+    void bind_screen_buffers() {
+        const auto bind = [&]<typename T>(Buffer<T> &view, const char *name, uint block_size, uint slices) {
+            const auto storage = frame_buffer_->prepare_screen_storage(
+                name, make_uint2(block_size), size_t(block_size) * block_size * slices * sizeof(T));
+            view = Buffer<T>{storage.template view_as<T>()};
+        };
+        bind(surfaces0_, "Falcor DI surface position and depth", 1u, 2u);
+        bind(surface_normals_, "Falcor DI surface normals", 1u, 2u);
+        bind(reservoirs_, "Falcor DI packed reservoir", falcor_di::screen_tile_size, 3u);
+    }
+
+    void prepare_sampling_buffers() {
         ris_ = device().create_buffer<uint2>(falcor_di::tile_count * falcor_di::tile_size, "Falcor DI RIS tiles");
         vector<float2> offsets;
         offsets.reserve(falcor_di::neighbor_count);
@@ -120,7 +127,7 @@ class FalcorDIExperiment final : private Toolkit {
         auto &geo = geometry();
         auto &sampler = renderer().sampler();
         auto &spec = spectrum();
-        auto &fb = frame_buffer();
+        auto &fb = *frame_buffer_;
         auto &materials = scene().materials();
         auto &lights = renderer().light_sampler();
         Kernel prepare_light_geometry = [&] {
@@ -304,21 +311,24 @@ class FalcorDIExperiment final : private Toolkit {
 
 public:
     FalcorDIExperiment(ReSTIRDI &direct, std::string_view mode, bool publish_gi)
-        : mode_{mode}, publish_gi_{publish_gi} {
+        : extent_{pipeline()->resolution()}, frame_buffer_{&frame_buffer()}, mode_{mode}, publish_gi_{publish_gi} {
         uint bias_mode = 0u;
         if (mode == "basic") bias_mode = 1u;
         else if (mode == "pairwise") bias_mode = 2u;
         else if (mode == "raytraced") bias_mode = 3u;
         else throw std::runtime_error("VISION_FALCOR_DI_MODE must be basic, pairwise, or raytraced");
         prepare_lights();
-        prepare_buffers();
+        bind_screen_buffers();
+        prepare_sampling_buffers();
         compile(direct, bias_mode);
         OC_INFO_FORMAT("Falcor DI native route active: mode={}, {} triangles, {}x{}", mode,
                        light_count_, extent_.x, extent_.y);
     }
 
     [[nodiscard]] bool matches(uint2 extent, std::string_view mode, bool publish_gi) const noexcept {
-        return extent.x == extent_.x && extent.y == extent_.y && mode == mode_ && publish_gi == publish_gi_;
+        // A replacement FrameBuffer owns different storage even when the extent is unchanged.
+        return frame_buffer_ == &frame_buffer() && extent.x == extent_.x && extent.y == extent_.y &&
+               mode == mode_ && publish_gi == publish_gi_;
     }
 
     [[nodiscard]] CommandBatch dispatch(uint frame) {

@@ -441,6 +441,29 @@ void FrameBuffer::manage_stable_plane_buffers(bool enabled, bool retain_history,
     resize(stable_dominant_, 1u, pixels, "FrameBuffer::stable_dominant");
 }
 
+void FrameBuffer::ScreenStorage::allocate(Device &device, uint2 extent, const string &name) noexcept {
+    const size_t blocks_x = (size_t(extent.x) + block_extent.x - 1u) / block_extent.x;
+    const size_t blocks_y = (size_t(extent.y) + block_extent.y - 1u) / block_extent.y;
+    buffer = device.create_byte_buffer(blocks_x * blocks_y * bytes_per_block, name);
+}
+
+ByteBufferView FrameBuffer::prepare_screen_storage(const string &name, uint2 block_extent,
+                                                   size_t bytes_per_block) noexcept {
+    OC_ERROR_IF(block_extent.x == 0u || block_extent.y == 0u || bytes_per_block == 0u,
+                "Invalid screen storage layout for {}", name);
+    auto [it, inserted] = screen_storage_.try_emplace(name);
+    auto &storage = it->second;
+    if (inserted) {
+        storage.block_extent = block_extent;
+        storage.bytes_per_block = bytes_per_block;
+        storage.allocate(device(), resolution(), name);
+    } else {
+        OC_ERROR_IF(any(storage.block_extent != block_extent) || storage.bytes_per_block != bytes_per_block,
+                    "Screen storage layout changed for {}", name);
+    }
+    return storage.buffer.view();
+}
+
 void FrameBuffer::update_resolution(ocarina::uint2 res) noexcept {
     OC_INFO_FORMAT("FrameBuffer::update_resolution input=({}, {}), prev=({}, {}), rt_before=({}, {})",
                    res.x, res.y, resolution_.x, resolution_.y,
@@ -462,6 +485,12 @@ void FrameBuffer::update_resolution(ocarina::uint2 res) noexcept {
     reset_accumulation_buffer();
     reset_rays();
     reset_visibility_buffer();
+    for (auto &entry : screen_storage_) {
+        entry.second.buffer.destroy();
+    }
+    for (auto &[name, storage] : screen_storage_) {
+        storage.allocate(device(), res, name);
+    }
     update_screen_window();
     // Data-only embedded bases have no pixel storage until their first render.
     if (rt_buffer_.device_buffer().size() != 0u) {

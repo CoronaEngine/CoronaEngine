@@ -10,6 +10,7 @@
 #include "tonemapper.h"
 #include "base/scattering/interaction.h"
 #include "visualizer.h"
+#include "rhi/resources/byte_buffer.h"
 #include "base/using.h"
 
 namespace vision {
@@ -345,6 +346,17 @@ public:                                                                     \
 
 #undef VS_MAKE_BUFFER
 
+private:
+    struct ScreenStorage {
+        uint2 block_extent{};
+        size_t bytes_per_block{};
+        ocarina::ByteBuffer buffer;
+
+        void allocate(Device &device, uint2 extent, const string &name) noexcept;
+    };
+
+    map<string, ScreenStorage> screen_storage_;
+
 public:
     using Desc = FrameBufferDesc;
 
@@ -416,6 +428,9 @@ public:
     void unregister(const string &name) noexcept;
     void init_screen_buffer(const SP<ScreenBuffer> &buffer) noexcept;
     void prepare_screen_buffer(const SP<ScreenBuffer> &buffer) noexcept;
+    // The returned view borrows storage until the framebuffer is resized or destroyed.
+    [[nodiscard]] ByteBufferView prepare_screen_storage(const string &name, uint2 block_extent,
+                                                        size_t bytes_per_block) noexcept;
 
     [[nodiscard]] BindlessArray &bindless_array() noexcept;
     void after_render() noexcept;
