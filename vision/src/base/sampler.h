@@ -19,7 +19,11 @@ enum Dimension {
     ReSTIRGI_init,
     ReSTIRGI_temporal,
     ReSTIRGI_spatial,
-    Camera
+    Camera,
+    FalcorDI_presample,
+    FalcorDI_tile,
+    FalcorDI_candidates,
+    FalcorDI_reuse
 };
 
 class Sampler : public Node, public GUIRenderable {

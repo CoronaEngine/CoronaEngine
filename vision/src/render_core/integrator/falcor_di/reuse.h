@@ -18,12 +18,6 @@ struct ReceiverTargets {
     Float spatial{0.f};
 };
 
-[[nodiscard]] inline Float2 reuse_random2(Uint &rng) {
-    const Float x = next_random(rng);
-    const Float y = next_random(rng);
-    return make_float2(x, y);
-}
-
 [[nodiscard]] inline Bool reuse_similar(const Surface &receiver, const Surface &history) {
     return valid_surface(history) &&
            dot(receiver.normal, history.normal) >= 0.8191520442889918f &&
@@ -90,17 +84,17 @@ struct ReceiverTargets {
 [[nodiscard]] inline ReservoirVar reuse_talbot(const Context &ctx, const ReservoirVar &current,
                                             const HistoryInput &temporal, const HistoryInput &spatial,
                                             const ReceiverTargets &targets, const SampledWavelengths &swl,
-                                            bool trace, Uint &rng) {
+                                            bool trace, TSampler &sampler) {
     ReservoirVar output;
     const Float current_weight = select(valid_reservoir(current), current.target * current.weight * current.count, 0.f);
     stream_reservoir(output, current.light_index, current.packed_uv, current.target, current_weight, current.count, 0.f);
 
     Uint selected_source = 0u;
-    const Float temporal_random = next_random(rng);
+    const Float temporal_random = sampler->next_1d();
     $if(stream_history(output, temporal.reservoir, targets.temporal, temporal_random)) {
         selected_source = 1u;
     };
-    const Float spatial_random = next_random(rng);
+    const Float spatial_random = sampler->next_1d();
     $if(stream_history(output, spatial.reservoir, targets.spatial, spatial_random)) {
         selected_source = 2u;
     };
@@ -157,7 +151,8 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
 
 [[nodiscard]] inline ReservoirVar reuse_pairwise(const Context &ctx, const ReservoirVar &current,
                                               const HistoryInput &temporal, const HistoryInput &spatial,
-                                              const ReceiverTargets &targets, const SampledWavelengths &swl, Uint &rng) {
+                                              const ReceiverTargets &targets, const SampledWavelengths &swl,
+                                              TSampler &sampler) {
     const Float pair_count = cast<float>(temporal.reservoir.count > 0.f) + cast<float>(spatial.reservoir.count > 0.f);
     ReservoirVar output;
     $if(pair_count == 0.f) {
@@ -165,11 +160,11 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
     } $else {
         Float canonical_mis = 0.f;
         const Float2 canonical_uv = current->uv();
-        const Float temporal_random = next_random(rng);
+        const Float temporal_random = sampler->next_1d();
         stream_pair(ctx, output, canonical_mis, current, canonical_uv, temporal, targets.temporal, pair_count, temporal_random, swl);
-        const Float spatial_random = next_random(rng);
+        const Float spatial_random = sampler->next_1d();
         stream_pair(ctx, output, canonical_mis, current, canonical_uv, spatial, targets.spatial, pair_count, spatial_random, swl);
-        const Float current_random = next_random(rng);
+        const Float current_random = sampler->next_1d();
         const Float weight = select(valid_reservoir(current), current.target * current.weight * canonical_mis, 0.f);
         stream_reservoir(output, current.light_index, current.packed_uv, current.target, weight, current.count, current_random);
         // The balance shares already partition unity across the pairs.
@@ -180,12 +175,12 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
 
 [[nodiscard]] inline ReservoirVar reuse_direct(const Context &ctx, const Uint2 &pixel, const Surface &receiver,
                                             const ReservoirVar &current, const Uint &history_slice,
-                                            const SampledWavelengths &swl, uint bias_mode) {
+                                            const SampledWavelengths &swl, uint bias_mode, TSampler &sampler) {
     ReservoirVar output = current;
     $if(ctx.has_history) {
-        Uint rng = init_random(pixel, ctx.frame, 4u);
+        sampler->set_seed(pixel, ctx.frame, Dimension::FalcorDI_reuse);
         const Float2 motion_vector = motion(pixel_index(pixel, ctx.extent));
-        const Float2 jitter = reuse_random2(rng);
+        const Float2 jitter = sampler->next_2d();
         const Float2 projected = cast<float2>(pixel) + motion_vector + jitter - 0.5f;
         // Match the original reprojection: round half-integers to even.
         const Int2 reprojected = cast<int2>(ocarina::call<float2>("round", projected));
@@ -197,7 +192,7 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
         $for(attempt, 9u) {
             Int2 offset = make_int2(0);
             $if(attempt != 0u) {
-                offset = cast<int2>(4.f * (reuse_random2(rng) - 0.5f));
+                offset = cast<int2>(4.f * (sampler->next_2d() - 0.5f));
             };
             const Int2 previous_pixel = reprojected + offset;
             const Surface previous = load_surface(ctx, previous_pixel, true);
@@ -211,7 +206,7 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
         };
 
         // One spatial neighbor from the previous frame keeps reads and writes in separate slices.
-        const Uint neighbor_index = cast<uint>(next_random(rng) * float(neighbor_count));
+        const Uint neighbor_index = cast<uint>(sampler->next_1d() * float(neighbor_count));
         const Int2 spatial_pixel = reprojected + cast<int2>(30.f * ctx.neighbors.read(neighbor_index, false));
         $if(any(spatial_pixel != temporal_pixel)) {
             const Surface neighbor = load_surface(ctx, spatial_pixel, true);
@@ -237,9 +232,9 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
         };
 
         if (bias_mode == 2u) {
-            output = reuse_pairwise(ctx, current, temporal, spatial, targets, swl, rng);
+            output = reuse_pairwise(ctx, current, temporal, spatial, targets, swl, sampler);
         } else {
-            output = reuse_talbot(ctx, current, temporal, spatial, targets, swl, bias_mode == 3u, rng);
+            output = reuse_talbot(ctx, current, temporal, spatial, targets, swl, bias_mode == 3u, sampler);
         }
     };
     return output;

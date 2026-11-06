@@ -174,7 +174,8 @@ class FalcorDIExperiment final : private Toolkit {
                                      probabilities_, light_bases_, ris_};
         };
         Kernel presample = [&](Uint frame) {
-            falcor_di::presample_light(context(frame, Bool{false}), dispatch_idx().xy());
+            sampler->load_data();
+            falcor_di::presample_light(context(frame, Bool{false}), dispatch_idx().xy(), sampler);
         };
         presample.function()->set_block_dim(256u, 1u);
         presample_ = device().compile(presample, "Falcor DI light presampling");
@@ -227,6 +228,7 @@ class FalcorDIExperiment final : private Toolkit {
             if (bias_mode == 3u) {
                 Function::current()->require_ray_query_compute_workgroups();
             }
+            sampler->load_data();
             const auto ctx = context(frame, history != 0u);
             const Uint2 pixel = dispatch_idx().xy();
             const auto surface = falcor_di::load_surface(ctx, make_int2(pixel), false);
@@ -234,7 +236,7 @@ class FalcorDIExperiment final : private Toolkit {
             $if(falcor_di::valid_surface(surface)) {
                 const auto candidate = falcor_di::load_reservoir(ctx, pixel, slices.x);
                 const auto swl = spec->sample_wavelength(sampler);
-                reservoir = falcor_di::reuse_direct(ctx, pixel, surface, candidate, slices.y, swl, bias_mode);
+                reservoir = falcor_di::reuse_direct(ctx, pixel, surface, candidate, slices.y, swl, bias_mode, sampler);
             };
             falcor_di::store_reservoir(ctx, pixel, slices.z, reservoir);
         };

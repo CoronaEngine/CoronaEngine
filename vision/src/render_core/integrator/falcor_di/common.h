@@ -35,7 +35,6 @@
 #include "base/mgr/renderer.h"
 #include "base/mgr/scene.h"
 #include "base/sensor/frame_buffer.h"
-#include "math/util.h"
 
 namespace vision::falcor_di {
 
@@ -223,24 +222,6 @@ struct TriangleSample {
         light_index = select(base == InvalidUI32, base, base + hit.prim_id);
     };
     return make_uint4(light_index, hit.prim_id, as<uint>(hit.bary.y), as<uint>(1.f - hit.bary.x - hit.bary.y));
-}
-
-[[nodiscard]] inline Uint morton_bits(const Uint &value) {
-    Uint bits = value & 0xffffu;
-    bits = (bits | (bits << 8u)) & 0x00ff00ffu;
-    bits = (bits | (bits << 4u)) & 0x0f0f0f0fu;
-    bits = (bits | (bits << 2u)) & 0x33333333u;
-    return (bits | (bits << 1u)) & 0x55555555u;
-}
-
-[[nodiscard]] inline Uint init_random(const Uint2 &pixel, const Uint &frame, uint pass) {
-    const Uint seed = morton_bits(pixel.x) | (morton_bits(pixel.y) << 1u);
-    return tea_impl<D, 16>(seed, frame + pass * 13u);
-}
-
-[[nodiscard]] inline Float next_random(Uint &state) {
-    state = 1664525u * state + 1013904223u;
-    return cast<float>(state >> 8u) * 0x1p-24f;
 }
 
 } // namespace vision::falcor_di

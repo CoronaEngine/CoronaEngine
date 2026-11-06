@@ -10,9 +10,9 @@ inline constexpr uint initial_light_count = 10u;
 inline constexpr uint initial_candidate_count = initial_light_count + 1u;
 inline constexpr uint screen_tile_size = 16u;
 
-inline void presample_light(const Context &ctx, const Uint2 &position) {
-    Uint rng = init_random(position, ctx.frame, 0u);
-    const Float u = next_random(rng);
+inline void presample_light(const Context &ctx, const Uint2 &position, TSampler &sampler) {
+    sampler->set_seed(position, ctx.frame, Dimension::FalcorDI_presample);
+    const Float u = sampler->next_1d();
     Float cumulative = 0.f;
     Uint selected = InvalidUI32;
     Float selected_probability = 0.f;
@@ -70,28 +70,31 @@ inline void presample_light(const Context &ctx, const Uint2 &position) {
         };
     };
 
-    Uint rng = init_random(pixel, ctx.frame, 2u);
-    Uint tile_rng = init_random(pixel / screen_tile_size, ctx.frame, 3u);
-    const Uint tile = cast<uint>(next_random(tile_rng) * float(tile_count));
-    $for(i, initial_light_count) {
-        const Uint offset = cast<uint>(next_random(rng) * float(tile_size));
-        const Uint2 entry = ctx.ris.read(tile * tile_size + offset, false);
-        const Float x = next_random(rng);
-        const Float y = next_random(rng);
-        const Float u = next_random(rng);
-        offer_candidate(entry.x, make_float2(x, y), as<float>(entry.y), u);
-    };
+    Float bsdf_replacement = 0.f;
+    // Use a separate stream for light proposals, then restore the BSDF stream.
+    sampler->temporary([&](Sampler *light_sampler) {
+        light_sampler->set_seed(pixel / screen_tile_size, ctx.frame, Dimension::FalcorDI_tile);
+        const Uint tile = cast<uint>(light_sampler->next_1d() * float(tile_count));
+        light_sampler->set_seed(pixel, ctx.frame, Dimension::FalcorDI_candidates);
+        $for(i, initial_light_count) {
+            const Uint offset = cast<uint>(light_sampler->next_1d() * float(tile_size));
+            const Uint2 entry = ctx.ris.read(tile * tile_size + offset, false);
+            const Float2 uv = light_sampler->next_2d();
+            const Float u = light_sampler->next_1d();
+            offer_candidate(entry.x, uv, as<float>(entry.y), u);
+        };
+        bsdf_replacement = light_sampler->next_1d();
+    });
 
     $if(use_bsdf) {
         const auto sample = bsdf.sample(wo, sampler);
         const Float pdf = sample.eval.pdf();
-        const Float u = next_random(rng);
         $if(pdf > 0.f && finite(pdf) && dot(surface.normal, sample.wi) > 0.f) {
             const Uint4 hit = trace_light(ctx, surface.position, sample.wi, ray_epsilon, 3.402823466e38f);
             $if(hit.y != InvalidUI32 && hit.x != InvalidUI32) {
                 // The folded-square sampler accepts the native triangle hit weights.
                 offer_candidate(hit.x, make_float2(as<float>(hit.z), as<float>(hit.w)),
-                                ctx.probabilities.read(hit.x, false), u, &pdf);
+                                ctx.probabilities.read(hit.x, false), bsdf_replacement, &pdf);
             };
         };
     };
