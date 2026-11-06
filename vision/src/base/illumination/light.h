@@ -1,4 +1,4 @@
-﻿//
+//
 // Created by Zero on 09/09/2022.
 //
 
@@ -67,6 +67,7 @@ struct LightSurfacePoint {
 };
 
 class Light : public Node, public GUIRenderable, public Encodable, public ShaderGraph {
+    friend class FalcorDIExperiment;
 public:
     using Desc = LightDesc;
 

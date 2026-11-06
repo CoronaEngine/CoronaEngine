@@ -12,6 +12,7 @@
 #include "ReSTIR/indirect.h"
 #include "ReSTIR/stable_planes.h"
 #include "ReSTIR/denoiser_signals.h"
+#include "falcor_di_experiment.h"
 #include <cstdlib>
 #include <fstream>
 #include <map>
@@ -94,6 +95,7 @@ private:
     Shader<void(uint, float)> compose_denoiser_;
     mutable float2 denoiser_factors_{make_float2(-1.f)};
     Shader<void(uint, Buffer<SurfaceData>)> path_tracing_;
+    mutable std::unique_ptr<FalcorDIExperiment> falcor_di_;
 
 public:
     RealTimeIntegrator() = default;
@@ -454,9 +456,35 @@ public:
             submit(stable_planes_->build(frame_index_, jitter_primary_samples(), copy_history, raw_stable_outputs), &cur_stage_profile_.stable_build_ms);
             submit(stable_planes_->fill(frame_index_, direct_->factor(), indirect_->factor(), raw_stable_outputs), &cur_stage_profile_.stable_fill_ms);
         }
-        submit(direct_->dispatch(frame_index_, precise_lobes), &cur_stage_profile_.restir_di_ms);
-        submit(indirect_->dispatch(frame_index_, precise_lobes, stable_planes_enabled(),
-                                  direct_->factor(), indirect_->factor(), direct_->open()), &cur_stage_profile_.restir_gi_ms);
+        const char *falcor_mode = std::getenv("VISION_FALCOR_DI_MODE");
+        const bool falcor_requested = falcor_mode && *falcor_mode && direct_->open() && !indirect_->open() &&
+            !denoiser_enabled && !stable_planes_enabled() && !jitter_primary_samples() &&
+            suffix_depth() == 0u && direct_->max_recursion() == 1u && spectrum()->impl_type() == "srgb" &&
+            !pipeline()->geometry().process_mediums();
+        if (falcor_requested) {
+            if (!falcor_di_ || !falcor_di_->matches(rp->resolution())) {
+                stream << synchronize() << commit();
+                Global::SceneGpuContextScope scene_gpu_context{
+                    scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
+                try {
+                    falcor_di_ = std::make_unique<FalcorDIExperiment>(*direct_, falcor_mode);
+                } catch (const std::exception &error) {
+                    OC_ERROR_FORMAT("Falcor DI experiment: {}", error.what());
+                }
+            }
+            submit(falcor_di_->dispatch(frame_index_), &cur_stage_profile_.restir_di_ms);
+            if (indirect_->compact_radiance()) {
+                submit(rp->reset_buffer(indirect_->raw_radiance().view(), make_uint2(0u), "ReSTIR indirect clear"),
+                       &cur_stage_profile_.restir_gi_ms);
+            } else {
+                submit(rp->reset_buffer(indirect_->radiance()->view(), make_float4(0.f), "ReSTIR indirect clear"),
+                       &cur_stage_profile_.restir_gi_ms);
+            }
+        } else {
+            submit(direct_->dispatch(frame_index_, precise_lobes), &cur_stage_profile_.restir_di_ms);
+            submit(indirect_->dispatch(frame_index_, precise_lobes, stable_planes_enabled(),
+                                      direct_->factor(), indirect_->factor(), direct_->open()), &cur_stage_profile_.restir_gi_ms);
+        }
         cur_stage_profile_.path_tracing_ms = cur_stage_profile_.restir_di_ms + cur_stage_profile_.restir_gi_ms;
         auto debug_readback = [&](const char *stage, bool layers = true) {
             const auto directory = evaluation_debug::directory(frame_index_);
