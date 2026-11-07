@@ -178,7 +178,8 @@ def test_build_tracks_pins_refs_and_deleted_checkouts(workspace_build):
     assert git(horizon, "rev-parse", "HEAD") == old
     assert (horizon / "value.txt").read_text() == "local edit\n"
     assert (build / "built.txt").stat().st_mtime_ns == product_time
-    (horizon / "value.txt").write_text("old\n", encoding="utf-8")
+    # Restore Git's working-tree line endings, including on Windows.
+    git(horizon, "checkout", "--", "value.txt")
     compile()
     assert (build / "built.txt").read_text() == f"{new} {new}"
     assert_noop()
