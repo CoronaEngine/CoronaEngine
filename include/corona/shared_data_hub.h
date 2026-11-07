@@ -15,6 +15,7 @@
 #include <corona/systems/geometry/mesh_draw_bounds.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -698,6 +699,13 @@ struct ViewportUiPointerCommand {
     std::uint64_t sequence{};
 };
 
+/// 视口指针命令的键（Fifo 队列只用它做 peek / erase）
+struct ViewportUiPointerKey {
+    static std::uintptr_t get(const ViewportUiPointerCommand& command) noexcept {
+        return command.camera_handle;
+    }
+};
+
 struct ViewportGizmoTarget {
     std::uintptr_t camera_handle{};
     std::string scene_id;
@@ -1044,8 +1052,12 @@ class SharedDataHub {
         camera_releases_;
     mutable std::mutex viewport_ui_mutex_;
     std::unordered_map<std::uintptr_t, ViewportUiState> viewport_ui_states_;
-    std::vector<ViewportUiPointerCommand> pending_viewport_ui_pointer_commands_;
-    std::uint64_t viewport_ui_pointer_sequence_{0};
+    // 指针命令：Fifo（不可合并，顺序即事件顺序）。sequence 仍由生产侧写入 ——
+    // 消费端（Optics）拿它丢弃相对 cursor state 过期的命令，语义保持不变。
+    Kernel::CommandBuffer<ViewportUiPointerCommand, ViewportUiPointerKey,
+                          Kernel::CoalescePolicy::Fifo>
+        viewport_ui_pointer_commands_;
+    std::atomic<std::uint64_t> viewport_ui_pointer_sequence_{0};
     mutable std::mutex viewport_gizmo_mutex_;
     std::unordered_map<std::uintptr_t, ViewportGizmoState> viewport_gizmo_states_;
     std::uint64_t viewport_gizmo_sequence_{0};

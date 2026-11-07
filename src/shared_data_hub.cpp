@@ -847,18 +847,14 @@ void SharedDataHub::enqueue_viewport_ui_pointer(ViewportUiPointerCommand command
         return;
     }
 
-    std::lock_guard<std::mutex> lock(viewport_ui_mutex_);
+    // sequence 仍由生产侧写入：消费端用它丢弃相对 cursor state 过期的命令。
+    // 计数器改成原子量后，入队不再需要 viewport_ui_mutex_（那把锁只服务 session store）。
     command.sequence = ++viewport_ui_pointer_sequence_;
-    pending_viewport_ui_pointer_commands_.push_back(std::move(command));
+    viewport_ui_pointer_commands_.push(std::move(command));
 }
 
 std::vector<ViewportUiPointerCommand> SharedDataHub::drain_viewport_ui_pointer_commands() {
-    std::vector<ViewportUiPointerCommand> commands;
-    {
-        std::lock_guard<std::mutex> lock(viewport_ui_mutex_);
-        commands.swap(pending_viewport_ui_pointer_commands_);
-    }
-    return commands;
+    return viewport_ui_pointer_commands_.drain();
 }
 
 void SharedDataHub::set_viewport_gizmo_target(ViewportGizmoTarget target) {

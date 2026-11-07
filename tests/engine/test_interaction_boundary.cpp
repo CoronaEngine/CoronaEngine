@@ -572,6 +572,32 @@ void test_camera_viewport_queue_coalescing() {
     hub.camera_storage().deallocate(camera);
 }
 
+void test_viewport_ui_pointer_queue_is_fifo() {
+    auto& hub = SharedDataHub::instance();
+    (void)hub.drain_viewport_ui_pointer_commands();
+
+    const auto camera = hub.camera_storage().allocate();
+    for (int i = 0; i < 3; ++i) {
+        Corona::ViewportUiPointerCommand command{};
+        command.camera_handle = camera;
+        command.event_type = (i == 0) ? "down" : ((i == 1) ? "move" : "up");
+        command.x = static_cast<float>(i);
+        hub.enqueue_viewport_ui_pointer(command);
+    }
+
+    const auto commands = hub.drain_viewport_ui_pointer_commands();
+    CHECK(commands.size() == 3);                    // Fifo：不合并
+    CHECK(commands[0].event_type == "down");
+    CHECK(commands[1].event_type == "move");
+    CHECK(commands[2].event_type == "up");
+    // 生产侧序列仍单调递增 —— Optics 靠它丢弃过期的 cursor 事件
+    CHECK(commands[0].sequence < commands[1].sequence);
+    CHECK(commands[1].sequence < commands[2].sequence);
+    CHECK(hub.drain_viewport_ui_pointer_commands().empty());
+
+    hub.camera_storage().deallocate(camera);
+}
+
 }  // namespace
 
 int main() {
@@ -587,6 +613,7 @@ int main() {
     test_mechanics_structural_commands();
     test_camera_release_queue_is_fifo();
     test_camera_viewport_queue_coalescing();
+    test_viewport_ui_pointer_queue_is_fifo();
 
     if (g_failures == 0) {
         std::printf("OK: %d checks passed\n", g_checks);
