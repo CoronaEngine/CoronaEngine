@@ -107,6 +107,8 @@ class DisplaySystem : public Kernel::SystemBase {
     bool ensure_composite_resources(CompositeResources& resources,
                                     uint32_t width,
                                     uint32_t height);
+    /// tick 开头应用入站 surface 命令（原先是发布线程同步回调）
+    void apply_pending_surface_commands();
     void handle_surface_changed(const Events::DisplaySurfaceChangedEvent& event);
     void handle_surface_removed(const Events::DisplaySurfaceRemovedEvent& event);
     void handle_optics_frame(const Events::OpticsFrameReadyEvent& event);

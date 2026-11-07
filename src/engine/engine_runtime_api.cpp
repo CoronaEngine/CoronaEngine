@@ -12,6 +12,7 @@
 #include <corona/systems/mechanics/mechanics_structural_commands.h>
 #include <corona/systems/optics/optics_commands.h>
 #include <corona/systems/optics/environment_commands.h>
+#include <corona/systems/display/display_surface_commands.h>
 #include <corona/systems/acoustics/acoustics_commands.h>
 #include <corona/engine/engine_runtime_api.h>
 #include <corona/systems/script/camera_follow_controller.h>
@@ -2394,7 +2395,10 @@ void Corona::API::Camera::set_surface(void* surface) {
     SharedDataHub::instance().enqueue_camera_state_update(command);
 
     if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
-        event_bus->publish<Events::DisplaySurfaceChangedEvent>({surface});
+        Corona::DisplaySurfaceCommand surface_command{};
+        surface_command.kind = Corona::DisplaySurfaceCommand::Kind::Changed;
+        surface_command.surface = surface;
+        Corona::DisplaySurfaceCommandChannel::instance().commands().push(std::move(surface_command));
     }
 }
 

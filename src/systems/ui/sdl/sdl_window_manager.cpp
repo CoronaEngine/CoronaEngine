@@ -1,4 +1,5 @@
 #include <corona/systems/ui/sdl_window_manager.h>
+#include <corona/systems/display/display_surface_commands.h>
 
 #include <corona/events/display_system_events.h>
 #include <horizon/core/logging.h>
@@ -158,7 +159,11 @@ bool SdlWindowManager::adopt_platform_window(SDL_Window* window) {
         Events::DisplaySurfaceChangedEvent changed;
         changed.surface = surface;
         changed.registration_ticket = SurfaceCompletionTicket{};
-        bus->publish<Events::DisplaySurfaceChangedEvent>(changed);
+        Corona::DisplaySurfaceCommand surface_command{};
+        surface_command.kind = Corona::DisplaySurfaceCommand::Kind::Changed;
+        surface_command.surface = changed.surface;
+        surface_command.registration_ticket = changed.registration_ticket;
+        Corona::DisplaySurfaceCommandChannel::instance().commands().push(std::move(surface_command));
         if (!changed.registration_ticket->wait_until(SurfaceCompletionTicket::Clock::now() + std::chrono::seconds(5)))
             return false;
         const auto result = changed.registration_ticket->result();
@@ -264,7 +269,11 @@ void* SdlWindowManager::create_secondary_window(int x, int y, int width, int hei
         Events::DisplaySurfaceChangedEvent changed;
         changed.surface = surface;
         changed.registration_ticket = Corona::Systems::UI::SurfaceCompletionTicket{};
-        event_bus->publish<Events::DisplaySurfaceChangedEvent>(changed);
+        Corona::DisplaySurfaceCommand surface_command{};
+        surface_command.kind = Corona::DisplaySurfaceCommand::Kind::Changed;
+        surface_command.surface = changed.surface;
+        surface_command.registration_ticket = changed.registration_ticket;
+        Corona::DisplaySurfaceCommandChannel::instance().commands().push(std::move(surface_command));
         if (!changed.registration_ticket->wait_until(
                 Corona::Systems::UI::SurfaceCompletionTicket::Clock::now() +
                     std::chrono::seconds(5))) {
@@ -333,7 +342,11 @@ bool SdlWindowManager::request_remove_surface(void* surface, std::chrono::millis
     if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
         auto done = std::make_shared<std::promise<void>>();
         auto fut = done->get_future();
-        event_bus->publish<Events::DisplaySurfaceRemovedEvent>({surface, done});
+        Corona::DisplaySurfaceCommand surface_command{};
+        surface_command.kind = Corona::DisplaySurfaceCommand::Kind::Removed;
+        surface_command.surface = surface;
+        surface_command.done = done;
+        Corona::DisplaySurfaceCommandChannel::instance().commands().push(std::move(surface_command));
         if (fut.wait_for(timeout) != std::future_status::ready) {
             CFW_LOG_WARNING(
                 "SdlWindowManager: surface {} teardown timed out; keeping window hidden",

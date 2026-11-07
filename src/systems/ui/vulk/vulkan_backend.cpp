@@ -1,4 +1,5 @@
 #include <corona/systems/ui/vulkan_backend.h>
+#include <corona/systems/display/display_surface_commands.h>
 
 #include <corona/events/display_system_events.h>
 #include <horizon/core/logging.h>
@@ -87,7 +88,10 @@ bool VulkanBackend::initialize() {
     surface_ = native_handle;
     Corona::API::set_default_surface(surface_);
     if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
-        event_bus->publish<Events::DisplaySurfaceChangedEvent>({surface_});
+        Corona::DisplaySurfaceCommand surface_command{};
+        surface_command.kind = Corona::DisplaySurfaceCommand::Kind::Changed;
+        surface_command.surface = surface_;
+        Corona::DisplaySurfaceCommandChannel::instance().commands().push(std::move(surface_command));
     }
 
     // Register the main window's surface (allocates its image handle, creates initial RT).

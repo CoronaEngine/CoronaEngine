@@ -6,6 +6,7 @@
 #include <corona/kernel/event/i_event_stream.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/display/display_system.h>
+#include <corona/systems/display/display_surface_commands.h>
 
 #include <algorithm>
 #include <array>
@@ -278,26 +279,8 @@ bool DisplaySystem::initialize(Kernel::ISystemContext* ctx) {
         return true;
     }
 
-    surface_changed_sub_id_ = event_bus->subscribe<Events::DisplaySurfaceChangedEvent>(
-        [callback_gate, forward_completion_fence](
-            const Events::DisplaySurfaceChangedEvent& event) {
-            auto access = callback_gate->try_acquire();
-            if (!access || !forward_completion_fence->run([&]() {
-                    access.owner().handle_surface_changed(event);
-                })) {
-                callback_gate->defer_registration(event.registration_ticket);
-            }
-        });
-    surface_removed_sub_id_ = event_bus->subscribe<Events::DisplaySurfaceRemovedEvent>(
-        [callback_gate, forward_completion_fence](
-            const Events::DisplaySurfaceRemovedEvent& event) {
-            auto access = callback_gate->try_acquire();
-            if (!access || !forward_completion_fence->run([&]() {
-                    access.owner().handle_surface_removed(event);
-                })) {
-                callback_gate->defer_removal(event.removal_ticket, event.done);
-            }
-        });
+    // surface 注册/移除不再走同步事件（处理器会跑在发布线程上）；
+    // 改为入站命令，由 apply_pending_surface_commands() 在 update() 开头处理。
     optics_frame_sub_id_ = event_bus->subscribe<Events::OpticsFrameReadyEvent>(
         [callback_gate, forward_completion_fence](
             const Events::OpticsFrameReadyEvent& event) {
@@ -491,7 +474,28 @@ void DisplaySystem::on_thread_stopped() {
     CFW_LOG_INFO("DisplaySystem: update loop exited");
 }
 
+void DisplaySystem::apply_pending_surface_commands() {
+    auto commands = DisplaySurfaceCommandChannel::instance().commands().drain();
+    for (auto& command : commands) {
+        if (command.kind == DisplaySurfaceCommand::Kind::Changed) {
+            Events::DisplaySurfaceChangedEvent event{};
+            event.surface = command.surface;
+            event.registration_ticket = std::move(command.registration_ticket);
+            handle_surface_changed(event);
+        } else {
+            Events::DisplaySurfaceRemovedEvent event{};
+            event.surface = command.surface;
+            event.done = std::move(command.done);
+            event.removal_ticket = std::move(command.removal_ticket);
+            handle_surface_removed(event);
+        }
+    }
+}
+
 void DisplaySystem::update() {
+    // 入站 surface 命令必须在任何早退之前处理：发布方在等回执，
+    // 漏掉就会让主线程等到超时（5s）。
+    apply_pending_surface_commands();
     if (!frame_submission_enabled_.load(std::memory_order_acquire)) {
         return;
     }
@@ -1212,6 +1216,9 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
 
 void DisplaySystem::shutdown() {
     CFW_LOG_INFO("DisplaySystem: destroying display resources");
+    // 关停时通道里可能还有 surface 命令：拆除命令必须兑现 promise，
+    // 否则发布方会一直阻塞。处理完再走原有 teardown。
+    apply_pending_surface_commands();
     frame_submission_enabled_.store(false, std::memory_order_release);
     const auto forward_completion_fence = forward_completion_fence_;
     if (forward_completion_fence) {
