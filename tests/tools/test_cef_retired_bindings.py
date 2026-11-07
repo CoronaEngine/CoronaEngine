@@ -652,3 +652,19 @@ def test_unused_network_and_chat_routes_keep_non_web_contracts_only():
             assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line, (module, method)
             assert ', "", ' in line, (module, method)
             assert ('"network.' if module == 'Network' else '"lan_chat.') in line
+
+
+def test_lanchat_events_use_named_owned_subscription_and_retire_generic_web_event():
+    root = Path(__file__).resolve().parents[2]
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
+    assert 'lan_chat->SetValue("onEvent"' in binding
+    assert 'lanchat_event_value' in binding
+    header = (root / 'src/systems/ui/cef/cef_lanchat_operations.h').read_text(encoding='utf-8')
+    assert 'struct LanChatEventSnapshot' in header
+    assert 'metadata_json' not in header
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8')
+    line = next(line for line in manifest.splitlines() if '{"LANChat.event"' in line)
+    assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
+    assert ', "", "events.on_lan_chat_event"' in line
+    owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8')
+    assert 'notify_corona_lanchat_event' in owner

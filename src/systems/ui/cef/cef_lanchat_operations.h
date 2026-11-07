@@ -26,6 +26,14 @@ struct LanChatMessageSnapshot {
     std::uint64_t seq = 0, ts = 0;
     nlohmann::json metadata;
 };
+struct LanChatEventSnapshot {
+    Corona::Network::LanChatEvent::Kind kind;
+    LanChatMessageSnapshot message;
+    std::vector<Corona::Network::LanChatMember> members;
+    std::vector<LanChatMessageSnapshot> history;
+    std::vector<Corona::Network::LanChatAgent> agents;
+    std::string peer_id, room_id, code, error_message;
+};
 struct LanChatReply {
     LanChatMethod method = LanChatMethod::GetLocalIp;
     std::string error_code, error_message, error;

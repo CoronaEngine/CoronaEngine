@@ -30,6 +30,7 @@
 #include "cef_project_launcher_operations.h"
 #include "cef_network_operations.h"
 #include "cef_lanchat_operations.h"
+#include "cef_v8_binding.h"
 #include "cef_viewport_pick.h"
 #include "cef_editor_native_api_handlers.h"
 #include "editor_dispatch.h"
@@ -4529,35 +4530,29 @@ nlohmann::json build_lanchat_agents(
     return result;
 }
 
+LanChatMessageSnapshot project_lanchat_message(const Corona::Network::LanChatMessage& message) {
+    auto metadata = message.metadata_json.empty() ? nlohmann::json::object() :
+        nlohmann::json::parse(message.metadata_json, nullptr, false);
+    if (!metadata.is_object() && !metadata.is_array()) metadata = nlohmann::json::object();
+    return {message.message_id, message.sender_id, message.room_id,
+        message.sender_name, message.text, message.sender_type, message.message_kind,
+        message.target_agent_id, message.source_user_id, message.correlation_id,
+        message.seq, message.timestamp_ms / 1000, std::move(metadata)};
+}
+
 void emit_lanchat_event(const Corona::Network::LanChatEvent& event) {
-    nlohmann::json payload;
-    using Kind = Corona::Network::LanChatEvent::Kind;
-    switch (event.kind) {
-    case Kind::Message:
-        payload = build_lanchat_history({event.message}).front();
-        payload["event"] = "message";
-        break;
-    case Kind::Members:
-        payload = {{"event", "member_update"}, {"peer_id", event.peer_id},
-            {"members", build_lanchat_members(event.members)},
-            {"member_details", build_lanchat_member_details(event.members)}};
-        break;
-    case Kind::History:
-        payload = {{"event", "history_snapshot"}, {"history", build_lanchat_history(event.history)}};
-        break;
-    case Kind::Agents:
-        payload = {{"event", "agent_roster"}, {"agents", build_lanchat_agents(event.agents)}};
-        break;
-    case Kind::Closed:
-        payload = {{"event", "room_closed"}, {"room_id", event.room_id}};
-        break;
-    case Kind::Error:
-        payload = {{"event", "error"}, {"code", event.code}};
-        if (!event.error_message.empty()) payload["message"] = event.error_message;
-        break;
-    }
-    payload["channel"] = "lanchat";
-    emit_editor_api_event("LANChat.event", payload);
+    LanChatEventSnapshot snapshot;
+    snapshot.kind = event.kind;
+    snapshot.message = project_lanchat_message(event.message);
+    snapshot.members = event.members;
+    snapshot.agents = event.agents;
+    snapshot.peer_id = event.peer_id;
+    snapshot.room_id = event.room_id;
+    snapshot.code = event.code;
+    snapshot.error_message = event.error_message;
+    for (const auto& message : event.history) snapshot.history.push_back(project_lanchat_message(message));
+    notify_corona_lanchat_event(snapshot);
+
 }
 
 nlohmann::json build_lanchat_message(
@@ -9255,15 +9250,8 @@ NativeResult execute_legacy_lanchat_operation(const LanChatRequest& request, con
 
 LanChatReply execute_lanchat_operation(const LanChatRequest& request) {
     auto outcome = run_lanchat_operation(request, request.metadata ? request.metadata->dump() : std::string{});
-    for (const auto& message : outcome.history) {
-        auto metadata = message.metadata_json.empty() ? nlohmann::json::object() :
-            nlohmann::json::parse(message.metadata_json, nullptr, false);
-        if (!metadata.is_object() && !metadata.is_array()) metadata = nlohmann::json::object();
-        outcome.value.history.push_back({message.message_id, message.sender_id, message.room_id,
-            message.sender_name, message.text, message.sender_type, message.message_kind,
-            message.target_agent_id, message.source_user_id, message.correlation_id,
-            message.seq, message.timestamp_ms / 1000, std::move(metadata)});
-    }
+    for (const auto& message : outcome.history)
+        outcome.value.history.push_back(project_lanchat_message(message));
     return std::move(outcome.value);
 }
 

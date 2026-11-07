@@ -564,11 +564,24 @@ try {
     assert.equal(typeof localIp.ip, 'string');
     assert.equal(typeof localIp.port, 'number');
     assert.deepEqual(await chatCall('loadHistoryRoom', ''), { ok: false, room: '', history: [], agents: [], error: 'ROOM_REQUIRED' });
-    stage = 'LANChat message and roster events with named methods';
+    stage = 'named LANChat event ownership, callback isolation and structured metadata';
+    for (const args of ['', 'null', '{}', '"callback"', '()=>{}, true']) {
+      assert.match(await main.evaluate(`(()=>{try{corona.lanChat.onEvent(${args});return 'unexpected';}catch(e){return String(e);}})()`), /INVALID_ARGUMENT/);
+    }
+    assert.equal(await main.evaluate("corona.editor.on('LANChat.event',()=>{}).catch(e=>e.code)"), 'INVALID_ARGUMENT');
     await main.evaluate(`corona.network.setProjectRoot(${JSON.stringify(cameraWorld)})`);
-    const chatToken = await main.evaluate(`(() => {
-      window.__chatEvents = [];
-      return corona.editor.on('LANChat.event', event => window.__chatEvents.push(event));
+    await main.evaluate(`(() => {
+      window.__chatEvents = []; window.__retiredChatEvents = [];
+      window.__stopThrowingChat = corona.lanChat.onEvent(() => { throw Error('isolate this callback'); });
+      window.__stopMutatingChat = corona.lanChat.onEvent(event => {
+        event.text = 'subscriber mutation';
+        if (event.metadata) event.metadata.note = 'subscriber mutation';
+        if (event.agents?.length) event.agents[0].name = 'subscriber mutation';
+      });
+      window.__stopChat = corona.lanChat.onEvent(event => window.__chatEvents.push(event));
+      const retired = corona.lanChat.onEvent(event => window.__retiredChatEvents.push(event));
+      retired(); retired();
+      return true;
     })()`);
     try {
       const room = await chatCall('startLocalRoom', { room: 'cef-owned-events', nickname: 'Host' });
@@ -589,6 +602,9 @@ try {
       assert.ok(events.every(event => event.channel === 'lanchat'));
       assert.deepEqual(events.map(event => event.event), ['message', 'agent_roster', 'agent_roster']);
       assert.equal(events[0].text, chatText);
+      assert.deepEqual(events[0].metadata, metadata);
+      assert.equal(Object.hasOwn(events[0], 'metadata_json'), false);
+      assert.deepEqual(await main.evaluate('window.__retiredChatEvents'), []);
       assert.equal(events[0].correlation_id, 'cef-correlation');
       assert.equal(events[0].from, 'Host');
       assert.equal(events[1].agents[0].name, 'Agent 中文');
@@ -614,9 +630,9 @@ try {
       assert.ok(restored.history.some(row => row.message_id === sent.message_id));
     } finally {
       await chatCall('stopLocalRoom');
-      assert.equal(await main.evaluate(`corona.editor.off(${chatToken})`), true);
+      await main.evaluate('window.__stopChat(); window.__stopChat(); window.__stopThrowingChat(); window.__stopMutatingChat(); true');
     }
-    evidence[0].lanChatEvents = 'local message and roster event compatibility with JSON disabled; exact text/identity, stable prior roster snapshot, unsubscribe; named methods and direct metadata history; named subscription still pending';
+    evidence[0].lanChatEvents = 'local message and roster event compatibility with JSON disabled; exact text/identity, stable prior roster snapshot, unsubscribe; named methods/subscription and metadata objects, callback mutation/throw isolation, idempotent unsubscribe, retired generic event denied';
     const listed = await listCameras();
     const camera = listed.data.cameras.find(item => item.camera_id === 'smoke-camera');
     assert.ok(camera?.archive_session);

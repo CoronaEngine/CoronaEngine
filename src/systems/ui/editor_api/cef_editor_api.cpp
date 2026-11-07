@@ -678,7 +678,7 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
 #undef EDITOR_API_METHOD0_WRAPPED
 
 constexpr auto kEditorApiEvents = std::to_array<EditorApiEventSpec>({
-    {"LANChat.event", EditorApiValueType::Object, all_callers(), "events.onLanChatEvent", "events.on_lan_chat_event"},
+    {"LANChat.event", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_lan_chat_event"},
     {"Network.actorDeleteSyncBroadcastRequested", EditorApiValueType::Object, all_callers(), "events.onNetworkActorDeleteSyncBroadcastRequested", "events.on_network_actor_delete_sync_broadcast_requested"},
     {"Network.actorOwnershipClaimed", EditorApiValueType::Object, all_callers(), "events.onNetworkActorOwnershipClaimed", "events.on_network_actor_ownership_claimed"},
     {"Network.actorStateSyncBroadcastRequested", EditorApiValueType::Object, all_callers(), "events.onNetworkActorStateSyncBroadcastRequested", "events.on_network_actor_state_sync_broadcast_requested"},
@@ -692,7 +692,8 @@ constexpr auto kEditorApiEvents = std::to_array<EditorApiEventSpec>({
 static_assert([] {
     for (const auto& event : kEditorApiEvents) {
         if (!event.event_name || !event.event_name[0] || !event.allowed_callers ||
-            !event.js_wrapper || !event.js_wrapper[0] ||
+            ((event.allowed_callers & caller_mask(EditorApiCaller::Cef)) &&
+                (!event.js_wrapper || !event.js_wrapper[0])) ||
             !event.python_wrapper || !event.python_wrapper[0]) return false;
     }
     return true;

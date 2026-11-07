@@ -182,21 +182,23 @@ bool read_lanchat(LanChatRequest& request, const CefV8ValueList& arguments) {
     return arguments.empty();
 }
 
+CefRefPtr<CefV8Value> lanchat_message_value(const LanChatMessageSnapshot& row) {
+    auto value = CefV8Value::CreateObject(nullptr, nullptr);
+    for (const auto& [key, text] : {std::pair{"message_id", &row.message_id}, {"sender_id", &row.sender_id},
+        {"room_id", &row.room_id}, {"from", &row.from}, {"text", &row.text}, {"sender_type", &row.sender_type},
+        {"message_kind", &row.message_kind}, {"target_agent_id", &row.target_agent_id},
+        {"source_user_id", &row.source_user_id}, {"correlation_id", &row.correlation_id}})
+        value->SetValue(key, CefV8Value::CreateString(*text), V8_PROPERTY_ATTRIBUTE_NONE);
+    value->SetValue("seq", CefV8Value::CreateDouble(static_cast<double>(row.seq)), V8_PROPERTY_ATTRIBUTE_NONE);
+    value->SetValue("ts", CefV8Value::CreateDouble(static_cast<double>(row.ts)), V8_PROPERTY_ATTRIBUTE_NONE);
+    value->SetValue("metadata", json_to_v8(row.metadata), V8_PROPERTY_ATTRIBUTE_NONE);
+    return value;
+}
+
 CefRefPtr<CefV8Value> lanchat_history_value(const std::vector<LanChatMessageSnapshot>& history) {
     auto result = CefV8Value::CreateArray(static_cast<int>(history.size()));
     int index = 0;
-    for (const auto& row : history) {
-        auto value = CefV8Value::CreateObject(nullptr, nullptr);
-        for (const auto& [key, text] : {std::pair{"message_id", &row.message_id}, {"sender_id", &row.sender_id},
-            {"room_id", &row.room_id}, {"from", &row.from}, {"text", &row.text}, {"sender_type", &row.sender_type},
-            {"message_kind", &row.message_kind}, {"target_agent_id", &row.target_agent_id},
-            {"source_user_id", &row.source_user_id}, {"correlation_id", &row.correlation_id}})
-            value->SetValue(key, CefV8Value::CreateString(*text), V8_PROPERTY_ATTRIBUTE_NONE);
-        value->SetValue("seq", CefV8Value::CreateDouble(static_cast<double>(row.seq)), V8_PROPERTY_ATTRIBUTE_NONE);
-        value->SetValue("ts", CefV8Value::CreateDouble(static_cast<double>(row.ts)), V8_PROPERTY_ATTRIBUTE_NONE);
-        value->SetValue("metadata", json_to_v8(row.metadata), V8_PROPERTY_ATTRIBUTE_NONE);
-        result->SetValue(index++, value);
-    }
+    for (const auto& row : history) result->SetValue(index++, lanchat_message_value(row));
     return result;
 }
 
@@ -213,6 +215,52 @@ CefRefPtr<CefV8Value> lanchat_agents_value(const std::vector<Corona::Network::La
     return result;
 }
 
+void set_lanchat_members(CefRefPtr<CefV8Value> result, const std::vector<Corona::Network::LanChatMember>& rows) {
+    auto members = CefV8Value::CreateArray(static_cast<int>(rows.size()));
+    auto details = CefV8Value::CreateArray(static_cast<int>(rows.size()));
+    int index = 0;
+    for (const auto& row : rows) {
+        members->SetValue(index, CefV8Value::CreateString(row.nickname));
+        auto value = CefV8Value::CreateObject(nullptr, nullptr);
+        for (const auto& [key, entry] : {std::pair{"member_id", &row.member_id}, {"nickname", &row.nickname}, {"status", &row.status}})
+            value->SetValue(key, CefV8Value::CreateString(*entry), V8_PROPERTY_ATTRIBUTE_NONE);
+        details->SetValue(index++, value);
+    }
+    result->SetValue("members", members, V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("member_details", details, V8_PROPERTY_ATTRIBUTE_NONE);
+}
+
+CefRefPtr<CefV8Value> lanchat_event_value(const LanChatEventSnapshot& snapshot) {
+    using Kind = Corona::Network::LanChatEvent::Kind;
+    auto value = snapshot.kind == Kind::Message ? lanchat_message_value(snapshot.message)
+                                               : CefV8Value::CreateObject(nullptr, nullptr);
+    const auto text = [&](const char* key, const std::string& entry) {
+        value->SetValue(key, CefV8Value::CreateString(entry), V8_PROPERTY_ATTRIBUTE_NONE);
+    };
+    switch (snapshot.kind) {
+    case Kind::Message: text("event", "message"); break;
+    case Kind::Members:
+        text("event", "member_update"); text("peer_id", snapshot.peer_id);
+        set_lanchat_members(value, snapshot.members);
+        break;
+    case Kind::History:
+        text("event", "history_snapshot");
+        value->SetValue("history", lanchat_history_value(snapshot.history), V8_PROPERTY_ATTRIBUTE_NONE);
+        break;
+    case Kind::Agents:
+        text("event", "agent_roster");
+        value->SetValue("agents", lanchat_agents_value(snapshot.agents), V8_PROPERTY_ATTRIBUTE_NONE);
+        break;
+    case Kind::Closed: text("event", "room_closed"); text("room_id", snapshot.room_id); break;
+    case Kind::Error:
+        text("event", "error"); text("code", snapshot.code);
+        if (!snapshot.error_message.empty()) text("message", snapshot.error_message);
+        break;
+    }
+    text("channel", "lanchat");
+    return value;
+}
+
 CefRefPtr<CefV8Value> lanchat_value(const LanChatReply& reply) {
     auto result = CefV8Value::CreateObject(nullptr, nullptr);
     const auto set = [&](const char* key, CefRefPtr<CefV8Value> value) { result->SetValue(key, value, V8_PROPERTY_ATTRIBUTE_NONE); };
@@ -221,17 +269,7 @@ CefRefPtr<CefV8Value> lanchat_value(const LanChatReply& reply) {
     if (!reply.error.empty()) text("error", reply.error);
     if (reply.method == LanChatMethod::StartRoom || reply.method == LanChatMethod::StartLocalRoom || reply.method == LanChatMethod::JoinRoom) {
         text("you", reply.you); text("peer_id", reply.peer_id); set("port", CefV8Value::CreateUInt(reply.port));
-        auto members = CefV8Value::CreateArray(static_cast<int>(reply.members.size()));
-        auto details = CefV8Value::CreateArray(static_cast<int>(reply.members.size()));
-        int index = 0;
-        for (const auto& row : reply.members) {
-            members->SetValue(index, CefV8Value::CreateString(row.nickname));
-            auto value = CefV8Value::CreateObject(nullptr, nullptr);
-            for (const auto& [key, entry] : {std::pair{"member_id", &row.member_id}, {"nickname", &row.nickname}, {"status", &row.status}})
-                value->SetValue(key, CefV8Value::CreateString(*entry), V8_PROPERTY_ATTRIBUTE_NONE);
-            details->SetValue(index++, value);
-        }
-        set("members", members); set("member_details", details);
+        set_lanchat_members(result, reply.members);
         set("history", lanchat_history_value(reply.history)); set("agents", lanchat_agents_value(reply.agents));
         if (reply.method != LanChatMethod::JoinRoom) {
             text("ip", reply.ip); text("room", reply.room); set("restored_history", CefV8Value::CreateBool(reply.restored_history));
@@ -700,12 +738,23 @@ bool read_gizmo_request(GizmoMethod method, const CefV8ValueList& arguments,
     return true;
 }
 
-enum class WindowEvent { Closed, CloseRequested };
+enum class NativeEventKind { Closed, CloseRequested, LanChat };
 struct WindowEventData {
-    WindowEvent type;
+    NativeEventKind type;
     int tab_id = -1;
     std::string panel_id;
 };
+
+NativeEventKind native_event_kind(const WindowEventData& data) { return data.type; }
+NativeEventKind native_event_kind(const LanChatEventSnapshot&) { return NativeEventKind::LanChat; }
+CefRefPtr<CefV8Value> native_event_value(const WindowEventData& data) {
+    auto value = CefV8Value::CreateObject(nullptr, nullptr);
+    value->SetValue("tabId", CefV8Value::CreateInt(data.tab_id), V8_PROPERTY_ATTRIBUTE_NONE);
+    value->SetValue("panelId", CefV8Value::CreateString(data.panel_id), V8_PROPERTY_ATTRIBUTE_NONE);
+    return value;
+}
+CefRefPtr<CefV8Value> native_event_value(const LanChatEventSnapshot& data) { return lanchat_event_value(data); }
+
 
 bool read_script_input(const CefV8ValueList& arguments, ScriptInputRequest& request) {
     if (arguments.size() != 3 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty() ||
@@ -2278,9 +2327,9 @@ public:
         context_ = nullptr;
     }
 
-    std::uint64_t subscribe(WindowEvent event, const CefV8ValueList& arguments, CefString& exception) {
+    std::uint64_t subscribe(NativeEventKind event, const CefV8ValueList& arguments, CefString& exception) {
         CEF_REQUIRE_RENDERER_THREAD();
-        if (!owns_current_context()) { exception = "PERMISSION_DENIED: Window binding belongs to another context"; return 0; }
+        if (!owns_current_context()) { exception = "PERMISSION_DENIED: Event binding belongs to another context"; return 0; }
         if (arguments.size() != 1 || !arguments[0] || !arguments[0]->IsFunction()) {
             exception = "INVALID_ARGUMENT: Expected exactly one event callback";
             return 0;
@@ -2293,13 +2342,14 @@ public:
     void unsubscribe(std::uint64_t id, CefString& exception) {
         CEF_REQUIRE_RENDERER_THREAD();
         if (!active()) return;
-        if (!owns_current_context()) { exception = "PERMISSION_DENIED: Window binding belongs to another context"; return; }
+        if (!owns_current_context()) { exception = "PERMISSION_DENIED: Event binding belongs to another context"; return; }
         subscribers_.erase(id);
     }
 
-    void post_event(WindowEventData data) {
+    template <typename Event>
+    void post_event(Event data) {
         runner_->PostTask(CefCreateClosureTask(base::BindOnce([](std::weak_ptr<CoronaV8Endpoint> weak,
-                                                               WindowEventData data) {
+                                                               Event data) {
             if (const auto endpoint = weak.lock()) endpoint->deliver(data);
         }, weak_from_this(), std::move(data))));
     }
@@ -2709,7 +2759,7 @@ public:
         }
         const auto current = CefV8Context::GetCurrentContext();
         if (!current || !current->IsSame(context_)) {
-            reject(context_, promise, "PERMISSION_DENIED", "Window binding belongs to another context");
+            reject(context_, promise, "PERMISSION_DENIED", "Event binding belongs to another context");
             return promise;
         }
         WindowRequest request{method, browser_id_};
@@ -2864,27 +2914,26 @@ private:
         return active() && context_ && context_->IsValid() && current && current->IsSame(context_);
     }
 
-    void deliver(const WindowEventData& data) {
+    template <typename Event>
+    void deliver(const Event& data) {
         CEF_REQUIRE_RENDERER_THREAD();
         if (!active() || !context_ || !context_->IsValid()) return;
         const auto context = context_;
         if (!context->Enter()) return;
         std::vector<std::uint64_t> ids;
-        for (const auto& [id, subscriber] : subscribers_) if (subscriber.type == data.type) ids.push_back(id);
+        for (const auto& [id, subscriber] : subscribers_) if (subscriber.type == native_event_kind(data)) ids.push_back(id);
         for (const auto id : ids) {
             const auto entry = subscribers_.find(id);
             if (!active() || entry == subscribers_.end()) continue;
             const auto callback = entry->second.callback;
             // A fresh V8 object for each subscriber prevents mutation of another
             // subscriber's event. No V8 handles or JSON cross the thread boundary.
-            auto value = CefV8Value::CreateObject(nullptr, nullptr);
-            value->SetValue("tabId", CefV8Value::CreateInt(data.tab_id), V8_PROPERTY_ATTRIBUTE_NONE);
-            value->SetValue("panelId", CefV8Value::CreateString(data.panel_id), V8_PROPERTY_ATTRIBUTE_NONE);
+            auto value = native_event_value(data);
             const bool rethrow = callback->WillRethrowExceptions();
             callback->SetRethrowExceptions(false);
             callback->ExecuteFunctionWithContext(context, nullptr, {value});
             if (callback->HasException()) {
-                CFW_LOG_WARNING("Native window event callback failed: {}", callback->GetException()->GetMessage().ToString());
+                CFW_LOG_WARNING("Native event callback failed: {}", callback->GetException()->GetMessage().ToString());
                 callback->ClearException();
             }
             callback->SetRethrowExceptions(rethrow);
@@ -2893,7 +2942,7 @@ private:
     }
 
     struct Subscriber {
-        WindowEvent type;
+        NativeEventKind type;
         CefRefPtr<CefV8Value> callback;
     };
     template <typename Reply>
@@ -3196,7 +3245,8 @@ namespace {
 std::mutex endpoints_mutex;
 std::vector<std::weak_ptr<CoronaV8Endpoint>> endpoints;
 
-void publish_window_event(const WindowEventData& data, std::optional<int> browser_id = std::nullopt) {
+template <typename Event>
+void publish_native_event(const Event& data, std::optional<int> browser_id = std::nullopt) {
     std::vector<std::shared_ptr<CoronaV8Endpoint>> recipients;
     {
         std::lock_guard lock(endpoints_mutex);
@@ -3209,9 +3259,9 @@ void publish_window_event(const WindowEventData& data, std::optional<int> browse
     for (const auto& endpoint : recipients) endpoint->post_event(data);
 }
 
-class WindowEventHandler final : public CefV8Handler {
+class NativeEventHandler final : public CefV8Handler {
 public:
-    WindowEventHandler(std::weak_ptr<CoronaV8Endpoint> endpoint, WindowEvent event, std::uint64_t token = 0)
+    NativeEventHandler(std::weak_ptr<CoronaV8Endpoint> endpoint, NativeEventKind event, std::uint64_t token = 0)
         : endpoint_(std::move(endpoint)), event_(event), token_(token) {}
 
     bool Execute(const CefString&, CefRefPtr<CefV8Value>, const CefV8ValueList& arguments,
@@ -3223,16 +3273,16 @@ public:
         } else if (!endpoint) {
             exception = "CONTEXT_CHANGED";
         } else if (const auto token = endpoint->subscribe(event_, arguments, exception)) {
-            result = CefV8Value::CreateFunction("unsubscribe", new WindowEventHandler(endpoint, event_, token));
+            result = CefV8Value::CreateFunction("unsubscribe", new NativeEventHandler(endpoint, event_, token));
         }
         return true;
     }
 
 private:
     std::weak_ptr<CoronaV8Endpoint> endpoint_;
-    WindowEvent event_;
+    NativeEventKind event_;
     std::uint64_t token_;
-    IMPLEMENT_REFCOUNTING(WindowEventHandler);
+    IMPLEMENT_REFCOUNTING(NativeEventHandler);
 };
 
 template <typename Method>
@@ -3269,6 +3319,8 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     }
     auto root = CefV8Value::CreateObject(nullptr, nullptr);
     auto lan_chat = CefV8Value::CreateObject(nullptr, nullptr);
+    lan_chat->SetValue("onEvent", CefV8Value::CreateFunction("onEvent",
+        new NativeEventHandler(endpoint, NativeEventKind::LanChat)), V8_PROPERTY_ATTRIBUTE_READONLY);
     lan_chat->SetValue("startRoom", CefV8Value::CreateFunction("startRoom", new NativeHandler(endpoint, LanChatMethod::StartRoom)), V8_PROPERTY_ATTRIBUTE_READONLY);
     lan_chat->SetValue("startLocalRoom", CefV8Value::CreateFunction("startLocalRoom", new NativeHandler(endpoint, LanChatMethod::StartLocalRoom)), V8_PROPERTY_ATTRIBUTE_READONLY);
     lan_chat->SetValue("stopRoom", CefV8Value::CreateFunction("stopRoom", new NativeHandler(endpoint, LanChatMethod::StopRoom)), V8_PROPERTY_ATTRIBUTE_READONLY);
@@ -3440,9 +3492,9 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     window->SetValue("toggleMainBorderless", CefV8Value::CreateFunction("toggleMainBorderless",
         new NativeHandler(endpoint, WindowMethod::ToggleMainBorderless)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("onClosed", CefV8Value::CreateFunction("onClosed",
-        new WindowEventHandler(endpoint, WindowEvent::Closed)), V8_PROPERTY_ATTRIBUTE_READONLY);
+        new NativeEventHandler(endpoint, NativeEventKind::Closed)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("onCloseRequested", CefV8Value::CreateFunction("onCloseRequested",
-        new WindowEventHandler(endpoint, WindowEvent::CloseRequested)), V8_PROPERTY_ATTRIBUTE_READONLY);
+        new NativeEventHandler(endpoint, NativeEventKind::CloseRequested)), V8_PROPERTY_ATTRIBUTE_READONLY);
     auto viewport = CefV8Value::CreateObject(nullptr, nullptr);
     auto gizmo = CefV8Value::CreateObject(nullptr, nullptr);
     gizmo->SetValue("setTarget", CefV8Value::CreateFunction("setTarget", new NativeHandler(endpoint, GizmoMethod::SetTarget)), V8_PROPERTY_ATTRIBUTE_READONLY);
@@ -3475,11 +3527,15 @@ void release_corona_v8_binding(const std::shared_ptr<CoronaV8Endpoint>& endpoint
 }
 
 void notify_corona_window_closed(int tab_id, const std::string& panel_id) {
-    publish_window_event({WindowEvent::Closed, tab_id, panel_id});
+    publish_native_event(WindowEventData{NativeEventKind::Closed, tab_id, panel_id});
 }
 
 void request_corona_window_close(int browser_id) {
-    publish_window_event({WindowEvent::CloseRequested}, browser_id);
+    publish_native_event(WindowEventData{NativeEventKind::CloseRequested}, browser_id);
+}
+
+void notify_corona_lanchat_event(const LanChatEventSnapshot& event) {
+    publish_native_event(event);
 }
 
 }  // namespace Corona::Systems::UI
