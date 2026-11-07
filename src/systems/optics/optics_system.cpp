@@ -787,15 +787,24 @@ void apply_pending_camera_viewport_updates() {
         return;
     }
 
-    CFW_LOG_INFO("Optics: applying {} camera viewport update(s)", updates.size());
+    // 逐帧都会收到视口更新，这里只在真的有变化时打日志（原先是无条件 INFO，
+    // 实测 70 秒内刷了 899 行，把真正的问题淹没了）。
+    CFW_LOG_DEBUG("Optics: applying {} camera viewport update(s)", updates.size());
 
     auto& camera_storage = hub.camera_storage();
     for (const auto& update : updates) {
         if (auto camera = camera_storage.acquire_write(update.camera_handle)) {
-            CFW_LOG_INFO("Optics: camera viewport handle={} surface={} open={} rect={}x{}+{},{} render={}x{}",
-                         update.camera_handle, update.surface, update.view_open, update.width,
-                         update.height, update.x, update.y, update.render_width,
-                         update.render_height);
+            const bool viewport_changed =
+                camera->surface != update.surface || camera->view_open != update.view_open ||
+                camera->view_x != update.x || camera->view_y != update.y ||
+                camera->view_width != update.width || camera->view_height != update.height;
+            if (viewport_changed) {
+                CFW_LOG_INFO(
+                    "Optics: camera viewport handle={} surface={} open={} rect={}x{}+{},{} render={}x{}",
+                    update.camera_handle, update.surface, update.view_open, update.width,
+                    update.height, update.x, update.y, update.render_width,
+                    update.render_height);
+            }
             camera->surface = update.surface;
             camera->follows_default_surface = false;
             camera->view_open = update.view_open;
