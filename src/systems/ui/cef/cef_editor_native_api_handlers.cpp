@@ -27,6 +27,7 @@
 #include "cef_project_settings_operations.h"
 #include "cef_files_operations.h"
 #include "cef_project_launcher_operations.h"
+#include "cef_network_operations.h"
 #include "cef_viewport_pick.h"
 #include "cef_editor_native_api_handlers.h"
 #include "editor_dispatch.h"
@@ -4403,34 +4404,47 @@ std::string detect_wlan_ipv4() {
 #endif
 }
 
-nlohmann::json build_network_session_info(
+std::vector<NetworkPeerSnapshot> read_network_peers(
     const std::shared_ptr<Corona::Systems::NetworkSystem>& sys) {
-    nlohmann::json payload;
-    payload["ok"] = true;
-    payload["active"] =
-        sys->session_state() == Corona::Systems::NetworkSystem::SessionState::Active;
-    payload["role"] = std::string(sys->session_role_name());
-    payload["peer_count"] = static_cast<int>(sys->peer_count());
-    payload["host_address"] = sys->host_address();
-    payload["host_port"] = sys->host_port();
-    payload["listen_port"] = sys->session_port();
-    payload["local_ip"] = detect_wlan_ipv4();
-    payload["discovered_peers"] = nlohmann::json::array();
+    std::vector<NetworkPeerSnapshot> result;
     for (const auto& peer : sys->discovered_peers()) {
-        payload["discovered_peers"].push_back({
-            {"ip", peer.ip},
-            {"name", peer.name},
-            {"port", peer.port},
-            {"project_id", peer.project_id},
-            {"role", peer.role == Corona::Systems::NetworkSystem::SessionRole::Host
-                ? "host" : peer.role == Corona::Systems::NetworkSystem::SessionRole::Client
-                    ? "client" : "none"},
-            {"stable_id", peer.stable_id},
-            {"last_seen_ms", peer.last_seen_ms},
-        });
+        result.push_back({peer.ip, peer.name,
+            peer.role == Corona::Systems::NetworkSystem::SessionRole::Host ? "host" :
+            peer.role == Corona::Systems::NetworkSystem::SessionRole::Client ? "client" : "none",
+            peer.stable_id, peer.port, peer.project_id, peer.last_seen_ms});
     }
-    return payload;
+    return result;
 }
+
+NetworkSessionSnapshot read_network_session(
+    const std::shared_ptr<Corona::Systems::NetworkSystem>& sys) {
+    NetworkSessionSnapshot result;
+    result.active = sys->session_state() == Corona::Systems::NetworkSystem::SessionState::Active;
+    result.role = std::string(sys->session_role_name());
+    result.peer_count = sys->peer_count();
+    result.host_address = sys->host_address();
+    result.host_port = sys->host_port();
+    result.listen_port = sys->session_port();
+    result.local_ip = detect_wlan_ipv4();
+    result.discovered_peers = read_network_peers(sys);
+    return result;
+}
+
+nlohmann::json network_peers_json(const std::vector<NetworkPeerSnapshot>& peers) {
+    auto result = nlohmann::json::array();
+    for (const auto& peer : peers) result.push_back({
+        {"ip", peer.ip}, {"name", peer.name}, {"port", peer.port}, {"project_id", peer.project_id},
+        {"role", peer.role}, {"stable_id", peer.stable_id}, {"last_seen_ms", peer.last_seen_ms}});
+    return result;
+}
+
+nlohmann::json network_session_json(const NetworkSessionSnapshot& session) {
+    return {{"ok", true}, {"active", session.active}, {"role", session.role},
+        {"peer_count", session.peer_count}, {"host_address", session.host_address},
+        {"host_port", session.host_port}, {"listen_port", session.listen_port},
+        {"local_ip", session.local_ip}, {"discovered_peers", network_peers_json(session.discovered_peers)}};
+}
+
 
 void emit_lanchat_event_json(const std::string& event_json) {
     if (event_json.empty()) {
@@ -8608,6 +8622,61 @@ void register_python_script_api_handlers(NativeApiRegistry& registry) {
     register_script_module("Scripts", script_files);
 }
 
+NetworkReply execute_network_operation(const NetworkRequest& request) {
+    NetworkReply reply;
+    reply.method = request.method;
+    const auto sys = require_network_system();
+    if (!sys) {
+        reply.error_code = "NATIVE_UNAVAILABLE";
+        reply.error_message = "NetworkSystem unavailable";
+        return reply;
+    }
+    switch (request.method) {
+    case NetworkMethod::StartSession: {
+        const auto role = request.role == "client" ? Corona::Systems::NetworkSystem::SessionRole::Client :
+            request.role == "none" ? Corona::Systems::NetworkSystem::SessionRole::None :
+            Corona::Systems::NetworkSystem::SessionRole::Host;
+        const bool was_active = sys->session_state() == Corona::Systems::NetworkSystem::SessionState::Active;
+        reply.ok = sys->start_session(request.name, request.project_id, request.port, role);
+        reply.session = read_network_session(sys);
+        reply.seeded_actor_count = reply.ok && !was_active ? seed_network_editor_state(*sys, role) : 0;
+        break;
+    }
+    case NetworkMethod::StopSession: sys->stop_session(); break;
+    case NetworkMethod::GetSessionInfo: reply.session = read_network_session(sys); break;
+    case NetworkMethod::GetDiscoveredPeers: reply.peers = read_network_peers(sys); break;
+    case NetworkMethod::ClearDiscoveredPeers: sys->clear_discovered_peers(); break;
+    case NetworkMethod::SearchLan:
+        reply.ok = sys->start_discovery(request.name, request.project_id);
+        reply.discovered_count = sys->discovered_peers().size();
+        break;
+    case NetworkMethod::ConnectToPeer:
+        reply.ok = sys->connect_to_peer(request.ip, request.port, request.name);
+        reply.session = read_network_session(sys);
+        break;
+    case NetworkMethod::SetProjectRoot:
+        if (!request.project_root.empty()) sys->set_project_root(request.project_root);
+        break;
+    }
+    return reply;
+}
+
+namespace {
+NativeResult execute_legacy_network_operation(const NetworkRequest& request) {
+    const auto reply = execute_network_operation(request);
+    if (!reply.error_code.empty()) return native_failure(reply.error_message, 2);
+    nlohmann::json payload = {{"ok", reply.ok}};
+    if (request.method == NetworkMethod::StartSession || request.method == NetworkMethod::GetSessionInfo ||
+        request.method == NetworkMethod::ConnectToPeer) {
+        payload = network_session_json(reply.session);
+        payload["ok"] = reply.ok;
+        if (request.method == NetworkMethod::StartSession) payload["seeded_actor_count"] = reply.seeded_actor_count;
+    } else if (request.method == NetworkMethod::GetDiscoveredPeers) payload["peers"] = network_peers_json(reply.peers);
+    else if (request.method == NetworkMethod::SearchLan) payload["peers"] = reply.discovered_count;
+    return native_success(payload);
+}
+} // namespace
+
 void register_network_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
         {"lock_object", [](const NativeRequest& request, const NativeContext&) {
@@ -8670,92 +8739,49 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             });
         }},
         {"start_session", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
+            NetworkRequest typed{NetworkMethod::StartSession};
+            typed.name = arg_string(request.args, 0);
+            typed.project_id = arg_uint64(request.args, 1);
+            typed.port = arg_uint16(request.args, 2, 27960);
+            if (request.args.size() > 3) {
+                const auto role = parse_network_session_role(request.args[3]);
+                typed.role = role == Corona::Systems::NetworkSystem::SessionRole::Client ? "client" :
+                    role == Corona::Systems::NetworkSystem::SessionRole::None ? "none" : "host";
             }
-            const std::string name = arg_string(request.args, 0);
-            const uint64_t project_id = arg_uint64(request.args, 1);
-            const uint16_t port = arg_uint16(request.args, 2, 27960);
-            const auto role = request.args.size() > 3
-                ? parse_network_session_role(request.args[3])
-                : Corona::Systems::NetworkSystem::SessionRole::Host;
-
-            const bool was_active =
-                sys->session_state() == Corona::Systems::NetworkSystem::SessionState::Active;
-            const bool ok = sys->start_session(name, project_id, port, role);
-            auto payload = build_network_session_info(sys);
-            payload["ok"] = ok;
-            payload["seeded_actor_count"] =
-                ok && !was_active ? seed_network_editor_state(*sys, role) : 0;
-            return native_success(payload);
+            return execute_legacy_network_operation(typed);
         }},
         {"stop_session", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            sys->stop_session();
-            return native_success({{"ok", true}});
+            return execute_legacy_network_operation({NetworkMethod::StopSession});
         }},
         {"get_peer_count", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            return native_success(build_network_session_info(sys));
+            return execute_legacy_network_operation({NetworkMethod::GetSessionInfo});
         }},
         {"get_session_info", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            return native_success(build_network_session_info(sys));
+            return execute_legacy_network_operation({NetworkMethod::GetSessionInfo});
         }},
         {"get_discovered_peers", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) return native_failure("NetworkSystem unavailable", 2);
-            auto payload = build_network_session_info(sys);
-            return native_success({{"ok", true},
-                                   {"peers", payload.value("discovered_peers", nlohmann::json::array())}});
+            return execute_legacy_network_operation({NetworkMethod::GetDiscoveredPeers});
         }},
         {"search_lan", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) return native_failure("NetworkSystem unavailable", 2);
-            const auto name = arg_string(request.args, 0, "Corona Peer");
-            const auto project_id = arg_uint64(request.args, 1, 0);
-            const bool ok = sys->start_discovery(name, project_id);
-            return native_success({{"ok", ok}, {"peers", sys->discovered_peers().size()}});
+            NetworkRequest typed{NetworkMethod::SearchLan};
+            typed.name = arg_string(request.args, 0, "Corona Peer");
+            typed.project_id = arg_uint64(request.args, 1, 0);
+            return execute_legacy_network_operation(typed);
         }},
         {"clear_discovered_peers", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) return native_failure("NetworkSystem unavailable", 2);
-            sys->clear_discovered_peers();
-            return native_success({{"ok", true}});
+            return execute_legacy_network_operation({NetworkMethod::ClearDiscoveredPeers});
         }},
         {"connect_to_peer", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const std::string ip = arg_string(request.args, 0);
-            const uint16_t port = arg_uint16(request.args, 1, 27960);
-            const std::string peer_name = arg_string(request.args, 2);
-            const bool ok = sys->connect_to_peer(ip, port, peer_name);
-            auto payload = build_network_session_info(sys);
-            payload["ok"] = ok;
-            return native_success(payload);
+            NetworkRequest typed{NetworkMethod::ConnectToPeer};
+            typed.ip = arg_string(request.args, 0);
+            typed.port = arg_uint16(request.args, 1, 27960);
+            typed.name = arg_string(request.args, 2);
+            return execute_legacy_network_operation(typed);
         }},
         {"set_project_root", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const std::string root = arg_string(request.args, 0);
-            if (!root.empty()) {
-                sys->set_project_root(root);
-            }
-            return native_success({{"ok", true}});
+            NetworkRequest typed{NetworkMethod::SetProjectRoot};
+            typed.project_root = arg_string(request.args, 0);
+            return execute_legacy_network_operation(typed);
         }},
         {"poll_pending_actor_create", [](const NativeRequest&, const NativeContext& context) {
             auto sys = require_network_system();

@@ -1,4 +1,4 @@
-#include <corona/systems/ui/file_script_api.h>
+﻿#include <corona/systems/ui/file_script_api.h>
 #include "cef_editor_api.h"
 
 #include "editor_dispatch.h"
@@ -544,17 +544,17 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_actor_state_update, kNetworkActorStateUpdateParams, "", "network.broadcast_actor_state_update", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_actor_transform, kNetworkActorStateUpdateParams, "", "network.broadcast_actor_transform", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, claim_actor_ownership, kActorGuidParam, "", "network.claim_actor_ownership", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, connect_to_peer, kNetworkConnectToPeerParams, "network.connectToPeer", "network.connect_to_peer", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, connect_to_peer, kNetworkConnectToPeerParams, "", "network.connect_to_peer", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, lock_object, kNetworkLockObjectParams, "", "network.lock_object", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, unlock_object, kNetworkUnlockObjectParams, "", "network.unlock_object", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, get_lock_owner, kNetworkLockOwnerParams, "", "network.get_lock_owner", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_intent, kNetworkIntentParams, "", "network.broadcast_intent", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, check_preview_collision, kNetworkPreviewCollisionParams, "", "network.check_preview_collision", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, get_peer_count, kNoParams, "", "network.get_peer_count", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, get_discovered_peers, kNoParams, "network.getDiscoveredPeers", "network.get_discovered_peers", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, clear_discovered_peers, kNoParams, "network.clearDiscoveredPeers", "network.clear_discovered_peers", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, search_lan, kNoParams, "network.searchLan", "network.search_lan", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, get_session_info, kNoParams, "network.getSessionInfo", "network.get_session_info", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, get_discovered_peers, kNoParams, "", "network.get_discovered_peers", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, clear_discovered_peers, kNoParams, "", "network.clear_discovered_peers", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, search_lan, kNoParams, "", "network.search_lan", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, get_session_info, kNoParams, "", "network.get_session_info", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_create, kNoParams, "", "network.poll_pending_actor_create", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_delete, kNoParams, "", "network.poll_pending_actor_delete", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_scene_snapshot, kNoParams, "", "network.poll_pending_scene_snapshot", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
@@ -563,10 +563,10 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_transform, kNoParams, "", "network.poll_pending_actor_transform", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, register_actor_identity, kNetworkRegisterActorIdentityParams, "", "network.register_actor_identity", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, request_actor_scene_snapshot, kSceneNameParam, "", "network.request_scene_snapshot", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, set_project_root, kProjectRootParam, "network.setProjectRoot", "network.set_project_root", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, set_project_root, kProjectRootParam, "", "network.set_project_root", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, set_sync_paused, kPausedParam, "", "network.set_sync_paused", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, start_session, kNetworkStartSessionParams, "network.startSession", "network.start_session", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, stop_session, kNoParams, "network.stopSession", "network.stop_session", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, start_session, kNetworkStartSessionParams, "", "network.start_session", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, stop_session, kNoParams, "", "network.stop_session", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, browse_folder, kPathOptionalParam, "", "project.browse_folder", EditorApiValueType::String, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, cleanup_portable_scene_assets, kObjectPayloadParam, "", "project.cleanup_portable_scene_assets", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, create_multiplayer_project, kObjectPayloadParam, "", "project.create_multiplayer_project", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),

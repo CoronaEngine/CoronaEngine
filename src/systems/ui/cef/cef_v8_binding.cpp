@@ -8,6 +8,7 @@
 #include "cef_project_settings_operations.h"
 #include "cef_files_operations.h"
 #include "cef_project_launcher_operations.h"
+#include "cef_network_operations.h"
 #include "cef_viewport_pick.h"
 #include "cef_viewport_gizmo.h"
 #include "cef_editor_native_api_handlers.h"
@@ -117,6 +118,83 @@ bool read_editor_api_call(const CefV8ValueList& arguments, std::string& api_name
 enum class GizmoMethod { SetTarget, Pointer };
 
 bool object_keys(CefRefPtr<CefV8Value> object, std::initializer_list<const char*> allowed);
+
+bool read_network(NetworkRequest& request, const CefV8ValueList& arguments) {
+    auto text = [&](std::size_t index, std::string& target) {
+        if (index >= arguments.size() || !arguments[index] || !arguments[index]->IsString()) return false;
+        target = arguments[index]->GetStringValue().ToString();
+        return target.find('\0') == std::string::npos;
+    };
+    auto integer = [&](std::size_t index, double maximum, std::uint64_t& target) {
+        if (index >= arguments.size() || !arguments[index] ||
+            !(arguments[index]->IsInt() || arguments[index]->IsUInt() || arguments[index]->IsDouble())) return false;
+        const auto value = arguments[index]->GetDoubleValue();
+        if (!std::isfinite(value) || value < 0 || value > maximum || std::trunc(value) != value) return false;
+        target = static_cast<std::uint64_t>(value);
+        return true;
+    };
+    if (request.method == NetworkMethod::StartSession) {
+        if (arguments.size() < 2 || arguments.size() > 4 || !text(0, request.name) ||
+            !integer(1, 9007199254740991.0, request.project_id)) return false;
+        if (arguments.size() > 2) {
+            std::uint64_t port;
+            if (!integer(2, 65535, port)) return false;
+            request.port = static_cast<std::uint16_t>(port);
+        }
+        if (arguments.size() > 3 && !text(3, request.role)) return false;
+        return request.role == "host" || request.role == "client";
+    }
+    if (request.method == NetworkMethod::ConnectToPeer) {
+        std::uint64_t port;
+        if (arguments.size() != 3 || !text(0, request.ip) || request.ip.empty() ||
+            !integer(1, 65535, port) || port == 0 || !text(2, request.name)) return false;
+        request.port = static_cast<std::uint16_t>(port);
+        return true;
+    }
+    if (request.method == NetworkMethod::SetProjectRoot)
+        return arguments.size() == 1 && text(0, request.project_root);
+    if (request.method == NetworkMethod::SearchLan) request.name = "Corona Peer";
+    return arguments.empty();
+}
+
+CefRefPtr<CefV8Value> network_peers_value(const std::vector<NetworkPeerSnapshot>& peers) {
+    auto result = CefV8Value::CreateArray(static_cast<int>(peers.size()));
+    int index = 0;
+    for (const auto& peer : peers) {
+        auto value = CefV8Value::CreateObject(nullptr, nullptr);
+        value->SetValue("ip", CefV8Value::CreateString(peer.ip), V8_PROPERTY_ATTRIBUTE_NONE);
+        value->SetValue("name", CefV8Value::CreateString(peer.name), V8_PROPERTY_ATTRIBUTE_NONE);
+        value->SetValue("role", CefV8Value::CreateString(peer.role), V8_PROPERTY_ATTRIBUTE_NONE);
+        value->SetValue("stable_id", CefV8Value::CreateString(peer.stable_id), V8_PROPERTY_ATTRIBUTE_NONE);
+        value->SetValue("port", CefV8Value::CreateUInt(peer.port), V8_PROPERTY_ATTRIBUTE_NONE);
+        value->SetValue("project_id", CefV8Value::CreateString(std::to_string(peer.project_id)), V8_PROPERTY_ATTRIBUTE_NONE);
+        value->SetValue("last_seen_ms", CefV8Value::CreateDouble(static_cast<double>(peer.last_seen_ms)), V8_PROPERTY_ATTRIBUTE_NONE);
+        result->SetValue(index++, value);
+    }
+    return result;
+}
+
+CefRefPtr<CefV8Value> network_value(const NetworkReply& reply) {
+    auto result = CefV8Value::CreateObject(nullptr, nullptr);
+    const auto set = [&](const char* key, CefRefPtr<CefV8Value> value) { result->SetValue(key, value, V8_PROPERTY_ATTRIBUTE_NONE); };
+    set("ok", CefV8Value::CreateBool(reply.ok));
+    if (reply.method == NetworkMethod::StartSession || reply.method == NetworkMethod::GetSessionInfo ||
+        reply.method == NetworkMethod::ConnectToPeer) {
+        const auto& session = reply.session;
+        set("active", CefV8Value::CreateBool(session.active));
+        set("role", CefV8Value::CreateString(session.role));
+        set("peer_count", CefV8Value::CreateDouble(static_cast<double>(session.peer_count)));
+        set("host_address", CefV8Value::CreateString(session.host_address));
+        set("host_port", CefV8Value::CreateUInt(session.host_port));
+        set("listen_port", CefV8Value::CreateUInt(session.listen_port));
+        set("local_ip", CefV8Value::CreateString(session.local_ip));
+        set("discovered_peers", network_peers_value(session.discovered_peers));
+        if (reply.method == NetworkMethod::StartSession)
+            set("seeded_actor_count", CefV8Value::CreateDouble(static_cast<double>(reply.seeded_actor_count)));
+    } else if (reply.method == NetworkMethod::GetDiscoveredPeers) set("peers", network_peers_value(reply.peers));
+    else if (reply.method == NetworkMethod::SearchLan) set("peers", CefV8Value::CreateDouble(static_cast<double>(reply.discovered_count)));
+    return result;
+}
 
 bool read_project_launcher(ProjectLauncherRequest& request, const CefV8ValueList& arguments) {
     if (request.method == ProjectLauncherMethod::Open) {
@@ -2111,6 +2189,34 @@ public:
         return promise;
     }
 
+    CefRefPtr<CefV8Value> invoke(NetworkMethod method, const CefV8ValueList& arguments) {
+        CEF_REQUIRE_RENDERER_THREAD();
+        auto promise = CefV8Value::CreatePromise();
+        if (!owns_current_context()) {
+            if (active() && context_ && context_->IsValid()) reject(context_, promise, "PERMISSION_DENIED", "Network binding belongs to another context");
+            else promise->RejectPromise("CONTEXT_CHANGED");
+            return promise;
+        }
+        NetworkRequest request{method};
+        if (!read_network(request, arguments)) {
+            reject(context_, promise, "INVALID_ARGUMENT", "Expected named network arguments"); return promise;
+        }
+        const auto id = ++sequence_;
+        pending_.emplace(id, Pending{method, promise});
+        const bool posted = CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
+            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id, NetworkRequest request) {
+                const auto endpoint = weak.lock();
+                if (!endpoint || !endpoint->active()) return;
+                NetworkReply reply;
+                try { reply = execute_network_operation(request); }
+                catch (const std::exception& error) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = error.what(); }
+                catch (...) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = "Network read failed"; }
+                endpoint->complete(id, std::move(reply));
+            }, weak_from_this(), id, std::move(request))));
+        if (!posted) { pending_.erase(id); reject(context_, promise, "NATIVE_UNAVAILABLE", "Network owner unavailable"); }
+        return promise;
+    }
+
     CefRefPtr<CefV8Value> invoke(ProjectLauncherMethod method, const CefV8ValueList& arguments) {
         CEF_REQUIRE_RENDERER_THREAD();
         auto promise = CefV8Value::CreatePromise();
@@ -2640,6 +2746,18 @@ private:
         context_->Exit();
     }
 
+    void resolve(std::uint64_t id, const NetworkReply& reply) {
+        CEF_REQUIRE_RENDERER_THREAD();
+        const auto entry = pending_.find(id);
+        if (entry == pending_.end()) return;
+        const auto promise = entry->second.promise;
+        pending_.erase(entry);
+        if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
+        if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
+        else promise->ResolvePromise(network_value(reply));
+        context_->Exit();
+    }
+
     void resolve(std::uint64_t id, const ProjectLauncherReply& reply) {
         CEF_REQUIRE_RENDERER_THREAD();
         const auto entry = pending_.find(id);
@@ -2885,7 +3003,7 @@ private:
     const std::uint64_t context_id_ = ++context_sequence_;
     std::uint64_t sequence_ = 0;
     std::string scene_archive_session_;
-    struct Pending { std::variant<WindowMethod, SceneMethod, ViewportMethod, ScriptInputMethod, GizmoMethod, ScriptsMethod, ProjectFilesMethod, ProjectSettingsMethod, ProjectLauncherMethod, FilesMethod, EditorApiMethod> method; CefRefPtr<CefV8Value> promise; };
+    struct Pending { std::variant<WindowMethod, SceneMethod, ViewportMethod, ScriptInputMethod, GizmoMethod, ScriptsMethod, ProjectFilesMethod, ProjectSettingsMethod, ProjectLauncherMethod, NetworkMethod, FilesMethod, EditorApiMethod> method; CefRefPtr<CefV8Value> promise; };
     std::unordered_map<std::uint64_t, Pending> pending_;
     std::map<std::uint64_t, Subscriber> subscribers_;
 };
@@ -2967,6 +3085,17 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
         endpoints.push_back(endpoint);
     }
     auto root = CefV8Value::CreateObject(nullptr, nullptr);
+    auto network = CefV8Value::CreateObject(nullptr, nullptr);
+    network->SetValue("startSession", CefV8Value::CreateFunction("startSession", new NativeHandler(endpoint, NetworkMethod::StartSession)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    network->SetValue("stopSession", CefV8Value::CreateFunction("stopSession", new NativeHandler(endpoint, NetworkMethod::StopSession)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    network->SetValue("getSessionInfo", CefV8Value::CreateFunction("getSessionInfo", new NativeHandler(endpoint, NetworkMethod::GetSessionInfo)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    network->SetValue("getDiscoveredPeers", CefV8Value::CreateFunction("getDiscoveredPeers", new NativeHandler(endpoint, NetworkMethod::GetDiscoveredPeers)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    network->SetValue("clearDiscoveredPeers", CefV8Value::CreateFunction("clearDiscoveredPeers", new NativeHandler(endpoint, NetworkMethod::ClearDiscoveredPeers)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    network->SetValue("searchLan", CefV8Value::CreateFunction("searchLan", new NativeHandler(endpoint, NetworkMethod::SearchLan)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    network->SetValue("connectToPeer", CefV8Value::CreateFunction("connectToPeer", new NativeHandler(endpoint, NetworkMethod::ConnectToPeer)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    network->SetValue("setProjectRoot", CefV8Value::CreateFunction("setProjectRoot", new NativeHandler(endpoint, NetworkMethod::SetProjectRoot)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    root->SetValue("network", network, V8_PROPERTY_ATTRIBUTE_READONLY);
+
     auto project = CefV8Value::CreateObject(nullptr, nullptr);
     project->SetValue("openProject", CefV8Value::CreateFunction("openProject", new NativeHandler(endpoint, ProjectLauncherMethod::Open)), V8_PROPERTY_ATTRIBUTE_READONLY);
     project->SetValue("openProjectFile", CefV8Value::CreateFunction("openProjectFile", new NativeHandler(endpoint, ProjectLauncherMethod::SelectFile)), V8_PROPERTY_ATTRIBUTE_READONLY);
