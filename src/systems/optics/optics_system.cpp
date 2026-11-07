@@ -1,4 +1,5 @@
 #include "native_material.h"
+#include <corona/systems/display/display_frame_commands.h>
 #include <corona/systems/acoustics/acoustics_commands.h>
 #include <corona/systems/mechanics/mechanics_commands.h>
 #include <corona/systems/optics/environment_commands.h>
@@ -4995,7 +4996,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         }
 
         if (auto* event_bus = context()->event_bus()) {
-            event_bus->publish<Events::OpticsFrameReadyEvent>({surface,
+            Corona::push_optics_frame({surface,
                                                                target.image_handle,
                                                                frame_index,
                                                                presented_extent.width,
@@ -6329,7 +6330,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                 }
 
                 if (auto* event_bus = context()->event_bus()) {
-                    event_bus->publish<Events::OpticsFrameReadyEvent>(
+                    Corona::push_optics_frame(
                         {surface,
                          target.image_handle,
                          frame_index,
