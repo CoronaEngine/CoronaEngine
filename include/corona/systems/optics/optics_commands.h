@@ -9,6 +9,7 @@
 /// 避免每加一个命令类型就让全仓 600 个 TU 重编。
 
 #include <corona/kernel/command/command_buffer.h>
+#include <corona/systems/optics/material_source.h>
 #include <corona/kernel/command/snapshot_channel.h>
 #include <corona/shared_data_hub.h>
 
@@ -38,6 +39,9 @@ enum class OpticsField : std::uint32_t {
     Diffuse = 1u << 13,
     SpecularColor = 1u << 14,
     Shininess = 1u << 15,
+    /// 非标量材质载荷（CEF 编辑器写入整份材质配置）
+    MaterialOverrides = 1u << 16,
+    Principled = 1u << 17,
 };
 
 constexpr OpticsField operator|(OpticsField lhs, OpticsField rhs) {
@@ -51,6 +55,11 @@ constexpr bool has_optics_field(OpticsField fields, OpticsField field) {
 
 struct OpticsUpdateCommand {
     std::uintptr_t optics_handle{};
+    /// 非 0 时作为守卫：只有 optics 设备的 geometry_handle 匹配才应用。
+    /// 编辑器按 profile 找到 optics 设备后，会用它确认"这份材质属于当前几何"。
+    std::uintptr_t geometry_handle{};
+    std::shared_ptr<const Materials::Overrides> material_overrides;
+    std::shared_ptr<const Materials::Principled> principled;
     OpticsField fields{OpticsField::None};
     bool visible{true};
     bool enable_lighting{true};

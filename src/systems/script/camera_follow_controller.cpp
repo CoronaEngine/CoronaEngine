@@ -132,9 +132,12 @@ void CameraFollowController::update(float delta_time) {
                 if (profile->geometry_handle != 0) {
                     if (auto geo = hub.geometry_storage().try_acquire_read(profile->geometry_handle)) {
                         if (geo->transform_handle != 0) {
-                            if (auto transform = hub.model_transform_storage().try_acquire_write(geo->transform_handle)) {
-                                transform->position = obj_pos;
-                            }
+                            // P5：改走命令通道（原先是脚本线程直接写槽位）
+                            Corona::TransformUpdateCommand command{};
+                            command.transform_handle = geo->transform_handle;
+                            command.fields = Corona::TransformField::Position;
+                            command.position = obj_pos;
+                            hub.enqueue_transform_update(std::move(command));
                         }
                     }
                 }

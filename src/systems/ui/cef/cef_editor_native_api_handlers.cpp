@@ -3,6 +3,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <SDL3/SDL_events.h>
+#include <corona/systems/optics/optics_commands.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
@@ -825,13 +826,16 @@ void apply_native_actor_optics_state(NativeEditorActor& item) {
             for (const auto handle : actor->profile_handles) {
                 auto profile = hub.profile_storage().acquire_read(handle);
                 if (!profile || !profile->optics_handle) continue;
-                if (auto write = hub.optics_storage().acquire_write(profile->optics_handle)) {
-                    // Geometry belongs to the component. Profile::geometry_handle
-                    // is intentionally empty for API-created actor profiles.
-                    if (write->geometry_handle != item.geometry->get_handle()) continue;
-                    write->material_overrides = overrides;
-                    write->principled = principled;
-                }
+                // P5：改走命令通道。geometry 归属校验随命令下发，
+                // 由 DAG 侧在应用时比对（原先是 UI 线程直接持写锁比���）。
+                Corona::OpticsUpdateCommand command{};
+                command.optics_handle = profile->optics_handle;
+                command.geometry_handle = item.geometry->get_handle();
+                command.fields = Corona::OpticsField::MaterialOverrides |
+                                 Corona::OpticsField::Principled;
+                command.material_overrides = overrides;
+                command.principled = principled;
+                Corona::OpticsCommandChannel::instance().commands().push(std::move(command));
             }
         }
     }

@@ -187,11 +187,13 @@ bool write_actor_gizmo_position(std::uintptr_t actor_handle,
         if (!geometry || geometry->transform_handle == 0) {
             continue;
         }
-        if (auto transform =
-                hub.model_transform_storage().try_acquire_write(geometry->transform_handle)) {
-            transform->position = position;
-            wrote = true;
-        }
+        // P5：改走命令通道（原先是 UI 线程直接写槽位，违反单写者约束）
+        Corona::TransformUpdateCommand command{};
+        command.transform_handle = geometry->transform_handle;
+        command.fields = Corona::TransformField::Position;
+        command.position = position;
+        hub.enqueue_transform_update(std::move(command));
+        wrote = true;
     }
     return wrote;
 }

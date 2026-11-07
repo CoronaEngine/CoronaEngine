@@ -3280,6 +3280,16 @@ void apply_pending_optics_updates() {
         if (Corona::has_optics_field(fields, Corona::OpticsField::Shininess)) {
             device->shininess = command.shininess;
         }
+        // 编辑器会带上 geometry_handle 作为归属守卫：材质只应用到同一几何的 optics 设备上。
+        if (command.geometry_handle != 0 && device->geometry_handle != command.geometry_handle) {
+            continue;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::MaterialOverrides)) {
+            device->material_overrides = command.material_overrides;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Principled)) {
+            device->principled = command.principled;
+        }
     }
 }
 
