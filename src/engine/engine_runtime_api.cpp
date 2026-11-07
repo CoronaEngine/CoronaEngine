@@ -2228,13 +2228,17 @@ Corona::API::Camera::Camera()
         accessor->aspect = static_cast<float>(width_) / static_cast<float>(height_);
         accessor->surface = get_default_surface();
         accessor->actor_pick_handle = actor_pick_handle;
-        // 播种首帧快照：外部线程从这一刻起就能读到这台相机，不必等第一个 DAG tick。
-        SharedDataHub::instance().seed_camera_snapshot_from_storage(handle_);
     } else {
         CFW_LOG_ERROR("[Camera::Camera] Failed to acquire write access to camera storage");
         SharedDataHub::instance().camera_storage().deallocate(handle_);
         SharedDataHub::instance().actor_pick_storage().deallocate(actor_pick_handle);
         handle_ = 0;
+    }
+
+    // 播种首帧快照必须在相机槽位的写锁**释放之后**：seed 内部会再读同一个槽位，
+    // 而 shared_timed_mutex 不可重入 —— 在锁内调用会自死锁（表现为创建相机时整个程序卡住）。
+    if (handle_ != 0) {
+        SharedDataHub::instance().seed_camera_snapshot_from_storage(handle_);
     }
 }
 
@@ -2267,13 +2271,17 @@ Corona::API::Camera::Camera(const std::array<float, 3>& position, const std::arr
         accessor->aspect = static_cast<float>(width_) / static_cast<float>(height_);
         accessor->surface = get_default_surface();
         accessor->actor_pick_handle = actor_pick_handle;
-        // 播种首帧快照：外部线程从这一刻起就能读到这台相机，不必等第一个 DAG tick。
-        SharedDataHub::instance().seed_camera_snapshot_from_storage(handle_);
     } else {
         CFW_LOG_ERROR("[Camera::Camera] Failed to acquire write access to camera storage");
         SharedDataHub::instance().camera_storage().deallocate(handle_);
         SharedDataHub::instance().actor_pick_storage().deallocate(actor_pick_handle);
         handle_ = 0;
+    }
+
+    // 播种首帧快照必须在相机槽位的写锁**释放之后**：seed 内部会再读同一个槽位，
+    // 而 shared_timed_mutex 不可重入 —— 在锁内调用会自死锁（表现为创建相机时整个程序卡住）。
+    if (handle_ != 0) {
+        SharedDataHub::instance().seed_camera_snapshot_from_storage(handle_);
     }
 }
 

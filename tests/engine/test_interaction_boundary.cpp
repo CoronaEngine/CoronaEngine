@@ -10,6 +10,7 @@
  * - 变换：命令叠加、快照发布、按 transform_handle 合并、销毁时丢弃待处理命令
  */
 
+#include <corona/engine/engine_runtime_api.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/mechanics/mechanics_commands.h>
 #include <corona/systems/mechanics/mechanics_structural_commands.h>
@@ -598,6 +599,28 @@ void test_viewport_ui_pointer_queue_is_fifo() {
     hub.camera_storage().deallocate(camera);
 }
 
+void test_camera_api_construction_does_not_self_deadlock() {
+    // 回归用例：Camera 构造函数曾在**持有相机槽位写锁的作用域内**派生快照行，
+    // 而派生函数内部又 try_acquire_read 同一个槽位 —— shared_timed_mutex 不可重入，
+    // 于是创建相机的线程自死锁（编辑器"创建世界"卡死就是这么来的）。
+    // 若该缺陷回归，本用例会挂住而不是失败。
+    Corona::API::Camera camera;
+    CHECK(camera.get_handle() != 0);
+
+    const auto position = camera.get_position();
+    CHECK(position[2] == -5.0f);   // 默认构造位置
+    CHECK(camera.get_fov() == 45.0f);
+
+    // 读路径走快照 ⊕ pending，构造后即可读到值（不必等 DAG tick）
+    camera.set(std::array<float, 3>{1.0f, 2.0f, 3.0f},
+               std::array<float, 3>{0.0f, 0.0f, 1.0f},
+               std::array<float, 3>{0.0f, 1.0f, 0.0f},
+               60.0f);
+    const auto moved = camera.get_position();
+    CHECK(moved[0] == 1.0f && moved[1] == 2.0f && moved[2] == 3.0f);
+    CHECK(camera.get_fov() == 60.0f);
+}
+
 }  // namespace
 
 int main() {
@@ -614,6 +637,7 @@ int main() {
     test_camera_release_queue_is_fifo();
     test_camera_viewport_queue_coalescing();
     test_viewport_ui_pointer_queue_is_fifo();
+    test_camera_api_construction_does_not_self_deadlock();
 
     if (g_failures == 0) {
         std::printf("OK: %d checks passed\n", g_checks);
