@@ -32,9 +32,6 @@ function(corona_dev_bootstrap)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
         "${CORONA_BUILD_TOOLS_DIR}/source_workspaces.py"
         "${CORONA_BUILD_TOOLS_DIR}/git_workspace.py"
-        "${CORONA_BUILD_TOOLS_DIR}/horizon_runtime_patch.py"
-        "${CORONA_BUILD_TOOLS_DIR}/patches/horizon/reblur-runtime.json"
-        "${CORONA_BUILD_TOOLS_DIR}/patches/horizon/reblur-runtime.patch"
         "${CORONA_BUILD_TOOLS_DIR}/dev.py"
         "${CORONA_BUILD_TOOLS_DIR}/git_tool.py"
         "${CORONA_BUILD_TOOLS_DIR}/ninja_tool.py"

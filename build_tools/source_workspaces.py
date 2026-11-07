@@ -2,6 +2,8 @@
 
 Build preparation aligns local HEAD to these pins, preserving nonconflicting
 edits. A different live remote branch tip only produces a warning.
+Each pinned commit must already contain the functionality the engine requires;
+source preparation does not apply engine-owned patches to either workspace.
 """
 
 from __future__ import annotations

@@ -430,7 +430,9 @@ ReBLUR 现在始终编译自有 EDSL 核心，CPU 调度来自仓库内 `schedul
 
 CPU调度对官方4.14.3的330次查询、3154个pass精确一致：比较了1/3identifier、历史/重置/resize、settings、相机/投影/MV、pipeline/资源池/绑定及完整832字节常量。当前验证仅使用仓库内29,620字节官方golden摘要或既有完整fixture，不再动态加载官方DLL或生成capture。golden仅从此前独立官方capture生成，原fixture SHA256为 `41e5e76ba10c5fcf1395c6348fabf9ac58a4790598ab15ede2946203e7eda5f1`，不从生产实现生成expected值。
 
-Horizon必要的五个运行时文件及两个测试文件，通过 `build_tools/patches/horizon/reblur-runtime.patch` 和before/after SHA清单随主仓库交付，源码准备流程自动验证或重放。86项CPU工作区/补丁回归通过；另对实际固定版本 `6429a2e0…` 的干净sparse clone重放，七份after SHA全部一致，二次执行bytes/mtime零写入。当前Horizon及用户既有math测试改动均保留。这样无需依靠另一份未记录的本地Horizon改动；原有固定Horizon基线仍按引擎既有流程获取。
+当时 Horizon 必要的五个运行时文件及两个测试文件，通过引擎维护的补丁和 before/after SHA 清单交付，源码准备流程自动验证或重放。86 项 CPU 工作区/补丁回归通过；另对当时固定版本 `6429a2e0…` 的干净 sparse clone 重放，七份 after SHA 全部一致，二次执行 bytes/mtime 零写入，并保留了用户既有 math 测试改动。这是该阶段的历史验证记录。
+
+后续源码管理已移除该补丁交付机制。Horizon 与 CoronaEditor 均直接使用 `build_tools/source_workspaces.py` 锁定的提交；更新锁定值时负责保证依赖包含引擎所需功能，本地版本自动对齐，远程分支差异仅提示。
 
 去依赖后重新执行完整 ReSTIR `render_ms(ON)-render_ms(OFF)`：Kitchen固定资产、SourceCamera、1920×1080、FOV35.9833984375°、SP3、1spp、AA0、accumulation关闭，原版quality/5×5/anti-firefly/history50/prepass15/40保持。每轮独立进程按OFF/ON/ON/OFF、每段预热24/采样48，无profiling；外部15 FPS采样等待不计入render_ms，生产帧率设置未改变。
 
