@@ -32,13 +32,8 @@ def verify(port, project, peer, relative, control):
         assert result["success"], result
         return result["data"]
 
-    def view(name, *args):
-        reply = web.api(name, list(args))
-        assert reply["success"], reply
-        return reply["data"]
-
     def open_project(path):
-        result = wait_for(lambda: view("ProjectLauncher.open_project", str(path)),
+        result = wait_for(lambda: web.evaluate("corona.project.openProject(" + json.dumps(str(path)) + ")"),
                           lambda r: r.get("status") != "service_initializing", "open project")
         assert result["ok"], result
         return web.evaluate("corona.scene.readActive()")["archive_session"]
@@ -91,7 +86,8 @@ def verify(port, project, peer, relative, control):
         tap("KeyJ" if len(runs) == 1 else "KeyD")
         wait_for(position, lambda v: v == moved, "D moves exactly once")
         if ending == "reload":
-            assert view("SceneTools.reload_scene", "scene.ini", str(project))["status"] == "success"
+            # Reload remains an independent native contract, not a retired Web route.
+            assert call("SceneTools.reload_scene", "scene.ini", str(project))["status"] == "success"
         else:
             assert call("Scripts.stop", {"runId": run})["restored"]
         stopped = call("Scripts.get_status")
