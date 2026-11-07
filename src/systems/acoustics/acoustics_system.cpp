@@ -6,6 +6,7 @@
 #include <corona/resource/types/audio.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/acoustics/acoustics_system.h>
+#include <corona/systems/acoustics/acoustics_commands.h>
 
 namespace Corona::Systems {
 
@@ -163,7 +164,40 @@ void AcousticsSystem::process_stop_request(std::uint64_t resource_id, std::uintp
     }
 }
 
+namespace {
+
+/// 应用入站声学参数命令（P3）：单写者入口，tick 开头一次。
+void apply_pending_acoustics_updates() {
+    auto& channel = Corona::AcousticsCommandChannel::instance();
+    auto commands = channel.commands().drain();
+    if (commands.empty()) {
+        return;
+    }
+
+    auto& storage = Corona::SharedDataHub::instance().acoustics_storage();
+    for (const auto& command : commands) {
+        auto device = storage.try_acquire_write(command.acoustics_handle);
+        if (!device) {
+            continue;
+        }
+        if (Corona::has_acoustics_field(command.fields, Corona::AcousticsField::Volume)) {
+            device->volume = command.volume;
+        }
+        if (Corona::has_acoustics_field(command.fields, Corona::AcousticsField::AudioEnabled)) {
+            device->audio_enabled = command.audio_enabled;
+        }
+        if (Corona::has_acoustics_field(command.fields, Corona::AcousticsField::ResourceId)) {
+            device->resource_id = command.resource_id;
+        }
+    }
+}
+
+}  // namespace
+
 void AcousticsSystem::update() {
+    // 先落地外部提交的声学参数，再处理播放/停止请求。
+    apply_pending_acoustics_updates();
+
     // --- 消费命令队列 ---
     {
         std::lock_guard lock(cmd_mutex_);

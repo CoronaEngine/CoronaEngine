@@ -17,6 +17,8 @@
 #include <corona/systems/geometry/native_render_load_guard.h>
 #include <corona/systems/mechanics/mechanics_commands.h>
 #include <corona/systems/optics/optics_system.h>
+#include <corona/systems/acoustics/acoustics_commands.h>
+#include <corona/systems/optics/optics_commands.h>
 
 #include "shadow_culling.h"
 
@@ -690,6 +692,74 @@ void mix_hash_float(std::size_t& sig, float value) {
 }
 
 constexpr uint64_t kVisionRuntimeIdleEvictFrames = 240;
+
+/// 应用入站 Optics 标量材质命令（P3）。
+/// 单写者入口：只在 DAG tick 开头执行一次；同一 optics_handle 的连续命令
+/// 已在入队侧按 LatestWins 合并。
+void apply_pending_optics_updates() {
+    auto& channel = Corona::OpticsCommandChannel::instance();
+    auto commands = channel.commands().drain();
+    if (commands.empty()) {
+        return;
+    }
+
+    auto& storage = Corona::SharedDataHub::instance().optics_storage();
+    for (const auto& command : commands) {
+        auto device = storage.try_acquire_write(command.optics_handle);
+        if (!device) {
+            continue;
+        }
+        const auto fields = command.fields;
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Visible)) {
+            device->visible = command.visible;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::EnableLighting)) {
+            device->bEnableLighting = command.enable_lighting;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Metallic)) {
+            device->metallic = command.metallic;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Roughness)) {
+            device->roughness = command.roughness;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Subsurface)) {
+            device->subsurface = command.subsurface;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Specular)) {
+            device->specular = command.specular;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::SpecularTint)) {
+            device->specularTint = command.specular_tint;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Anisotropic)) {
+            device->anisotropic = command.anisotropic;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Sheen)) {
+            device->sheen = command.sheen;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::SheenTint)) {
+            device->sheenTint = command.sheen_tint;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Clearcoat)) {
+            device->clearcoat = command.clearcoat;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::ClearcoatGloss)) {
+            device->clearcoatGloss = command.clearcoat_gloss;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Ambient)) {
+            device->ambient = command.ambient;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Diffuse)) {
+            device->diffuse = command.diffuse;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::SpecularColor)) {
+            device->specular_color = command.specular_color;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Shininess)) {
+            device->shininess = command.shininess;
+        }
+    }
+}
 
 void apply_pending_camera_moves() {
     auto& hub = Corona::SharedDataHub::instance();
@@ -3262,6 +3332,8 @@ void OpticsSystem::update() {
     // Promote requests first, then drain those changes. Requests arriving later
     // must wait for the next frame instead of capturing this frame's old state.
     begin_screenshot_frame();
+    // 标量材质命令先落地，本 tick 的渲染就用到新参数。
+    apply_pending_optics_updates();
     apply_pending_camera_moves();
     // Explicit camera viewport/state commands below take precedence over the
     // default surface size, matching the previous follows_default_surface rule.
@@ -3281,6 +3353,9 @@ void OpticsSystem::update() {
 
     // Mechanics 在本 tick 更早的位置已完成写入，这里把它的对外投影一并发布。
     Corona::publish_mechanics_snapshot_from_storage();
+    Corona::publish_optics_snapshot_from_storage();
+    // Acoustics 与 Geometry 同层、在本 tick 更早的位置跑完，这里一并发布。
+    Corona::publish_acoustics_snapshot_from_storage();
 
     // �ӳٻ�ȡ GeometrySystem ָ�루������ initialize() �л�ȡ����������
     // initialize_all() ��������ϵͳ��get_system() Ҳ��ͬ�� �� �ǵݹ� mutex �������

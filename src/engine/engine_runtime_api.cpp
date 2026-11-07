@@ -9,6 +9,8 @@
 #include <corona/resource/types/scene.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/mechanics/mechanics_commands.h>
+#include <corona/systems/optics/optics_commands.h>
+#include <corona/systems/acoustics/acoustics_commands.h>
 #include <corona/engine/engine_runtime_api.h>
 #include <corona/systems/script/camera_follow_controller.h>
 #include <corona/systems/geometry/geometry_system.h>
@@ -1320,119 +1322,288 @@ Corona::API::Geometry* Corona::API::Optics::get_geometry() const {
 }
 
 void Corona::API::Optics::set_visible(bool visible) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->visible = visible;
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_visible] Invalid optics handle");
+        return;
+    }
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::Visible;
+    command.visible = visible;
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 bool Corona::API::Optics::get_visible() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return r->visible;
-    return true;
+    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).visible;
 }
+
 
 void Corona::API::Optics::set_lighting_enabled(bool enabled) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->bEnableLighting = enabled;  // 设置光照开关
-}
-bool Corona::API::Optics::get_lighting_enabled() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return r->bEnableLighting;  // 读取光照开关状态
-    return true;
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_lighting_enabled] Invalid optics handle");
+        return;
+    }
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::EnableLighting;
+    command.enable_lighting = enabled;
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
 
+bool Corona::API::Optics::get_lighting_enabled() const {
+    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).enable_lighting;
+}
+
+
 void Corona::API::Optics::set_metallic(float metallic) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->metallic = metallic;
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_metallic] Invalid optics handle");
+        return;
+    }
+    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::Metallic;
+    command.metallic = metallic;
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 float Corona::API::Optics::get_metallic() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return r->metallic;
-    return 0.0f;
+    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
+    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).metallic;
 }
+
 void Corona::API::Optics::set_roughness(float roughness) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->roughness = roughness;
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_roughness] Invalid optics handle");
+        return;
+    }
+    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::Roughness;
+    command.roughness = roughness;
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 float Corona::API::Optics::get_roughness() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return r->roughness;
-    return 0.5f;
+    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
+    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).roughness;
 }
+
 void Corona::API::Optics::set_subsurface(float subsurface) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->subsurface = subsurface;
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_subsurface] Invalid optics handle");
+        return;
+    }
+    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::Subsurface;
+    command.subsurface = subsurface;
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 float Corona::API::Optics::get_subsurface() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return r->subsurface;
-    return 0.0f;
+    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
+    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).subsurface;
 }
+
 void Corona::API::Optics::set_specular(float specular) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->specular = specular;
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_specular] Invalid optics handle");
+        return;
+    }
+    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::Specular;
+    command.specular = specular;
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 float Corona::API::Optics::get_specular() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return r->specular;
-    return 0.5f;
+    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
+    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).specular;
 }
+
 void Corona::API::Optics::set_specular_tint(float specularTint) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->specularTint = specularTint;
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_specular_tint] Invalid optics handle");
+        return;
+    }
+    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::SpecularTint;
+    command.specular_tint = specularTint;
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 float Corona::API::Optics::get_specular_tint() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return r->specularTint;
-    return 0.0f;
+    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
+    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).specular_tint;
 }
+
 void Corona::API::Optics::set_anisotropic(float anisotropic) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->anisotropic = anisotropic;
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_anisotropic] Invalid optics handle");
+        return;
+    }
+    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::Anisotropic;
+    command.anisotropic = anisotropic;
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 float Corona::API::Optics::get_anisotropic() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return r->anisotropic;
-    return 0.0f;
+    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
+    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).anisotropic;
 }
+
 void Corona::API::Optics::set_sheen(float sheen) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->sheen = sheen;
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_sheen] Invalid optics handle");
+        return;
+    }
+    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::Sheen;
+    command.sheen = sheen;
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 float Corona::API::Optics::get_sheen() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return r->sheen;
-    return 0.0f;
+    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
+    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).sheen;
 }
+
 void Corona::API::Optics::set_sheen_tint(float sheenTint) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->sheenTint = sheenTint;
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_sheen_tint] Invalid optics handle");
+        return;
+    }
+    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::SheenTint;
+    command.sheen_tint = sheenTint;
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 float Corona::API::Optics::get_sheen_tint() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return r->sheenTint;
-    return 0.5f;
+    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
+    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).sheen_tint;
 }
+
 void Corona::API::Optics::set_clearcoat(float clearcoat) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->clearcoat = clearcoat;
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_clearcoat] Invalid optics handle");
+        return;
+    }
+    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::Clearcoat;
+    command.clearcoat = clearcoat;
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 float Corona::API::Optics::get_clearcoat() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return r->clearcoat;
-    return 0.0f;
+    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
+    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).clearcoat;
 }
+
 void Corona::API::Optics::set_clearcoat_gloss(float clearcoatGloss) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->clearcoatGloss = clearcoatGloss;
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_clearcoat_gloss] Invalid optics handle");
+        return;
+    }
+    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::ClearcoatGloss;
+    command.clearcoat_gloss = clearcoatGloss;
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 float Corona::API::Optics::get_clearcoat_gloss() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return r->clearcoatGloss;
-    return 1.0f;
+    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
+    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).clearcoat_gloss;
 }
+
 void Corona::API::Optics::set_ambient(const std::array<float, 3>& ambient) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->ambient = {ambient[0], ambient[1], ambient[2]};
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_ambient] Invalid optics handle");
+        return;
+    }
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::Ambient;
+    command.ambient = ktm::fvec3{ambient[0], ambient[1], ambient[2]};
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 std::array<float, 3> Corona::API::Optics::get_ambient() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return {r->ambient.x, r->ambient.y, r->ambient.z};
-    return {0.2f, 0.2f, 0.2f};
+    const auto view = Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{});
+    return {view.ambient.x, view.ambient.y, view.ambient.z};
 }
+
 void Corona::API::Optics::set_diffuse(const std::array<float, 3>& diffuse) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->diffuse = {diffuse[0], diffuse[1], diffuse[2]};
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_diffuse] Invalid optics handle");
+        return;
+    }
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::Diffuse;
+    command.diffuse = ktm::fvec3{diffuse[0], diffuse[1], diffuse[2]};
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 std::array<float, 3> Corona::API::Optics::get_diffuse() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return {r->diffuse.x, r->diffuse.y, r->diffuse.z};
-    return {0.8f, 0.8f, 0.8f};
+    const auto view = Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{});
+    return {view.diffuse.x, view.diffuse.y, view.diffuse.z};
 }
+
 void Corona::API::Optics::set_specular_color(const std::array<float, 3>& specular) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->specular_color = {specular[0], specular[1], specular[2]};
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_specular_color] Invalid optics handle");
+        return;
+    }
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::SpecularColor;
+    command.specular_color = ktm::fvec3{specular[0], specular[1], specular[2]};
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 std::array<float, 3> Corona::API::Optics::get_specular_color() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return {r->specular_color.x, r->specular_color.y, r->specular_color.z};
-    return {1.0f, 1.0f, 1.0f};
+    const auto view = Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{});
+    return {view.specular_color.x, view.specular_color.y, view.specular_color.z};
 }
+
 void Corona::API::Optics::set_shininess(float shininess) {
-    if (auto w = SharedDataHub::instance().optics_storage().acquire_write(handle_)) w->shininess = shininess;
+    if (handle_ == 0) {
+        CFW_LOG_WARNING("[Optics::set_shininess] Invalid optics handle");
+        return;
+    }
+    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle_;
+    command.fields = Corona::OpticsField::Shininess;
+    command.shininess = shininess;
+    Corona::OpticsCommandChannel::instance().commands().push(command);
 }
+
 float Corona::API::Optics::get_shininess() const {
-    if (auto r = SharedDataHub::instance().optics_storage().try_acquire_read(handle_)) return r->shininess;
-    return 32.0f;
+    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
+    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).shininess;
 }
+
 
 // ########################
 //       Mechanics
@@ -1707,69 +1878,59 @@ void Corona::API::Acoustics::set_volume(float volume) {
         CFW_LOG_WARNING("[Acoustics::set_volume] Invalid acoustics handle");
         return;
     }
-
-    if (auto accessor = SharedDataHub::instance().acoustics_storage().acquire_write(handle_)) {
-        accessor->volume = volume;
-    } else {
-        CFW_LOG_ERROR("[Acoustics::set_volume] Failed to acquire write access to acoustics storage");
-    }
+    // 走命令队列（P3）：外部线程不再直接写 Acoustics 槽位。
+    Corona::AcousticsUpdateCommand command{};
+    command.acoustics_handle = handle_;
+    command.fields = Corona::AcousticsField::Volume;
+    command.volume = volume;
+    Corona::AcousticsCommandChannel::instance().commands().push(command);
 }
+
 
 float Corona::API::Acoustics::get_volume() const {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Acoustics::get_volume] Invalid acoustics handle");
-        return 0.0f;
-    }
-
-    float result = 0.0f;
-    if (auto accessor = SharedDataHub::instance().acoustics_storage().acquire_read(handle_)) {
-        result = accessor->volume;
-    } else {
-        CFW_LOG_ERROR("[Acoustics::get_volume] Failed to acquire read access to acoustics storage");
-    }
-    return result;
+    if (handle_ == 0) return 0.0f;
+    return Corona::acoustics_view(handle_).value_or(Corona::AcousticsSnapshotRow{}).volume;
 }
+
 
 void Corona::API::Acoustics::set_audio_enabled(bool enabled) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Acoustics::set_audio_enabled] Invalid acoustics handle");
         return;
     }
-
-    if (auto accessor = SharedDataHub::instance().acoustics_storage().acquire_write(handle_)) {
-        accessor->audio_enabled = enabled;
-    } else {
-        CFW_LOG_ERROR("[Acoustics::set_audio_enabled] Failed to acquire write access to acoustics storage");
-    }
+    Corona::AcousticsUpdateCommand command{};
+    command.acoustics_handle = handle_;
+    command.fields = Corona::AcousticsField::AudioEnabled;
+    command.audio_enabled = enabled;
+    Corona::AcousticsCommandChannel::instance().commands().push(command);
 }
+
 
 bool Corona::API::Acoustics::get_audio_enabled() const {
     if (handle_ == 0) return true;
-    if (auto accessor = SharedDataHub::instance().acoustics_storage().try_acquire_read(handle_)) {
-        return accessor->audio_enabled;
-    }
-    return true;
+    return Corona::acoustics_view(handle_).value_or(Corona::AcousticsSnapshotRow{}).audio_enabled;
 }
+
 
 void Corona::API::Acoustics::set_audio_resource(std::uint64_t resource_id) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Acoustics::set_audio_resource] Invalid acoustics handle");
         return;
     }
-    if (auto accessor = SharedDataHub::instance().acoustics_storage().acquire_write(handle_)) {
-        accessor->resource_id = resource_id;
-    } else {
-        CFW_LOG_ERROR("[Acoustics::set_audio_resource] Failed to acquire write access to acoustics storage");
-    }
+    Corona::AcousticsUpdateCommand command{};
+    command.acoustics_handle = handle_;
+    command.fields = Corona::AcousticsField::ResourceId;
+    command.resource_id = resource_id;
+    Corona::AcousticsCommandChannel::instance().commands().push(command);
 }
+
 
 std::uint64_t Corona::API::Acoustics::get_audio_resource() const {
     if (handle_ == 0) return 0;
-    if (auto accessor = SharedDataHub::instance().acoustics_storage().try_acquire_read(handle_)) {
-        return accessor->resource_id;
-    }
-    return 0;
+    // 含 pending：刚 set_audio_resource 就 play() 也能读到。
+    return Corona::acoustics_view(handle_).value_or(Corona::AcousticsSnapshotRow{}).resource_id;
 }
+
 
 void Corona::API::Acoustics::play(bool loop) {
     if (handle_ == 0) {

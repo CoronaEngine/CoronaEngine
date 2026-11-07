@@ -12,6 +12,8 @@
 
 #include <corona/shared_data_hub.h>
 #include <corona/systems/mechanics/mechanics_commands.h>
+#include <corona/systems/optics/optics_commands.h>
+#include <corona/systems/acoustics/acoustics_commands.h>
 
 #include <cstdio>
 #include <cstdint>
@@ -247,6 +249,127 @@ void test_mechanics_command_and_snapshot() {
     hub.mechanics_storage().deallocate(handle);
 }
 
+void test_optics_command_and_snapshot() {
+    auto& hub = SharedDataHub::instance();
+    auto& channel = Corona::OpticsCommandChannel::instance();
+    channel.commands().clear();
+
+    const auto handle = hub.optics_storage().allocate();
+    CHECK(handle != 0);
+    {
+        auto device = hub.optics_storage().acquire_write(handle);
+        device->metallic = 0.25f;
+        device->roughness = 0.75f;
+    }
+
+    CHECK(!Corona::optics_row(handle).has_value());
+    Corona::publish_optics_snapshot_from_storage();
+    CHECK(Corona::optics_row(handle).has_value());
+    CHECK(Corona::optics_row(handle)->metallic == 0.25f);
+    CHECK(Corona::optics_row(handle)->roughness == 0.75f);
+
+    // 命令：pending 立刻可见，已提交值不变
+    Corona::OpticsUpdateCommand command{};
+    command.optics_handle = handle;
+    command.fields = Corona::OpticsField::Metallic | Corona::OpticsField::Visible;
+    command.metallic = 0.9f;
+    command.visible = false;
+    channel.commands().push(command);
+
+    CHECK(Corona::optics_view(handle)->metallic == 0.9f);
+    CHECK(Corona::optics_view(handle)->visible == false);
+    CHECK(Corona::optics_row(handle)->metallic == 0.25f);
+    CHECK(Corona::optics_row(handle)->visible == true);
+
+    // LatestWins：同 handle 再推一条，合并成最后一条
+    command.metallic = 0.95f;
+    channel.commands().push(command);
+    const auto drained = channel.commands().drain();
+    CHECK(drained.size() == 1);
+    CHECK(drained[0].metallic == 0.95f);
+    CHECK(Corona::has_optics_field(drained[0].fields, Corona::OpticsField::Visible));
+
+    for (const auto& incoming : drained) {
+        if (auto device = hub.optics_storage().try_acquire_write(incoming.optics_handle)) {
+            if (Corona::has_optics_field(incoming.fields, Corona::OpticsField::Metallic)) {
+                device->metallic = incoming.metallic;
+            }
+            if (Corona::has_optics_field(incoming.fields, Corona::OpticsField::Visible)) {
+                device->visible = incoming.visible;
+            }
+        }
+    }
+    Corona::publish_optics_snapshot_from_storage();
+    CHECK(Corona::optics_view(handle)->metallic == 0.95f);
+    CHECK(Corona::optics_row(handle)->metallic == 0.95f);
+    CHECK(Corona::optics_row(handle)->visible == false);
+
+    channel.commands().clear();
+    hub.optics_storage().deallocate(handle);
+}
+
+void test_acoustics_command_and_snapshot() {
+    auto& hub = SharedDataHub::instance();
+    auto& channel = Corona::AcousticsCommandChannel::instance();
+    channel.commands().clear();
+
+    const auto handle = hub.acoustics_storage().allocate();
+    CHECK(handle != 0);
+    {
+        auto device = hub.acoustics_storage().acquire_write(handle);
+        device->volume = 0.4f;
+        device->resource_id = 42;
+    }
+
+    Corona::publish_acoustics_snapshot_from_storage();
+    CHECK(Corona::acoustics_row(handle).has_value());
+    CHECK(Corona::acoustics_row(handle)->volume == 0.4f);
+    CHECK(Corona::acoustics_row(handle)->resource_id == 42);
+
+    // 先绑资源再读：pending 必须可见（脚本常见用法：set_audio_resource 后立刻 play）
+    Corona::AcousticsUpdateCommand command{};
+    command.acoustics_handle = handle;
+    command.fields = Corona::AcousticsField::ResourceId | Corona::AcousticsField::Volume;
+    command.resource_id = 99;
+    command.volume = 0.8f;
+    channel.commands().push(command);
+
+    CHECK(Corona::acoustics_view(handle)->resource_id == 99);
+    CHECK(Corona::acoustics_view(handle)->volume == 0.8f);
+    CHECK(Corona::acoustics_row(handle)->resource_id == 42);  // 已提交值不变
+
+    // 应用 + 发布后收敛
+    const auto drained = channel.commands().drain();
+    CHECK(drained.size() == 1);
+    for (const auto& incoming : drained) {
+        if (auto device = hub.acoustics_storage().try_acquire_write(incoming.acoustics_handle)) {
+            if (Corona::has_acoustics_field(incoming.fields, Corona::AcousticsField::ResourceId)) {
+                device->resource_id = incoming.resource_id;
+            }
+            if (Corona::has_acoustics_field(incoming.fields, Corona::AcousticsField::Volume)) {
+                device->volume = incoming.volume;
+            }
+        }
+    }
+    Corona::publish_acoustics_snapshot_from_storage();
+    CHECK(Corona::acoustics_row(handle)->resource_id == 99);
+    CHECK(Corona::acoustics_view(handle)->resource_id == 99);
+
+    // 无快照、只有 pending 时也要能读出来
+    const auto fresh = hub.acoustics_storage().allocate();
+    Corona::AcousticsUpdateCommand bind{};
+    bind.acoustics_handle = fresh;
+    bind.fields = Corona::AcousticsField::ResourceId;
+    bind.resource_id = 7;
+    channel.commands().push(bind);
+    CHECK(Corona::acoustics_view(fresh)->resource_id == 7);
+    channel.commands().clear();
+    hub.acoustics_storage().deallocate(fresh);
+
+    channel.commands().clear();
+    hub.acoustics_storage().deallocate(handle);
+}
+
 }  // namespace
 
 int main() {
@@ -256,6 +379,8 @@ int main() {
     test_camera_move_coalescing();
     test_transform_command_and_snapshot();
     test_mechanics_command_and_snapshot();
+    test_optics_command_and_snapshot();
+    test_acoustics_command_and_snapshot();
 
     if (g_failures == 0) {
         std::printf("OK: %d checks passed\n", g_checks);
