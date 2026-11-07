@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -236,6 +237,14 @@ class ISystemManager {
      * @brief DAG 的可读 dump（执行序、逐节点统计、最近异常）
      */
     [[nodiscard]] virtual std::string dag_dump() const = 0;
+
+    /**
+     * @brief 设置 tick 边界阶段（P4）
+     *
+     * 在所有 DAG 节点之前执行一次，用于落地结构变更与全局环境参数。
+     * 必须在 configure_dag() 之后、start_all() 之前调用；DAG 不存在时为空操作。
+     */
+    virtual void set_tick_boundary_hook(std::function<void()> hook) = 0;
 };
 
 /**

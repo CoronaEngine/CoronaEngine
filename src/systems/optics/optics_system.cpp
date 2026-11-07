@@ -19,6 +19,7 @@
 #include <corona/systems/optics/optics_system.h>
 #include <corona/systems/acoustics/acoustics_commands.h>
 #include <corona/systems/optics/optics_commands.h>
+#include <corona/systems/optics/environment_commands.h>
 
 #include "shadow_culling.h"
 
@@ -3332,6 +3333,10 @@ void OpticsSystem::update() {
     // Promote requests first, then drain those changes. Requests arriving later
     // must wait for the next frame instead of capturing this frame's old state.
     begin_screenshot_frame();
+    // 兜底：DAG 降级路径（每系统一条线程）没有 tick 边界阶段，
+    // 这里保证 Environment 命令仍然会被应用；DAG 模式下边界阶段已 drain，
+    // 这次调用是空操作（helper 幂等，不重复重建快照）。
+    Corona::apply_pending_environment_updates();
     // 标量材质命令先落地，本 tick 的渲染就用到新参数。
     apply_pending_optics_updates();
     apply_pending_camera_moves();

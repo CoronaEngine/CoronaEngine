@@ -1,6 +1,7 @@
 #include "corona/engine.h"
 
 #include <corona/events/engine_events.h>
+#include <corona/systems/optics/environment_commands.h>
 #include <corona/kernel/event/i_event_stream.h>
 #include <horizon/core/logging.h>
 #include <corona/resource/resource_manager.h>
@@ -77,6 +78,13 @@ static void configure_systems_dag(Kernel::ISystemManager* sys_mgr) {
         CFW_LOG_ERROR("Failed to configure systems DAG ({}); falling back to per-system threads", error);
         return;
     }
+
+    // tick 边界阶段（P4）：结构变更与全局环境参数必须在所有节点开始遍历之前落地。
+    // Environment 跨 Optics（光照）与 Mechanics（重力/固定步长）两个消费者，
+    // 且 Mechanics 在 DAG 里排在 Optics 之前 —— 只有在边界应用才能同 tick 生效。
+    sys_mgr->set_tick_boundary_hook([]() {
+        Corona::apply_pending_environment_updates();
+    });
 
     CFW_LOG_NOTICE("Systems DAG enabled: {}Hz tick, order = Mechanics -> {{Geometry, Acoustics}} -> Optics -> Display",
                    tick_rate);

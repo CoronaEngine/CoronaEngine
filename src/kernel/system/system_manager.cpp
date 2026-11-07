@@ -304,6 +304,12 @@ class SystemManager : public ISystemManager {
         return dag_ ? dag_->dump() : std::string{};
     }
 
+    void set_tick_boundary_hook(std::function<void()> hook) override {
+        if (dag_) {
+            dag_->set_tick_boundary_hook(std::move(hook));
+        }
+    }
+
    private:
     std::vector<std::shared_ptr<ISystem>> snapshot_systems(bool ensure_sorted = false) {
         std::lock_guard<std::mutex> lock(mutex_);

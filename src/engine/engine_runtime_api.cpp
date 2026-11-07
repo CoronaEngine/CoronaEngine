@@ -10,6 +10,7 @@
 #include <corona/shared_data_hub.h>
 #include <corona/systems/mechanics/mechanics_commands.h>
 #include <corona/systems/optics/optics_commands.h>
+#include <corona/systems/optics/environment_commands.h>
 #include <corona/systems/acoustics/acoustics_commands.h>
 #include <corona/engine/engine_runtime_api.h>
 #include <corona/systems/script/camera_follow_controller.h>
@@ -587,44 +588,39 @@ void Corona::API::Environment::set_sun_direction(const std::array<float, 3>& dir
         CFW_LOG_WARNING("[Environment::set_sun_direction] Invalid environment handle");
         return;
     }
-
-    if (auto accessor = SharedDataHub::instance().environment_storage().acquire_write(handle_)) {
-        accessor->sun_position.x = direction[0];
-        accessor->sun_position.y = direction[1];
-        accessor->sun_position.z = direction[2];
-    } else {
-        CFW_LOG_ERROR("[Environment::set_sun_direction] Failed to acquire write access to environment storage");
-    }
+    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
+    Corona::EnvironmentUpdateCommand command{};
+    command.environment_handle = handle_;
+    command.fields = Corona::EnvironmentField::SunDirection;
+    command.sun_direction = ktm::fvec3{direction[0], direction[1], direction[2]};
+    Corona::EnvironmentCommandChannel::instance().commands().push(command);
 }
+
 
 std::array<float, 3> Corona::API::Environment::get_sun_direction() const {
-    if (handle_ == 0) return {1.0f, 1.0f, 1.0f};
-    if (auto accessor = SharedDataHub::instance().environment_storage().try_acquire_read(handle_)) {
-        return {accessor->sun_position.x, accessor->sun_position.y, accessor->sun_position.z};
-    }
-    return {1.0f, 1.0f, 1.0f};
+    const auto view = Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{});
+    return {view.sun_direction.x, view.sun_direction.y, view.sun_direction.z};
 }
+
 
 void Corona::API::Environment::set_sun_intensity(float intensity) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Environment::set_sun_intensity] Invalid environment handle");
         return;
     }
-
-    if (auto accessor = SharedDataHub::instance().environment_storage().acquire_write(handle_)) {
-        accessor->sun_intensity = intensity;
-    } else {
-        CFW_LOG_ERROR("[Environment::set_sun_intensity] Failed to acquire write access to environment storage");
-    }
+    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
+    Corona::EnvironmentUpdateCommand command{};
+    command.environment_handle = handle_;
+    command.fields = Corona::EnvironmentField::SunIntensity;
+    command.sun_intensity = intensity;
+    Corona::EnvironmentCommandChannel::instance().commands().push(command);
 }
+
 
 float Corona::API::Environment::get_sun_intensity() const {
-    if (handle_ == 0) return 10.0f;
-    if (auto accessor = SharedDataHub::instance().environment_storage().try_acquire_read(handle_)) {
-        return accessor->sun_intensity;
-    }
-    return 10.0f;
+    return Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{}).sun_intensity;
 }
+
 
 void Corona::API::Environment::set_authored_lighting(const std::string& description) {
     if (description.empty()) {
@@ -673,42 +669,38 @@ void Corona::API::Environment::set_sky_intensity(float intensity) {
         CFW_LOG_WARNING("[Environment::set_sky_intensity] Invalid environment handle");
         return;
     }
-
-    if (auto accessor = SharedDataHub::instance().environment_storage().acquire_write(handle_)) {
-        accessor->sky_intensity = intensity;
-    } else {
-        CFW_LOG_ERROR("[Environment::set_sky_intensity] Failed to acquire write access to environment storage");
-    }
+    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
+    Corona::EnvironmentUpdateCommand command{};
+    command.environment_handle = handle_;
+    command.fields = Corona::EnvironmentField::SkyIntensity;
+    command.sky_intensity = intensity;
+    Corona::EnvironmentCommandChannel::instance().commands().push(command);
 }
+
 
 float Corona::API::Environment::get_sky_intensity() const {
-    if (handle_ == 0) return 20.0f;
-    if (auto accessor = SharedDataHub::instance().environment_storage().try_acquire_read(handle_)) {
-        return accessor->sky_intensity;
-    }
-    return 20.0f;
+    return Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{}).sky_intensity;
 }
+
 
 void Corona::API::Environment::set_floor_grid(bool enabled) const {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Environment::set_floor_grid] Invalid environment handle");
         return;
     }
-
-    if (auto accessor = SharedDataHub::instance().environment_storage().acquire_write(handle_)) {
-        accessor->floor_grid_enabled = enabled ? 1u : 0u;
-    } else {
-        CFW_LOG_ERROR("[Environment::set_floor_grid] Failed to acquire write access to environment storage");
-    }
+    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
+    Corona::EnvironmentUpdateCommand command{};
+    command.environment_handle = handle_;
+    command.fields = Corona::EnvironmentField::FloorGrid;
+    command.floor_grid_enabled = enabled ? 1u : 0u;
+    Corona::EnvironmentCommandChannel::instance().commands().push(command);
 }
+
 
 bool Corona::API::Environment::get_floor_grid() const {
-    if (handle_ == 0) return true;
-    if (auto accessor = SharedDataHub::instance().environment_storage().try_acquire_read(handle_)) {
-        return accessor->floor_grid_enabled;
-    }
-    return true;
+    return Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{}).floor_grid_enabled != 0;
 }
+
 
 std::uintptr_t Corona::API::Environment::get_handle() const {
     return handle_;
@@ -719,74 +711,77 @@ void Corona::API::Environment::set_gravity(const std::array<float, 3>& gravity) 
         CFW_LOG_WARNING("[Environment::set_gravity] Invalid environment handle");
         return;
     }
-    if (auto accessor = SharedDataHub::instance().environment_storage().acquire_write(handle_)) {
-        accessor->gravity.x = gravity[0];
-        accessor->gravity.y = gravity[1];
-        accessor->gravity.z = gravity[2];
-    }
+    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
+    Corona::EnvironmentUpdateCommand command{};
+    command.environment_handle = handle_;
+    command.fields = Corona::EnvironmentField::Gravity;
+    command.gravity = ktm::fvec3{gravity[0], gravity[1], gravity[2]};
+    Corona::EnvironmentCommandChannel::instance().commands().push(command);
 }
 
+
 std::array<float, 3> Corona::API::Environment::get_gravity() const {
-    if (handle_ == 0) return {0.0f, -9.8f, 0.0f};
-    if (auto accessor = SharedDataHub::instance().environment_storage().try_acquire_read(handle_)) {
-        return {accessor->gravity.x, accessor->gravity.y, accessor->gravity.z};
-    }
-    return {0.0f, -9.8f, 0.0f};
+    const auto view = Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{});
+    return {view.gravity.x, view.gravity.y, view.gravity.z};
 }
+
 
 void Corona::API::Environment::set_floor_y(float y) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Environment::set_floor_y] Invalid environment handle");
         return;
     }
-    if (auto accessor = SharedDataHub::instance().environment_storage().acquire_write(handle_)) {
-        accessor->floor_y = y;
-    }
+    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
+    Corona::EnvironmentUpdateCommand command{};
+    command.environment_handle = handle_;
+    command.fields = Corona::EnvironmentField::FloorY;
+    command.floor_y = y;
+    Corona::EnvironmentCommandChannel::instance().commands().push(command);
 }
 
+
 float Corona::API::Environment::get_floor_y() const {
-    if (handle_ == 0) return 0.0f;
-    if (auto accessor = SharedDataHub::instance().environment_storage().try_acquire_read(handle_)) {
-        return accessor->floor_y;
-    }
-    return 0.0f;
+    return Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{}).floor_y;
 }
+
 
 void Corona::API::Environment::set_floor_restitution(float restitution) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Environment::set_floor_restitution] Invalid environment handle");
         return;
     }
-    if (auto accessor = SharedDataHub::instance().environment_storage().acquire_write(handle_)) {
-        accessor->floor_restitution = restitution;
-    }
+    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
+    Corona::EnvironmentUpdateCommand command{};
+    command.environment_handle = handle_;
+    command.fields = Corona::EnvironmentField::FloorRestitution;
+    command.floor_restitution = restitution;
+    Corona::EnvironmentCommandChannel::instance().commands().push(command);
 }
 
+
 float Corona::API::Environment::get_floor_restitution() const {
-    if (handle_ == 0) return 0.6f;
-    if (auto accessor = SharedDataHub::instance().environment_storage().try_acquire_read(handle_)) {
-        return accessor->floor_restitution;
-    }
-    return 0.6f;
+    return Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{}).floor_restitution;
 }
+
 
 void Corona::API::Environment::set_fixed_dt(float dt) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Environment::set_fixed_dt] Invalid environment handle");
         return;
     }
-    if (auto accessor = SharedDataHub::instance().environment_storage().acquire_write(handle_)) {
-        accessor->fixed_dt = dt;
-    }
+    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
+    Corona::EnvironmentUpdateCommand command{};
+    command.environment_handle = handle_;
+    command.fields = Corona::EnvironmentField::FixedDt;
+    command.fixed_dt = dt;
+    Corona::EnvironmentCommandChannel::instance().commands().push(command);
 }
 
+
 float Corona::API::Environment::get_fixed_dt() const {
-    if (handle_ == 0) return 1.0f / 60.0f;
-    if (auto accessor = SharedDataHub::instance().environment_storage().try_acquire_read(handle_)) {
-        return accessor->fixed_dt;
-    }
-    return 1.0f / 60.0f;
+    return Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{}).fixed_dt;
 }
+
 
 // ########################
 //         Geometry
