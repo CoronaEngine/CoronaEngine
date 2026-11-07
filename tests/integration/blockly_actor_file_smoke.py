@@ -121,10 +121,9 @@ def verify(port, root, switch_root=None):
 
     web = Frontend(port)
 
-    def api(name, *args):
-        result = web.api(name, list(args))
-        assert result["success"], result
-        return result["data"]
+    def v8(method, *args):
+        # JSON belongs to the test host/CDP only; arguments reach V8 as values.
+        return web.evaluate(method + "(..." + json.dumps(args) + ")")
 
     def position():
         return web.evaluate("(async()=>{const s=await corona.scene.readActive();return "
@@ -150,12 +149,12 @@ def verify(port, root, switch_root=None):
     wait_for(lambda: web.evaluate("document.readyState === 'complete' && !!document.querySelector('#app[data-v-app] button')"),
              bool, "editor startup page")
     if switch_root:
-        peer = wait_for(lambda: api("ProjectLauncher.open_project", str(switch_root)),
+        peer = wait_for(lambda: v8("corona.project.openProject", str(switch_root)),
                         lambda r: r.get("status") != "service_initializing", "archive service")
         assert peer.get("ok"), peer
         peer_start = position()
         assert peer_start != [0, 0, 0], "the switch fixture needs a distinct starting position"
-    opened = wait_for(lambda: api("ProjectLauncher.open_project", str(root)),
+    opened = wait_for(lambda: v8("corona.project.openProject", str(root)),
                       lambda r: r.get("status") != "service_initializing", "archive service")
     assert opened.get("ok"), opened
     initial = position()
@@ -163,14 +162,14 @@ def verify(port, root, switch_root=None):
     before_edit = project_files()
     edit_position(start)
     assert project_files() == before_edit, "An ordinary Actor edit wrote to disk"
-    committed = api("MainView.scene_save", "scene.ini", {"archive_session": scope()})
-    assert committed["ok"], committed
+    committed = v8("corona.scene.save", "scene.ini", {"archive_session": scope()})
+    assert committed["status"] == "saved", committed
     after_save = project_files()
     assert {key for key in after_save if after_save[key] != before_edit.get(key)} == {"scene.ini"}
     assert after_save.keys() == before_edit.keys()
     edit_position(initial)
     assert project_files() == after_save
-    assert api("ProjectLauncher.open_project", str(root))["ok"]
+    assert v8("corona.project.openProject", str(root))["ok"]
     assert position() == start, "Reopen must read the saved edit, not the latest in-memory Actor"
     assert project_files() == after_save
     target_fields = {"SCOPE": "SCENE", "v": "presses", "x": 1}
@@ -187,9 +186,9 @@ def verify(port, root, switch_root=None):
     first_session = scope()
     target = {"target_type": "actor", "scene_name": "scene.ini", "actor_name": "Probe", "script_kind": "node_graph",
               "id": "node_graph:actor:scene.ini:Probe", "enabled": True, "runnable": True, "validation_errors": []}
-    locator = {"key": json.dumps(["node_graph", "actor", "scene.ini", "Probe"], separators=(",", ":")),
+    locator = {"identity": ["node_graph", "actor", "scene.ini", "Probe"],
                "archive_session": first_session, "project_path": str(root)}
-    saved = api("ProjectFiles.save", {**locator, "document": {"target": target, "workspace": graph},
+    saved = v8("corona.projectFiles.save", {**locator, "document": {"target": target, "workspace": graph},
                 "code": "raise RuntimeError('node panel did not generate the script')"})
     assert saved["status"] == "saved", saved
     web.evaluate("localStorage.setItem('corona.activeProjectPath'," + json.dumps(str(root)) +
@@ -207,10 +206,10 @@ def verify(port, root, switch_root=None):
     for _ in range(2):
         web.evaluate(f"{run_button}.click()")
         wait_for(lambda: web.evaluate(f"{run_button}.classList.contains('running')"), bool, "run accepted by panel")
-        status = lambda: api("Scripts.get_status")
+        status = lambda: v8("corona.scripts.getStatus")
         running = wait_for(status, lambda r: r.get("status") == "running" and r.get("marker", {}).get("id") == "start",
                            "generated file running")
-        saved = api("ProjectFiles.load", locator)
+        saved = v8("corona.projectFiles.load", locator)
         path = root / saved["code_path"]
         script = path.read_bytes()
         assert b"def run():" in script and b"KeyD" in script, script
@@ -227,8 +226,8 @@ def verify(port, root, switch_root=None):
                 raise AssertionError(("Run modified archive", changes, saved_workspace,
                                       (root / saved["document_path"]).read_text(encoding="utf-8")))
         request_id = running["requestId"]
-        assert api("Scripts.get_run", {"requestId": request_id})["runId"] == running["runId"]
-        replay = api("Scripts.run_file", {
+        assert v8("corona.scripts.getRun", request_id)["runId"] == running["runId"]
+        replay = v8("corona.scripts.runFile", {
             "archive_session": first_session,
             "project_path": str(root), "path": saved["code_path"], "revision": hashlib.sha256(script).hexdigest(),
             "target_type": "actor", "scene_name": "scene.ini", "actor_name": "Probe", "requestId": request_id})
@@ -238,8 +237,9 @@ def verify(port, root, switch_root=None):
             moved = wait_for(position, lambda p: p != start, "key moved actor")
             assert moved == [start[0] + 1, *start[1:]], moved
             assert project_files() == saved_files, "Starting the run or moving the Actor changed the archive"
-            blocked = api("MainView.scene_save", "scene.ini", {"archive_session": scope()})
-            assert not blocked["ok"] and blocked["status"] == "run_active", blocked
+            blocked = web.evaluate("corona.scene.save('scene.ini'," + json.dumps({"archive_session": scope()}) +
+                                   ").then(()=>null,error=>({code:error.code,message:error.message}))")
+            assert blocked and blocked["code"] == "SAVE_FAILED", blocked
             key_up()
             key_down()
             key_up()
@@ -270,7 +270,7 @@ def verify(port, root, switch_root=None):
                "e.innerText.toLowerCase().replaceAll(String.fromCharCode(92), '/').includes(" + peer_path + "))")
         wait_for(lambda: web.evaluate("!!(" + row + ")"), bool, "switch target in Recent Projects")
         switch_request = "switch-" + runs[-1]["requestId"]
-        active = api("Scripts.run_file", {"archive_session": first_session, "requestId": switch_request, "project_path": str(root),
+        active = v8("corona.scripts.runFile", {"archive_session": first_session, "requestId": switch_request, "project_path": str(root),
                      "path": report["path"], "revision": hashlib.sha256(script).hexdigest(),
                      "target_type": "actor", "actor_name": "Probe", "scene_name": "scene.ini"})
         wait_for(status, lambda r: r.get("runId") == active.get("runId") and r.get("marker", {}).get("id") == "start", "switch run")
@@ -282,7 +282,7 @@ def verify(port, root, switch_root=None):
                  lambda s: Path(s["project_path"]).resolve() == switch_root, "project switch")
         assert position() == peer_start
         assert project_files() == saved_files
-        assert api("Scripts.get_run", {"requestId": switch_request})["status"] == "stopped"
+        assert v8("corona.scripts.getRun", switch_request)["status"] == "stopped"
         assert not status()["snapshotCaptured"]
         key_down()
         key_up()
@@ -292,30 +292,29 @@ def verify(port, root, switch_root=None):
                             "to": str(switch_root), "newProjectPosition": peer_start}
         peer_files = project_files(switch_root)
         stale_target = {"archive_session": first_session, "project_path": str(root),
-                        "target_type": "actor", "scene_name": "scene.ini", "actor_name": "Probe",
-                        "script_kind": "node_graph"}
+                        "target_type": "actor", "scene_name": "scene.ini", "actor_name": "Probe"}
         stale_run = {**stale_target, "requestId": "late-start", "path": report["path"],
                      "revision": hashlib.sha256(script).hexdigest()}
         def verify_rejected():
             for name, payload in (
-                ("ProjectFiles.load", locator),
-                ("ProjectFiles.save", {**locator, "document": {}, "code": "raise AssertionError()"}),
+                ("corona.projectFiles.load", locator),
+                ("corona.projectFiles.save", {**locator, "document": {}, "code": "raise AssertionError()"}),
             ):
-                reply = api(name, payload)
+                reply = v8(name, payload)
                 assert reply.get("code") == "PROJECT_CONTEXT_CHANGED", reply
-            rejected = web.evaluate("corona.editor.invoke('Scripts.run_file'," + json.dumps([stale_run]) +
+            rejected = web.evaluate("corona.scripts.runFile(" + json.dumps(stale_run) +
                                     ").then(value=>value,error=>({code:error.code,error:error.message}))")
-            assert not rejected.get("success") and "PROJECT_CONTEXT_CHANGED" in str(rejected), rejected
+            assert rejected.get("code") == "PROJECT_CONTEXT_CHANGED", rejected
             assert not status()["snapshotCaptured"]
             assert project_files() == saved_files and project_files(switch_root) == peer_files
             return scope()
 
         sessions = [first_session, verify_rejected()]
-        assert api("ProjectLauncher.open_project", str(root)).get("ok")
+        assert v8("corona.project.openProject", str(root)).get("ok")
         sessions.append(verify_rejected())
         assert position() == start
-        assert api("ProjectFiles.load", {**locator, "archive_session": sessions[-1]})["status"] == "loaded"
-        assert api("ProjectLauncher.open_project", str(root)).get("ok")
+        assert v8("corona.projectFiles.load", {**locator, "archive_session": sessions[-1]})["status"] == "loaded"
+        assert v8("corona.project.openProject", str(root)).get("ok")
         sessions.append(verify_rejected())
         assert len(set(sessions)) == 4, sessions
         report["sessionIsolation"] = {"openings": sessions, "staleLoadSaveRunRejected": True,
