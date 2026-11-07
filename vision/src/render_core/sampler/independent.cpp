@@ -25,6 +25,11 @@ public:
     void set_seed(const Uint2 &pixel, const Uint &sample_index, const Uint &dim) noexcept override {
         Uint index = sample_index;
         if (seed_ != 0u) index += seed_;
+        const char *native = std::getenv("VISION_RESTIR_GI_NATIVE_ALIGNED_LAMBERT");
+        const char *multibounce = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
+        const char *offset = std::getenv("VISION_BENCH_SAMPLE_OFFSET");
+        if (native && native[0] == '1' && multibounce && multibounce[0] == '1' && offset)
+            index += uint(std::strtoul(offset, nullptr, 10));
         Uint state = tea<D>(tea<D>(pixel.x, pixel.y), tea<D>(index, dim));
         try_load_data();
         state_ = state;

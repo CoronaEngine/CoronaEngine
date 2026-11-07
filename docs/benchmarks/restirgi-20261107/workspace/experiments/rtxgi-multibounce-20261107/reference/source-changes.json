@@ -1,0 +1,77 @@
+{
+  "baseline": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\restirgi-aligned-20261107\\reference-full\\RestirGI",
+  "destination": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxgi-multibounce-20261107\\reference\\RestirGI",
+  "GPU_launched": false,
+  "files": [
+    {
+      "file": "BenchmarkCapture.cpp",
+      "sha256": "aeeef69238daf8ff7bc4c013589134e7c3cbf21d3cd9c0546b39f94ad562f562",
+      "baseline_sha256": "410ec18ca932ea638faa54b43fa515add4e0c447e5db99836a05fa210a6653aa"
+    },
+    {
+      "file": "BenchmarkCapture.h",
+      "sha256": "99312048bb08210d92add29636c1173b281f623c2df5423eaf76067ad57bf33f",
+      "baseline_sha256": "213fc483721b27dd41504ffffdf94a9a062f4fb475e7a1d4322ad5a131b94fa0"
+    },
+    {
+      "file": "RestirGI.cpp",
+      "sha256": "957cdbf967532db5c77ebf77c0c84828de134094bc25bce559cedcb9a83f3b8f",
+      "baseline_sha256": "0d31f0d070cdbea156307cebed0b41fb049f67f320ce7a648e156d35328ee6f1"
+    },
+    {
+      "file": "Structure.h",
+      "sha256": "4bbaebad5ffdc2d5d10bddfe41d9e9026eb1be4975fb7325331ddd08a83210fc",
+      "baseline_sha256": "728afd305252144e48bdf558173f961fea6745a7d7cede07e8cb3f15149d0870"
+    },
+    {
+      "file": "helper\\ModelLoader.h",
+      "sha256": "bdaeb12e0407f9b98548f75f6b38993988cd0b82eedf987b966a463887328986",
+      "baseline_sha256": "473b9103e3a9687867f9a212ab0b2ff393895eaaf5efc5e47bf9081b0a1afa69"
+    },
+    {
+      "file": "shaders\\benchmark_multibounce.hlsl",
+      "sha256": "a9871691ea5488edd35e30093880c7e32828fd9d1ee0ec43b6b2575319ed231e",
+      "baseline_sha256": null
+    },
+    {
+      "file": "shaders\\diffuse_trace_common_inc.hlsl",
+      "sha256": "6ade7796b54eb45c0c42da381c1f6da777626f0448bc6633de53336f9916982f",
+      "baseline_sha256": "e7ae3372af7535c8b333f9cc99edcfe6f7231308c1a9de56fe78c0dc82f87c47"
+    },
+    {
+      "file": "shaders\\GbufferRchit.hlsl",
+      "sha256": "2361098ce2b55e15ee6f8071ec45be0e5e0b2481f2ba1cbec06c626546f99efa",
+      "baseline_sha256": "f09f36aaf11c4c5099d6159816f0e6d2e37997c3159a8c1ea4f11e77a50f5563"
+    },
+    {
+      "file": "shaders\\RasterGbufferPass.hlsl",
+      "sha256": "27c8ca6dd9ed86172a5ae779c40e175eb30760bbfa9fb9286b324d73dcda5bb1",
+      "baseline_sha256": "b739450705206cc302dbb6d7f16fb6f9b52f2d3bc7efeee97d0732137c4fd9ff"
+    },
+    {
+      "file": "shaders\\rt.hlsl",
+      "sha256": "643eebc3fbe9ebf86a6add9deff7706451950e23e23927a3ca40926b30e5d3e9",
+      "baseline_sha256": "cf91ed98d00e1bcd72ab887fdf07b7bc6117c6c8cb2106183bb676ef3c26f341"
+    },
+    {
+      "file": "shaders\\RtdgiTraceRgen.hlsl",
+      "sha256": "d1bf4e375a9b4d3e10384214fc8bda93665fa4949745b2e771e001fe272a3987",
+      "baseline_sha256": "330652f4c4894124d5192d311cef3b39c69424f1cfd8c32a22528bbe49fa5081"
+    },
+    {
+      "file": "shaders\\RtdgiValidateRgen.hlsl",
+      "sha256": "f887798651a55d9c4bd41db3c64e0b4087e1d425e11c04ebff619149c2cac859",
+      "baseline_sha256": "ccb3e3fbadd20e02fcb915e39ad85f60d05dc777ff67150e69a53d9b39b56e02"
+    },
+    {
+      "file": "shaders\\rtdgi_restir_settings.hlsl",
+      "sha256": "79d4aa61c50846ec24dae1302702ed30835e417ecd70ce6b143110f93b6bcabf",
+      "baseline_sha256": "dfe12403f13d0060e19e52ce8a3a855f2844876c4e9c3301dc9444dc13405a9b"
+    },
+    {
+      "file": "shaders\\sun.hlsl",
+      "sha256": "bc561b7272e3e233c389b728aae046f0532c3b9e379f3743fc4ef4acae7de6d2",
+      "baseline_sha256": "ecf0e34f8421e52e347c25a7882b87b8bf1a8b3e94859f97ded2f23bfe196321"
+    }
+  ]
+}

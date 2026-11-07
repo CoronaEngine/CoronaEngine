@@ -1,0 +1,1009 @@
+--- a/BenchmarkCapture.cpp
++++ b/BenchmarkCapture.cpp
+@@ -12,7 +12,9 @@
+ 
+ namespace benchmark {
+ bool enabled = false, hasCamera = false;
+-bool controlledProfile = false, exportRaw = false;
++bool controlledProfile = false, exportRaw = false, referenceMode = false;
++unsigned sampleOffset = 0, minDepth = 5, maxDepth = 16;
++static std::vector<unsigned> rawFrames;
+ std::string scene;
+ float eye[3]{0,15,0}, target[3]{5,15,0}, up[3]{0,1,0};
+ float fovY = 68.f, nearPlane = .01f, farPlane = 10000.f, modelScale = .1f;
+@@ -67,11 +69,19 @@
+     if(output.empty())return;
+     const auto temporary=output/"capture-result.json.tmp";
+     std::ofstream f(temporary,std::ios::trunc);
+-    f<<"{\"status\":\""<<state<<"\",\"frames\":"<<captured<<",\"expected_frames\":"<<frames<<",\"warmup\":"<<warmup<<",\"measured_frames\":"<<(frames-warmup)<<",\"interval_ms\":"<<intervalMs<<",\"presentation_mode\":\"offscreen_no_present\",\"common_gui\":false,\"gi_resolution\":[1920,1080],\"gi_guides_resolution\":[1920,1080],\"ao_internal_resolution\":[960,540],\"timestamp_frequency_hz\":"<<frequency<<",\"scene\":\""<<Escape(scene)<<"\",\"algorithm\":\"controlled_lambert_sun_v1; full-resolution GI, albedo0.7, sunRGB1 direction+Y, opaque, black sky, AO1, no cache/feedback/output-denoise; native core budgets retained\",\"camera_coordinates\":\"native imported coordinates; Assimp ConvertToLeftHanded reflects OBJ Z, native model_scale applied separately\",\"eye\":["<<eye[0]<<","<<eye[1]<<","<<eye[2]<<"],\"target\":["<<target[0]<<","<<target[1]<<","<<target[2]<<"],\"up\":["<<up[0]<<","<<up[1]<<","<<up[2]<<"],\"fov_y_deg\":"<<fovY<<",\"near_plane\":"<<nearPlane<<",\"far_plane\":"<<farPlane<<",\"model_scale\":"<<modelScale<<",\"camera_supplied\":"<<(hasCamera?"true":"false")<<",\"seed_api\":null,\"png_pixel_format_guid\":\""<<pngPixelFormatGuid<<"\",\"error\":\""<<Escape(error)<<"\"}\n";
++    f<<"{\"status\":\""<<state<<"\",\"frames\":"<<captured<<",\"expected_frames\":"<<frames<<",\"warmup\":"<<warmup<<",\"measured_frames\":"<<(frames-warmup)<<",\"interval_ms\":"<<intervalMs<<",\"presentation_mode\":\"offscreen_no_present\",\"common_gui\":false,\"gi_resolution\":[1920,1080],\"gi_guides_resolution\":[1920,1080],\"ao_internal_resolution\":[960,540],\"timestamp_frequency_hz\":"<<frequency<<",\"scene\":\""<<Escape(scene)<<"\",\"algorithm\":\"kitchen_multibounce_v1; surface1=primary, max16, firstRRafterSurface6, exactLambert0.7, hardSunRGB1, blackSky, oneFullUniformCandidate, nativeCoreBudgets\",\"camera_coordinates\":\"shared canonical world OBJ; Assimp3.3, no axis reflection\",\"eye\":["<<eye[0]<<","<<eye[1]<<","<<eye[2]<<"],\"target\":["<<target[0]<<","<<target[1]<<","<<target[2]<<"],\"up\":["<<up[0]<<","<<up[1]<<","<<up[2]<<"],\"fov_y_deg\":"<<fovY<<",\"near_plane\":"<<nearPlane<<",\"far_plane\":"<<farPlane<<",\"model_scale\":"<<modelScale<<",\"camera_supplied\":"<<(hasCamera?"true":"false")<<",\"seed_api\":null,\"png_pixel_format_guid\":\""<<pngPixelFormatGuid<<"\",\"error\":\""<<Escape(error)<<"\"}\n";
+     f.close();if(!f)throw std::runtime_error("cannot write capture-result.json");
+     Check(MoveFileExW(temporary.c_str(),(output/"capture-result.json").c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)?S_OK:HRESULT_FROM_WIN32(GetLastError()));
+ }
+-void Failure(const std::string& message) { try {Status("failed",message);}catch(...){} }
++void Failure(const std::string& message) {
++    std::cerr<<"RESTIRGI_BENCH_FAILURE "<<message<<std::endl;
++    try {
++        if(!output.empty()&&std::filesystem::is_directory(output)) {
++            std::ofstream log(output/"failure.txt",std::ios::app);log<<message<<'\n';
++        }
++        Status("failed",message);
++    }catch(...){}
++}
+ void Checkpoint(const char* label) {
+     if(!enabled||checkpointFile==INVALID_HANDLE_VALUE)return;
+     DWORD written=0;WriteFile(checkpointFile,label,DWORD(strlen(label)),&written,nullptr);
+@@ -83,12 +93,17 @@
+     if(!enabled){LocalFree(args);throw std::runtime_error("controlled reference requires --benchmark --controlled-lambert");}
+     unsigned cameraFields=0;
+     auto number=[&](int& i)->float{if(++i>=count)throw std::runtime_error("missing numeric argument"); size_t n=0; float v=std::stof(args[i],&n); if(n!=wcslen(args[i])||!std::isfinite(v))throw std::runtime_error("invalid numeric argument"); return v;};
+-    auto integer=[&](int& i)->unsigned{float v=number(i);if(v<0||v>100000||std::floor(v)!=v)throw std::runtime_error("invalid unsigned argument");return unsigned(v);};
++    auto integer=[&](int& i)->unsigned{float v=number(i);if(v<0||v>10000000||std::floor(v)!=v)throw std::runtime_error("invalid unsigned argument");return unsigned(v);};
+     for(int i=1;i<count;i++) {
+         std::wstring a=args[i];
+         if(a==L"--benchmark")continue;
+         if(a==L"--controlled-lambert"){controlledProfile=true;continue;}
+         if(a==L"--export-raw"){exportRaw=true;continue;}
++        if(a==L"--reference"){referenceMode=true;exportRaw=true;continue;}
++        if(a==L"--sample-offset"){sampleOffset=integer(i);continue;}
++        if(a==L"--min-depth"){minDepth=integer(i);continue;}
++        if(a==L"--max-depth"){maxDepth=integer(i);continue;}
++        if(a==L"--raw-frames"){if(++i>=count)throw std::runtime_error("missing raw frames");std::wistringstream input(args[i]);std::wstring item;while(std::getline(input,item,L','))rawFrames.push_back(unsigned(std::stoul(item)));exportRaw=true;continue;}
+         if(a==L"--output"){if(++i>=count)throw std::runtime_error("missing output");output=args[i];}
+         else if(a==L"--scene"){if(++i>=count)throw std::runtime_error("missing scene");scene=std::filesystem::path(args[i]).generic_string();}
+         else if(a==L"--frames")frames=integer(i);
+@@ -103,13 +118,26 @@
+     }
+     LocalFree(args);
+     if(!controlledProfile)throw std::runtime_error("must explicitly select --controlled-lambert");
+-    if(output.empty()||!output.is_absolute()||std::filesystem::exists(output))throw std::runtime_error("output must be a fresh absolute directory");
++    if(output.empty()||!output.is_absolute())throw std::runtime_error("output must be an absolute directory");
++    if(std::filesystem::exists(output)) {
++        if(!std::filesystem::is_directory(output))throw std::runtime_error("output is not a directory");
++        const std::vector<std::string> launcherFiles={"launch-manifest.json","frozen-scene-contract.json","stdout.txt","stderr.txt"};
++        for(const auto& entry:std::filesystem::directory_iterator(output)) {
++            auto name=entry.path().filename().string();
++            if(!entry.is_regular_file()||std::find(launcherFiles.begin(),launcherFiles.end(),name)==launcherFiles.end())throw std::runtime_error("output contains prior renderer evidence: "+name);
++        }
++    }
+     if(frames<=warmup||frames>100000||intervalMs!=0||modelScale<=0||nearPlane<=0||farPlane<=nearPlane||fovY<=0||fovY>=179)throw std::runtime_error("invalid capture configuration");
+     if(cameraFields!=0&&cameraFields!=7)throw std::runtime_error("supply eye, target and up together");
++    if(minDepth != 5 || maxDepth != 16)throw std::runtime_error("frozen benchmark requires min-depth5/max-depth16");
++    for(auto selected:rawFrames)if(selected>=frames)throw std::runtime_error("raw frame out of range");
+     hasCamera=cameraFields==7;
+     if(hasCamera){float d=0,u=0,c[3];for(int k=0;k<3;k++){d+=(eye[k]-target[k])*(eye[k]-target[k]);u+=up[k]*up[k];} c[0]=(target[1]-eye[1])*up[2]-(target[2]-eye[2])*up[1];c[1]=(target[2]-eye[2])*up[0]-(target[0]-eye[0])*up[2];c[2]=(target[0]-eye[0])*up[1]-(target[1]-eye[1])*up[0];if(d<1e-12||u<1e-12||c[0]*c[0]+c[1]*c[1]+c[2]*c[2]<1e-12)throw std::runtime_error("degenerate camera");}
+     if(!scene.empty()&&(!std::filesystem::path(scene).is_absolute()||!std::filesystem::is_regular_file(scene)))throw std::runtime_error("scene must be an existing absolute model path");
+     std::filesystem::create_directories(output);
++    std::ofstream configuration(output/"benchmark-config.json");
++    configuration<<"{\"profile\":\"kitchen_multibounce_v1\",\"reference_mode\":"<<(referenceMode?"true":"false")<<",\"sample_offset\":"<<sampleOffset<<",\"min_depth\":"<<minDepth<<",\"max_depth\":"<<maxDepth<<",\"RR_first_after_surface\":6,\"RR_threshold\":1,\"RR_survival_cap\":0.95,\"RR_floor\":0,\"surface16_NEE_before_termination\":true,\"primary_proposal\":\"uniform hemisphere\",\"primary_direct\":false,\"temporal_M_clamp\":20,\"reservoir_W_clamp\":10,\"spatial_passes\":2,\"native_core_unchanged\":true,\"interleaved_short_paths\":false,\"scene_geometry\":\"canonical world OBJ315 groups, originalAssimp3.3, no axis reflection\",\"diagnostic_components\":[\"last_surface\",\"RR_tests\",\"RR_survivals\",\"reason\"],\"diagnostic_reasons\":{\"0\":\"invalid_primary\",\"1\":\"miss\",\"2\":\"RR\",\"3\":\"max_depth\"},\"fresh_pt_sum_is_sum\":true,\"replay_seed\":\"source pixel and recovered discrete8bit uniform proposal; nativeFP16 history quantization retained\"}\n";
++    configuration.close();if(!configuration)throw std::runtime_error("cannot write benchmark configuration");
+     checkpointFile=CreateFileW((output/L"startup-checkpoints.log").c_str(),FILE_APPEND_DATA,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
+     Checkpoint("Parse complete");
+     Status("initializing");
+@@ -141,7 +169,7 @@
+     DXGI_FORMAT format{};
+ };
+ static std::vector<RawImage> rawImages;
+-bool RawFrame() { return enabled && exportRaw && frame + 1 == frames; }
++bool RawFrame() { return enabled && exportRaw && (rawFrames.empty() ? frame + 1 == frames : std::find(rawFrames.begin(),rawFrames.end(),frame)!=rawFrames.end()); }
+ void CopyRawImage(ID3D12GraphicsCommandList* list, const char* name, ID3D12Resource* resource, D3D12_RESOURCE_STATES state) {
+     if (!RawFrame()) return;
+     RawImage image; image.name = name;
+@@ -161,14 +189,16 @@
+ }
+ static void SaveRawImages() {
+     if (!exportRaw) return;
+-    if (rawImages.size() != 4) throw std::runtime_error("missing controlled raw export");
+-    std::ofstream metadata(output / "raw-images.json");
+-    metadata << "{\"profile\":\"controlled_lambert_sun_v1\",\"frame\":" << frame - 1 << ",\"row_order\":\"top_to_bottom\",\"endianness\":\"little\",\"world_coordinates\":\"native imported scene; Corona vision export must reflect Z back\",\"gi_includes_albedo\":true,\"images\":[";
++    if (rawImages.size() != 11) throw std::runtime_error("missing controlled raw export");
++    std::ostringstream folderName;folderName<<"frame_"<<std::setw(6)<<std::setfill('0')<<(frame-1);
++    auto frameOutput=output/"raw"/folderName.str();std::filesystem::create_directories(frameOutput);
++    std::ofstream metadata(frameOutput / "raw-images.json");
++    metadata << "{\"profile\":\"controlled_lambert_sun_v1\",\"frame\":" << frame - 1 << ",\"row_order\":\"top_to_bottom\",\"endianness\":\"little\",\"world_coordinates\":\"shared glTF world coordinates\",\"gi_includes_albedo\":true,\"images\":[";
+     bool first = true;
+     for (auto& image : rawImages) {
+         BYTE* pointer = nullptr; D3D12_RANGE range{0, SIZE_T(image.bytes)};
+         Check(image.data->Map(0, &range, reinterpret_cast<void**>(&pointer)));
+-        std::ofstream file(output / (image.name + ".bin"), std::ios::binary);
++        std::ofstream file(frameOutput / (image.name + ".bin"), std::ios::binary);
+         for (UINT y = 0; y < image.rows; ++y)
+             file.write(reinterpret_cast<const char*>(pointer + image.footprint.Offset + size_t(y) * image.footprint.Footprint.RowPitch), std::streamsize(image.rowBytes));
+         D3D12_RANGE written{0,0}; image.data->Unmap(0, &written);
+@@ -178,6 +208,7 @@
+     }
+     metadata << "]}\n";
+     if (!metadata) throw std::runtime_error("raw image metadata write failed");
++    rawImages.clear();
+ }
+ 
+ void CopyFinalImage(ID3D12GraphicsCommandList* l,ID3D12Resource* rt) {
+@@ -222,8 +253,9 @@
+     frameCsv<<frame<<','<<(frame<warmup?"warmup":"measure")<<','<<nativeFrame<<','<<a<<','<<b<<','<<frequency<<','<<double(b-a)*1000./double(frequency)<<','<<dispatchSumMs<<'\n';
+     D3D12_RANGE written{0,0};readback->Unmap(0,&written);csv.flush();frameCsv.flush();if(!valid||!csv||!frameCsv)throw std::runtime_error("invalid timestamp/readback/CSV");
+     captured=++frame;
++    if(!rawImages.empty())SaveRawImages();
+     if(frame%20==0||frame==frames)std::cout<<"RESTIRGI_BENCH_FRAME "<<(frame-1)<<std::endl;
+-    if(frame==frames){SaveRawImages();SavePng();csv.close();frameCsv.close();Status("complete");PostQuitMessage(0);}else {Status("running");}
++    if(frame==frames){SavePng();csv.close();frameCsv.close();Status("complete");PostQuitMessage(0);}else {Status("running");}
+ }
+ bool Finished(){return enabled && captured>=frames;}
+ }
+--- a/BenchmarkCapture.h
++++ b/BenchmarkCapture.h
+@@ -5,7 +5,8 @@
+ // CPU control and GPU timestamp capture only; estimator inputs stay native.
+ namespace benchmark {
+ extern bool enabled;
+-extern bool controlledProfile, exportRaw;
++extern bool controlledProfile, exportRaw, referenceMode;
++extern unsigned sampleOffset, minDepth, maxDepth;
+ bool RawFrame();
+ void CopyRawImage(ID3D12GraphicsCommandList* list, const char* name, ID3D12Resource* resource, D3D12_RESOURCE_STATES state);
+ extern bool hasCamera;
+--- a/RestirGI.cpp
++++ b/RestirGI.cpp
+@@ -439,6 +439,7 @@
+ 			rtvHandle = CD3DX12_CPU_DESCRIPTOR_HANDLE(m_rtvHeap->GetCPUDescriptorHandleForHeapStart(), FrameCount, m_rtvDescriptorSize);
+ 			m_commandList->OMSetRenderTargets(RasterGBufferCount, &rtvHandle, true, &dsvHandle);
+ 
++			benchmark::Begin(m_commandList.Get(), "primaryGBuffer", "Raster", GetWidth(), GetHeight(), 1);
+ 			//model render
+ 			{
+ 				m_commandList->SetGraphicsRootConstantBufferView(0, m_frameBuffer->Get()->GetGPUVirtualAddress());
+@@ -458,6 +459,7 @@
+ 				}
+ 			}
+ 
++			benchmark::End(m_commandList.Get());
+ 			for (int i = 0; i < RasterGBufferCount; i++) {
+ 				transition = CD3DX12_RESOURCE_BARRIER::Transition(m_rtBuffer[i].Get(),
+ 					D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_GENERIC_READ);
+@@ -990,11 +992,19 @@
+ 				m_commandList->Dispatch(240, 135, 1);
+ 
+ 				benchmark::End(m_commandList.Get());
+-                ReadResource(std::vector<std::string>{"test", "spatial_filtered_tex"});
+-                benchmark::CopyRawImage(m_commandList.Get(), "raw_gi", m_rtBuffer[TexMap["spatial_filtered_tex"].resourceBuffer].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++                ReadResource(std::vector<std::string>{"test", "bench_raw_gi", "bench_fresh", "bench_sum", "bench_depth", "candidate_radiance_tex", "candidate_hit_tex", "candidate_normal_tex", "gi_view_normal_tex"});
++                benchmark::CopyRawImage(m_commandList.Get(), "raw_gi", m_rtBuffer[TexMap["bench_raw_gi"].resourceBuffer].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                 benchmark::CopyRawImage(m_commandList.Get(), "primary_world_normal", m_rtBuffer[TexMap["test"].resourceBuffer].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                 benchmark::CopyRawImage(m_commandList.Get(), "primary_world_position", m_rtBuffer[TexMap["worldPositon"].resourceBuffer].Get(), D3D12_RESOURCE_STATE_GENERIC_READ);
+                 benchmark::CopyRawImage(m_commandList.Get(), "primary_depth", m_dsBuffer.Get(), D3D12_RESOURCE_STATE_GENERIC_READ);
++                benchmark::CopyRawImage(m_commandList.Get(), "fresh_pt", m_rtBuffer[TexMap["bench_fresh"].resourceBuffer].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++                benchmark::CopyRawImage(m_commandList.Get(), "fresh_pt_sum", m_rtBuffer[TexMap["bench_sum"].resourceBuffer].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++                benchmark::CopyRawImage(m_commandList.Get(), "path_diagnostics", m_rtBuffer[TexMap["bench_depth"].resourceBuffer].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++                benchmark::CopyRawImage(m_commandList.Get(), "native_candidate_radiance", m_rtBuffer[TexMap["candidate_radiance_tex"].resourceBuffer].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++                benchmark::CopyRawImage(m_commandList.Get(), "native_candidate_hit_pdf", m_rtBuffer[TexMap["candidate_hit_tex"].resourceBuffer].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++                benchmark::CopyRawImage(m_commandList.Get(), "native_candidate_normal_view", m_rtBuffer[TexMap["candidate_normal_tex"].resourceBuffer].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++                benchmark::CopyRawImage(m_commandList.Get(), "native_primary_normal_view", m_rtBuffer[TexMap["gi_view_normal_tex"].resourceBuffer].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
++
+ 				}
+ 
+ 			}
+@@ -2086,6 +2096,11 @@
+ 
+ 	CreateTexture("test", m_width, m_height, DXGI_FORMAT_R32G32B32A32_FLOAT);
+ 	CreateTexture("test2", m_width, m_height, DXGI_FORMAT_R32G32B32A32_FLOAT);
++	CreateTexture("bench_fresh", m_width, m_height, DXGI_FORMAT_R32G32B32A32_FLOAT);
++	CreateTexture("bench_sum", m_width, m_height, DXGI_FORMAT_R32G32B32A32_FLOAT);
++	CreateTexture("bench_depth", m_width, m_height, DXGI_FORMAT_R32G32B32A32_FLOAT);
++	CreateTexture("bench_raw_gi", m_width, m_height, DXGI_FORMAT_R32G32B32A32_FLOAT);
++
+ 	//Restir
+ 	CreateTexture("prevDepth", m_width, m_height, DXGI_FORMAT_R32_FLOAT);
+ 	CreateTexture("reprojection_map", m_width, m_height, DXGI_FORMAT_R16G16B16A16_SNORM);
+@@ -2965,7 +2980,7 @@
+ 		clearPathTraceCS->uavResource = uav;
+ 
+ 		srv = {"gbuffer", "depth", "irradiance_output_tex"};
+-		uav = { "test", "spatial_filtered_tex" };
++		uav = { "test", "bench_raw_gi" };
+ 		copyTestCS = std::make_shared<CS>(m_device, L"shaders/copyTestCS.hlsl", L"CS", getsrvHandle(srv), getuavHandle(uav), 0, uint2(0, 0));
+ 		copyTestCS->srvResource = srv;
+ 		copyTestCS->uavResource = uav;
+@@ -3257,7 +3272,12 @@
+ 	XMStoreFloat4(&sun_direction, v);
+ 	
+ 	frameConstant->sun_direction = sun_direction;
+-	frameConstant->frame_index = frameTime;
++	frameConstant->frame_index = frameTime + benchmark::sampleOffset;
++	frameConstant->benchmark_frame = frameTime;
++	frameConstant->benchmark_min_depth = benchmark::minDepth;
++	frameConstant->benchmark_max_depth = benchmark::maxDepth;
++	frameConstant->benchmark_reference = benchmark::referenceMode ? 1 : 0;
++	frameConstant->benchmark_capture = benchmark::exportRaw ? 1 : 0;
+ 	frameConstant->delta_time_seconds = 1/ ImGui::GetIO().Framerate; // ImGui::GetIO().Framerate
+ 	frameConstant->sun_angular_radius_cos = 0.99999;
+ 	frameConstant->triangle_light_count = 0;
+@@ -3630,7 +3650,7 @@
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[3].signature.Get(), { L"rHitGroup" });
+ 
+ 
+-		pipeline.SetMaxPayloadSize(3 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
++		pipeline.SetMaxPayloadSize(6 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
+ 		pipeline.SetMaxAttributeSize(2 * sizeof(float)); // barycentric coordinates
+ 		pipeline.SetMaxRecursionDepth(2);
+ 
+@@ -3731,7 +3751,7 @@
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[3].signature.Get(), { L"rHitGroup" });
+ 
+ 
+-		pipeline.SetMaxPayloadSize(3 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
++		pipeline.SetMaxPayloadSize(6 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
+ 		pipeline.SetMaxAttributeSize(2 * sizeof(float)); // barycentric coordinates
+ 		pipeline.SetMaxRecursionDepth(2);
+ 
+@@ -3792,7 +3812,7 @@
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[0].signature.Get(), { L"TraceAccessibilityRgen" });
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[1].signature.Get(), { L"ShadowRmiss" });
+ 
+-		pipeline.SetMaxPayloadSize(3 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
++		pipeline.SetMaxPayloadSize(6 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
+ 		pipeline.SetMaxAttributeSize(2 * sizeof(float)); // barycentric coordinates
+ 		pipeline.SetMaxRecursionDepth(2);
+ 		benchmark::Checkpoint("StateObject ircacheTraceAccessRT begin");
+@@ -3877,7 +3897,7 @@
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[2].signature.Get(), { L"GbufferRMiss" });
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[3].signature.Get(), { L"rHitGroup" });
+ 
+-		pipeline.SetMaxPayloadSize(3 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
++		pipeline.SetMaxPayloadSize(6 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
+ 		pipeline.SetMaxAttributeSize(2 * sizeof(float)); // barycentric coordinates
+ 		pipeline.SetMaxRecursionDepth(2);
+ 		benchmark::Checkpoint("StateObject ircacheVaildateRT begin");
+@@ -3962,7 +3982,7 @@
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[2].signature.Get(), { L"GbufferRMiss" });
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[3].signature.Get(), { L"rHitGroup" });
+ 
+-		pipeline.SetMaxPayloadSize(3 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
++		pipeline.SetMaxPayloadSize(6 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
+ 		pipeline.SetMaxAttributeSize(2 * sizeof(float)); // barycentric coordinates
+ 		pipeline.SetMaxRecursionDepth(2);
+ 		benchmark::Checkpoint("StateObject ircacheTraceRT begin");
+@@ -4020,7 +4040,7 @@
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[0].signature.Get(), { L"TraceSunShadowMaskRgen" });
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[1].signature.Get(), { L"ShadowRmiss" });
+ 
+-		pipeline.SetMaxPayloadSize(3 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
++		pipeline.SetMaxPayloadSize(6 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
+ 		pipeline.SetMaxAttributeSize(2 * sizeof(float)); // barycentric coordinates
+ 		pipeline.SetMaxRecursionDepth(2);
+ 		benchmark::Checkpoint("StateObject traceShadowMaskRT begin");
+@@ -4118,7 +4138,7 @@
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[2].signature.Get(), { L"GbufferRMiss" });
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[3].signature.Get(), { L"rHitGroup" });
+ 
+-		pipeline.SetMaxPayloadSize(3 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
++		pipeline.SetMaxPayloadSize(6 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
+ 		pipeline.SetMaxAttributeSize(2 * sizeof(float)); // barycentric coordinates
+ 		pipeline.SetMaxRecursionDepth(2);
+ 		benchmark::Checkpoint("StateObject rtdgiValidateRT begin");
+@@ -4167,12 +4187,16 @@
+ 			{8,1,0,D3D12_DESCRIPTOR_RANGE_TYPE_UAV,TexMap["candidate_hit_tex"].uavHandle},
+ 			{9,1,0,D3D12_DESCRIPTOR_RANGE_TYPE_UAV,TexMap["rt_history_validity_input_tex"].uavHandle},
+ 			{10,1,0,D3D12_DESCRIPTOR_RANGE_TYPE_UAV,TexMap["test"].uavHandle},
++			{11,1,0,D3D12_DESCRIPTOR_RANGE_TYPE_UAV,TexMap["bench_fresh"].uavHandle},
++			{12,1,0,D3D12_DESCRIPTOR_RANGE_TYPE_UAV,TexMap["bench_sum"].uavHandle},
++			{13,1,0,D3D12_DESCRIPTOR_RANGE_TYPE_UAV,TexMap["bench_depth"].uavHandle},
++
+ 			});
+ 
+ 		rtdgiTraceRT->srv = std::vector<std::string>{ "gi_view_normal_tex","reprojected_history_tex","reprojection_map","rt_history_validity_pre_input_tex",
+ 		"ircache_spatial_buf","ircache_irradiance_buf","wrc","convolve_sky","ray_orig_history_tex"};
+ 		rtdgiTraceRT->uav = std::vector<std::string>{ "ircache_grid_meta_buf","ircache_meta_buf","ircache_pool_buf","ircache_reposition_proposal_buf",
+-		"ircache_reposition_proposal_count_buf","ircache_entry_cell_buf","ircache_life_buf","candidate_radiance_tex","candidate_normal_tex","candidate_hit_tex","rt_history_validity_input_tex" };
++		"ircache_reposition_proposal_count_buf","ircache_entry_cell_buf","ircache_life_buf","candidate_radiance_tex","candidate_normal_tex","candidate_hit_tex","rt_history_validity_input_tex","bench_fresh","bench_sum","bench_depth" };
+ 
+ 		rtdgiTraceRT->GlobalSignature = globalRSG.Generate(m_device.Get(), D3D12_ROOT_SIGNATURE_FLAG_NONE, (UINT)staticSamplers.size(), staticSamplers.data());
+ 		rtdgiTraceRT->GlobalSignature->SetName(L"rtdgiTraceRSG");
+@@ -4224,7 +4248,7 @@
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[3].signature.Get(), { L"rHitGroup" });
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[4].signature.Get(), { L"ShadowMiss",L"ShadowHitGroup" });
+ 
+-		pipeline.SetMaxPayloadSize(3 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
++		pipeline.SetMaxPayloadSize(6 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
+ 		pipeline.SetMaxAttributeSize(2 * sizeof(float)); // barycentric coordinates
+ 		pipeline.SetMaxRecursionDepth(2);
+ 		benchmark::Checkpoint("StateObject rtdgiTraceRT begin");
+@@ -4288,7 +4312,7 @@
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[2].signature.Get(), { L"GbufferRMiss" });
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[3].signature.Get(), { L"rHitGroup" });
+ 
+-		pipeline.SetMaxPayloadSize(3 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
++		pipeline.SetMaxPayloadSize(6 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
+ 		pipeline.SetMaxAttributeSize(2 * sizeof(float)); // barycentric coordinates
+ 		pipeline.SetMaxRecursionDepth(2);
+ 		benchmark::Checkpoint("StateObject reflectionTraceRT begin");
+@@ -4364,7 +4388,7 @@
+ 		pipeline.AddRootSignatureAssociation(m_rtShaderLibrary[3].signature.Get(), { L"rHitGroup" });
+ 
+ 
+-		pipeline.SetMaxPayloadSize(3 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
++		pipeline.SetMaxPayloadSize(6 * sizeof(float) + 5 * sizeof(UINT)); // GbufferRayPayload
+ 		pipeline.SetMaxAttributeSize(2 * sizeof(float)); // barycentric coordinates
+ 		pipeline.SetMaxRecursionDepth(2);
+ 		benchmark::Checkpoint("StateObject pathTraceRT begin");
+--- a/Structure.h
++++ b/Structure.h
+@@ -107,7 +107,7 @@
+ 	matrix prev_clip_to_prev_view;
+ 	matrix prev_world_to_prev_view;
+ 	matrix prev_view_to_prev_world;
+-	//taaÏà¹Ø
++	//taaï¿½ï¿½ï¿½
+ 	float2 sample_offset_pixels;
+ 	float2 sample_offset_clip;
+ };
+@@ -143,6 +143,14 @@
+ 	float4 sun_direction;
+ 
+ 	uint frame_index;
++	uint benchmark_frame;
++	uint benchmark_min_depth;
++	uint benchmark_max_depth;
++	uint benchmark_reference;
++	uint benchmark_capture;
++	uint benchmark_pad0;
++	uint benchmark_pad1;
++	uint benchmark_pad2;
+ 	float delta_time_seconds;
+ 	float sun_angular_radius_cos;
+ 	uint triangle_light_count;
+@@ -200,4 +208,4 @@
+ 	
+ };
+ 
+-#endif+#endif
+--- a/helper/ModelLoader.h
++++ b/helper/ModelLoader.h
+@@ -22,7 +22,7 @@
+ 	ModelLoader(const ModelLoader&&) = delete;
+ 
+ 	bool Load(std::string filename, Model& model,
+-		unsigned int loadFlag = aiProcess_JoinIdenticalVertices | aiProcess_Triangulate | aiProcess_ConvertToLeftHanded);//
++		unsigned int loadFlag = aiProcess_JoinIdenticalVertices | aiProcess_Triangulate);// Canonical OBJ is already in world coordinates.
+ 
+ 
+ private:
+@@ -37,7 +37,7 @@
+ 	std::string m_modelDic;
+ 	int			m_indexInTextureLoader = 0;
+ 	int         CurrentID = 0;
+-	//²âÊÔÓÃ£¬ÓÃÒÔÍ³¼Æ¸÷ÖÖÌùÍ¼ÊýÁ¿
++	//ï¿½ï¿½ï¿½ï¿½ï¿½Ã£ï¿½ï¿½ï¿½ï¿½ï¿½Í³ï¿½Æ¸ï¿½ï¿½ï¿½ï¿½ï¿½Í¼ï¿½ï¿½ï¿½ï¿½
+ 	int countMap[13]{};
+ 	std::vector<std::vector<UINT>> test;
+ 	
+--- /dev/null
++++ b/shaders/benchmark_multibounce.hlsl
+@@ -0,0 +1,24 @@
++#ifndef BENCHMARK_MULTIBOUNCE_HLSL
++#define BENCHMARK_MULTIBOUNCE_HLSL
++uint benchmark_source_pixel(float3 origin) {
++    float3 clip = position_world_to_sample(origin);
++    uint2 pixel = uint2(clamp(floor(cs_to_uv(clip.xy) * gbuffer_tex_size.xy), 0.0.xx, gbuffer_tex_size.xy - 1));
++    return pixel.x | (pixel.y << 16);
++}
++uint benchmark_replay_seed(uint2 source_pixel, float3 normal, float3 direction) {
++    // Native blue-noise proposals use 8-bit centers. Recover the discrete draw
++    // so validation can retrace its suffix without adding reservoir state.
++    float3 local = mul(direction, build_orthonormal_basis(normalize(normal)));
++    float phi = frac(atan2(local.y, local.x) / M_TAU + 1.0);
++    uint2 draw = uint2(clamp(floor(float2(1.0 - local.z, phi) * 256.0), 0.0.xx, 255.0.xx));
++    return hash3(uint3(source_pixel, draw.x | (draw.y << 8))) ^ 0x91e10da5u;
++}
++float2 benchmark_random2(inout uint rng) {
++    return float2(uint_to_u01_float(hash1_mut(rng)), uint_to_u01_float(hash1_mut(rng)));
++}
++float3 benchmark_cosine_direction(float3 normal, inout uint rng) {
++    float2 u = benchmark_random2(rng);
++    float r = sqrt(u.x), phi = M_TAU * u.y;
++    return normalize(mul(build_orthonormal_basis(normal), float3(r * cos(phi), r * sin(phi), sqrt(1.0 - u.x))));
++}
++#endif
+--- a/shaders/diffuse_trace_common_inc.hlsl
++++ b/shaders/diffuse_trace_common_inc.hlsl
+@@ -1,168 +1,63 @@
+-// Should be 1, but rarely matters for the diffuse bounce, so might as well save a few cycles.
+-#define USE_SOFT_SHADOWS 0
+-
+-#define USE_IRCACHE 0
+-#define USE_WORLD_RADIANCE_CACHE 0
+-
+-#define ROUGHNESS_BIAS 0.5
+-#define USE_SCREEN_GI_REPROJECTION 0
+-#define USE_SWIZZLE_TILE_PIXELS 0
+-
+-#define USE_EMISSIVE 0
+-#define USE_LIGHTS 1
+-
+-#define USE_SKY_CUBE_TEX 1
+-
+-static const float SKY_DIST = 1e4;
+-
+-float3 sample_environment_light(float3 dir) { return 0.0.xxx; }
+-
+-uint2 reservoir_payload_to_px(uint payload) {
+-    return uint2(payload & 0xffff, payload >> 16);
+-}
+-
+-struct TraceResult
+-{
+-    float3 out_value;
+-    float3 hit_normal_ws;
+-    float hit_t;
+-    float pdf;
+-    bool is_hit;
+-    
+-};
+-
+-TraceResult newTraceResult()
+-{
+-    TraceResult traceresult;
+-    traceresult.out_value = float3(0, 0, 0);
+-    traceresult.hit_normal_ws = float3(0, 0, 0);
+-    traceresult.hit_t = 0;
+-    traceresult.pdf = 0;
+-    traceresult.is_hit = false;
+-    return traceresult;
+-
+-}
+-
+-TraceResult do_the_thing(uint2 px, float3 normal_ws, inout uint rng, RayDesc outgoing_ray) {
+-    float3 test = 0.0.xxx;
+-    
+-    float3 total_radiance = 0.0.xxx;
+-    float3 hit_normal_ws = -outgoing_ray.Direction;
+-
+-
+-    
+-    #if USE_WORLD_RADIANCE_CACHE
+-        WrcFarField far_field =
+-            WrcFarFieldQuery::from_ray(outgoing_ray.Origin, outgoing_ray.Direction)
+-                .with_interpolation_urand(float3(
+-                    uint_to_u01_float(hash1_mut(rng)),
+-                    uint_to_u01_float(hash1_mut(rng)),
+-                    uint_to_u01_float(hash1_mut(rng))
+-                ))
+-                .with_query_normal(normal_ws)
+-                .query();
+-    #else
+-        WrcFarField far_field = WrcFarField::create_miss();
+-    #endif
+-
+-    if (far_field.is_hit()) {
+-        outgoing_ray.TMax = far_field.probe_t;
+-    }
+-
+-    float hit_t = outgoing_ray.TMax;
+-
+-    // cosine-weighted
+-    //float pdf = 1.0 / M_PI;
+-    
+-    // uniform
+-    float pdf = max(0.0, 1.0 / (dot(normal_ws, outgoing_ray.Direction) * 2 * M_PI));
+-
+-    const float reflected_cone_spread_angle = 0.03;
+-    const RayCone ray_cone =
+-        pixel_ray_cone_from_image_height(gbuffer_tex_size.y)
+-        .propagate(reflected_cone_spread_angle, length(outgoing_ray.Origin - get_eye_position()));
+-
+-
+-
+-    
+-    const GbufferPathVertex primary_hit = GbufferRaytrace::with_ray(outgoing_ray)
+-        .with_cone(ray_cone)
+-        .with_cull_back_faces(false)
+-        .with_path_length(1)
+-        .trace(acceleration_structure);
+-
+-    
+-    
+-    if (primary_hit.is_hit) {
+-        
+-        hit_t = primary_hit.ray_t;
+-        GbufferData gbuffer = unpack(primary_hit.gbuffer_packed);
+-        hit_normal_ws = gbuffer.normal;
+-        
+-
+-        bool is_on_screen = false;
+-        float4 reprojected_radiance = 0.0;
+-        gbuffer.roughness = lerp(gbuffer.roughness, 1.0, ROUGHNESS_BIAS);
+-        const float3x3 tangent_to_world = build_orthonormal_basis(gbuffer.normal); //¸ù¾Ýµ¥Î»·¨ÏòÁ¿¹¹½¨ÁËÒ»¸ö×ø±êÏµ
+-        const float3 wo = mul(-outgoing_ray.Direction, tangent_to_world);//½«wo·½Ïò×ª³ÉÃüÖÐ±íÃæ×ø±êÏµµÄÏòÁ¿
+-
+-
+-
+-        
+-        // Sun
+-        float3 sun_radiance = SUN_COLOR;
+-        if (any(sun_radiance) > 0) {
+-            const float3 to_light_norm = sample_sun_direction(
+-                blue_noise_for_pixel(px, rng).xy,
+-                USE_SOFT_SHADOWS
+-            );
+-
+-            const bool is_shadowed =
+-                rt_is_shadowed(
+-                    acceleration_structure,
+-                    new_ray(
+-                        primary_hit.position,
+-                        to_light_norm,
+-                        1e-4,
+-                        SKY_DIST
+-                ));
+-
+-            
+-            const float3 wi = mul(to_light_norm, tangent_to_world);
+-            const float3 brdf_value = (0.7 / M_PI).xxx * max(0.0, wi.z);
+-            const float3 light_radiance = is_shadowed ? 0.0 : sun_radiance;
+-            total_radiance += brdf_value * light_radiance;
+-            
+-            test = total_radiance;
+-
+-        }    
+-        
+-
+-
+-    } else {
+-        if (far_field.is_hit()) {
+-            total_radiance += far_field.radiance;
+-            hit_t = far_field.approx_surface_t;
+-            pdf = 1.0 / far_field.inv_pdf;
+-        } else {
+-            total_radiance += sample_environment_light(outgoing_ray.Direction);
+-            
+-
+-        }
+-    }
+-
+-    float3 out_value = total_radiance;
+-
+-    //out_value /= reservoir.p_sel;
+-
+-    TraceResult result;
+-
+-    
+-    result.out_value = total_radiance; //out_value
+-    
+-    result.hit_t = hit_t;
+-    result.hit_normal_ws = hit_normal_ws;
+-    result.pdf = pdf;
+-    result.is_hit = primary_hit.is_hit;
+-    return result;
+-}
++#define USE_SOFT_SHADOWS 0
++#define USE_IRCACHE 0
++#define USE_WORLD_RADIANCE_CACHE 0
++#define USE_SCREEN_GI_REPROJECTION 0
++#define USE_SWIZZLE_TILE_PIXELS 0
++#define USE_EMISSIVE 0
++#define USE_LIGHTS 1
++#define USE_SKY_CUBE_TEX 0
++static const float SKY_DIST = 1e4;
++#include "benchmark_multibounce.hlsl"
++float3 sample_environment_light(float3 dir) { return 0.0.xxx; }
++uint2 reservoir_payload_to_px(uint payload) { return uint2(payload & 0xffff, payload >> 16); }
++struct TraceResult {
++    float3 out_value;
++    float3 hit_normal_ws;
++    float hit_t;
++    float pdf;
++    bool is_hit;
++    float4 diagnostics; // last surface, RR tests, RR survivals, reason
++};
++TraceResult do_the_thing(uint2 px, float3 primary_normal, inout uint rng, RayDesc outgoing_ray) {
++    TraceResult result;
++    result.out_value = 0;
++    result.hit_normal_ws = -outgoing_ray.Direction;
++    result.hit_t = SKY_DIST;
++    result.pdf = rcp(max(1e-20, dot(primary_normal, outgoing_ray.Direction)) * 2.0 * M_PI);
++    result.is_hit = false;
++    result.diagnostics = float4(1, 0, 0, 1);
++    // Uniform primary proposal rho*cos/(pdf*pi)=1.4*cos. True camera beta is
++    // distinct from outgoing Lo at the stored first secondary vertex.
++    float camera_beta = 1.4 * max(0.0, dot(primary_normal, outgoing_ray.Direction));
++    float suffix_beta = 1.0;
++    RayDesc ray = outgoing_ray;
++    [loop] for (uint surface = 2; surface <= frame_constants.benchmark_max_depth; ++surface) {
++        GbufferPathVertex hit = GbufferRaytrace::with_ray(ray).with_cull_back_faces(false).with_path_length(surface - 1).trace(acceleration_structure);
++        if (!hit.is_hit) { result.diagnostics.w = 1; break; }
++        float3 normal = normalize(hit.geometric_normal);
++        result.diagnostics.x = surface;
++        if (surface == 2) {
++            result.is_hit = true;
++            result.hit_t = hit.ray_t;
++            result.hit_normal_ws = normal;
++        }
++        float sun_cosine = max(0.0, dot(normal, SUN_DIRECTION));
++        if (sun_cosine > 0.0 && !rt_is_shadowed(acceleration_structure, new_ray(hit.position, SUN_DIRECTION, 1e-4, SKY_DIST))) {
++            result.out_value += suffix_beta * (0.7 / M_PI) * sun_cosine * SUN_COLOR;
++        }
++        // Surface16 contributes NEE then ends before a17th ray or terminal RR.
++        if (surface == frame_constants.benchmark_max_depth) { result.diagnostics.w = 3; break; }
++        float probability = 1.0;
++        // Corona min_depth5 is zero-based: first test after surface6.
++        if (surface >= frame_constants.benchmark_min_depth + 1 && camera_beta < 1.0) {
++            result.diagnostics.y += 1;
++            probability = min(0.95, camera_beta);
++            if (uint_to_u01_float(hash1_mut(rng)) >= probability) { result.diagnostics.w = 2; break; }
++            result.diagnostics.z += 1;
++        }
++        suffix_beta *= 0.7 / probability;
++        camera_beta *= 0.7 / probability;
++        ray = new_ray(hit.position + normal * 1e-4, benchmark_cosine_direction(normal, rng), 0.0, SKY_DIST);
++    }
++    return result;
++}
+--- a/shaders/GbufferRchit.hlsl
++++ b/shaders/GbufferRchit.hlsl
+@@ -91,7 +91,7 @@
+     
+     GbufferData gbuffer = GbufferData::create_zero();
+     gbuffer.albedo = 0.7.xxx;
+-    gbuffer.normal = normalize(mul(ObjectToWorld3x4(), float4(normal, 0.0)));
++    gbuffer.normal = normalize(mul(ObjectToWorld3x4(), float4(surf_normal, 0.0)));
+     gbuffer.roughness = 1.0;
+     gbuffer.metalness = 0.0;
+     gbuffer.emissive = 0.0.xxx;
+@@ -102,6 +102,7 @@
+         gbuffer.normal *= -1;
+     }
+     
++    payload.geometric_normal = gbuffer.normal;
+     payload.gbuffer_packed = gbuffer.pack();
+     payload.t = RayTCurrent();
+     
+--- a/shaders/RasterGbufferPass.hlsl
++++ b/shaders/RasterGbufferPass.hlsl
+@@ -116,7 +116,7 @@
+     screenPos.xy += 1.0;
+     screenPos.xy /= 2.0;
+     screenPos.y *= -1.0; //[0,1] [-1,0]
+-    /* È¡Öµ´óÖÂÈçÏÂ(¶ÔÓÚÒ»ÕÅÎÆÀí¶øÑÔ)
++    /* È¡Öµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½(ï¿½ï¿½ï¿½ï¿½Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½)
+      (0,-1)    (0.5,-1)    (1,-1)
+      (0,-0.5)  (0.5,-0.5)  (1,-0.5)
+      (0,0)     (0.5,0)     (1,0)
+@@ -140,7 +140,7 @@
+         normal_ws *= -1;
+     }
+     
+-    normal_ws = normalize(input.normal);
++    normal_ws = normalize(geometric_normal_ws);
+     if (dot(normal_ws, input.worldSpacePosition.xyz - get_eye_position()) > 0.0) normal_ws = -normal_ws;
+ 
+     //gbuffer
+--- a/shaders/rt.hlsl
++++ b/shaders/rt.hlsl
+@@ -9,6 +9,7 @@
+ {
+     GbufferDataPacked gbuffer_packed;
+     float t;
++    float3 geometric_normal; // Uncompressed benchmark transport normal; packed native GBuffer remains unchanged.
+     RayCone ray_cone;
+     uint path_length;
+ 
+@@ -85,6 +86,7 @@
+     GbufferDataPacked gbuffer_packed;
+     float3 position;
+     float ray_t;
++    float3 geometric_normal;
+ };
+ 
+ struct GbufferRaytrace
+@@ -156,6 +158,7 @@
+             res.position = ray.Origin + ray.Direction * payload.t;
+             res.gbuffer_packed = payload.gbuffer_packed;
+             res.ray_t = payload.t;
++            res.geometric_normal = payload.geometric_normal;
+             return res;
+         }
+         else
+--- a/shaders/RtdgiTraceRgen.hlsl
++++ b/shaders/RtdgiTraceRgen.hlsl
+@@ -1,149 +1,102 @@
+-#include "uv.hlsl"
+-#include "pack_unpack.hlsl"
+-#include "frame_constants.hlsl"
+-#include "gbuffer.hlsl"
+-#include "brdf.hlsl"
+-#include "brdf_lut.hlsl"
+-#include "layered_brdf.hlsl"
+-#include "blue_noise.hlsl"
+-#include "rt.hlsl"
+-#include "atmosphere.hlsl"
+-#include "sun.hlsl"
+-#include "triangle.hlsl"
+-#include "reservoir.hlsl"
+-#include "mesh.hlsl"
+-
+-#include "rtr_settings.hlsl" // for rtr_encode_cos_theta_for_fp16. consider moving out.
+-#include "rtdgi_restir_settings.hlsl"
+-#include "near_field_settings.hlsl"
+-
+-#include "BVH.hlsl"
+-StructuredBuffer<MeshMaterial> MeshMaterialBuffer : register(t0, space2);
+-
+-Texture2D<float3> ray_orig_history_tex : register(t1,space1);
+-
+-
+-Texture2D<float3> gi_view_normal_tex : register(t2);
+-Texture2D<float> depth_tex : register(t3);
+-Texture2D<float4> reprojected_gi_tex : register(t4);
+-Texture2D<float4> reprojection_tex : register(t5);
+-Texture2D<float> rt_history_invalidity_in_tex : register(t6);
+-StructuredBuffer<VertexPacked> ircache_spatial_buf : register(t7);
+-StructuredBuffer<float4> ircache_irradiance_buf : register(t8);
+-Texture2D<float4> wrc_radiance_atlas_tex : register(t9);
+-Texture2D<float4> worldPosition : register(t10);
+-TextureCube<float4> sky_cube_tex : register(t11);
+-
+-
+-RWByteAddressBuffer ircache_grid_meta_buf : register(u0, space1);
+-
+-RWByteAddressBuffer ircache_meta_buf : register(u0);
+-RWStructuredBuffer<uint> ircache_pool_buf : register(u1);
+-RWStructuredBuffer<VertexPacked> ircache_reposition_proposal_buf : register(u2);
+-RWStructuredBuffer<uint> ircache_reposition_proposal_count_buf : register(u3);
+-RWStructuredBuffer<uint> ircache_entry_cell_buf : register(u4);
+-RWByteAddressBuffer ircache_life_buf : register(u5);
+-
+-RWTexture2D<float4> candidate_irradiance_out_tex : register(u6);
+-RWTexture2D<float4> candidate_normal_out_tex : register(u7);
+-RWTexture2D<float4> candidate_hit_out_tex : register(u8);
+-RWTexture2D<float> rt_history_invalidity_out_tex : register(u9);
+-RWTexture2D<float4> RWtest : register(u10);
+-
+-static const float4 gbuffer_tex_size = float4(1920.0f, 1080.0f, 1 / 1920.0, 1 / 1080.0);
+-
+-//#define IRCACHE_LOOKUP_DONT_KEEP_ALIVE
+-//#define IRCACHE_LOOKUP_KEEP_ALIVE_PROB 0.125
+-
+-#include "lookup.hlsl"
+-#include "wrcLookup.hlsl"
+-#include "candidate_ray_dir.hlsl"
+-
+-#include "diffuse_trace_common_inc.hlsl"
+-
+-
+-[shader("raygeneration")]
+-void RtdgiTraceRgen()
+-{
+-
+-    
+-    const uint2 px = DispatchRaysIndex().xy;
+-    const uint2 hi_px = px;
+- 
+-    float depth = depth_tex[hi_px];
+-
+-    if (0.0 == depth) {
+-        candidate_irradiance_out_tex[px] = 0;
+-        candidate_normal_out_tex[px] = float4(0, 0, 1, 0);
+-        rt_history_invalidity_out_tex[px] = 0;
+-        return;
+-    }
+-    
+-    const float2 uv = get_uv(hi_px, gbuffer_tex_size);
+-    const ViewRayContext view_ray_context = ViewRayContext::from_uv_and_biased_depth(uv, depth);
+-
+-    const float NEAR_FIELD_FADE_OUT_END = -view_ray_context.ray_hit_vs().z * (SSGI_NEAR_FIELD_RADIUS * gbuffer_tex_size.w * 0.5);
+-
+-    #if RTDGI_INTERLEAVED_VALIDATION_ALWAYS_TRACE_NEAR_FIELD
+-        if (true) {
+-    #else
+-        if (is_rtdgi_tracing_frame()) {
+-    #endif
+-        const float3 normal_vs = gi_view_normal_tex[px];
+-        const float3 normal_ws = direction_view_to_world(normal_vs);
+-        const float3x3 tangent_to_world = build_orthonormal_basis(normal_ws);
+-        const float3 outgoing_dir = rtdgi_candidate_ray_dir(px, tangent_to_world);
+-
+-        RayDesc outgoing_ray;
+-        outgoing_ray.Direction = outgoing_dir; 
+-        outgoing_ray.Origin = view_ray_context.biased_secondary_ray_origin_ws_with_normal(normal_ws); 
+-        outgoing_ray.TMin = 0;
+-        
+-        
+-        
+-        
+-        if (is_rtdgi_tracing_frame())
+-        {
+-            outgoing_ray.TMax = SKY_DIST;
+-        }
+-        else
+-        {
+-            outgoing_ray.TMax = NEAR_FIELD_FADE_OUT_END;
+-        }
+-        
+-        uint rng = hash3(uint3(px, frame_constants.frame_index & 31));
+-        TraceResult result = do_the_thing(px, normal_ws, rng, outgoing_ray);
+-        
+-        
+-        
+-        
+-
+-#if RTDGI_INTERLEAVED_VALIDATION_ALWAYS_TRACE_NEAR_FIELD
+-        if (!is_rtdgi_tracing_frame() && !result.is_hit)
+-        {
+-                // If we were only tracing short rays, make sure we don't try to output
+-                // sky color upon misses.
+-            result.out_value = 0;
+-            result.hit_t = SKY_DIST;
+-        }
+-#endif
+-
+-        const float3 hit_offset_ws = outgoing_ray.Direction * result.hit_t;
+-
+-        const float cos_theta = dot(normalize(outgoing_dir - view_ray_context.ray_dir_ws()), normal_ws);
+-        candidate_irradiance_out_tex[px] = float4(result.out_value, rtr_encode_cos_theta_for_fp16(cos_theta));
+-        candidate_hit_out_tex[px] = float4(hit_offset_ws, result.pdf * (is_rtdgi_tracing_frame() ? 1 : -1));
+-        candidate_normal_out_tex[px] = float4(direction_world_to_view(result.hit_normal_ws), 0);
+-    } else {
+-        const float4 reproj = reprojection_tex[hi_px];
+-        const int2 reproj_px = floor(px + gbuffer_tex_size.xy * reproj.xy + 0.5);
+-
+-        candidate_irradiance_out_tex[px] = 0.0;
+-        candidate_hit_out_tex[px] = 0.0;
+-        candidate_normal_out_tex[px] = 0.0;
+-    }
+-
+-    const float4 reproj = reprojection_tex[hi_px];
+-    const int2 reproj_px = floor(px + gbuffer_tex_size.xy * reproj.xy + 0.5);
+-    rt_history_invalidity_out_tex[px] = rt_history_invalidity_in_tex[reproj_px];
+-}
++#include "uv.hlsl"
++#include "pack_unpack.hlsl"
++#include "frame_constants.hlsl"
++#include "gbuffer.hlsl"
++#include "brdf.hlsl"
++#include "brdf_lut.hlsl"
++#include "layered_brdf.hlsl"
++#include "blue_noise.hlsl"
++#include "rt.hlsl"
++#include "atmosphere.hlsl"
++#include "sun.hlsl"
++#include "triangle.hlsl"
++#include "reservoir.hlsl"
++#include "mesh.hlsl"
++#include "rtr_settings.hlsl"
++#include "rtdgi_restir_settings.hlsl"
++#include "near_field_settings.hlsl"
++#include "BVH.hlsl"
++StructuredBuffer<MeshMaterial> MeshMaterialBuffer : register(t0, space2);
++Texture2D<float3> ray_orig_history_tex : register(t1,space1);
++Texture2D<float3> gi_view_normal_tex : register(t2);
++Texture2D<float> depth_tex : register(t3);
++Texture2D<float4> reprojected_gi_tex : register(t4);
++Texture2D<float4> reprojection_tex : register(t5);
++Texture2D<float> rt_history_invalidity_in_tex : register(t6);
++StructuredBuffer<VertexPacked> ircache_spatial_buf : register(t7);
++StructuredBuffer<float4> ircache_irradiance_buf : register(t8);
++Texture2D<float4> wrc_radiance_atlas_tex : register(t9);
++Texture2D<float4> worldPosition : register(t10);
++TextureCube<float4> sky_cube_tex : register(t11);
++RWByteAddressBuffer ircache_grid_meta_buf : register(u0, space1);
++RWByteAddressBuffer ircache_meta_buf : register(u0);
++RWStructuredBuffer<uint> ircache_pool_buf : register(u1);
++RWStructuredBuffer<VertexPacked> ircache_reposition_proposal_buf : register(u2);
++RWStructuredBuffer<uint> ircache_reposition_proposal_count_buf : register(u3);
++RWStructuredBuffer<uint> ircache_entry_cell_buf : register(u4);
++RWByteAddressBuffer ircache_life_buf : register(u5);
++RWTexture2D<float4> candidate_irradiance_out_tex : register(u6);
++RWTexture2D<float4> candidate_normal_out_tex : register(u7);
++RWTexture2D<float4> candidate_hit_out_tex : register(u8);
++RWTexture2D<float> rt_history_invalidity_out_tex : register(u9);
++RWTexture2D<float4> RWtest : register(u10);
++RWTexture2D<float4> benchmark_fresh : register(u11);
++RWTexture2D<float4> benchmark_sum : register(u12);
++RWTexture2D<float4> benchmark_depth : register(u13);
++static const float4 gbuffer_tex_size = float4(1920.0, 1080.0, 1.0/1920.0, 1.0/1080.0);
++#include "lookup.hlsl"
++#include "wrcLookup.hlsl"
++#include "candidate_ray_dir.hlsl"
++#include "diffuse_trace_common_inc.hlsl"
++void benchmark_store(uint2 px, float3 radiance, float4 diagnostics, bool valid) {
++    if (frame_constants.benchmark_capture == 0) return;
++    float4 value = float4(radiance, valid ? 1.0 : 0.0);
++    benchmark_fresh[px] = value;
++    benchmark_sum[px] = frame_constants.benchmark_frame == 0 ? value : benchmark_sum[px] + value;
++    benchmark_depth[px] = diagnostics;
++}
++[shader("raygeneration")]
++void RtdgiTraceRgen() {
++    uint2 px = DispatchRaysIndex().xy;
++    float2 uv = get_uv(px, gbuffer_tex_size);
++    if (frame_constants.benchmark_reference != 0) {
++        // Independent camera-primary and uncompressed geometric normals;
++        // no native GBuffer, FP16 radiance or reservoir read.
++        ViewRayContext view = ViewRayContext::from_uv(uv);
++        RayDesc camera_ray = new_ray(get_eye_position(), view.ray_dir_ws(), 0.0, SKY_DIST);
++        GbufferPathVertex primary = GbufferRaytrace::with_ray(camera_ray).with_cull_back_faces(false).trace(acceleration_structure);
++        if (!primary.is_hit) { benchmark_store(px, 0.0.xxx, 0.0.xxxx, false); return; }
++        float3 normal = normalize(primary.geometric_normal);
++        uint rng = hash3(uint3(px, frame_constants.frame_index)) ^ 0xa511e9b3u;
++        float3 direction = normalize(mul(build_orthonormal_basis(normal), uniform_sample_hemisphere(benchmark_random2(rng))));
++        RayDesc ray = new_ray(primary.position + normal * 1e-4, direction, 0, SKY_DIST);
++        TraceResult result = do_the_thing(px, normal, rng, ray);
++        benchmark_store(px, result.out_value * (1.4 * max(0.0, dot(normal, direction))), result.diagnostics, true);
++        candidate_irradiance_out_tex[px] = 0;
++        candidate_hit_out_tex[px] = 0;
++        candidate_normal_out_tex[px] = 0;
++        rt_history_invalidity_out_tex[px] = 0;
++        return;
++    }
++    float depth = depth_tex[px];
++    if (depth == 0.0) {
++        candidate_irradiance_out_tex[px] = 0;
++        candidate_normal_out_tex[px] = float4(0, 0, 1, 0);
++        candidate_hit_out_tex[px] = 0;
++        rt_history_invalidity_out_tex[px] = 0;
++        benchmark_store(px, 0.0.xxx, 0.0.xxxx, false);
++        return;
++    }
++    ViewRayContext view = ViewRayContext::from_uv_and_biased_depth(uv, depth);
++    float3 normal = normalize(direction_view_to_world(gi_view_normal_tex[px]));
++    float3 direction = normalize(rtdgi_candidate_ray_dir(px, build_orthonormal_basis(normal)));
++    RayDesc ray = new_ray(view.biased_secondary_ray_origin_ws_with_normal(normal), direction, 0, SKY_DIST);
++    uint rng = benchmark_replay_seed(px, normal, direction);
++    TraceResult result = do_the_thing(px, normal, rng, ray);
++    float cos_theta = dot(normalize(direction - view.ray_dir_ws()), normal);
++    candidate_irradiance_out_tex[px] = float4(result.out_value, rtr_encode_cos_theta_for_fp16(cos_theta));
++    candidate_hit_out_tex[px] = float4(direction * result.hit_t, result.pdf);
++    candidate_normal_out_tex[px] = float4(direction_world_to_view(result.hit_normal_ws), 0);
++    rt_history_invalidity_out_tex[px] = rt_history_invalidity_in_tex[px];
++    benchmark_store(px, result.out_value * (1.4 * max(0.0, dot(normal, direction))), result.diagnostics, true);
++}
+--- a/shaders/RtdgiValidateRgen.hlsl
++++ b/shaders/RtdgiValidateRgen.hlsl
+@@ -72,6 +72,12 @@
+ 
+     float invalidity = 0.0;
+ 
++    if (frame_constants.benchmark_frame == 0 || frame_constants.benchmark_reference != 0) {
++        rt_history_invalidity_out_tex[px] = 0;
++        RWTest[px] = 0;
++        return;
++    }
++
+     if (RESTIR_USE_PATH_VALIDATION && is_rtdgi_validation_frame())
+     {
+         const float3 normal_vs = gi_view_normal_tex[px];
+@@ -90,9 +96,12 @@
+         prev_ray.TMax = SKY_DIST;
+ 
+         // TODO: frame index
+-        uint rng = hash3(uint3(px, 0));
++        uint source_packed = benchmark_source_pixel(prev_ray_orig);
++        uint2 source_px = uint2(source_packed & 0xffff, source_packed >> 16);
++        float3 source_normal = normalize(direction_view_to_world(gi_view_normal_tex[source_px]));
++        uint rng = benchmark_replay_seed(source_px, source_normal, prev_ray.Direction);
+         
+-        TraceResult result = do_the_thing(px, normal_ws, rng, prev_ray);
++        TraceResult result = do_the_thing(px, source_normal, rng, prev_ray);
+         const float3 new_radiance = max(0.0.xxx, result.out_value);
+ 
+         const float rad_diff = length(abs(prev_radiance - new_radiance) / max(1e-3, prev_radiance + new_radiance));
+--- a/shaders/rtdgi_restir_settings.hlsl
++++ b/shaders/rtdgi_restir_settings.hlsl
+@@ -23,7 +23,7 @@
+ // If `1`, every RTDGI_INTERLEAVED_VALIDATION_PERIOD-th frame is a validation one,
+ // where new candidates are not suggested, but the reservoir picks are validated instead.
+ // This hides the cost of validation, but reduces responsiveness.
+-#define RTDGI_INTERLEAVE_TRACING_AND_VALIDATION 1
++#define RTDGI_INTERLEAVE_TRACING_AND_VALIDATION 0
+ 
+ // How often should validation happen in interleaved mode. Lower values result
+ // in more frequent validation, but less frequent candidate generation.
+--- a/shaders/sun.hlsl
++++ b/shaders/sun.hlsl
+@@ -7,7 +7,7 @@
+ // static const float3 SUN_DIRECTION = normalize(float3(1, 1.6, -0.2));
+ // static const float3 SUN_DIRECTION = normalize(float3(-0.8, 0.3, 1.0));
+ 
+-#define SUN_DIRECTION float3(0.0, 1.0, 0.0)
++#define SUN_DIRECTION float3(0.0, 0.4472135954999579, -0.8944271909999159)
+ //#define SUN_DIRECTION float3(0, -1, 0)
+  //#define SUN_DIRECTION normalize(float3(-6.0, 0.5, -1.5))
+ 

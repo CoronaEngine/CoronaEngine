@@ -1,0 +1,12 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>RTXPT完整主循环实测</title><style>body{font:16px/1.7 system-ui,"Microsoft YaHei",sans-serif;margin:30px auto;max-width:1100px;padding:0 20px;color:#17212e}table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;margin:20px 0}th,td{border-bottom:1px solid #d5dfe9;padding:10px;text-align:right}th:first-child{text-align:left}thead{background:#e8eef7}a{color:#0757b3}</style>
+<h1>RTXPT完整主循环实际墙钟：12.88ms／帧</h1>
+<p>同一Kitchen、RTX3070Ti／610.88、1920×1080、最小深度5／最大16、RR阈值1、每像素每帧一条新候选路径，无去噪。此为本次新实测，之前12.76ms只代表GPU。</p>
+<table><thead><tr><th>范围</th><th>平均ms</th><th>中位ms</th><th>P10–P90 ms</th></tr></thead><tbody><tr><th>完整主循环墙钟</th><td>12.87896</td><td>12.85000</td><td>12.37329–13.40492</td></tr><tr><th>相邻主循环开始间隔</th><td>12.87865</td><td>12.84935</td><td>12.37350–13.40515</td></tr><tr><th>完整GPU范围，仅供分开对照</th><td>12.82400</td><td>12.74419</td><td>12.32282–13.21574</td></tr><tr><th>GI GPU内核</th><td>11.11229</td><td>11.06842</td><td>10.65882–11.52819</td></tr><tr><th>GI GPU＋准备</th><td>12.35111</td><td>12.28237</td><td>11.86406–12.74276</td></tr></tbody></table>
+<p>完整循环在Donut RunMessageLoop顶部、Streamline／事件轮询之前开始计时，直到AnimateRenderPresent返回，覆盖事件、窗口和场景更新、Animate、BeginFrame等待、所有渲染pass与GUI、Present、垃圾回收和帧索引更新。相邻开始间隔另外记录，包含两次回调之间的记录开销。三个进程各测240帧，共720帧；先预热120帧。</p>
+<p>三组墙钟均值：12.95181, 12.83949, 12.84557ms。合并P95：13.58631ms。</p>
+<table><thead><tr><th>互不重叠的主线程经过时间</th><th>均值ms</th></tr></thead><tbody><tr><th>Animate主线程区间</th><td>0.01905</td></tr><tr><th>BeginFrame区间（含帧缓冲fence等待及回调）</th><td>11.28288</td></tr><tr><th>Render主线程编码／提交／查询区间</th><td>1.36652</td></tr><tr><th>Present主线程区间</th><td>0.15288</td></tr><tr><th>事件、窗口更新、回收等其余区间</th><td>0.05763</td></tr></tbody></table>
+<p>上述五项相加等于完整循环墙钟。Render区间包含CPU工作、提交与既有测量查询；BeginFrame区间包含等待GPU释放可复用缓冲的自然等待。CPU与GPU正常重叠运行，所以GPU范围单独报告，不与主线程区间再相加。</p>
+<p>保持原有D3D12三缓冲流水线、禁用VSync／帧率上限的测试设置；没有新增GPU强制等待、sleep或限速。这是正常流水线循环的实际耗时／吞吐，不是从某帧输入开始到该帧GPU完成的独立延迟。已有测量模式的查询和状态记录成本也包含在主循环内。</p>
+<p>每进程共368帧：0–119预热，120–359计时，360–367尾部。原应用最后一帧会在Render内强制drain并截图退出，该367帧不参与墙钟统计；CSV在尾部366帧写出，测量窗口内只保留内存记录。367条完整循环对应0–366；GPU记录0–367。原始clock为steady_clock，导出单位换算为ns，未声称1ns计时分辨率。</p>
+<p>使用隔离源代码副本，仅新增主机计时。624个shader源码与之前逐文件一致，原始可执行文件保持原哈希。Release／MSVC14.44构建成功，三组原始元数据和采样设置通过检查，独立直接按时间戳重算结果一致。</p>
+<p><a href="results-final.json">精简结果</a> · <a href="analysis/mainloop-results.json">完整统计与原始文件哈希</a> · <a href="independent-check.json">独立重算</a> · <a href="mainloop-peer-review.json">边界与源码复核</a> · <a href="build-record.json">构建与shader一致性</a></p></html>

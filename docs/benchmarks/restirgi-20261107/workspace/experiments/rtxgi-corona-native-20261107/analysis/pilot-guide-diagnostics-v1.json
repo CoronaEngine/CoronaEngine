@@ -1,0 +1,282 @@
+{
+  "schema": "corona-native-physical-guide-diagnostic.v1",
+  "status": "diagnostic_requires_review",
+  "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-pilot-fresh-v1",
+  "guides": {
+    "inputs": {
+      "original": {
+        "valid_pixels": 2026258,
+        "position_sha256": "425ade7de5d9febf94f6b57c13190e6f7e240f2cb668b6c98efd8b916de6997a",
+        "normal_sha256": "e07737ccc981b2b8e32a8d248238457607d280a3040d35754e08961bddf73872",
+        "validity": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-pilot-v3\\raw\\frame_000003\\primary_world_normal.bin",
+          "channel": 3
+        },
+        "internal_to_canonical_scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "rtxpt": {
+        "valid_pixels": 2026259,
+        "position_sha256": "5063841f4fe8fe77bb1d66bc825b36aa9f7022fbb4941da46e5924eed49f40fd",
+        "normal_sha256": "8586e1841254358060add7b2b3eeb4d0ffc2cd8c4e7d86efb59e9dd2b2650a95",
+        "validity": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-pilot-none-v1\\primary-position.rgba32f",
+          "channel": 3
+        },
+        "internal_to_canonical_scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "rtxdi": {
+        "valid_pixels": 2026260,
+        "position_sha256": "28a5d4b9de28f864ab6f1d0cf5e94af345de911cf4546d5dd3753b7011df059b",
+        "normal_sha256": "ae8ff5e6652dee7d6c46ae6f288b2ce5df67e8d095e7e4b6f090b688bdf92e48",
+        "validity": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-pilot-none-v1\\capture.position.rgba32f",
+          "channel": 3
+        },
+        "internal_to_canonical_scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "corona_port": {
+        "valid_pixels": 2026259,
+        "position_sha256": "c01b430638e20f9c28f5aae7c7221734d9466bd3d176b4cdb0e06a56420b996d",
+        "normal_sha256": "f0e0962064648959e31b242c4d55527f0c41a8ac0d48ab4eb8b65c5153ef6d4a",
+        "validity": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-pilot-v3\\raw\\frame_0003\\reference_position_depth.f32",
+          "channel": 3
+        },
+        "internal_to_canonical_scale": [
+          1,
+          1,
+          -1
+        ]
+      },
+      "corona_native": {
+        "valid_pixels": 2026259,
+        "position_sha256": "fa56451448475909136c3ba967ac7cd35b48c9de455d0794f78f71aa452e7cc1",
+        "normal_sha256": "fc1f8f8a612b29fc5bbacebd97ec5e239e9c29d551270a4a45d517c1cda63190",
+        "validity": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-pilot-fresh-v1\\raw\\frame_0000\\reference_position_depth.f32",
+          "channel": 3
+        },
+        "internal_to_canonical_scale": [
+          1,
+          1,
+          -1
+        ]
+      }
+    },
+    "pairwise": {
+      "original__rtxpt": {
+        "common_valid_pixels": 2026258,
+        "validity_mismatch_pixels": 1,
+        "position_distance_m_p50_p95_p99_p999_max": [
+          6.017413172101585e-06,
+          2.992533093531105e-05,
+          4.694794192006032e-05,
+          6.490974386093644e-05,
+          3.268818470518521
+        ],
+        "position_pixels_above_1mm": 33,
+        "normal_dot_min_p001_p1_p50": [
+          -0.9982165875340792,
+          0.9955274248932314,
+          0.9999980967767929,
+          0.9999994029040018
+        ],
+        "normal_pixels_below_dot_0999": 240
+      },
+      "original__rtxdi": {
+        "common_valid_pixels": 2026258,
+        "validity_mismatch_pixels": 2,
+        "position_distance_m_p50_p95_p99_p999_max": [
+          6.053313892891106e-06,
+          3.154843968912773e-05,
+          4.9196085084566455e-05,
+          6.695656336828209e-05,
+          3.2688194693324
+        ],
+        "position_pixels_above_1mm": 33,
+        "normal_dot_min_p001_p1_p50": [
+          -0.998195661829815,
+          0.9957598973499056,
+          0.9999988851660884,
+          0.9999994029040018
+        ],
+        "normal_pixels_below_dot_0999": 237
+      },
+      "original__corona_port": {
+        "common_valid_pixels": 2026258,
+        "validity_mismatch_pixels": 1,
+        "position_distance_m_p50_p95_p99_p999_max": [
+          6.0032264289923534e-06,
+          3.0246323987668546e-05,
+          4.7504416146603726e-05,
+          6.541981018539445e-05,
+          3.26881867651837
+        ],
+        "position_pixels_above_1mm": 33,
+        "normal_dot_min_p001_p1_p50": [
+          -0.9981932240157905,
+          0.9956748304564205,
+          0.9999988688949449,
+          0.9999994029040019
+        ],
+        "normal_pixels_below_dot_0999": 237
+      },
+      "original__corona_native": {
+        "common_valid_pixels": 2026258,
+        "validity_mismatch_pixels": 1,
+        "position_distance_m_p50_p95_p99_p999_max": [
+          6.0032264289923534e-06,
+          3.0246323987668546e-05,
+          4.7504416146603726e-05,
+          6.541981018539445e-05,
+          3.26881867651837
+        ],
+        "position_pixels_above_1mm": 33,
+        "normal_dot_min_p001_p1_p50": [
+          -0.9981932240157905,
+          0.9956748304564205,
+          0.9999988688949449,
+          0.9999994029040019
+        ],
+        "normal_pixels_below_dot_0999": 237
+      },
+      "rtxpt__rtxdi": {
+        "common_valid_pixels": 2026259,
+        "validity_mismatch_pixels": 1,
+        "position_distance_m_p50_p95_p99_p999_max": [
+          6.373193555203322e-07,
+          2.0390103439208657e-06,
+          3.216442480857859e-06,
+          4.623107774177865e-06,
+          0.00032761353578425446
+        ],
+        "position_pixels_above_1mm": 0,
+        "normal_dot_min_p001_p1_p50": [
+          0.0,
+          0.9999946847313038,
+          0.9999987904339374,
+          1.0
+        ],
+        "normal_pixels_below_dot_0999": 13
+      },
+      "rtxpt__corona_port": {
+        "common_valid_pixels": 2026259,
+        "validity_mismatch_pixels": 0,
+        "position_distance_m_p50_p95_p99_p999_max": [
+          5.101335873789695e-07,
+          1.3058723390225556e-06,
+          1.922192036699903e-06,
+          3.3309173302071022e-06,
+          6.65365397517827e-05
+        ],
+        "position_pixels_above_1mm": 0,
+        "normal_dot_min_p001_p1_p50": [
+          0.48739665600452925,
+          0.9999944839192118,
+          0.9999987265434533,
+          1.0
+        ],
+        "normal_pixels_below_dot_0999": 13
+      },
+      "rtxpt__corona_native": {
+        "common_valid_pixels": 2026259,
+        "validity_mismatch_pixels": 0,
+        "position_distance_m_p50_p95_p99_p999_max": [
+          5.101335873789695e-07,
+          1.3058723390225556e-06,
+          1.922192036699903e-06,
+          3.3309173302071022e-06,
+          6.65365397517827e-05
+        ],
+        "position_pixels_above_1mm": 0,
+        "normal_dot_min_p001_p1_p50": [
+          0.48739665600452925,
+          0.9999944839192118,
+          0.9999987265434533,
+          1.0
+        ],
+        "normal_pixels_below_dot_0999": 13
+      },
+      "rtxdi__corona_port": {
+        "common_valid_pixels": 2026259,
+        "validity_mismatch_pixels": 1,
+        "position_distance_m_p50_p95_p99_p999_max": [
+          5.840038639982171e-07,
+          1.8157418026599666e-06,
+          2.9544910744175265e-06,
+          4.74558088055105e-06,
+          0.0003428460203722398
+        ],
+        "position_pixels_above_1mm": 0,
+        "normal_dot_min_p001_p1_p50": [
+          0.0,
+          0.999999974095139,
+          0.99999999832725,
+          1.0
+        ],
+        "normal_pixels_below_dot_0999": 20
+      },
+      "rtxdi__corona_native": {
+        "common_valid_pixels": 2026259,
+        "validity_mismatch_pixels": 1,
+        "position_distance_m_p50_p95_p99_p999_max": [
+          5.840038639982171e-07,
+          1.8157418026599666e-06,
+          2.9544910744175265e-06,
+          4.74558088055105e-06,
+          0.0003428460203722398
+        ],
+        "position_pixels_above_1mm": 0,
+        "normal_dot_min_p001_p1_p50": [
+          0.0,
+          0.999999974095139,
+          0.99999999832725,
+          1.0
+        ],
+        "normal_pixels_below_dot_0999": 20
+      },
+      "corona_port__corona_native": {
+        "common_valid_pixels": 2026259,
+        "validity_mismatch_pixels": 0,
+        "position_distance_m_p50_p95_p99_p999_max": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "position_pixels_above_1mm": 0,
+        "normal_dot_min_p001_p1_p50": [
+          0.9999999999999998,
+          0.9999999999999998,
+          0.9999999999999999,
+          1.0
+        ],
+        "normal_pixels_below_dot_0999": 0
+      }
+    },
+    "guide_consistent_pixels": 2026003,
+    "guide_consistency_diagnostic_definition": "all pairwise valid positions within1mm and normal dot>=.999; edge exclusion is diagnostic only"
+  },
+  "native_guide_sha256": {
+    "position": "fa56451448475909136c3ba967ac7cd35b48c9de455d0794f78f71aa452e7cc1",
+    "normal": "fc1f8f8a612b29fc5bbacebd97ec5e239e9c29d551270a4a45d517c1cda63190"
+  },
+  "notes": [
+    "Same canonical coordinates after Corona Z reflection. Validity comes from position alpha.",
+    "Metrics do not prove Lambert, direct exclusion, depth/RR or route; source/runtime evidence must establish those.",
+    "Review validity mismatch, positions above1mm, and normal edge disagreements before writing acceptance status pass."
+  ]
+}

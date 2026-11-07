@@ -1,0 +1,5 @@
+{
+  "restirTemporalCS.hlsl": "3874a3b9a05c4ec9f950b1f6daff6a7a6e565a8f23a7f24c3fa4842144767a66",
+  "restirSpatialCS.hlsl": "453e5c99cf5db40fb5c11a65918a4bc393e2fc5c6858e2ae5227a863bf3161d5",
+  "restirResolveCS.hlsl": "858da618dd7e9c2c589dab65dae40e793978422855e59ccbb48aa3e3c5431492"
+}

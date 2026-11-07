@@ -7,6 +7,7 @@
 #include "base/sampler.h"
 #include "base/mgr/scene.h"
 #include "base/mgr/pipeline.h"
+#include <cstdlib>
 
 namespace vision {
 using namespace ocarina;
@@ -595,6 +596,36 @@ SampledSpectrum Material::integral_albedo(const Float3 &wo, const Lobe *lobe_set
 
 MaterialEvaluator Material::create_evaluator(const Interaction &it,
                                              const SampledWavelengths &swl) const noexcept {
+    const char *aligned_value = std::getenv("VISION_RESTIR_GI_NATIVE_ALIGNED_LAMBERT");
+    const bool aligned_lambert = aligned_value && aligned_value[0] != '\0' && aligned_value[0] != '0';
+    if (aligned_lambert) {
+        static const bool logged = [] {
+            OC_INFO("Native ReSTIR GI aligned Lambert material active: albedo=0.7, opaque two-sided interpolated shading normal; material factory override, original geometric ray offsets; requires separate=false");
+            return true;
+        }();
+        (void)logged;
+        // Match the controlled PT/GI material without changing the interaction
+        // used by the native algorithm for visibility and ray offsets.
+        auto shading = it.shading;
+        const char *multibounce = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
+        if (multibounce && multibounce[0] == '1') {
+            Float3 n = normalize(it.ng);
+            n = ocarina::select(dot(n, it.wo) < 0.f, -n, n);
+            shading.set_frame(Frame<Float3>{n});
+        }
+        Float side = ocarina::select(dot(shading.normal(), it.wo) < 0.f, -1.f, 1.f);
+        shading.y *= side;
+        shading.z = normalize(shading.normal()) * side;
+        shading.dn_du *= side;
+        shading.dn_dv *= side;
+        Interaction lambert_it = it;
+        lambert_it.shading = shading;
+        lambert_it.ng = shading.normal();
+        MaterialEvaluator evaluator{lambert_it, swl};
+        evaluator.update_frame(shading);
+        evaluator.link(make_unique<DiffuseLobe>(SampledSpectrum{swl, .7f}, swl, shading));
+        return evaluator;
+    }
     MaterialEvaluator evaluator{it, swl};
     build_evaluator(evaluator, it, swl);
     evaluator.update_frame(it.shading);

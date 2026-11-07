@@ -95,6 +95,10 @@ public:
     [[nodiscard]] Float4x4 device_c2w() const noexcept;
     [[nodiscard]] Float4x4 device_w2c() const noexcept;
     [[nodiscard]] float4x4 host_c2w() const noexcept;
+    [[nodiscard]] float4x4 host_raster_to_sensor() const noexcept { return raster_to_sensor_.hv(); }
+    [[nodiscard]] virtual bool supports_screen_position_reconstruction() const noexcept {
+        return impl_type() == "pinhole";
+    }
     [[nodiscard]] float4x4 host_world_to_raster() const noexcept {
         return inverse(raster_to_sensor_.hv()) * inverse(c2w_.hv());
     }

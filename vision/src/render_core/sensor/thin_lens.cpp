@@ -31,6 +31,9 @@ public:
     VS_MAKE_PLUGIN_NAME_FUNC
     [[nodiscard]] float focal_distance() const noexcept { return focal_distance_.hv(); }
     [[nodiscard]] float lens_radius() const noexcept { return lens_radius_.hv(); }
+    [[nodiscard]] bool supports_screen_position_reconstruction() const noexcept override {
+        return lens_radius() == 0.f && focal_distance() > 0.f;
+    }
     [[nodiscard]] RayVar generate_ray_in_local_space(const SensorSample &ss) const noexcept override {
         RayVar ray = Sensor::generate_ray_in_local_space(ss);
         Float2 p_lens = square_to_disk<D>(ss.p_lens) * *lens_radius_;

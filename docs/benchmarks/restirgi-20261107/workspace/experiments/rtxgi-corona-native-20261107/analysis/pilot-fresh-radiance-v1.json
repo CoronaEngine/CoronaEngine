@@ -1,0 +1,241 @@
+{
+  "schema": "corona-native-pilot-radiance.v1",
+  "status": "diagnostic_requires_review",
+  "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-pilot-fresh-v1",
+  "reference": {
+    "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\common-reference-8192spp.rgba32f",
+    "sha256": "a6bfe494999dc2e25e7315882f0b58a6a0289351be3c29b0321a3e78cae0c847",
+    "mean_luminance": 0.0052990399609526735
+  },
+  "frame_count": 32,
+  "frames": [
+    {
+      "frame": 0,
+      "mean_luminance": 0.0053201726720524265,
+      "sha256": "2bbca2a9ac288dfcb345038df3c57d2f8b64bea56dae8ab1d6b17653699e5dc2",
+      "signed_brightness_bias_percent": 0.3988026369960318,
+      "L2_NRMSE_percent": 441.18972763012323
+    },
+    {
+      "frame": 1,
+      "mean_luminance": 0.0053094482698228095,
+      "sha256": "233baf3916d9af3ef8874bbcac06ff9841e2889f47311f60b1fc968cc73fa5d5",
+      "signed_brightness_bias_percent": 0.1964187654147187,
+      "L2_NRMSE_percent": 443.0523342095433
+    },
+    {
+      "frame": 2,
+      "mean_luminance": 0.005313043251705439,
+      "sha256": "f2680712f755631404002d341d4fe7256b9b9aa91378247024d1d90fd6c138db",
+      "signed_brightness_bias_percent": 0.2642609011434649,
+      "L2_NRMSE_percent": 443.32497107960114
+    },
+    {
+      "frame": 3,
+      "mean_luminance": 0.005328814511615276,
+      "sha256": "02d368b1276c26574880c9ec05e0e956ef5a36ebf4027b049edb1c75cc9261c0",
+      "signed_brightness_bias_percent": 0.5618857544386069,
+      "L2_NRMSE_percent": 442.84703149105746
+    },
+    {
+      "frame": 4,
+      "mean_luminance": 0.005298578070192293,
+      "sha256": "12b98cf7d801b893304e2d75b54beed5e73af70b8534179893a45281844b9e51",
+      "signed_brightness_bias_percent": -0.00871649890893389,
+      "L2_NRMSE_percent": 442.04311675768196
+    },
+    {
+      "frame": 5,
+      "mean_luminance": 0.005313609130733586,
+      "sha256": "89b5960081313a3e46ca019a2180a2ed3fc57df4c7bb51042b411dd9a2dc5fc1",
+      "signed_brightness_bias_percent": 0.2749397983081714,
+      "L2_NRMSE_percent": 442.5825002640022
+    },
+    {
+      "frame": 6,
+      "mean_luminance": 0.005287027673096898,
+      "sha256": "5ecf733be3a6a190a0bf0fb9a7c141b4032242ff84c0395cfdcb4159a511ea1f",
+      "signed_brightness_bias_percent": -0.2266880028135465,
+      "L2_NRMSE_percent": 441.05890305353563
+    },
+    {
+      "frame": 7,
+      "mean_luminance": 0.0052981968178088855,
+      "sha256": "552d78089d32e3009a496c071c52dd0c0b3302556705aaacc1febfd9407370da",
+      "signed_brightness_bias_percent": -0.015911243357302762,
+      "L2_NRMSE_percent": 440.7951338088245
+    },
+    {
+      "frame": 8,
+      "mean_luminance": 0.0053056327429822315,
+      "sha256": "eb0c6a4fd9af04b34a7781fb727a1a5933aa0b1e1e7d80c01ad86ad967764a86",
+      "signed_brightness_bias_percent": 0.12441465016566067,
+      "L2_NRMSE_percent": 441.73623936608
+    },
+    {
+      "frame": 9,
+      "mean_luminance": 0.005313240003746617,
+      "sha256": "4cef631da656718171851a7919739bdfbe6238e51882509603313c1c0e72e104",
+      "signed_brightness_bias_percent": 0.2679738763734507,
+      "L2_NRMSE_percent": 442.00251252319293
+    },
+    {
+      "frame": 10,
+      "mean_luminance": 0.0053183362024613445,
+      "sha256": "1c93187554b5734e27bc6bf4c2132877dab0bbf2a2ee16314953ebe585c3c8c0",
+      "signed_brightness_bias_percent": 0.36414598966718614,
+      "L2_NRMSE_percent": 441.9390742858046
+    },
+    {
+      "frame": 11,
+      "mean_luminance": 0.005338752781430617,
+      "sha256": "f5b79046bbb9ef9c67806969225e98f1e6a09405652a57f8d0a4f0ff7dd96c46",
+      "signed_brightness_bias_percent": 0.7494342516866759,
+      "L2_NRMSE_percent": 444.1348075688001
+    },
+    {
+      "frame": 12,
+      "mean_luminance": 0.005319616002977936,
+      "sha256": "7735b5bd517557316fa5b31106bfcb0508d0c63b8b60c267dff2bbb9aeec272c",
+      "signed_brightness_bias_percent": 0.38829754402460726,
+      "L2_NRMSE_percent": 441.1365576352049
+    },
+    {
+      "frame": 13,
+      "mean_luminance": 0.005260486703311192,
+      "sha256": "2930c51388675ee2b06880908a9abed66db98497607f00325d1fe79d36137d86",
+      "signed_brightness_bias_percent": -0.7275517438172008,
+      "L2_NRMSE_percent": 438.3477726100108
+    },
+    {
+      "frame": 14,
+      "mean_luminance": 0.00530809975391114,
+      "sha256": "4474bedf3d23c24000abd5012909654217f0b3a7eb4e33f34747f51ccf6ca112",
+      "signed_brightness_bias_percent": 0.17097045927614296,
+      "L2_NRMSE_percent": 441.77703311706705
+    },
+    {
+      "frame": 15,
+      "mean_luminance": 0.005331436974761891,
+      "sha256": "840be88677d70245b027fa029906e1ececde09b3714c87e219c04c41ac5f72bf",
+      "signed_brightness_bias_percent": 0.6113751556497737,
+      "L2_NRMSE_percent": 443.59188507741544
+    },
+    {
+      "frame": 16,
+      "mean_luminance": 0.005307525371376918,
+      "sha256": "a36a22239d555b8c410260a3c87bb2428d21b504aa815483bb2999664809aa52",
+      "signed_brightness_bias_percent": 0.16013108953265576,
+      "L2_NRMSE_percent": 441.9750366098422
+    },
+    {
+      "frame": 17,
+      "mean_luminance": 0.005322341091095167,
+      "sha256": "21b9686f5ef8c428855d157dc24b4ace7feb7cce3f8289ba48fade23aab5ce98",
+      "signed_brightness_bias_percent": 0.43972361624358136,
+      "L2_NRMSE_percent": 444.28248717491255
+    },
+    {
+      "frame": 18,
+      "mean_luminance": 0.00531891863460159,
+      "sha256": "1f5e60ffd8324caaa797624c8ea7f9ad0e1384cf624bf267238b41f8b1010d89",
+      "signed_brightness_bias_percent": 0.3751372662859076,
+      "L2_NRMSE_percent": 441.95694103607053
+    },
+    {
+      "frame": 19,
+      "mean_luminance": 0.005286543646128926,
+      "sha256": "c815f94238abc282f7f405bf1ab13e1bc28fd948f3df37b4f8421be41824e6bb",
+      "signed_brightness_bias_percent": -0.23582224168585686,
+      "L2_NRMSE_percent": 440.30410726799295
+    },
+    {
+      "frame": 20,
+      "mean_luminance": 0.005329130151252166,
+      "sha256": "d99226bedea5cbbb2f33fdad786fd9ecb1eb4dce9883710b12c9a20f43815320",
+      "signed_brightness_bias_percent": 0.5678422982506204,
+      "L2_NRMSE_percent": 442.7509875646354
+    },
+    {
+      "frame": 21,
+      "mean_luminance": 0.005325840318158103,
+      "sha256": "fd6f8b914e634ed6a681481ed5e03c8184e3e55d58d373e51f609ae6d526ccd8",
+      "signed_brightness_bias_percent": 0.5057587299381661,
+      "L2_NRMSE_percent": 443.13905757909924
+    },
+    {
+      "frame": 22,
+      "mean_luminance": 0.005325995340184135,
+      "sha256": "981a7ae700002ee53af2426cde2d17fedb7ac21ea45c696aab187df87d110861",
+      "signed_brightness_bias_percent": 0.5086842037442585,
+      "L2_NRMSE_percent": 443.10940268381245
+    },
+    {
+      "frame": 23,
+      "mean_luminance": 0.005287854330634207,
+      "sha256": "2076f976824360dfc1b390df8b1dac2fb34534f89fbfa0926057816a56afe584",
+      "signed_brightness_bias_percent": -0.21108786498856835,
+      "L2_NRMSE_percent": 440.6095654600227
+    },
+    {
+      "frame": 24,
+      "mean_luminance": 0.0053223202000038956,
+      "sha256": "a7508de1ef1fd55b7b9170d9de4bbd1a05c524eb44c226144376322a3fe6cd10",
+      "signed_brightness_bias_percent": 0.4393293732972037,
+      "L2_NRMSE_percent": 442.2907099105691
+    },
+    {
+      "frame": 25,
+      "mean_luminance": 0.005316618444359624,
+      "sha256": "52d7097a4e0c9cc2955a7b508570b50f030bc50349ca59bb7c2669b02a579f00",
+      "signed_brightness_bias_percent": 0.3317295875570281,
+      "L2_NRMSE_percent": 442.9876184151515
+    },
+    {
+      "frame": 26,
+      "mean_luminance": 0.005333720490177681,
+      "sha256": "fc07602344621a13d30d56e9cfa3c6e4029f215053d04d8b9e67c5c03e5825a0",
+      "signed_brightness_bias_percent": 0.6544681580165301,
+      "L2_NRMSE_percent": 443.3664812195551
+    },
+    {
+      "frame": 27,
+      "mean_luminance": 0.005301641760738057,
+      "sha256": "492515b22ff03a2594e791d2f433427d97ffb6e4cf236ab0dd214bc471c70dfc",
+      "signed_brightness_bias_percent": 0.04909945583644326,
+      "L2_NRMSE_percent": 441.6942081363028
+    },
+    {
+      "frame": 28,
+      "mean_luminance": 0.005295645016883059,
+      "sha256": "9ee82556656e4b973ea5645017de834119085642b1c216381a8df956fcd59f8f",
+      "signed_brightness_bias_percent": -0.0640671535718007,
+      "L2_NRMSE_percent": 441.4547762537576
+    },
+    {
+      "frame": 29,
+      "mean_luminance": 0.005293424011875436,
+      "sha256": "68c86660900c65776d290e198c88e1a413637c6d4a2252f77a13d2fc0e5045c8",
+      "signed_brightness_bias_percent": -0.10598050059293929,
+      "L2_NRMSE_percent": 440.70493380257733
+    },
+    {
+      "frame": 30,
+      "mean_luminance": 0.005292781977841195,
+      "sha256": "8a8ba2c9e8efd0ae74745927797eb55ee44088a020d1cc5920cb2670b77b5026",
+      "signed_brightness_bias_percent": -0.11809654498913247,
+      "L2_NRMSE_percent": 440.9578843338336
+    },
+    {
+      "frame": 31,
+      "mean_luminance": 0.005301411270059154,
+      "sha256": "15aca6290ba79205f48a8d7083db60ac24ae9b948054cd5de60cd32d3057e614",
+      "signed_brightness_bias_percent": 0.04474978720585554,
+      "L2_NRMSE_percent": 442.23087780298
+    }
+  ],
+  "mean_luminance": 0.005310193863061872,
+  "mean_signed_brightness_bias_percent": 0.2104891110727536,
+  "time_mean_L2_NRMSE_percent": 78.23155973124129,
+  "note": "Fresh proposal or reused output semantics must be established by actual route/settings/source. Mean agreement alone does not establish transport correctness."
+}

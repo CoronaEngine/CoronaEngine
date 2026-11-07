@@ -1,0 +1,530 @@
+{
+  "snapshot": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxgi-multibounce-20261107\\rtxdi",
+  "previous": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxgi-kitchen-bench-20261107\\rtxdi",
+  "source_frozen": true,
+  "sdk_file_count": 69,
+  "sdk_all_unchanged": true,
+  "sdk_files": [
+    {
+      "path": "Libraries/Rtxdi/.git",
+      "new_sha256": "a7d6020a192baa69c32ed171d82c24c2064b15bef259e72a8413a97a7a1f1c70",
+      "previous_sha256": "a7d6020a192baa69c32ed171d82c24c2064b15bef259e72a8413a97a7a1f1c70",
+      "donor_sha256": "a7d6020a192baa69c32ed171d82c24c2064b15bef259e72a8413a97a7a1f1c70",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/CMakeLists.txt",
+      "new_sha256": "f6eca3a7c7b1b522948faca5a2442cd712dcbba84328743c4689e10cca88c05f",
+      "previous_sha256": "f6eca3a7c7b1b522948faca5a2442cd712dcbba84328743c4689e10cca88c05f",
+      "donor_sha256": "f6eca3a7c7b1b522948faca5a2442cd712dcbba84328743c4689e10cca88c05f",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/DI/BoilingFilter.hlsli",
+      "new_sha256": "28530097ce3ea47156d345152e14e4c1f9661d210f0e719af7694dee3fdb6806",
+      "previous_sha256": "28530097ce3ea47156d345152e14e4c1f9661d210f0e719af7694dee3fdb6806",
+      "donor_sha256": "28530097ce3ea47156d345152e14e4c1f9661d210f0e719af7694dee3fdb6806",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/DI/InitialSampling.hlsli",
+      "new_sha256": "53f27901d296bac2a1d5fb9c4f73b643a4c39c632c970407ab595e6ddaf098ec",
+      "previous_sha256": "53f27901d296bac2a1d5fb9c4f73b643a4c39c632c970407ab595e6ddaf098ec",
+      "donor_sha256": "53f27901d296bac2a1d5fb9c4f73b643a4c39c632c970407ab595e6ddaf098ec",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/DI/PairwiseStreaming.hlsli",
+      "new_sha256": "fd15e9051036a211a3f516a186edef0f36cf99f9392bd840121b0dbe449fac8c",
+      "previous_sha256": "fd15e9051036a211a3f516a186edef0f36cf99f9392bd840121b0dbe449fac8c",
+      "donor_sha256": "fd15e9051036a211a3f516a186edef0f36cf99f9392bd840121b0dbe449fac8c",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/DI/Reservoir.hlsli",
+      "new_sha256": "be474731482b1edb0669f19a1c07f4abe23d8ceee895948e933f685566a0111d",
+      "previous_sha256": "be474731482b1edb0669f19a1c07f4abe23d8ceee895948e933f685566a0111d",
+      "donor_sha256": "be474731482b1edb0669f19a1c07f4abe23d8ceee895948e933f685566a0111d",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/DI/ReservoirStorage.hlsli",
+      "new_sha256": "564bdaf5e82dc214f9f90a055e388eae33280347d5aed531cecdc3ab47afa139",
+      "previous_sha256": "564bdaf5e82dc214f9f90a055e388eae33280347d5aed531cecdc3ab47afa139",
+      "donor_sha256": "564bdaf5e82dc214f9f90a055e388eae33280347d5aed531cecdc3ab47afa139",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/DI/ReSTIRDI.h",
+      "new_sha256": "ff8572e7852e7e3a271641721be101adbcdec50539282481b7f8561487038256",
+      "previous_sha256": "ff8572e7852e7e3a271641721be101adbcdec50539282481b7f8561487038256",
+      "donor_sha256": "ff8572e7852e7e3a271641721be101adbcdec50539282481b7f8561487038256",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/DI/ReSTIRDIParameters.h",
+      "new_sha256": "39fc383642be6b3c0f90c376b8be261b1d5eccf361efc002e684bfc28c6e4e39",
+      "previous_sha256": "39fc383642be6b3c0f90c376b8be261b1d5eccf361efc002e684bfc28c6e4e39",
+      "donor_sha256": "39fc383642be6b3c0f90c376b8be261b1d5eccf361efc002e684bfc28c6e4e39",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/DI/SpatialResampling.hlsli",
+      "new_sha256": "7ece19806068de3e12a088544af90a2597bf3444b50b7d1331b5e2a61cda55f5",
+      "previous_sha256": "7ece19806068de3e12a088544af90a2597bf3444b50b7d1331b5e2a61cda55f5",
+      "donor_sha256": "7ece19806068de3e12a088544af90a2597bf3444b50b7d1331b5e2a61cda55f5",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/DI/SpatioTemporalResampling.hlsli",
+      "new_sha256": "f1d6c303aa9500db46426d93b80dd0ea5868e190671727649de2ce9c357adb6e",
+      "previous_sha256": "f1d6c303aa9500db46426d93b80dd0ea5868e190671727649de2ce9c357adb6e",
+      "donor_sha256": "f1d6c303aa9500db46426d93b80dd0ea5868e190671727649de2ce9c357adb6e",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/DI/TemporalResampling.hlsli",
+      "new_sha256": "ef2394f6959b24fb2098a41aae2c14284708c410f17ea071eb3216ea4ec90d59",
+      "previous_sha256": "ef2394f6959b24fb2098a41aae2c14284708c410f17ea071eb3216ea4ec90d59",
+      "donor_sha256": "ef2394f6959b24fb2098a41aae2c14284708c410f17ea071eb3216ea4ec90d59",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/GI/BoilingFilter.hlsli",
+      "new_sha256": "820253d7059cf3493bffd3c6e757192a721abb34bb761a233acb282a4264b653",
+      "previous_sha256": "820253d7059cf3493bffd3c6e757192a721abb34bb761a233acb282a4264b653",
+      "donor_sha256": "820253d7059cf3493bffd3c6e757192a721abb34bb761a233acb282a4264b653",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/GI/Reservoir.hlsli",
+      "new_sha256": "0de6dc6ed185f0896ec143e48149f155a3f4cfaee6f8bf9e5532488c9dab15a6",
+      "previous_sha256": "0de6dc6ed185f0896ec143e48149f155a3f4cfaee6f8bf9e5532488c9dab15a6",
+      "donor_sha256": "0de6dc6ed185f0896ec143e48149f155a3f4cfaee6f8bf9e5532488c9dab15a6",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/GI/ReSTIRGI.h",
+      "new_sha256": "aeb21b7af6d43a4b5d90f0bf83f8b4afe28b52e3f91193723f7d8c52e55b2b80",
+      "previous_sha256": "aeb21b7af6d43a4b5d90f0bf83f8b4afe28b52e3f91193723f7d8c52e55b2b80",
+      "donor_sha256": "aeb21b7af6d43a4b5d90f0bf83f8b4afe28b52e3f91193723f7d8c52e55b2b80",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/GI/ReSTIRGIParameters.h",
+      "new_sha256": "35e5dbc5a54b18d786498b272ab9ff74e0ee3da9589723344586dd529aeaa4ad",
+      "previous_sha256": "35e5dbc5a54b18d786498b272ab9ff74e0ee3da9589723344586dd529aeaa4ad",
+      "donor_sha256": "35e5dbc5a54b18d786498b272ab9ff74e0ee3da9589723344586dd529aeaa4ad",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/GI/SpatialResampling.hlsli",
+      "new_sha256": "8dcf085d6254f998ab4c2be89404b8d5e3e56a1f34790e8c35d9f2e7e7afd94d",
+      "previous_sha256": "8dcf085d6254f998ab4c2be89404b8d5e3e56a1f34790e8c35d9f2e7e7afd94d",
+      "donor_sha256": "8dcf085d6254f998ab4c2be89404b8d5e3e56a1f34790e8c35d9f2e7e7afd94d",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/GI/SpatioTemporalResampling.hlsli",
+      "new_sha256": "a283eadebcaccc9b96a28c628459316e4b5de7b3c52ac367dbfea914488343f8",
+      "previous_sha256": "a283eadebcaccc9b96a28c628459316e4b5de7b3c52ac367dbfea914488343f8",
+      "donor_sha256": "a283eadebcaccc9b96a28c628459316e4b5de7b3c52ac367dbfea914488343f8",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/GI/TemporalResampling.hlsli",
+      "new_sha256": "36c0fb514a139611f504f5b08343848fc70f655870fd23331dc4752e45ed12c6",
+      "previous_sha256": "36c0fb514a139611f504f5b08343848fc70f655870fd23331dc4752e45ed12c6",
+      "donor_sha256": "36c0fb514a139611f504f5b08343848fc70f655870fd23331dc4752e45ed12c6",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/ImportanceSamplingContext.h",
+      "new_sha256": "c97eaa076771c122978d50c2be5587cd044d1f9639fe54acf96de2025f92ca08",
+      "previous_sha256": "c97eaa076771c122978d50c2be5587cd044d1f9639fe54acf96de2025f92ca08",
+      "donor_sha256": "c97eaa076771c122978d50c2be5587cd044d1f9639fe54acf96de2025f92ca08",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/LightSampling/LocalLightSelection.hlsli",
+      "new_sha256": "7376cf1cea74ea9710c7da350db193d8edfcdd0b49d16f80020e0fa06c9da92c",
+      "previous_sha256": "7376cf1cea74ea9710c7da350db193d8edfcdd0b49d16f80020e0fa06c9da92c",
+      "donor_sha256": "7376cf1cea74ea9710c7da350db193d8edfcdd0b49d16f80020e0fa06c9da92c",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/LightSampling/PresamplingFunctions.hlsli",
+      "new_sha256": "cec1bc2f34f39563d4fe04e88ecf89afaf2dfb49f80e91dc2ac6fb716b27a6c5",
+      "previous_sha256": "cec1bc2f34f39563d4fe04e88ecf89afaf2dfb49f80e91dc2ac6fb716b27a6c5",
+      "donor_sha256": "cec1bc2f34f39563d4fe04e88ecf89afaf2dfb49f80e91dc2ac6fb716b27a6c5",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/LightSampling/RISBuffer.hlsli",
+      "new_sha256": "23b7dd3d870ce210fc51925fdc3a66f6fca2960962256287631a65da28f15f1c",
+      "previous_sha256": "23b7dd3d870ce210fc51925fdc3a66f6fca2960962256287631a65da28f15f1c",
+      "donor_sha256": "23b7dd3d870ce210fc51925fdc3a66f6fca2960962256287631a65da28f15f1c",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/LightSampling/RISBufferSegmentAllocator.h",
+      "new_sha256": "83e2520d782efd0afc06fc87fe74c22cb17d6a5060cf141e85958dfd6a61b046",
+      "previous_sha256": "83e2520d782efd0afc06fc87fe74c22cb17d6a5060cf141e85958dfd6a61b046",
+      "donor_sha256": "83e2520d782efd0afc06fc87fe74c22cb17d6a5060cf141e85958dfd6a61b046",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/LightSampling/RISBufferSegmentParameters.h",
+      "new_sha256": "7c3028089f236e2dd8d37f8c9f91f65de10b2940b028aa43d448aecc82af96d2",
+      "previous_sha256": "7c3028089f236e2dd8d37f8c9f91f65de10b2940b028aa43d448aecc82af96d2",
+      "donor_sha256": "7c3028089f236e2dd8d37f8c9f91f65de10b2940b028aa43d448aecc82af96d2",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/LightSampling/UniformSampling.hlsli",
+      "new_sha256": "3d3779cf58a4b2e68658d56d4acc3240be5ca92f387c8a70ab553793a466675c",
+      "previous_sha256": "3d3779cf58a4b2e68658d56d4acc3240be5ca92f387c8a70ab553793a466675c",
+      "donor_sha256": "3d3779cf58a4b2e68658d56d4acc3240be5ca92f387c8a70ab553793a466675c",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/BoilingFilter.hlsli",
+      "new_sha256": "87194445f0a4338d78b55d01c0b739bd8dc09d12f0c4cc86d05901a93a8dcbf1",
+      "previous_sha256": "87194445f0a4338d78b55d01c0b739bd8dc09d12f0c4cc86d05901a93a8dcbf1",
+      "donor_sha256": "87194445f0a4338d78b55d01c0b739bd8dc09d12f0c4cc86d05901a93a8dcbf1",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/Decorrelation.hlsli",
+      "new_sha256": "5a17c08e293a1cb5ebf758d17d1eb48c8ee5f7a7f1f2471c5b24b7751bcfde39",
+      "previous_sha256": "5a17c08e293a1cb5ebf758d17d1eb48c8ee5f7a7f1f2471c5b24b7751bcfde39",
+      "donor_sha256": "5a17c08e293a1cb5ebf758d17d1eb48c8ee5f7a7f1f2471c5b24b7751bcfde39",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/DuplicationMap.hlsli",
+      "new_sha256": "610051043734bf23d26395335f9136ae4dba643936b2876f3b9d68cd4a97e5ad",
+      "previous_sha256": "610051043734bf23d26395335f9136ae4dba643936b2876f3b9d68cd4a97e5ad",
+      "donor_sha256": "610051043734bf23d26395335f9136ae4dba643936b2876f3b9d68cd4a97e5ad",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/HybridShift.hlsli",
+      "new_sha256": "7e8b59daaaecc14d4ff4424aa5b097b29134bfc30730e2531682500909356864",
+      "previous_sha256": "7e8b59daaaecc14d4ff4424aa5b097b29134bfc30730e2531682500909356864",
+      "donor_sha256": "7e8b59daaaecc14d4ff4424aa5b097b29134bfc30730e2531682500909356864",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/HybridShiftPathTracerContext.hlsli",
+      "new_sha256": "c95a209c7b290f32ee48d9b7dfe9d7ca7134ebcbded7cf149e504cbc9e42726a",
+      "previous_sha256": "c95a209c7b290f32ee48d9b7dfe9d7ca7134ebcbded7cf149e504cbc9e42726a",
+      "donor_sha256": "c95a209c7b290f32ee48d9b7dfe9d7ca7134ebcbded7cf149e504cbc9e42726a",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/InitialSampling.hlsli",
+      "new_sha256": "4a361efab7bc431389bb62339bcbb932a732b544aa17cc634d7b31b46dc226aa",
+      "previous_sha256": "4a361efab7bc431389bb62339bcbb932a732b544aa17cc634d7b31b46dc226aa",
+      "donor_sha256": "4a361efab7bc431389bb62339bcbb932a732b544aa17cc634d7b31b46dc226aa",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/InitialSamplingPathTracerContext.hlsli",
+      "new_sha256": "45b6e43ca5efc1117ce28d96d5793ac3d219ca9baf7285b00f7824c09e1d85d8",
+      "previous_sha256": "45b6e43ca5efc1117ce28d96d5793ac3d219ca9baf7285b00f7824c09e1d85d8",
+      "donor_sha256": "45b6e43ca5efc1117ce28d96d5793ac3d219ca9baf7285b00f7824c09e1d85d8",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/PathReconnectibility.hlsli",
+      "new_sha256": "c9054081902d6d7abd1bfb868c4b757ce6d3a15ea7f3a29b50bbf588d2df411c",
+      "previous_sha256": "c9054081902d6d7abd1bfb868c4b757ce6d3a15ea7f3a29b50bbf588d2df411c",
+      "donor_sha256": "c9054081902d6d7abd1bfb868c4b757ce6d3a15ea7f3a29b50bbf588d2df411c",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/PathTracerContext.hlsli",
+      "new_sha256": "3e4f2be9b5e04acb55a66e28faf94374f5a7b15a663db60bc22bff167a507d13",
+      "previous_sha256": "3e4f2be9b5e04acb55a66e28faf94374f5a7b15a663db60bc22bff167a507d13",
+      "donor_sha256": "3e4f2be9b5e04acb55a66e28faf94374f5a7b15a663db60bc22bff167a507d13",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/PathTracerContextParameters.hlsli",
+      "new_sha256": "91c43c2ada8244dfd11ac10ea25c2cfe098e479c5284deb05ea8e73e5d4e8775",
+      "previous_sha256": "91c43c2ada8244dfd11ac10ea25c2cfe098e479c5284deb05ea8e73e5d4e8775",
+      "donor_sha256": "91c43c2ada8244dfd11ac10ea25c2cfe098e479c5284deb05ea8e73e5d4e8775",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/PathTracerRandomContext.hlsli",
+      "new_sha256": "a578bd529aadab95e2f097b4193dcfffd6d54207e101b79d4d48f25adb0244d5",
+      "previous_sha256": "a578bd529aadab95e2f097b4193dcfffd6d54207e101b79d4d48f25adb0244d5",
+      "donor_sha256": "a578bd529aadab95e2f097b4193dcfffd6d54207e101b79d4d48f25adb0244d5",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/PathTracerState.hlsli",
+      "new_sha256": "d1b0293ec40a17cd3c107a7b5ded6bfa28546dcb905488fd903149ad0455fd69",
+      "previous_sha256": "d1b0293ec40a17cd3c107a7b5ded6bfa28546dcb905488fd903149ad0455fd69",
+      "donor_sha256": "d1b0293ec40a17cd3c107a7b5ded6bfa28546dcb905488fd903149ad0455fd69",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/Reservoir.hlsli",
+      "new_sha256": "f43d46039ae0f72411b039c018eb181e4cb5b7cc7b2ee38af5b02cecece7e832",
+      "previous_sha256": "f43d46039ae0f72411b039c018eb181e4cb5b7cc7b2ee38af5b02cecece7e832",
+      "donor_sha256": "f43d46039ae0f72411b039c018eb181e4cb5b7cc7b2ee38af5b02cecece7e832",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/ReSTIRPT.h",
+      "new_sha256": "dfd70de03ca71199e6253890c74146c79671fcfd274ad81876bb1c71a9ce568d",
+      "previous_sha256": "dfd70de03ca71199e6253890c74146c79671fcfd274ad81876bb1c71a9ce568d",
+      "donor_sha256": "dfd70de03ca71199e6253890c74146c79671fcfd274ad81876bb1c71a9ce568d",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/ReSTIRPTParameters.h",
+      "new_sha256": "17bd2ceb66a22c98c612a6415bc13aafad75ce33ec53b325aa4efd6950e07dc3",
+      "previous_sha256": "17bd2ceb66a22c98c612a6415bc13aafad75ce33ec53b325aa4efd6950e07dc3",
+      "donor_sha256": "17bd2ceb66a22c98c612a6415bc13aafad75ce33ec53b325aa4efd6950e07dc3",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/SpatialNeighborSelection.hlsli",
+      "new_sha256": "6054b9c38a879f4ceeb01bd8b48e34dfbd0e3f70853e804f13c7f9829119a458",
+      "previous_sha256": "6054b9c38a879f4ceeb01bd8b48e34dfbd0e3f70853e804f13c7f9829119a458",
+      "donor_sha256": "6054b9c38a879f4ceeb01bd8b48e34dfbd0e3f70853e804f13c7f9829119a458",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/SpatialResampling.hlsli",
+      "new_sha256": "00b2d12d1d527340fe0b21a07dfd354131915dad871011aa4b90736f3b6f252c",
+      "previous_sha256": "00b2d12d1d527340fe0b21a07dfd354131915dad871011aa4b90736f3b6f252c",
+      "donor_sha256": "00b2d12d1d527340fe0b21a07dfd354131915dad871011aa4b90736f3b6f252c",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/PT/TemporalResampling.hlsli",
+      "new_sha256": "9d0d71439631b1008f7c1a337cbb46fb187217e53dd5bb55c76d4dd6fd82d25c",
+      "previous_sha256": "9d0d71439631b1008f7c1a337cbb46fb187217e53dd5bb55c76d4dd6fd82d25c",
+      "donor_sha256": "9d0d71439631b1008f7c1a337cbb46fb187217e53dd5bb55c76d4dd6fd82d25c",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/ReGIR/ReGIR.h",
+      "new_sha256": "0bed923e912f56470595bbc9d4120b91c470691b2e7fdac0314101b19dff3323",
+      "previous_sha256": "0bed923e912f56470595bbc9d4120b91c470691b2e7fdac0314101b19dff3323",
+      "donor_sha256": "0bed923e912f56470595bbc9d4120b91c470691b2e7fdac0314101b19dff3323",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/ReGIR/ReGIRParameters.h",
+      "new_sha256": "efa12becd55831bb8e079fd9ed2201616bcda6ada8c03c07fd0cd781be1d344e",
+      "previous_sha256": "efa12becd55831bb8e079fd9ed2201616bcda6ada8c03c07fd0cd781be1d344e",
+      "donor_sha256": "efa12becd55831bb8e079fd9ed2201616bcda6ada8c03c07fd0cd781be1d344e",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/ReGIR/ReGIRSampling.hlsli",
+      "new_sha256": "fba9b81a34d63d8d5b3b6fda7a5792557e3ab309ae6d98c0ab95fb8bfc153720",
+      "previous_sha256": "fba9b81a34d63d8d5b3b6fda7a5792557e3ab309ae6d98c0ab95fb8bfc153720",
+      "donor_sha256": "fba9b81a34d63d8d5b3b6fda7a5792557e3ab309ae6d98c0ab95fb8bfc153720",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/RtxdiParameters.h",
+      "new_sha256": "70947be081ce6456bc724f18f3c06a6b88cad90d336bda470c4794416d6cfe30",
+      "previous_sha256": "70947be081ce6456bc724f18f3c06a6b88cad90d336bda470c4794416d6cfe30",
+      "donor_sha256": "70947be081ce6456bc724f18f3c06a6b88cad90d336bda470c4794416d6cfe30",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/RtxdiTypes.h",
+      "new_sha256": "3e0b0593cf23503f3d7c5fdc449a5ecb0f686e334b394ca328130b4fd1af6336",
+      "previous_sha256": "3e0b0593cf23503f3d7c5fdc449a5ecb0f686e334b394ca328130b4fd1af6336",
+      "donor_sha256": "3e0b0593cf23503f3d7c5fdc449a5ecb0f686e334b394ca328130b4fd1af6336",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/RtxdiUtils.h",
+      "new_sha256": "9e77e4aecc7f575fe166ffa068aedfe4c5a3d8788b11bc09bd3305c061584fd5",
+      "previous_sha256": "9e77e4aecc7f575fe166ffa068aedfe4c5a3d8788b11bc09bd3305c061584fd5",
+      "donor_sha256": "9e77e4aecc7f575fe166ffa068aedfe4c5a3d8788b11bc09bd3305c061584fd5",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/Utils/BoilingFilter.hlsli",
+      "new_sha256": "80c42405fc0b22ac8383baaf0737394b892257e7c812effce0fbd78ce10ea418",
+      "previous_sha256": "80c42405fc0b22ac8383baaf0737394b892257e7c812effce0fbd78ce10ea418",
+      "donor_sha256": "80c42405fc0b22ac8383baaf0737394b892257e7c812effce0fbd78ce10ea418",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/Utils/BrdfRaySample.hlsli",
+      "new_sha256": "4c49daad4f9549daf55bd397db89882f8eab0a089f2d60626103d001a795d516",
+      "previous_sha256": "4c49daad4f9549daf55bd397db89882f8eab0a089f2d60626103d001a795d516",
+      "donor_sha256": "4c49daad4f9549daf55bd397db89882f8eab0a089f2d60626103d001a795d516",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/Utils/Checkerboard.hlsli",
+      "new_sha256": "9d787231c7c4d32a9e7b575166fd77eeecc74759e540ca44f98149e5901865b5",
+      "previous_sha256": "9d787231c7c4d32a9e7b575166fd77eeecc74759e540ca44f98149e5901865b5",
+      "donor_sha256": "9d787231c7c4d32a9e7b575166fd77eeecc74759e540ca44f98149e5901865b5",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/Utils/Color.hlsli",
+      "new_sha256": "4dbc197d6b38c19becb80adf6e361d16c99684b9689a1cc4678a842d21179114",
+      "previous_sha256": "4dbc197d6b38c19becb80adf6e361d16c99684b9689a1cc4678a842d21179114",
+      "donor_sha256": "4dbc197d6b38c19becb80adf6e361d16c99684b9689a1cc4678a842d21179114",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/Utils/Math.hlsli",
+      "new_sha256": "ec4bb38fac6d922e75799449bc311b9fa2c91f79bdfa50e197e4d2c95f381954",
+      "previous_sha256": "ec4bb38fac6d922e75799449bc311b9fa2c91f79bdfa50e197e4d2c95f381954",
+      "donor_sha256": "ec4bb38fac6d922e75799449bc311b9fa2c91f79bdfa50e197e4d2c95f381954",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/Utils/RandomSamplerPerPassSeeds.hlsli",
+      "new_sha256": "c83a644b6cbd6256a523ed0a719af4d49a9ef1a7133db320339114c3645cfbd9",
+      "previous_sha256": "c83a644b6cbd6256a523ed0a719af4d49a9ef1a7133db320339114c3645cfbd9",
+      "donor_sha256": "c83a644b6cbd6256a523ed0a719af4d49a9ef1a7133db320339114c3645cfbd9",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/Utils/RandomSamplerState.hlsli",
+      "new_sha256": "ea29055daa730794146adb25612889b9d7fe2adb1ff940b462ae13c731e0274d",
+      "previous_sha256": "ea29055daa730794146adb25612889b9d7fe2adb1ff940b462ae13c731e0274d",
+      "donor_sha256": "ea29055daa730794146adb25612889b9d7fe2adb1ff940b462ae13c731e0274d",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/Utils/ReservoirAddressing.hlsli",
+      "new_sha256": "df44bf8fbc1d5bbcda24e40d4f4acc71bedab5ffa24d7f2db8c3e515cf4a86da",
+      "previous_sha256": "df44bf8fbc1d5bbcda24e40d4f4acc71bedab5ffa24d7f2db8c3e515cf4a86da",
+      "donor_sha256": "df44bf8fbc1d5bbcda24e40d4f4acc71bedab5ffa24d7f2db8c3e515cf4a86da",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/Utils/SampledLightData.hlsli",
+      "new_sha256": "8224d0ba265d5daca0df8629c91a8dd4576f848d2b9f461acaab91b7ff64cf88",
+      "previous_sha256": "8224d0ba265d5daca0df8629c91a8dd4576f848d2b9f461acaab91b7ff64cf88",
+      "donor_sha256": "8224d0ba265d5daca0df8629c91a8dd4576f848d2b9f461acaab91b7ff64cf88",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Include/Rtxdi/Utils/TypePacking.hlsli",
+      "new_sha256": "e9bda8d1c534329ba19ee5d46819adac829da17869f3864c5749236f434873f0",
+      "previous_sha256": "e9bda8d1c534329ba19ee5d46819adac829da17869f3864c5749236f434873f0",
+      "donor_sha256": "e9bda8d1c534329ba19ee5d46819adac829da17869f3864c5749236f434873f0",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/LICENSE.txt",
+      "new_sha256": "120a5af845068454e8498718e230689660abd96b15f48a19858c56f0e3ecfb4c",
+      "previous_sha256": "120a5af845068454e8498718e230689660abd96b15f48a19858c56f0e3ecfb4c",
+      "donor_sha256": "120a5af845068454e8498718e230689660abd96b15f48a19858c56f0e3ecfb4c",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/README.md",
+      "new_sha256": "88c2c0f3d73292158608b6fb0f6efeca495f4b713252a8ca69da8bc8c4842db9",
+      "previous_sha256": "88c2c0f3d73292158608b6fb0f6efeca495f4b713252a8ca69da8bc8c4842db9",
+      "donor_sha256": "88c2c0f3d73292158608b6fb0f6efeca495f4b713252a8ca69da8bc8c4842db9",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Source/ImportanceSamplingContext.cpp",
+      "new_sha256": "491b745eb567a53dc7ea52ec2588e249c15b5dca71dd42f1def6f43476ea5bb0",
+      "previous_sha256": "491b745eb567a53dc7ea52ec2588e249c15b5dca71dd42f1def6f43476ea5bb0",
+      "donor_sha256": "491b745eb567a53dc7ea52ec2588e249c15b5dca71dd42f1def6f43476ea5bb0",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Source/ReGIR.cpp",
+      "new_sha256": "1c542e1085e1b6c1a22de309eff9c4b8b7f08f337c77c4f85ac08610d4d301d6",
+      "previous_sha256": "1c542e1085e1b6c1a22de309eff9c4b8b7f08f337c77c4f85ac08610d4d301d6",
+      "donor_sha256": "1c542e1085e1b6c1a22de309eff9c4b8b7f08f337c77c4f85ac08610d4d301d6",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Source/ReSTIRDI.cpp",
+      "new_sha256": "ae6e5157ee9cf752ff3200a455203753cb484bfcf93f62f0e4a6cd81f2ee7f16",
+      "previous_sha256": "ae6e5157ee9cf752ff3200a455203753cb484bfcf93f62f0e4a6cd81f2ee7f16",
+      "donor_sha256": "ae6e5157ee9cf752ff3200a455203753cb484bfcf93f62f0e4a6cd81f2ee7f16",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Source/ReSTIRGI.cpp",
+      "new_sha256": "0dc1778277aef89f77972b8b39aa59f759cb27a93d4568624d3ab4ef7968cf7e",
+      "previous_sha256": "0dc1778277aef89f77972b8b39aa59f759cb27a93d4568624d3ab4ef7968cf7e",
+      "donor_sha256": "0dc1778277aef89f77972b8b39aa59f759cb27a93d4568624d3ab4ef7968cf7e",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Source/ReSTIRPT.cpp",
+      "new_sha256": "fc92ca98675be0f8c924d8d7a5025d38edc53c7e52b92274fbbf8dfd4f5e53d3",
+      "previous_sha256": "fc92ca98675be0f8c924d8d7a5025d38edc53c7e52b92274fbbf8dfd4f5e53d3",
+      "donor_sha256": "fc92ca98675be0f8c924d8d7a5025d38edc53c7e52b92274fbbf8dfd4f5e53d3",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Source/RISBufferSegmentAllocator.cpp",
+      "new_sha256": "d17bf9c94e1e69a3810132a7983f3c6c79f770d4c28fac6aa2e1657b8bcbc1a6",
+      "previous_sha256": "d17bf9c94e1e69a3810132a7983f3c6c79f770d4c28fac6aa2e1657b8bcbc1a6",
+      "donor_sha256": "d17bf9c94e1e69a3810132a7983f3c6c79f770d4c28fac6aa2e1657b8bcbc1a6",
+      "unchanged": true
+    },
+    {
+      "path": "Libraries/Rtxdi/Source/RtxdiUtils.cpp",
+      "new_sha256": "3b8613b9e2b191d031103c5be307eef2249b211788d0c1b02e0397210732a261",
+      "previous_sha256": "3b8613b9e2b191d031103c5be307eef2249b211788d0c1b02e0397210732a261",
+      "donor_sha256": "3b8613b9e2b191d031103c5be307eef2249b211788d0c1b02e0397210732a261",
+      "unchanged": true
+    }
+  ],
+  "changed_sources": [
+    {
+      "path": "Samples/FullSample/Shaders/LightingPasses/BenchmarkPathTrace.hlsli",
+      "sha256": "1aa4b5d8236e627dbd73ab14f640ab779fb8ff66a1278ca296a988a8015afe13",
+      "previous_sha256": null
+    },
+    {
+      "path": "Samples/FullSample/Shaders/LightingPasses/RtxdiApplicationBridge/RAB_Buffers.hlsli",
+      "sha256": "d811f2bddc2819f5f72fa7fac7ebc5d8f0884e88a08642dd63ba454d9d3beede",
+      "previous_sha256": "4de90a9669443f8aef34a3ce44dfc8aaa006c20bd2fb5fd6eb60adf9494f2dcc"
+    },
+    {
+      "path": "Samples/FullSample/Shaders/LightingPasses/ShadeSecondarySurfaces.hlsl",
+      "sha256": "d8ad663a8969c6c9e6dce281995476e8c60ed2e5e1c1480f567496343961e7b4",
+      "previous_sha256": "a4fd2cdcaced7b8f0734dded46c5d2a085ff56062657de02a9bbf2df9db80c07"
+    },
+    {
+      "path": "Samples/FullSample/Source/App/SceneRenderer.cpp",
+      "sha256": "0d24f3999a6a6b8c566a073c5a5e4c6ab053898a6efa10fb2d51e001fe2f8ef8",
+      "previous_sha256": "c285d184a89173ff56562090d092a42cbf89039fad23a802e810c524ddb30b03"
+    },
+    {
+      "path": "Samples/FullSample/Source/RenderPasses/LightingPasses/LightingPasses.cpp",
+      "sha256": "b230100be11e20e69cf0af93bc95ba00c4502d13ee412728117c0f23635f5212",
+      "previous_sha256": "f951e79b09d4256408b9fc8f5d58ce9160eb0e8c4c9373556108f34545f1f31a"
+    },
+    {
+      "path": "Samples/FullSample/Source/RenderTargets.cpp",
+      "sha256": "1c4a127e62b4e3a612692908aba6ce0663d81a6fe7a90ddca04bc0c1c6e1818a",
+      "previous_sha256": "2b3810ed50f8889922c2ca570f15ca9573e604a7c0e7ebec1af34e198d060bfb"
+    },
+    {
+      "path": "Samples/FullSample/Source/RenderTargets.h",
+      "sha256": "cd744b311af78afc6c4d755fabc01782833333f42136ec7908ab7ee21a729dc7",
+      "previous_sha256": "698afd259144231c98b909763d5d313a70a58c3780b633af017d430ba34acb2e"
+    }
+  ],
+  "gpu_launches_by_implementer": 0
+}

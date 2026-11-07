@@ -1,0 +1,703 @@
+{
+  "status": "complete",
+  "schema": "rtxpt-mainloop-wall.v1",
+  "timer": "steady_clock duration_cast nanoseconds; 1e9 ticks/s",
+  "primary_metric": "wall_ms: actual outer main-loop end minus start, including natural waits",
+  "secondary_metric": "start_interval_ms: current loop start minus previous loop start",
+  "interpretation": "Normal pipelined three-buffer loop throughput, not per-frame GPU completion latency. CPU wall and GPU overlap; never sum them.",
+  "quantiles": "Linear interpolation at (n-1)*p; pooled percentiles use all 720 raw samples",
+  "repeats": [
+    {
+      "run": "rtxpt-loop-r1-v1",
+      "sample_offset": 0,
+      "measured_frames": [
+        120,
+        359
+      ],
+      "warmup_count": 120,
+      "measured_count": 240,
+      "excluded_mainloop_tail_count": 7,
+      "metrics": {
+        "wall_ms": {
+          "count": 240,
+          "mean_ms": 12.9518075,
+          "median_ms": 12.93195,
+          "p10_ms": 12.40124,
+          "p90_ms": 13.54955,
+          "p95_ms": 13.72768,
+          "min_ms": 11.6388,
+          "max_ms": 13.9789
+        },
+        "animate_host_ms": {
+          "count": 240,
+          "mean_ms": 0.020401666666666665,
+          "median_ms": 0.018,
+          "p10_ms": 0.0155,
+          "p90_ms": 0.02331,
+          "p95_ms": 0.02585999999999998,
+          "min_ms": 0.014,
+          "max_ms": 0.3279
+        },
+        "beginframe_gap_host_ms": {
+          "count": 240,
+          "mean_ms": 11.304672083333333,
+          "median_ms": 11.31655,
+          "p10_ms": 10.80613,
+          "p90_ms": 11.82849,
+          "p95_ms": 11.975029999999999,
+          "min_ms": 10.1484,
+          "max_ms": 12.2909
+        },
+        "render_host_ms": {
+          "count": 240,
+          "mean_ms": 1.4003658333333333,
+          "median_ms": 1.3824999999999998,
+          "p10_ms": 1.20614,
+          "p90_ms": 1.58875,
+          "p95_ms": 1.630805,
+          "min_ms": 1.0704,
+          "max_ms": 2.7246
+        },
+        "present_host_ms": {
+          "count": 240,
+          "mean_ms": 0.16785666666666668,
+          "median_ms": 0.14965,
+          "p10_ms": 0.12173,
+          "p90_ms": 0.1943,
+          "p95_ms": 0.21361,
+          "min_ms": 0.1043,
+          "max_ms": 1.251
+        },
+        "other_host_ms": {
+          "count": 240,
+          "mean_ms": 0.05851125,
+          "median_ms": 0.03415,
+          "p10_ms": 0.02769,
+          "p90_ms": 0.12700999999999998,
+          "p95_ms": 0.144115,
+          "min_ms": 0.0252,
+          "max_ms": 0.6421
+        },
+        "start_interval_ms": {
+          "count": 240,
+          "mean_ms": 12.950167083333334,
+          "median_ms": 12.9256,
+          "p10_ms": 12.40145,
+          "p90_ms": 13.54978,
+          "p95_ms": 13.72817,
+          "min_ms": 11.6391,
+          "max_ms": 13.9794
+        },
+        "gpu_Frame.RenderGPU": {
+          "count": 240,
+          "mean_ms": 12.899217063869582,
+          "median_ms": 12.8051196225,
+          "p10_ms": 12.3351039365,
+          "p90_ms": 13.37118698281,
+          "p95_ms": 13.51475203407,
+          "min_ms": 12.2869759798,
+          "max_ms": 13.9171844348
+        },
+        "gpu_GI.Exclusive": {
+          "count": 240,
+          "mean_ms": 11.174126921224167,
+          "median_ms": 11.100159783399999,
+          "p10_ms": 10.66188796249,
+          "p90_ms": 11.59290883223,
+          "p95_ms": 11.82510057257,
+          "min_ms": 10.6301438354,
+          "max_ms": 12.2572798282
+        },
+        "gpu_GI.WithPreparation": {
+          "count": 240,
+          "mean_ms": 12.422289045661667,
+          "median_ms": 12.34175973515,
+          "p10_ms": 11.87430386017,
+          "p90_ms": 12.875878773030001,
+          "p95_ms": 13.047961382805,
+          "min_ms": 11.826175818,
+          "max_ms": 13.4655998554
+        },
+        "host_component_residual_ms": {
+          "count": 240,
+          "mean_ms": 4.4408920985006264e-17,
+          "median_ms": 0.0,
+          "p10_ms": -1.7763568394002505e-15,
+          "p90_ms": 1.7763568394002505e-15,
+          "p95_ms": 1.7763568394002505e-15,
+          "min_ms": -1.7763568394002505e-15,
+          "max_ms": 1.7763568394002505e-15
+        },
+        "between_loop_gap_ms": {
+          "count": 240,
+          "mean_ms": 0.0004162499999999625,
+          "median_ms": 0.0003000000000010772,
+          "p10_ms": 0.00019999999999953388,
+          "p90_ms": 0.0005000000000006111,
+          "p95_ms": 0.0005000000000006111,
+          "min_ms": 9.999999999976694e-05,
+          "max_ms": 0.014899999999999025
+        }
+      },
+      "evidence": {
+        "mainloop.csv": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r1-v1\\mainloop.csv",
+          "sha256": "11b57f0273be17587c660c4d82ad9006764b09b7770d9189f19aaf9a377cb90d"
+        },
+        "gpu.csv": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r1-v1\\gpu.csv",
+          "sha256": "4546a95d3a7d8e4f4068c5c57794632cfb0c359b78dd62395d0ab323e15d8016"
+        },
+        "launch-manifest.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r1-v1\\launch-manifest.json",
+          "sha256": "77c19dc57da8561ffbc1d81a1435adfc41bb2742227510ca13e85c10a0ec5403"
+        },
+        "completed.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r1-v1\\completed.json",
+          "sha256": "070a7c881fce2987d0a94115011529a7cb1cc5c8d75d99991af24c48b473333d"
+        },
+        "actual-settings.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r1-v1\\actual-settings.json",
+          "sha256": "2be3227ec4b5903efd7541b334d728bc8b72c64a8d54f3af85305abc81dd90cf"
+        },
+        "effective-settings.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r1-v1\\effective-settings.json",
+          "sha256": "2a59d0faa09ebaf1a0f8b237c568feb679e710ac5e904b897ddd6b8c633d9bdd"
+        },
+        "mainloop-meta.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r1-v1\\mainloop-meta.json",
+          "sha256": "0d1fdd99afda6f14bcff2ea4abd0d576375bebbd33105db0569624d136fbfd46"
+        },
+        "frozen-scene-contract.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r1-v1\\frozen-scene-contract.json",
+          "sha256": "81eefb82b4f9ba31322eb1ee33b35f0f9a2a61f05d5ae79beb28c846c81b4e73"
+        }
+      },
+      "metadata_checks": {
+        "status": "pass",
+        "actual_settings_equal_frozen_baseline_except_frame_and_offset": true,
+        "launch_executable_sha256": "c19960e8b1f7f53c855c885b7596e097987c2b59d90ff866b2fdb135af093210",
+        "shader_files_equal": 624,
+        "process_exit_code": 0,
+        "mainloop_metadata": {
+          "clock": "std::chrono::steady_clock converted to nanoseconds",
+          "is_steady": true,
+          "tick_frequency_hz": 1000000000,
+          "frame_target": 368,
+          "complete_loop_rows": 367,
+          "terminal_incomplete_frame_excluded": 367,
+          "csv_write_only_in_unmeasured_tail": true,
+          "added_gpu_wait": false,
+          "added_frame_pacing": false,
+          "boundary": "before outer-loop Streamline/input polling to after AnimateRenderPresent including Present, garbage collection and frame bookkeeping",
+          "semantics": "normal pipelined main-loop wall time, not isolated same-frame GPU completion latency"
+        },
+        "vsync_evidence": "Frozen scene contract and boundary-audit source review; no runtime vsync field exported",
+        "baseline_actual_settings_sha256": "d6ddd7f98651828d2564b193785adbd41b3b3a9ddc069a4be4d6fc5e0954b78a",
+        "build_record_sha256": "e7100a3fa8351fa22324ca821c9c8fcd37e7be4b08f3b40c9475d9d7a253f990"
+      }
+    },
+    {
+      "run": "rtxpt-loop-r2-v1",
+      "sample_offset": 10000,
+      "measured_frames": [
+        120,
+        359
+      ],
+      "warmup_count": 120,
+      "measured_count": 240,
+      "excluded_mainloop_tail_count": 7,
+      "metrics": {
+        "wall_ms": {
+          "count": 240,
+          "mean_ms": 12.839491666666667,
+          "median_ms": 12.81335,
+          "p10_ms": 12.38322,
+          "p90_ms": 13.3661,
+          "p95_ms": 13.46956,
+          "min_ms": 11.8456,
+          "max_ms": 13.9443
+        },
+        "animate_host_ms": {
+          "count": 240,
+          "mean_ms": 0.01808375,
+          "median_ms": 0.0172,
+          "p10_ms": 0.0146,
+          "p90_ms": 0.0215,
+          "p95_ms": 0.023409999999999997,
+          "min_ms": 0.0137,
+          "max_ms": 0.0513
+        },
+        "beginframe_gap_host_ms": {
+          "count": 240,
+          "mean_ms": 11.26903875,
+          "median_ms": 11.2759,
+          "p10_ms": 10.82481,
+          "p90_ms": 11.71477,
+          "p95_ms": 11.76888,
+          "min_ms": 10.0697,
+          "max_ms": 12.4166
+        },
+        "render_host_ms": {
+          "count": 240,
+          "mean_ms": 1.346475,
+          "median_ms": 1.339,
+          "p10_ms": 1.1465100000000001,
+          "p90_ms": 1.5380500000000001,
+          "p95_ms": 1.5948849999999999,
+          "min_ms": 1.024,
+          "max_ms": 2.3239
+        },
+        "present_host_ms": {
+          "count": 240,
+          "mean_ms": 0.14828041666666666,
+          "median_ms": 0.14550000000000002,
+          "p10_ms": 0.11969,
+          "p90_ms": 0.17812,
+          "p95_ms": 0.19182,
+          "min_ms": 0.1041,
+          "max_ms": 0.3462
+        },
+        "other_host_ms": {
+          "count": 240,
+          "mean_ms": 0.05761375,
+          "median_ms": 0.0322,
+          "p10_ms": 0.02689,
+          "p90_ms": 0.12101999999999999,
+          "p95_ms": 0.14507999999999993,
+          "min_ms": 0.025,
+          "max_ms": 1.041
+        },
+        "start_interval_ms": {
+          "count": 240,
+          "mean_ms": 12.838982083333333,
+          "median_ms": 12.81015,
+          "p10_ms": 12.383519999999999,
+          "p90_ms": 13.366399999999999,
+          "p95_ms": 13.469954999999999,
+          "min_ms": 11.8458,
+          "max_ms": 13.9445
+        },
+        "gpu_Frame.RenderGPU": {
+          "count": 240,
+          "mean_ms": 12.783957323212084,
+          "median_ms": 12.7211520448,
+          "p10_ms": 12.31964128095,
+          "p90_ms": 13.18205427378,
+          "p95_ms": 13.251942442694999,
+          "min_ms": 12.290048413,
+          "max_ms": 13.6765437201
+        },
+        "gpu_GI.Exclusive": {
+          "count": 240,
+          "mean_ms": 11.082790388774583,
+          "median_ms": 11.0576642328,
+          "p10_ms": 10.65768958359,
+          "p90_ms": 11.51600622688,
+          "p95_ms": 11.53433560978,
+          "min_ms": 10.6352638395,
+          "max_ms": 11.789311684
+        },
+        "gpu_GI.WithPreparation": {
+          "count": 240,
+          "mean_ms": 12.312051179196251,
+          "median_ms": 12.264448188949999,
+          "p10_ms": 11.8589439953,
+          "p90_ms": 12.719411414569999,
+          "p95_ms": 12.745881665619999,
+          "min_ms": 11.8343677896,
+          "max_ms": 13.2218877843
+        },
+        "host_component_residual_ms": {
+          "count": 240,
+          "mean_ms": 2.2204460492503132e-17,
+          "median_ms": 0.0,
+          "p10_ms": -1.7763568394002505e-15,
+          "p90_ms": 1.7763568394002505e-15,
+          "p95_ms": 1.7763568394002505e-15,
+          "min_ms": -1.7763568394002505e-15,
+          "max_ms": 1.7763568394002505e-15
+        },
+        "between_loop_gap_ms": {
+          "count": 240,
+          "mean_ms": 0.00029166666666662343,
+          "median_ms": 0.0002999999999993008,
+          "p10_ms": 0.00019999999999953388,
+          "p90_ms": 0.0004000000000008441,
+          "p95_ms": 0.0004999999999988347,
+          "min_ms": 9.999999999976694e-05,
+          "max_ms": 0.000600000000000378
+        }
+      },
+      "evidence": {
+        "mainloop.csv": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r2-v1\\mainloop.csv",
+          "sha256": "70df7b52ff0a2727fefff79d364953c4e847e0b6ceadb074b56b501d8b1fa59b"
+        },
+        "gpu.csv": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r2-v1\\gpu.csv",
+          "sha256": "dfc030fcc4c54aa78fff495d93f91699b765cde9b8bb701f90d615ba7b2c5a2b"
+        },
+        "launch-manifest.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r2-v1\\launch-manifest.json",
+          "sha256": "157ed17cb46e6c7816adcc85142eb8838b3ea3efcd872c31d959bf190c8f4de1"
+        },
+        "completed.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r2-v1\\completed.json",
+          "sha256": "070a7c881fce2987d0a94115011529a7cb1cc5c8d75d99991af24c48b473333d"
+        },
+        "actual-settings.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r2-v1\\actual-settings.json",
+          "sha256": "a6bf6a83237e8b655ce7f74ee2a686720d68bbaec9b69c57c9bec573e23ddfd8"
+        },
+        "effective-settings.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r2-v1\\effective-settings.json",
+          "sha256": "2a59d0faa09ebaf1a0f8b237c568feb679e710ac5e904b897ddd6b8c633d9bdd"
+        },
+        "mainloop-meta.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r2-v1\\mainloop-meta.json",
+          "sha256": "0d1fdd99afda6f14bcff2ea4abd0d576375bebbd33105db0569624d136fbfd46"
+        },
+        "frozen-scene-contract.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r2-v1\\frozen-scene-contract.json",
+          "sha256": "81eefb82b4f9ba31322eb1ee33b35f0f9a2a61f05d5ae79beb28c846c81b4e73"
+        }
+      },
+      "metadata_checks": {
+        "status": "pass",
+        "actual_settings_equal_frozen_baseline_except_frame_and_offset": true,
+        "launch_executable_sha256": "c19960e8b1f7f53c855c885b7596e097987c2b59d90ff866b2fdb135af093210",
+        "shader_files_equal": 624,
+        "process_exit_code": 0,
+        "mainloop_metadata": {
+          "clock": "std::chrono::steady_clock converted to nanoseconds",
+          "is_steady": true,
+          "tick_frequency_hz": 1000000000,
+          "frame_target": 368,
+          "complete_loop_rows": 367,
+          "terminal_incomplete_frame_excluded": 367,
+          "csv_write_only_in_unmeasured_tail": true,
+          "added_gpu_wait": false,
+          "added_frame_pacing": false,
+          "boundary": "before outer-loop Streamline/input polling to after AnimateRenderPresent including Present, garbage collection and frame bookkeeping",
+          "semantics": "normal pipelined main-loop wall time, not isolated same-frame GPU completion latency"
+        },
+        "vsync_evidence": "Frozen scene contract and boundary-audit source review; no runtime vsync field exported",
+        "baseline_actual_settings_sha256": "d6ddd7f98651828d2564b193785adbd41b3b3a9ddc069a4be4d6fc5e0954b78a",
+        "build_record_sha256": "e7100a3fa8351fa22324ca821c9c8fcd37e7be4b08f3b40c9475d9d7a253f990"
+      }
+    },
+    {
+      "run": "rtxpt-loop-r3-v1",
+      "sample_offset": 20000,
+      "measured_frames": [
+        120,
+        359
+      ],
+      "warmup_count": 120,
+      "measured_count": 240,
+      "excluded_mainloop_tail_count": 7,
+      "metrics": {
+        "wall_ms": {
+          "count": 240,
+          "mean_ms": 12.845572916666667,
+          "median_ms": 12.82835,
+          "p10_ms": 12.327050000000002,
+          "p90_ms": 13.30373,
+          "p95_ms": 13.516549999999999,
+          "min_ms": 8.6775,
+          "max_ms": 17.0457
+        },
+        "animate_host_ms": {
+          "count": 240,
+          "mean_ms": 0.018679166666666667,
+          "median_ms": 0.0173,
+          "p10_ms": 0.0148,
+          "p90_ms": 0.022439999999999998,
+          "p95_ms": 0.024019999999999993,
+          "min_ms": 0.0136,
+          "max_ms": 0.1434
+        },
+        "beginframe_gap_host_ms": {
+          "count": 240,
+          "mean_ms": 11.274929583333334,
+          "median_ms": 11.27485,
+          "p10_ms": 10.86588,
+          "p90_ms": 11.7749,
+          "p95_ms": 11.888695,
+          "min_ms": 7.2338,
+          "max_ms": 12.098
+        },
+        "render_host_ms": {
+          "count": 240,
+          "mean_ms": 1.3527141666666667,
+          "median_ms": 1.31995,
+          "p10_ms": 1.14223,
+          "p90_ms": 1.54199,
+          "p95_ms": 1.5839649999999998,
+          "min_ms": 1.033,
+          "max_ms": 5.3123
+        },
+        "present_host_ms": {
+          "count": 240,
+          "mean_ms": 0.14248916666666667,
+          "median_ms": 0.13790000000000002,
+          "p10_ms": 0.1109,
+          "p90_ms": 0.17459,
+          "p95_ms": 0.198015,
+          "min_ms": 0.1032,
+          "max_ms": 0.2558
+        },
+        "other_host_ms": {
+          "count": 240,
+          "mean_ms": 0.05676083333333334,
+          "median_ms": 0.0301,
+          "p10_ms": 0.0259,
+          "p90_ms": 0.12789999999999999,
+          "p95_ms": 0.13920499999999988,
+          "min_ms": 0.0239,
+          "max_ms": 0.9139
+        },
+        "start_interval_ms": {
+          "count": 240,
+          "mean_ms": 12.846815416666667,
+          "median_ms": 12.8287,
+          "p10_ms": 12.32726,
+          "p90_ms": 13.30404,
+          "p95_ms": 13.516855,
+          "min_ms": 8.6777,
+          "max_ms": 17.046
+        },
+        "gpu_Frame.RenderGPU": {
+          "count": 240,
+          "mean_ms": 12.788838384825834,
+          "median_ms": 12.72422401235,
+          "p10_ms": 12.32066564262,
+          "p90_ms": 13.18307863545,
+          "p95_ms": 13.265766715615,
+          "min_ms": 12.2920963913,
+          "max_ms": 13.6089604348
+        },
+        "gpu_GI.Exclusive": {
+          "count": 240,
+          "mean_ms": 11.079948806093334,
+          "median_ms": 11.06022404565,
+          "p10_ms": 10.656768071970001,
+          "p90_ms": 11.51938544934,
+          "p95_ms": 11.613286085730001,
+          "min_ms": 10.6383357779,
+          "max_ms": 11.945983948
+        },
+        "gpu_GI.WithPreparation": {
+          "count": 240,
+          "mean_ms": 12.318975998689583,
+          "median_ms": 12.26854423295,
+          "p10_ms": 11.86508803515,
+          "p90_ms": 12.72750055066,
+          "p95_ms": 12.81090592097,
+          "min_ms": 11.8364162336,
+          "max_ms": 13.1491839711
+        },
+        "host_component_residual_ms": {
+          "count": 240,
+          "mean_ms": 3.700743415417188e-17,
+          "median_ms": 0.0,
+          "p10_ms": -1.7763568394002505e-15,
+          "p90_ms": 1.7763568394002505e-15,
+          "p95_ms": 1.7763568394002505e-15,
+          "min_ms": -1.7763568394002505e-15,
+          "max_ms": 1.7763568394002505e-15
+        },
+        "between_loop_gap_ms": {
+          "count": 240,
+          "mean_ms": 0.00028958333333322094,
+          "median_ms": 0.0002999999999993008,
+          "p10_ms": 0.00019999999999953388,
+          "p90_ms": 0.0004000000000008441,
+          "p95_ms": 0.0004999999999988347,
+          "min_ms": 9.999999999976694e-05,
+          "max_ms": 0.000700000000000145
+        }
+      },
+      "evidence": {
+        "mainloop.csv": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r3-v1\\mainloop.csv",
+          "sha256": "5b65afa9963633e00f53302263bb7f8b3a2480885fd5a33ab62d5abde818419f"
+        },
+        "gpu.csv": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r3-v1\\gpu.csv",
+          "sha256": "b5b51a9606340d04914a4aedc7bfd8570df3f3dcb9259b6a26ab19eac246a745"
+        },
+        "launch-manifest.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r3-v1\\launch-manifest.json",
+          "sha256": "d46411d66fd1fb36d04c5744b3705b4f8a8c04bf86b709cc3b8cfcce961d6764"
+        },
+        "completed.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r3-v1\\completed.json",
+          "sha256": "070a7c881fce2987d0a94115011529a7cb1cc5c8d75d99991af24c48b473333d"
+        },
+        "actual-settings.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r3-v1\\actual-settings.json",
+          "sha256": "c9529558566d24c8f5fc96131d4381b0d2ee80a7ab9fb04cbead1c81cbab97a5"
+        },
+        "effective-settings.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r3-v1\\effective-settings.json",
+          "sha256": "2a59d0faa09ebaf1a0f8b237c568feb679e710ac5e904b897ddd6b8c633d9bdd"
+        },
+        "mainloop-meta.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r3-v1\\mainloop-meta.json",
+          "sha256": "0d1fdd99afda6f14bcff2ea4abd0d576375bebbd33105db0569624d136fbfd46"
+        },
+        "frozen-scene-contract.json": {
+          "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r3-v1\\frozen-scene-contract.json",
+          "sha256": "81eefb82b4f9ba31322eb1ee33b35f0f9a2a61f05d5ae79beb28c846c81b4e73"
+        }
+      },
+      "metadata_checks": {
+        "status": "pass",
+        "actual_settings_equal_frozen_baseline_except_frame_and_offset": true,
+        "launch_executable_sha256": "c19960e8b1f7f53c855c885b7596e097987c2b59d90ff866b2fdb135af093210",
+        "shader_files_equal": 624,
+        "process_exit_code": 0,
+        "mainloop_metadata": {
+          "clock": "std::chrono::steady_clock converted to nanoseconds",
+          "is_steady": true,
+          "tick_frequency_hz": 1000000000,
+          "frame_target": 368,
+          "complete_loop_rows": 367,
+          "terminal_incomplete_frame_excluded": 367,
+          "csv_write_only_in_unmeasured_tail": true,
+          "added_gpu_wait": false,
+          "added_frame_pacing": false,
+          "boundary": "before outer-loop Streamline/input polling to after AnimateRenderPresent including Present, garbage collection and frame bookkeeping",
+          "semantics": "normal pipelined main-loop wall time, not isolated same-frame GPU completion latency"
+        },
+        "vsync_evidence": "Frozen scene contract and boundary-audit source review; no runtime vsync field exported",
+        "baseline_actual_settings_sha256": "d6ddd7f98651828d2564b193785adbd41b3b3a9ddc069a4be4d6fc5e0954b78a",
+        "build_record_sha256": "e7100a3fa8351fa22324ca821c9c8fcd37e7be4b08f3b40c9475d9d7a253f990"
+      }
+    }
+  ],
+  "pooled": {
+    "wall_ms": {
+      "count": 720,
+      "mean_ms": 12.87895736111111,
+      "median_ms": 12.85,
+      "p10_ms": 12.37329,
+      "p90_ms": 13.40492,
+      "p95_ms": 13.586314999999999,
+      "min_ms": 8.6775,
+      "max_ms": 17.0457
+    },
+    "animate_host_ms": {
+      "count": 720,
+      "mean_ms": 0.019054861111111113,
+      "median_ms": 0.0175,
+      "p10_ms": 0.01499,
+      "p90_ms": 0.022410000000000003,
+      "p95_ms": 0.02440999999999999,
+      "min_ms": 0.0136,
+      "max_ms": 0.3279
+    },
+    "beginframe_gap_host_ms": {
+      "count": 720,
+      "mean_ms": 11.282880138888888,
+      "median_ms": 11.29575,
+      "p10_ms": 10.82051,
+      "p90_ms": 11.758180000000001,
+      "p95_ms": 11.889739999999998,
+      "min_ms": 7.2338,
+      "max_ms": 12.4166
+    },
+    "render_host_ms": {
+      "count": 720,
+      "mean_ms": 1.3665183333333333,
+      "median_ms": 1.3486,
+      "p10_ms": 1.15057,
+      "p90_ms": 1.56253,
+      "p95_ms": 1.6074899999999999,
+      "min_ms": 1.024,
+      "max_ms": 5.3123
+    },
+    "present_host_ms": {
+      "count": 720,
+      "mean_ms": 0.15287541666666668,
+      "median_ms": 0.1451,
+      "p10_ms": 0.11679,
+      "p90_ms": 0.18452,
+      "p95_ms": 0.19997999999999994,
+      "min_ms": 0.1032,
+      "max_ms": 1.251
+    },
+    "other_host_ms": {
+      "count": 720,
+      "mean_ms": 0.05762861111111112,
+      "median_ms": 0.0324,
+      "p10_ms": 0.0265,
+      "p90_ms": 0.1268,
+      "p95_ms": 0.14442499999999997,
+      "min_ms": 0.0239,
+      "max_ms": 1.041
+    },
+    "start_interval_ms": {
+      "count": 720,
+      "mean_ms": 12.87865486111111,
+      "median_ms": 12.849350000000001,
+      "p10_ms": 12.3735,
+      "p90_ms": 13.40515,
+      "p95_ms": 13.586705,
+      "min_ms": 8.6777,
+      "max_ms": 17.046
+    },
+    "gpu_Frame.RenderGPU": {
+      "count": 720,
+      "mean_ms": 12.8240042573025,
+      "median_ms": 12.744192034000001,
+      "p10_ms": 12.3228160664,
+      "p90_ms": 13.2157439366,
+      "p95_ms": 13.36831972,
+      "min_ms": 12.2869759798,
+      "max_ms": 13.9171844348
+    },
+    "gpu_GI.Exclusive": {
+      "count": 720,
+      "mean_ms": 11.112288705364028,
+      "median_ms": 11.0684158426,
+      "p10_ms": 10.6588159979,
+      "p90_ms": 11.52819169806,
+      "p95_ms": 11.65025315564,
+      "min_ms": 10.6301438354,
+      "max_ms": 12.2572798282
+    },
+    "gpu_GI.WithPreparation": {
+      "count": 720,
+      "mean_ms": 12.351105407849168,
+      "median_ms": 12.282367824800001,
+      "p10_ms": 11.8640640576,
+      "p90_ms": 12.742758484129999,
+      "p95_ms": 12.89067531474,
+      "min_ms": 11.826175818,
+      "max_ms": 13.4655998554
+    },
+    "host_component_residual_ms": {
+      "count": 720,
+      "mean_ms": 3.454027187722709e-17,
+      "median_ms": 0.0,
+      "p10_ms": -1.7763568394002505e-15,
+      "p90_ms": 1.7763568394002505e-15,
+      "p95_ms": 1.7763568394002505e-15,
+      "min_ms": -1.7763568394002505e-15,
+      "max_ms": 1.7763568394002505e-15
+    },
+    "between_loop_gap_ms": {
+      "count": 720,
+      "mean_ms": 0.0003324999999999356,
+      "median_ms": 0.0002999999999993008,
+      "p10_ms": 0.00019999999999953388,
+      "p90_ms": 0.0004000000000008441,
+      "p95_ms": 0.0005000000000006111,
+      "min_ms": 9.999999999976694e-05,
+      "max_ms": 0.014899999999999025
+    }
+  }
+}

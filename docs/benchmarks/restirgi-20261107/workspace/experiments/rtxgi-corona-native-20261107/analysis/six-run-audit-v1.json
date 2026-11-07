@@ -1,0 +1,1076 @@
+{
+  "schema": "corona-native-six-run-audit.v1",
+  "status": "pass",
+  "runs": {
+    "quality": {
+      "r1": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1",
+        "sample_offset": 0,
+        "actual_settings": {
+          "direct": {
+            "M_bsdf": 1,
+            "M_light": 1,
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "max_recursion": 1,
+            "open": true,
+            "pairwise": true,
+            "spatial": {
+              "depth": 0.10000000149011612,
+              "open": false,
+              "radius": 30,
+              "sample_num": 1,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.10000000149011612,
+              "history_limit": 20,
+              "open": false,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "indirect": {
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "open": true,
+            "spatial": {
+              "depth": 0.30000001192092896,
+              "open": true,
+              "radius": 12,
+              "sample_num": 2,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.30000001192092896,
+              "history_limit": 5,
+              "open": true,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "max_depth": 16,
+          "min_depth": 5,
+          "rr_threshold": 1
+        },
+        "process_identity": 1794048235540058900,
+        "source_runtime_identity_sha256": "af2d555df1fc25766784be565e626932de85f3ae6f4c850bc58a4eb381cda1cb",
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\contract.json",
+            "sha256": "907f2be24c2c5a4cfdb1d50308ed884dbc1af7fd1106ac0944b75e926a4e49a8"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\result.json",
+            "sha256": "080df307ccf87b006b9b49f434a10e4cf31ef6373e7ec63d00ec46222c5eddbc"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\route-validation.json",
+            "sha256": "4ad6dbce96882143d4b735e91c47d05978855da2d8869f6af34411d2d4399aed"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\identity-before.json",
+            "sha256": "e2f1d18ae57d2a99428372516491248c2af78cf0dce3218b8fdaa1fc92ff475d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\identity-after.json",
+            "sha256": "e2f1d18ae57d2a99428372516491248c2af78cf0dce3218b8fdaa1fc92ff475d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\frames.csv",
+            "sha256": "1b1791f7626bc39c84a093ff841d3b25acd629888955c7372934e9370c6d2981"
+          }
+        ],
+        "late_frame_files": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0096\\raw_indirect.f32",
+            "sha256": "e24a56336a697817951a7d04ba76b545441713ef1cd93276e1b45f64a6400a35"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0097\\raw_indirect.f32",
+            "sha256": "c50a53067116bab4167188002baca76d6bbb7f0b5238fcd5b787c4c262a927fb"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0098\\raw_indirect.f32",
+            "sha256": "63d2279ab29b81f43f90966e454dfdeb55948f69fe6b33485cb312ef2c2262fd"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0099\\raw_indirect.f32",
+            "sha256": "c35163c7f4970af0e1ea70c5d4ce3e8870b72d7080277006aba5a95e8b1fa8fc"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0100\\raw_indirect.f32",
+            "sha256": "e601ecac538f56afb26d63a180ff195ff838d138e58faecb3b5987df404de0d7"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0101\\raw_indirect.f32",
+            "sha256": "e534bb6876e90ac5687fa4f2c81baff361943dc8e8bed2f88e5b7af8574e7023"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0102\\raw_indirect.f32",
+            "sha256": "ac507493ff9c3c9af19e72520992c09a1188931a7b6e7ca9205ca8b52eb0c452"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0103\\raw_indirect.f32",
+            "sha256": "45061c184aecd8bb7756b5cda84c53f9fe93167196f62034fbda1a81a85fd6d2"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0104\\raw_indirect.f32",
+            "sha256": "7b023f1338e13d6c115405c421f034bece93316208fcdebf202d859024e872fa"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0105\\raw_indirect.f32",
+            "sha256": "0ee180e253276d914f8e96da440ac39ce42f0e6854a6e66de5267c320881b8f0"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0106\\raw_indirect.f32",
+            "sha256": "ff360fd132b25104024ad105b57caf9de9a4fcfb8fc3311f718df9c3cbc6e6a1"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0107\\raw_indirect.f32",
+            "sha256": "2d523de84039594fc9dfbac2a253094d311a4d97b1967fa40979708cb26dbcad"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0108\\raw_indirect.f32",
+            "sha256": "a92d762c0210ecf5d2b06306f2cf5c00db1d1ad704213c03b83832e21678dc90"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0109\\raw_indirect.f32",
+            "sha256": "eb3283d011e17ddd877fcd8cc3450b3bec8716a37d6c9aa6fd82e25d7ce1645c"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0110\\raw_indirect.f32",
+            "sha256": "2572fb04b1c18b851447e9e13f998566cac5073aba806385d603e3b70c9ef91a"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0111\\raw_indirect.f32",
+            "sha256": "e8f552371827c10239ce17a606af4686c4d4ff9e0141b8e092ef859e2942e15e"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0112\\raw_indirect.f32",
+            "sha256": "76f0a714431bfe716a4d4397f7f0f0b465f12052bd0a22b1c7090ebc570f3566"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0113\\raw_indirect.f32",
+            "sha256": "1316902a43cb02102c5733e0251ed0e63732bd3744fa6c71acb2f263fa8d3985"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0114\\raw_indirect.f32",
+            "sha256": "d2cc999384c68e70fc08a809380f854db426450232a1ba309e40c9bda50f882e"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0115\\raw_indirect.f32",
+            "sha256": "7681a8b09f5c549b69ba1a79eadaf3ba053babd6194ae3f8821582383c2315f8"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0116\\raw_indirect.f32",
+            "sha256": "93a796392c993bc9507df3b4d8721c4bdfd5045b9a196a041de3cfe7a4bfb1f1"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0117\\raw_indirect.f32",
+            "sha256": "485c8b2bf21f62941063892c6f8fc73750c86beeb243c9662de603db6d7fecf4"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0118\\raw_indirect.f32",
+            "sha256": "56724bb3cff25a295e3a2201b9458cca06cddf39981d68270302f75ef1c947d5"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0119\\raw_indirect.f32",
+            "sha256": "0afc6eee2d0ebd77477ead9d4669f09256446a76ab8b8cc6a9ecb1b44a5adcee"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0120\\raw_indirect.f32",
+            "sha256": "d39237c600016f3cb008b4bdbe10d13484347f3d3d28b5900095802c728076a9"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0121\\raw_indirect.f32",
+            "sha256": "bc701bdc38437ab1ed48a5accd0aab4732858f35f6354131b70e86aecf690904"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0122\\raw_indirect.f32",
+            "sha256": "afd6264b447accca6602b8a992cee6b3a85757d4074e6a3e82f50ecd6172d2d9"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0123\\raw_indirect.f32",
+            "sha256": "2698b2d1fb9d4a9ac6a882780ce3329e7269d333932699b7b6bba311d6e22f3e"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0124\\raw_indirect.f32",
+            "sha256": "8ed0d527ce8a8d74fcce5931475fba4b363cab900732f2bd8cb743523d5b4465"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0125\\raw_indirect.f32",
+            "sha256": "3f508c916b649eb88e0f605b097da313785b9c3611a889ee63b7c98d1b72d0d9"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0126\\raw_indirect.f32",
+            "sha256": "9caa4f956310089047736f78ad78b99537fe27a6f5c2035ec57c6491949994f3"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r1-v1\\raw\\frame_0127\\raw_indirect.f32",
+            "sha256": "dc5286d6d468cf92c1d08f3fa5952494c7b240b5bc10acfcafef456b2935fde5"
+          }
+        ]
+      },
+      "r2": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1",
+        "sample_offset": 10000,
+        "actual_settings": {
+          "direct": {
+            "M_bsdf": 1,
+            "M_light": 1,
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "max_recursion": 1,
+            "open": true,
+            "pairwise": true,
+            "spatial": {
+              "depth": 0.10000000149011612,
+              "open": false,
+              "radius": 30,
+              "sample_num": 1,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.10000000149011612,
+              "history_limit": 20,
+              "open": false,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "indirect": {
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "open": true,
+            "spatial": {
+              "depth": 0.30000001192092896,
+              "open": true,
+              "radius": 12,
+              "sample_num": 2,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.30000001192092896,
+              "history_limit": 5,
+              "open": true,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "max_depth": 16,
+          "min_depth": 5,
+          "rr_threshold": 1
+        },
+        "process_identity": 1794048272622158200,
+        "source_runtime_identity_sha256": "af2d555df1fc25766784be565e626932de85f3ae6f4c850bc58a4eb381cda1cb",
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\contract.json",
+            "sha256": "82fc17cccb1617aa82b51d079f1a21e9dd35cf025c966334b272401393a8fa58"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\result.json",
+            "sha256": "ea0c83301c26e0e0893cfc192c8cbe3567f2fe4f093e26bc7ba8b9cf43a85c5d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\route-validation.json",
+            "sha256": "4ad6dbce96882143d4b735e91c47d05978855da2d8869f6af34411d2d4399aed"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\identity-before.json",
+            "sha256": "e2f1d18ae57d2a99428372516491248c2af78cf0dce3218b8fdaa1fc92ff475d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\identity-after.json",
+            "sha256": "e2f1d18ae57d2a99428372516491248c2af78cf0dce3218b8fdaa1fc92ff475d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\frames.csv",
+            "sha256": "a823fdf13b998192c26e618e9726114f19942cebc556cd6f00e52d8ce8932baf"
+          }
+        ],
+        "late_frame_files": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0096\\raw_indirect.f32",
+            "sha256": "bc90dee5cc25d496e41d26b8207e461f22df9bb73d6b3354643a4c575999310c"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0097\\raw_indirect.f32",
+            "sha256": "82ffdda8ef592764c1d2fdf5d8605c9266965e38534a224ee316760c998f2e1b"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0098\\raw_indirect.f32",
+            "sha256": "af7e245d2956159ba336ceb3d8bade5d1e170ed82b64d865dbd8cf65521dbe84"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0099\\raw_indirect.f32",
+            "sha256": "f0bb7f417ff2320483484a4a2ba9b04de795926a4d4778c6e8820fd092b659fa"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0100\\raw_indirect.f32",
+            "sha256": "ac9029d7e262e2b464d1dbe7823d6947605372fc153bd3df42755226a435f240"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0101\\raw_indirect.f32",
+            "sha256": "919baaa16920e94ef901b674d03857527fbe86e52eda0c7c2eb99e36143aacca"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0102\\raw_indirect.f32",
+            "sha256": "7bb1dbba599f7326a2d1a3be2093266ea797a3485679a18baa69785fb9eb47e8"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0103\\raw_indirect.f32",
+            "sha256": "38f4c488a4a5bf8e4fd44cf69f591b2e00d226620c542f07342053496c71afc6"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0104\\raw_indirect.f32",
+            "sha256": "59bf2a54b90b53e3313b7577d4d5463ee0f5275d4fd04e68f577407c5b4f6334"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0105\\raw_indirect.f32",
+            "sha256": "f5970a013d959780c99759fb39f5c916e441dc07822dd54e5f44f144ce7ccdbc"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0106\\raw_indirect.f32",
+            "sha256": "1feb0bfa269c380807118d0e580e9e2bd290766f60f35b6b1f2e6a04b5372018"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0107\\raw_indirect.f32",
+            "sha256": "6b6a1b43910847a50b05172dc338e479579bba2478138692336e350a11cd68e1"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0108\\raw_indirect.f32",
+            "sha256": "4259cc0cba969a2f2f5ff92de999ba905a8548da3dd12a2882bfb0832fca3a34"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0109\\raw_indirect.f32",
+            "sha256": "b4f86db4b6a88f2d160046a3393efbb01ad76a36f06d9387bb321ce39a82e70d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0110\\raw_indirect.f32",
+            "sha256": "61217039c07cd5b414a6982b78e6495b0b5b8a67a9b2d01798efd07a6c7a3c2e"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0111\\raw_indirect.f32",
+            "sha256": "49e6983f3b992b905ada0db978e1ffc1049b9067ee724005fd2e4cdf1656f932"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0112\\raw_indirect.f32",
+            "sha256": "7741461defdde05b18bb9444ec10c437cee224cb799889b2e2a01676a1102cda"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0113\\raw_indirect.f32",
+            "sha256": "295c5e518a89f1b00353d49a1c2a82dd1f51a1243f7365b8e12dd0e11a8ba2e0"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0114\\raw_indirect.f32",
+            "sha256": "745dd866e2cc86a19dc5b95d0fc825818b4a0b0b5fbdfa50e5e6bdc2a3068941"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0115\\raw_indirect.f32",
+            "sha256": "2b108d678d79d42b3a370689d3c2724052e1a8285d43dc45c4893571c7f1b80b"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0116\\raw_indirect.f32",
+            "sha256": "31d37926f47765a9e3912d8dc679d19af2670fffcf75de52193edb8503752dc5"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0117\\raw_indirect.f32",
+            "sha256": "6c5d265d59b99afc54f78f49813222abf7d47b492a69a04e1d96223f877c478e"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0118\\raw_indirect.f32",
+            "sha256": "3b061c41db0eab83cffe7e405ec0d310b712dca8539dc5681a38cb926d88ae7c"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0119\\raw_indirect.f32",
+            "sha256": "b53c198b72627efb48da7f903ff0a80c4f49c853b2985f3e6a649d143ce75f3d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0120\\raw_indirect.f32",
+            "sha256": "e43811044a7f31745020cd079761ecc87d394261063ddc184e2c6f1ad63c336f"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0121\\raw_indirect.f32",
+            "sha256": "08936e44d9b13234fd3c3fc4f7a08b015d3f41c57073438e98002223d6b71118"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0122\\raw_indirect.f32",
+            "sha256": "c79a4fc518319851d6918e135be9712b97d8d6b3859707e3b072fb83a136f329"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0123\\raw_indirect.f32",
+            "sha256": "fa05aa101f99f00b8e6288e0732b25420ca1c7dcfdc8cf009aefb31e99ee6055"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0124\\raw_indirect.f32",
+            "sha256": "a2a5102c840d086ca7195b1abd523e58a28ee9b5f26fe605ef0ecaeba1261b9e"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0125\\raw_indirect.f32",
+            "sha256": "42c0d10ce45e453553999977a8b7eaf3c519007d459e58fa5c1de6d4049144ef"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0126\\raw_indirect.f32",
+            "sha256": "a98483044b1e34ea6ee435c180056a5a74a4a616cb1ab7fde8149147c888d168"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r2-v1\\raw\\frame_0127\\raw_indirect.f32",
+            "sha256": "3b95759ce60d4291833ac176ba3904e94077dc6b39eaff2759d806732fff730a"
+          }
+        ]
+      },
+      "r3": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1",
+        "sample_offset": 20000,
+        "actual_settings": {
+          "direct": {
+            "M_bsdf": 1,
+            "M_light": 1,
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "max_recursion": 1,
+            "open": true,
+            "pairwise": true,
+            "spatial": {
+              "depth": 0.10000000149011612,
+              "open": false,
+              "radius": 30,
+              "sample_num": 1,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.10000000149011612,
+              "history_limit": 20,
+              "open": false,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "indirect": {
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "open": true,
+            "spatial": {
+              "depth": 0.30000001192092896,
+              "open": true,
+              "radius": 12,
+              "sample_num": 2,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.30000001192092896,
+              "history_limit": 5,
+              "open": true,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "max_depth": 16,
+          "min_depth": 5,
+          "rr_threshold": 1
+        },
+        "process_identity": 1794048309619652600,
+        "source_runtime_identity_sha256": "af2d555df1fc25766784be565e626932de85f3ae6f4c850bc58a4eb381cda1cb",
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\contract.json",
+            "sha256": "a8dc48070f1684f87e81564d93b2d4e6bb37fffb631bbe865c4f815b62004f74"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\result.json",
+            "sha256": "f86e6473a166ad18233ff9341734d2c5ddfec6366a8b36db5fdf03eb8891f7a4"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\route-validation.json",
+            "sha256": "4ad6dbce96882143d4b735e91c47d05978855da2d8869f6af34411d2d4399aed"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\identity-before.json",
+            "sha256": "e2f1d18ae57d2a99428372516491248c2af78cf0dce3218b8fdaa1fc92ff475d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\identity-after.json",
+            "sha256": "e2f1d18ae57d2a99428372516491248c2af78cf0dce3218b8fdaa1fc92ff475d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\frames.csv",
+            "sha256": "54ffbcc73d1b0337099be147cea54addf95a32df1fd35dd91388df0b81ce8ace"
+          }
+        ],
+        "late_frame_files": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0096\\raw_indirect.f32",
+            "sha256": "e30430f347fcda49739f7805b7bceba309ee2c566f2a191385d4598281d85a82"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0097\\raw_indirect.f32",
+            "sha256": "715e75bf71d4c7e894ae8ab06457fc736fae640c114f56c36e883b4dbf420406"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0098\\raw_indirect.f32",
+            "sha256": "31fa0e5af3ab9c6d83a6b6cfce24b58fbe1ba4e73d2e284c9e4699dedda6e0e4"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0099\\raw_indirect.f32",
+            "sha256": "6a49c381dd17f28a0fc3997c6554970172589b97ea44c7e9dfa94bf39801a043"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0100\\raw_indirect.f32",
+            "sha256": "6942dd71a6fe52bcd4560215633f9dd28024480bdda94fae44c25ff509140640"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0101\\raw_indirect.f32",
+            "sha256": "775887d06970b234b219497f3c234098d060808c2d837c30d92b329490902048"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0102\\raw_indirect.f32",
+            "sha256": "ef0645c10d6f04f62c8e213a3bee2550280e4bfd0c5578b4b15423f2f91a0486"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0103\\raw_indirect.f32",
+            "sha256": "e81a5be4dfef08a167e10638e39dfc7a9602a8b299aac3dbabcdc27303e1c173"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0104\\raw_indirect.f32",
+            "sha256": "a893fce8abba027f15f4325a9a25f14dc2621d771494bbebb803857fb39df315"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0105\\raw_indirect.f32",
+            "sha256": "20fa363cf04b7b0d9c12850bc496067f0d2285c2ebd9341e70f5ce75ff97616a"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0106\\raw_indirect.f32",
+            "sha256": "c66408bef0d2dc56f63b3005c564c8a880210f47f2cb349c0bac556d3a480367"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0107\\raw_indirect.f32",
+            "sha256": "c62c97d969b8e3ccb4e91c62578309706194ac4d57af0f842d8601263ebe3f81"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0108\\raw_indirect.f32",
+            "sha256": "8fa9caaa36c98c31ef9d1cfd1de41c84ae26784716a55db43e3e32f4a7da3516"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0109\\raw_indirect.f32",
+            "sha256": "dd286cb025251497926e2ac7ffc312c5c7be9bb21f52cc2ee604a69f6e5ea4ab"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0110\\raw_indirect.f32",
+            "sha256": "ef9bea0dda68f601c582ef11d4f67e0dda727cfa073e65ea4cadb739b5f00a0f"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0111\\raw_indirect.f32",
+            "sha256": "9256d19f764c87599e3d1a21659d7a19a4f937a24bec1301749731e41e72b8bf"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0112\\raw_indirect.f32",
+            "sha256": "97c2c9354de19fd3c8b527a884d9a728d969d2cd094e12e779b9d5354d562848"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0113\\raw_indirect.f32",
+            "sha256": "027c80139c598adcd3a758bdfb39a5c383c0c0ad0224238a6c572bc134876358"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0114\\raw_indirect.f32",
+            "sha256": "c2703dfea6767c53e39b80be4cefa9c939a28016a45deb814691c4f02accb9e2"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0115\\raw_indirect.f32",
+            "sha256": "ea59dc51c0d7790739fdc322ad07cbafa1d49060579138b6c161a62bb1206daf"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0116\\raw_indirect.f32",
+            "sha256": "ce4a9f159a2a6707540df97cc15e12ba1ce96a9d3e4ef0306093f3f93ecc099b"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0117\\raw_indirect.f32",
+            "sha256": "fb284e6fa461082ed85e15d2a89b3748493b24e5a1bd4e248dca25247b357928"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0118\\raw_indirect.f32",
+            "sha256": "928f55707707461ce9ea3ce7e796c17863fb34a5811e64271946ef06571e913a"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0119\\raw_indirect.f32",
+            "sha256": "17af9ea36541ac0d487951922bd571856f3317527d583b02da1638d036f8a187"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0120\\raw_indirect.f32",
+            "sha256": "67bf1dbc277c0fcc30a0ba6e0bda1a19a1c8d2a6ac5bb4f33e8e8c6186c2871d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0121\\raw_indirect.f32",
+            "sha256": "a35bb311e2e454f2a4ab914d87f0462881a95b2ceeced406dcbf152ef91b91c2"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0122\\raw_indirect.f32",
+            "sha256": "50ae8c56edf949be2622b3245fb94c4eccb81828b7328d0c1aa6503fc427a10c"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0123\\raw_indirect.f32",
+            "sha256": "c66645fecf7995d20bd44ba30aa27d9363261b103676d43036325be70b72a4b1"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0124\\raw_indirect.f32",
+            "sha256": "43695a7156cc9eb00167ee9b79a61fb9ff411bda93961b09964653ee3661054c"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0125\\raw_indirect.f32",
+            "sha256": "b3625209e1dfbc675220f6ad93ad6d42c6d67fc7e541abd1022934d1ee42c3bb"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0126\\raw_indirect.f32",
+            "sha256": "8c3666a4e7dce831fc2296c7cac43407e884191afee7908ede80908a38dd0f3b"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-quality-r3-v1\\raw\\frame_0127\\raw_indirect.f32",
+            "sha256": "38adf8a785f0e65a0f44a4533bb0093a9e50c6978e4b596c4ef5e91405b19e14"
+          }
+        ]
+      }
+    },
+    "timing": {
+      "r1": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r1-v1",
+        "sample_offset": 0,
+        "actual_settings": {
+          "direct": {
+            "M_bsdf": 1,
+            "M_light": 1,
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "max_recursion": 1,
+            "open": true,
+            "pairwise": true,
+            "spatial": {
+              "depth": 0.10000000149011612,
+              "open": false,
+              "radius": 30,
+              "sample_num": 1,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.10000000149011612,
+              "history_limit": 20,
+              "open": false,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "indirect": {
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "open": true,
+            "spatial": {
+              "depth": 0.30000001192092896,
+              "open": true,
+              "radius": 12,
+              "sample_num": 2,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.30000001192092896,
+              "history_limit": 5,
+              "open": true,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "max_depth": 16,
+          "min_depth": 5,
+          "rr_threshold": 1
+        },
+        "process_identity": 1794048334301797600,
+        "source_runtime_identity_sha256": "af2d555df1fc25766784be565e626932de85f3ae6f4c850bc58a4eb381cda1cb",
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r1-v1\\contract.json",
+            "sha256": "f2b7f45b10952e00ed7516396020d206198b5fdde318fe5543035b0b04aaafa9"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r1-v1\\result.json",
+            "sha256": "bd57a6f36c72519cad51e40e023ce97b9cc2db9ed4eaaf455ffbea8ecef5356f"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r1-v1\\route-validation.json",
+            "sha256": "4ad6dbce96882143d4b735e91c47d05978855da2d8869f6af34411d2d4399aed"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r1-v1\\identity-before.json",
+            "sha256": "e2f1d18ae57d2a99428372516491248c2af78cf0dce3218b8fdaa1fc92ff475d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r1-v1\\identity-after.json",
+            "sha256": "e2f1d18ae57d2a99428372516491248c2af78cf0dce3218b8fdaa1fc92ff475d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r1-v1\\frames.csv",
+            "sha256": "9b5a8acfd5135f833d15abca35c9645725f1a290b1b7da19cbcc7c1a2f41471f"
+          }
+        ],
+        "scope_means": {
+          "GI_exclusive": {
+            "count": 240,
+            "mean_ms": 13.14464,
+            "median_ms": 12.998656,
+            "p10_ms": 12.5283328,
+            "p90_ms": 13.953536,
+            "p95_ms": 14.2163968
+          },
+          "primary_preparation": {
+            "count": 240,
+            "mean_ms": 3.9738126666666664,
+            "median_ms": 3.8584639999999997,
+            "p10_ms": 3.8484320000000003,
+            "p90_ms": 4.140784,
+            "p95_ms": 4.574744
+          },
+          "GI_plus_primary_preparation": {
+            "count": 240,
+            "mean_ms": 17.118452666666666,
+            "median_ms": 16.940208,
+            "p10_ms": 16.6226464,
+            "p90_ms": 17.9588864,
+            "p95_ms": 18.1053648
+          },
+          "primary_geometry_preparation": {
+            "count": 240,
+            "mean_ms": 0.6757006666666666,
+            "median_ms": 0.675008,
+            "p10_ms": 0.673792,
+            "p90_ms": 0.6767072,
+            "p95_ms": 0.6771536
+          },
+          "candidate_producer_fused": {
+            "count": 240,
+            "mean_ms": 3.298112,
+            "median_ms": 3.183616,
+            "p10_ms": 3.173376,
+            "p90_ms": 3.4486272000000002,
+            "p95_ms": 3.9000064
+          },
+          "component_candidate": {
+            "count": 240,
+            "mean_ms": 6.373350399999999,
+            "median_ms": 6.105088,
+            "p10_ms": 6.07744,
+            "p90_ms": 6.937907199999999,
+            "p95_ms": 7.310694399999999
+          },
+          "component_temporal": {
+            "count": 240,
+            "mean_ms": 1.8926762666666666,
+            "median_ms": 1.790976,
+            "p10_ms": 1.787904,
+            "p90_ms": 2.1062656,
+            "p95_ms": 2.4392192
+          },
+          "component_spatial_and_resolve": {
+            "count": 240,
+            "mean_ms": 4.878613333333333,
+            "median_ms": 4.658176,
+            "p10_ms": 4.6468096,
+            "p90_ms": 5.382656,
+            "p95_ms": 5.6435200000000005
+          }
+        },
+        "scope_note": "Three native GI dispatches measure suffix tracing/reuse/shading. Native primary BSDF proposal is produced by fused DI initial+temporal; its full GPU scope is charged to preparation. Spatial reuse and shading are fused. No full GPU range."
+      },
+      "r2": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r2-v1",
+        "sample_offset": 10000,
+        "actual_settings": {
+          "direct": {
+            "M_bsdf": 1,
+            "M_light": 1,
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "max_recursion": 1,
+            "open": true,
+            "pairwise": true,
+            "spatial": {
+              "depth": 0.10000000149011612,
+              "open": false,
+              "radius": 30,
+              "sample_num": 1,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.10000000149011612,
+              "history_limit": 20,
+              "open": false,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "indirect": {
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "open": true,
+            "spatial": {
+              "depth": 0.30000001192092896,
+              "open": true,
+              "radius": 12,
+              "sample_num": 2,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.30000001192092896,
+              "history_limit": 5,
+              "open": true,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "max_depth": 16,
+          "min_depth": 5,
+          "rr_threshold": 1
+        },
+        "process_identity": 1794048356335721700,
+        "source_runtime_identity_sha256": "af2d555df1fc25766784be565e626932de85f3ae6f4c850bc58a4eb381cda1cb",
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r2-v1\\contract.json",
+            "sha256": "fbb77505a34e608ad11811c0b3d3f0b2da46c23d8c69cdd03d20d67cbc3f59aa"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r2-v1\\result.json",
+            "sha256": "0ec9d7c5ce7406468f701724e27e5f28b8a65712a4491594caa26a9a387a1874"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r2-v1\\route-validation.json",
+            "sha256": "4ad6dbce96882143d4b735e91c47d05978855da2d8869f6af34411d2d4399aed"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r2-v1\\identity-before.json",
+            "sha256": "e2f1d18ae57d2a99428372516491248c2af78cf0dce3218b8fdaa1fc92ff475d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r2-v1\\identity-after.json",
+            "sha256": "e2f1d18ae57d2a99428372516491248c2af78cf0dce3218b8fdaa1fc92ff475d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r2-v1\\frames.csv",
+            "sha256": "876fe055d0fc503e24322e94a15cb21b441d68d7a8b6f66886d50ee928c619d4"
+          }
+        ],
+        "scope_means": {
+          "GI_exclusive": {
+            "count": 240,
+            "mean_ms": 13.178376533333335,
+            "median_ms": 13.039616,
+            "p10_ms": 12.53888,
+            "p90_ms": 13.9019264,
+            "p95_ms": 14.1404672
+          },
+          "primary_preparation": {
+            "count": 240,
+            "mean_ms": 4.012309733333334,
+            "median_ms": 3.85928,
+            "p10_ms": 3.8496864,
+            "p90_ms": 4.459289599999999,
+            "p95_ms": 4.800315199999999
+          },
+          "GI_plus_primary_preparation": {
+            "count": 240,
+            "mean_ms": 17.190686266666663,
+            "median_ms": 17.016959999999997,
+            "p10_ms": 16.6346432,
+            "p90_ms": 18.029776000000002,
+            "p95_ms": 18.152808
+          },
+          "primary_geometry_preparation": {
+            "count": 240,
+            "mean_ms": 0.6760238666666667,
+            "median_ms": 0.6748799999999999,
+            "p10_ms": 0.6737568,
+            "p90_ms": 0.6764511999999999,
+            "p95_ms": 0.6771552
+          },
+          "candidate_producer_fused": {
+            "count": 240,
+            "mean_ms": 3.3362858666666666,
+            "median_ms": 3.183616,
+            "p10_ms": 3.1744,
+            "p90_ms": 3.7835775999999997,
+            "p95_ms": 4.125696
+          },
+          "component_candidate": {
+            "count": 240,
+            "mean_ms": 6.431718399999999,
+            "median_ms": 6.3646720000000006,
+            "p10_ms": 6.080512,
+            "p90_ms": 7.204864,
+            "p95_ms": 7.455539199999999
+          },
+          "component_temporal": {
+            "count": 240,
+            "mean_ms": 1.8847872,
+            "median_ms": 1.792,
+            "p10_ms": 1.788928,
+            "p90_ms": 2.0790271999999996,
+            "p95_ms": 2.4130559999999996
+          },
+          "component_spatial_and_resolve": {
+            "count": 240,
+            "mean_ms": 4.861870933333333,
+            "median_ms": 4.656128,
+            "p10_ms": 4.646912,
+            "p90_ms": 5.379174399999999,
+            "p95_ms": 5.690470400000001
+          }
+        },
+        "scope_note": "Three native GI dispatches measure suffix tracing/reuse/shading. Native primary BSDF proposal is produced by fused DI initial+temporal; its full GPU scope is charged to preparation. Spatial reuse and shading are fused. No full GPU range."
+      },
+      "r3": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r3-v1",
+        "sample_offset": 20000,
+        "actual_settings": {
+          "direct": {
+            "M_bsdf": 1,
+            "M_light": 1,
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "max_recursion": 1,
+            "open": true,
+            "pairwise": true,
+            "spatial": {
+              "depth": 0.10000000149011612,
+              "open": false,
+              "radius": 30,
+              "sample_num": 1,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.10000000149011612,
+              "history_limit": 20,
+              "open": false,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "indirect": {
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "open": true,
+            "spatial": {
+              "depth": 0.30000001192092896,
+              "open": true,
+              "radius": 12,
+              "sample_num": 2,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.30000001192092896,
+              "history_limit": 5,
+              "open": true,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "max_depth": 16,
+          "min_depth": 5,
+          "rr_threshold": 1
+        },
+        "process_identity": 1794048378442934800,
+        "source_runtime_identity_sha256": "af2d555df1fc25766784be565e626932de85f3ae6f4c850bc58a4eb381cda1cb",
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r3-v1\\contract.json",
+            "sha256": "2a4c872b9f9c6cd0a512d1ef88f1432c9b0a1186b44521c842464d89ea072265"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r3-v1\\result.json",
+            "sha256": "e628e8bf611fdc6227639af978ed330e2941d700e774b4c86061b130fe61bcaf"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r3-v1\\route-validation.json",
+            "sha256": "4ad6dbce96882143d4b735e91c47d05978855da2d8869f6af34411d2d4399aed"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r3-v1\\identity-before.json",
+            "sha256": "e2f1d18ae57d2a99428372516491248c2af78cf0dce3218b8fdaa1fc92ff475d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r3-v1\\identity-after.json",
+            "sha256": "e2f1d18ae57d2a99428372516491248c2af78cf0dce3218b8fdaa1fc92ff475d"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-timing-r3-v1\\frames.csv",
+            "sha256": "60ce63f569958d9bf05395b412f682fc7a4c9bc29b0702efd845a20f61e72f81"
+          }
+        ],
+        "scope_means": {
+          "GI_exclusive": {
+            "count": 240,
+            "mean_ms": 13.159569066666666,
+            "median_ms": 12.874752,
+            "p10_ms": 12.56448,
+            "p90_ms": 13.9112448,
+            "p95_ms": 14.094336
+          },
+          "primary_preparation": {
+            "count": 240,
+            "mean_ms": 3.9812653333333334,
+            "median_ms": 3.8647359999999997,
+            "p10_ms": 3.8575936,
+            "p90_ms": 4.239184,
+            "p95_ms": 4.770774399999998
+          },
+          "GI_plus_primary_preparation": {
+            "count": 240,
+            "mean_ms": 17.1408344,
+            "median_ms": 17.002944,
+            "p10_ms": 16.6695552,
+            "p90_ms": 17.877011200000002,
+            "p95_ms": 17.9842336
+          },
+          "primary_geometry_preparation": {
+            "count": 240,
+            "mean_ms": 0.6760664000000001,
+            "median_ms": 0.67552,
+            "p10_ms": 0.6742688,
+            "p90_ms": 0.6761632,
+            "p95_ms": 0.6763520000000001
+          },
+          "candidate_producer_fused": {
+            "count": 240,
+            "mean_ms": 3.3051989333333336,
+            "median_ms": 3.189248,
+            "p10_ms": 3.181568,
+            "p90_ms": 3.5654656,
+            "p95_ms": 4.094310399999999
+          },
+          "component_candidate": {
+            "count": 240,
+            "mean_ms": 6.415317333333333,
+            "median_ms": 6.129664,
+            "p10_ms": 6.112256,
+            "p90_ms": 7.078399999999999,
+            "p95_ms": 7.3452544
+          },
+          "component_temporal": {
+            "count": 240,
+            "mean_ms": 1.8942464,
+            "median_ms": 1.787904,
+            "p10_ms": 1.783808,
+            "p90_ms": 2.0773888,
+            "p95_ms": 2.5680895999999986
+          },
+          "component_spatial_and_resolve": {
+            "count": 240,
+            "mean_ms": 4.850005333333333,
+            "median_ms": 4.6576640000000005,
+            "p10_ms": 4.649984,
+            "p90_ms": 5.4030336000000005,
+            "p95_ms": 5.7787391999999995
+          }
+        },
+        "scope_note": "Three native GI dispatches measure suffix tracing/reuse/shading. Native primary BSDF proposal is produced by fused DI initial+temporal; its full GPU scope is charged to preparation. Spatial reuse and shading are fused. No full GPU range."
+      }
+    }
+  },
+  "selected_manifest_sha256": "b86b842d449cf28e33dd1b425888f0cb2eb8c0c298cba1b6b937afa300ce08fc"
+}

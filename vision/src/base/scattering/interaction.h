@@ -443,6 +443,8 @@ public:
     const Float *rr_survival_scale{};
     // ReSTIR's direct channel also owns emission reached by its first BSDF ray.
     bool restir_direct_split{false};
+    // Explicit controlled PT comparison with the reference GI Lambert transport.
+    bool aligned_lambert{false};
 
 public:
     HitContext() = default;

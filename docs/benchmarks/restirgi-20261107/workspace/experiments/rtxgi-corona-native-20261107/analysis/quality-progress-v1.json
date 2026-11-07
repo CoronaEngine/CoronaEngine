@@ -1,0 +1,417 @@
+{
+  "status": "descriptive_progress_only",
+  "reference_sha256": "a6bfe494999dc2e25e7315882f0b58a6a0289351be3c29b0321a3e78cae0c847",
+  "repeats": [
+    {
+      "label": "r1",
+      "available_late_frames": 32,
+      "run_complete": true,
+      "mean_luminance": 0.0055555178084395005,
+      "brightness_bias_percent": 4.8400813992109715,
+      "frames": [
+        {
+          "frame": 96,
+          "mean_luminance": 0.005554793130878274
+        },
+        {
+          "frame": 97,
+          "mean_luminance": 0.005550642836883473
+        },
+        {
+          "frame": 98,
+          "mean_luminance": 0.005562883413439771
+        },
+        {
+          "frame": 99,
+          "mean_luminance": 0.005550815181204617
+        },
+        {
+          "frame": 100,
+          "mean_luminance": 0.005557929019279232
+        },
+        {
+          "frame": 101,
+          "mean_luminance": 0.005559870215440446
+        },
+        {
+          "frame": 102,
+          "mean_luminance": 0.005564540355599677
+        },
+        {
+          "frame": 103,
+          "mean_luminance": 0.005550566428987142
+        },
+        {
+          "frame": 104,
+          "mean_luminance": 0.00554368238599321
+        },
+        {
+          "frame": 105,
+          "mean_luminance": 0.005550233523012239
+        },
+        {
+          "frame": 106,
+          "mean_luminance": 0.005547609700080873
+        },
+        {
+          "frame": 107,
+          "mean_luminance": 0.0055421494028822125
+        },
+        {
+          "frame": 108,
+          "mean_luminance": 0.0055490317344652484
+        },
+        {
+          "frame": 109,
+          "mean_luminance": 0.005554376103914968
+        },
+        {
+          "frame": 110,
+          "mean_luminance": 0.005554514716756052
+        },
+        {
+          "frame": 111,
+          "mean_luminance": 0.005544581342003947
+        },
+        {
+          "frame": 112,
+          "mean_luminance": 0.005549986431645416
+        },
+        {
+          "frame": 113,
+          "mean_luminance": 0.005551803246933963
+        },
+        {
+          "frame": 114,
+          "mean_luminance": 0.0055486154224461
+        },
+        {
+          "frame": 115,
+          "mean_luminance": 0.005551583821015229
+        },
+        {
+          "frame": 116,
+          "mean_luminance": 0.005555047236250522
+        },
+        {
+          "frame": 117,
+          "mean_luminance": 0.0055562184345942095
+        },
+        {
+          "frame": 118,
+          "mean_luminance": 0.0055567836305039624
+        },
+        {
+          "frame": 119,
+          "mean_luminance": 0.005562949313248967
+        },
+        {
+          "frame": 120,
+          "mean_luminance": 0.005561325814644591
+        },
+        {
+          "frame": 121,
+          "mean_luminance": 0.0055687785961462425
+        },
+        {
+          "frame": 122,
+          "mean_luminance": 0.0055655621402752415
+        },
+        {
+          "frame": 123,
+          "mean_luminance": 0.005560184393939284
+        },
+        {
+          "frame": 124,
+          "mean_luminance": 0.005556202653217373
+        },
+        {
+          "frame": 125,
+          "mean_luminance": 0.005561782856393395
+        },
+        {
+          "frame": 126,
+          "mean_luminance": 0.005562034160760944
+        },
+        {
+          "frame": 127,
+          "mean_luminance": 0.005569492227227199
+        }
+      ]
+    },
+    {
+      "label": "r2",
+      "available_late_frames": 32,
+      "run_complete": true,
+      "mean_luminance": 0.0055494854103766795,
+      "brightness_bias_percent": 4.726241947022047,
+      "frames": [
+        {
+          "frame": 96,
+          "mean_luminance": 0.005566704652764006
+        },
+        {
+          "frame": 97,
+          "mean_luminance": 0.0055508560055061214
+        },
+        {
+          "frame": 98,
+          "mean_luminance": 0.005553248063575308
+        },
+        {
+          "frame": 99,
+          "mean_luminance": 0.005551323022122621
+        },
+        {
+          "frame": 100,
+          "mean_luminance": 0.005553793447270933
+        },
+        {
+          "frame": 101,
+          "mean_luminance": 0.00555088342980425
+        },
+        {
+          "frame": 102,
+          "mean_luminance": 0.0055411486418243585
+        },
+        {
+          "frame": 103,
+          "mean_luminance": 0.005538157878652696
+        },
+        {
+          "frame": 104,
+          "mean_luminance": 0.005548225415192891
+        },
+        {
+          "frame": 105,
+          "mean_luminance": 0.005545183461758977
+        },
+        {
+          "frame": 106,
+          "mean_luminance": 0.005542422747170945
+        },
+        {
+          "frame": 107,
+          "mean_luminance": 0.005541166703289481
+        },
+        {
+          "frame": 108,
+          "mean_luminance": 0.005549058650724963
+        },
+        {
+          "frame": 109,
+          "mean_luminance": 0.005547565564097724
+        },
+        {
+          "frame": 110,
+          "mean_luminance": 0.005544397437673169
+        },
+        {
+          "frame": 111,
+          "mean_luminance": 0.005551625342276674
+        },
+        {
+          "frame": 112,
+          "mean_luminance": 0.005545173487066012
+        },
+        {
+          "frame": 113,
+          "mean_luminance": 0.005544741784817833
+        },
+        {
+          "frame": 114,
+          "mean_luminance": 0.005555171638042774
+        },
+        {
+          "frame": 115,
+          "mean_luminance": 0.005547334523544044
+        },
+        {
+          "frame": 116,
+          "mean_luminance": 0.005549203987238388
+        },
+        {
+          "frame": 117,
+          "mean_luminance": 0.00557343379861222
+        },
+        {
+          "frame": 118,
+          "mean_luminance": 0.00554788112653112
+        },
+        {
+          "frame": 119,
+          "mean_luminance": 0.00554447954742822
+        },
+        {
+          "frame": 120,
+          "mean_luminance": 0.005539164751148615
+        },
+        {
+          "frame": 121,
+          "mean_luminance": 0.005535736926400996
+        },
+        {
+          "frame": 122,
+          "mean_luminance": 0.005537530961448349
+        },
+        {
+          "frame": 123,
+          "mean_luminance": 0.005602350453367717
+        },
+        {
+          "frame": 124,
+          "mean_luminance": 0.0055441876157821075
+        },
+        {
+          "frame": 125,
+          "mean_luminance": 0.005547877414588047
+        },
+        {
+          "frame": 126,
+          "mean_luminance": 0.00554344986840361
+        },
+        {
+          "frame": 127,
+          "mean_luminance": 0.005550054783928569
+        }
+      ]
+    },
+    {
+      "label": "r3",
+      "available_late_frames": 32,
+      "run_complete": true,
+      "mean_luminance": 0.005555952748506171,
+      "brightness_bias_percent": 4.848289302338249,
+      "frames": [
+        {
+          "frame": 96,
+          "mean_luminance": 0.005550310361933302
+        },
+        {
+          "frame": 97,
+          "mean_luminance": 0.005550803956514496
+        },
+        {
+          "frame": 98,
+          "mean_luminance": 0.0055507650402560615
+        },
+        {
+          "frame": 99,
+          "mean_luminance": 0.005549298056224033
+        },
+        {
+          "frame": 100,
+          "mean_luminance": 0.0055454209291256416
+        },
+        {
+          "frame": 101,
+          "mean_luminance": 0.005555276789319306
+        },
+        {
+          "frame": 102,
+          "mean_luminance": 0.00554976160772696
+        },
+        {
+          "frame": 103,
+          "mean_luminance": 0.005570355562510672
+        },
+        {
+          "frame": 104,
+          "mean_luminance": 0.005573804824674858
+        },
+        {
+          "frame": 105,
+          "mean_luminance": 0.005565087269730001
+        },
+        {
+          "frame": 106,
+          "mean_luminance": 0.0055523640743746884
+        },
+        {
+          "frame": 107,
+          "mean_luminance": 0.005547058142507364
+        },
+        {
+          "frame": 108,
+          "mean_luminance": 0.005550096805150749
+        },
+        {
+          "frame": 109,
+          "mean_luminance": 0.005554840786973024
+        },
+        {
+          "frame": 110,
+          "mean_luminance": 0.005563003970034344
+        },
+        {
+          "frame": 111,
+          "mean_luminance": 0.005544485604263637
+        },
+        {
+          "frame": 112,
+          "mean_luminance": 0.005551577327833935
+        },
+        {
+          "frame": 113,
+          "mean_luminance": 0.005558276148085004
+        },
+        {
+          "frame": 114,
+          "mean_luminance": 0.00557381748681695
+        },
+        {
+          "frame": 115,
+          "mean_luminance": 0.005543127158126257
+        },
+        {
+          "frame": 116,
+          "mean_luminance": 0.005546075300520377
+        },
+        {
+          "frame": 117,
+          "mean_luminance": 0.005553388406278408
+        },
+        {
+          "frame": 118,
+          "mean_luminance": 0.005558383425646099
+        },
+        {
+          "frame": 119,
+          "mean_luminance": 0.005554666205408808
+        },
+        {
+          "frame": 120,
+          "mean_luminance": 0.005570505466970593
+        },
+        {
+          "frame": 121,
+          "mean_luminance": 0.005554354732458524
+        },
+        {
+          "frame": 122,
+          "mean_luminance": 0.005547156141577774
+        },
+        {
+          "frame": 123,
+          "mean_luminance": 0.005544321117203221
+        },
+        {
+          "frame": 124,
+          "mean_luminance": 0.005609281290465675
+        },
+        {
+          "frame": 125,
+          "mean_luminance": 0.005556606705809214
+        },
+        {
+          "frame": 126,
+          "mean_luminance": 0.005548166113422096
+        },
+        {
+          "frame": 127,
+          "mean_luminance": 0.005548051144255421
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "binary": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxgi-multibounce-20261107\\rtxpt\\bin\\Rtxpt.exe",
+  "binary_sha256": "3be89155ee62358400c3b252dd86ff8cf7c6cca193846b50b7be7cf97556c056",
+  "build_command": "cmake --build D:/work/corona/CoronaEngine/.workspace/experiments/rtxgi-multibounce-20261107/rtxpt-build --config Release --target Rtxpt --parallel 6 -- /p:VCToolsVersion=14.44.35207 /verbosity:minimal",
+  "build_exit_code": 0,
+  "toolchain": "MSVC14.44.35207 Release",
+  "source_frozen_during_build": true,
+  "CPU_DXC_validation": {
+    "target": "lib_6_5",
+    "modes": [
+      0,
+      1,
+      2
+    ],
+    "NVAPI_hit_object": [
+      0,
+      1
+    ],
+    "permutations_passed": 6,
+    "GPU_execution": false
+  },
+  "GPU_execution_by_this_agent": false
+}

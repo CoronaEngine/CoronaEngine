@@ -1,0 +1,118 @@
+{
+  "schema": "four-way-multibounce-reference-acceptance.v1",
+  "status": "accepted_common_reference",
+  "producers": [
+    "original",
+    "rtxpt",
+    "rtxdi",
+    "corona_pt"
+  ],
+  "independent_halves": 8,
+  "samples_per_half": 1024,
+  "total_fresh_paths_per_pixel": 8192,
+  "raw_domain": "scene-linear pure indirect multibounce5/16/RR1; primary albedo included; primary direct/environment/emission absent",
+  "normalization": "original SUM/1024; RTXPT RTXDI CoronaPT already MEAN/1; equal mean of8halves",
+  "common_reference": {
+    "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\common-reference-8192spp.rgba32f",
+    "sha256": "a6bfe494999dc2e25e7315882f0b58a6a0289351be3c29b0321a3e78cae0c847",
+    "format": "top-left little-endian float32RGBA,alpha1,alreadyMEAN",
+    "divisor": 1,
+    "preview_PFM": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\common-reference-8192spp.pfm",
+    "preview_PFM_sha256": "8873a27583f06d6a313064cadff0bcf50b031e867190c656fcc9656e09740ff8",
+    "full_frame": {
+      "pixel_count": 2073600,
+      "mean_luminance": 0.005299039961001295,
+      "reference_L2_rms": 0.006292234852540129,
+      "split_difference_rmse": 0.0004907636668778554,
+      "estimated_mean_reference_noise_mse": 6.021224418184967e-08,
+      "estimated_mean_reference_noise_rmse": 0.0002453818334389277,
+      "signed_half_mean_difference": -3.345332277364687e-07
+    }
+  },
+  "evidence": {
+    "reference-review-policy.json": "dbc6153d7179c3eb462b882773af2f512f50f38ce07cda80d6ecedfa17ecb706",
+    "manifest-reference-review-v1.json": "8ddd0bd6733e0d497c4c8cc14fd5e635619b59afc490e599dff3af4fd3ae0394",
+    "reference-input-audit-accepted-v1.json": "de66b0c49534dbc82f568a0d5d262628e550f18f14cd155fa7cf4da335634551",
+    "reference-diagnostics-accepted-v1.json": "551c8ace525d03d96fa02e258f52755e3fc22ad07aa0c32b34db718f6d5a9b08"
+  },
+  "guide_region_note": "Full-frame and all common-valid primary pixels retained for primary results. Guide-consistent interior removes255common-valid edge/normal pixels only as a separately reported diagnostic. Corona XYZ converted via contract reflection[1,1,-1].",
+  "screen_results": {
+    "original__rtxpt": {
+      "full_frame": {
+        "relative_mean_difference_abs_below_1pct": true,
+        "cross_MSE_ratio_below_1_25": true,
+        "half_difference_correlation_abs_below_0_1": true
+      },
+      "common_valid_primary": {
+        "relative_mean_difference_abs_below_1pct": true,
+        "cross_MSE_ratio_below_1_25": true,
+        "half_difference_correlation_abs_below_0_1": true
+      }
+    },
+    "original__rtxdi": {
+      "full_frame": {
+        "relative_mean_difference_abs_below_1pct": true,
+        "cross_MSE_ratio_below_1_25": true,
+        "half_difference_correlation_abs_below_0_1": true
+      },
+      "common_valid_primary": {
+        "relative_mean_difference_abs_below_1pct": true,
+        "cross_MSE_ratio_below_1_25": true,
+        "half_difference_correlation_abs_below_0_1": true
+      }
+    },
+    "original__corona_pt": {
+      "full_frame": {
+        "relative_mean_difference_abs_below_1pct": true,
+        "cross_MSE_ratio_below_1_25": true,
+        "half_difference_correlation_abs_below_0_1": true
+      },
+      "common_valid_primary": {
+        "relative_mean_difference_abs_below_1pct": true,
+        "cross_MSE_ratio_below_1_25": true,
+        "half_difference_correlation_abs_below_0_1": true
+      }
+    },
+    "rtxpt__rtxdi": {
+      "full_frame": {
+        "relative_mean_difference_abs_below_1pct": true,
+        "cross_MSE_ratio_below_1_25": true,
+        "half_difference_correlation_abs_below_0_1": true
+      },
+      "common_valid_primary": {
+        "relative_mean_difference_abs_below_1pct": true,
+        "cross_MSE_ratio_below_1_25": true,
+        "half_difference_correlation_abs_below_0_1": true
+      }
+    },
+    "rtxpt__corona_pt": {
+      "full_frame": {
+        "relative_mean_difference_abs_below_1pct": true,
+        "cross_MSE_ratio_below_1_25": true,
+        "half_difference_correlation_abs_below_0_1": true
+      },
+      "common_valid_primary": {
+        "relative_mean_difference_abs_below_1pct": true,
+        "cross_MSE_ratio_below_1_25": true,
+        "half_difference_correlation_abs_below_0_1": true
+      }
+    },
+    "rtxdi__corona_pt": {
+      "full_frame": {
+        "relative_mean_difference_abs_below_1pct": true,
+        "cross_MSE_ratio_below_1_25": true,
+        "half_difference_correlation_abs_below_0_1": true
+      },
+      "common_valid_primary": {
+        "relative_mean_difference_abs_below_1pct": true,
+        "cross_MSE_ratio_below_1_25": true,
+        "half_difference_correlation_abs_below_0_1": true
+      }
+    }
+  },
+  "limitations": [
+    "Heuristic screens are descriptive, not iid confidence tests.",
+    "One split estimates reference noise imperfectly. Shared systematic renderer errors are not excluded by agreement alone.",
+    "This acceptance covers fresh reference agreement and the recorded scene/route evidence; each quality/timing run still needs actual completion/source/runtime provenance."
+  ]
+}

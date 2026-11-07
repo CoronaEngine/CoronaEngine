@@ -1,0 +1,205 @@
+--- onebounce/Rtxpt/RepositoryBenchmark.h
++++ multibounce/Rtxpt/RepositoryBenchmark.h
+@@ -10,6 +10,7 @@
+ #include <vector>
+ #include <deque>
+ #include <sstream>
++#include <array>
+ namespace RepositoryBenchmark {
+ struct Interval { std::string name; nvrhi::TimerQueryHandle query; };
+ inline std::vector<Interval> intervals;
+@@ -53,8 +54,14 @@
+  const auto desc=texture->getDesc();auto stage=d->createStagingTexture(desc,nvrhi::CpuAccessMode::Read);auto cmd=d->createCommandList();cmd->open();cmd->copyTexture(stage,nvrhi::TextureSlice(),texture,nvrhi::TextureSlice());cmd->close();d->executeCommandList(cmd);d->waitForIdle();
+  size_t pitch=0;const auto* bytes=static_cast<const unsigned char*>(d->mapStagingTexture(stage,nvrhi::TextureSlice(),nvrhi::CpuAccessMode::Read,&pitch));
+  if(!bytes)std::abort();const auto path=std::filesystem::path(output())/name;std::ofstream out(path,std::ios::binary);
+- std::vector<float> row(desc.width*4);for(uint32_t y=0;y<desc.height;++y){const float* src=reinterpret_cast<const float*>(bytes+y*pitch);if(average){for(size_t x=0;x<row.size();++x)row[x]=float(double(src[x])/double(frame+1));out.write(reinterpret_cast<const char*>(row.data()),row.size()*sizeof(float));}else out.write(reinterpret_cast<const char*>(src),row.size()*sizeof(float));}
+- d->unmapStagingTexture(stage);out.close();std::ofstream meta(path.string()+".json");meta<<"{\"width\":"<<desc.width<<",\"height\":"<<desc.height<<",\"channels\":4,\"dtype\":\"float32_le\",\"layout\":\"row_major_top_down_RGBA\",\"frame\":"<<frame<<",\"samples\":"<<(average?frame+1:1)<<",\"mode\":"<<std::quoted(mode())<<",\"seed_offset\":"<<seedOffset()<<"}\n";
++ const bool depthDiagnostic=name.rfind("gi-diagnostic-frame-",0)==0;
++ std::array<uint64_t,17> depths{};std::array<uint64_t,4> reasons{};uint64_t rrTests=0,rrSurvivals=0,earlyRR=0,overMax=0,rrCountMismatches=0;
++ std::vector<float> row(desc.width*4);for(uint32_t y=0;y<desc.height;++y){const float* src=reinterpret_cast<const float*>(bytes+y*pitch);
++ if(depthDiagnostic)for(uint32_t x=0;x<desc.width;++x){const float* s=src+4*x;const uint32_t depth=uint32_t(s[0]);if(depth<=16)++depths[depth];else ++overMax;const uint32_t reason=uint32_t(s[3]);if(reason<4)++reasons[reason];rrTests+=uint64_t(s[1]);rrSurvivals+=uint64_t(s[2]);if(s[1]>0&&depth<6)++earlyRR;const uint32_t expectedTests=depth<6?0:(depth<16?depth-5:10);if(uint32_t(s[1])!=expectedTests||uint32_t(s[2])+(reason==2?1u:0u)!=expectedTests)++rrCountMismatches;}
++ if(average){for(size_t x=0;x<row.size();++x)row[x]=float(double(src[x])/double(frame+1));out.write(reinterpret_cast<const char*>(row.data()),row.size()*sizeof(float));}else out.write(reinterpret_cast<const char*>(src),row.size()*sizeof(float));}
++ d->unmapStagingTexture(stage);out.close();
++ if(depthDiagnostic){std::ofstream histogram(std::filesystem::path(output())/("path-depth-frame-"+std::to_string(frame)+".json"));histogram<<"{\"frame\":"<<frame<<",\"min_depth\":5,\"max_surface_depth\":16,\"first_RR_surface\":6,\"terminal_surface_histogram\":[";for(size_t i=0;i<depths.size();++i){if(i)histogram<<',';histogram<<depths[i];}histogram<<"],\"RR_tests\":"<<rrTests<<",\"RR_survivals\":"<<rrSurvivals<<",\"early_RR_paths\":"<<earlyRR<<",\"over_max_paths\":"<<overMax<<",\"RR_count_mismatches\":"<<rrCountMismatches<<",\"reason_invalid\":"<<reasons[0]<<",\"reason_miss\":"<<reasons[1]<<",\"reason_RR\":"<<reasons[2]<<",\"reason_max16\":"<<reasons[3]<<"}\n";}
++ std::ofstream meta(path.string()+".json");meta<<"{\"width\":"<<desc.width<<",\"height\":"<<desc.height<<",\"channels\":4,\"dtype\":\"float32_le\",\"layout\":\"row_major_top_down_RGBA\",\"frame\":"<<frame<<",\"samples\":"<<(average?frame+1:1)<<",\"mode\":"<<std::quoted(mode())<<",\"seed_offset\":"<<seedOffset()<<"}\n";
+ }
+ inline void capture(nvrhi::IDevice* d,nvrhi::ITexture* raw,nvrhi::ITexture* sum,nvrhi::ITexture* pos,nvrhi::ITexture* norm,nvrhi::ITexture* fresh,nvrhi::ITexture* diagnostic,nvrhi::ITexture* secondary){
+  if(!enabled())return;
+--- onebounce/Rtxpt/RTXDI/GIFinalShading.hlsl
++++ multibounce/Rtxpt/RTXDI/GIFinalShading.hlsl
+@@ -72,7 +72,6 @@
+     
+     float3 diffuseBrdf, specularBrdf;
+     surface.Eval(L, diffuseBrdf, specularBrdf);
+-    if (g_Const.ptConsts._padding0 & 1u) u_BenchDiagnostic[pixelPosition].y = diffuseBrdf.x;
+     
+     diffuseContribution = 0; 
+     specularContribution = 0;
+--- onebounce/Rtxpt/Sample.cpp
++++ multibounce/Rtxpt/Sample.cpp
+@@ -709,8 +709,8 @@
+         m_ui.AllowRTXDIInReferenceMode=false; m_ui.UseReSTIRDI=false; m_ui.UseReSTIRGI=true;
+         m_ui.StandaloneDenoiser=false; m_ui.RealtimeAA=0; m_ui.AccumulationAA=false;
+         m_ui.RealtimeNoise=true; m_ui.RealtimeSamplesPerPixel=1;
+-        m_ui.BounceCount=2; m_ui.ReferenceDiffuseBounceCount=2; m_ui.RealtimeDiffuseBounceCount=2;
+-        m_ui.EnableRussianRoulette=false;
++        m_ui.BounceCount=16; m_ui.ReferenceDiffuseBounceCount=16; m_ui.RealtimeDiffuseBounceCount=16;
++        m_ui.EnableRussianRoulette=true;
+         m_ui.UseNEE=true; m_ui.NEEType=0; m_ui.NEECandidateSamples=1; m_ui.NEEFullSamples=1;
+         m_ui.NEEBoostSamplingOnDominantPlane=0; m_ui.NEEAT_GlobalTemporalFeedbackEnabled=false;
+         m_ui.NEEAT_NarrowTemporalFeedbackEnabled=false; m_ui.SuppressPrimaryNEE=true;
+@@ -738,8 +738,8 @@
+         gi.finalShadingParams.enableFinalVisibility=true; gi.finalShadingParams.enableFinalMIS=false;
+         std::filesystem::create_directories(RepositoryBenchmark::output());
+         std::ofstream settings(std::filesystem::path(RepositoryBenchmark::output())/"effective-settings.json");
+-        settings << "{\"mode\":" << std::quoted(mode) << ",\"spp\":1,\"indirect_vertices\":1,\"sun_NEE\":1,\"material\":\"opaque_exact_Lambert_0.7\",\"environment\":\"black\",\"emission\":false,\"history\":8,\"age\":30,\"spatial_samples\":2,\"radius_pixels\":32,\"normal_threshold\":0.6,\"depth_threshold\":0.1,\"bias\":\"BASIC\",\"final_visibility\":true,\"final_MIS\":false,\"boiling\":false,\"fallback\":false,\"permutation\":false,\"NRD\":false,\"AA\":false,\"jitter\":false,\"raw\":\"RGBA32_FLOAT_pure_indirect_before_tonemap\"}\n";
+-        donut::log::info("MATCHED GI BENCH mode=%s candidate=1 indirectVertices=1 secondarySunNEE=1 Lambert=0.7 blackEnv noEmission BASIC finalVisibility=1 finalMIS=0 history=8 age=30 spatial=2 radius=32 jitter=0 raw=RGBA32_FLOAT", mode.c_str());
++        settings << "{\"mode\":" << std::quoted(mode) << ",\"spp\":1,\"minimum_depth\":5,\"max_surface_depth\":16,\"first_RR_surface\":6,\"sun_NEE_per_secondary_surface\":1,\"material\":\"opaque_exact_Lambert_0.7\",\"environment\":\"black\",\"emission\":false,\"history\":8,\"age\":30,\"spatial_samples\":2,\"radius_pixels\":32,\"normal_threshold\":0.6,\"depth_threshold\":0.1,\"bias\":\"BASIC\",\"final_visibility\":true,\"final_MIS\":false,\"boiling\":false,\"fallback\":false,\"permutation\":false,\"NRD\":false,\"AA\":false,\"jitter\":false,\"raw\":\"RGBA32_FLOAT_pure_indirect_before_tonemap\"}\n";
++        donut::log::info("MATCHED GI BENCH mode=%s candidate=1 minDepth=5 maxSurfaceDepth=16 firstRRSurface=6 sunNEEAtEverySecondary=1 Lambert=0.7 blackEnv noEmission BASIC finalVisibility=1 finalMIS=0 history=8 age=30 spatial=2 radius=32 jitter=0 raw=RGBA32_FLOAT", mode.c_str());
+     }
+ 
+ 
+@@ -1501,6 +1501,7 @@
+     if (RepositoryBenchmark::enabled()) {
+         constants.sampleBaseIndex = uint32_t(RepositoryBenchmark::frame) + RepositoryBenchmark::seedOffset();
+         constants._padding4 = uint32_t(RepositoryBenchmark::frame);
++        constants._padding2 = 5u; // Corona min_depth: zero-based bounce index, first RR at surface6
+         constants._padding1 = std::string(RepositoryBenchmark::mode())=="reference" ? 1u : 0u;
+         constants._padding0 = (RepositoryBenchmark::wantCapture() ? 1u : 0u) | (std::string(RepositoryBenchmark::mode())=="reference" ? 2u : 0u) | (RepositoryBenchmark::frame==0 && RepositoryBenchmark::wantCapture() ? 4u : 0u);
+     }
+@@ -2093,7 +2094,7 @@
+                 settings["GI_spatial"] = m_ui.RTXDI.restirGI.spatialResamplingParams.numSpatialSamples;
+                 settings["environment_enabled"] = m_ui.EnvironmentMapParams.Enabled; settings["environment_path"] = m_envMapLocalPath;
+                 settings["environment_intensity"] = m_ui.EnvironmentMapParams.Intensity; settings["environment_tint"] = vec(m_ui.EnvironmentMapParams.TintColor);
+-                settings["RR"] = "disabled"; settings["GI_executed"]=true; settings["indirect_vertices"]=1; settings["proposal_pdf"]="cosine_hemisphere_cos_theta_over_pi"; settings["material"]="exact_Lambert_0.7"; settings["raw_format"]="RGBA32_FLOAT_pure_indirect"; settings["GI_mode"]=RepositoryBenchmark::mode(); settings["to_sun"]=vec(float3(0,0.4472135955f,-0.894427191f)); settings["sun_irradiance"]=vec(float3(1)); settings["sun_angular_diameter"]=0; settings["normals"]="faceforward_flat_geometric"; settings["raw_write"]=RepositoryBenchmark::wantCapture(); settings["GPU_FP32_accumulation"]=std::string(RepositoryBenchmark::mode())=="reference"; settings["sample_offset"]=RepositoryBenchmark::seedOffset(); settings["reference_estimator"]="native_cosine_primary_secondary_hard_sun_unpacked_0.7_times_secondaryLo"; settings["diagnostic_channels"]="primaryPdf,finalPrimaryLambertCosine,preSecondaryThroughput,secondaryLo"; settings["TMin"]=0; settings["scatter_TMax"]=1000; settings["ray_origin"]="RTXPT_ComputeRayOrigin_origin1div16_fScale3div65536_iScale768";
++                settings["RR"] = "q=min(0.95,physical_camera_beta_before_current_BSDF),when_beta_lt_1,after_surface6_onward,no_floor"; settings["minimum_depth"]=5; settings["first_RR_surface"]=6; settings["max_surface_depth"]=16; settings["max_depth_includes_primary"]=true; settings["RR_physical_beta_rule"]="exact_gray_Lambert_closed_form_q_surface6_0.7pow5_then_0.7"; settings["path_payload_bytes"]=96; settings["GI_executed"]=true; settings["indirect_vertices_max"]=15; settings["proposal_pdf"]="cosine_hemisphere_cos_theta_over_pi"; settings["material"]="exact_Lambert_0.7"; settings["raw_format"]="RGBA32_FLOAT_pure_indirect"; settings["GI_mode"]=RepositoryBenchmark::mode(); settings["to_sun"]=vec(float3(0,0.4472135955f,-0.894427191f)); settings["sun_irradiance"]=vec(float3(1)); settings["sun_angular_diameter"]=0; settings["normals"]="faceforward_flat_geometric"; settings["raw_write"]=RepositoryBenchmark::wantCapture(); settings["GPU_FP32_accumulation"]=std::string(RepositoryBenchmark::mode())=="reference"; settings["sample_offset"]=RepositoryBenchmark::seedOffset(); settings["reference_estimator"]="FP32_full_camera_cosine_Lambert_path_sun_NEE_at_surfaces2_to16_matching_physical_RR"; settings["diagnostic_channels"]="lastVisitedSurfaceDepth,RRtests,RRsurvivals,terminationReason_0invalid_1miss_2RR_3max16"; settings["TMin"]=0; settings["scatter_TMax"]=1000; settings["ray_origin"]="RTXPT_ComputeRayOrigin_origin1div16_fScale3div65536_iScale768";
+                 Json::StreamWriterBuilder writer; writer["indentation"] = "  ";
+                 std::ofstream(std::filesystem::path(RepositoryBenchmark::output())/"actual-settings.json") << Json::writeString(writer,settings);
+             }
+--- onebounce/Rtxpt/Shaders/PathTracer/PathTracer.hlsli
++++ multibounce/Rtxpt/Shaders/PathTracer/PathTracer.hlsli
+@@ -171,8 +171,10 @@
+         }
+ 
+         path.dir = bs.wo;
+-        if (path.getVertexIndex()==1 && (g_Const.ptConsts._padding0 & 1u))
+-            u_BenchDiagnostic[PathIDToPixel(path.id)].x = bs.pdf;
++#if PATH_TRACER_MODE==PATH_TRACER_MODE_FILL_STABLE_PLANES
++        if (g_Const.ptConsts._padding0 & 3u)
++            u_BenchFresh[PathIDToPixel(path.id)].w *= 0.7;
++#endif
+         if (workingContext.ptConsts.useReSTIRGI && path.hasFlag(PathFlags::stablePlaneOnPlane) && bs.pdf != 0 && path.hasFlag(PathFlags::stablePlaneOnDominantBranch))
+         {
+             // ReSTIR GI decomposes the throughput of the primary scatter ray into the BRDF and PDF components.
+@@ -309,6 +311,10 @@
+     inline void HandleMiss(inout PathState path, const float3 rayOrigin, const float3 rayDir, const float rayTCurrent, const WorkingContext workingContext)
+     {
+         UpdatePathTravelled(path, rayOrigin, rayDir, rayTCurrent, workingContext);
++#if PATH_TRACER_MODE==PATH_TRACER_MODE_FILL_STABLE_PLANES
++        if (g_Const.ptConsts._padding0 & 1u)
++            u_BenchDiagnostic[PathIDToPixel(path.id)].w = 1; // miss; depth remains last actual surface
++#endif
+ 
+ #if PATH_TRACER_MODE==PATH_TRACER_MODE_BUILD_STABLE_PLANES && ENABLE_DEBUG_DELTA_TREE_VIZUALISATION
+         if (path.hasFlag(PathFlags::deltaTreeExplorer))
+@@ -373,6 +379,10 @@
+     inline void HandleHit(const uniform OptimizationHints optimizationHints, inout PathState path, const float3 rayOrigin, const float3 rayDir, const float rayTCurrent, const WorkingContext workingContext)
+     {
+         UpdatePathTravelled(path, rayOrigin, rayDir, rayTCurrent, workingContext);
++#if PATH_TRACER_MODE==PATH_TRACER_MODE_FILL_STABLE_PLANES
++        if (g_Const.ptConsts._padding0 & 1u)
++            u_BenchDiagnostic[PathIDToPixel(path.id)].x = path.getVertexIndex();
++#endif
+         
+         const uint2 pixelPos = PathIDToPixel(path.id);
+         const SampleGeneratorVertexBase sampleGeneratorVertexBase = SampleGeneratorVertexBase::make(pixelPos, path.getVertexIndex(), Bridge::getSampleIndex() );
+@@ -536,7 +546,8 @@
+ #if defined(RTXPT_COMPILE_WITH_NEE) && RTXPT_COMPILE_WITH_NEE!=0
+         NEEResult neeResult = NEEResult::empty();
+ #if PATH_TRACER_MODE==PATH_TRACER_MODE_FILL_STABLE_PLANES
+-        if (preScatterPath.getVertexIndex() == 2)
++        // Pure indirect: one hard-sun NEE at every secondary and later surface.
++        if (preScatterPath.getVertexIndex() >= 2)
+         {
+             const float3 toSun = float3(0, 0.4472135954999579, -0.8944271909999159);
+             const float cosSun = max(0.0, dot(shadingData.N, toSun));
+@@ -545,16 +556,16 @@
+                 RayDesc sunRay;
+                 sunRay.Origin = shadingData.computeNewRayOrigin(true);
+                 sunRay.Direction = toSun; sunRay.TMin = 0; sunRay.TMax = 1000;
+-                if (Bridge::traceVisibilityRay(sunRay, preScatterPath.rayCone, 2, workingContext.debug))
++                if (Bridge::traceVisibilityRay(sunRay, preScatterPath.rayCone, preScatterPath.getVertexIndex(), workingContext.debug))
+                 {
+                     const float secondaryLo = 0.7 * K_1_PI * cosSun;
+                     path.secondaryL += preScatterPath.thp * secondaryLo;
+                     if (g_Const.ptConsts._padding0 & 3u)
+-                        u_BenchFresh[PathIDToPixel(path.id)] = float4((0.7 * secondaryLo).xxx, 1);
+-                    if (g_Const.ptConsts._padding0 & 1u)
+                     {
+-                        u_BenchDiagnostic[PathIDToPixel(path.id)].z = preScatterPath.thp.x;
+-                        u_BenchDiagnostic[PathIDToPixel(path.id)].w = secondaryLo;
++                        float4 fresh = u_BenchFresh[PathIDToPixel(path.id)];
++                        // FP32 full camera estimator, independent of packed native GI throughput/radiance.
++                        fresh.xyz += (fresh.w * K_1_PI * cosSun).xxx;
++                        u_BenchFresh[PathIDToPixel(path.id)] = fresh;
+                     }
+                 }
+             }
+@@ -584,12 +595,42 @@
+ #endif
+         }
+         
+-        // Matched GI benchmark: primary -> secondary -> directional sun only.
+-        if (preScatterPath.getVertexIndex() >= 2)
+-        {
++#if PATH_TRACER_MODE==PATH_TRACER_MODE_FILL_STABLE_PLANES
++        // Surface indices include the primary. Max16 collects NEE then stops without a 17th ray.
++        if (preScatterPath.getVertexIndex() >= Bridge::getMaxBounceLimit())
++        {
++            if (g_Const.ptConsts._padding0 & 1u) u_BenchDiagnostic[pixelPos].w = 3;
+             path.terminate();
+             return;
+         }
++        if (!scatterResult.Valid)
++        {
++            // Diagnostic reason0 denotes an invalid path.
++            path.terminate();
++            return;
++        }
++        // Corona min_depth5 is a zero-based bounce index: first RR follows completed surface6.
++        // Exact gray-Lambert specialization of q=min(.95,beta_before_current_BSDF), beta<1.
++        // At surface6 beta=.7^5; each surviving continuation restores beta=.7, so later q=.7.
++        // This avoids using native GI throughput containing 1/pdf and preserves its 96-byte payload.
++        if (workingContext.ptConsts.enableRussianRoulette &&
++            preScatterPath.getVertexIndex() > g_Const.ptConsts._padding2)
++        {
++            const float q = preScatterPath.getVertexIndex() == 6 ? 0.7f * 0.7f * 0.7f * 0.7f * 0.7f : 0.7f;
++            if (g_Const.ptConsts._padding0 & 1u) u_BenchDiagnostic[pixelPos].y += 1;
++            SampleGenerator rr = SampleGenerator::make(sampleGeneratorVertexBase, SampleGeneratorEffectSeed::RussianRoulette, false);
++            if (sampleNext1D(rr) >= q)
++            {
++                if (g_Const.ptConsts._padding0 & 1u) u_BenchDiagnostic[pixelPos].w = 2;
++                path.terminate();
++                return;
++            }
++            path.thp /= q;
++            if (g_Const.ptConsts._padding0 & 3u) u_BenchFresh[pixelPos].w /= q;
++            if (g_Const.ptConsts._padding0 & 1u) u_BenchDiagnostic[pixelPos].z += 1;
++        }
++        return; // Common benchmark RR above replaces native perceptual/depth-dependent RR.
++#endif
+ 
+         if (!scatterResult.Valid)
+         {   // this is very suboptimal from performance perspective, and should only happen very, very rarely (as in, almost never)
+--- onebounce/Rtxpt/Shaders/PathTracerSample.hlsl
++++ multibounce/Rtxpt/Shaders/PathTracerSample.hlsl
+@@ -297,6 +297,9 @@
+         nextHit(path, workingContext, false);
+     
+     SanitizeNaNs(path, workingContext);
++#if PATH_TRACER_MODE==PATH_TRACER_MODE_FILL_STABLE_PLANES
++    if (g_Const.ptConsts._padding0 & 3u) u_BenchFresh[pixelPos].w = 1;
++#endif
+        
+ #if PATH_TRACER_MODE==PATH_TRACER_MODE_FILL_STABLE_PLANES
+     workingContext.stablePlanes.CommitDenoiserRadiance(path.getStablePlaneIndex(), path.denoiserSampleHitTFromPlane,

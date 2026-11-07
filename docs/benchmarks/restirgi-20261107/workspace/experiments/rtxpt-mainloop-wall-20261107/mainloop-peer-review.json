@@ -1,0 +1,48 @@
+{
+  "review_type": "independent read-only source review",
+  "timestamp": "2026-11-07T20:45:26.6470311+08:00",
+  "result": "pass",
+  "actionable_findings": [],
+  "boundary": "MainLoopWall begin clocks before SL SimStart, beforeFrame, event polling and window update. End clocks after AnimateRenderPresent including all render passes, Present, garbage collection and frame bookkeeping. Callback aggregation outside clock interval is instrumentation bookkeeping, not omitted application work.",
+  "phase_partition": {
+    "animate": "beforeAnimate to afterAnimate: all pass Animate, SetLatewarpOptions and SL SimEnd",
+    "beginframe_gap": "afterAnimate to beforeRender: includes native BeginFrame backbuffer fence wait plus SL RenderStart",
+    "render": "beforeRender to afterRender: all passes including Sample and GUI, CPU command submission and existing query-drain behavior",
+    "present": "beforePresent to afterPresent: DXGI Present plus normal fence setup/queue signal",
+    "other": "Full wall minus four disjoint marked ranges: includes poll/window/joystick handling, SL intervening hooks, normal zero-duration yield, garbage collection and bookkeeping",
+    "note": "Host wall durations may include scheduling and GPU backpressure. They are not additive GPU timestamps or pure CPU-execution-time counters."
+  },
+  "mapping": "At begin current.frame captures pre-render RepositoryBenchmark::frame; end accepts only successful loop with benchmarkFrameAfter=current.frame+1 and all6 marks. Device frame ID is separately captured pre-increment; no assumption of identity is required. Skipped/non-rendered loops are rejected.",
+  "tail": {
+    "target": 368,
+    "measured": "120..359 inclusive,240 frames",
+    "csv_write": "After full frame366 completes; benchmarkFrameAfter367 plus1 equals target368",
+    "csv_rows": "Frames0..366 inclusive,367 complete-loop rows for normal uninterrupted run",
+    "terminal": "Frame367 triggers existing forced query drain and screenshot exit inside Sample Render. No outer end callback/row is claimed for terminal367.",
+    "io": "mainloop.csv/meta export occurs after end timestamp on unmeasured tail366. Earlier rows only accumulate in pre-reserved memory; no timing CSV file I/O in120..359."
+  },
+  "callback_review": "rg over app and Donut sources found only the6 newly assigned m_callbacks fields; defaults are null, no prior assignments are replaced. DeviceManager class layout unchanged.",
+  "global_behavior": "Instrumentation registration gated by both benchmark enabled and RESTIR_MAINLOOP_WALL. New generic callback remains null otherwise. No source change to DX12 synchronization, RepositoryBenchmark query/capture/pacing settings, or shader sources.",
+  "current_instrumentation_matches_build_record": {
+    "Rtxpt/Sample.cpp": true,
+    "Rtxpt/MainLoopWall.h": true,
+    "External/Donut/src/app/DeviceManager.cpp": true,
+    "External/Donut/include/donut/app/MainLoopTiming.h": true
+  },
+  "baseline_files_unchanged": {
+    "Rtxpt/RepositoryBenchmark.h": true,
+    "External/Donut/src/app/dx12/DeviceManager_DX12.cpp": true,
+    "External/Donut/include/donut/app/DeviceManager.h": true
+  },
+  "independently_verified_identical_shader_source_count": 624,
+  "shader_mismatches": [],
+  "nonblocking_notes": [
+    "mainloop-meta tick_frequency_hz=1000000000 describes the nanosecond integer representation, not guaranteed actual native steady_clock resolution. The clock string explicitly says converted to nanoseconds; do not claim1ns clock precision.",
+    "Full normal-loop wall time preserves asynchronous pipeline overlap and captures natural GPU waits. It does not establish same-frame submit-to-GPU-complete latency."
+  ],
+  "build_record_status": "pass",
+  "build_record_exit_code": 0,
+  "no_source_edits": true,
+  "no_builds": true,
+  "no_gpu_jobs": true
+}

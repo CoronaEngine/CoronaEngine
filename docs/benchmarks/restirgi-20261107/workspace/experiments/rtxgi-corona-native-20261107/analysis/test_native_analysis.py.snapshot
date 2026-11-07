@@ -1,0 +1,95 @@
+"""Analytic CPU checks for native fifth-row protocol and timing."""
+import copy
+import unittest
+
+import numpy as np
+
+import analyze_native as native
+
+
+def timing_fixture():
+    names = sum(native.GI.values(), []) + native.PREP + [native.CANDIDATE_PRODUCER]
+    return {'gpu': {'frames': [{'sample_index': f, 'dispatches': [
+        {'name': name, 'gpu_ms': float(i + 1)} for i, name in enumerate(names)]}
+        for f in range(360)]}}
+
+
+class NativeAnalysisTests(unittest.TestCase):
+    def test_actual_profile_accepts_float32_readback(self):
+        actual = copy.deepcopy(native.EXPECTED_SETTINGS)
+        actual['indirect']['spatial']['depth'] = float(np.float32(.3))
+        native.require_settings(actual, native.EXPECTED_SETTINGS)
+
+    def test_unmatched_native_reuse_or_candidate_budget_is_rejected(self):
+        for group, field, bad in [('direct', 'M_bsdf', 0), ('direct', 'M_light', 2)]:
+            actual = copy.deepcopy(native.EXPECTED_SETTINGS)
+            actual[group][field] = bad
+            with self.assertRaises(ValueError):
+                native.require_settings(actual, native.EXPECTED_SETTINGS)
+        actual = copy.deepcopy(native.EXPECTED_SETTINGS)
+        actual['direct']['temporal']['open'] = True
+        with self.assertRaises(ValueError):
+            native.require_settings(actual, native.EXPECTED_SETTINGS)
+        actual = copy.deepcopy(native.EXPECTED_SETTINGS)
+        actual['indirect']['spatial']['sample_num'] = 3
+        with self.assertRaises(ValueError):
+            native.require_settings(actual, native.EXPECTED_SETTINGS)
+
+    def test_three_gi_dispatches_and_geometry_plus_fused_candidate_producer(self):
+        report, values = native.native_timing(timing_fixture())
+        self.assertEqual(len(report['frames']), 240)
+        self.assertEqual(report['frames'][0]['frame'], 120)
+        self.assertEqual(report['frames'][-1]['frame'], 359)
+        self.assertEqual(values['GI_exclusive'], [6.] * 240)
+        self.assertEqual(values['primary_geometry_preparation'], [9.] * 240)
+        self.assertEqual(values['candidate_producer_fused'], [6.] * 240)
+        self.assertEqual(values['primary_preparation'], [15.] * 240)
+        self.assertEqual(values['GI_plus_primary_preparation'], [21.] * 240)
+        self.assertIsNone(report['full_GPU_frame'])
+
+    def test_duplicate_frame_is_not_an_independent_sample(self):
+        result = timing_fixture()
+        result['gpu']['frames'][-1]['sample_index'] = 120
+        with self.assertRaisesRegex(ValueError, 'unique frame coverage'):
+            native.native_timing(result)
+
+    def test_duplicate_gi_dispatch_cannot_be_silently_summed(self):
+        result = timing_fixture()
+        result['gpu']['frames'][120]['dispatches'].append(copy.deepcopy(result['gpu']['frames'][120]['dispatches'][0]))
+        with self.assertRaisesRegex(ValueError, 'duplicated'):
+            native.native_timing(result)
+
+    def test_missing_fused_spatial_resolve_is_rejected(self):
+        result = timing_fixture()
+        del result['gpu']['frames'][120]['dispatches'][2]
+        with self.assertRaisesRegex(ValueError, 'missing'):
+            native.native_timing(result)
+
+    def test_port_route_events_are_rejected(self):
+        result = timing_fixture()
+        result['gpu']['frames'][120]['dispatches'].append({'name': 'RestirGI reference candidates', 'gpu_ms': 1.})
+        with self.assertRaisesRegex(ValueError, 'ported GI'):
+            native.native_timing(result)
+
+    def test_invalid_gpu_timestamp_rejected(self):
+        for bad in [-1., float('nan'), float('inf'), 0.]:
+            result = timing_fixture()
+            result['gpu']['frames'][120]['dispatches'][0]['gpu_ms'] = bad
+            with self.assertRaises(ValueError):
+                native.native_timing(result)
+
+    def test_pooled_noise_has_93_within_repeat_degrees_of_freedom(self):
+        a = native.analysis
+        regions = {'full_frame': np.ones((1, 1), bool)}
+        ref, noise = np.ones((1, 1)), np.zeros((1, 1))
+        repeats = [a.summarize_sequence([np.array([[base + f % 2]], dtype=float) for f in range(32)],
+                                       ref, noise, regions) for base in [0., 10., 20.]]
+        pooled = a.pool_sequences(repeats, ref, noise, regions)
+        self.assertEqual(pooled['frame_count'], 96)
+        self.assertEqual(pooled['temporal_variance_degrees_of_freedom'], 93)
+        self.assertEqual(pooled['lag_pairs'], 93)
+        self.assertAlmostEqual(pooled['regions']['full_frame']['temporal_sample_std_rms'], np.sqrt(8 / 31))
+
+
+if __name__ == '__main__':
+    unittest.main()

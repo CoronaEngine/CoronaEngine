@@ -1,0 +1,102 @@
+{
+  "DI" : false,
+  "DI_bsdf" : 1,
+  "DI_environment" : 1,
+  "DI_light_total" : 9,
+  "DI_local" : 8,
+  "DI_spatial" : 2,
+  "GI" : true,
+  "GI_executed" : true,
+  "GI_mode" : "temporalspatial",
+  "GI_spatial" : 2,
+  "GPU_FP32_accumulation" : false,
+  "RR" : "q=min(0.95,physical_camera_beta_before_current_BSDF),when_beta_lt_1,after_surface6_onward,no_floor",
+  "RR_physical_beta_rule" : "exact_gray_Lambert_closed_form_q_surface6_0.7pow5_then_0.7",
+  "SP" : 1,
+  "TMin" : 0,
+  "benchmark_frame" : 367,
+  "camera_forward" : 
+  [
+    -0.43809998035430908,
+    -0.041670322418212891,
+    -0.89795994758605957
+  ],
+  "camera_position" : 
+  [
+    1.2110049724578857,
+    1.8047510385513306,
+    3.8523900508880615
+  ],
+  "camera_up" : 
+  [
+    -0.018271638080477715,
+    0.99913144111633301,
+    -0.03745080903172493
+  ],
+  "denoise" : false,
+  "diagnostic_channels" : "lastVisitedSurfaceDepth,RRtests,RRsurvivals,terminationReason_0invalid_1miss_2RR_3max16",
+  "display_height" : 1080,
+  "display_width" : 1920,
+  "environment_enabled" : false,
+  "environment_intensity" : 0.0,
+  "environment_path" : "",
+  "environment_tint" : 
+  [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "final_image_height" : 1080,
+  "final_image_width" : 1920,
+  "first_RR_surface" : 6,
+  "fixed_benchmark_canvas" : true,
+  "indirect_vertices_max" : 15,
+  "jitter_x" : 0.0,
+  "jitter_y" : 0.0,
+  "material" : "exact_Lambert_0.7",
+  "max_bounces" : 16,
+  "max_depth_includes_primary" : true,
+  "max_surface_depth" : 16,
+  "minimum_depth" : 5,
+  "normals" : "faceforward_flat_geometric",
+  "nrd_method" : "RELAX",
+  "nrd_version" : "4.14.3",
+  "path_payload_bytes" : 96,
+  "proposal_pdf" : "cosine_hemisphere_cos_theta_over_pi",
+  "raw_format" : "RGBA32_FLOAT_pure_indirect",
+  "raw_write" : false,
+  "ray_origin" : "RTXPT_ComputeRayOrigin_origin1div16_fScale3div65536_iScale768",
+  "reblur_anti_firefly" : true,
+  "reblur_diffuse_prepass" : 15.0,
+  "reblur_max_history" : 50,
+  "reblur_performance_mode" : false,
+  "reblur_reconstruction" : 2,
+  "reblur_specular_prepass" : 40.0,
+  "reference_estimator" : "FP32_full_camera_cosine_Lambert_path_sun_NEE_at_surfaces2_to16_matching_physical_RR",
+  "render_height" : 1080,
+  "render_target_height" : 1080,
+  "render_target_width" : 1920,
+  "render_width" : 1920,
+  "sample_frame" : 367,
+  "sample_offset" : 10000,
+  "scatter_TMax" : 1000,
+  "scene_argument" : "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\shared-scene\\kitchen.scene.json",
+  "spp" : 1,
+  "sun_angular_diameter" : 0,
+  "sun_irradiance" : 
+  [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "swapchain_height" : 1061,
+  "swapchain_width" : 1920,
+  "to_sun" : 
+  [
+    0.0,
+    0.44721359014511108,
+    -0.89442718029022217
+  ],
+  "vertical_fov_radians" : 1.0471975803375244,
+  "z_near" : 0.0099999997764825821
+}

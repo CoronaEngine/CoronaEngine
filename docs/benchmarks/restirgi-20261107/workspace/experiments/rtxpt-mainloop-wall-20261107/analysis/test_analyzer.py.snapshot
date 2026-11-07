@@ -1,0 +1,57 @@
+"""Small analytic fixture checks, independent of native renderer execution."""
+import csv
+from pathlib import Path
+import tempfile
+import unittest
+from analyze_mainloop import HOST, GPU, audit_run, stats
+
+
+class AnalyticChecks(unittest.TestCase):
+    def test_percentiles(self):
+        result = stats(list(range(1, 241)))
+        self.assertEqual(result['mean_ms'], 120.5)
+        self.assertEqual(result['median_ms'], 120.5)
+        self.assertAlmostEqual(result['p10_ms'], 24.9)
+        self.assertAlmostEqual(result['p90_ms'], 216.1)
+        self.assertAlmostEqual(result['p95_ms'], 228.05)
+
+    def test_counts_phase_boundary_and_tick_validation(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temporary:
+            directory = Path(temporary)
+            fields = ['frame', 'device_frame', 'loop_start_ns', 'loop_end_ns'] + HOST
+            rows, tick, previous_start = [], 0, 0
+            for frame in range(367):
+                duration = frame-119 if 120 <= frame < 360 else 1000
+                row = dict.fromkeys(fields, 0)
+                row.update(frame=frame, device_frame=frame+10, loop_start_ns=tick,
+                           loop_end_ns=tick+duration*1000000, wall_ms=duration,
+                           render_host_ms=duration, start_interval_ms=(tick-previous_start)/1e6)
+                rows.append(row)
+                previous_start, tick = tick, tick+(duration+1)*1000000
+            def write_host():
+                with (directory/'mainloop.csv').open('w', newline='') as stream:
+                    writer = csv.DictWriter(stream, fieldnames=fields)
+                    writer.writeheader()
+                    writer.writerows(rows)
+            write_host()
+            with (directory/'gpu.csv').open('w', newline='') as stream:
+                writer = csv.writer(stream)
+                writer.writerow(['frame', 'sample_frame', 'name', 'ms'])
+                writer.writerows((frame, frame, name, 2) for frame in range(368) for name in GPU)
+            result, data = audit_run(directory, 10000)
+            self.assertEqual(result['measured_count'], 240)
+            self.assertEqual(data['wall_ms'], list(range(1, 241)))
+            self.assertEqual(result['metrics']['wall_ms']['mean_ms'], 120.5)
+            self.assertEqual(result['metrics']['between_loop_gap_ms']['mean_ms'], 1)
+            rows[120]['wall_ms'] = 1.5
+            write_host()
+            with self.assertRaisesRegex(ValueError, 'wall tick conversion mismatch'):
+                audit_run(directory, 10000)
+            rows.pop()
+            write_host()
+            with self.assertRaisesRegex(ValueError, 'expected exactly mainloop frames'):
+                audit_run(directory, 10000)
+
+
+if __name__ == '__main__':
+    unittest.main()

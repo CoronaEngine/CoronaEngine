@@ -1,0 +1,169 @@
+--- /dev/null
++++ b/Rtxpt/MainLoopWall.h
+@@ -0,0 +1,79 @@
++#pragma once
++#include <array>
++#include <chrono>
++#include <cstdint>
++#include <cstdlib>
++#include <filesystem>
++#include <fstream>
++#include <iomanip>
++#include <stdexcept>
++#include <vector>
++
++// Host timestamps only. No queue synchronization or frame pacing is added.
++namespace MainLoopWall {
++enum Mark { AnimateBegin, AnimateEnd, RenderBegin, RenderEnd, PresentBegin, PresentEnd };
++struct Row {
++    uint64_t frame{};
++    uint32_t deviceFrame{};
++    int64_t start{}, end{};
++    double wall{}, animate{}, beginFrame{}, render{}, present{}, other{}, interval{};
++};
++inline Row current;
++inline std::array<int64_t, 6> marks{};
++inline std::vector<Row> rows;
++inline int64_t previousStart{};
++inline bool enabled() {
++    const char* value = std::getenv("RESTIR_MAINLOOP_WALL");
++    return value && value[0] == '1';
++}
++inline int64_t now() {
++    return std::chrono::duration_cast<std::chrono::nanoseconds>(
++        std::chrono::steady_clock::now().time_since_epoch()).count();
++}
++inline double milliseconds(int64_t duration) { return double(duration) / 1000000.; }
++inline void begin(uint64_t frame, uint32_t deviceFrame) {
++    const int64_t tick = now();
++    current = {};
++    current.frame = frame;
++    current.deviceFrame = deviceFrame;
++    current.start = tick;
++    marks.fill(0);
++}
++inline void mark(Mark stage) { marks[size_t(stage)] = now(); }
++inline void write(const char* output, uint64_t target) {
++    std::ofstream file(std::filesystem::path(output) / "mainloop.csv");
++    if (!file) throw std::runtime_error("Cannot export main-loop wall timestamps");
++    file << "frame,device_frame,loop_start_ns,loop_end_ns,wall_ms,animate_host_ms,beginframe_gap_host_ms,render_host_ms,present_host_ms,other_host_ms,start_interval_ms\n";
++    file << std::setprecision(12);
++    for (const auto& r : rows)
++        file << r.frame << ',' << r.deviceFrame << ',' << r.start << ',' << r.end << ',' << r.wall << ','
++             << r.animate << ',' << r.beginFrame << ',' << r.render << ',' << r.present << ',' << r.other << ',' << r.interval << '\n';
++    std::ofstream meta(std::filesystem::path(output) / "mainloop-meta.json");
++    meta << "{\"clock\":\"std::chrono::steady_clock converted to nanoseconds\",\"is_steady\":"
++         << (std::chrono::steady_clock::is_steady ? "true" : "false")
++         << ",\"tick_frequency_hz\":1000000000,\"frame_target\":" << target
++         << ",\"complete_loop_rows\":" << rows.size()
++         << ",\"terminal_incomplete_frame_excluded\":" << target - 1
++         << ",\"csv_write_only_in_unmeasured_tail\":true,\"added_gpu_wait\":false,\"added_frame_pacing\":false,"
++            "\"boundary\":\"before outer-loop Streamline/input polling to after AnimateRenderPresent including Present, garbage collection and frame bookkeeping\","
++            "\"semantics\":\"normal pipelined main-loop wall time, not isolated same-frame GPU completion latency\"}\n";
++}
++inline void end(uint64_t benchmarkFrameAfter, bool success, const char* output, uint64_t target) {
++    const int64_t tick = now();
++    if (!success || benchmarkFrameAfter != current.frame + 1) return;
++    for (auto value : marks) if (value == 0) return;
++    current.end = tick;
++    current.wall = milliseconds(tick - current.start);
++    current.animate = milliseconds(marks[AnimateEnd] - marks[AnimateBegin]);
++    current.beginFrame = milliseconds(marks[RenderBegin] - marks[AnimateEnd]);
++    current.render = milliseconds(marks[RenderEnd] - marks[RenderBegin]);
++    current.present = milliseconds(marks[PresentEnd] - marks[PresentBegin]);
++    current.other = current.wall - current.animate - current.beginFrame - current.render - current.present;
++    current.interval = previousStart ? milliseconds(current.start - previousStart) : 0.;
++    previousStart = current.start;
++    rows.push_back(current);
++    // The app exits inside its last Render call. Export beforehand, after the
++    // measured window, so every reported loop includes Present and collection.
++    if (benchmarkFrameAfter + 1 == target) write(output, target);
++}
++}
+--- a/Rtxpt/Sample.cpp
++++ b/Rtxpt/Sample.cpp
+@@ -10,6 +10,8 @@
+ 
+ #include "Sample.h"
+ #include "RepositoryBenchmark.h"
++#include "MainLoopWall.h"
++#include <donut/app/MainLoopTiming.h>
+ #include <iomanip>
+ 
+ #include <donut/engine/FramebufferFactory.h>
+@@ -3098,6 +3100,20 @@
+             deviceManager->AddRenderPassToBack(&example);
+             if (!cmdLine.noWindow)
+                 deviceManager->AddRenderPassToBack(&gui);
++            if (RepositoryBenchmark::enabled() && MainLoopWall::enabled()) {
++                MainLoopWall::rows.reserve(size_t(RepositoryBenchmark::frameTarget()));
++                donut::app::SetMainLoopBoundaryCallback([](uint32_t deviceFrame, bool begin, bool success) {
++                    if (begin) MainLoopWall::begin(RepositoryBenchmark::frame, deviceFrame);
++                    else MainLoopWall::end(RepositoryBenchmark::frame, success,
++                        RepositoryBenchmark::output(), RepositoryBenchmark::frameTarget());
++                });
++                deviceManager->m_callbacks.beforeAnimate = [](auto&, uint32_t) { MainLoopWall::mark(MainLoopWall::AnimateBegin); };
++                deviceManager->m_callbacks.afterAnimate = [](auto&, uint32_t) { MainLoopWall::mark(MainLoopWall::AnimateEnd); };
++                deviceManager->m_callbacks.beforeRender = [](auto&, uint32_t) { MainLoopWall::mark(MainLoopWall::RenderBegin); };
++                deviceManager->m_callbacks.afterRender = [](auto&, uint32_t) { MainLoopWall::mark(MainLoopWall::RenderEnd); };
++                deviceManager->m_callbacks.beforePresent = [](auto&, uint32_t) { MainLoopWall::mark(MainLoopWall::PresentBegin); };
++                deviceManager->m_callbacks.afterPresent = [](auto&, uint32_t) { MainLoopWall::mark(MainLoopWall::PresentEnd); };
++            }
+             deviceManager->RunMessageLoop();
+             if (!cmdLine.noWindow)
+                 deviceManager->RemoveRenderPass(&gui);
+--- a/External/Donut/src/app/DeviceManager.cpp
++++ b/External/Donut/src/app/DeviceManager.cpp
+@@ -48,6 +48,7 @@
+ */
+ 
+ #include <donut/app/DeviceManager.h>
++#include <donut/app/MainLoopTiming.h>
+ #include <donut/core/math/math.h>
+ #include <donut/core/log.h>
+ #include <nvrhi/utils.h>
+@@ -85,6 +86,16 @@
+ #endif
+ 
+ using namespace donut::app;
++
++namespace donut::app
++{
++    static void (*s_MainLoopBoundaryCallback)(uint32_t, bool, bool) = nullptr;
++
++    void SetMainLoopBoundaryCallback(void (*callback)(uint32_t, bool, bool))
++    {
++        s_MainLoopBoundaryCallback = callback;
++    }
++}
+ 
+ // The joystick interface in glfw is not per-window like the keys, mouse, etc. The joystick callbacks
+ // don't take a window arg. So glfw's model is a global joystick shared by all windows. Hence, the equivalent 
+@@ -504,6 +515,8 @@
+ #endif
+     while(!glfwWindowShouldClose(m_Window))
+     {
++        const uint32_t frameIndex = m_FrameIndex;
++        if (s_MainLoopBoundaryCallback) s_MainLoopBoundaryCallback(frameIndex, true, true);
+ #if DONUT_WITH_STREAMLINE
+         StreamlineIntegration::Get().SimStart(*this);
+ #endif
+@@ -511,6 +524,7 @@
+         glfwPollEvents();
+         UpdateWindowSize();
+         bool presentSuccess = AnimateRenderPresent();
++        if (s_MainLoopBoundaryCallback) s_MainLoopBoundaryCallback(frameIndex, false, presentSuccess);
+         if (!presentSuccess)
+         {
+ #if DONUT_WITH_AFTERMATH
+--- /dev/null
++++ b/External/Donut/include/donut/app/MainLoopTiming.h
+@@ -0,0 +1,8 @@
++#pragma once
++
++#include <cstdint>
++
++namespace donut::app
++{
++    void SetMainLoopBoundaryCallback(void (*callback)(uint32_t frameIndex, bool begin, bool success));
++}

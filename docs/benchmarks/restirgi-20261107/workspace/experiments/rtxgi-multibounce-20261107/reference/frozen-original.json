@@ -1,0 +1,38 @@
+{
+  "frozen_utc": "2026-11-07T09:20:55.842441+00:00",
+  "executable": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxgi-multibounce-20261107\\reference\\bin-release\\RestirGI.exe",
+  "executable_sha256": "e0dbb833ef78191ad99e2ab248b962235fbe9710533651d2e9c9be9438d91c84",
+  "native_core_hashes": {
+    "restirTemporalCS.hlsl": "3874a3b9a05c4ec9f950b1f6daff6a7a6e565a8f23a7f24c3fa4842144767a66",
+    "restirSpatialCS.hlsl": "453e5c99cf5db40fb5c11a65918a4bc393e2fc5c6858e2ae5227a863bf3161d5",
+    "restirResolveCS.hlsl": "858da618dd7e9c2c589dab65dae40e793978422855e59ccbb48aa3e3c5431492"
+  },
+  "native_GI_capture_only_v2_v3_comparison": [
+    {
+      "frame": 0,
+      "v2_v3_raw_gi_sha256": "67b7801e0351984619bd8d47d9cdcc8e35098fbd6e46cb78b2e833f877bf9501",
+      "bit_identical": true
+    },
+    {
+      "frame": 1,
+      "v2_v3_raw_gi_sha256": "49fe4f1abc1951aabdbe5a8f4ba9effa411ccc243e81a769f5d9eed07fc6de63",
+      "bit_identical": true
+    },
+    {
+      "frame": 2,
+      "v2_v3_raw_gi_sha256": "5a5d7b6ad63c011299c2ad527b4f980dd50824c010f772a442ad1b9e5c853f3f",
+      "bit_identical": true
+    },
+    {
+      "frame": 3,
+      "v2_v3_raw_gi_sha256": "f49626e0fbb892b9d9b9f6fe92d14b4e3f28ab7c9a33c91843c8d616bfce6677",
+      "bit_identical": true
+    }
+  ],
+  "source_changes_archive_sha256": "2efdc8eb00cc2fe63ed974ffad11e4e147b72b2771abd718c08d46ccb87a05d8",
+  "candidate_physics_gate": "PASS: same native path pre/post packing MC difference approximately-0.0151%; native resolved GI excess is downstream reuse/resolve behavior",
+  "runtime_depth_RR_gate": "PASS: surfaces above6 and at16 observed, no RR before6, no overmax",
+  "guide_gate": "positions99.99837%within1mm; normals99.98816%globally,99.99984%onstable3x3interiors; native raster/DXR edge/tie differences disclosed",
+  "independent_PT_reference_gate": "requires root --reference captures and crossrenderer convergence comparison",
+  "GPU_launched_by_this_agent": false
+}

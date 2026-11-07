@@ -1,0 +1,76 @@
+"""CPU-only guards for the opt-in native Kitchen transport/sampler adapter."""
+from pathlib import Path
+import math
+import re
+import unittest
+
+REPO = Path(__file__).resolve().parents[3]
+
+
+def source(relative):
+    return (REPO / relative).read_text(encoding="utf-8")
+
+
+class NativeContract(unittest.TestCase):
+    def test_adapter_is_native_and_multibounce_only(self):
+        sampler = source("vision/src/render_core/sampler/independent.cpp")
+        body = sampler[sampler.index("void set_seed("):sampler.index("void temporary(")]
+        for flag in ("VISION_RESTIR_GI_NATIVE_ALIGNED_LAMBERT",
+                     "VISION_RESTIR_GI_MULTIBOUNCE_BENCH", "VISION_BENCH_SAMPLE_OFFSET"):
+            self.assertIn(flag, body)
+        self.assertIn("Uint index = sample_index", body)
+        additions = re.findall(r"index\s*\+=\s*([^;]+);", body)
+        self.assertTrue(any(value.strip() != "seed_" for value in additions),
+                        "Offset must be added once to the seed index")
+        self.assertEqual(len(additions), 2, "Expected authored seed plus exactly one benchmark offset")
+        self.assertIn("tea<D>(index, dim)", body)
+
+    def test_joint_random_streams_keep_logical_history(self):
+        for name, expected_initials in (("direct.cpp", 2), ("indirect.cpp", 3)):
+            text = source("vision/src/render_core/integrator/ReSTIR/" + name)
+            self.assertEqual(text.count("initial(sampler(), frame_index, spectrum)"), expected_initials)
+            self.assertNotIn("VISION_BENCH_SAMPLE_OFFSET", text,
+                             "IndependentSampler owns the single offset; never shift a caller again")
+            self.assertNotIn("benchmark_sample_frame", text)
+            self.assertNotIn("sample_frame", text)
+        gi = source("vision/src/render_core/integrator/ReSTIR/indirect.cpp")
+        self.assertIn("history_.begin_frame(frame_index", gi)
+        self.assertIn("sampler()->set_seed(pixel, frame_index(), 3)", gi)
+        self.assertIn("initial_samples_(frame_index)", gi)
+        di = source("vision/src/render_core/integrator/ReSTIR/direct.cpp")
+        self.assertIn("cur_visibility_buffer_var(frame_index)", di)
+
+    def test_geometric_material_and_native_suffix_contract(self):
+        material = source("vision/src/base/scattering/material.cpp")
+        start = material.index('std::getenv("VISION_RESTIR_GI_NATIVE_ALIGNED_LAMBERT")')
+        body = material[start:material.index("MaterialEvaluator evaluator{it, swl};", start)]
+        self.assertIn("VISION_RESTIR_GI_MULTIBOUNCE_BENCH", body)
+        self.assertRegex(body, r"normalize\(it\.ng\)")
+        gi = source("vision/src/render_core/integrator/ReSTIR/indirect.cpp")
+        self.assertIn("hit_context.aligned_lambert", gi)
+        self.assertIn("Uint rr_depth_offset = prefix_depth + 1u", gi)
+        self.assertIn("rr_survival_scale", gi)
+
+    def test_seed_keys_and_roulette_semantics_fixture(self):
+        # Model the central set_seed adapter: only native+MB shifts sample_index.
+        def sample_index(logical, offset, native, multibounce):
+            return logical + (offset if native and multibounce else 0)
+        for offset in (0, 10000, 20000):
+            for logical in (0, 63, 96, 127):
+                streams = [sample_index(logical, offset, True, True) for _ in range(4)]
+                self.assertEqual(set(streams), {logical + offset})
+                if offset:
+                    self.assertNotEqual(streams[1], logical + 2 * offset)
+                for native, multibounce in ((False, False), (True, False), (False, True)):
+                    self.assertEqual(sample_index(logical, offset, native, multibounce), logical)
+        # Native owns primary scatter outside Li; suffix0 is physical surface2.
+        suffix_depths = list(range(15))
+        self.assertEqual([b + 2 for b in suffix_depths], list(range(2, 17)))
+        first_rr = next(b for b in suffix_depths if b + 1 >= 5)
+        self.assertEqual(first_rr + 2, 6)
+        camera_beta_before_scatter = .7 ** first_rr * .7
+        self.assertTrue(math.isclose(camera_beta_before_scatter, .16807))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

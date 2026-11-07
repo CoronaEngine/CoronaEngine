@@ -1,0 +1,31 @@
+{
+  "executable": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxgi-multibounce-20261107\\rtxpt\\bin\\Rtxpt.exe",
+  "args": [
+    "--scene",
+    "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\shared-scene\\kitchen.scene.json",
+    "--width",
+    "1920",
+    "--height",
+    "1080",
+    "--nonInteractive"
+  ],
+  "env": {
+    "RESTIR_REPO_BENCH_OUTPUT": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r3-v1",
+    "RESTIR_REPO_BENCH_FRAMES": 128,
+    "RESTIR_REPO_BENCH_INTERVAL_MS": 0,
+    "RESTIR_GI_MODE": "temporalspatial",
+    "RESTIR_GI_CAPTURE": "0,63,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127",
+    "RESTIR_GI_SAMPLE_OFFSET": 20000
+  },
+  "output": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r3-v1",
+  "timeout_seconds": 1800,
+  "experiment": {
+    "renderer": "rtxpt",
+    "label": "quality-r3",
+    "mode": "temporalspatial",
+    "frames": 128,
+    "warmup": 0,
+    "sample_offset": 20000,
+    "scene_contract": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\scene_contract.json"
+  }
+}

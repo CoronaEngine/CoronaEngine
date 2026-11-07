@@ -1,0 +1,29 @@
+{
+  "GPU_launched": false,
+  "assimp_version": [
+    3,
+    3
+  ],
+  "input": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxgi-multibounce-20261107\\reference\\assets\\kitchen-world.obj",
+  "flags": "JoinIdenticalVertices|Triangulate; canonical world OBJ, no axis conversion",
+  "import_succeeded": true,
+  "meshes": 315,
+  "triangles": 1474261,
+  "world_float32_triangle_sha256": "e8386a903db21e7d2acfaccf1ea5826c21de6ff5a42999aa6cd631b0e6cf8982",
+  "bounds": [
+    [
+      -3.138697862625122,
+      -0.029768995940685272,
+      -3.1837048530578613
+    ],
+    [
+      3.7774105072021484,
+      3.3639004230499268,
+      5.470590114593506
+    ]
+  ],
+  "canonical_triangle_sha256": "86ec4c0e450c428f4f3523800157a464fc2026513e93b6a2ce81985da1ead37e",
+  "maximum_absolute_coordinate_delta": 7.275957614183426e-12,
+  "coordinate_bit_differences": 300,
+  "triangle_order_equal_within_1micrometer": true
+}

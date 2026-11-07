@@ -1,0 +1,53 @@
+{
+  "renderer": "RTXDI FullSample native ReSTIR GI with application multibounce candidate tail",
+  "snapshot": "D:/work/corona/CoronaEngine/.workspace/cache/rtxgi-multibounce-20261107/rtxdi",
+  "previous_snapshot_preserved": "D:/work/corona/CoronaEngine/.workspace/cache/rtxgi-kitchen-bench-20261107/rtxdi",
+  "build_directory": "D:/work/corona/CoronaEngine/.workspace/experiments/rtxgi-multibounce-20261107/rtxdi-build-msvc1444",
+  "configuration": "Release",
+  "configure_exit_code": 0,
+  "build_exit_code": 0,
+  "compiler": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/HostX64/x64/CL.exe",
+  "configure_log": "D:/work/corona/CoronaEngine/.workspace/tmp/rtxgi-multibounce-20261107/rtxdi-configure.log",
+  "build_log": "D:/work/corona/CoronaEngine/.workspace/tmp/rtxgi-multibounce-20261107/rtxdi-build.log",
+  "configure_options": [
+    "-G", "Visual Studio 17 2022", "-A", "x64", "-T", "v143,version=14.44.35207",
+    "-DCMAKE_GENERATOR_INSTANCE=C:/Program Files/Microsoft Visual Studio/2022/Community",
+    "-DDONUT_WITH_VULKAN=OFF", "-DDONUT_WITH_DLSS=OFF", "-DDONUT_WITH_AFTERMATH=OFF",
+    "-DRTXDI_CONSOLE_APP=ON", "-DNRD_EMBEDS_SPIRV_SHADERS=OFF", "-DNRD_EMBEDS_DXBC_SHADERS=OFF",
+    "-DFETCHCONTENT_SOURCE_DIR_MATHLIB=D:/work/corona/CoronaEngine/.workspace/cache/rtxgi-multibounce-20261107/rtxdi-mathlib",
+    "-DCMAKE_EXE_LINKER_FLAGS_RELEASE=/MAP:D:/work/corona/CoronaEngine/.workspace/tmp/rtxgi-multibounce-20261107/rtxdi.map /DEBUG:FULL /INCREMENTAL:NO"
+  ],
+  "build_arguments": ["--config", "Release", "--target", "FullSample", "--", "/m:6", "/p:VCToolsVersion=14.44.35207", "/nologo", "/verbosity:normal"],
+  "warnings": {
+    "count": 8,
+    "scope": "unchanged upstream PT SpatialNeighborSelection shader attribute, debug-path size conversion and deprecated graphics pipeline calls"
+  },
+  "source_frozen_before_build": true,
+  "source_mutated_during_build": false,
+  "sdk_files_unchanged": 69,
+  "old_sources_and_binary_preserved": true,
+  "executable": "D:/work/corona/CoronaEngine/.workspace/experiments/rtxgi-multibounce-20261107/rtxdi-build-msvc1444/bin/FullSample.exe",
+  "executable_sha256": "f3bf6fbbab8638c355e6d1833d196f55f27371ffaf34f5b94dbafab8e19ec955",
+  "run_working_directory": "D:/work/corona/CoronaEngine/.workspace/experiments/rtxgi-multibounce-20261107/rtxdi-build-msvc1444/bin",
+  "environment_overrides": {},
+  "assets_junction": "rtxdi-build-msvc1444/Assets -> OWN snapshot/Assets",
+  "expected_secondary_shader": {
+    "permutation": "RTXDI_REGIR_MODE=RTXDI_REGIR_ONION USE_RAY_QUERY=0",
+    "bytes": 156232,
+    "fnv64": "72dbfc65e26cf6cd"
+  },
+  "transport": {
+    "max_surface_reflections_including_primary": 16,
+    "minimum_zero_based_depth": 5,
+    "first_RR_physical_surface": 6,
+    "first_RR_survival": 0.16807,
+    "RR_threshold": 1,
+    "RR_lower_clamp": false,
+    "primary_direct_in_raw_AOV": false,
+    "initial_GI_paths_per_pixel_per_frame": 1,
+    "reference": "independent separate unpacked full path from primary only in quality/reference capture modes"
+  },
+  "analytical_validation": "rtxdi-rr-oracle.json",
+  "runtime_validation": "pending root-owned GPU pilots; compilation and analytic oracle do not establish runtime transport correctness",
+  "gpu_launches_by_implementer": 0
+}

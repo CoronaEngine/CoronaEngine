@@ -13,6 +13,7 @@
 #include "ReSTIR/stable_planes.h"
 #include "ReSTIR/denoiser_signals.h"
 #include "falcor_di_experiment.h"
+#include "restir_gi_experiment.h"
 #include <cstdlib>
 #include <fstream>
 #include <map>
@@ -98,6 +99,10 @@ private:
     mutable std::unique_ptr<FalcorDIExperiment> falcor_di_;
     mutable bool falcor_di_needs_compile_{true};
     mutable bool falcor_di_was_active_{};
+    mutable std::unique_ptr<RestirGIExperiment> reference_gi_;
+    mutable bool reference_gi_needs_compile_{true};
+    mutable bool reference_gi_was_active_{};
+    mutable bool reference_gi_rejected_{};
 
 public:
     RealTimeIntegrator() = default;
@@ -128,6 +133,7 @@ public:
 
     void update_resolution(ocarina::uint2 res) noexcept override {
         falcor_di_needs_compile_ = true;
+        reference_gi_needs_compile_ = true;
         direct_->update_resolution(res);
         indirect_->update_resolution(res);
         if (!denoiser_runtime_disabled() && denoiser_ &&
@@ -234,6 +240,7 @@ public:
         const bool recompile_direct = direct_->set_settings(candidate["direct"]);
         const bool recompile_indirect = indirect_->set_settings(candidate["indirect"]);
         falcor_di_needs_compile_ = true;
+        reference_gi_needs_compile_ = true;
         auto transport = candidate;
         transport["max_depth"] = candidate["max_depth"].get<uint>() - 1u;
         apply_illumination_settings(transport);
@@ -252,7 +259,13 @@ public:
 
     void compile() noexcept override {
         switch_profile::Scope profile{"integrator.compile", "compile"};
+        const char *native_lambert = std::getenv("VISION_RESTIR_GI_NATIVE_ALIGNED_LAMBERT");
+        if (native_lambert && native_lambert[0] != '\0' && native_lambert[0] != '0') {
+            OC_ASSERT(!separate());
+            OC_INFO_FORMAT("Native ReSTIR GI material contract: separate={}, suffix_depth={}", separate(), suffix_depth());
+        }
         falcor_di_needs_compile_ = true;
+        reference_gi_needs_compile_ = true;
         direct_->compile();
         indirect_->compile();
         stable_planes_->set_max_recursion(direct_->max_recursion());
@@ -413,6 +426,7 @@ public:
             direct_->set_compact_radiance(compact);
             indirect_->set_compact_radiance(compact);
             falcor_di_needs_compile_ = true;
+            reference_gi_needs_compile_ = true;
             pipeline()->upload_bindless_array();
             Global::SceneGpuContextScope scene_gpu_context{
                 scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
@@ -489,6 +503,40 @@ public:
             indirect_->invalidate_history();
         }
         falcor_di_was_active_ = use_falcor;
+        const char *reference_gi_mode = std::getenv("VISION_RESTIR_GI_MODE");
+        const char *multibounce_value = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
+        const bool multibounce_reference = multibounce_value && multibounce_value[0] == '1';
+        const bool reference_depth_supported = suffix_depth() == 1u ||
+            (multibounce_reference && suffix_depth() == 15u && min_depth_.hv() == 5u && rr_threshold_.hv() == 1.f);
+        const bool reference_gi_requested = reference_gi_mode && *reference_gi_mode && gi_enabled &&
+            direct_->open() && reference_depth_supported && direct_->max_recursion() == 1u &&
+            !denoiser_enabled && !stable_planes_enabled() && !jitter_primary_samples() &&
+            spectrum()->impl_type() == "srgb" && frame_buffer().impl_type() == "normal" &&
+            scene().sensor()->supports_screen_position_reconstruction() &&
+            !pipeline()->geometry().process_mediums();
+        const bool reference_gi_rejected = reference_gi_mode && *reference_gi_mode && !reference_gi_requested;
+        if (reference_gi_rejected && !reference_gi_rejected_) {
+            OC_WARNING("Reference GI inactive: requires DI+GI, max_depth=2 (or explicit multibounce benchmark5/16/1), max_recursion=1, zero-aperture perspective camera, RGB normal framebuffer, "
+                       "no denoiser, Stable Planes, primary jitter or media; using native ReSTIR GI.");
+        }
+        reference_gi_rejected_ = reference_gi_rejected;
+        const bool prepare_reference_gi = reference_gi_requested && (reference_gi_needs_compile_ ||
+            (reference_gi_ && !reference_gi_->matches(rp->resolution(), reference_gi_mode)));
+        if (prepare_reference_gi) {
+            stream << synchronize() << commit();
+            Global::SceneGpuContextScope scene_gpu_context{
+                scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
+            reference_gi_needs_compile_ = false;
+            reference_gi_.reset();
+            try {
+                reference_gi_ = std::make_unique<RestirGIExperiment>(*indirect_, reference_gi_mode);
+            } catch (const std::exception &error) {
+                OC_WARNING_FORMAT("Reference GI unavailable, using native ReSTIR GI: {}", error.what());
+            }
+        }
+        const bool use_reference_gi = reference_gi_requested && reference_gi_;
+        if (prepare_reference_gi || use_reference_gi != reference_gi_was_active_) indirect_->invalidate_history();
+        reference_gi_was_active_ = use_reference_gi;
         submit(use_falcor ? falcor_di_->dispatch(frame_index_) : direct_->dispatch(frame_index_, precise_lobes),
                &cur_stage_profile_.restir_di_ms);
         const bool direct_only = suffix_depth() == 0u && !denoiser_enabled && !stable_planes_enabled() &&
@@ -502,14 +550,49 @@ public:
                        &cur_stage_profile_.restir_gi_ms);
             }
         } else {
-            submit(indirect_->dispatch(frame_index_, precise_lobes, stable_planes_enabled(),
-                                      direct_->factor(), indirect_->factor(), direct_->open()), &cur_stage_profile_.restir_gi_ms);
+            submit(use_reference_gi ? reference_gi_->dispatch(frame_index_) :
+                   indirect_->dispatch(frame_index_, precise_lobes, stable_planes_enabled(),
+                                       direct_->factor(), indirect_->factor(), direct_->open()), &cur_stage_profile_.restir_gi_ms);
         }
         cur_stage_profile_.path_tracing_ms = cur_stage_profile_.restir_di_ms + cur_stage_profile_.restir_gi_ms;
         auto debug_readback = [&](const char *stage, bool layers = true) {
             const auto directory = evaluation_debug::directory(frame_index_);
             if (directory.empty()) return;
             fs::create_directories(directory);
+            if(use_reference_gi&&string_view(stage)=="raw") reference_gi_->download_guides(frame_index_,directory);
+            const char *native_diagnostic = std::getenv("VISION_RESTIR_GI_NATIVE_MB_DIAGNOSTIC");
+            if (!use_reference_gi && string_view(stage) == "raw" && native_diagnostic && native_diagnostic[0] == '1') {
+                auto positions = device().create_buffer<float4>(pipeline()->pixel_num());
+                auto normals = device().create_buffer<float4>(pipeline()->pixel_num());
+                auto &camera = scene().sensor();
+                Kernel guides = [&](Uint frame) {
+                    camera->load_data();
+                    Uint i = dispatch_id();
+                    Float4 p = make_float4(0.f), n = make_float4(0.f);
+                    auto hit = frame_buffer().cur_visibility_buffer_var(frame).read(i);
+                    $if(hit->is_hit()) {
+                        auto ray = frame_buffer().rays().read(i)->to_ray_state().ray;
+                        auto it = pipeline()->geometry().compute_surface_interaction(hit, ray);
+                        Float3 normal = normalize(it.ng);
+                        normal = ocarina::select(dot(normal, ray.dir_max.xyz()) > 0.f, -normal, normal);
+                        p = make_float4(it.pos, camera->linear_depth(it.pos));
+                        n = make_float4(normal, 1.f);
+                    };
+                    positions.write(i, p); normals.write(i, n);
+                };
+                guides.function()->set_block_dim(8u, 8u);
+                auto shader = device().compile(guides, "Native GI benchmark physical guides");
+                vector<float4> host_positions(pipeline()->pixel_num()), host_normals(pipeline()->pixel_num());
+                stream << shader(frame_index_).dispatch(rp->resolution())
+                       << positions.download(host_positions.data()) << normals.download(host_normals.data()) << synchronize() << commit();
+                auto write_guide = [&](const char *name, const vector<float4> &values) {
+                    std::ofstream file(fs::path(directory) / name, std::ios::binary);
+                    file.write(reinterpret_cast<const char *>(values.data()), values.size() * sizeof(float4));
+                    if (!file) throw std::runtime_error("Native GI physical guide export failed");
+                };
+                write_guide("reference_position_depth.f32", host_positions);
+                write_guide("reference_world_normal.f32", host_normals);
+            }
             vector<float4> direct, indirect;
             if (precise_lobes && string_view(stage).starts_with("composite_")) {
                 direct.resize(pipeline()->pixel_num());

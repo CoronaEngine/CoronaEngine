@@ -1,0 +1,33 @@
+{
+  "status": "complete; three native processes audited, 720 measured frames; mainloop-results.json",
+  "primary_metric": "main loop monotonic elapsed milliseconds per iteration",
+  "expected_runs": 3,
+  "expected_warmup_iterations_per_run": 120,
+  "expected_measured_iterations_per_run": 240,
+  "default_measured_frame_range_inclusive": [120, 359],
+  "legacy_gpu_csv_columns": ["frame", "sample_frame", "name", "ms"],
+  "mainloop_csv_columns": ["frame", "device_frame", "loop_start_ns", "loop_end_ns", "wall_ms", "animate_host_ms", "beginframe_gap_host_ms", "render_host_ms", "present_host_ms", "other_host_ms", "start_interval_ms"],
+  "gpu_frame_mapping": "GPU frame == sample_frame == mainloop frame; random-seed sample_offset separately verified from actual-settings.json",
+  "recorded_mainloop_frames_inclusive": [0, 366],
+  "recorded_gpu_frames_inclusive": [0, 367],
+  "timer": "steady_clock duration_cast nanoseconds; 1e9 ticks per second",
+  "required_checks": [
+    "Exact warmup and measured row counts; unique contiguous frame identifiers",
+    "Join GPU scopes by original frame and sample_frame, not CSV row position",
+    "Finite positive primary wall durations and matched GPU durations",
+    "Monotonic native start/end ticks and explicit timer frequency/time units",
+    "Recompute milliseconds from native tick differences and verify exported values",
+    "Record exact timing boundaries, including whether final GPU completion is inside the interval",
+    "Confirm no measured frame omitted by delayed GPU query resolution or drain",
+    "Check measured phase starts immediately after warmup with no mixed statistics"
+  ],
+  "statistics": ["count", "mean", "median", "p10", "p90", "p95", "min", "max"],
+  "aggregation": "Per run and pooled raw measured samples; do not average per-run percentiles",
+  "quantiles": "Linear interpolation at rank (n - 1) * p on ascending samples",
+  "interpretation": [
+    "CPU wall already includes naturally occurring waits and CPU/GPU overlap; never add CPU wall and GPU elapsed",
+    "Consecutive iteration-start interval exposes work outside explicit iteration start/end boundaries",
+    "Keep CPU work/submission, GPU scopes, and queue waits separate when available",
+    "A pipelined loop wall is throughput elapsed unless it explicitly waits for that iteration GPU completion"
+  ]
+}

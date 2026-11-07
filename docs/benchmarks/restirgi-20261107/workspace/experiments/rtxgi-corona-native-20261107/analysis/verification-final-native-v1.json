@@ -1,0 +1,24 @@
+{
+  "schema": "corona-native-final-verification.v1",
+  "status": "pass",
+  "artifacts": {
+    "manifest-executed-v1.json": "09279558826b034b6980d87194eb62e87a1457cfb40f59c9c5bf9f94e82e977f",
+    "final-native-v1.json": "cbc0d1af8e2a7fe444fd2d9343b339850afddea3fd177baafc3822111d0bdfd5",
+    "six-run-audit-v1.json": "ca0ac65cebd40352231e11c8c97b120f10ae93fe319abbe15f9636e618d49c75",
+    "self-check-results-v1.json": "1476f33cf959a9a5af3a3cc62dc51ba42530499b1401b6a647763a3ef68e6542"
+  },
+  "checks": {
+    "old_25_immutable_input_pins_unchanged": true,
+    "old_four_renderer_rows_unchanged": true,
+    "quality_96_frames_93_within_repeat_dof": true,
+    "timing_720_measured_frames": true,
+    "six_unique_processes_same_pilot_source_runtime_freeze": true,
+    "mandatory_fused_candidate_producer_in_GI_plus_preparation": true,
+    "native_component_means_sum_to_inclusive_cost": true,
+    "full_GPU_unavailable": true,
+    "analytic_checks_9_pass": true
+  },
+  "limitations": [
+    "Independent direct float64/raw timestamp recomputation is performed separately by root; this verifies artifact and protocol integrity."
+  ]
+}

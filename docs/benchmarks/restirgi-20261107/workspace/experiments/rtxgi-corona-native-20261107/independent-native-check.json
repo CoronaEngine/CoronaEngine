@@ -1,0 +1,40 @@
+{
+  "status": "pass",
+  "quality_frames": 96,
+  "within_repeat_DOF": 93,
+  "timing_frames": 720,
+  "temporal_noise_percent": 252.14141686494807,
+  "NRMSE_percent": 254.01404251580914,
+  "brightness_bias_percent": 4.804870882857104,
+  "GI_mean_ms": 13.160861866666666,
+  "GI_plus_preparation_mean_ms": 17.149991111111113,
+  "stage_means_ms": {
+    "ReSTIR indirect initial samples": 6.406795377777778,
+    "ReSTIR indirect temporal reuse": 1.8905699555555555,
+    "ReSTIR indirect spatial reuse and shading": 4.8634965333333335,
+    "rt_geom": 0.4838976,
+    "FrameBuffer-SaveSurfaceExtHistory": 0.19203271111111112,
+    "ReSTIR direct initial candidates and temporal reuse": 3.313198933333333
+  },
+  "quality_repeats": [
+    {
+      "repeat": 1,
+      "noise_percent": 123.01285335600802,
+      "NRMSE_percent": 126.7051920351377,
+      "brightness_bias_percent": 4.840081399210994
+    },
+    {
+      "repeat": 2,
+      "noise_percent": 285.32764721079405,
+      "NRMSE_percent": 287.07245390582426,
+      "brightness_bias_percent": 4.726241947022047
+    },
+    {
+      "repeat": 3,
+      "noise_percent": 306.8906221153662,
+      "NRMSE_percent": 308.3903401624266,
+      "brightness_bias_percent": 4.848289302338271
+    }
+  ],
+  "note": "Root independent directfloat64 all96rawframes and720authoritativeGPU frame maps, no reuse of agent quality summary."
+}

@@ -1,0 +1,47 @@
+{
+  "status": "pass_observation",
+  "total_pixel_frames": 199065600,
+  "luminance_threshold_counts": {
+    "1": 354,
+    "10": 18,
+    "100": 2
+  },
+  "invalid_primary_above1": 0,
+  "fraction_of_total_squared_error_from_luminance_above1": 0.8551113975645125,
+  "extremes": [
+    {
+      "repeat": 1,
+      "max_luminance": 22.63671875,
+      "maximum_location": {
+        "frame": 102,
+        "x": 1152,
+        "y": 370,
+        "valid": true,
+        "reference_luminance": 0.010414601303637028
+      }
+    },
+    {
+      "repeat": 2,
+      "max_luminance": 125.4375,
+      "maximum_location": {
+        "frame": 123,
+        "x": 1104,
+        "y": 519,
+        "valid": true,
+        "reference_luminance": 0.014351069927215574
+      }
+    },
+    {
+      "repeat": 3,
+      "max_luminance": 107.1875,
+      "maximum_location": {
+        "frame": 124,
+        "x": 1079,
+        "y": 736,
+        "valid": true,
+        "reference_luminance": 0.0006631960859522223
+      }
+    }
+  ],
+  "note": "No clamping or rejection; thresholds are descriptive only, all samples retained in canonical noise/NRMSE."
+}

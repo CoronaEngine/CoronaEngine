@@ -1,0 +1,24 @@
+{
+  "schema": "multibounce-independent-review-resolution.v1",
+  "status": "all_six_actionable_findings_addressed",
+  "review": "independent-analysis-review.json",
+  "resolutions": {
+    "R1": "Exact four final guide/reference/quality sets, correct offsets and all four common reference producers required. Diagnostics remain partial.",
+    "R2": "Timing uses actual completed process/helper evidence, actual capture-off flags, unique run directories/input paths, binary and selected shader freeze, and Corona source/runtime identities. Manifest declarations alone no longer suffice.",
+    "R3": "Formal120/240 window and exact360frame coverage enforced; original spatial dispatch twice, Corona spatial0+1 each once and validationevents counted; whole GPU contains GI+prep.",
+    "R4": "Producer-specific1024spp SUM/MEAN/divisor checks; progressive raw input path must equal expected output inside its completed producer run.",
+    "R5": "Known RTXPT/RTXDI whole GPU scope required exactly once per measured frame; original canonical same-run gpu-frames.csv required and SHA recorded. Only Corona fullGPU may be unavailable.",
+    "R6": "Timing actual transport checked in renderer metadata, including actual Corona settings, original benchmark config and RTX min/max/firstRR fields."
+  },
+  "verification": {
+    "unit_tests": "14 passed; includes missing/duplicate fullGPU, missing originalsecond spatial, too-short fullGPU, and actual transport2/2/9 counterexamples",
+    "synthetic_full_four_renderer_quality_integration": "pass; self-check-results.json",
+    "real_pilot_timing_parser_check": "pass; pilot-timing-parser-checks-v1.json",
+    "formal_reference_guide_CLI": "pass; formal-reference-guide-diagnostics-v1.json"
+  },
+  "limitations_retained": [
+    "Review thresholds are diagnostic heuristic screens, not inferential statistical tests.",
+    "Progressive reviewer uses Python assertions; documented commands use standard python -B, not optimized -O.",
+    "Completed immutable inputs and root-owned sequential GPU scheduling are assumed."
+  ]
+}

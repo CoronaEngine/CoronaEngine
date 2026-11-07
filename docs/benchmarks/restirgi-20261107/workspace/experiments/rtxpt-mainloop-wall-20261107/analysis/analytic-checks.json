@@ -1,0 +1,14 @@
+{
+  "command": "python .workspace/experiments/rtxpt-mainloop-wall-20261107/analysis/test_analyzer.py",
+  "exit_code": 0,
+  "test_count": 2,
+  "result": "OK",
+  "checks": [
+    "Known 1..240 arithmetic series mean/median/P10/P90/P95",
+    "367-frame fixture selects exactly 120..359, excludes warmup and seven tail frames",
+    "Native nanosecond conversion and consecutive-start identity",
+    "Host phase partition and exact one millisecond inter-loop gap",
+    "Reject altered wall/tick identity and missing final row"
+  ],
+  "native_runs": "all three passed canonical analyzer; 720 measured frames total; mainloop-results.json"
+}

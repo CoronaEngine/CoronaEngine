@@ -129,6 +129,9 @@ GISampleVar ReSTIRGI::init_sample(const Interaction &it, const SensorSample &ss,
         sp_it.pos = make_float3(0.f);
         sp_it.ng = make_float3(0.f);
         HitContext hit_context{sp_it};
+        const char *native = std::getenv("VISION_RESTIR_GI_NATIVE_ALIGNED_LAMBERT");
+        const char *multibounce = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
+        hit_context.aligned_lambert = native && native[0] == '1' && multibounce && multibounce[0] == '1';
         hit_context.suppress_initial_emission = true;
         hit_context.complete_terminal_direct = true;
         RayVar ray = it.spawn_ray(hit_bsdf.wi.as_vec3());
@@ -157,6 +160,10 @@ GISampleVar ReSTIRGI::init_sample(const Interaction &it, const SensorSample &ss,
 
 void ReSTIRGI::compile_initial_samples() noexcept {
     switch_profile::Scope profile{"GI.initial.compile", "compile"};
+    const char *native = std::getenv("VISION_RESTIR_GI_NATIVE_ALIGNED_LAMBERT");
+    const char *multibounce = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
+    if (native && native[0] == '1' && multibounce && multibounce[0] == '1')
+        OC_INFO("Native ReSTIR GI multibounce benchmark: geometric Lambert0.7; public5/16/RR1; native prefix-aware roulette; joint IndependentSampler offset; one candidate per pixel; original reuse/visibility/normalization retained");
     TSpectrum &spectrum = pipeline()->spectrum();
     TSensor &camera = scene().sensor();
     Kernel kernel = [&](Uint frame_index) {

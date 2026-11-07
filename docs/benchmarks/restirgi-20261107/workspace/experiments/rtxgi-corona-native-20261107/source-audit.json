@@ -1,0 +1,175 @@
+{
+  "status": "pass_cpu_source_and_route_configuration",
+  "source_root": "D:/work/corona/CoronaEngine",
+  "renderer_mutations_by_auditor": false,
+  "gpu_or_build_launched_by_auditor": false,
+  "reuse_prior_four_captures_and_pt_reference": true,
+  "route": {
+    "requirements": [
+      "VISION_RESTIR_GI_MODE absent",
+      "VISION_FALCOR_DI_MODE absent",
+      "direct.open=true",
+      "indirect.open=true",
+      "direct.M_bsdf=1",
+      "direct.max_recursion=1",
+      "denoiser=false",
+      "stable_planes=false",
+      "primary_jitter=false",
+      "accumulation=false"
+    ],
+    "proof": "vision/src/render_core/integrator/rt.cpp:506-555 selects indirect_->dispatch when reference_gi_mode absent",
+    "critical": "Prior port harness uses M_bsdf=0; native RIS then writes invalid primary HitBSDF and native GI generates no usable candidate.",
+    "candidate_source": "vision/src/render_core/integrator/ReSTIR/direct.cpp:225-292",
+    "candidate_count": "Exactly one BSDF proposal (M_bsdf=1) and one suffix invocation per valid hit pixel/frame; indirect.cpp:674-690 dispatches once over full resolution. Native cosine primary proposal retained."
+  },
+  "physical_domain": {
+    "material_flag": "VISION_RESTIR_GI_NATIVE_ALIGNED_LAMBERT=1",
+    "multibounce_flag": "VISION_RESTIR_GI_MULTIBOUNCE_BENCH=1",
+    "existing_gap": "material.cpp:599-621 uses interpolated shading normal, so needs opt-in geometric Frame{faceforward normalize(it.ng)} under native+multibounce guard.",
+    "suffix_gap": "indirect.cpp:131 HitContext leaves aligned_lambert=false; set it true under same native+multibounce guard to activate existing integrator.cpp:353-359 geometric normal handling.",
+    "guide_note": "direct.cpp:632 stores original it.shading.normal(); material factory evaluator uses a copy, so original guide normal can remain native interpolated behavior while all transport BSDF evaluations use exact geometric Lambert. Do not silently describe every native guide as geometric.",
+    "generic_geometry_caution": "geometry.cpp:289 generic compute_surface_interaction sets ng but caller overload geometry.h:140-149 only supplies wo afterward; cannot faceforward against it.wo inside generic constructor.",
+    "reuse_kernels": "Preserve native temporal/spatial/Jacobian/support/target/final shading logic.",
+    "post_adapter_status": "Resolved: native+MB material geometric frame and suffix aligned_lambert enabled; only native reuse guides intentionally retain interpolated normals."
+  },
+  "depth_and_rr": {
+    "api": {
+      "min_depth": 5,
+      "max_depth": 16,
+      "rr_threshold": 1
+    },
+    "conversion": "rt.cpp:245 converts API max16 to suffix_depth15",
+    "suffix": "indirect.cpp:139-150 prefix_depth=0, rr_depth_offset=1, reusable suffix throughput starts1, rr_survival_scale=clamp(max(primaryBSDF/pdf),.25,1)=.7 for cosine Lambert",
+    "semantics": "integrator.cpp:517-532 reads pre-current-BSDF lum. suffix b0 is physical surface2; first RR b4+offset1>=5 at surface6, q=.7^5=.16807. suffix b0..14 visits surface2..16. No native loop modifications required.",
+    "terminal": "Existing complete_terminal_direct may trace a terminal ray but environment/emission zero, so physical AOV remains contract depths2..16."
+  },
+  "random_streams": {
+    "existing_gap": "Native sampler set_seed calls ignore VISION_BENCH_SAMPLE_OFFSET.",
+    "planned_adapter": "IndependentSampler::set_seed centrally adds VISION_BENCH_SAMPLE_OFFSET only under native+multibounce guard; all call sites retain their logical frame and the authored sampler seed remains separate",
+    "di_kernels": [
+      "direct.cpp:708-717 initial+camera+RIS",
+      "direct.cpp:842-850 initial+combine"
+    ],
+    "gi_kernels": [
+      "indirect.cpp:162-173 initial+camera",
+      "indirect.cpp:360-376 initial+camera+temporal",
+      "indirect.cpp:574-621 initial+spatial"
+    ],
+    "suffix": "indirect.cpp:125 frame_index() remains RenderEnv logical frame; IndependentSampler adds the offset once. Keep native DI/GI caller arguments and RenderEnv initial logical. Native route does not execute PT compile_path kernel, so its existing multibounce offset is inactive.",
+    "invariants": [
+      "Kernel frame arguments remain logical",
+      "history_.begin_frame retains logical frame",
+      "visibility buffers and reservoir parity retain logical frame",
+      "all stochastic streams offset jointly",
+      "fixed guide seed is non-stochastic material guide and may remain fixed"
+    ],
+    "repeat_offsets": [
+      0,
+      10000,
+      20000
+    ],
+    "post_adapter_status": "Resolved: IndependentSampler central native+MB offset; DI/GI caller frames untouched."
+  },
+  "raw_aov": {
+    "path": "raw/frame_*/raw_indirect.f32",
+    "layout": "top-left row-major little-endian float32 RGBA",
+    "interpretation": "Physical single-frame pure indirect linear RGB; use directly, no PI factor, albedo factor or spp division.",
+    "proof": "indirect.cpp:555 exact F*Lo*W*prefix; rt.cpp:610 readback occurs before composite/denoising/factors",
+    "precision": "Denoiser-off native storage is rgb21: original8-bit exponent,12mantissa bits and sign, alpha1bit; indirect.cpp:772-780 decodes to float4. Record packing rather than calling producer full FP32."
+  },
+  "timing": {
+    "native_suffix_reuse_scopes": [
+      "ReSTIR indirect initial samples",
+      "ReSTIR indirect temporal reuse",
+      "ReSTIR indirect spatial reuse and shading"
+    ],
+    "mandatory_primary_candidate_scope": "ReSTIR direct initial candidates and temporal reuse",
+    "primary_preparation_scopes": [
+      "rt_geom",
+      "FrameBuffer-SaveSurfaceExtHistory"
+    ],
+    "fused_boundary": "Native primary BSDF proposal and first segment trace are fused with direct candidate generation. Three indirect scopes alone exclude part of candidate path work. Report suffix/reuse and primary-candidate-inclusive sum separately; full DI.initial inclusion conservatively includes direct-only overhead.",
+    "other_direct_scope": "ReSTIR direct spatial reuse and shading",
+    "whole_gpu_frame": "Unavailable with existing Corona profiler; do not substitute CPU wall fields.",
+    "analyzer": "Old analyze_timing.py corona profile recognizes only RestirGI reference/port scopes. New native profile required; QPC result.gpu.frames mapping remains reusable."
+  },
+  "cpu_regression": {
+    "file": "test_native_contract.py",
+    "command": "C:/Users/Zero/miniforge3/envs/coronaengine-dev/python.exe -B .workspace/experiments/rtxgi-corona-native-20261107/test_native_contract.py",
+    "initial_red": "Superseded per-kernel strategy first failed3 source guards. Revised centralized sampler strategy exit1 with2 expected adapter failures and2 passing no-double-offset/seed/depth/RR fixtures. DI2 and GI3 RenderEnv initial calls must remain logical."
+  },
+  "post_adapter_review": {
+    "regression": "native-contract-regression.json",
+    "checks": {
+      "native_flag": true,
+      "multibounce_flag": true,
+      "port_mode_absent": true,
+      "pt_flag_absent": true,
+      "one_primary_bsdf": true,
+      "one_suffix": true,
+      "depth_5_16_rr1": true,
+      "li_unchanged": true,
+      "native_direct_unchanged": true
+    },
+    "physical_guides": "Pilot diagnostic geometric normals match physical BSDF; native reuse guide remains interpolated algorithm heuristic.",
+    "terminal_cost": "Native extra terminal BSDF/RR/trace retained without optimization.",
+    "source_hashes": {
+      "vision/src/render_core/sampler/independent.cpp": {
+        "sha256": "22ddf3262de6a4faecbace6f22d245e86f480fba096c44400010bc03e7a45cdb",
+        "previous_four_way_capture_sha256": "2630b97b2419d0adb75e7c21d5d3ab79b7c04272cdef06a88366fe5ae61327ac",
+        "unchanged_from_previous_capture": false
+      },
+      "vision/src/base/scattering/material.cpp": {
+        "sha256": "d68158bbfaf6114f57700e15fd6c934626483716f0684b362c220cb7eb26f7d8",
+        "previous_four_way_capture_sha256": "5a3a6276a02703d84294b42049654d61edd3a9e5759e933539cd0e0d147c7b41",
+        "unchanged_from_previous_capture": false
+      },
+      "vision/src/render_core/integrator/ReSTIR/indirect.cpp": {
+        "sha256": "0dd68f36922300465197abfcc3b0a80b17544fad8fdd3e85dd86c310e85ed295",
+        "previous_four_way_capture_sha256": "0a07ad0410499eaedc0c41350d1a7b95b338d78a1c2f53e0f99e89bb2d008f5a",
+        "unchanged_from_previous_capture": false
+      },
+      "vision/src/render_core/integrator/rt.cpp": {
+        "sha256": "57db77aa1c000ffc788a1d305bbf5e39d5f40422c8c513bbbda6a4aeacd3b12d",
+        "previous_four_way_capture_sha256": "1ac1306887b626bbd523681101cef212c134c9a1ec65fc0146d46df543b90e8f",
+        "unchanged_from_previous_capture": false
+      },
+      "vision/src/base/integral/integrator.cpp": {
+        "sha256": "7fc0e614ddf3561f11453fe413daf8c26e5ebd3729d8d264f60129fbbfbf7d42",
+        "previous_four_way_capture_sha256": "7fc0e614ddf3561f11453fe413daf8c26e5ebd3729d8d264f60129fbbfbf7d42",
+        "unchanged_from_previous_capture": true
+      },
+      "vision/src/render_core/integrator/ReSTIR/direct.cpp": {
+        "sha256": "921b8e446440c989d1a3ddd0cf63661ea2f3c82670657f412921f57efc9a7eb9",
+        "previous_four_way_capture_sha256": "921b8e446440c989d1a3ddd0cf63661ea2f3c82670657f412921f57efc9a7eb9",
+        "unchanged_from_previous_capture": true
+      }
+    },
+    "scoped_diff_proof": {
+      "vision/src/render_core/sampler/independent.cpp": {
+        "removed_adapter_blocks": 1,
+        "adapter_removed_sha256": "2630b97b2419d0adb75e7c21d5d3ab79b7c04272cdef06a88366fe5ae61327ac",
+        "previous_capture_sha256": "2630b97b2419d0adb75e7c21d5d3ab79b7c04272cdef06a88366fe5ae61327ac",
+        "matches_prior_capture": true
+      },
+      "vision/src/base/scattering/material.cpp": {
+        "removed_adapter_blocks": 1,
+        "adapter_removed_sha256": "5a3a6276a02703d84294b42049654d61edd3a9e5759e933539cd0e0d147c7b41",
+        "previous_capture_sha256": "5a3a6276a02703d84294b42049654d61edd3a9e5759e933539cd0e0d147c7b41",
+        "matches_prior_capture": true
+      },
+      "vision/src/render_core/integrator/ReSTIR/indirect.cpp": {
+        "removed_adapter_blocks": 2,
+        "adapter_removed_sha256": "0a07ad0410499eaedc0c41350d1a7b95b338d78a1c2f53e0f99e89bb2d008f5a",
+        "previous_capture_sha256": "0a07ad0410499eaedc0c41350d1a7b95b338d78a1c2f53e0f99e89bb2d008f5a",
+        "matches_prior_capture": true
+      },
+      "vision/src/render_core/integrator/rt.cpp": {
+        "removed_adapter_blocks": 1,
+        "adapter_removed_sha256": "1ac1306887b626bbd523681101cef212c134c9a1ec65fc0146d46df543b90e8f",
+        "previous_capture_sha256": "1ac1306887b626bbd523681101cef212c134c9a1ec65fc0146d46df543b90e8f",
+        "matches_prior_capture": true
+      }
+    }
+  }
+}

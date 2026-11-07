@@ -1,0 +1,61 @@
+{
+  "schema": "four-way-multibounce-final-verification.v1",
+  "status": "pass",
+  "canonical_statuses": {
+    "quality": "quality_complete",
+    "timing": "timing_complete"
+  },
+  "immutable_manifest": {
+    "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\manifest-executed-seedstreams-v1.json",
+    "sha256": "7d12b58cb14b279035573b421b5bce34d01fc64d19c180fb2ee61afceb274bd3"
+  },
+  "verification": [
+    "15CPUanalysis tests pass",
+    "4renderers x96qualityframes,93within-repeat DOF,93within-repeat lagpairs",
+    "4renderers x720measured GPUframes;120warmup then240measured perprocess",
+    "Allselected Corona inputs from seedstreams-v1;402d/d61b/7fc sourcehashes enforced",
+    "Corona80suffix validationevents per240measuredframes; meanincludesnon-eventzero frames",
+    "Nonoverlapping per-stage means sum to strict GI mean",
+    "Known external wholeGPU timestamps mandatory and containGI+prep; Corona wholeGPU unavailable",
+    "Canonical source-script hashes match current immutable computation sources",
+    "Independent rootCorona quality/timing recomputation agrees within2e-9percentagepoints/2e-15ms"
+  ],
+  "artifacts": {
+    "final-quality-v1.json": {
+      "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\final-quality-v1.json",
+      "sha256": "a39de54e54314baad63d80637d6cbda5e8d9843e3081f1005d45c74de1b1fc66"
+    },
+    "final-timing-v1.json": {
+      "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\final-timing-v1.json",
+      "sha256": "fafd56efcf4b38c7938ecf486f51bd981f5d393388fdbf5815c805ba0e08936b"
+    },
+    "final-metrics-summary-v1.json": {
+      "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\final-metrics-summary-v1.json",
+      "sha256": "9d6fa1bf1ed5ff792f3a2fc0345b16815410e7212d5a5679ca838b5740502771"
+    },
+    "final-stage-means-v1.json": {
+      "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\final-stage-means-v1.json",
+      "sha256": "d6d0e1c4ea38851c3f691b621a3000342ecf2c42f9a091c84598f716eb1c9a8e"
+    },
+    "final-independent-crosscheck-v1.json": {
+      "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\final-independent-crosscheck-v1.json",
+      "sha256": "800a66357786876d476d48040f0f513f75242ea5ea5b166d702e63a7907722c6"
+    },
+    "quality-run-audit-seedstreams-v1.json": {
+      "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\quality-run-audit-seedstreams-v1.json",
+      "sha256": "10ad1b445b4ce4e9a042d62d4f7355619ed3321c4451352a6aa3bdb082079b56"
+    },
+    "timing-run-audit-seedstreams-v1.json": {
+      "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\timing-run-audit-seedstreams-v1.json",
+      "sha256": "53402c8caa8ed47027821de0459764ed46a87174302ae0de7a9230785b48d4cd"
+    },
+    "reference-acceptance-v1.json": {
+      "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\reference-acceptance-v1.json",
+      "sha256": "db455adce9748629b95e2758d7a884803d59860f987dec84f2e8a84de7ece8f3"
+    },
+    "corona-seed-stream-regression-v1.json": {
+      "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\corona-seed-stream-regression-v1.json",
+      "sha256": "7af3e0ffcecd677e68388a72b6dfd0f5102692b360550ec386cdf17ada438f8d"
+    }
+  }
+}

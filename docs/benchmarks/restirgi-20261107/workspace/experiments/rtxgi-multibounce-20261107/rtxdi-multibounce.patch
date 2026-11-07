@@ -1,0 +1,457 @@
+--- a/Samples/FullSample/Shaders/LightingPasses/BenchmarkPathTrace.hlsli
++++ b/Samples/FullSample/Shaders/LightingPasses/BenchmarkPathTrace.hlsli
+@@ -0,0 +1,168 @@
++#ifndef BENCHMARK_PATH_TRACE_HLSLI
++#define BENCHMARK_PATH_TRACE_HLSLI
++
++// Application-only transport extension. ReSTIR GI continues to reconnect the
++// first secondary vertex; its outgoing radiance contains this entire path tail.
++// Physical surface depths include the primary as 1. Corona min_depth=5 is
++// zero-based, so the first roulette test follows surface 6.
++static const uint kBenchmarkMaxSurfaceDepth = 16;
++static const uint kBenchmarkFirstRRSurfaceDepth = 6;
++static const float kBenchmarkAlbedo = 0.7;
++
++struct BenchmarkPathResult
++{
++    float3 radiance;
++    uint lastDepth;
++    uint rrTests;
++    uint rrSurvivals;
++    uint reason; // 0 invalid primary, 1 miss, 2 roulette, 3 terminal depth
++};
++
++bool BenchmarkTraceNextSurface(RAB_Surface surface, inout RTXDI_RandomSamplerState rng, out RAB_Surface nextSurface)
++{
++    float3 tangent, bitangent;
++    BranchlessONB(surface.normal, tangent, bitangent);
++    float unusedPdf;
++    float2 random = float2(RTXDI_GetNextRandom(rng), RTXDI_GetNextRandom(rng));
++    float3 localDirection = SampleCosHemisphere(random, unusedPdf);
++
++    RayDesc ray;
++    ray.Origin = BenchmarkOffsetRayOrigin(surface.worldPos, surface.geoNormal);
++    ray.Direction = tangent * localDirection.x + bitangent * localDirection.y + surface.normal * localDirection.z;
++    ray.TMin = 0;
++    ray.TMax = 1000;
++
++    RAB_RayPayload payload = (RAB_RayPayload)0;
++    payload.instanceID = ~0u;
++    payload.throughput = 1;
++#if USE_RAY_QUERY
++    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> rayQuery;
++    rayQuery.TraceRayInline(SceneBVH, RAY_FLAG_NONE, INSTANCE_MASK_OPAQUE, ray);
++    while (rayQuery.Proceed()) { }
++    if (rayQuery.CommittedStatus() == COMMITTED_TRIANGLE_HIT)
++    {
++        payload.instanceID = rayQuery.CommittedInstanceID();
++        payload.geometryIndex = rayQuery.CommittedGeometryIndex();
++        payload.primitiveIndex = rayQuery.CommittedPrimitiveIndex();
++        payload.barycentrics = rayQuery.CommittedTriangleBarycentrics();
++        payload.committedRayT = rayQuery.CommittedRayT();
++    }
++#else
++    TraceRay(SceneBVH, RAY_FLAG_NONE, INSTANCE_MASK_OPAQUE, 0, 0, 0, ray, payload);
++#endif
++    nextSurface = RAB_EmptySurface();
++    if (payload.instanceID == ~0u)
++        return false;
++
++    GeometrySample gs = getGeometryFromHit(payload.instanceID, payload.geometryIndex,
++        payload.primitiveIndex, payload.barycentrics, GeomAttr_Normal | GeomAttr_Position,
++        t_InstanceData, t_GeometryData, t_MaterialConstants);
++    nextSurface.worldPos = ray.Origin + ray.Direction * payload.committedRayT;
++    nextSurface.normal = dot(gs.flatNormal, ray.Direction) < 0 ? gs.flatNormal : -gs.flatNormal;
++    nextSurface.geoNormal = nextSurface.normal;
++    nextSurface.viewDir = -ray.Direction;
++    nextSurface.viewDepth = 1;
++    nextSurface.diffuseProbability = 1;
++    nextSurface.material.diffuseAlbedo = kBenchmarkAlbedo;
++    nextSurface.material.specularF0 = 0;
++    nextSurface.material.roughness = 1;
++    return true;
++}
++
++float3 BenchmarkSampleSun(RAB_Surface surface, inout RTXDI_RandomSamplerState rng,
++    inout RTXDI_RandomSamplerState tileRng)
++{
++    // Keep the native secondary-light candidate path, including its hard-sun
++    // PolymorphicLight conversion and discrete probability mass of one.
++    RAB_LightSample lightSample;
++    RTXDI_DIReservoir reservoir = RTXDI_SampleLightsForSurface(rng, tileRng, surface,
++        g_Const.brdfPT.secondarySurfaceReSTIRDIParams.initialSamplingParams, g_Const.lightBufferParams,
++#if RTXDI_ENABLE_PRESAMPLING
++        g_Const.localLightsRISBufferSegmentParams, g_Const.environmentLightRISBufferSegmentParams,
++#if RTXDI_REGIR_MODE != RTXDI_REGIR_MODE_DISABLED
++        g_Const.regir,
++#endif
++#endif
++        lightSample);
++    float3 diffuse = 0;
++    float3 specular = 0;
++    float lightDistance = 0;
++    ShadeSurfaceWithLightSample(reservoir, surface, g_Const.restirDI.shadingParams, lightSample,
++        false, false, false, diffuse, specular, lightDistance);
++    return diffuse * kBenchmarkAlbedo;
++}
++
++BenchmarkPathResult BenchmarkTraceTail(RAB_Surface secondarySurface, bool validSecondary,
++    inout RTXDI_RandomSamplerState rng, inout RTXDI_RandomSamplerState tileRng)
++{
++    BenchmarkPathResult result = (BenchmarkPathResult)0;
++    result.lastDepth = 1;
++    result.reason = 1;
++    if (!validSecondary)
++        return result;
++
++    RAB_Surface surface = secondarySurface;
++    float betaCamera = kBenchmarkAlbedo; // primary cosine-BSDF sampling weight
++    float tailWeight = 1;
++    [loop]
++    for (uint depth = 2; depth <= kBenchmarkMaxSurfaceDepth; ++depth)
++    {
++        result.lastDepth = depth;
++        result.radiance += tailWeight * BenchmarkSampleSun(surface, rng, tileRng);
++        if (depth == kBenchmarkMaxSurfaceDepth)
++        {
++            result.reason = 3;
++            break;
++        }
++
++        const float betaBeforeCurrentBSDF = betaCamera;
++        betaCamera *= kBenchmarkAlbedo;
++        tailWeight *= kBenchmarkAlbedo;
++        if (depth >= kBenchmarkFirstRRSurfaceDepth && betaBeforeCurrentBSDF < 1)
++        {
++            ++result.rrTests;
++            const float survival = min(0.95, betaBeforeCurrentBSDF);
++            if (RTXDI_GetNextRandom(rng) > survival)
++            {
++                result.reason = 2;
++                break;
++            }
++            ++result.rrSurvivals;
++            betaCamera /= survival;
++            tailWeight /= survival;
++        }
++
++        RAB_Surface nextSurface;
++        if (!BenchmarkTraceNextSurface(surface, rng, nextSurface))
++        {
++            result.reason = 1;
++            break;
++        }
++        surface = nextSurface;
++    }
++    return result;
++}
++
++BenchmarkPathResult BenchmarkTraceFresh(RAB_Surface primarySurface, uint2 globalIndex)
++{
++    BenchmarkPathResult result = (BenchmarkPathResult)0;
++    if (!RAB_IsSurfaceValid(primarySurface))
++        return result;
++    // Separate from initial GI candidate generation and all reuse/packing.
++    RTXDI_RandomSamplerState rng = RTXDI_InitRandomSampler(globalIndex,
++        g_Const.runtimeParams.frameIndex, 0x4d425046u);
++    RTXDI_RandomSamplerState tileRng = RTXDI_InitRandomSampler(globalIndex / RTXDI_TILE_SIZE_IN_PIXELS,
++        g_Const.runtimeParams.frameIndex, 0x4d425054u);
++    RAB_Surface secondarySurface;
++    bool validSecondary = BenchmarkTraceNextSurface(primarySurface, rng, secondarySurface);
++    result = BenchmarkTraceTail(secondarySurface, validSecondary, rng, tileRng);
++    result.radiance *= kBenchmarkAlbedo;
++    return result;
++}
++
++float4 BenchmarkPathStats(BenchmarkPathResult result)
++{
++    return float4(result.lastDepth, result.rrTests, result.rrSurvivals, result.reason);
++}
++
++#endif
+--- a/Samples/FullSample/Shaders/LightingPasses/RtxdiApplicationBridge/RAB_Buffers.hlsli
++++ b/Samples/FullSample/Shaders/LightingPasses/RtxdiApplicationBridge/RAB_Buffers.hlsli
+@@ -101,6 +101,8 @@
+ RWTexture2D<float4> u_DirectLightingRaw : register(u17);
+ RWTexture2D<float4> u_BenchmarkAccum : register(u31);
+ RWTexture2D<float4> u_BenchmarkFresh : register(u35);
++RWTexture2D<float4> u_BenchmarkPathStats : register(u36);
++RWTexture2D<float4> u_BenchmarkFreshPathStats : register(u37);
+ RWTexture2D<float4> u_BenchmarkPosition : register(u32);
+ RWTexture2D<float4> u_BenchmarkNormal : register(u33);
+ RWTexture2D<float4> u_BenchmarkAlbedo : register(u34);
+--- a/Samples/FullSample/Shaders/LightingPasses/ShadeSecondarySurfaces.hlsl
++++ b/Samples/FullSample/Shaders/LightingPasses/ShadeSecondarySurfaces.hlsl
+@@ -12,8 +12,7 @@
+ 
+ #pragma pack_matrix(row_major)
+ 
+-// Disable specular MIS on direct lighting of the secondary surfaces,
+-// because we do not trace the BRDF rays further.
++// Exact Lambert benchmark uses a hard delta sun, so no specular MIS is needed.
+ #define RAB_ENABLE_SPECULAR_MIS 0
+ 
+ #include "RtxdiApplicationBridge/RtxdiApplicationBridge.hlsli"
+@@ -30,8 +29,7 @@
+ #endif
+ 
+ #include "ShadingHelpers.hlsli"
+-
+-static const float c_MaxIndirectRadiance = 10;
++#include "BenchmarkPathTrace.hlsli"
+ 
+ #if USE_RAY_QUERY
+ [numthreads(RTXDI_SCREEN_SPACE_GROUP_SIZE, RTXDI_SCREEN_SPACE_GROUP_SIZE, 1)]
+@@ -46,7 +44,7 @@
+ #endif
+     uint2 pixelPosition = RTXDI_ReservoirPosToPixelPos(globalIndex, g_Const.runtimeParams.activeCheckerboardField);
+ 
+-    if (any(pixelPosition > int2(g_Const.view.viewportSize)))
++    if (any(pixelPosition >= uint2(g_Const.view.viewportSize)))
+         return;
+ 
+     if(all(pixelPosition == g_Const.debug.mouseSelectedPixel))
+@@ -74,7 +72,7 @@
+     const bool isEnvironmentMap = (secondaryFlags & kSecondaryGBuffer_IsEnvironmentMap) != 0;
+ 
+     RAB_Surface secondarySurface = RAB_EmptySurface();
+-    float3 radiance = secondaryGBufferData.emission;
++    float3 radiance = 0;
+ 
+     // Unpack the G-buffer data
+     secondarySurface.worldPos = secondaryGBufferData.worldPos;
+@@ -88,63 +86,23 @@
+     secondarySurface.diffuseProbability = GetSurfaceDiffuseProbability(secondarySurface);
+     secondarySurface.viewDir = normalize(primarySurface.worldPos - secondarySurface.worldPos);
+ 
+-    // Shade the secondary surface.
+-    if (isValidSecondarySurface && !isEnvironmentMap)
+-    {
+-        RAB_LightSample lightSample;
+-        RTXDI_DIReservoir reservoir = RTXDI_SampleLightsForSurface(rng, tileRng, secondarySurface,
+-            g_Const.brdfPT.secondarySurfaceReSTIRDIParams.initialSamplingParams, g_Const.lightBufferParams,
+-#if RTXDI_ENABLE_PRESAMPLING
+-        g_Const.localLightsRISBufferSegmentParams, g_Const.environmentLightRISBufferSegmentParams,
+-#if RTXDI_REGIR_MODE != RTXDI_REGIR_MODE_DISABLED
+-        g_Const.regir,
+-#endif
+-#endif
+-        lightSample);
++    BenchmarkPathResult candidate = (BenchmarkPathResult)0;
++    if (RAB_IsSurfaceValid(primarySurface))
++        candidate = BenchmarkTraceTail(secondarySurface, isValidSecondarySurface && !isEnvironmentMap, rng, tileRng);
++    radiance = candidate.radiance;
+ 
+-        if (g_Const.brdfPT.enableSecondaryResampling)
+-        {
+-            // Try to find this secondary surface in the G-buffer. If found, resample the lights
+-            // from that G-buffer surface into the reservoir using the spatial resampling function.
+-
+-            float4 secondaryClipPos = mul(float4(secondaryGBufferData.worldPos, 1.0), g_Const.view.matWorldToClip);
+-            secondaryClipPos.xyz /= secondaryClipPos.w;
+-
+-            if (all(abs(secondaryClipPos.xy) < 1.0) && secondaryClipPos.w > 0)
+-            {
+-                int2 secondaryPixelPos = int2(secondaryClipPos.xy * g_Const.view.clipToWindowScale + g_Const.view.clipToWindowBias);
+-                secondarySurface.viewDepth = secondaryClipPos.w;
+-                uint sourceBufferIndex = g_Const.restirDI.bufferIndices.shadingInputBufferIndex;
+-                reservoir = RTXDI_DISpatialResampling(secondaryPixelPos, secondarySurface, reservoir,
+-                    rng, g_Const.runtimeParams, g_Const.restirDI.reservoirBufferParams, sourceBufferIndex, g_Const.brdfPT.secondarySurfaceReSTIRDIParams.spatialResamplingParams, lightSample);
+-            }
+-        }
+-        bool valid = reservoir.weightSum > 0;
+-        Debug_RecordPTNEELightPosition(RAB_LightSamplePosition(lightSample));
+-        Debug_RecordPTFinalVertexCount(3);
+-
+-        float3 indirectDiffuse = 0;
+-        float3 indirectSpecular = 0;
+-        float lightDistance = 0;
+-        ShadeSurfaceWithLightSample(reservoir, secondarySurface, g_Const.restirDI.shadingParams, lightSample, /* prevFrameTLAS = */ false,
+-            /* enableVisibilityReuse = */ false, /* enableVisibilityShortcut */ false, indirectDiffuse, indirectSpecular, lightDistance);
+-        radiance += indirectDiffuse * secondarySurface.material.diffuseAlbedo + indirectSpecular;
+-        // Firefly suppression
+-        float indirectLuminance = CalcLuminance(radiance);
+-        if (false && indirectLuminance > c_MaxIndirectRadiance)
+-            radiance *= c_MaxIndirectRadiance / indirectLuminance;
+-    }
+-
+-    // Independent uncompressed one-spp integral. Cosine sampling cancels the
+-    // primary Lambert cosine/pdf exactly, leaving primaryAlbedo*secondaryLo.
++    // Diagnostic/reference transport is a separately traced full path. It has
++    // no secondary/reservoir packing or reused samples, and never runs in timing.
+     if (g_Const.benchmarkCaptureFlags & 1)
+     {
+-        const float3 fresh = RAB_IsSurfaceValid(primarySurface) ? 0.7 * radiance : 0;
+-        u_BenchmarkFresh[pixelPosition] = float4(fresh, RAB_IsSurfaceValid(primarySurface) ? 1.0 : 0.0);
++        BenchmarkPathResult fresh = BenchmarkTraceFresh(primarySurface, globalIndex);
++        u_BenchmarkFresh[pixelPosition] = float4(fresh.radiance, RAB_IsSurfaceValid(primarySurface) ? 1.0 : 0.0);
++        u_BenchmarkPathStats[pixelPosition] = BenchmarkPathStats(candidate);
++        u_BenchmarkFreshPathStats[pixelPosition] = BenchmarkPathStats(fresh);
+         if (g_Const.benchmarkCaptureFlags & 4)
+         {
+             const float4 previous = (g_Const.benchmarkFrame % 64 == 0) ? 0 : u_BenchmarkAccum[pixelPosition];
+-            u_BenchmarkAccum[pixelPosition] = previous + float4(fresh, 1.0);
++            u_BenchmarkAccum[pixelPosition] = previous + float4(fresh.radiance, 1.0);
+         }
+     }
+ 
+--- a/Samples/FullSample/Source/App/SceneRenderer.cpp
++++ b/Samples/FullSample/Source/App/SceneRenderer.cpp
+@@ -1225,14 +1225,14 @@
+ void SceneRenderer::WriteBenchmarkSettings()
+ {
+     Json::Value root(Json::objectValue);
+-    root["schema"] = "rtxdi.matched-lambert-gi.v1";
++    root["schema"] = "rtxdi.matched-lambert-multibounce-gi.v1";
+     root["mode"] = m_args.benchmarkMode;
+     root["gi_mode"] = m_args.benchmarkGiMode;
+     root["material"] = "exact Lambert albedo0.7 F0zero geometry normal no emission no maps";
+     root["raw_format"] = "top-left row-major RGBA32_FLOAT linear indirect with primary albedo";
+     root["raw_capture_flags"] = m_args.benchmarkMode == "reference" ? 7u : m_args.benchmarkMode == "quality" ? 3u : 0u;
+     root["reference_chunk_spp"] = 64;
+-    root["reference_source"] = "independent uncompressed fresh candidate after secondary NEE, before GI packing/final visibility";
++    root["reference_source"] = "independent unpacked primary-start full PT path; surface2..16 sun NEE; Corona RR; no GI reuse";
+     root["renderer"] = GetDeviceManager()->GetRendererString();
+     root["graphics_api"] = GetDevice()->getGraphicsAPI() == nvrhi::GraphicsAPI::VULKAN ? "Vulkan" : "D3D12";
+     root["scene_file"] = m_args.sceneFile;
+@@ -1309,10 +1309,21 @@
+     root["GI"]["final_MIS"] = bool(gd.enableFinalMIS);
+     root["GI"]["boiling_filter"] = bool(gi.GetBoilingFilterParameters().enableBoilingFilter);
+     const auto secondary = m_ui.lightingSettings.brdfptParams.secondarySurfaceReSTIRDIParams;
+-    root["GI"]["native_candidate_secondary_interactions"] = 1;
+-    root["GI"]["native_candidate_has_multibounce_loop"] = false;
+-    root["GI"]["native_candidate_RR"] = false;
+-    root["GI"]["Corona_min5_max16_RR1_match"] = false;
++    root["GI"]["candidate_generator"] = "application multibounce path tail behind native GI secondary vertex";
++    root["GI"]["stock_candidate_secondary_interactions"] = 1;
++    root["GI"]["candidate_max_secondary_interactions"] = 15;
++    root["GI"]["candidate_has_multibounce_loop"] = true;
++    root["GI"]["candidate_RR"] = true;
++    root["GI"]["Corona_min5_max16_RR1_match"] = true;
++    root["GI"]["max_surface_reflections_including_primary"] = 16;
++    root["GI"]["min_depth_zero_based"] = 5;
++    root["GI"]["first_RR_after_surface_reflection"] = 6;
++    root["GI"]["RR_threshold"] = 1;
++    root["GI"]["RR_survival"] = "min(0.95,maxRGB(beta_before_current_BSDF)); if beta_before_current_BSDF < 1; no lower clamp";
++    root["GI"]["RR_order"] = "NEE, scatter beta*=0.7, RR, next ray; terminal surface16 NEE then stop";
++    root["GI"]["first_RR_survival"] = 0.16807;
++    root["GI"]["reference_estimator"] = "separate unpacked full path from primary, independent RNG, no GI reuse or reservoir/secondary packing";
++    root["GI"]["pathstats_RGBA"] = "last visited surface depth, RR tests, RR survivals, reason:0 invalid/1 miss/2 RR/3 max16";
+     root["GI"]["secondary_NEE_local_candidates"] = secondary.initialSamplingParams.numLocalLightSamples;
+     root["GI"]["secondary_NEE_BRDF_candidates"] = secondary.initialSamplingParams.numBrdfSamples;
+     root["GI"]["secondary_NEE_infinite_candidates"] = secondary.initialSamplingParams.numInfiniteLightSamples;
+@@ -1321,7 +1332,7 @@
+     root["GI"]["secondary_DI_spatial_reuse_enabled"] = bool(m_ui.lightingSettings.brdfptParams.enableSecondaryResampling);
+     root["GI"]["secondary_DI_spatial_neighbors"] = secondary.spatialResamplingParams.numSamples;
+     root["GI"]["min_secondary_roughness"] = m_ui.lightingSettings.brdfptParams.materialOverrideParams.minSecondaryRoughness;
+-    root["comparison_scope"] = "camera-primary-secondary-unit-hard-sun; exactly one indirect reflection";
++    root["comparison_scope"] = "pure indirect camera-primary-secondary-...-unit-hard-sun; surface reflections2..16 NEE, Corona min_depth5/max_depth16/rr_threshold1";
+     root["GI"]["depth_threshold"] = gt.depthThreshold;
+     root["GI"]["normal_threshold"] = gt.normalThreshold;
+     root["GI"]["spatial_radius"] = gs.samplingRadius;
+@@ -1378,6 +1389,39 @@
+     device->unmapBuffer(staging);
+     if(!out) throw std::runtime_error("Cannot write diagnostic buffer");
+ }
++static Json::Value SummarizeBenchmarkPathStats(const std::vector<float>& data)
++{
++    uint64_t depthHistogram[17] = {};
++    uint64_t reasonHistogram[4] = {};
++    uint64_t rrTests = 0, rrSurvivals = 0, invalidRecords = 0, prematureRR = 0;
++    for (size_t i = 0; i < data.size(); i += 4)
++    {
++        const int depth = int(data[i]);
++        const int tests = int(data[i + 1]);
++        const int survivals = int(data[i + 2]);
++        const int reason = int(data[i + 3]);
++        if (depth < 0 || depth > 16 || reason < 0 || reason > 3 || tests < 0 || survivals < 0 || survivals > tests)
++        {
++            ++invalidRecords;
++            continue;
++        }
++        ++depthHistogram[depth];
++        ++reasonHistogram[reason];
++        rrTests += uint64_t(tests);
++        rrSurvivals += uint64_t(survivals);
++        if (depth < 6 && tests > 0) ++prematureRR;
++    }
++    Json::Value result(Json::objectValue);
++    result["pixels"] = Json::UInt64(data.size() / 4);
++    for (auto count : depthHistogram) result["last_depth_histogram"].append(Json::UInt64(count));
++    for (auto count : reasonHistogram) result["termination_histogram"].append(Json::UInt64(count));
++    result["termination_labels"] = "0 invalid primary, 1 miss, 2 RR, 3 max16";
++    result["RR_tests"] = Json::UInt64(rrTests);
++    result["RR_survivals"] = Json::UInt64(rrSurvivals);
++    result["invalid_records"] = Json::UInt64(invalidRecords);
++    result["RR_before_surface6"] = Json::UInt64(prematureRR);
++    return result;
++}
+ void SceneRenderer::CaptureBenchmarkFrame()
+ {
+     if(m_args.benchmarkMode=="timing") return;
+@@ -1397,6 +1441,21 @@
+     {
+         WriteBenchmarkFloat4(prefix+".frame"+std::to_string(m_renderFrameIndex)+".rgba32f",ReadBenchmarkFloat4(GetDevice(),m_renderTargets->IndirectLightingRaw));
+         WriteBenchmarkFloat4(prefix+".fresh.frame"+std::to_string(m_renderFrameIndex)+".rgba32f",ReadBenchmarkFloat4(GetDevice(),m_renderTargets->BenchmarkFresh));
++        const auto candidateStats = ReadBenchmarkFloat4(GetDevice(),m_renderTargets->BenchmarkPathStats);
++        const auto freshStats = ReadBenchmarkFloat4(GetDevice(),m_renderTargets->BenchmarkFreshPathStats);
++        Json::Value stats(Json::objectValue);
++        stats["frame"] = m_renderFrameIndex;
++        stats["candidate"] = SummarizeBenchmarkPathStats(candidateStats);
++        stats["independent_fresh"] = SummarizeBenchmarkPathStats(freshStats);
++        const auto filename = prefix+".pathstats.frame"+std::to_string(m_renderFrameIndex)+".json";
++        if(std::filesystem::exists(filename)) throw std::runtime_error("Refusing to overwrite path statistics");
++        std::ofstream out(filename); out << stats.toStyledString();
++        if(!out) throw std::runtime_error("Cannot write path statistics");
++        if(m_args.benchmarkMeasured <= 4)
++        {
++            WriteBenchmarkFloat4(prefix+".pathstats.frame"+std::to_string(m_renderFrameIndex)+".rgba32f",candidateStats);
++            WriteBenchmarkFloat4(prefix+".freshpathstats.frame"+std::to_string(m_renderFrameIndex)+".rgba32f",freshStats);
++        }
+     }
+     if(m_args.benchmarkMode=="reference" && ((m_renderFrameIndex+1)%64==0 || m_renderFrameIndex+1==m_args.benchmarkMeasured))
+     {
+--- a/Samples/FullSample/Source/RenderPasses/LightingPasses/LightingPasses.cpp
++++ b/Samples/FullSample/Source/RenderPasses/LightingPasses/LightingPasses.cpp
+@@ -223,6 +223,8 @@
+ 
+         nvrhi::BindingLayoutItem::Texture_UAV(31),
+         nvrhi::BindingLayoutItem::Texture_UAV(35),
++        nvrhi::BindingLayoutItem::Texture_UAV(36),
++        nvrhi::BindingLayoutItem::Texture_UAV(37),
+ 
+         nvrhi::BindingLayoutItem::Texture_UAV(32),
+ 
+@@ -332,6 +334,8 @@
+ 
+             nvrhi::BindingSetItem::Texture_UAV(31, renderTargets.BenchmarkAccum),
+             nvrhi::BindingSetItem::Texture_UAV(35, renderTargets.BenchmarkFresh),
++            nvrhi::BindingSetItem::Texture_UAV(36, renderTargets.BenchmarkPathStats),
++            nvrhi::BindingSetItem::Texture_UAV(37, renderTargets.BenchmarkFreshPathStats),
+             nvrhi::BindingSetItem::Texture_UAV(32, renderTargets.BenchmarkPosition),
+             nvrhi::BindingSetItem::Texture_UAV(33, renderTargets.BenchmarkNormal),
+             nvrhi::BindingSetItem::Texture_UAV(34, renderTargets.BenchmarkAlbedo),
+--- a/Samples/FullSample/Source/RenderTargets.cpp
++++ b/Samples/FullSample/Source/RenderTargets.cpp
+@@ -171,6 +171,10 @@
+     BenchmarkAccum = device->createTexture(desc);
+     desc.debugName = "BenchmarkFresh";
+     BenchmarkFresh = device->createTexture(desc);
++    desc.debugName = "BenchmarkPathStats";
++    BenchmarkPathStats = device->createTexture(desc);
++    desc.debugName = "BenchmarkFreshPathStats";
++    BenchmarkFreshPathStats = device->createTexture(desc);
+ 
+     desc.format = nvrhi::Format::RGBA32_FLOAT;
+     desc.debugName = "BenchmarkPosition";
+--- a/Samples/FullSample/Source/RenderTargets.h
++++ b/Samples/FullSample/Source/RenderTargets.h
+@@ -69,6 +69,8 @@
+ 
+     nvrhi::TextureHandle BenchmarkAccum;
+     nvrhi::TextureHandle BenchmarkFresh;
++    nvrhi::TextureHandle BenchmarkPathStats;
++    nvrhi::TextureHandle BenchmarkFreshPathStats;
+     nvrhi::TextureHandle BenchmarkPosition;
+     nvrhi::TextureHandle BenchmarkNormal;
+     nvrhi::TextureHandle BenchmarkAlbedo;

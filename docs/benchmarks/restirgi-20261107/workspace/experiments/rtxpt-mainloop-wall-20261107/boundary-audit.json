@@ -1,0 +1,65 @@
+{
+  "audit_type": "read_only_source_boundary_audit",
+  "source_root": "D:/work/corona/CoronaEngine/.workspace/cache/rtxgi-multibounce-20261107/rtxpt",
+  "codegraph_result": "Repository index does not cover frozen .workspace source; continued with rg and direct source",
+  "required_metric": "Elapsed steady-clock wall duration of one full normal outer main-loop iteration, preserving CPU/GPU overlap and natural synchronization",
+  "outer_loop": {
+    "file": "External/Donut/src/app/DeviceManager.cpp",
+    "function": "DeviceManager::RunMessageLoop",
+    "loop_lines": "505-521",
+    "start": "At top of while body before Streamline SimStart (507-509), callbacks.beforeFrame (510), glfwPollEvents (511), UpdateWindowSize (512)",
+    "end": "Immediately after AnimateRenderPresent returns at513, before error branch",
+    "included": "Input polling, window update, joystick update, Animate all passes, BeginFrame native fence wait, Render all passes including GUI, Present and queue signal, zero-duration existing yield, garbage collection, bookkeeping/frame index increment",
+    "excluded": "Startup/device/scene loading, terminal waitForIdle at523, shutdown",
+    "caution": "Do not reuse Sample::Render-only timing or afterPresent as full-loop timing: afterPresent precedes garbage collection and outer return"
+  },
+  "inner_loop": {
+    "file": "External/Donut/src/app/DeviceManager.cpp",
+    "animate": 550,
+    "begin_frame": 562,
+    "render": 576,
+    "present": 583,
+    "after_present": 584,
+    "existing_zero_sleep": 596,
+    "garbage_collection": 598,
+    "increment_frame": 603
+  },
+  "dx12_sync": {
+    "file": "External/Donut/src/app/dx12/DeviceManager_DX12.cpp",
+    "begin_frame_wait": "541-569; waits auto-reset event for GetCurrentBackBufferIndex at565-567",
+    "present": "594-610; DXGI Present at605, queues frame-fence signal607-609",
+    "events": "One initially-signaled event per swapchain buffer425-428",
+    "swapchain_buffers": 3,
+    "swapchain_count_source": "Rtxpt/Sample.cpp85,2953",
+    "maxFramesInFlight": "Default2 in DeviceManager.h158 is used only by Vulkan backend; not actual DX12 pacing",
+    "semantics": "End of current CPU loop does not guarantee its GPU completion. The BeginFrame wait fences reuse of an earlier backbuffer. Wall loop duration is pipeline throughput cadence incl natural backpressure, not isolated same-frame submit-to-complete latency."
+  },
+  "benchmark": {
+    "run_spec": "D:/work/corona/CoronaEngine/.workspace/experiments/rtxgi-multibounce-20261107/run-specs/rtxpt-timing-r1-v1.json",
+    "previous_total_frames": 360,
+    "previous_warmup_frames": 120,
+    "previous_measurement_frames": 240,
+    "previous_measurement_window": "benchmark frames120..359 inclusive",
+    "capture": "none",
+    "interval_ms": 0,
+    "counter": "RepositoryBenchmark::frame starts0, increments in finishFrame before Present and before Sample m_frameIndex increment",
+    "entry": "Sample.cpp1898 beginFrame only starts inside Sample::Render",
+    "submit": "Sample.cpp2414-2416 closes GPU timer scope and submits command list",
+    "finish": "Sample.cpp2418 finishFrame pushes pending timestamp queries and increments benchmark frame",
+    "post_sample_counter": "Sample.cpp2506 invokes PostUpdatePathTracing; Sample.cpp1458 increments m_frameIndex",
+    "vsync": "Sample.cpp720 sets EnableVsync=false, FPSLimiter=0; Sample.cpp2504 requests vsync state for next UpdateWindowSize. Initial device params are vsync=true at2956; warmup covers transition",
+    "gui": "Sample.cpp3098-3100 registers Sample then GUI; DeviceManager.cpp467-469 renders all passes",
+    "current_final_frame_problem": "RepositoryBenchmark.h finishFrame forces drain(done), causing waitForIdle on terminal target. Sample.cpp2419-2420 sets screenshot for same current device frame. Sample.cpp2489-2491 calls screenshot with exitOnCompletion=true; Sample.cpp2453 exits process inside Sample::Render, before GUI/Present/GC/outer-loop completion. Terminal target frame is invalid for full-loop wall time."
+  },
+  "recommendations": [
+    "Use std::chrono::steady_clock timestamps at exact outer boundaries; collect durations in memory and write outside measured window to minimize observer overhead. Store DeviceManager frame ID plus benchmark frame ID captured before Sample::finishFrame increments it; record rendered=true/false to exclude idle/invisible iterations.",
+    "A generic Donut end-of-frame callback or outer-loop elapsed callback avoids a Donut-to-Rtxpt header dependency; callbacks beforeFrame plus afterPresent alone omit GC and cannot measure exact full loop.",
+    "Preserve normal three-buffer pipeline, current settings, CPU/GPU overlap, native fence wait and Present behavior. Do not insert per-frame waitForIdle, fences, FPS limits or sleeps.",
+    "Use unmeasured trailing frames: target strictly beyond last measured frame359, preferably a few tail frames, so target-frame forced query drain/screenshot/exit stays outside120..359 and all240 measured outer loops return.",
+    "Report direct wall elapsed and elapsed/N throughput frame time; do not add CPU elapsed and GPU timestamp durations, since they overlap. Retain GPU scopes only as explanatory breakdown.",
+    "Describe the measured quantity as normal full main-loop wall time including CPU execution and natural GPU/present waits. It is not isolated end-to-end GPU completion latency of the same submitted frame."
+  ],
+  "no_source_edits": true,
+  "no_builds": true,
+  "no_gpu_jobs": true
+}

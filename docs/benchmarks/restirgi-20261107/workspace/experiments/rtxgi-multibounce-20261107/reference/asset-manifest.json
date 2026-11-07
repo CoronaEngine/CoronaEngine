@@ -1,0 +1,8 @@
+{
+  "GPU_launched": false,
+  "asset": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxgi-multibounce-20261107\\reference\\assets\\kitchen-world.obj",
+  "asset_sha256": "07c36f52984ebce6a64e8beacbd64b943194c1859d0d6e8c30918319abe89e2d",
+  "world_triangles": 1474261,
+  "source_world_meshes": 315,
+  "reason": "Original shipped Assimp3.3 cannot load glTF2; OBJ uses canonical shared world float32 triangles."
+}

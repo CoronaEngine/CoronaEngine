@@ -32,6 +32,7 @@ struct Node{DataWrap data={{"max_recursion",5u},{"M_light",10u},{"open",true}};
 class Harness {
 public:
     Param<uint> max_depth_{16},min_depth_{5};Param<float>rr_threshold_{1};uint apply_count=0;
+    bool falcor_di_needs_compile_=false,reference_gi_needs_compile_=false;
     std::shared_ptr<Node>direct_=std::make_shared<Node>(),indirect_=std::make_shared<Node>(),stable_planes_=std::make_shared<Node>();
     DataWrap scene_restir_settings_;
     explicit Harness(uint depth){max_depth_=depth;__CONSTRUCTOR__ scene_restir_settings_=settings();}
@@ -49,7 +50,9 @@ int main(){
     require(h.max_depth_.hv()==15&&h.settings()["max_depth"]==16,"Constructor/getter public total-depth mismatch");
     require(!h.set_settings({{"max_depth",16},{"min_depth",5},{"rr_threshold",1}}),"Identical public settings should be no-op");
     for(uint depth=1;depth<=128;++depth){
+        h.reference_gi_needs_compile_=false;
         h.set_settings({{"max_depth",depth}});
+        require(h.reference_gi_needs_compile_,"Changed RT settings did not invalidate the reference GI program");
         require(h.max_depth_.hv()==depth-1&&h.settings()["max_depth"]==depth,"Setter/getter failed total-to-suffix roundtrip");
         require(h.min_depth_.hv()==5&&h.rr_threshold_.hv()==1,"Unrelated RR/depth setting changed");
     }

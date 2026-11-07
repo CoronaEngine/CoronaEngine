@@ -1,0 +1,32 @@
+{
+  "executable": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\rtxdi-build-msvc1444\\bin\\FullSample.exe",
+  "args": [
+    "--scene.file",
+    "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\shared-scene\\kitchen.scene.json",
+    "--benchmark.output",
+    "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-reference-b-v1\\capture",
+    "--benchmark.mode",
+    "reference",
+    "--benchmark.giMode",
+    "reference",
+    "--benchmark.warmup",
+    "0",
+    "--benchmark.measured",
+    "1024",
+    "--benchmark.intervalMs",
+    "0",
+    "--benchmark.seed",
+    "200000"
+  ],
+  "output": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-reference-b-v1",
+  "timeout_seconds": 1800,
+  "experiment": {
+    "renderer": "rtxdi",
+    "label": "reference-b",
+    "mode": "reference",
+    "frames": 1024,
+    "warmup": 0,
+    "sample_offset": 200000,
+    "scene_contract": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\scene_contract.json"
+  }
+}

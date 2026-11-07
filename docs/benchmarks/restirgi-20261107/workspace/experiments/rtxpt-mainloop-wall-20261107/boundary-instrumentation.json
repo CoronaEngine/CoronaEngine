@@ -1,0 +1,29 @@
+{
+  "red": {
+    "timestamp": "2026-11-07T20:40:29.5521632+08:00",
+    "checks": {
+      "header_exists": false,
+      "setter_defined": false,
+      "begin_before_poll": false,
+      "end_after_full_loop": false,
+      "logical_index_captured": false
+    },
+    "passed": false
+  },
+  "device_manager_header_sha256": "E3495064E35D8A8D543965F85E8CA316987960EE0FF816CA7745E9A998D9D2C1",
+  "green": {
+    "timestamp": "2026-11-07T20:41:03.6863169+08:00",
+    "checks": {
+      "header_exists": true,
+      "setter_defined": true,
+      "begin_before_poll": true,
+      "end_after_full_loop": true,
+      "logical_index_captured": true,
+      "standalone_header_contract": true,
+      "class_header_unchanged": true,
+      "existing_loop_body_unchanged": true
+    },
+    "passed": true
+  },
+  "validation_scope": "Source-boundary structural checks only; no compilation or GPU execution requested"
+}

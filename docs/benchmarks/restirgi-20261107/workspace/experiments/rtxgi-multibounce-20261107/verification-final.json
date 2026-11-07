@@ -1,0 +1,45 @@
+{
+  "status": "pass",
+  "manifest_sha256": "7d12b58cb14b279035573b421b5bce34d01fc64d19c180fb2ee61afceb274bd3",
+  "build": {
+    "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .agents/skills/clion-build-corona-engine/scripts/build.ps1",
+    "exit_code": 0,
+    "log": "../../../tmp/rtxgi-multibounce-20261107/corona-build-6.log"
+  },
+  "optics_tests": {
+    "count": 6,
+    "exit_code": 0,
+    "files": [
+      "test_restir_gi_reference_math.py",
+      "test_restir_gi_candidate_origin.py",
+      "test_pt_primary_jitter.py",
+      "test_restir_depth_contract.py"
+    ]
+  },
+  "analysis_tests": {
+    "count": 15,
+    "exit_code": 0,
+    "script": "analysis/test_analysis.py"
+  },
+  "stream_regression": {
+    "cases": 120,
+    "guards": 19,
+    "exit_code": 0,
+    "evidence": "analysis/corona-seed-stream-regression-v1.json"
+  },
+  "root_independent_corona_quality": "root-corona-quality-verification-v1.json",
+  "root_independent_corona_timing": "root-corona-timing-verification-v1.json",
+  "root_full_timing_recompute": "../../../tmp/rtxgi-multibounce-20261107/root-final-timing-verification.json",
+  "final_suite": "suite-corona-seedstreams-v1.json",
+  "note": "Exit codes/counts observed in root tool executions for final build6 and final datasets; no source mutation after refreeze.",
+  "report_links_verified": 14,
+  "figures_verified": 2,
+  "root_quality_matches_canonical": true,
+  "canonical_statuses": [
+    "quality_complete",
+    "timing_complete"
+  ],
+  "final_report_sha256": "587bd97a57a38b72c8ad93167ac85218710d4107df610e12064ac53215271da4",
+  "final_results_sha256": "f5ae0700b539810ec35ce2fb37affb61b74db5785804b961e2b7f688e297674b",
+  "final_source_hashes_current": true
+}

@@ -1,0 +1,849 @@
+{
+  "schema": "four-way-multibounce-quality-run-audit.v1",
+  "status": "pass_all_12_selected_quality_processes",
+  "runs": {
+    "original": {
+      "r1": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r1-v1",
+        "sample_offset": 0,
+        "executed_binary_sha256": "e0dbb833ef78191ad99e2ab248b962235fbe9710533651d2e9c9be9438d91c84",
+        "status": "pass",
+        "actual_native_settings": {
+          "profile": "kitchen_multibounce_v1",
+          "reference_mode": false,
+          "sample_offset": 0,
+          "min_depth": 5,
+          "max_depth": 16,
+          "RR_first_after_surface": 6,
+          "RR_threshold": 1,
+          "RR_survival_cap": 0.95,
+          "RR_floor": 0,
+          "surface16_NEE_before_termination": true,
+          "primary_proposal": "uniform hemisphere",
+          "primary_direct": false,
+          "temporal_M_clamp": 20,
+          "reservoir_W_clamp": 10,
+          "spatial_passes": 2,
+          "native_core_unchanged": true,
+          "interleaved_short_paths": false,
+          "scene_geometry": "canonical world OBJ315 groups, originalAssimp3.3, no axis reflection",
+          "diagnostic_components": [
+            "last_surface",
+            "RR_tests",
+            "RR_survivals",
+            "reason"
+          ],
+          "diagnostic_reasons": {
+            "0": "invalid_primary",
+            "1": "miss",
+            "2": "RR",
+            "3": "max_depth"
+          },
+          "fresh_pt_sum_is_sum": true,
+          "replay_seed": "source pixel and recovered discrete8bit uniform proposal; nativeFP16 history quantization retained"
+        },
+        "primary_guide_sha256": {
+          "position": "425ade7de5d9febf94f6b57c13190e6f7e240f2cb668b6c98efd8b916de6997a",
+          "normal": "e07737ccc981b2b8e32a8d248238457607d280a3040d35754e08961bddf73872"
+        },
+        "guide_bytes_identical_to_accepted_pilot": true,
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r1-v1\\launch-manifest.json",
+            "sha256": "38decf547a580c83ca6f52d7ead56fbbfd245e0cb0c4e2bcbc357fc408cd0689"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r1-v1\\benchmark-config.json",
+            "sha256": "cf8778de50222777bcb18d16f8a25acf8cd3f14b31e03e5eeefcf4f543686123"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r1-v1\\capture-result.json",
+            "sha256": "7b92ecd7f355c823625a955970b7a45de63502ac9428996798258cf69c8c219f"
+          }
+        ]
+      },
+      "r2": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r2-v1",
+        "sample_offset": 10000,
+        "executed_binary_sha256": "e0dbb833ef78191ad99e2ab248b962235fbe9710533651d2e9c9be9438d91c84",
+        "status": "pass",
+        "actual_native_settings": {
+          "profile": "kitchen_multibounce_v1",
+          "reference_mode": false,
+          "sample_offset": 10000,
+          "min_depth": 5,
+          "max_depth": 16,
+          "RR_first_after_surface": 6,
+          "RR_threshold": 1,
+          "RR_survival_cap": 0.95,
+          "RR_floor": 0,
+          "surface16_NEE_before_termination": true,
+          "primary_proposal": "uniform hemisphere",
+          "primary_direct": false,
+          "temporal_M_clamp": 20,
+          "reservoir_W_clamp": 10,
+          "spatial_passes": 2,
+          "native_core_unchanged": true,
+          "interleaved_short_paths": false,
+          "scene_geometry": "canonical world OBJ315 groups, originalAssimp3.3, no axis reflection",
+          "diagnostic_components": [
+            "last_surface",
+            "RR_tests",
+            "RR_survivals",
+            "reason"
+          ],
+          "diagnostic_reasons": {
+            "0": "invalid_primary",
+            "1": "miss",
+            "2": "RR",
+            "3": "max_depth"
+          },
+          "fresh_pt_sum_is_sum": true,
+          "replay_seed": "source pixel and recovered discrete8bit uniform proposal; nativeFP16 history quantization retained"
+        },
+        "primary_guide_sha256": {
+          "position": "425ade7de5d9febf94f6b57c13190e6f7e240f2cb668b6c98efd8b916de6997a",
+          "normal": "e07737ccc981b2b8e32a8d248238457607d280a3040d35754e08961bddf73872"
+        },
+        "guide_bytes_identical_to_accepted_pilot": true,
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r2-v1\\launch-manifest.json",
+            "sha256": "ee221444cfa2d9b52a127a6396ce12c8ae70d9e6454357735114523427a53d69"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r2-v1\\benchmark-config.json",
+            "sha256": "f351b091c7601fd6e34ed934697622f4fd6ea09bd9657052bbdfa3402524c5e1"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r2-v1\\capture-result.json",
+            "sha256": "7b92ecd7f355c823625a955970b7a45de63502ac9428996798258cf69c8c219f"
+          }
+        ]
+      },
+      "r3": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r3-v1",
+        "sample_offset": 20000,
+        "executed_binary_sha256": "e0dbb833ef78191ad99e2ab248b962235fbe9710533651d2e9c9be9438d91c84",
+        "status": "pass",
+        "actual_native_settings": {
+          "profile": "kitchen_multibounce_v1",
+          "reference_mode": false,
+          "sample_offset": 20000,
+          "min_depth": 5,
+          "max_depth": 16,
+          "RR_first_after_surface": 6,
+          "RR_threshold": 1,
+          "RR_survival_cap": 0.95,
+          "RR_floor": 0,
+          "surface16_NEE_before_termination": true,
+          "primary_proposal": "uniform hemisphere",
+          "primary_direct": false,
+          "temporal_M_clamp": 20,
+          "reservoir_W_clamp": 10,
+          "spatial_passes": 2,
+          "native_core_unchanged": true,
+          "interleaved_short_paths": false,
+          "scene_geometry": "canonical world OBJ315 groups, originalAssimp3.3, no axis reflection",
+          "diagnostic_components": [
+            "last_surface",
+            "RR_tests",
+            "RR_survivals",
+            "reason"
+          ],
+          "diagnostic_reasons": {
+            "0": "invalid_primary",
+            "1": "miss",
+            "2": "RR",
+            "3": "max_depth"
+          },
+          "fresh_pt_sum_is_sum": true,
+          "replay_seed": "source pixel and recovered discrete8bit uniform proposal; nativeFP16 history quantization retained"
+        },
+        "primary_guide_sha256": {
+          "position": "425ade7de5d9febf94f6b57c13190e6f7e240f2cb668b6c98efd8b916de6997a",
+          "normal": "e07737ccc981b2b8e32a8d248238457607d280a3040d35754e08961bddf73872"
+        },
+        "guide_bytes_identical_to_accepted_pilot": true,
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r3-v1\\launch-manifest.json",
+            "sha256": "707ace4ca1678b243923dc7ba809736fd7eb11a23035f5fe3dd8afdf6b2ec0b5"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r3-v1\\benchmark-config.json",
+            "sha256": "e62d9b984dd41d3d0f444e8a1c63909bd97811680e700d877141c615ca335044"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r3-v1\\capture-result.json",
+            "sha256": "7b92ecd7f355c823625a955970b7a45de63502ac9428996798258cf69c8c219f"
+          }
+        ]
+      }
+    },
+    "rtxpt": {
+      "r1": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r1-v1",
+        "sample_offset": 0,
+        "executed_binary_sha256": "3be89155ee62358400c3b252dd86ff8cf7c6cca193846b50b7be7cf97556c056",
+        "status": "pass",
+        "actual_native_settings": {
+          "mode": "temporalspatial",
+          "spp": 1,
+          "minimum_depth": 5,
+          "max_surface_depth": 16,
+          "first_RR_surface": 6,
+          "sun_NEE_per_secondary_surface": 1,
+          "material": "opaque_exact_Lambert_0.7",
+          "environment": "black",
+          "emission": false,
+          "history": 8,
+          "age": 30,
+          "spatial_samples": 2,
+          "radius_pixels": 32,
+          "normal_threshold": 0.6,
+          "depth_threshold": 0.1,
+          "bias": "BASIC",
+          "final_visibility": true,
+          "final_MIS": false,
+          "boiling": false,
+          "fallback": false,
+          "permutation": false,
+          "NRD": false,
+          "AA": false,
+          "jitter": false,
+          "raw": "RGBA32_FLOAT_pure_indirect_before_tonemap"
+        },
+        "primary_guide_sha256": {
+          "position": "5063841f4fe8fe77bb1d66bc825b36aa9f7022fbb4941da46e5924eed49f40fd",
+          "normal": "8586e1841254358060add7b2b3eeb4d0ffc2cd8c4e7d86efb59e9dd2b2650a95"
+        },
+        "guide_bytes_identical_to_accepted_pilot": true,
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r1-v1\\launch-manifest.json",
+            "sha256": "0d3414662775513839bbca76a7e2dcf75fefbf8bedf0fae6b6171126a80ffedb"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r1-v1\\actual-settings.json",
+            "sha256": "ad5ba1dd499db4380483cd24ca60abff88302811604c7da8961bd75844abacd9"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r1-v1\\effective-settings.json",
+            "sha256": "2a59d0faa09ebaf1a0f8b237c568feb679e710ac5e904b897ddd6b8c633d9bdd"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r1-v1\\completed.json",
+            "sha256": "6be065e9bd595b3384b4974762a519b1ea4924f1ff5f79b459eac1b784d6bad6"
+          }
+        ]
+      },
+      "r2": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r2-v1",
+        "sample_offset": 10000,
+        "executed_binary_sha256": "3be89155ee62358400c3b252dd86ff8cf7c6cca193846b50b7be7cf97556c056",
+        "status": "pass",
+        "actual_native_settings": {
+          "mode": "temporalspatial",
+          "spp": 1,
+          "minimum_depth": 5,
+          "max_surface_depth": 16,
+          "first_RR_surface": 6,
+          "sun_NEE_per_secondary_surface": 1,
+          "material": "opaque_exact_Lambert_0.7",
+          "environment": "black",
+          "emission": false,
+          "history": 8,
+          "age": 30,
+          "spatial_samples": 2,
+          "radius_pixels": 32,
+          "normal_threshold": 0.6,
+          "depth_threshold": 0.1,
+          "bias": "BASIC",
+          "final_visibility": true,
+          "final_MIS": false,
+          "boiling": false,
+          "fallback": false,
+          "permutation": false,
+          "NRD": false,
+          "AA": false,
+          "jitter": false,
+          "raw": "RGBA32_FLOAT_pure_indirect_before_tonemap"
+        },
+        "primary_guide_sha256": {
+          "position": "5063841f4fe8fe77bb1d66bc825b36aa9f7022fbb4941da46e5924eed49f40fd",
+          "normal": "8586e1841254358060add7b2b3eeb4d0ffc2cd8c4e7d86efb59e9dd2b2650a95"
+        },
+        "guide_bytes_identical_to_accepted_pilot": true,
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r2-v1\\launch-manifest.json",
+            "sha256": "0e95378e559f81fbbd139562a946a9a347f0000bfb4be2915c476359267ee21a"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r2-v1\\actual-settings.json",
+            "sha256": "91b3d764e3f47a3dd8dd33e774b80485e38823c72afbc71b0623c2088bea2f4f"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r2-v1\\effective-settings.json",
+            "sha256": "2a59d0faa09ebaf1a0f8b237c568feb679e710ac5e904b897ddd6b8c633d9bdd"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r2-v1\\completed.json",
+            "sha256": "6be065e9bd595b3384b4974762a519b1ea4924f1ff5f79b459eac1b784d6bad6"
+          }
+        ]
+      },
+      "r3": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r3-v1",
+        "sample_offset": 20000,
+        "executed_binary_sha256": "3be89155ee62358400c3b252dd86ff8cf7c6cca193846b50b7be7cf97556c056",
+        "status": "pass",
+        "actual_native_settings": {
+          "mode": "temporalspatial",
+          "spp": 1,
+          "minimum_depth": 5,
+          "max_surface_depth": 16,
+          "first_RR_surface": 6,
+          "sun_NEE_per_secondary_surface": 1,
+          "material": "opaque_exact_Lambert_0.7",
+          "environment": "black",
+          "emission": false,
+          "history": 8,
+          "age": 30,
+          "spatial_samples": 2,
+          "radius_pixels": 32,
+          "normal_threshold": 0.6,
+          "depth_threshold": 0.1,
+          "bias": "BASIC",
+          "final_visibility": true,
+          "final_MIS": false,
+          "boiling": false,
+          "fallback": false,
+          "permutation": false,
+          "NRD": false,
+          "AA": false,
+          "jitter": false,
+          "raw": "RGBA32_FLOAT_pure_indirect_before_tonemap"
+        },
+        "primary_guide_sha256": {
+          "position": "5063841f4fe8fe77bb1d66bc825b36aa9f7022fbb4941da46e5924eed49f40fd",
+          "normal": "8586e1841254358060add7b2b3eeb4d0ffc2cd8c4e7d86efb59e9dd2b2650a95"
+        },
+        "guide_bytes_identical_to_accepted_pilot": true,
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r3-v1\\launch-manifest.json",
+            "sha256": "f9e430fa82bc3330f8de118b703c4b9c42e2bb6560adc3518ffbb0ff1431d962"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r3-v1\\actual-settings.json",
+            "sha256": "326fbc142b3e3050bad8325496b484540fbe9f0d4b35d07be4ba2d6af8c96ef2"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r3-v1\\effective-settings.json",
+            "sha256": "2a59d0faa09ebaf1a0f8b237c568feb679e710ac5e904b897ddd6b8c633d9bdd"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r3-v1\\completed.json",
+            "sha256": "6be065e9bd595b3384b4974762a519b1ea4924f1ff5f79b459eac1b784d6bad6"
+          }
+        ]
+      }
+    },
+    "rtxdi": {
+      "r1": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r1-v1",
+        "sample_offset": 0,
+        "executed_binary_sha256": "f3bf6fbbab8638c355e6d1833d196f55f27371ffaf34f5b94dbafab8e19ec955",
+        "status": "pass",
+        "actual_native_settings": {
+          "Corona_min5_max16_RR1_match": true,
+          "RR_order": "NEE, scatter beta*=0.7, RR, next ray; terminal surface16 NEE then stop",
+          "RR_survival": "min(0.95,maxRGB(beta_before_current_BSDF)); if beta_before_current_BSDF < 1; no lower clamp",
+          "RR_threshold": 1,
+          "boiling_filter": false,
+          "candidate_RR": true,
+          "candidate_generator": "application multibounce path tail behind native GI secondary vertex",
+          "candidate_has_multibounce_loop": true,
+          "candidate_max_secondary_interactions": 15,
+          "depth_threshold": 0.10000000149011612,
+          "fallback": false,
+          "final_MIS": false,
+          "final_read_buffer": 1,
+          "final_visibility": true,
+          "firefly_clamp": false,
+          "first_RR_after_surface_reflection": 6,
+          "first_RR_survival": 0.16807,
+          "initial_write_buffer": 0,
+          "max_history_length": 8,
+          "max_reservoir_age": 30,
+          "max_surface_reflections_including_primary": 16,
+          "min_depth_zero_based": 5,
+          "min_secondary_roughness": 0.0,
+          "normal_threshold": 0.6000000238418579,
+          "pathstats_RGBA": "last visited surface depth, RR tests, RR survivals, reason:0 invalid/1 miss/2 RR/3 max16",
+          "permutation": false,
+          "reference_estimator": "separate unpacked full path from primary, independent RNG, no GI reuse or reservoir/secondary packing",
+          "resampling_mode_enum": 3,
+          "secondary_DI_spatial_neighbors": 1,
+          "secondary_DI_spatial_reuse_enabled": false,
+          "secondary_NEE_BRDF_candidates": 0,
+          "secondary_NEE_environment_candidates_effective": 0,
+          "secondary_NEE_infinite_candidates": 1,
+          "secondary_NEE_local_candidates": 0,
+          "secondary_NEE_local_sampling_mode_enum": 0,
+          "spatial_bias_enum": 1,
+          "spatial_neighbors": 2,
+          "spatial_radius": 32.0,
+          "stock_candidate_secondary_interactions": 1,
+          "temporal_bias_enum": 1
+        },
+        "primary_guide_sha256": {
+          "position": "28a5d4b9de28f864ab6f1d0cf5e94af345de911cf4546d5dd3753b7011df059b",
+          "normal": "ae8ff5e6652dee7d6c46ae6f288b2ce5df67e8d095e7e4b6f090b688bdf92e48"
+        },
+        "guide_bytes_identical_to_accepted_pilot": true,
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r1-v1\\launch-manifest.json",
+            "sha256": "bac9efbc55ae2aab031cfe198ab897480ec49162eb365b52378ba5d21ff60264"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r1-v1\\capture.settings.json",
+            "sha256": "f841ab53ec1fc2de2af5eab74e5814ace4d068d395b9d3c5487cac940e079a7c"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r1-v1\\capture.result.json",
+            "sha256": "b8ec6e9e850acf7d02d0ada86c2a0254e185826864f47768835b83cdca94e467"
+          }
+        ]
+      },
+      "r2": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r2-v1",
+        "sample_offset": 10000,
+        "executed_binary_sha256": "f3bf6fbbab8638c355e6d1833d196f55f27371ffaf34f5b94dbafab8e19ec955",
+        "status": "pass",
+        "actual_native_settings": {
+          "Corona_min5_max16_RR1_match": true,
+          "RR_order": "NEE, scatter beta*=0.7, RR, next ray; terminal surface16 NEE then stop",
+          "RR_survival": "min(0.95,maxRGB(beta_before_current_BSDF)); if beta_before_current_BSDF < 1; no lower clamp",
+          "RR_threshold": 1,
+          "boiling_filter": false,
+          "candidate_RR": true,
+          "candidate_generator": "application multibounce path tail behind native GI secondary vertex",
+          "candidate_has_multibounce_loop": true,
+          "candidate_max_secondary_interactions": 15,
+          "depth_threshold": 0.10000000149011612,
+          "fallback": false,
+          "final_MIS": false,
+          "final_read_buffer": 1,
+          "final_visibility": true,
+          "firefly_clamp": false,
+          "first_RR_after_surface_reflection": 6,
+          "first_RR_survival": 0.16807,
+          "initial_write_buffer": 0,
+          "max_history_length": 8,
+          "max_reservoir_age": 30,
+          "max_surface_reflections_including_primary": 16,
+          "min_depth_zero_based": 5,
+          "min_secondary_roughness": 0.0,
+          "normal_threshold": 0.6000000238418579,
+          "pathstats_RGBA": "last visited surface depth, RR tests, RR survivals, reason:0 invalid/1 miss/2 RR/3 max16",
+          "permutation": false,
+          "reference_estimator": "separate unpacked full path from primary, independent RNG, no GI reuse or reservoir/secondary packing",
+          "resampling_mode_enum": 3,
+          "secondary_DI_spatial_neighbors": 1,
+          "secondary_DI_spatial_reuse_enabled": false,
+          "secondary_NEE_BRDF_candidates": 0,
+          "secondary_NEE_environment_candidates_effective": 0,
+          "secondary_NEE_infinite_candidates": 1,
+          "secondary_NEE_local_candidates": 0,
+          "secondary_NEE_local_sampling_mode_enum": 0,
+          "spatial_bias_enum": 1,
+          "spatial_neighbors": 2,
+          "spatial_radius": 32.0,
+          "stock_candidate_secondary_interactions": 1,
+          "temporal_bias_enum": 1
+        },
+        "primary_guide_sha256": {
+          "position": "28a5d4b9de28f864ab6f1d0cf5e94af345de911cf4546d5dd3753b7011df059b",
+          "normal": "ae8ff5e6652dee7d6c46ae6f288b2ce5df67e8d095e7e4b6f090b688bdf92e48"
+        },
+        "guide_bytes_identical_to_accepted_pilot": true,
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r2-v1\\launch-manifest.json",
+            "sha256": "3a47cbfc74d1d0893dfe4e5940a6abb0d683c61cfebf51253197e5258e63a5ba"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r2-v1\\capture.settings.json",
+            "sha256": "b99f4164c712a925960e9b2a663638cfa69a56afeaadf460197111107eecd155"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r2-v1\\capture.result.json",
+            "sha256": "b8ec6e9e850acf7d02d0ada86c2a0254e185826864f47768835b83cdca94e467"
+          }
+        ]
+      },
+      "r3": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r3-v1",
+        "sample_offset": 20000,
+        "executed_binary_sha256": "f3bf6fbbab8638c355e6d1833d196f55f27371ffaf34f5b94dbafab8e19ec955",
+        "status": "pass",
+        "actual_native_settings": {
+          "Corona_min5_max16_RR1_match": true,
+          "RR_order": "NEE, scatter beta*=0.7, RR, next ray; terminal surface16 NEE then stop",
+          "RR_survival": "min(0.95,maxRGB(beta_before_current_BSDF)); if beta_before_current_BSDF < 1; no lower clamp",
+          "RR_threshold": 1,
+          "boiling_filter": false,
+          "candidate_RR": true,
+          "candidate_generator": "application multibounce path tail behind native GI secondary vertex",
+          "candidate_has_multibounce_loop": true,
+          "candidate_max_secondary_interactions": 15,
+          "depth_threshold": 0.10000000149011612,
+          "fallback": false,
+          "final_MIS": false,
+          "final_read_buffer": 1,
+          "final_visibility": true,
+          "firefly_clamp": false,
+          "first_RR_after_surface_reflection": 6,
+          "first_RR_survival": 0.16807,
+          "initial_write_buffer": 0,
+          "max_history_length": 8,
+          "max_reservoir_age": 30,
+          "max_surface_reflections_including_primary": 16,
+          "min_depth_zero_based": 5,
+          "min_secondary_roughness": 0.0,
+          "normal_threshold": 0.6000000238418579,
+          "pathstats_RGBA": "last visited surface depth, RR tests, RR survivals, reason:0 invalid/1 miss/2 RR/3 max16",
+          "permutation": false,
+          "reference_estimator": "separate unpacked full path from primary, independent RNG, no GI reuse or reservoir/secondary packing",
+          "resampling_mode_enum": 3,
+          "secondary_DI_spatial_neighbors": 1,
+          "secondary_DI_spatial_reuse_enabled": false,
+          "secondary_NEE_BRDF_candidates": 0,
+          "secondary_NEE_environment_candidates_effective": 0,
+          "secondary_NEE_infinite_candidates": 1,
+          "secondary_NEE_local_candidates": 0,
+          "secondary_NEE_local_sampling_mode_enum": 0,
+          "spatial_bias_enum": 1,
+          "spatial_neighbors": 2,
+          "spatial_radius": 32.0,
+          "stock_candidate_secondary_interactions": 1,
+          "temporal_bias_enum": 1
+        },
+        "primary_guide_sha256": {
+          "position": "28a5d4b9de28f864ab6f1d0cf5e94af345de911cf4546d5dd3753b7011df059b",
+          "normal": "ae8ff5e6652dee7d6c46ae6f288b2ce5df67e8d095e7e4b6f090b688bdf92e48"
+        },
+        "guide_bytes_identical_to_accepted_pilot": true,
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r3-v1\\launch-manifest.json",
+            "sha256": "1f992d289398308a2730711eb90ee2697315a77d548ca0e76411ed8ac330288f"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r3-v1\\capture.settings.json",
+            "sha256": "71995c80e5c5851ed19d89ff5e4aefa8b527e364b540bee942905be57e45356b"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r3-v1\\capture.result.json",
+            "sha256": "b8ec6e9e850acf7d02d0ada86c2a0254e185826864f47768835b83cdca94e467"
+          }
+        ]
+      }
+    },
+    "corona_port": {
+      "r1": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r1-seedstreams-v1",
+        "sample_offset": 0,
+        "replay_fix": {
+          "source": "D:\\work\\corona\\CoronaEngine\\vision\\src\\render_core\\integrator\\restir_gi_experiment.h",
+          "sha256": "402d272b0e63b09dcf596d8058ae39abf02cb8728ab84eef259103de1daa2085",
+          "regression_evidence": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\corona-seed-stream-regression-v1.json",
+          "source_hashes": {
+            "D:\\work\\corona\\CoronaEngine\\vision\\src\\render_core\\integrator\\restir_gi_experiment.h": "402d272b0e63b09dcf596d8058ae39abf02cb8728ab84eef259103de1daa2085",
+            "D:\\work\\corona\\CoronaEngine\\vision\\src\\render_core\\integrator\\restir_gi\\literal.h": "d61b3592dad41ae9404378c608168562c562aff4f120288dd6c5ea5004d7d17f",
+            "D:\\work\\corona\\CoronaEngine\\vision\\src\\base\\integral\\integrator.cpp": "7fc0e614ddf3561f11453fe413daf8c26e5ebd3729d8d264f60129fbbfbf7d42"
+          },
+          "regression_evidence_sha256": "7af3e0ffcecd677e68388a72b6dfd0f5102692b360550ec386cdf17ada438f8d",
+          "cases": 120,
+          "guards": 19,
+          "mismatches": 0
+        },
+        "source_runtime_stable": true,
+        "source_runtime_consistent_across_repeats": true,
+        "source_runtime_identity_sha256": "f677f65c4bac8de5a42322c5d255b0476c77b43f743ef896717451f12f6255e8",
+        "status": "pass",
+        "actual_native_settings": {
+          "direct": {
+            "M_bsdf": 0,
+            "M_light": 1,
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "max_recursion": 1,
+            "open": true,
+            "pairwise": true,
+            "spatial": {
+              "depth": 0.10000000149011612,
+              "open": false,
+              "radius": 30,
+              "sample_num": 1,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.10000000149011612,
+              "history_limit": 20,
+              "open": false,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "indirect": {
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "open": true,
+            "spatial": {
+              "depth": 0.30000001192092896,
+              "open": true,
+              "radius": 12,
+              "sample_num": 2,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.30000001192092896,
+              "history_limit": 5,
+              "open": true,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "max_depth": 16,
+          "min_depth": 5,
+          "rr_threshold": 1
+        },
+        "primary_guide_sha256": {
+          "position": "c01b430638e20f9c28f5aae7c7221734d9466bd3d176b4cdb0e06a56420b996d",
+          "normal": "f0e0962064648959e31b242c4d55527f0c41a8ac0d48ab4eb8b65c5153ef6d4a"
+        },
+        "guide_bytes_identical_to_accepted_pilot": true,
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r1-seedstreams-v1\\contract.json",
+            "sha256": "c90c17fd46993015a181041d51dd3715b198ad29f828be16ba1dd5e8cadae8b7"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r1-seedstreams-v1\\result.json",
+            "sha256": "fe41640e976893d9b61737a8814fe8bed970b06e586999a529db3167fa9b6ec5"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r1-seedstreams-v1\\route-validation.json",
+            "sha256": "89b851b656e6e24e60cb7bca5a00804f82a1affea718f49090601cd9897abff9"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r1-seedstreams-v1\\identity-before.json",
+            "sha256": "6d4292b6caa363ac19d20b07656dbbd637f6a07ca3bef1eee530270875f337bb"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r1-seedstreams-v1\\identity-after.json",
+            "sha256": "6d4292b6caa363ac19d20b07656dbbd637f6a07ca3bef1eee530270875f337bb"
+          }
+        ]
+      },
+      "r2": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r2-seedstreams-v1",
+        "sample_offset": 10000,
+        "replay_fix": {
+          "source": "D:\\work\\corona\\CoronaEngine\\vision\\src\\render_core\\integrator\\restir_gi_experiment.h",
+          "sha256": "402d272b0e63b09dcf596d8058ae39abf02cb8728ab84eef259103de1daa2085",
+          "regression_evidence": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\corona-seed-stream-regression-v1.json",
+          "source_hashes": {
+            "D:\\work\\corona\\CoronaEngine\\vision\\src\\render_core\\integrator\\restir_gi_experiment.h": "402d272b0e63b09dcf596d8058ae39abf02cb8728ab84eef259103de1daa2085",
+            "D:\\work\\corona\\CoronaEngine\\vision\\src\\render_core\\integrator\\restir_gi\\literal.h": "d61b3592dad41ae9404378c608168562c562aff4f120288dd6c5ea5004d7d17f",
+            "D:\\work\\corona\\CoronaEngine\\vision\\src\\base\\integral\\integrator.cpp": "7fc0e614ddf3561f11453fe413daf8c26e5ebd3729d8d264f60129fbbfbf7d42"
+          },
+          "regression_evidence_sha256": "7af3e0ffcecd677e68388a72b6dfd0f5102692b360550ec386cdf17ada438f8d",
+          "cases": 120,
+          "guards": 19,
+          "mismatches": 0
+        },
+        "source_runtime_stable": true,
+        "source_runtime_consistent_across_repeats": true,
+        "source_runtime_identity_sha256": "f677f65c4bac8de5a42322c5d255b0476c77b43f743ef896717451f12f6255e8",
+        "status": "pass",
+        "actual_native_settings": {
+          "direct": {
+            "M_bsdf": 0,
+            "M_light": 1,
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "max_recursion": 1,
+            "open": true,
+            "pairwise": true,
+            "spatial": {
+              "depth": 0.10000000149011612,
+              "open": false,
+              "radius": 30,
+              "sample_num": 1,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.10000000149011612,
+              "history_limit": 20,
+              "open": false,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "indirect": {
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "open": true,
+            "spatial": {
+              "depth": 0.30000001192092896,
+              "open": true,
+              "radius": 12,
+              "sample_num": 2,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.30000001192092896,
+              "history_limit": 5,
+              "open": true,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "max_depth": 16,
+          "min_depth": 5,
+          "rr_threshold": 1
+        },
+        "primary_guide_sha256": {
+          "position": "c01b430638e20f9c28f5aae7c7221734d9466bd3d176b4cdb0e06a56420b996d",
+          "normal": "f0e0962064648959e31b242c4d55527f0c41a8ac0d48ab4eb8b65c5153ef6d4a"
+        },
+        "guide_bytes_identical_to_accepted_pilot": true,
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r2-seedstreams-v1\\contract.json",
+            "sha256": "3a9134a1248b8bea30739561096aab6054729a00bc9e79c3448a841619613d6a"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r2-seedstreams-v1\\result.json",
+            "sha256": "bcd81a16a779e5718d2fb751be3f6700cb7ae890bc0038cdea493336141eebcd"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r2-seedstreams-v1\\route-validation.json",
+            "sha256": "89b851b656e6e24e60cb7bca5a00804f82a1affea718f49090601cd9897abff9"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r2-seedstreams-v1\\identity-before.json",
+            "sha256": "6d4292b6caa363ac19d20b07656dbbd637f6a07ca3bef1eee530270875f337bb"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r2-seedstreams-v1\\identity-after.json",
+            "sha256": "6d4292b6caa363ac19d20b07656dbbd637f6a07ca3bef1eee530270875f337bb"
+          }
+        ]
+      },
+      "r3": {
+        "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r3-seedstreams-v1",
+        "sample_offset": 20000,
+        "replay_fix": {
+          "source": "D:\\work\\corona\\CoronaEngine\\vision\\src\\render_core\\integrator\\restir_gi_experiment.h",
+          "sha256": "402d272b0e63b09dcf596d8058ae39abf02cb8728ab84eef259103de1daa2085",
+          "regression_evidence": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\corona-seed-stream-regression-v1.json",
+          "source_hashes": {
+            "D:\\work\\corona\\CoronaEngine\\vision\\src\\render_core\\integrator\\restir_gi_experiment.h": "402d272b0e63b09dcf596d8058ae39abf02cb8728ab84eef259103de1daa2085",
+            "D:\\work\\corona\\CoronaEngine\\vision\\src\\render_core\\integrator\\restir_gi\\literal.h": "d61b3592dad41ae9404378c608168562c562aff4f120288dd6c5ea5004d7d17f",
+            "D:\\work\\corona\\CoronaEngine\\vision\\src\\base\\integral\\integrator.cpp": "7fc0e614ddf3561f11453fe413daf8c26e5ebd3729d8d264f60129fbbfbf7d42"
+          },
+          "regression_evidence_sha256": "7af3e0ffcecd677e68388a72b6dfd0f5102692b360550ec386cdf17ada438f8d",
+          "cases": 120,
+          "guards": 19,
+          "mismatches": 0
+        },
+        "source_runtime_stable": true,
+        "source_runtime_consistent_across_repeats": true,
+        "source_runtime_identity_sha256": "f677f65c4bac8de5a42322c5d255b0476c77b43f743ef896717451f12f6255e8",
+        "status": "pass",
+        "actual_native_settings": {
+          "direct": {
+            "M_bsdf": 0,
+            "M_light": 1,
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "max_recursion": 1,
+            "open": true,
+            "pairwise": true,
+            "spatial": {
+              "depth": 0.10000000149011612,
+              "open": false,
+              "radius": 30,
+              "sample_num": 1,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.10000000149011612,
+              "history_limit": 20,
+              "open": false,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "indirect": {
+            "diffuse_factor": 0.30000001192092896,
+            "max_age": 30,
+            "open": true,
+            "spatial": {
+              "depth": 0.30000001192092896,
+              "open": true,
+              "radius": 12,
+              "sample_num": 2,
+              "theta": 35
+            },
+            "temporal": {
+              "depth": 0.30000001192092896,
+              "history_limit": 5,
+              "open": true,
+              "radius": 0,
+              "theta": 35
+            }
+          },
+          "max_depth": 16,
+          "min_depth": 5,
+          "rr_threshold": 1
+        },
+        "primary_guide_sha256": {
+          "position": "c01b430638e20f9c28f5aae7c7221734d9466bd3d176b4cdb0e06a56420b996d",
+          "normal": "f0e0962064648959e31b242c4d55527f0c41a8ac0d48ab4eb8b65c5153ef6d4a"
+        },
+        "guide_bytes_identical_to_accepted_pilot": true,
+        "evidence": [
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r3-seedstreams-v1\\contract.json",
+            "sha256": "a6fd6f25587419925315fd3e0f09079efeb72dce98d699f774fe41cd68caa42c"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r3-seedstreams-v1\\result.json",
+            "sha256": "472da80941835fa27066db22d57e37e01b30a670109cbb010f3b24c8afd3e5c2"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r3-seedstreams-v1\\route-validation.json",
+            "sha256": "89b851b656e6e24e60cb7bca5a00804f82a1affea718f49090601cd9897abff9"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r3-seedstreams-v1\\identity-before.json",
+            "sha256": "6d4292b6caa363ac19d20b07656dbbd637f6a07ca3bef1eee530270875f337bb"
+          },
+          {
+            "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\corona-port-quality-r3-seedstreams-v1\\identity-after.json",
+            "sha256": "6d4292b6caa363ac19d20b07656dbbd637f6a07ca3bef1eee530270875f337bb"
+          }
+        ]
+      }
+    }
+  },
+  "scope": "Completed128frame quality processes; late32raw frames96..127; all offsets and actual routes/frozen runtimes checked."
+}

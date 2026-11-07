@@ -1,0 +1,26 @@
+{
+  "status": "pass",
+  "native_independent_recompute_agrees": true,
+  "old_four_rows_unchanged": true,
+  "old_immutable_inputs_verified": 25,
+  "local_links_verified": 9,
+  "quality_frames": 96,
+  "timing_frames": 720,
+  "source_hashes_current": true,
+  "build": {
+    "exit_code": 0,
+    "log": "../../../tmp/rtxgi-corona-native-20261107/build-1.log"
+  },
+  "tests": {
+    "optics": 6,
+    "native_contract": 4,
+    "analysis": 9,
+    "all_exit_codes": 0
+  },
+  "hashes": {
+    "results-final.json": "b125ab83464a1409f15faffbf4c34d98ffab23ac5c9e5c8a22720f70769d2329",
+    "report.html": "1a8b5e93d9b39c0dfa832625502ba6781af236ea56f2e91b7b27e6b37aaf7aa0",
+    "analysis/final-native-v1.json": "cbc0d1af8e2a7fe444fd2d9343b339850afddea3fd177baafc3822111d0bdfd5",
+    "analysis/manifest-executed-v1.json": "09279558826b034b6980d87194eb62e87a1457cfb40f59c9c5bf9f94e82e977f"
+  }
+}

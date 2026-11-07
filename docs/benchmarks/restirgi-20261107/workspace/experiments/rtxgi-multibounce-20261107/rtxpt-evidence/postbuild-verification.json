@@ -1,0 +1,82 @@
+{
+  "source_hashes_unchanged_during_build": true,
+  "old_source_hashes_unchanged": true,
+  "native_SDK_all_unchanged": true,
+  "roulette_scalar_recurrence_passed": true,
+  "roulette_rows": [
+    {
+      "surface": 6,
+      "physical_beta_before_BSDF": 0.168069988489151,
+      "generic_q": 0.168069988489151,
+      "specialized_q": 0.168069988489151,
+      "surviving_beta_after_BSDF_and_RR": 0.699999988079071
+    },
+    {
+      "surface": 7,
+      "physical_beta_before_BSDF": 0.699999988079071,
+      "generic_q": 0.699999988079071,
+      "specialized_q": 0.699999988079071,
+      "surviving_beta_after_BSDF_and_RR": 0.699999988079071
+    },
+    {
+      "surface": 8,
+      "physical_beta_before_BSDF": 0.699999988079071,
+      "generic_q": 0.699999988079071,
+      "specialized_q": 0.699999988079071,
+      "surviving_beta_after_BSDF_and_RR": 0.699999988079071
+    },
+    {
+      "surface": 9,
+      "physical_beta_before_BSDF": 0.699999988079071,
+      "generic_q": 0.699999988079071,
+      "specialized_q": 0.699999988079071,
+      "surviving_beta_after_BSDF_and_RR": 0.699999988079071
+    },
+    {
+      "surface": 10,
+      "physical_beta_before_BSDF": 0.699999988079071,
+      "generic_q": 0.699999988079071,
+      "specialized_q": 0.699999988079071,
+      "surviving_beta_after_BSDF_and_RR": 0.699999988079071
+    },
+    {
+      "surface": 11,
+      "physical_beta_before_BSDF": 0.699999988079071,
+      "generic_q": 0.699999988079071,
+      "specialized_q": 0.699999988079071,
+      "surviving_beta_after_BSDF_and_RR": 0.699999988079071
+    },
+    {
+      "surface": 12,
+      "physical_beta_before_BSDF": 0.699999988079071,
+      "generic_q": 0.699999988079071,
+      "specialized_q": 0.699999988079071,
+      "surviving_beta_after_BSDF_and_RR": 0.699999988079071
+    },
+    {
+      "surface": 13,
+      "physical_beta_before_BSDF": 0.699999988079071,
+      "generic_q": 0.699999988079071,
+      "specialized_q": 0.699999988079071,
+      "surviving_beta_after_BSDF_and_RR": 0.699999988079071
+    },
+    {
+      "surface": 14,
+      "physical_beta_before_BSDF": 0.699999988079071,
+      "generic_q": 0.699999988079071,
+      "specialized_q": 0.699999988079071,
+      "surviving_beta_after_BSDF_and_RR": 0.699999988079071
+    },
+    {
+      "surface": 15,
+      "physical_beta_before_BSDF": 0.699999988079071,
+      "generic_q": 0.699999988079071,
+      "specialized_q": 0.699999988079071,
+      "surviving_beta_after_BSDF_and_RR": 0.699999988079071
+    }
+  ],
+  "payload_bytes": 96,
+  "GPU_execution_by_this_agent": false,
+  "binary": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxgi-multibounce-20261107\\rtxpt\\bin\\Rtxpt.exe",
+  "binary_sha256": "3be89155ee62358400c3b252dd86ff8cf7c6cca193846b50b7be7cf97556c056"
+}

@@ -1,0 +1,161 @@
+"""Small, analytic CPU checks for the benchmark analysis (no renderer/GPU)."""
+from pathlib import Path
+import csv
+import json
+import sys
+import tempfile
+import unittest
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import analyze_multibounce as analysis
+import analyze_timing as timing
+
+
+class AnalysisChecks(unittest.TestCase):
+    def test_corona_identity_requires_the_all_streams_refreeze(self):
+        record=json.loads((Path(__file__).resolve().parent/'corona-seed-stream-regression-v1.json').read_text(encoding='utf-8-sig'))
+        identity={'source':{p:{'sha256':h}for p,h in record['source_hashes'].items()}}
+        self.assertEqual(analysis.validate_corona_replay_identity(identity)['guards'],19)
+        identity['source'][record['source']]['sha256']='6d090cb0136d831211f254383407bfc6c3649c8174603fe3b88b40d83478ce93'
+        with self.assertRaisesRegex(ValueError,'joint-seed-stream'):
+            analysis.validate_corona_replay_identity(identity)
+
+    def test_final_manifest_requires_all_four_reference_and_quality_producers(self):
+        with self.assertRaises(ValueError):
+            analysis.validate_final_manifest({'guides': {}, 'references': {}, 'quality': {}})
+
+    def test_original_reference_sum_cannot_use_a_mean_divisor(self):
+        with self.assertRaises(ValueError):
+            analysis.validate_reference_input('original', {'storage': 'SUM', 'spp': 1024, 'divisor': 1})
+
+    def test_pfm_reference_reader_restores_top_left_rgb_rows(self):
+        temporary_root = Path(__file__).resolve().parents[3] / 'tmp/rtxgi-multibounce-analysis-checks'
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        expected = np.array([[[1., 2., 3.]], [[4., 5., 6.]]], dtype='<f4')
+        with tempfile.TemporaryDirectory(dir=temporary_root) as folder:
+            path = Path(folder) / 'reference.pfm'
+            with path.open('wb') as stream:
+                stream.write(b'PF\n1 2\n-1.0\n')
+                stream.write(expected[::-1].tobytes())
+            actual = analysis.read_reference(path, 1, 2)
+        np.testing.assert_array_equal(actual, expected)
+
+    def test_corona_internal_z_is_converted_to_shared_world_for_guides(self):
+        raw = np.array([[[2., 3., -4., 9.]]])
+        np.testing.assert_array_equal(analysis.canonical_xyz(raw, [1, 1, -1]), [[[2., 3., 4.]]])
+
+    def test_reference_sum_and_mean_are_normalized_per_input(self):
+        raw = np.full((2, 2, 4), 8, dtype=np.float32)
+        np.testing.assert_array_equal(analysis.normalized_rgb(raw, 4), np.full((2, 2, 3), 2))
+        np.testing.assert_array_equal(analysis.normalized_rgb(raw, 1), np.full((2, 2, 3), 8))
+
+    def test_multibounce_values_above_old_bound_are_valid(self):
+        raw = np.full((2, 2, 4), 1.5, dtype=np.float32)
+        self.assertEqual(analysis.normalized_rgb(raw, 1).max(), 1.5)
+
+    def test_pooling_preserves_within_repeat_noise_without_between_repeat_spread(self):
+        repeats = [analysis.summarize_sequence([np.array([[v]], float) for v in values],
+                                              np.ones((1, 1)), np.zeros((1, 1)),
+                                              {'full_frame': np.ones((1, 1), bool)})
+                   for values in ([0., 2., 0., 2.], [10., 12., 10., 12.])]
+        pooled = analysis.pool_sequences(repeats, np.ones((1, 1)), np.zeros((1, 1)),
+                                         {'full_frame': np.ones((1, 1), bool)})
+        self.assertAlmostEqual(pooled['regions']['full_frame']['temporal_sample_std_rms'], np.sqrt(4/3))
+        self.assertAlmostEqual(pooled['regions']['full_frame']['mean_luminance'], 6.)
+        self.assertEqual(pooled['temporal_variance_degrees_of_freedom'], 6)
+        self.assertEqual(pooled['lag_pairs'], 6)
+
+    def test_quality_reports_signed_brightness_bias_and_l2_error(self):
+        result = analysis.summarize_sequence([np.array([[2.]]), np.array([[2.]])],
+                                             np.ones((1, 1)), np.zeros((1, 1)),
+                                             {'full_frame': np.ones((1, 1), bool)})
+        region = result['regions']['full_frame']
+        self.assertEqual(region['relative_signed_mean_bias'], 1.)
+        self.assertEqual(region['per_frame_L2_NRMSE_rms'], 1.)
+        self.assertEqual(region['temporal_sample_std_rms'], 0.)
+
+    def test_reference_pair_noise_diagnostic_matches_known_values(self):
+        a = np.array([[0., 2.]])
+        b = np.array([[2., 0.]])
+        result = analysis.reference_region(a, b, np.ones((1, 2), bool))
+        self.assertEqual(result['mean_luminance'], 1.)
+        self.assertEqual(result['estimated_mean_reference_noise_mse'], 1.)
+        self.assertEqual(result['split_difference_rmse'], 2.)
+
+    def test_timing_sums_each_frame_before_taking_median(self):
+        temporary_root = Path(__file__).resolve().parents[3] / 'tmp/rtxgi-multibounce-analysis-checks'
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary_root) as folder:
+            path = Path(folder) / 'gpu.csv'
+            with path.open('w', newline='') as out:
+                writer = csv.writer(out)
+                writer.writerow(['frame', 'name', 'ms'])
+                for frame, pair in enumerate([(1, 9), (9, 1)]):
+                    for name, value in [('GI.Candidate', pair[0]), ('GI.Temporal', pair[1]),
+                                        ('GI.Spatial', 1), ('GI.Final', 1), ('GI.Exclusive', 12),
+                                        ('SP build', 2), ('SP export', 3), ('Frame.RenderGPU', 20)]:
+                        writer.writerow([frame, name, value])
+            result, _ = timing.analyze_repeat(path, 'rtxpt', warmup=0, measured=2)
+        self.assertEqual(result['scopes']['GI_exclusive']['median_ms'], 12.)
+        self.assertEqual(result['scopes']['GI_plus_primary_preparation']['median_ms'], 17.)
+        self.assertEqual(result['scopes']['full_GPU_frame']['median_ms'], 20.)
+
+    def test_full_gpu_range_must_contain_gi_and_preparation(self):
+        temporary_root = Path(__file__).resolve().parents[3] / 'tmp/rtxgi-multibounce-analysis-checks'
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary_root) as folder:
+            path = Path(folder) / 'gpu.csv'
+            with path.open('w', newline='') as out:
+                writer = csv.writer(out);writer.writerow(['frame', 'name', 'ms'])
+                for name in timing.PROFILES['rtxpt']['gi']+timing.PROFILES['rtxpt']['prep']:
+                    writer.writerow([0, name, 1])
+                writer.writerow([0, 'Frame.RenderGPU', 5])
+            with self.assertRaises(ValueError):
+                timing.analyze_repeat(path, 'rtxpt', warmup=0, measured=1)
+
+    def test_original_requires_two_native_spatial_dispatches(self):
+        temporary_root = Path(__file__).resolve().parents[3] / 'tmp/rtxgi-multibounce-analysis-checks'
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary_root) as folder:
+            path = Path(folder) / 'gpu.csv'
+            with path.open('w', newline='') as out:
+                writer=csv.writer(out);writer.writerow(['frame','stage','ms','begin_tick','end_tick','frequency_hz','phase'])
+                for name in timing.PROFILES['original']['gi']+timing.PROFILES['original']['prep']:
+                    writer.writerow([0,name,1,0,1,1000,'measure'])
+            with self.assertRaisesRegex(ValueError,'expected2 dispatches'):
+                timing.analyze_repeat(path,'original',warmup=0,measured=1)
+
+    def test_native_full_gpu_scope_must_exist_once(self):
+        temporary_root = Path(__file__).resolve().parents[3] / 'tmp/rtxgi-multibounce-analysis-checks'
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary_root) as folder:
+            path=Path(folder)/'gpu.csv'
+            for full_values in [[],[8,8]]:
+                with self.subTest(full_values=full_values):
+                    with path.open('w',newline='')as out:
+                        writer=csv.writer(out);writer.writerow(['frame','name','ms'])
+                        for name in timing.PROFILES['rtxpt']['gi']+timing.PROFILES['rtxpt']['prep']:
+                            writer.writerow([0,name,1])
+                        for value in full_values:writer.writerow([0,'Frame.RenderGPU',value])
+                    with self.assertRaisesRegex(ValueError,'one required whole GPU frame scope'):
+                        timing.analyze_repeat(path,'rtxpt',warmup=0,measured=1)
+
+    def test_timing_actual_transport_must_match_the_frozen_descriptor(self):
+        temporary_root=Path(__file__).resolve().parents[3]/'tmp/rtxgi-multibounce-analysis-checks'
+        temporary_root.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary_root)as folder:
+            task=Path(folder);run=task/'runs/timing';run.mkdir(parents=True)
+            (task/'reference').mkdir();(task/'reference/build-manifest.json').write_text(json.dumps({'executable_sha256':'synthetic'}))
+            contract={'transport':{'min_depth':5,'max_depth':16,'rr_threshold':1}}
+            (run/'launch-manifest.json').write_text(json.dumps({'exit_code':0,'spec':{'args':[],'output':str(run)},'frozen_scene_contract':contract,'executable_sha256':'synthetic','start_utc':'synthetic'}))
+            (run/'capture-result.json').write_text(json.dumps({'status':'complete','frames':360,'warmup':120}))
+            (run/'benchmark-config.json').write_text(json.dumps({'reference_mode':False,'min_depth':2,'max_depth':2,'RR_first_after_surface':6,'RR_threshold':9}))
+            path=run/'gpu-kernels.csv';path.write_text('synthetic')
+            with self.assertRaisesRegex(ValueError,'actual original timing transport'):
+                timing.validate_timing_provenance(path,'original',contract)
+
+
+if __name__ == '__main__':
+    unittest.main()

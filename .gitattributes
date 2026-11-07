@@ -2,3 +2,6 @@
 vision/src/render_core/denoiser/ReBLUR/scheduler/** -text whitespace=cr-at-eol
 vision/src/render_core/denoiser/ReBLUR/scheduler/LICENSE-NRD.txt whitespace=-blank-at-eol
 vision/src/render_core/denoiser/ReBLUR/scheduler/src/CpuReblurConfig.h whitespace=-blank-at-eof
+
+# Preserve immutable benchmark snapshots and their recorded byte checksums.
+docs/benchmarks/restirgi-20261107/** -text -whitespace

@@ -1,0 +1,1738 @@
+{
+  "schema": "five-way-restirgi-native-supplement.v1",
+  "status": "complete",
+  "scene": "Kitchen",
+  "resolution": [
+    1920,
+    1080
+  ],
+  "GPU": "NVIDIA GeForce RTX 3070 Ti",
+  "driver": "610.88",
+  "transport": {
+    "min_depth": 5,
+    "max_depth": 16,
+    "rr_threshold": 1,
+    "max_depth_includes_primary": true,
+    "first_roulette_after_surface": 6
+  },
+  "budget": "One new full candidate path per valid pixel/frame; native reuse counts and validation schedules differ.",
+  "quality": "3 independent offset sequences, frames96..127 each; within-repeat temporal variance,93DOF",
+  "timing": "3 processes,120warmup+240measured each, capture disabled; GPU timestamp sums; means include periodic validation",
+  "reference": "8192spp average of8 fresh1024spp PT halves from4producers",
+  "renderers": {
+    "original": {
+      "label": "原版 RestirGI（全分辨率实验版）",
+      "GI_GPU_ms": {
+        "count": 720,
+        "mean_ms": 16.466702222222224,
+        "median_ms": 16.435712000000002,
+        "p10_ms": 16.2784256,
+        "p90_ms": 16.721408,
+        "p95_ms": 16.828467200000002
+      },
+      "GI_plus_preparation_GPU_ms": {
+        "count": 720,
+        "mean_ms": 17.319580444444444,
+        "median_ms": 17.283584,
+        "p10_ms": 17.125376000000003,
+        "p90_ms": 17.5791104,
+        "p95_ms": 17.6702976
+      },
+      "full_GPU_ms": {
+        "count": 720,
+        "mean_ms": 18.05908026666667,
+        "median_ms": 18.003968,
+        "p10_ms": 17.8420448,
+        "p90_ms": 18.342195200000003,
+        "p95_ms": 18.4751616
+      },
+      "temporal_noise_percent": 36.67444869308898,
+      "brightness_bias_percent": -4.532930571814599,
+      "per_frame_L2_NRMSE_percent": 39.15057228967498,
+      "reference_noise_adjusted_NRMSE_percent": 38.95586233640129,
+      "mean_luminance": 0.005058838158596395,
+      "time_mean_NRMSE_percent": 14.074654230217524,
+      "quality_repeat_ranges": {
+        "full_frame": {
+          "mean_luminance": {
+            "min": 0.005056928104216354,
+            "max": 0.0050625983870251495
+          },
+          "signed_mean_bias": {
+            "min": -0.00024211185678494143,
+            "max": -0.00023644157397614677
+          },
+          "relative_signed_mean_bias": {
+            "min": -0.045689758629257914,
+            "max": -0.04461970011856058
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.0022958546252831273,
+            "max": 0.002318100244538598
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 0.36487109573736076,
+            "max": 0.3684065040265937
+          },
+          "mean_per_frame_mse": {
+            "min": 6.005614916150492e-06,
+            "max": 6.114056124005612e-06
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.00245063561472335,
+            "max": 0.002472661748805447
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 0.3894698262468774,
+            "max": 0.3929703526255464
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 0.38751249726058007,
+            "max": 0.39103054614570004
+          },
+          "time_mean_rmse": {
+            "min": 0.0009483583685006032,
+            "max": 0.0009599584051175548
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.1507188448501343,
+            "max": 0.15256239279276532
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.14558626366974678,
+            "max": 0.14749397842289083
+          },
+          "lag1_covariance_over_variance": {
+            "min": -0.029571244846529305,
+            "max": -0.0278836551610415
+          }
+        },
+        "common_valid_primary": {
+          "mean_luminance": {
+            "min": 0.00517507944047749,
+            "max": 0.005180882205195661
+          },
+          "signed_mean_bias": {
+            "min": -0.00024776038269070164,
+            "max": -0.00024195761797252808
+          },
+          "relative_signed_mean_bias": {
+            "min": -0.045688309219864186,
+            "max": -0.0446182490839586
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.002322520230689872,
+            "max": 0.0023450242255840096
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 0.36487159844846795,
+            "max": 0.36840701160870604
+          },
+          "mean_per_frame_mse": {
+            "min": 6.145819961675115e-06,
+            "max": 6.256794817102397e-06
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.002479076433205543,
+            "max": 0.002501358594264804
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 0.3894668252646181,
+            "max": 0.39296738797884
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 0.3875094762627063,
+            "max": 0.39102756197819166
+          },
+          "time_mean_rmse": {
+            "min": 0.0009593150533832711,
+            "max": 0.0009710505238522798
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.15070991086250343,
+            "max": 0.15255357181838675
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.1455770017684114,
+            "max": 0.14748484154734007
+          },
+          "lag1_covariance_over_variance": {
+            "min": -0.02957124484652934,
+            "max": -0.027883655161041486
+          }
+        },
+        "guide_consistent_primary_diagnostic": {
+          "mean_luminance": {
+            "min": 0.005174954421409034,
+            "max": 0.005180736323014328
+          },
+          "signed_mean_bias": {
+            "min": -0.0002477095892960376,
+            "max": -0.0002419276876907387
+          },
+          "relative_signed_mean_bias": {
+            "min": -0.04568042364546755,
+            "max": -0.04461417620806692
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.0023203234463821405,
+            "max": 0.0023425098638730248
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 0.3645621788900431,
+            "max": 0.36804804148167974
+          },
+          "mean_per_frame_mse": {
+            "min": 6.134065107012874e-06,
+            "max": 6.243675332677948e-06
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.002476704485200621,
+            "max": 0.002498734746362236
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 0.3891322931720175,
+            "max": 0.3925936209550546
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 0.38717292849932067,
+            "max": 0.3906516174138131
+          },
+          "time_mean_rmse": {
+            "min": 0.0009583376827490886,
+            "max": 0.0009702595999865887
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.15057110864443823,
+            "max": 0.15244424410381852
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.14543243700028663,
+            "max": 0.14737090124516347
+          },
+          "lag1_covariance_over_variance": {
+            "min": -0.029570386017407246,
+            "max": -0.027848747373818147
+          }
+        }
+      },
+      "quality_repeats": [
+        {
+          "label": "r1",
+          "bias_percent": -4.567845840661958,
+          "noise_percent": 36.69472542054591,
+          "NRMSE_percent": 39.20685521478366
+        },
+        {
+          "label": "r2",
+          "bias_percent": -4.568975862925791,
+          "noise_percent": 36.84065040265937,
+          "NRMSE_percent": 39.297035262554644
+        },
+        {
+          "label": "r3",
+          "bias_percent": -4.461970011856058,
+          "noise_percent": 36.48710957373608,
+          "NRMSE_percent": 38.94698262468774
+        }
+      ],
+      "timing_repeat_GI_means_ms": [
+        16.472768,
+        16.443498666666667,
+        16.48384
+      ],
+      "stage_means_ms": {
+        "candidate": 6.439294577777778,
+        "validation": 7.3654144000000015,
+        "temporal": 0.6657607111111111,
+        "spatial": 1.4868522666666666,
+        "resolve": 0.5093802666666666
+      },
+      "native_settings": {
+        "primary_proposal": "uniform hemisphere",
+        "temporal_M_clamp": 20,
+        "W_clamp": 10,
+        "spatial_passes": 2,
+        "interleaved_short_paths": false,
+        "spatial_pass_proposals": [
+          8,
+          5
+        ],
+        "temporal_sources": 5,
+        "M_clamp": 20,
+        "resolve_taps": 4,
+        "validation": "native full suffix refresh; actual dispatch/work recorded",
+        "source": "Executed runtime settings plus recorded native reuse implementation profile; only newly generated candidate path budget is matched.",
+        "actual_runtime_by_repeat": {
+          "r1": {
+            "profile": "kitchen_multibounce_v1",
+            "reference_mode": false,
+            "sample_offset": 0,
+            "min_depth": 5,
+            "max_depth": 16,
+            "RR_first_after_surface": 6,
+            "RR_threshold": 1,
+            "RR_survival_cap": 0.95,
+            "RR_floor": 0,
+            "surface16_NEE_before_termination": true,
+            "primary_proposal": "uniform hemisphere",
+            "primary_direct": false,
+            "temporal_M_clamp": 20,
+            "reservoir_W_clamp": 10,
+            "spatial_passes": 2,
+            "native_core_unchanged": true,
+            "interleaved_short_paths": false,
+            "scene_geometry": "canonical world OBJ315 groups, originalAssimp3.3, no axis reflection",
+            "diagnostic_components": [
+              "last_surface",
+              "RR_tests",
+              "RR_survivals",
+              "reason"
+            ],
+            "diagnostic_reasons": {
+              "0": "invalid_primary",
+              "1": "miss",
+              "2": "RR",
+              "3": "max_depth"
+            },
+            "fresh_pt_sum_is_sum": true,
+            "replay_seed": "source pixel and recovered discrete8bit uniform proposal; nativeFP16 history quantization retained"
+          },
+          "r2": {
+            "profile": "kitchen_multibounce_v1",
+            "reference_mode": false,
+            "sample_offset": 10000,
+            "min_depth": 5,
+            "max_depth": 16,
+            "RR_first_after_surface": 6,
+            "RR_threshold": 1,
+            "RR_survival_cap": 0.95,
+            "RR_floor": 0,
+            "surface16_NEE_before_termination": true,
+            "primary_proposal": "uniform hemisphere",
+            "primary_direct": false,
+            "temporal_M_clamp": 20,
+            "reservoir_W_clamp": 10,
+            "spatial_passes": 2,
+            "native_core_unchanged": true,
+            "interleaved_short_paths": false,
+            "scene_geometry": "canonical world OBJ315 groups, originalAssimp3.3, no axis reflection",
+            "diagnostic_components": [
+              "last_surface",
+              "RR_tests",
+              "RR_survivals",
+              "reason"
+            ],
+            "diagnostic_reasons": {
+              "0": "invalid_primary",
+              "1": "miss",
+              "2": "RR",
+              "3": "max_depth"
+            },
+            "fresh_pt_sum_is_sum": true,
+            "replay_seed": "source pixel and recovered discrete8bit uniform proposal; nativeFP16 history quantization retained"
+          },
+          "r3": {
+            "profile": "kitchen_multibounce_v1",
+            "reference_mode": false,
+            "sample_offset": 20000,
+            "min_depth": 5,
+            "max_depth": 16,
+            "RR_first_after_surface": 6,
+            "RR_threshold": 1,
+            "RR_survival_cap": 0.95,
+            "RR_floor": 0,
+            "surface16_NEE_before_termination": true,
+            "primary_proposal": "uniform hemisphere",
+            "primary_direct": false,
+            "temporal_M_clamp": 20,
+            "reservoir_W_clamp": 10,
+            "spatial_passes": 2,
+            "native_core_unchanged": true,
+            "interleaved_short_paths": false,
+            "scene_geometry": "canonical world OBJ315 groups, originalAssimp3.3, no axis reflection",
+            "diagnostic_components": [
+              "last_surface",
+              "RR_tests",
+              "RR_survivals",
+              "reason"
+            ],
+            "diagnostic_reasons": {
+              "0": "invalid_primary",
+              "1": "miss",
+              "2": "RR",
+              "3": "max_depth"
+            },
+            "fresh_pt_sum_is_sum": true,
+            "replay_seed": "source pixel and recovered discrete8bit uniform proposal; nativeFP16 history quantization retained"
+          }
+        }
+      }
+    },
+    "rtxpt": {
+      "label": "RTXPT ReSTIR GI",
+      "GI_GPU_ms": {
+        "count": 720,
+        "mean_ms": 11.055325869648945,
+        "median_ms": 11.0346239380305,
+        "p10_ms": 10.688512207707,
+        "p90_ms": 11.559014269727701,
+        "p95_ms": 11.7046782805146
+      },
+      "GI_plus_preparation_GPU_ms": {
+        "count": 720,
+        "mean_ms": 12.291316620433463,
+        "median_ms": 12.262912161533,
+        "p10_ms": 11.8977536098089,
+        "p90_ms": 12.7748096507281,
+        "p95_ms": 12.927334598491749
+      },
+      "full_GPU_ms": {
+        "count": 720,
+        "mean_ms": 12.7619100320675,
+        "median_ms": 12.7334399149,
+        "p10_ms": 12.3586561531,
+        "p90_ms": 13.2403196767,
+        "p95_ms": 13.398118736189998
+      },
+      "temporal_noise_percent": 40.496157341436906,
+      "brightness_bias_percent": -5.362287018666337,
+      "per_frame_L2_NRMSE_percent": 43.604301395740194,
+      "reference_noise_adjusted_NRMSE_percent": 43.42956366317917,
+      "mean_luminance": 0.005014890229058582,
+      "time_mean_NRMSE_percent": 12.689646845868872,
+      "quality_repeat_ranges": {
+        "full_frame": {
+          "mean_luminance": {
+            "min": 0.005014071719526766,
+            "max": 0.005015758532903325
+          },
+          "signed_mean_bias": {
+            "min": -0.00028496824147452963,
+            "max": -0.0002832814280979698
+          },
+          "relative_signed_mean_bias": {
+            "min": -0.0537773339268577,
+            "max": -0.05345900959094514
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.0025453865673016516,
+            "max": 0.0025515668452719504
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 0.4045282204102884,
+            "max": 0.4055104275457713
+          },
+          "mean_per_frame_mse": {
+            "min": 7.515043374970926e-06,
+            "max": 7.541555939364281e-06
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.0027413579436058556,
+            "max": 0.0027461893487821048
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 0.4356731762005339,
+            "max": 0.4364410123175057
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 0.433924309571404,
+            "max": 0.4346952348589611
+          },
+          "time_mean_rmse": {
+            "min": 0.0011084543966953814,
+            "max": 0.0011181678709505545
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.17616227344850402,
+            "max": 0.17770599749612945
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.17179154974242383,
+            "max": 0.17337419508811727
+          },
+          "lag1_covariance_over_variance": {
+            "min": 0.4322089833953369,
+            "max": 0.4336033661683985
+          }
+        },
+        "common_valid_primary": {
+          "mean_luminance": {
+            "min": 0.00513121801008922,
+            "max": 0.005132940896791282
+          },
+          "signed_mean_bias": {
+            "min": -0.00029162181307896445,
+            "max": -0.00028989892637691113
+          },
+          "relative_signed_mean_bias": {
+            "min": -0.05377658617779168,
+            "max": -0.05345887686712892
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.0025749466362194515,
+            "max": 0.0025811983605547924
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 0.4045281856588282,
+            "max": 0.4055103414313174
+          },
+          "mean_per_frame_mse": {
+            "min": 7.690609812709595e-06,
+            "max": 7.717709944200073e-06
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.0027731948746363994,
+            "max": 0.0027780766627650997
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 0.43567329719970754,
+            "max": 0.4364402338292655
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 0.43392442672032305,
+            "max": 0.4346944489139933
+          },
+          "time_mean_rmse": {
+            "min": 0.0011213279809757716,
+            "max": 0.0011311470520959967
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.1761623978113179,
+            "max": 0.17770498940108054
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.1717916663122206,
+            "max": 0.17337315094827824
+          },
+          "lag1_covariance_over_variance": {
+            "min": 0.43220841315815833,
+            "max": 0.4336027461327152
+          }
+        },
+        "guide_consistent_primary_diagnostic": {
+          "mean_luminance": {
+            "min": 0.005131162826081635,
+            "max": 0.005132870435759462
+          },
+          "signed_mean_bias": {
+            "min": -0.00029150118462343167,
+            "max": -0.0002897935749456041
+          },
+          "relative_signed_mean_bias": {
+            "min": -0.05375608447212832,
+            "max": -0.05344118211519517
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.002574511402057927,
+            "max": 0.002580683143741745
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 0.4044994191542217,
+            "max": 0.40546910447947554
+          },
+          "mean_per_frame_mse": {
+            "min": 7.683651844615491e-06,
+            "max": 7.713112579138702e-06
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.002771940086765133,
+            "max": 0.002777249102824358
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 0.43551881499943373,
+            "max": 0.43635295149248654
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 0.4337690320803666,
+            "max": 0.4346065269293956
+          },
+          "time_mean_rmse": {
+            "min": 0.0011198824976647393,
+            "max": 0.0011300406083610127
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.17595253975735692,
+            "max": 0.17754855128523844
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.17157573027818177,
+            "max": 0.1732120753207295
+          },
+          "lag1_covariance_over_variance": {
+            "min": 0.4320455991756718,
+            "max": 0.433480370436762
+          }
+        }
+      },
+      "quality_repeats": [
+        {
+          "label": "r1",
+          "bias_percent": -5.37773339268577,
+          "noise_percent": 40.55104275457713,
+          "NRMSE_percent": 43.64410123175057
+        },
+        {
+          "label": "r2",
+          "bias_percent": -5.345900959094514,
+          "noise_percent": 40.484545183323355,
+          "NRMSE_percent": 43.567317620053394
+        },
+        {
+          "label": "r3",
+          "bias_percent": -5.3632267042187305,
+          "noise_percent": 40.45282204102884,
+          "NRMSE_percent": 43.60145139439447
+        }
+      ],
+      "timing_repeat_GI_means_ms": [
+        10.837994673782791,
+        11.157730144500396,
+        11.170252790663652
+      ],
+      "stage_means_ms": {
+        "candidate": 7.928015651931556,
+        "validation": 0.0,
+        "temporal": 0.8014819525770069,
+        "spatial": 1.842130487945153,
+        "resolve": 0.48369777719523055
+      },
+      "native_settings": {
+        "primary_proposal": "cosine hemisphere",
+        "note": "Fill actual runtime history/spatial/bias/resolve settings.",
+        "history": 8,
+        "age": 30,
+        "spatial_neighbors": 2,
+        "spatial_radius": 32,
+        "BASIC": true,
+        "final_visibility": true,
+        "final_MIS": false,
+        "source": "Executed runtime settings plus recorded native reuse implementation profile; only newly generated candidate path budget is matched.",
+        "actual_runtime_by_repeat": {
+          "r1": {
+            "mode": "temporalspatial",
+            "spp": 1,
+            "minimum_depth": 5,
+            "max_surface_depth": 16,
+            "first_RR_surface": 6,
+            "sun_NEE_per_secondary_surface": 1,
+            "material": "opaque_exact_Lambert_0.7",
+            "environment": "black",
+            "emission": false,
+            "history": 8,
+            "age": 30,
+            "spatial_samples": 2,
+            "radius_pixels": 32,
+            "normal_threshold": 0.6,
+            "depth_threshold": 0.1,
+            "bias": "BASIC",
+            "final_visibility": true,
+            "final_MIS": false,
+            "boiling": false,
+            "fallback": false,
+            "permutation": false,
+            "NRD": false,
+            "AA": false,
+            "jitter": false,
+            "raw": "RGBA32_FLOAT_pure_indirect_before_tonemap"
+          },
+          "r2": {
+            "mode": "temporalspatial",
+            "spp": 1,
+            "minimum_depth": 5,
+            "max_surface_depth": 16,
+            "first_RR_surface": 6,
+            "sun_NEE_per_secondary_surface": 1,
+            "material": "opaque_exact_Lambert_0.7",
+            "environment": "black",
+            "emission": false,
+            "history": 8,
+            "age": 30,
+            "spatial_samples": 2,
+            "radius_pixels": 32,
+            "normal_threshold": 0.6,
+            "depth_threshold": 0.1,
+            "bias": "BASIC",
+            "final_visibility": true,
+            "final_MIS": false,
+            "boiling": false,
+            "fallback": false,
+            "permutation": false,
+            "NRD": false,
+            "AA": false,
+            "jitter": false,
+            "raw": "RGBA32_FLOAT_pure_indirect_before_tonemap"
+          },
+          "r3": {
+            "mode": "temporalspatial",
+            "spp": 1,
+            "minimum_depth": 5,
+            "max_surface_depth": 16,
+            "first_RR_surface": 6,
+            "sun_NEE_per_secondary_surface": 1,
+            "material": "opaque_exact_Lambert_0.7",
+            "environment": "black",
+            "emission": false,
+            "history": 8,
+            "age": 30,
+            "spatial_samples": 2,
+            "radius_pixels": 32,
+            "normal_threshold": 0.6,
+            "depth_threshold": 0.1,
+            "bias": "BASIC",
+            "final_visibility": true,
+            "final_MIS": false,
+            "boiling": false,
+            "fallback": false,
+            "permutation": false,
+            "NRD": false,
+            "AA": false,
+            "jitter": false,
+            "raw": "RGBA32_FLOAT_pure_indirect_before_tonemap"
+          }
+        }
+      }
+    },
+    "rtxdi": {
+      "label": "RTXDI ReSTIR GI",
+      "GI_GPU_ms": {
+        "count": 720,
+        "mean_ms": 10.352017074910691,
+        "median_ms": 10.315264400560409,
+        "p10_ms": 9.90402564057149,
+        "p90_ms": 10.803405140177347,
+        "p95_ms": 10.965503788611386
+      },
+      "GI_plus_preparation_GPU_ms": {
+        "count": 720,
+        "mean_ms": 10.977197527891905,
+        "median_ms": 10.928639967460185,
+        "p10_ms": 10.511257621692494,
+        "p90_ms": 11.420774253201671,
+        "p95_ms": 11.5735550163663
+      },
+      "full_GPU_ms": {
+        "count": 720,
+        "mean_ms": 11.792773701664474,
+        "median_ms": 11.734016239643097,
+        "p10_ms": 11.309977620840073,
+        "p90_ms": 12.226560153067112,
+        "p95_ms": 12.383590312674642
+      },
+      "temporal_noise_percent": 43.87922295900246,
+      "brightness_bias_percent": -4.1065892788589675,
+      "per_frame_L2_NRMSE_percent": 47.00280295693796,
+      "reference_noise_adjusted_NRMSE_percent": 46.840744929733106,
+      "mean_luminance": 0.0050814301540803575,
+      "time_mean_NRMSE_percent": 12.69363146839812,
+      "quality_repeat_ranges": {
+        "full_frame": {
+          "mean_luminance": {
+            "min": 0.005079229781529252,
+            "max": 0.005084456490523695
+          },
+          "signed_mean_bias": {
+            "min": -0.00021981017947204237,
+            "max": -0.0002145834704776005
+          },
+          "relative_signed_mean_bias": {
+            "min": -0.04148113263718576,
+            "max": -0.0404947824618883
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.002759943941904745,
+            "max": 0.002762833095911645
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 0.43862697540454587,
+            "max": 0.4390861372245682
+          },
+          "mean_per_frame_mse": {
+            "min": 8.726161608510615e-06,
+            "max": 8.758014777077443e-06
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.0029540077197784394,
+            "max": 0.0029593943260534652
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 0.4694687641205777,
+            "max": 0.47032483615241727
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 0.467846246603797,
+            "max": 0.46870528211036444
+          },
+          "time_mean_rmse": {
+            "min": 0.0011538864123113069,
+            "max": 0.0011742080500054108
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.1833826040115924,
+            "max": 0.1866122415204181
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.1791880839521163,
+            "max": 0.18249196875926632
+          },
+          "lag1_covariance_over_variance": {
+            "min": 0.436960414345589,
+            "max": 0.4401383350020623
+          }
+        },
+        "common_valid_primary": {
+          "mean_luminance": {
+            "min": 0.0051978929294075,
+            "max": 0.005203244807095977
+          },
+          "signed_mean_bias": {
+            "min": -0.00022494689376068993,
+            "max": -0.0002195950160722116
+          },
+          "relative_signed_mean_bias": {
+            "min": -0.04148138265114186,
+            "max": -0.040494468439585526
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.002791993668159464,
+            "max": 0.0027949183932035816
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 0.43862661736933456,
+            "max": 0.4390860962956183
+          },
+          "mean_per_frame_mse": {
+            "min": 8.929998293888414e-06,
+            "max": 8.962598184351218e-06
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.0029883102740325363,
+            "max": 0.0029937598741968633
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 0.4694682663850717,
+            "max": 0.47032440718272245
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 0.4678457431187132,
+            "max": 0.4687048476423896
+          },
+          "time_mean_rmse": {
+            "min": 0.0011672793131858328,
+            "max": 0.0011878427658590822
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.18338142471699156,
+            "max": 0.18661197562774912
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.17918686654699326,
+            "max": 0.1824916865486972
+          },
+          "lag1_covariance_over_variance": {
+            "min": 0.4369606051479061,
+            "max": 0.44013767046170954
+          }
+        },
+        "guide_consistent_primary_diagnostic": {
+          "mean_luminance": {
+            "min": 0.005197648038640101,
+            "max": 0.0052030565285898465
+          },
+          "signed_mean_bias": {
+            "min": -0.0002250159720649697,
+            "max": -0.00021960748211521946
+          },
+          "relative_signed_mean_bias": {
+            "min": -0.04149546636501137,
+            "max": -0.04049808022065996
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.002791115160367339,
+            "max": 0.002794402177342277
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 0.4385315443771836,
+            "max": 0.43904799050985543
+          },
+          "mean_per_frame_mse": {
+            "min": 8.925711590753954e-06,
+            "max": 8.95576419960593e-06
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.0029875929426134936,
+            "max": 0.0029926182849815525
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 0.46940153731322226,
+            "max": 0.4701911038567249
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 0.4677785140485223,
+            "max": 0.46857081547982965
+          },
+          "time_mean_rmse": {
+            "min": 0.0011666402283016294,
+            "max": 0.0011869658719291566
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.18329897250901347,
+            "max": 0.18649247595774493
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.1791017819461526,
+            "max": 0.18236879821470883
+          },
+          "lag1_covariance_over_variance": {
+            "min": 0.4368720802231015,
+            "max": 0.43996728730819584
+          }
+        }
+      },
+      "quality_repeats": [
+        {
+          "label": "r1",
+          "bias_percent": -4.148113263718576,
+          "noise_percent": 43.86634276873582,
+          "NRMSE_percent": 47.028998900244524
+        },
+        {
+          "label": "r2",
+          "bias_percent": -4.122176326669492,
+          "noise_percent": 43.86269754045459,
+          "NRMSE_percent": 47.03248361524173
+        },
+        {
+          "label": "r3",
+          "bias_percent": -4.04947824618883,
+          "noise_percent": 43.90861372245682,
+          "NRMSE_percent": 46.94687641205777
+        }
+      ],
+      "timing_repeat_GI_means_ms": [
+        10.335500829751254,
+        10.317623478355623,
+        10.402926916625196
+      ],
+      "stage_means_ms": {
+        "candidate": 8.826019563518154,
+        "validation": 0.0,
+        "temporal": 0.41504284421939197,
+        "spatial": 0.5483975102025498,
+        "resolve": 0.5625571569705952
+      },
+      "native_settings": {
+        "primary_proposal": "cosine hemisphere",
+        "note": "Fill actual runtime history/spatial/bias/resolve settings.",
+        "history": 8,
+        "age": 30,
+        "spatial_neighbors": 2,
+        "spatial_radius": 32,
+        "BASIC": true,
+        "final_visibility": true,
+        "final_MIS": false,
+        "source": "Executed runtime settings plus recorded native reuse implementation profile; only newly generated candidate path budget is matched.",
+        "actual_runtime_by_repeat": {
+          "r1": {
+            "Corona_min5_max16_RR1_match": true,
+            "RR_order": "NEE, scatter beta*=0.7, RR, next ray; terminal surface16 NEE then stop",
+            "RR_survival": "min(0.95,maxRGB(beta_before_current_BSDF)); if beta_before_current_BSDF < 1; no lower clamp",
+            "RR_threshold": 1,
+            "boiling_filter": false,
+            "candidate_RR": true,
+            "candidate_generator": "application multibounce path tail behind native GI secondary vertex",
+            "candidate_has_multibounce_loop": true,
+            "candidate_max_secondary_interactions": 15,
+            "depth_threshold": 0.10000000149011612,
+            "fallback": false,
+            "final_MIS": false,
+            "final_read_buffer": 1,
+            "final_visibility": true,
+            "firefly_clamp": false,
+            "first_RR_after_surface_reflection": 6,
+            "first_RR_survival": 0.16807,
+            "initial_write_buffer": 0,
+            "max_history_length": 8,
+            "max_reservoir_age": 30,
+            "max_surface_reflections_including_primary": 16,
+            "min_depth_zero_based": 5,
+            "min_secondary_roughness": 0.0,
+            "normal_threshold": 0.6000000238418579,
+            "pathstats_RGBA": "last visited surface depth, RR tests, RR survivals, reason:0 invalid/1 miss/2 RR/3 max16",
+            "permutation": false,
+            "reference_estimator": "separate unpacked full path from primary, independent RNG, no GI reuse or reservoir/secondary packing",
+            "resampling_mode_enum": 3,
+            "secondary_DI_spatial_neighbors": 1,
+            "secondary_DI_spatial_reuse_enabled": false,
+            "secondary_NEE_BRDF_candidates": 0,
+            "secondary_NEE_environment_candidates_effective": 0,
+            "secondary_NEE_infinite_candidates": 1,
+            "secondary_NEE_local_candidates": 0,
+            "secondary_NEE_local_sampling_mode_enum": 0,
+            "spatial_bias_enum": 1,
+            "spatial_neighbors": 2,
+            "spatial_radius": 32.0,
+            "stock_candidate_secondary_interactions": 1,
+            "temporal_bias_enum": 1
+          },
+          "r2": {
+            "Corona_min5_max16_RR1_match": true,
+            "RR_order": "NEE, scatter beta*=0.7, RR, next ray; terminal surface16 NEE then stop",
+            "RR_survival": "min(0.95,maxRGB(beta_before_current_BSDF)); if beta_before_current_BSDF < 1; no lower clamp",
+            "RR_threshold": 1,
+            "boiling_filter": false,
+            "candidate_RR": true,
+            "candidate_generator": "application multibounce path tail behind native GI secondary vertex",
+            "candidate_has_multibounce_loop": true,
+            "candidate_max_secondary_interactions": 15,
+            "depth_threshold": 0.10000000149011612,
+            "fallback": false,
+            "final_MIS": false,
+            "final_read_buffer": 1,
+            "final_visibility": true,
+            "firefly_clamp": false,
+            "first_RR_after_surface_reflection": 6,
+            "first_RR_survival": 0.16807,
+            "initial_write_buffer": 0,
+            "max_history_length": 8,
+            "max_reservoir_age": 30,
+            "max_surface_reflections_including_primary": 16,
+            "min_depth_zero_based": 5,
+            "min_secondary_roughness": 0.0,
+            "normal_threshold": 0.6000000238418579,
+            "pathstats_RGBA": "last visited surface depth, RR tests, RR survivals, reason:0 invalid/1 miss/2 RR/3 max16",
+            "permutation": false,
+            "reference_estimator": "separate unpacked full path from primary, independent RNG, no GI reuse or reservoir/secondary packing",
+            "resampling_mode_enum": 3,
+            "secondary_DI_spatial_neighbors": 1,
+            "secondary_DI_spatial_reuse_enabled": false,
+            "secondary_NEE_BRDF_candidates": 0,
+            "secondary_NEE_environment_candidates_effective": 0,
+            "secondary_NEE_infinite_candidates": 1,
+            "secondary_NEE_local_candidates": 0,
+            "secondary_NEE_local_sampling_mode_enum": 0,
+            "spatial_bias_enum": 1,
+            "spatial_neighbors": 2,
+            "spatial_radius": 32.0,
+            "stock_candidate_secondary_interactions": 1,
+            "temporal_bias_enum": 1
+          },
+          "r3": {
+            "Corona_min5_max16_RR1_match": true,
+            "RR_order": "NEE, scatter beta*=0.7, RR, next ray; terminal surface16 NEE then stop",
+            "RR_survival": "min(0.95,maxRGB(beta_before_current_BSDF)); if beta_before_current_BSDF < 1; no lower clamp",
+            "RR_threshold": 1,
+            "boiling_filter": false,
+            "candidate_RR": true,
+            "candidate_generator": "application multibounce path tail behind native GI secondary vertex",
+            "candidate_has_multibounce_loop": true,
+            "candidate_max_secondary_interactions": 15,
+            "depth_threshold": 0.10000000149011612,
+            "fallback": false,
+            "final_MIS": false,
+            "final_read_buffer": 1,
+            "final_visibility": true,
+            "firefly_clamp": false,
+            "first_RR_after_surface_reflection": 6,
+            "first_RR_survival": 0.16807,
+            "initial_write_buffer": 0,
+            "max_history_length": 8,
+            "max_reservoir_age": 30,
+            "max_surface_reflections_including_primary": 16,
+            "min_depth_zero_based": 5,
+            "min_secondary_roughness": 0.0,
+            "normal_threshold": 0.6000000238418579,
+            "pathstats_RGBA": "last visited surface depth, RR tests, RR survivals, reason:0 invalid/1 miss/2 RR/3 max16",
+            "permutation": false,
+            "reference_estimator": "separate unpacked full path from primary, independent RNG, no GI reuse or reservoir/secondary packing",
+            "resampling_mode_enum": 3,
+            "secondary_DI_spatial_neighbors": 1,
+            "secondary_DI_spatial_reuse_enabled": false,
+            "secondary_NEE_BRDF_candidates": 0,
+            "secondary_NEE_environment_candidates_effective": 0,
+            "secondary_NEE_infinite_candidates": 1,
+            "secondary_NEE_local_candidates": 0,
+            "secondary_NEE_local_sampling_mode_enum": 0,
+            "spatial_bias_enum": 1,
+            "spatial_neighbors": 2,
+            "spatial_radius": 32.0,
+            "stock_candidate_secondary_interactions": 1,
+            "temporal_bias_enum": 1
+          }
+        }
+      }
+    },
+    "corona_port": {
+      "label": "CoronaEngine 当前移植版",
+      "GI_GPU_ms": {
+        "count": 720,
+        "mean_ms": 12.614305822222223,
+        "median_ms": 10.277888,
+        "p10_ms": 9.7156096,
+        "p90_ms": 17.926937600000002,
+        "p95_ms": 18.226688000000003
+      },
+      "GI_plus_preparation_GPU_ms": {
+        "count": 720,
+        "mean_ms": 13.704702933333333,
+        "median_ms": 11.357968,
+        "p10_ms": 10.7977376,
+        "p90_ms": 19.0238592,
+        "p95_ms": 19.3052176
+      },
+      "full_GPU_ms": null,
+      "temporal_noise_percent": 36.421027160680026,
+      "brightness_bias_percent": 15.3757371756023,
+      "per_frame_L2_NRMSE_percent": 42.5621599968007,
+      "reference_noise_adjusted_NRMSE_percent": 42.383125927152236,
+      "mean_luminance": 0.006113806418234992,
+      "time_mean_NRMSE_percent": 22.22616131523993,
+      "quality_repeat_ranges": {
+        "full_frame": {
+          "mean_luminance": {
+            "min": 0.006112998378618169,
+            "max": 0.006114456244843732
+          },
+          "signed_mean_bias": {
+            "min": 0.0008139584176168696,
+            "max": 0.0008154162838424394
+          },
+          "relative_signed_mean_bias": {
+            "min": 0.1536048838293844,
+            "max": 0.15388000276343644
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.0022804072453461452,
+            "max": 0.0023039853418244647
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 0.36241610473670766,
+            "max": 0.36616327836116336
+          },
+          "mean_per_frame_mse": {
+            "min": 7.1114472801408436e-06,
+            "max": 7.2081702190585625e-06
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.0026667296976148227,
+            "max": 0.0026848035717829642
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 0.42381280421189044,
+            "max": 0.4266852135531987
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 0.4220147900136965,
+            "max": 0.4248993544844437
+          },
+          "time_mean_rmse": {
+            "min": 0.001437256989179736,
+            "max": 0.0014540201313085264
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.22841756909304267,
+            "max": 0.23108166897514154
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.22506393724169385,
+            "max": 0.22776726655227494
+          },
+          "lag1_covariance_over_variance": {
+            "min": -0.03182168775611973,
+            "max": -0.03124289412483323
+          }
+        },
+        "common_valid_primary": {
+          "mean_luminance": {
+            "min": 0.006255816240954957,
+            "max": 0.0062573083554616285
+          },
+          "signed_mean_bias": {
+            "min": 0.0008329764177867641,
+            "max": 0.0008344685322934375
+          },
+          "relative_signed_mean_bias": {
+            "min": 0.15360520409030162,
+            "max": 0.153880357802255
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.0023068877430826623,
+            "max": 0.0023307429975058087
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 0.3624157099418373,
+            "max": 0.36616340810943643
+          },
+          "mean_per_frame_mse": {
+            "min": 7.2775738821430185e-06,
+            "max": 7.376570048719039e-06
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.002697697885631936,
+            "max": 0.0027159841768167646
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 0.4238126009215431,
+            "max": 0.4266854061639416
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 0.4220145813968748,
+            "max": 0.4248995434746714
+          },
+          "time_mean_rmse": {
+            "min": 0.001453949266501371,
+            "max": 0.0014709074829397293
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.22841772739854838,
+            "max": 0.23108188999956086
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.22506408954254314,
+            "max": 0.22776748252870835
+          },
+          "lag1_covariance_over_variance": {
+            "min": -0.03182113036376097,
+            "max": -0.031242321372666363
+          }
+        },
+        "guide_consistent_primary_diagnostic": {
+          "mean_luminance": {
+            "min": 0.006255772158375854,
+            "max": 0.006257226034891739
+          },
+          "signed_mean_bias": {
+            "min": 0.0008331081476707771,
+            "max": 0.0008345620241866699
+          },
+          "relative_signed_mean_bias": {
+            "min": 0.15363447671220454,
+            "max": 0.15390258783120853
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.00230481547909147,
+            "max": 0.0023290586542543982
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 0.3621256141281529,
+            "max": 0.36593462824400413
+          },
+          "mean_per_frame_mse": {
+            "min": 7.266154182590065e-06,
+            "max": 7.367492548380736e-06
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.002695580490838674,
+            "max": 0.0027143125369751982
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 0.4235214270001365,
+            "max": 0.42646454924684224
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 0.42172186818050955,
+            "max": 0.42467746200821566
+          },
+          "time_mean_rmse": {
+            "min": 0.0014534422598235011,
+            "max": 0.0014702476319464462
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.2283604374029404,
+            "max": 0.23100084647511157
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.225005387367257,
+            "max": 0.22768470753576137
+          },
+          "lag1_covariance_over_variance": {
+            "min": -0.0317710695817879,
+            "max": -0.03127388101213854
+          }
+        }
+      },
+      "quality_repeats": [
+        {
+          "label": "r1",
+          "bias_percent": 15.388000276343645,
+          "noise_percent": 36.24161047367077,
+          "NRMSE_percent": 42.38128042118905
+        },
+        {
+          "label": "r2",
+          "bias_percent": 15.378722867524832,
+          "noise_percent": 36.616327836116334,
+          "NRMSE_percent": 42.668521355319875
+        },
+        {
+          "label": "r3",
+          "bias_percent": 15.360488382938438,
+          "noise_percent": 36.404173722112496,
+          "NRMSE_percent": 42.63609674900995
+        }
+      ],
+      "timing_repeat_GI_means_ms": [
+        12.551498,
+        12.587774933333332,
+        12.703644533333334
+      ],
+      "stage_means_ms": {
+        "candidate": 6.627555422222223,
+        "validation": 2.5445183555555557,
+        "temporal": 0.9427473333333334,
+        "spatial": 1.8006448444444447,
+        "resolve": 0.6988398666666668
+      },
+      "native_settings": {
+        "primary_proposal": "uniform hemisphere",
+        "spatial_pass_proposals": [
+          8,
+          5
+        ],
+        "temporal_sources": 5,
+        "M_clamp": 20,
+        "W_clamp": 10,
+        "resolve_taps": 4,
+        "validation": "history and frame modulo3==0; full fresh candidate generated every frame",
+        "source": "Executed runtime settings plus recorded native reuse implementation profile; only newly generated candidate path budget is matched.",
+        "actual_runtime_by_repeat": {
+          "r1": {
+            "direct": {
+              "M_bsdf": 0,
+              "M_light": 1,
+              "diffuse_factor": 0.30000001192092896,
+              "max_age": 30,
+              "max_recursion": 1,
+              "open": true,
+              "pairwise": true,
+              "spatial": {
+                "depth": 0.10000000149011612,
+                "open": false,
+                "radius": 30,
+                "sample_num": 1,
+                "theta": 35
+              },
+              "temporal": {
+                "depth": 0.10000000149011612,
+                "history_limit": 20,
+                "open": false,
+                "radius": 0,
+                "theta": 35
+              }
+            },
+            "indirect": {
+              "diffuse_factor": 0.30000001192092896,
+              "max_age": 30,
+              "open": true,
+              "spatial": {
+                "depth": 0.30000001192092896,
+                "open": true,
+                "radius": 12,
+                "sample_num": 2,
+                "theta": 35
+              },
+              "temporal": {
+                "depth": 0.30000001192092896,
+                "history_limit": 5,
+                "open": true,
+                "radius": 0,
+                "theta": 35
+              }
+            },
+            "max_depth": 16,
+            "min_depth": 5,
+            "rr_threshold": 1
+          },
+          "r2": {
+            "direct": {
+              "M_bsdf": 0,
+              "M_light": 1,
+              "diffuse_factor": 0.30000001192092896,
+              "max_age": 30,
+              "max_recursion": 1,
+              "open": true,
+              "pairwise": true,
+              "spatial": {
+                "depth": 0.10000000149011612,
+                "open": false,
+                "radius": 30,
+                "sample_num": 1,
+                "theta": 35
+              },
+              "temporal": {
+                "depth": 0.10000000149011612,
+                "history_limit": 20,
+                "open": false,
+                "radius": 0,
+                "theta": 35
+              }
+            },
+            "indirect": {
+              "diffuse_factor": 0.30000001192092896,
+              "max_age": 30,
+              "open": true,
+              "spatial": {
+                "depth": 0.30000001192092896,
+                "open": true,
+                "radius": 12,
+                "sample_num": 2,
+                "theta": 35
+              },
+              "temporal": {
+                "depth": 0.30000001192092896,
+                "history_limit": 5,
+                "open": true,
+                "radius": 0,
+                "theta": 35
+              }
+            },
+            "max_depth": 16,
+            "min_depth": 5,
+            "rr_threshold": 1
+          },
+          "r3": {
+            "direct": {
+              "M_bsdf": 0,
+              "M_light": 1,
+              "diffuse_factor": 0.30000001192092896,
+              "max_age": 30,
+              "max_recursion": 1,
+              "open": true,
+              "pairwise": true,
+              "spatial": {
+                "depth": 0.10000000149011612,
+                "open": false,
+                "radius": 30,
+                "sample_num": 1,
+                "theta": 35
+              },
+              "temporal": {
+                "depth": 0.10000000149011612,
+                "history_limit": 20,
+                "open": false,
+                "radius": 0,
+                "theta": 35
+              }
+            },
+            "indirect": {
+              "diffuse_factor": 0.30000001192092896,
+              "max_age": 30,
+              "open": true,
+              "spatial": {
+                "depth": 0.30000001192092896,
+                "open": true,
+                "radius": 12,
+                "sample_num": 2,
+                "theta": 35
+              },
+              "temporal": {
+                "depth": 0.30000001192092896,
+                "history_limit": 5,
+                "open": true,
+                "radius": 0,
+                "theta": 35
+              }
+            },
+            "max_depth": 16,
+            "min_depth": 5,
+            "rr_threshold": 1
+          }
+        }
+      }
+    },
+    "corona_native": {
+      "label": "CoronaEngine native ReSTIRGI",
+      "GI_GPU_ms": {
+        "count": 720,
+        "mean_ms": 13.160861866666666,
+        "median_ms": 12.998144,
+        "p10_ms": 12.546048,
+        "p90_ms": 13.9143168,
+        "p95_ms": 14.1404672
+      },
+      "GI_plus_preparation_GPU_ms": {
+        "count": 720,
+        "mean_ms": 17.149991111111113,
+        "median_ms": 16.982384,
+        "p10_ms": 16.6334016,
+        "p90_ms": 17.9487424,
+        "p95_ms": 18.1037568
+      },
+      "full_GPU_ms": null,
+      "candidate_producer_fused_GPU_ms": {
+        "count": 720,
+        "mean_ms": 3.313198933333333,
+        "median_ms": 3.185664,
+        "p10_ms": 3.175424,
+        "p90_ms": 3.6622336000000004,
+        "p95_ms": 4.0891392
+      },
+      "primary_geometry_preparation_GPU_ms": {
+        "count": 720,
+        "mean_ms": 0.6759303111111111,
+        "median_ms": 0.675136,
+        "p10_ms": 0.674016,
+        "p90_ms": 0.6763520000000001,
+        "p95_ms": 0.6771199999999999
+      },
+      "GI_scope_note": "Native suffix/reuse/shading only; mandatory primary candidate producer is in GI_plus_preparation. Old port preparation did not charge its unrelated native DI initial scope.",
+      "temporal_noise_percent": 252.14141685363617,
+      "brightness_bias_percent": 4.804870881895434,
+      "per_frame_L2_NRMSE_percent": 254.01404250443917,
+      "reference_noise_adjusted_NRMSE_percent": 253.98410519008988,
+      "mean_luminance": 0.00555365198910745,
+      "time_mean_NRMSE_percent": 31.62176975509835,
+      "quality_repeat_ranges": {
+        "full_frame": {
+          "mean_luminance": {
+            "min": 0.0055494854103766795,
+            "max": 0.005555952748506172
+          },
+          "signed_mean_bias": {
+            "min": 0.00025044544937538333,
+            "max": 0.00025691278750487553
+          },
+          "relative_signed_mean_bias": {
+            "min": 0.04726241946061107,
+            "max": 0.04848289301376203
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.007740257631623562,
+            "max": 0.019310278683053975
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 1.2301285335048926,
+            "max": 3.0689062210159808
+          },
+          "mean_per_frame_mse": {
+            "min": 6.356216345027062e-05,
+            "max": 0.0003765402268003235
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.00797258825289947,
+            "max": 0.019404644464671942
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 1.2670519203015755,
+            "max": 3.0839034014819764
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 1.2664516408913007,
+            "max": 3.08365681937022
+          },
+          "time_mean_rmse": {
+            "min": 0.0023500664624082302,
+            "max": 0.003912298358529497
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.3734867686096501,
+            "max": 0.6217661054005527
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.3714452265177687,
+            "max": 0.6205419242898335
+          },
+          "lag1_covariance_over_variance": {
+            "min": -0.012093436018409183,
+            "max": 0.10501391785742899
+          }
+        },
+        "common_valid_primary": {
+          "mean_luminance": {
+            "min": 0.005679137064509646,
+            "max": 0.005685759153868739
+          },
+          "signed_mean_bias": {
+            "min": 0.00025629724134145605,
+            "max": 0.00026291933070054976
+          },
+          "relative_signed_mean_bias": {
+            "min": 0.04726255056372278,
+            "max": 0.04848369844472821
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.007830147406525382,
+            "max": 0.019534560438013313
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 1.2301285313055852,
+            "max": 3.068910314675263
+          },
+          "mean_per_frame_mse": {
+            "min": 6.504706118155128e-05,
+            "max": 0.0003853377536046736
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.008065175830789511,
+            "max": 0.01963002174233828
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 1.26705186816565,
+            "max": 3.0839074364392705
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 1.2664515872443605,
+            "max": 3.0836608540397448
+          },
+          "time_mean_rmse": {
+            "min": 0.0023773573640457324,
+            "max": 0.003957735774133183
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.37348659875610407,
+            "max": 0.6217665444041017
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.37144505066308176,
+            "max": 0.620542361126067
+          },
+          "lag1_covariance_over_variance": {
+            "min": -0.012093501552717718,
+            "max": 0.10501193240051078
+          }
+        },
+        "guide_consistent_primary_diagnostic": {
+          "mean_luminance": {
+            "min": 0.005678976247705321,
+            "max": 0.005685573414033513
+          },
+          "signed_mean_bias": {
+            "min": 0.00025631223700025007,
+            "max": 0.000262909403328443
+          },
+          "relative_signed_mean_bias": {
+            "min": 0.04726684826761443,
+            "max": 0.04848343965427774
+          },
+          "temporal_sample_std_rms": {
+            "min": 0.007829717339391704,
+            "max": 0.01953554230170497
+          },
+          "temporal_RMS_noise_over_reference_L2": {
+            "min": 1.230181429141879,
+            "max": 3.069365125975305
+          },
+          "mean_per_frame_mse": {
+            "min": 6.503832161367553e-05,
+            "max": 0.00038537451764308303
+          },
+          "mean_per_frame_rmse": {
+            "min": 0.008064634003702557,
+            "max": 0.019630958143786133
+          },
+          "per_frame_L2_NRMSE_rms": {
+            "min": 1.2670908225854,
+            "max": 3.0843565735443814
+          },
+          "reference_noise_adjusted_frame_L2_NRMSE": {
+            "min": 1.2664904609406153,
+            "max": 3.0841099863234227
+          },
+          "time_mean_rmse": {
+            "min": 0.0023768914151399566,
+            "max": 0.003957685406687486
+          },
+          "time_mean_L2_NRMSE": {
+            "min": 0.37344996648615963,
+            "max": 0.6218195215296264
+          },
+          "reference_noise_adjusted_time_mean_L2_NRMSE": {
+            "min": 0.37140787880972703,
+            "max": 0.6205952403368564
+          },
+          "lag1_covariance_over_variance": {
+            "min": -0.012102310869350702,
+            "max": 0.10495882546073008
+          }
+        }
+      },
+      "quality_repeats": [
+        {
+          "label": "r1",
+          "bias_percent": 4.840081398248993,
+          "noise_percent": 123.01285335048927,
+          "NRMSE_percent": 126.70519203015755
+        },
+        {
+          "label": "r2",
+          "bias_percent": 4.726241946061107,
+          "noise_percent": 285.3276471979933,
+          "NRMSE_percent": 287.072453893126
+        },
+        {
+          "label": "r3",
+          "bias_percent": 4.848289301376203,
+          "noise_percent": 306.89062210159807,
+          "NRMSE_percent": 308.39034014819765
+        }
+      ],
+      "timing_repeat_GI_means_ms": [
+        13.14464,
+        13.178376533333335,
+        13.159569066666666
+      ],
+      "stage_means_ms": {
+        "candidate": 6.406795377777778,
+        "temporal": 1.8905699555555555,
+        "spatial_and_resolve": 4.8634965333333335
+      },
+      "native_settings": {
+        "direct": {
+          "M_bsdf": 1,
+          "M_light": 1,
+          "diffuse_factor": 0.30000001192092896,
+          "max_age": 30,
+          "max_recursion": 1,
+          "open": true,
+          "pairwise": true,
+          "spatial": {
+            "depth": 0.10000000149011612,
+            "open": false,
+            "radius": 30,
+            "sample_num": 1,
+            "theta": 35
+          },
+          "temporal": {
+            "depth": 0.10000000149011612,
+            "history_limit": 20,
+            "open": false,
+            "radius": 0,
+            "theta": 35
+          }
+        },
+        "indirect": {
+          "diffuse_factor": 0.30000001192092896,
+          "max_age": 30,
+          "open": true,
+          "spatial": {
+            "depth": 0.30000001192092896,
+            "open": true,
+            "radius": 12,
+            "sample_num": 2,
+            "theta": 35
+          },
+          "temporal": {
+            "depth": 0.30000001192092896,
+            "history_limit": 5,
+            "open": true,
+            "radius": 0,
+            "theta": 35
+          }
+        },
+        "max_depth": 16,
+        "min_depth": 5,
+        "rr_threshold": 1
+      }
+    }
+  },
+  "source_evidence": {
+    "final-quality-v1.json": "a39de54e54314baad63d80637d6cbda5e8d9843e3081f1005d45c74de1b1fc66",
+    "final-timing-v1.json": "fafd56efcf4b38c7938ecf486f51bd981f5d393388fdbf5815c805ba0e08936b",
+    "reference-acceptance-v1.json": "db455adce9748629b95e2758d7a884803d59860f987dec84f2e8a84de7ece8f3"
+  },
+  "supplement": "Only Corona native was newly measured; four previous measured rows reused unchanged.",
+  "native_evidence": {
+    "path": "analysis/final-native-v1.json",
+    "sha256": "cbc0d1af8e2a7fe444fd2d9343b339850afddea3fd177baafc3822111d0bdfd5"
+  }
+}

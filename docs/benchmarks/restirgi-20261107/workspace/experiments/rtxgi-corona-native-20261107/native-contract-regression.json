@@ -1,0 +1,138 @@
+{
+  "status": "pass",
+  "kind": "CPU source and harness review; no GPU/build actions by auditor",
+  "timestamp_utc": "2026-11-07T10:42:57.984554+00:00",
+  "red": {
+    "before_root_renderer_edits": true,
+    "strategy": "central IndependentSampler offset",
+    "exit_code": 1,
+    "tests": 4,
+    "failures": 2,
+    "passes": 2,
+    "expected_failures": [
+      "native+multibounce central sampler env adapter absent",
+      "geometric Lambert and native Li context absent"
+    ]
+  },
+  "green": {
+    "command": "C:\\Users\\Zero\\miniforge3\\envs\\coronaengine-dev\\python.exe -B D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\test_native_contract.py",
+    "exit_code": 0,
+    "output": "test_adapter_is_native_and_multibounce_only (__main__.NativeContract.test_adapter_is_native_and_multibounce_only) ... ok\ntest_geometric_material_and_native_suffix_contract (__main__.NativeContract.test_geometric_material_and_native_suffix_contract) ... ok\ntest_joint_random_streams_keep_logical_history (__main__.NativeContract.test_joint_random_streams_keep_logical_history) ... ok\ntest_seed_keys_and_roulette_semantics_fixture (__main__.NativeContract.test_seed_keys_and_roulette_semantics_fixture) ... ok\n\n----------------------------------------------------------------------\nRan 4 tests in 0.001s\n\nOK\n",
+    "tests": 4
+  },
+  "sources": {
+    "vision/src/render_core/sampler/independent.cpp": {
+      "sha256": "22ddf3262de6a4faecbace6f22d245e86f480fba096c44400010bc03e7a45cdb",
+      "previous_four_way_capture_sha256": "2630b97b2419d0adb75e7c21d5d3ab79b7c04272cdef06a88366fe5ae61327ac",
+      "unchanged_from_previous_capture": false
+    },
+    "vision/src/base/scattering/material.cpp": {
+      "sha256": "d68158bbfaf6114f57700e15fd6c934626483716f0684b362c220cb7eb26f7d8",
+      "previous_four_way_capture_sha256": "5a3a6276a02703d84294b42049654d61edd3a9e5759e933539cd0e0d147c7b41",
+      "unchanged_from_previous_capture": false
+    },
+    "vision/src/render_core/integrator/ReSTIR/indirect.cpp": {
+      "sha256": "0dd68f36922300465197abfcc3b0a80b17544fad8fdd3e85dd86c310e85ed295",
+      "previous_four_way_capture_sha256": "0a07ad0410499eaedc0c41350d1a7b95b338d78a1c2f53e0f99e89bb2d008f5a",
+      "unchanged_from_previous_capture": false
+    },
+    "vision/src/render_core/integrator/rt.cpp": {
+      "sha256": "57db77aa1c000ffc788a1d305bbf5e39d5f40422c8c513bbbda6a4aeacd3b12d",
+      "previous_four_way_capture_sha256": "1ac1306887b626bbd523681101cef212c134c9a1ec65fc0146d46df543b90e8f",
+      "unchanged_from_previous_capture": false
+    },
+    "vision/src/base/integral/integrator.cpp": {
+      "sha256": "7fc0e614ddf3561f11453fe413daf8c26e5ebd3729d8d264f60129fbbfbf7d42",
+      "previous_four_way_capture_sha256": "7fc0e614ddf3561f11453fe413daf8c26e5ebd3729d8d264f60129fbbfbf7d42",
+      "unchanged_from_previous_capture": true
+    },
+    "vision/src/render_core/integrator/ReSTIR/direct.cpp": {
+      "sha256": "921b8e446440c989d1a3ddd0cf63661ea2f3c82670657f412921f57efc9a7eb9",
+      "previous_four_way_capture_sha256": "921b8e446440c989d1a3ddd0cf63661ea2f3c82670657f412921f57efc9a7eb9",
+      "unchanged_from_previous_capture": true
+    }
+  },
+  "checks": {
+    "native_flag": true,
+    "multibounce_flag": true,
+    "port_mode_absent": true,
+    "pt_flag_absent": true,
+    "one_primary_bsdf": true,
+    "one_suffix": true,
+    "depth_5_16_rr1": true,
+    "li_unchanged": true,
+    "native_direct_unchanged": true,
+    "pilot_source_identity_bound": true,
+    "pilot_route_native": true
+  },
+  "review": {
+    "scope": "Only new native+MB adapters reviewed; full git diff also contains earlier uncommitted RestirGIExperiment wiring and preexisting native Lambert override, excluded from new-change attribution.",
+    "native_algorithm": "Native DI and Li unchanged; native temporal/spatial/target/Jacobian/visibility/normalization/packing unchanged; indirect.cpp only adds guarded HitContext material selection and compile log.",
+    "random_streams": "One central sampler addition after authored seed, gated by both native and multibounce flags. Native DI/GI/RenderEnv receive logical frames throughout; no double offset in active native path. PT path offset exists but PT path is inactive.",
+    "physical_material": "Primary and every reconnect use native material factory geometric faceforward Lambert .7. Candidate suffix uses aligned_lambert existing Li geometric adapter.",
+    "physical_guides": "Pilot-only raw diagnostic exports geometric normals matching physical BSDF and positions from current exact visibility. Native reuse guide continues original interpolated normal as an algorithm heuristic.",
+    "terminal_cost": "Existing native terminal BSDF sample, RR and optional terminal trace remain included; no optimization introduced.",
+    "raw_aov": "Physical indirect F*Lo*W, unscaled, single-frame mean; native compact rgb21 decode to f32 retained.",
+    "limits": [
+      "CPU/source evidence does not substitute for pilot guide/mean/depth acceptance.",
+      "Existing material log says interpolated; new native compile log correctly says geometric. It is a legacy informational string, not route evidence.",
+      "Full GPU frame range unavailable; fused primary candidate scope must be disclosed."
+    ]
+  },
+  "scoped_diff_proof": {
+    "vision/src/render_core/sampler/independent.cpp": {
+      "removed_adapter_blocks": 1,
+      "adapter_removed_sha256": "2630b97b2419d0adb75e7c21d5d3ab79b7c04272cdef06a88366fe5ae61327ac",
+      "previous_capture_sha256": "2630b97b2419d0adb75e7c21d5d3ab79b7c04272cdef06a88366fe5ae61327ac",
+      "matches_prior_capture": true
+    },
+    "vision/src/base/scattering/material.cpp": {
+      "removed_adapter_blocks": 1,
+      "adapter_removed_sha256": "5a3a6276a02703d84294b42049654d61edd3a9e5759e933539cd0e0d147c7b41",
+      "previous_capture_sha256": "5a3a6276a02703d84294b42049654d61edd3a9e5759e933539cd0e0d147c7b41",
+      "matches_prior_capture": true
+    },
+    "vision/src/render_core/integrator/ReSTIR/indirect.cpp": {
+      "removed_adapter_blocks": 2,
+      "adapter_removed_sha256": "0a07ad0410499eaedc0c41350d1a7b95b338d78a1c2f53e0f99e89bb2d008f5a",
+      "previous_capture_sha256": "0a07ad0410499eaedc0c41350d1a7b95b338d78a1c2f53e0f99e89bb2d008f5a",
+      "matches_prior_capture": true
+    },
+    "vision/src/render_core/integrator/rt.cpp": {
+      "removed_adapter_blocks": 1,
+      "adapter_removed_sha256": "1ac1306887b626bbd523681101cef212c134c9a1ec65fc0146d46df543b90e8f",
+      "previous_capture_sha256": "1ac1306887b626bbd523681101cef212c134c9a1ec65fc0146d46df543b90e8f",
+      "matches_prior_capture": true
+    }
+  },
+  "pilot_binding": {
+    "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\runs\\corona-native-pilot-fresh-v1",
+    "files": {
+      "contract.json": {
+        "sha256": "45227c2ab72f4c5beba9751b2414aaaf68c64e212d1df1f950f3d3fb9d7a75b5"
+      },
+      "identity-before.json": {
+        "sha256": "e2f1d18ae57d2a99428372516491248c2af78cf0dce3218b8fdaa1fc92ff475d"
+      },
+      "route-validation.json": {
+        "sha256": "4ad6dbce96882143d4b735e91c47d05978855da2d8869f6af34411d2d4399aed"
+      },
+      "result.json": {
+        "sha256": "9c7e5220f3f6b14ef17a8c91d095cf65e4e5c59beb9ec981c2dbb5cb66ab1439"
+      }
+    },
+    "current_sources_match_pilot_identity": {
+      "vision/src/render_core/sampler/independent.cpp": true,
+      "vision/src/base/scattering/material.cpp": true,
+      "vision/src/render_core/integrator/ReSTIR/indirect.cpp": true,
+      "vision/src/render_core/integrator/rt.cpp": true,
+      "vision/src/base/integral/integrator.cpp": true,
+      "vision/src/render_core/integrator/ReSTIR/direct.cpp": true
+    },
+    "route_validation": {
+      "expected_log": "Native ReSTIR GI multibounce benchmark:",
+      "observed": true,
+      "port_route_absent": true
+    }
+  }
+}

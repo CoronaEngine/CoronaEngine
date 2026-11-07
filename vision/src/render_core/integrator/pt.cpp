@@ -4,12 +4,14 @@
 
 #include "base/integral/integrator.h"
 #include "base/mgr/pipeline.h"
+#include "base/mgr/evaluation_debug.h"
 #include "base/sensor/light_field_types.h"
 #include "math/warp.h"
 #include "base/color/spectrum.h"
 #include "adaptive/inspector.h"
 #include "render_core/denoiser/SSAT/ssat.h"
 #include <cstdlib>
+#include <fstream>
 
 namespace vision {
 using namespace ocarina;
@@ -43,6 +45,11 @@ public:
           taa_history_(make_shared<ScreenBuffer>("taa_history")) {}
 
     VS_MAKE_PLUGIN_NAME_FUNC
+    [[nodiscard]] bool jitter_primary_samples() const noexcept override {
+        const char *value = std::getenv("VISION_PT_PRIMARY_JITTER");
+        return value == nullptr || value[0] == '\0' || value[0] != '0';
+    }
+
     void render_sub_UI(Widgets *widgets) noexcept override {
         inspector_->render_UI(widgets);
     }
@@ -110,6 +117,7 @@ public:
 
     void compile() noexcept override {
         switch_profile::Scope profile{"integrator.compile", "compile"};
+        OC_INFO_FORMAT("PathTracingIntegrator primary_jitter={}", jitter_primary_samples());
         ILightFieldFrameBuffer *lf_fb = dynamic_cast<ILightFieldFrameBuffer *>(&frame_buffer());
         bool denoiser_enabled = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
         bool compatible_lightfield_denoiser = denoiser_ && denoiser_->supports_lightfield();
@@ -383,6 +391,17 @@ public:
                        &cur_stage_profile_.combine_ms);
             } else {
                 submit(path_tracing(param, frame_buffer().raytracing_resolution()), &cur_stage_profile_.path_tracing_ms);
+                // Diagnostic reference before lobe decoding, composition and display transforms.
+                const auto directory = evaluation_debug::directory(frame_index_);
+                if (!directory.empty()) {
+                    fs::create_directories(directory);
+                    const auto resolution = frame_buffer().raytracing_resolution();
+                    vector<float4> raw(size_t(resolution.x) * resolution.y);
+                    stream << frame_buffer().rt_buffer().view().download(raw.data()) << synchronize() << commit();
+                    std::ofstream out(directory / "raw_total.f32", std::ios::binary);
+                    out.write(reinterpret_cast<const char *>(raw.data()), raw.size() * sizeof(float4));
+                    if (!out) throw std::runtime_error("PT reference diagnostic write failed");
+                }
                 submit(combine_(frame_index_).dispatch(frame_buffer().raytracing_resolution()),
                        &cur_stage_profile_.combine_ms);
             }

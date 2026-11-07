@@ -1,0 +1,308 @@
+{
+  "schema": "four-way-multibounce-independent-final-audit.v1",
+  "reviewer": "/root/mb_final_audit",
+  "utc": "2026-11-07T10:00:53.563532+00:00",
+  "scope": "Read-only fresh hashes, reference normalization, selected actual depth arrays, all external late-frame coverage and all external timing sums. No renderer/GPU/build actions. Corona excluded while replay-fix reruns pending.",
+  "status": "unaffected_external_data_and_reference_checks_pass",
+  "checks": {
+    "physical_scene_hashes": {
+      "kitchen-gray.gltf": "882e4374c9f582c33e225bbfd7c599cc096ed6e983df2b4a8677d7edffc6a0f4",
+      "kitchen.bin": "aae0d070c6eab6edc6871a232bd4bf6bc80435aeb3882140c2a252b218fef26c",
+      "kitchen.scene.json": "f5891e585c0e00f7278e5fbf8c302e1772ff31bec372dde6349d5435800eec93",
+      "kitchen-world.xml": "122f9901ba0df51f63ea2726ba3bf60f408fcf62ffc66007bb5f7d8004d78b11"
+    },
+    "rtxpt_SDK_and_binary": {
+      "fresh_hash_checked_files": 44,
+      "unchanged_vs_declared_donor": true,
+      "binary_sha256": "3be89155ee62358400c3b252dd86ff8cf7c6cca193846b50b7be7cf97556c056"
+    },
+    "rtxdi_SDK_and_binary": {
+      "fresh_hash_checked_files": 69,
+      "unchanged_vs_declared_donor": true,
+      "binary_sha256": "f3bf6fbbab8638c355e6d1833d196f55f27371ffaf34f5b94dbafab8e19ec955"
+    },
+    "original_core_and_binary": {
+      "baseline": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\restirgi-aligned-20261107\\reference-full\\RestirGI",
+      "fresh_hashes": {
+        "restirTemporalCS.hlsl": {
+          "benchmark_runtime_previous_fullres_sha256": "3874a3b9a05c4ec9f950b1f6daff6a7a6e565a8f23a7f24c3fa4842144767a66",
+          "stock_donor_sha256": "607c1b48ec96ba2af8606adbd5e3ef489a6aa8d7cc9fee21053cc8750bbf6382",
+          "byte_identical_to_stock": false
+        },
+        "restirSpatialCS.hlsl": {
+          "benchmark_runtime_previous_fullres_sha256": "453e5c99cf5db40fb5c11a65918a4bc393e2fc5c6858e2ae5227a863bf3161d5",
+          "stock_donor_sha256": "4683973c841a327069a7864471dd7fee27706cc38d4b84b5c293153dec7dca4c",
+          "byte_identical_to_stock": false
+        },
+        "restirResolveCS.hlsl": {
+          "benchmark_runtime_previous_fullres_sha256": "858da618dd7e9c2c589dab65dae40e793978422855e59ccbb48aa3e3c5431492",
+          "stock_donor_sha256": "aa3d32cc17b4410ee65ce4a66fa533f1fd49a71ce07fe60e2e83e4a98ab8fbb3",
+          "byte_identical_to_stock": false
+        }
+      },
+      "binary_sha256": "e0dbb833ef78191ad99e2ab248b962235fbe9710533651d2e9c9be9438d91c84"
+    },
+    "eight_reference_halves": {
+      "actual_hashes_match": true,
+      "normalization": "original SUM/1024; others MEAN/1; CoronaPT bottom-up PFM reversed",
+      "means": {
+        "original_a": 0.00529719495935398,
+        "original_b": 0.0052993747028187484,
+        "rtxpt_a": 0.005298452225923039,
+        "rtxpt_b": 0.005298443676914045,
+        "rtxdi_a": 0.005299416293396653,
+        "rtxdi_b": 0.00529908026225758,
+        "corona_pt_a": 0.005300427298876038,
+        "corona_pt_b": 0.0052999302684702855
+      },
+      "common_reference_sha256": "a6bfe494999dc2e25e7315882f0b58a6a0289351be3c29b0321a3e78cae0c847",
+      "common_pixel_max_difference_vs_independent_mean": 3.259629011154175e-09,
+      "all_finite_nonnegative": true
+    },
+    "actual_depth_frame3": {
+      "rtxpt": {
+        "reaches16": 12144,
+        "paths_above6": 322551,
+        "RR_before_surface6": 0,
+        "maximum_depth": 16
+      },
+      "rtxdi": {
+        "reaches16": 11902,
+        "paths_above6": 322557,
+        "RR_before_surface6": 0,
+        "maximum_depth": 16
+      },
+      "original": {
+        "reaches16": 12097,
+        "paths_above6": 322865,
+        "RR_before_surface6": 0,
+        "maximum_depth": 16
+      }
+    },
+    "quality_external_coverage": {
+      "original": [
+        {
+          "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r1-v1",
+          "late_frame_count": 32,
+          "offset": 0,
+          "executed_binary_sha256": "e0dbb833ef78191ad99e2ab248b962235fbe9710533651d2e9c9be9438d91c84"
+        },
+        {
+          "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r2-v1",
+          "late_frame_count": 32,
+          "offset": 10000,
+          "executed_binary_sha256": "e0dbb833ef78191ad99e2ab248b962235fbe9710533651d2e9c9be9438d91c84"
+        },
+        {
+          "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-quality-r3-v1",
+          "late_frame_count": 32,
+          "offset": 20000,
+          "executed_binary_sha256": "e0dbb833ef78191ad99e2ab248b962235fbe9710533651d2e9c9be9438d91c84"
+        }
+      ],
+      "rtxpt": [
+        {
+          "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r1-v1",
+          "late_frame_count": 32,
+          "offset": 0,
+          "executed_binary_sha256": "3be89155ee62358400c3b252dd86ff8cf7c6cca193846b50b7be7cf97556c056"
+        },
+        {
+          "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r2-v1",
+          "late_frame_count": 32,
+          "offset": 10000,
+          "executed_binary_sha256": "3be89155ee62358400c3b252dd86ff8cf7c6cca193846b50b7be7cf97556c056"
+        },
+        {
+          "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-quality-r3-v1",
+          "late_frame_count": 32,
+          "offset": 20000,
+          "executed_binary_sha256": "3be89155ee62358400c3b252dd86ff8cf7c6cca193846b50b7be7cf97556c056"
+        }
+      ],
+      "rtxdi": [
+        {
+          "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r1-v1",
+          "late_frame_count": 32,
+          "offset": 0,
+          "executed_binary_sha256": "f3bf6fbbab8638c355e6d1833d196f55f27371ffaf34f5b94dbafab8e19ec955"
+        },
+        {
+          "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r2-v1",
+          "late_frame_count": 32,
+          "offset": 10000,
+          "executed_binary_sha256": "f3bf6fbbab8638c355e6d1833d196f55f27371ffaf34f5b94dbafab8e19ec955"
+        },
+        {
+          "run": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-quality-r3-v1",
+          "late_frame_count": 32,
+          "offset": 20000,
+          "executed_binary_sha256": "f3bf6fbbab8638c355e6d1833d196f55f27371ffaf34f5b94dbafab8e19ec955"
+        }
+      ]
+    },
+    "external_timing_independent_sum": {
+      "original": {
+        "runs": [
+          {
+            "csv": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-timing-r1-v1\\gpu-kernels.csv",
+            "full_frame_rows_unique": true,
+            "GI_dispatch_multiplicities_verified": true,
+            "measured": 240
+          },
+          {
+            "csv": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-timing-r2-v1\\gpu-kernels.csv",
+            "full_frame_rows_unique": true,
+            "GI_dispatch_multiplicities_verified": true,
+            "measured": 240
+          },
+          {
+            "csv": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\reference-timing-r3-v1\\gpu-kernels.csv",
+            "full_frame_rows_unique": true,
+            "GI_dispatch_multiplicities_verified": true,
+            "measured": 240
+          }
+        ],
+        "GI_mean_ms_independently_resummed": 16.466702222222224,
+        "fullGPU_mean_ms_independently_resummed": 18.05908026666667
+      },
+      "rtxpt": {
+        "runs": [
+          {
+            "csv": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-timing-r1-v1\\gpu.csv",
+            "full_frame_rows_unique": true,
+            "GI_dispatch_multiplicities_verified": true,
+            "measured": 240
+          },
+          {
+            "csv": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-timing-r2-v1\\gpu.csv",
+            "full_frame_rows_unique": true,
+            "GI_dispatch_multiplicities_verified": true,
+            "measured": 240
+          },
+          {
+            "csv": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxpt-timing-r3-v1\\gpu.csv",
+            "full_frame_rows_unique": true,
+            "GI_dispatch_multiplicities_verified": true,
+            "measured": 240
+          }
+        ],
+        "GI_mean_ms_independently_resummed": 11.055325869648945,
+        "fullGPU_mean_ms_independently_resummed": 12.7619100320675
+      },
+      "rtxdi": {
+        "runs": [
+          {
+            "csv": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-timing-r1-v1\\capture.gpu.csv",
+            "full_frame_rows_unique": true,
+            "GI_dispatch_multiplicities_verified": true,
+            "measured": 240
+          },
+          {
+            "csv": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-timing-r2-v1\\capture.gpu.csv",
+            "full_frame_rows_unique": true,
+            "GI_dispatch_multiplicities_verified": true,
+            "measured": 240
+          },
+          {
+            "csv": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\runs\\rtxdi-timing-r3-v1\\capture.gpu.csv",
+            "full_frame_rows_unique": true,
+            "GI_dispatch_multiplicities_verified": true,
+            "measured": 240
+          }
+        ],
+        "GI_mean_ms_independently_resummed": 10.352017074910691,
+        "fullGPU_mean_ms_independently_resummed": 11.792773701664474
+      }
+    }
+  },
+  "original_baseline_qualification": {
+    "current": "full-resolution controlled benchmark adaptation",
+    "baseline_previous_fullres": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\restirgi-aligned-20261107\\reference-full\\RestirGI",
+    "stock_donor": "D:/work/utils/RestirGI/RestirGI/shaders",
+    "stock_difference": "Half-to-full resolution indexing, temporal offset/permutation scaling, spatial radius/quad scaling, resolve radius/index scaling; AO guides replaced by1.0. Current multibounce rerun does not further modify the3reuse shaders.",
+    "AO_effects": "Stock AO changes spatial kernel tightness, spatial relevance *=1-|sampleAO-centerAO|, normalized resolve weights *=exp2(-20|centerAO-sampleAO|). AO1 neutralizes these guide factors; not a simple radiance darkening multiplier.",
+    "earlier_profile": "prepare_reference_profile.py explicitly freezes AO1/no cache/feedback/output-denoise and disables SSAO passes for controlled comparison.",
+    "native_math_claim": "Reservoir merge/Jacobian/clamp equations retained; cannot claim ALL native weights/settings or stock files untouched."
+  },
+  "material_claim_limitations": [
+    "Equal one NEW candidate path per valid pixel/frame, not equal rays/reuse-work. Original/Corona uniform primary vsRTX cosine retained.",
+    "Original/Corona8+5spatial,5temporal,M20W10,4resolve taps; RTX2spatial/history8. Original fullsuffixvalidation every noninitial frame; Corona every third frame. Include all validation in GI mean.",
+    "Adapted copies extend original/RTXDI candidate tails to true5..16. Label original full-resolution benchmark adaptation, not unmodified stock feature support.",
+    "Static grayLambert0.7Kitchen, fixed1080p/hardsun/no denoiser. Motion/disocclusion/specular/material diversity/other hardware untested.",
+    "max16 includes primary; min5 is zero-based and first RR aftersurface6. Misses can terminate before5.",
+    "Finite8192spp reference still noisy; cross-producer agreement alone cannot exclude shared systematic transport errors.",
+    "Use scene-linear luminance/common exposure, not native PNG differences, for brightness.",
+    "Pre-fix Corona quality/timing invalid; use only newly frozen reruns. A singleoffset0 image cannot summarize invalid pooled data.",
+    "Corona fullGPU timestamp unavailable; CPU stages.csv is not a substitute. Use GImean plus preparation separately; median hides periodic validation.",
+    "Correct guides/MC means/native hashes do not uniquely prove the cause of remaining bias. Historical4frame original2x startup is not formal late-window bias."
+  ],
+  "findings": [
+    {
+      "severity": "P2 claim qualification",
+      "status": "reported_to_root",
+      "summary": "Original3reuse files match prior fullres benchmark baseline, but differ from stock donor, including AOheuristic neutralization."
+    }
+  ],
+  "final_report_review": {
+    "utc": "2026-11-07T10:15:43.265343+00:00",
+    "status": "pass_no_blocking_findings",
+    "scope": "Read-only review of final report, summary and canonical complete datasets; own fresh external/reference checks above plus root independently recomputed finalCorona96quality/720timing evidence reviewed. No new GPU or source edits.",
+    "artifact_sha256": {
+      "report.html": "587bd97a57a38b72c8ad93167ac85218710d4107df610e12064ac53215271da4",
+      "results-final.json": "f5ae0700b539810ec35ce2fb37affb61b74db5785804b961e2b7f688e297674b",
+      "analysis\\final-quality-v1.json": "a39de54e54314baad63d80637d6cbda5e8d9843e3081f1005d45c74de1b1fc66",
+      "analysis\\final-timing-v1.json": "fafd56efcf4b38c7938ecf486f51bd981f5d393388fdbf5815c805ba0e08936b",
+      "root-corona-quality-verification-v1.json": "59dd97a4d32997674a99fa4198bafbbe01f88168f9a2263726c18e54d8ffd594",
+      "root-corona-timing-verification-v1.json": "7c7aa16dd98e82ea032b575bad750b3ad10eb5c8f6b78b349362a66839521ff4"
+    },
+    "metrics_checked_against_canonical": {
+      "original": {
+        "GImean_ms": 16.466702222222224,
+        "noise_percent": 36.67444869308898,
+        "NRMSE_percent": 39.15057228967498,
+        "brightness_bias_percent": -4.532930571814599
+      },
+      "rtxpt": {
+        "GImean_ms": 11.055325869648945,
+        "noise_percent": 40.496157341436906,
+        "NRMSE_percent": 43.604301395740194,
+        "brightness_bias_percent": -5.362287018666337
+      },
+      "rtxdi": {
+        "GImean_ms": 10.352017074910691,
+        "noise_percent": 43.87922295900246,
+        "NRMSE_percent": 47.00280295693796,
+        "brightness_bias_percent": -4.1065892788589675
+      },
+      "corona_port": {
+        "GImean_ms": 12.614305822222223,
+        "noise_percent": 36.421027160680026,
+        "NRMSE_percent": 42.5621599968007,
+        "brightness_bias_percent": 15.3757371756023
+      }
+    },
+    "stage_sums_equal_strict_GI": true,
+    "source_evidence_hashes_match": true,
+    "local_link_targets_exist": 14,
+    "reported_pairwise_reductions": {
+      "RTXDI_GI_vs_RTXPT_percent": 6.361719256680644,
+      "RTXPT_temporal_noise_vs_RTXDI_percent": 7.709948785388578
+    },
+    "claims_review": {
+      "equal_new_paths_unequal_reuse_rays": "Prominent near lead; native controls and validation frequency explicitly tabulated.",
+      "original_baseline_AO_qualification": "Explicitly says fullresolution adaptation, scaled coordinates/radii/permutations and AO1neutralization from earlier baseline; not unmodified original stock demo.",
+      "sampling_minmax_convention": "Surface1 primary, first RR aftersurface6, max16includesprimary, terminalNEE retained.",
+      "efficiency_scopes": "GImean mainstatistic, mandatoryprep separate; no Corona wholeGPU or CPU substitution; periodicvalidation included.",
+      "scope_and_causality": "Static grayKitchen limitation explicit; no universalwinner, no frameworkefficiency causeclaim; no RTX integration orintegrationcostcomparison.",
+      "images": "Commonexposure, singleframe/r1 clearlylabelled; all96framesusedfortable.",
+      "bias": "Corona+15.38% retained honestly; no claimreplayfixremovesallbias.",
+      "reference": "Finite8192spp noise explicitlyacknowledged;8mean/sumconventions stated."
+    },
+    "resolved_minor_finding": {
+      "field": "results-final.json renderers.corona_port.native_settings.note",
+      "resolution": "Rootremovedinheritedscaffoldnote from summary; confirmed actual_runtime_by_repeat retained; canonical unchanged."
+    },
+    "blocking_findings": []
+  }
+}

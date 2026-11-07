@@ -1,0 +1,449 @@
+{
+  "schema": "four-way-multibounce-final-metrics-summary.v1",
+  "status": "quality_complete_and_timing_complete",
+  "manifest_path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\manifest-executed-seedstreams-v1.json",
+  "manifest_sha256": "7d12b58cb14b279035573b421b5bce34d01fc64d19c180fb2ee61afceb274bd3",
+  "rows": [
+    {
+      "renderer": "original",
+      "temporal_noise_L2_percent": 36.67444869308898,
+      "raw_L2_NRMSE_percent": 39.15057228967498,
+      "reference_noise_adjusted_L2_NRMSE_percent": 38.95586233640129,
+      "brightness_bias_percent": -4.532930571814599,
+      "GI_mean_ms": 16.466702222222224,
+      "GI_median_ms": 16.435712000000002,
+      "GI_p10_ms": 16.2784256,
+      "GI_p90_ms": 16.721408,
+      "prep_mean_ms": 0.8528782222222222,
+      "GI_plus_prep_mean_ms": 17.319580444444444,
+      "full_GPU_mean_ms": 18.05908026666667
+    },
+    {
+      "renderer": "rtxpt",
+      "temporal_noise_L2_percent": 40.496157341436906,
+      "raw_L2_NRMSE_percent": 43.604301395740194,
+      "reference_noise_adjusted_L2_NRMSE_percent": 43.42956366317917,
+      "brightness_bias_percent": -5.362287018666337,
+      "GI_mean_ms": 11.055325869648945,
+      "GI_median_ms": 11.0346239380305,
+      "GI_p10_ms": 10.688512207707,
+      "GI_p90_ms": 11.559014269727701,
+      "prep_mean_ms": 1.2359907507845196,
+      "GI_plus_prep_mean_ms": 12.291316620433463,
+      "full_GPU_mean_ms": 12.7619100320675
+    },
+    {
+      "renderer": "rtxdi",
+      "temporal_noise_L2_percent": 43.87922295900246,
+      "raw_L2_NRMSE_percent": 47.00280295693796,
+      "reference_noise_adjusted_L2_NRMSE_percent": 46.840744929733106,
+      "brightness_bias_percent": -4.1065892788589675,
+      "GI_mean_ms": 10.352017074910691,
+      "GI_median_ms": 10.315264400560409,
+      "GI_p10_ms": 9.90402564057149,
+      "GI_p90_ms": 10.803405140177347,
+      "prep_mean_ms": 0.6251804529812135,
+      "GI_plus_prep_mean_ms": 10.977197527891905,
+      "full_GPU_mean_ms": 11.792773701664474
+    },
+    {
+      "renderer": "corona_port",
+      "temporal_noise_L2_percent": 36.421027160680026,
+      "raw_L2_NRMSE_percent": 42.5621599968007,
+      "reference_noise_adjusted_L2_NRMSE_percent": 42.383125927152236,
+      "brightness_bias_percent": 15.3757371756023,
+      "GI_mean_ms": 12.614305822222223,
+      "GI_median_ms": 10.277888,
+      "GI_p10_ms": 9.7156096,
+      "GI_p90_ms": 17.926937600000002,
+      "prep_mean_ms": 1.090397111111111,
+      "GI_plus_prep_mean_ms": 13.704702933333333,
+      "full_GPU_mean_ms": null
+    }
+  ],
+  "quality_scope": "Each renderer3x32lateframes96..127=96; within-repeat93DOF;93lagpairs, no across-repeat links. Full-frame Rec.709 luminance.",
+  "timing_scope": "Each renderer3x240measuredframes after120warmup=720; per-frame strict nonoverlapping GI sums before means/median. Mean primarycost.",
+  "repeat_ranges": {
+    "original": {
+      "quality_full_frame": {
+        "mean_luminance": {
+          "min": 0.005056928104216354,
+          "max": 0.0050625983870251495
+        },
+        "signed_mean_bias": {
+          "min": -0.00024211185678494143,
+          "max": -0.00023644157397614677
+        },
+        "relative_signed_mean_bias": {
+          "min": -0.045689758629257914,
+          "max": -0.04461970011856058
+        },
+        "temporal_sample_std_rms": {
+          "min": 0.0022958546252831273,
+          "max": 0.002318100244538598
+        },
+        "temporal_RMS_noise_over_reference_L2": {
+          "min": 0.36487109573736076,
+          "max": 0.3684065040265937
+        },
+        "mean_per_frame_mse": {
+          "min": 6.005614916150492e-06,
+          "max": 6.114056124005612e-06
+        },
+        "mean_per_frame_rmse": {
+          "min": 0.00245063561472335,
+          "max": 0.002472661748805447
+        },
+        "per_frame_L2_NRMSE_rms": {
+          "min": 0.3894698262468774,
+          "max": 0.3929703526255464
+        },
+        "reference_noise_adjusted_frame_L2_NRMSE": {
+          "min": 0.38751249726058007,
+          "max": 0.39103054614570004
+        },
+        "time_mean_rmse": {
+          "min": 0.0009483583685006032,
+          "max": 0.0009599584051175548
+        },
+        "time_mean_L2_NRMSE": {
+          "min": 0.1507188448501343,
+          "max": 0.15256239279276532
+        },
+        "reference_noise_adjusted_time_mean_L2_NRMSE": {
+          "min": 0.14558626366974678,
+          "max": 0.14749397842289083
+        },
+        "lag1_covariance_over_variance": {
+          "min": -0.029571244846529305,
+          "max": -0.0278836551610415
+        }
+      },
+      "timing_mean_ms": {
+        "GI_exclusive": {
+          "min": 16.443498666666667,
+          "max": 16.48384
+        },
+        "primary_preparation": {
+          "min": 0.848,
+          "max": 0.8611711999999999
+        },
+        "GI_plus_primary_preparation": {
+          "min": 17.292962133333333,
+          "max": 17.3450112
+        },
+        "full_GPU_frame": {
+          "min": 18.0495456,
+          "max": 18.07657173333333
+        },
+        "component_candidate": {
+          "min": 6.434048000000001,
+          "max": 6.443532800000001
+        },
+        "component_validation": {
+          "min": 7.355264,
+          "max": 7.3709824
+        },
+        "component_temporal": {
+          "min": 0.6592682666666666,
+          "max": 0.6721066666666666
+        },
+        "component_spatial": {
+          "min": 1.4765696000000001,
+          "max": 1.4990592000000003
+        },
+        "component_resolve": {
+          "min": 0.49657173333333327,
+          "max": 0.5261141333333333
+        }
+      }
+    },
+    "rtxpt": {
+      "quality_full_frame": {
+        "mean_luminance": {
+          "min": 0.005014071719526766,
+          "max": 0.005015758532903325
+        },
+        "signed_mean_bias": {
+          "min": -0.00028496824147452963,
+          "max": -0.0002832814280979698
+        },
+        "relative_signed_mean_bias": {
+          "min": -0.0537773339268577,
+          "max": -0.05345900959094514
+        },
+        "temporal_sample_std_rms": {
+          "min": 0.0025453865673016516,
+          "max": 0.0025515668452719504
+        },
+        "temporal_RMS_noise_over_reference_L2": {
+          "min": 0.4045282204102884,
+          "max": 0.4055104275457713
+        },
+        "mean_per_frame_mse": {
+          "min": 7.515043374970926e-06,
+          "max": 7.541555939364281e-06
+        },
+        "mean_per_frame_rmse": {
+          "min": 0.0027413579436058556,
+          "max": 0.0027461893487821048
+        },
+        "per_frame_L2_NRMSE_rms": {
+          "min": 0.4356731762005339,
+          "max": 0.4364410123175057
+        },
+        "reference_noise_adjusted_frame_L2_NRMSE": {
+          "min": 0.433924309571404,
+          "max": 0.4346952348589611
+        },
+        "time_mean_rmse": {
+          "min": 0.0011084543966953814,
+          "max": 0.0011181678709505545
+        },
+        "time_mean_L2_NRMSE": {
+          "min": 0.17616227344850402,
+          "max": 0.17770599749612945
+        },
+        "reference_noise_adjusted_time_mean_L2_NRMSE": {
+          "min": 0.17179154974242383,
+          "max": 0.17337419508811727
+        },
+        "lag1_covariance_over_variance": {
+          "min": 0.4322089833953369,
+          "max": 0.4336033661683985
+        }
+      },
+      "timing_mean_ms": {
+        "GI_exclusive": {
+          "min": 10.837994673782791,
+          "max": 11.170252790663652
+        },
+        "primary_preparation": {
+          "min": 1.2214015929203499,
+          "max": 1.2453333292797166
+        },
+        "GI_plus_primary_preparation": {
+          "min": 12.059396266703141,
+          "max": 12.411490120817144
+        },
+        "full_GPU_frame": {
+          "min": 12.528900262746667,
+          "max": 12.8890581234975
+        },
+        "component_candidate": {
+          "min": 7.7491754840592915,
+          "max": 8.024213323369626
+        },
+        "component_validation": {
+          "min": 0.0,
+          "max": 0.0
+        },
+        "component_temporal": {
+          "min": 0.7920042594680752,
+          "max": 0.8066133319516083
+        },
+        "component_spatial": {
+          "min": 1.8199423973165,
+          "max": 1.8565546638744166
+        },
+        "component_resolve": {
+          "min": 0.476872532938925,
+          "max": 0.48953173269787503
+        }
+      }
+    },
+    "rtxdi": {
+      "quality_full_frame": {
+        "mean_luminance": {
+          "min": 0.005079229781529252,
+          "max": 0.005084456490523695
+        },
+        "signed_mean_bias": {
+          "min": -0.00021981017947204237,
+          "max": -0.0002145834704776005
+        },
+        "relative_signed_mean_bias": {
+          "min": -0.04148113263718576,
+          "max": -0.0404947824618883
+        },
+        "temporal_sample_std_rms": {
+          "min": 0.002759943941904745,
+          "max": 0.002762833095911645
+        },
+        "temporal_RMS_noise_over_reference_L2": {
+          "min": 0.43862697540454587,
+          "max": 0.4390861372245682
+        },
+        "mean_per_frame_mse": {
+          "min": 8.726161608510615e-06,
+          "max": 8.758014777077443e-06
+        },
+        "mean_per_frame_rmse": {
+          "min": 0.0029540077197784394,
+          "max": 0.0029593943260534652
+        },
+        "per_frame_L2_NRMSE_rms": {
+          "min": 0.4694687641205777,
+          "max": 0.47032483615241727
+        },
+        "reference_noise_adjusted_frame_L2_NRMSE": {
+          "min": 0.467846246603797,
+          "max": 0.46870528211036444
+        },
+        "time_mean_rmse": {
+          "min": 0.0011538864123113069,
+          "max": 0.0011742080500054108
+        },
+        "time_mean_L2_NRMSE": {
+          "min": 0.1833826040115924,
+          "max": 0.1866122415204181
+        },
+        "reference_noise_adjusted_time_mean_L2_NRMSE": {
+          "min": 0.1791880839521163,
+          "max": 0.18249196875926632
+        },
+        "lag1_covariance_over_variance": {
+          "min": 0.436960414345589,
+          "max": 0.4401383350020623
+        }
+      },
+      "timing_mean_ms": {
+        "GI_exclusive": {
+          "min": 10.317623478355623,
+          "max": 10.402926916625196
+        },
+        "primary_preparation": {
+          "min": 0.6222592123473684,
+          "max": 0.6283264078471499
+        },
+        "GI_plus_primary_preparation": {
+          "min": 10.945949886202774,
+          "max": 11.027882655374318
+        },
+        "full_GPU_frame": {
+          "min": 11.75343362847343,
+          "max": 11.847129615489393
+        },
+        "component_candidate": {
+          "min": 8.79180374564991,
+          "max": 8.875093317813784
+        },
+        "component_validation": {
+          "min": 0.0,
+          "max": 0.0
+        },
+        "component_temporal": {
+          "min": 0.4086058670509374,
+          "max": 0.4199338657296418
+        },
+        "component_spatial": {
+          "min": 0.545484795778369,
+          "max": 0.5510527999528373
+        },
+        "component_resolve": {
+          "min": 0.5581781328752792,
+          "max": 0.5670784007331046
+        }
+      }
+    },
+    "corona_port": {
+      "quality_full_frame": {
+        "mean_luminance": {
+          "min": 0.006112998378618169,
+          "max": 0.006114456244843732
+        },
+        "signed_mean_bias": {
+          "min": 0.0008139584176168696,
+          "max": 0.0008154162838424394
+        },
+        "relative_signed_mean_bias": {
+          "min": 0.1536048838293844,
+          "max": 0.15388000276343644
+        },
+        "temporal_sample_std_rms": {
+          "min": 0.0022804072453461452,
+          "max": 0.0023039853418244647
+        },
+        "temporal_RMS_noise_over_reference_L2": {
+          "min": 0.36241610473670766,
+          "max": 0.36616327836116336
+        },
+        "mean_per_frame_mse": {
+          "min": 7.1114472801408436e-06,
+          "max": 7.2081702190585625e-06
+        },
+        "mean_per_frame_rmse": {
+          "min": 0.0026667296976148227,
+          "max": 0.0026848035717829642
+        },
+        "per_frame_L2_NRMSE_rms": {
+          "min": 0.42381280421189044,
+          "max": 0.4266852135531987
+        },
+        "reference_noise_adjusted_frame_L2_NRMSE": {
+          "min": 0.4220147900136965,
+          "max": 0.4248993544844437
+        },
+        "time_mean_rmse": {
+          "min": 0.001437256989179736,
+          "max": 0.0014540201313085264
+        },
+        "time_mean_L2_NRMSE": {
+          "min": 0.22841756909304267,
+          "max": 0.23108166897514154
+        },
+        "reference_noise_adjusted_time_mean_L2_NRMSE": {
+          "min": 0.22506393724169385,
+          "max": 0.22776726655227494
+        },
+        "lag1_covariance_over_variance": {
+          "min": -0.03182168775611973,
+          "max": -0.03124289412483323
+        }
+      },
+      "timing_mean_ms": {
+        "GI_exclusive": {
+          "min": 12.551498,
+          "max": 12.703644533333334
+        },
+        "primary_preparation": {
+          "min": 1.0834582666666668,
+          "max": 1.0980432
+        },
+        "GI_plus_primary_preparation": {
+          "min": 13.641187866666666,
+          "max": 13.801687733333333
+        },
+        "component_candidate": {
+          "min": 6.5848508,
+          "max": 6.6882557333333335
+        },
+        "component_validation": {
+          "min": 2.5325624,
+          "max": 2.5623004
+        },
+        "component_temporal": {
+          "min": 0.9318024000000001,
+          "max": 0.9597953333333333
+        },
+        "component_spatial": {
+          "min": 1.7849514666666666,
+          "max": 1.8111616
+        },
+        "component_resolve": {
+          "min": 0.6816502666666667,
+          "max": 0.7172096
+        }
+      }
+    }
+  },
+  "reference": "reference-acceptance-v1.json",
+  "native_budget_note": "One newly generated full candidate path per pixel/frame matched. Native reuse neighbors/history/validation/proposal/storage differ and actual costs are included. Original denotes the prior full-resolution controlled adaptation, not unchanged upstream sources.",
+  "evidence": {
+    "final-quality-v1.json": "a39de54e54314baad63d80637d6cbda5e8d9843e3081f1005d45c74de1b1fc66",
+    "final-timing-v1.json": "fafd56efcf4b38c7938ecf486f51bd981f5d393388fdbf5815c805ba0e08936b",
+    "quality-run-audit-seedstreams-v1.json": "10ad1b445b4ce4e9a042d62d4f7355619ed3321c4451352a6aa3bdb082079b56",
+    "timing-run-audit-seedstreams-v1.json": "53402c8caa8ed47027821de0459764ed46a87174302ae0de7a9230785b48d4cd",
+    "final-stage-means-v1.json": "d6d0e1c4ea38851c3f691b621a3000342ecf2c42f9a091c84598f716eb1c9a8e"
+  }
+}

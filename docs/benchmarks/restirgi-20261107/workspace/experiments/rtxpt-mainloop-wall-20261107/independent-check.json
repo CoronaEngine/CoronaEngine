@@ -1,0 +1,38 @@
+{
+  "status": "pass",
+  "frames": 720,
+  "wall_mean_ms": 12.87895736111111,
+  "wall_median_ms": 12.85,
+  "wall_p10_ms": 12.37329,
+  "wall_p90_ms": 13.40492,
+  "wall_p95_ms": 13.586314999999999,
+  "start_interval_mean_ms": 12.87865486111111,
+  "full_GPU_mean_ms": 12.8240042573025,
+  "host_phase_means_ms": {
+    "animate_host_ms": 0.019054861111111113,
+    "beginframe_gap_host_ms": 11.282880138888888,
+    "render_host_ms": 1.3665183333333333,
+    "present_host_ms": 0.15287541666666668,
+    "other_host_ms": 0.05762861111111112
+  },
+  "repeats": [
+    {
+      "repeat": 1,
+      "wall_mean_ms": 12.951807500000001,
+      "wall_median_ms": 12.93195,
+      "gpu_mean_ms": 12.899217063869582
+    },
+    {
+      "repeat": 2,
+      "wall_mean_ms": 12.839491666666667,
+      "wall_median_ms": 12.81335,
+      "gpu_mean_ms": 12.783957323212084
+    },
+    {
+      "repeat": 3,
+      "wall_mean_ms": 12.845572916666667,
+      "wall_median_ms": 12.82835,
+      "gpu_mean_ms": 12.788838384825832
+    }
+  ]
+}

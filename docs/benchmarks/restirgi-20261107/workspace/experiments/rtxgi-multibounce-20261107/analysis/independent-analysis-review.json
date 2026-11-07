@@ -1,0 +1,162 @@
+{
+  "schema": "multibounce-independent-analysis-review.v1",
+  "snapshot_utc": "2026-11-07T09:36:00.779373+00:00",
+  "scope": "CPU-only independent review of seven named analysis artifacts; no renderer source edits, builds, GPU queries, or renderer launches.",
+  "status": "changes_required_before_final_acceptance",
+  "reviewed_files": {
+    "analyze_multibounce.py": {
+      "sha256": "c05347a35ae92a268b985d3ebc5ab793c11a646b4304b56c790db58efdf40742",
+      "bytes": 20932
+    },
+    "analyze_timing.py": {
+      "sha256": "007a23cbd6ed18532cb042cc41c452e44518205687bf2cb2ac446b0fa2293264",
+      "bytes": 8004
+    },
+    "review_reference_progress.py": {
+      "sha256": "8dcd2bf01fe8300854075880160d5b455ea82b4684a22e0cbbc39eac40734a8f",
+      "bytes": 11155
+    },
+    "test_analysis.py": {
+      "sha256": "6c036a4d79369b76b49a6b93e6a0af8d2d017c88db5ba884a4817731500d5d38",
+      "bytes": 6959
+    },
+    "manifest-formal-v1.json": {
+      "sha256": "6ba44c1b2c82520e289b7513517d2e57e9094942a3d7d755d9492eaf14704dc3",
+      "bytes": 21234
+    },
+    "README.md": {
+      "sha256": "268f7fc34e2ec377cdf67a53c8b758ca19dd18415b8d04ebd794f72f4a1b21b4",
+      "bytes": 8488
+    },
+    "reference-review-policy.json": {
+      "sha256": "dbc6153d7179c3eb462b882773af2f512f50f38ce07cda80d6ecedfa17ecb706",
+      "bytes": 1890
+    }
+  },
+  "current_acceptance": "No final acceptance: formal manifest has all four evidence flags false and all timing capture-disabled declarations false; two Corona PT halves remain required according to assignment context.",
+  "verified_correct": [
+    "Manifest conventions: original fresh_pt_sum SUM /1024; RTXPT gi-mean and RTXDI capture.mean MEAN /1; Corona reference.pfm MEAN /1. Original validity comes from normal alpha, not derivativeDepth in position alpha.",
+    "PFM reader validates little-endian unit-scale RGB and flips bottom-up rows to top-left; existing analytic test passed.",
+    "Corona guide canonicalization multiplies position and normal XYZ by [1,1,-1], without image flipping; existing analytic test passed.",
+    "Temporal mean/M2 are computed per repeat; pooled M2 sums within-repeat deviations. Targeted three-by-32 test gave 96 frames, 93 temporal degrees of freedom, 93 lag pairs, and standard deviation 9.38083151964686, exactly matching analytic expected value. Repeat mean offsets did not inflate pooled temporal noise.",
+    "Per-frame L2 NRMSE uses pooled per-frame luminance MSE divided by common-reference luminance power. Time-mean error and signed relative brightness bias are separately reported.",
+    "Each reference mean is (A+B)/2; its estimated noise MSE is (A-B)^2/4. Cross-reference MSE and its independent split expectation, centered half-difference Pearson correlation, and tile residuals use the intended formulas.",
+    "Per-frame native stage sums precede percentile/median summaries; original validation work and repeated spatial rows are included when present; Corona CPU render wall time is not mislabeled whole GPU time."
+  ],
+  "findings": [
+    {
+      "id": "R1",
+      "priority": "P1",
+      "file": "analyze_multibounce.py",
+      "lines": "319-325,347-355",
+      "title": "Final status does not require all producers or quality results",
+      "evidence": "A CPU synthetic manifest with all four review flags true, guides={}, a single two-half producer, and quality={} returned status=quality_complete with an empty quality object.",
+      "impact": "An accidentally reused partial progressive manifest can produce a final-looking status before four producers/eight halves or four renderer quality results exist.",
+      "recommendation": "Before non-diagnostics final quality, require exact producer sets original/rtxpt/rtxdi/corona_pt, guide and quality sets original/rtxpt/rtxdi/corona_port, and expected two1024-spp halves; retain partial diagnostics as explicitly partial."
+    },
+    {
+      "id": "R2",
+      "priority": "P1",
+      "file": "analyze_timing.py",
+      "lines": "118-125",
+      "title": "Timing provenance is a manifest declaration rather than runtime proof",
+      "evidence": "main checks raw_capture_disabled is True but never loads repeat.evidence or enforces unique process run/CSV identities. Reusing one CSV for all three entries is permitted.",
+      "impact": "The output can claim three process runs and no-capture timing from one run or capture-enabled runs.",
+      "recommendation": "Validate completed runtime/launch records and actual capture-off settings, process completion and freeze identity; require unique executed run identities and bind CSV hashes. Preserve a blocked status when runtime evidence is absent."
+    },
+    {
+      "id": "R3",
+      "priority": "P2",
+      "file": "analyze_timing.py",
+      "lines": "43-104,122-124",
+      "title": "Exact timing window and native dispatch invariants are underchecked",
+      "evidence": "Formal main accepts arbitrary warmup/measured. analyze_repeat requires only measured-frame subset and stage presence. CPU original fixture with one restirSpatialCS row passed despite the required two. RTXPT fixture with GI4ms+prep2ms and fullGPU5ms passed. A wholly missing supplied fullGPU window is treated as unavailable.",
+      "impact": "Missing or duplicated native stages, incomplete startup coverage, wrong windows or misaligned whole-frame timestamps can silently bias timing.",
+      "recommendation": "Enforce120 warmup/240 measured in formal main, native frame coverage and required per-frame stage multiplicities, wholeGPU>=GI+prep, and full coverage for known native full-frame scopes. Keep custom helper counts for analytic tests. Corona candidate-batch ordinal mapping also needs proof against renderer-frame/QPC metadata; legitimate combine-only batches must remain excluded."
+    },
+    {
+      "id": "R4",
+      "priority": "P2",
+      "file": "analyze_multibounce.py and review_reference_progress.py",
+      "lines": "analyze_multibounce.py:226-246; review_reference_progress.py:101-105",
+      "title": "Declared storage/sample normalization is never cross-validated",
+      "evidence": "A reference half declared storage=SUM,spp=1024,divisor=1 is accepted. completed_run checks renderer frame counts but trusts manifest spp/storage/divisor when normalizing. The current formal manifest values are correct.",
+      "impact": "A mistyped executed manifest silently changes radiometric scale while retaining a validated/completed label.",
+      "recommendation": "Require producer-specific SUM/MEAN format, spp1024, divisor1024 for original and divisor1 for the three mean producers; enforce the declared half offset pair and bind each raw path to its validated producer run."
+    }
+  ],
+  "limitations_not_bugs": [
+    "One independent split is a noisy variance estimator; clipped noise-adjusted MSE is diagnostic. Shared systematic transport errors or correlated producer streams can pass mean comparisons. Existing README/policy acknowledge this correctly.",
+    "The policy JSON thresholds currently match reviewer hard-coded screens, but the reviewer does not load/hash the policy. Future policy edits would not alter screens; consider binding the predeclared policy hash.",
+    "Completed external runs wait for final launch provenance before admission, which avoids the known completion-marker-before-process-finalization race. Raw/provenance files are then reread and outputs are written without atomic snapshot publication, so review assumes completed-run artifacts remain immutable and consumers do not parse an output mid-write.",
+    "review_reference_progress.py uses Python assert for27 audit checks. The documented python -B invocation preserves them; running with python -O would disable them. Explicit validation exceptions are more robust if optimized execution must be supported.",
+    "A wholly empty guide-consistent diagnostic mask can produce NaN diagnostics in the progressive reviewer, unlike analyze_multibounce.main which adds that region only when nonempty. This is an availability issue, not a false pass."
+  ],
+  "verification": [
+    {
+      "command": "python -B .workspace/experiments/rtxgi-multibounce-20261107/analysis/test_analysis.py",
+      "result": "8 tests passed;0 failures"
+    },
+    {
+      "kind": "CPU analytic three32frame pooling counterexample",
+      "result": "96frames,dof93,lagpairs93,computedstd==analyticstd==9.38083151964686"
+    },
+    {
+      "kind": "CPU synthetic false-pass cases",
+      "result": "Confirmed R1,R3,R4 as described. All temporary fixtures created under .workspace/tmp/rtxgi-multibounce-independent-review and removed by TemporaryDirectory."
+    }
+  ],
+  "changes_made": "Only this independent review JSON was written. No owned analysis scripts or renderer artifacts were mutated.",
+  "rereview_v2": {
+    "snapshot_utc": "2026-11-07T09:42:07.830776+00:00",
+    "status": "two_remaining_actionable_timing_errors",
+    "supersedes_initial_findings": "R1 fixed by exact final renderer/reference sets, offsets and common inclusion. R4 storage/spp/divisor fixed; owner is separately adding strict sourcefile-in-run binding. R2/R3 substantially improved by actual process/no-capture/binary checks, exact360 coverage, native counted stages and authoritative Corona QPC event mapping.",
+    "reviewed_files": {
+      "analyze_multibounce.py": {
+        "sha256": "c05347a35ae92a268b985d3ebc5ab793c11a646b4304b56c790db58efdf40742",
+        "bytes": 20932
+      },
+      "analyze_timing.py": {
+        "sha256": "cfd5b34382966b767d7449e779f12879e96f7b1383f789de02a4d0bde4e90732",
+        "bytes": 17738
+      },
+      "review_reference_progress.py": {
+        "sha256": "bd04fbb7ffb6c1ab086e2b619595d81c73da38fbf86e45ced87f4906b5bd61f9",
+        "bytes": 11445
+      },
+      "test_analysis.py": {
+        "sha256": "1b6684122ead14eb452b3c0a05b469f388a1e0a9c615aeee26c1788e591a323d",
+        "bytes": 7005
+      }
+    },
+    "remaining_findings": [
+      {
+        "id": "R5",
+        "priority": "P2",
+        "file": "analyze_timing.py",
+        "function": "analyze_repeat / main",
+        "title": "Known native whole-frame GPU ranges may be absent or duplicated",
+        "evidence": "CPU RTXPT fixture with all required GI/prep scopes and no Frame.RenderGPU row was accepted with full_GPU_frame=null. Adding two identical8ms Frame.RenderGPU rows was accepted as one16ms full-frame range. Original formal main likewise permits omitted full_gpu_csv.",
+        "impact": "Only Corona should lack a genuine full GPU range. Missing known ranges silently remove the required measurement; duplicated timestamps inflate it.",
+        "recommendation": "Require exactly one native full-GPU event per measured RTXPT/RTXDI frame. Require original canonical gpu-frames.csv from the same validated run, hash it as evidence, and require exact frame coverage. Preserve unavailable full-GPU only for Corona."
+      },
+      {
+        "id": "R6",
+        "priority": "P2",
+        "file": "analyze_timing.py",
+        "function": "validate_timing_provenance",
+        "title": "Frozen descriptor is compared but actual executed transport fields are not",
+        "evidence": "A CPU original-run fixture with launch frozen transport5/16/1, successful360frame process, actual benchmark-config min_depth2/max_depth2/RR_threshold9 and CLI depth2 was accepted by validate_timing_provenance as no_capture_actual=true.",
+        "impact": "A wrong CLI/runtime transport can produce timing for a cheaper/different workload while retaining the intended attached physical descriptor. Reference completed_run already validates these actual fields.",
+        "recommendation": "Apply actual runtime depth/RR checks to timing: original benchmark-config, RTXPT actual-settings, RTXDI capture.settings.GI and Corona contract.settings; keep each renderer native reuse work unchanged."
+      }
+    ],
+    "verification": [
+      "python -B analysis/test_analysis.py:12 tests passed",
+      "CPU synthetic missing native whole-GPU event accepted:confirmed",
+      "CPU synthetic duplicated native whole-GPU event accepted as16ms from two8ms rows:confirmed",
+      "CPU synthetic wrong original actual transport2/2/9 accepted despite attached5/16/1 contract:confirmed"
+    ],
+    "changes_made": "Only this JSON review was updated; no analysis scripts, renderer sources, builds, GPU queries or jobs were changed."
+  }
+}

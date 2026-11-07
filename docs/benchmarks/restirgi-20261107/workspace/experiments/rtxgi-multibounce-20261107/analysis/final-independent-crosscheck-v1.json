@@ -1,0 +1,23 @@
+{
+  "schema": "final-multibounce-independent-crosscheck.v1",
+  "status": "pass",
+  "manifest_path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\manifest-executed-seedstreams-v1.json",
+  "manifest_sha256": "7d12b58cb14b279035573b421b5bce34d01fc64d19c180fb2ee61afceb274bd3",
+  "differences_analysis_minus_root": {
+    "brightness_bias_percent": -1.0586642673615643e-09,
+    "temporal_noise_percent": -1.6339782860086416e-09,
+    "NRMSE_percent": -1.2689156392298173e-09,
+    "mean_GI_ms": 1.7763568394002505e-15
+  },
+  "absolute_tolerance": 1e-06,
+  "rounding_note": "Analysis computes the common reference asFP64mean of8halves; rootchecks use exportedFP32commonreference. Numerical differences are below2e-9percentagepoint.",
+  "independent_sources": {
+    "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\root-corona-quality-verification-v1.json": "59dd97a4d32997674a99fa4198bafbbe01f88168f9a2263726c18e54d8ffd594",
+    "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\root-corona-timing-verification-v1.json": "7c7aa16dd98e82ea032b575bad750b3ad10eb5c8f6b78b349362a66839521ff4",
+    "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\final-independent-audit.json": "7384ef95a43e59d15b1ccc68444262671c41e79fdee5c07444a0ab337be66632"
+  },
+  "canonical_sources": {
+    "final-quality-v1.json": "a39de54e54314baad63d80637d6cbda5e8d9843e3081f1005d45c74de1b1fc66",
+    "final-timing-v1.json": "fafd56efcf4b38c7938ecf486f51bd981f5d393388fdbf5815c805ba0e08936b"
+  }
+}

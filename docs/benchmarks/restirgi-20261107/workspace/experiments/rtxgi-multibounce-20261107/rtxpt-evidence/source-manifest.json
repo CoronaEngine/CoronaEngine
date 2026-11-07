@@ -1,0 +1,433 @@
+{
+  "schema": "rtxpt-multibounce-standalone-v1",
+  "donor": "D:\\work\\renderers\\restir-benchmark-20261029\\RTXPT",
+  "donor_git_head": "21ef566cb37ef832438375fb3b5bd0b170e52f7c",
+  "isolated_source": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxgi-multibounce-20261107\\rtxpt",
+  "completed_onebounce_baseline": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxgi-kitchen-bench-20261107\\rtxpt",
+  "original_repositories_edited": false,
+  "corona_integration": false,
+  "changed_files_from_original_donor": [
+    {
+      "path": "Rtxpt/RenderTargets.cpp",
+      "original_sha256": "a0138b80006dceee490176910e7ce003cc5155c9f116e4f016b7514edb53a335",
+      "onebounce_sha256": "213a147b613331caefc7520f07e53c3ce9420ec63270764ae429c892f924783f",
+      "multibounce_sha256": "213a147b613331caefc7520f07e53c3ce9420ec63270764ae429c892f924783f"
+    },
+    {
+      "path": "Rtxpt/RenderTargets.h",
+      "original_sha256": "c7d420621f43363a8b69d21ad6cc5e2f557f8d4e932615affd7c8b2f6552b557",
+      "onebounce_sha256": "08dc11c0ccc5cbf403a64ef8b051764acd107ef16f3ccd5feeb4774162dd05b0",
+      "multibounce_sha256": "08dc11c0ccc5cbf403a64ef8b051764acd107ef16f3ccd5feeb4774162dd05b0"
+    },
+    {
+      "path": "Rtxpt/RepositoryBenchmark.h",
+      "original_sha256": "3935b2ab116c3ce10a2c97914d241009a6dc829775f68fb9cca73bb002763eda",
+      "onebounce_sha256": "1ce72e3a51cf931804f57f1c31cb2d57d68e587b7ee0d830df52542fb14b688f",
+      "multibounce_sha256": "5116caf8fcdeb65e4b1997250b63761a233ae0b770c63e9bb424c6eafa813869"
+    },
+    {
+      "path": "Rtxpt/RTXDI/GIFinalShading.hlsl",
+      "original_sha256": "efb027212ff60ae025373e32a276e39e4dde4ef25f332e35c103896748dcd4e4",
+      "onebounce_sha256": "406c71b43cf50c5f74ebf4a62dd07867e846ac0bc4a172b0c82e65d3b279aa16",
+      "multibounce_sha256": "b2ed272ecfc0f70d5bbaecee884822e76af91ad5caf8b8fedbbb19d83fe498b2"
+    },
+    {
+      "path": "Rtxpt/RTXDI/GITemporalResampling.hlsl",
+      "original_sha256": "a70201b986435b3ad39c7d3b9773b18a9d3053b23b898d8af28c78824337f76f",
+      "onebounce_sha256": "d478d289010da5bb9810ae67f1a448591c99d81cd2cbe86344508e89661be804",
+      "multibounce_sha256": "d478d289010da5bb9810ae67f1a448591c99d81cd2cbe86344508e89661be804"
+    },
+    {
+      "path": "Rtxpt/RTXDI/RtxdiPass.cpp",
+      "original_sha256": "f7feb2f785cd3ff8e8474323b9d0335cd0ae42a4db94a16bec63831290750d5e",
+      "onebounce_sha256": "38fbcabc900857a6159dedbd0101e7e21d5ae15f715094b0f681568363bdf5cf",
+      "multibounce_sha256": "38fbcabc900857a6159dedbd0101e7e21d5ae15f715094b0f681568363bdf5cf"
+    },
+    {
+      "path": "Rtxpt/Sample.cpp",
+      "original_sha256": "c782de1df32eb17b69b00eaae9c724521f843cbfb54191b5dc88261b1bd8f9f3",
+      "onebounce_sha256": "87b467d8b45770e1d6ed2a3c7df31ea1bb4e4d8b451d50859a343cc75a18cbde",
+      "multibounce_sha256": "7eaecb26ae8419a1232016ebf045a6a79f4a9a98da5179e2350e0e386bb70c24"
+    },
+    {
+      "path": "Rtxpt/Shaders/Bindings/ShaderResourceBindings.hlsli",
+      "original_sha256": "8ec38bc6dfd2c699ba87111dd511728112b865fc22ca17eaa4d9e4563352cf1b",
+      "onebounce_sha256": "3039ff196e30eae5da827a78184a393ba205e52e3dde78941c8df978ab7e2e17",
+      "multibounce_sha256": "3039ff196e30eae5da827a78184a393ba205e52e3dde78941c8df978ab7e2e17"
+    },
+    {
+      "path": "Rtxpt/Shaders/PathTracer/PathState.hlsli",
+      "original_sha256": "fb7ae9f67fa38d0943b705b19ad129d2478e15ebd04569d1f2e30fcfcc0eb974",
+      "onebounce_sha256": "598333c3fef4cd8ec856e166f9a9ef1df8193bf5353e8825e547a0e59e77bbb7",
+      "multibounce_sha256": "598333c3fef4cd8ec856e166f9a9ef1df8193bf5353e8825e547a0e59e77bbb7"
+    },
+    {
+      "path": "Rtxpt/Shaders/PathTracer/PathTracer.hlsli",
+      "original_sha256": "a8585a17941c8f4f639d6c8e4d2f5e6490e77ecbe186e1601452f48bfcf833aa",
+      "onebounce_sha256": "bf30c818c24b10628f42f34942db2f29d51d03462c72ed4fe861a8c7750f93f6",
+      "multibounce_sha256": "f0e1402bc8cf3093051f1a7460a7620b8493407bd86fa2c67cfcdc715138c2b3"
+    },
+    {
+      "path": "Rtxpt/Shaders/PathTracer/Rendering/Materials/BxDF.hlsli",
+      "original_sha256": "1c65d40923e62eb962cec4769e7db99c8758a4a1dca14e70feddb405a5b38fae",
+      "onebounce_sha256": "5c94281fd91c9ee4efe97d50c60df5e144224f2760b2c554c52941e7cb22e852",
+      "multibounce_sha256": "5c94281fd91c9ee4efe97d50c60df5e144224f2760b2c554c52941e7cb22e852"
+    },
+    {
+      "path": "Rtxpt/Shaders/PathTracer/Rendering/Materials/BxDFConfig.hlsli",
+      "original_sha256": "97d7cb8f662e9ee8d65fd859f6df01333738d513f149147567004c3f69db2153",
+      "onebounce_sha256": "2a59d6182cc4f2592d9a96bd8ceda72c0e1b783e2740ee703f309838d497be74",
+      "multibounce_sha256": "2a59d6182cc4f2592d9a96bd8ceda72c0e1b783e2740ee703f309838d497be74"
+    },
+    {
+      "path": "Rtxpt/Shaders/PathTracerBridgeDonut.hlsli",
+      "original_sha256": "5a9362eea528dd8b87b2d005576da68aa03752f74425ba4ec15ab0a5d4cbad06",
+      "onebounce_sha256": "2aa9e3a6522d1bbf0dd2375410f56958408bef7bce9265f5bd633e40a31e47c3",
+      "multibounce_sha256": "2aa9e3a6522d1bbf0dd2375410f56958408bef7bce9265f5bd633e40a31e47c3"
+    },
+    {
+      "path": "Rtxpt/Shaders/PathTracerSample.hlsl",
+      "original_sha256": "40445fb7e1c133a98988a42babd8cf41556221179043150ae46026dbc31e728b",
+      "onebounce_sha256": "24b17b39f8e1265f808a13c3b59e5f02b9fe000021a90b96f9bda8cf3fa04a94",
+      "multibounce_sha256": "348158550151ef2727ade48e1a3f2b8fb2defb03ad1083c177221df779de208b"
+    },
+    {
+      "path": "CMakeLists.txt",
+      "original_sha256": "36edc8a2b8253edc2f1ece118ef6d9a0a9336716700fb3a4315cd7c0f460cf56",
+      "onebounce_sha256": "f5d8b741bfeb04b8c0110e711735c9d41845960731e9092408c0d1d2895613d8",
+      "multibounce_sha256": "f5d8b741bfeb04b8c0110e711735c9d41845960731e9092408c0d1d2895613d8"
+    }
+  ],
+  "changed_files_from_onebounce": [
+    {
+      "path": "Rtxpt/RepositoryBenchmark.h",
+      "onebounce_sha256": "1ce72e3a51cf931804f57f1c31cb2d57d68e587b7ee0d830df52542fb14b688f",
+      "patched_sha256": "5116caf8fcdeb65e4b1997250b63761a233ae0b770c63e9bb424c6eafa813869"
+    },
+    {
+      "path": "Rtxpt/RTXDI/GIFinalShading.hlsl",
+      "onebounce_sha256": "406c71b43cf50c5f74ebf4a62dd07867e846ac0bc4a172b0c82e65d3b279aa16",
+      "patched_sha256": "b2ed272ecfc0f70d5bbaecee884822e76af91ad5caf8b8fedbbb19d83fe498b2"
+    },
+    {
+      "path": "Rtxpt/Sample.cpp",
+      "onebounce_sha256": "87b467d8b45770e1d6ed2a3c7df31ea1bb4e4d8b451d50859a343cc75a18cbde",
+      "patched_sha256": "7eaecb26ae8419a1232016ebf045a6a79f4a9a98da5179e2350e0e386bb70c24"
+    },
+    {
+      "path": "Rtxpt/Shaders/PathTracer/PathTracer.hlsli",
+      "onebounce_sha256": "bf30c818c24b10628f42f34942db2f29d51d03462c72ed4fe861a8c7750f93f6",
+      "patched_sha256": "f0e1402bc8cf3093051f1a7460a7620b8493407bd86fa2c67cfcdc715138c2b3"
+    },
+    {
+      "path": "Rtxpt/Shaders/PathTracerSample.hlsl",
+      "onebounce_sha256": "24b17b39f8e1265f808a13c3b59e5f02b9fe000021a90b96f9bda8cf3fa04a94",
+      "patched_sha256": "348158550151ef2727ade48e1a3f2b8fb2defb03ad1083c177221df779de208b"
+    }
+  ],
+  "SDK_files": [
+    {
+      "path": "External/Rtxdi/.git",
+      "original_sha256": "9bab78c8a590aef74c6f35b1dbeb184dd825c9c12f7bef1365a561969d88a6da",
+      "snapshot_sha256": "9bab78c8a590aef74c6f35b1dbeb184dd825c9c12f7bef1365a561969d88a6da",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/CMakeLists.txt",
+      "original_sha256": "31a20fe116ffd8a5a9720eed226ca7a94c44ce16efaf17d18fa6462c457f1a1d",
+      "snapshot_sha256": "31a20fe116ffd8a5a9720eed226ca7a94c44ce16efaf17d18fa6462c457f1a1d",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/DI/BoilingFilter.hlsli",
+      "original_sha256": "63ea9925fd0945f92581d8767c355f1571241512dca822809fd8cdd37c69d71f",
+      "snapshot_sha256": "63ea9925fd0945f92581d8767c355f1571241512dca822809fd8cdd37c69d71f",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/DI/InitialSampling.hlsli",
+      "original_sha256": "1ba3804df0b534461d199d357e678803f4d0791d67fe99b4cf332c9d00b42c48",
+      "snapshot_sha256": "1ba3804df0b534461d199d357e678803f4d0791d67fe99b4cf332c9d00b42c48",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/DI/PairwiseStreaming.hlsli",
+      "original_sha256": "53d4be4fe60ccaaa83b9cad1b5ac54e365bc9ea88f08e9d4ddf57ed5fb2e0c4a",
+      "snapshot_sha256": "53d4be4fe60ccaaa83b9cad1b5ac54e365bc9ea88f08e9d4ddf57ed5fb2e0c4a",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/DI/Reservoir.hlsli",
+      "original_sha256": "cb8dcc870d3df2ed590d224349589bfea766eddc8c8122cbea7365edf6b78677",
+      "snapshot_sha256": "cb8dcc870d3df2ed590d224349589bfea766eddc8c8122cbea7365edf6b78677",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/DI/ReSTIRDI.h",
+      "original_sha256": "13722be6ef6bb433d5bc34b4ea5bbe18aee8d3517dcec2529fad7be2507027d0",
+      "snapshot_sha256": "13722be6ef6bb433d5bc34b4ea5bbe18aee8d3517dcec2529fad7be2507027d0",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/DI/ReSTIRDIParameters.h",
+      "original_sha256": "879c3a615409489a605a88603bdaa2c3cb903c7782b044e1c31ebb67a801cf5d",
+      "snapshot_sha256": "879c3a615409489a605a88603bdaa2c3cb903c7782b044e1c31ebb67a801cf5d",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/DI/SpatialResampling.hlsli",
+      "original_sha256": "a9df0513c5afacb7a38b3d3eb2181d3e2d529dffc8b75f7b4adf2c1123f46bd3",
+      "snapshot_sha256": "a9df0513c5afacb7a38b3d3eb2181d3e2d529dffc8b75f7b4adf2c1123f46bd3",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/DI/SpatioTemporalResampling.hlsli",
+      "original_sha256": "9c036324f76232869b430298224a24c8919214fad9256e4a81c95151d0ea31f0",
+      "snapshot_sha256": "9c036324f76232869b430298224a24c8919214fad9256e4a81c95151d0ea31f0",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/DI/TemporalResampling.hlsli",
+      "original_sha256": "4e41c79994e94e324d62abdf24406d2d6c1a95205c22dcb2d4f00387feca921b",
+      "snapshot_sha256": "4e41c79994e94e324d62abdf24406d2d6c1a95205c22dcb2d4f00387feca921b",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/GI/BoilingFilter.hlsli",
+      "original_sha256": "a904ca9a3848c18cf2b1f0b5828b923762ed99c07e28622fba7983a77a40ce3f",
+      "snapshot_sha256": "a904ca9a3848c18cf2b1f0b5828b923762ed99c07e28622fba7983a77a40ce3f",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/GI/JacobianMath.hlsli",
+      "original_sha256": "26493498de988e6a66c715eb8954067af57ede8a75eaa7009c64a9cecebd1799",
+      "snapshot_sha256": "26493498de988e6a66c715eb8954067af57ede8a75eaa7009c64a9cecebd1799",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/GI/Reservoir.hlsli",
+      "original_sha256": "48d5274466e0bcc2c97f9cf0afca736ff537f2ebcc648f93caec0b7b95a70a6a",
+      "snapshot_sha256": "48d5274466e0bcc2c97f9cf0afca736ff537f2ebcc648f93caec0b7b95a70a6a",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/GI/ReSTIRGI.h",
+      "original_sha256": "88abd0d98c4d74b0dc01678691de039c7bfb498cf9cdb7225da3e8403c516649",
+      "snapshot_sha256": "88abd0d98c4d74b0dc01678691de039c7bfb498cf9cdb7225da3e8403c516649",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/GI/ReSTIRGIParameters.h",
+      "original_sha256": "ae2b5a03d556c1da7b9a7aa6a2801fc48182bbe6a81441db6a0063df6c1c9802",
+      "snapshot_sha256": "ae2b5a03d556c1da7b9a7aa6a2801fc48182bbe6a81441db6a0063df6c1c9802",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/GI/SpatialResampling.hlsli",
+      "original_sha256": "ffd5b314eb812d96c3de433426155f3baa02d8d3dea02682c8c8f4ec86a1fd6b",
+      "snapshot_sha256": "ffd5b314eb812d96c3de433426155f3baa02d8d3dea02682c8c8f4ec86a1fd6b",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/GI/SpatioTemporalResampling.hlsli",
+      "original_sha256": "8a5f4a38670ba075374ce7f7e98bc64b8e4500776a3bdefcc16b6b4a49e3a1fa",
+      "snapshot_sha256": "8a5f4a38670ba075374ce7f7e98bc64b8e4500776a3bdefcc16b6b4a49e3a1fa",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/GI/TemporalResampling.hlsli",
+      "original_sha256": "d4f1c75fc90fb95469a1f0218ef46851474dfa94e9833a50bc4602759d6f7f81",
+      "snapshot_sha256": "d4f1c75fc90fb95469a1f0218ef46851474dfa94e9833a50bc4602759d6f7f81",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/ImportanceSamplingContext.h",
+      "original_sha256": "571485935f4cc8899c2102c86bd67cd7068e3f2a1cd211c4d8fd217d63fd5ff9",
+      "snapshot_sha256": "571485935f4cc8899c2102c86bd67cd7068e3f2a1cd211c4d8fd217d63fd5ff9",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/LightSampling/LocalLightSelection.hlsli",
+      "original_sha256": "6b3b60fe60a3169b1e7814ca6fb0dd46cf21a377c3326f842560563bb0d165db",
+      "snapshot_sha256": "6b3b60fe60a3169b1e7814ca6fb0dd46cf21a377c3326f842560563bb0d165db",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/LightSampling/PresamplingFunctions.hlsli",
+      "original_sha256": "34ffe715eb69452cf6503278e7b1c552b4eb0085f4f5906f834fc02619963348",
+      "snapshot_sha256": "34ffe715eb69452cf6503278e7b1c552b4eb0085f4f5906f834fc02619963348",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/LightSampling/RISBuffer.hlsli",
+      "original_sha256": "be2d9df437996dcdc05c48514b3ea51a80bd29eb981147e85ea893d3368169da",
+      "snapshot_sha256": "be2d9df437996dcdc05c48514b3ea51a80bd29eb981147e85ea893d3368169da",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/LightSampling/RISBufferSegmentAllocator.h",
+      "original_sha256": "f3ba2e462e8c7bfc17eed5975fa21d257b6e08ce747bfea6715df101522490f7",
+      "snapshot_sha256": "f3ba2e462e8c7bfc17eed5975fa21d257b6e08ce747bfea6715df101522490f7",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/LightSampling/RISBufferSegmentParameters.h",
+      "original_sha256": "ad7cbd0b1f015797473ed8111d9888b917aa8ff68f4ebb30e74f05583cefcf10",
+      "snapshot_sha256": "ad7cbd0b1f015797473ed8111d9888b917aa8ff68f4ebb30e74f05583cefcf10",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/LightSampling/UniformSampling.hlsli",
+      "original_sha256": "db57ae5ddc7c0c4c8409bfa2f5b084dd082ff978a74f9bd201b527c1b6ddb44d",
+      "snapshot_sha256": "db57ae5ddc7c0c4c8409bfa2f5b084dd082ff978a74f9bd201b527c1b6ddb44d",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/ReGIR/ReGIR.h",
+      "original_sha256": "418db3531409396f3b6732b7e459a6f9655bf271b240892264ca9e416d263d56",
+      "snapshot_sha256": "418db3531409396f3b6732b7e459a6f9655bf271b240892264ca9e416d263d56",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/ReGIR/ReGIRParameters.h",
+      "original_sha256": "80afb35e532d46fe42ad435555e0db3e3e11d27ad2b8ea348f87426b80f29b3b",
+      "snapshot_sha256": "80afb35e532d46fe42ad435555e0db3e3e11d27ad2b8ea348f87426b80f29b3b",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/ReGIR/ReGIRSampling.hlsli",
+      "original_sha256": "dfc7b9d62e5fedb1359dbc56aeda026eb0ccc9276f35ead243a1ca82b2231c70",
+      "snapshot_sha256": "dfc7b9d62e5fedb1359dbc56aeda026eb0ccc9276f35ead243a1ca82b2231c70",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/RtxdiParameters.h",
+      "original_sha256": "6afe9c40a8e05d37d2920a5cd196d8badfd50a81bda2fb607071957d8e2b24b0",
+      "snapshot_sha256": "6afe9c40a8e05d37d2920a5cd196d8badfd50a81bda2fb607071957d8e2b24b0",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/RtxdiTypes.h",
+      "original_sha256": "062ac9388c7dbddd6ed02b0f4321fa3a3e9977785662be70625a34a2fef24710",
+      "snapshot_sha256": "062ac9388c7dbddd6ed02b0f4321fa3a3e9977785662be70625a34a2fef24710",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/RtxdiUtils.h",
+      "original_sha256": "f0db0cd0b2e88967805ea3baf3cee6f696db53287e7638bb9d31dd36b3b83437",
+      "snapshot_sha256": "f0db0cd0b2e88967805ea3baf3cee6f696db53287e7638bb9d31dd36b3b83437",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/Utils/BoilingFilter.hlsli",
+      "original_sha256": "ad5ef6a7186f965000a94701fedc57f4a70e0f21c0b13e34201d28f8acfd54f6",
+      "snapshot_sha256": "ad5ef6a7186f965000a94701fedc57f4a70e0f21c0b13e34201d28f8acfd54f6",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/Utils/Checkerboard.hlsli",
+      "original_sha256": "0bee5a18d9752bc4e9dda9485395d70ff74a971a80989cf767213d44619542d7",
+      "snapshot_sha256": "0bee5a18d9752bc4e9dda9485395d70ff74a971a80989cf767213d44619542d7",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/Utils/Math.hlsli",
+      "original_sha256": "26cd1003f8060ba570376354f6a67b5770ecc67e46fec84fbaa1a886829b7cf2",
+      "snapshot_sha256": "26cd1003f8060ba570376354f6a67b5770ecc67e46fec84fbaa1a886829b7cf2",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Include/Rtxdi/Utils/ReservoirAddressing.hlsli",
+      "original_sha256": "dd9b80b03e5eedcd90eaa7df02b8050e58acbd52898b769713c4124b0d2efdd3",
+      "snapshot_sha256": "dd9b80b03e5eedcd90eaa7df02b8050e58acbd52898b769713c4124b0d2efdd3",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/LICENSE.txt",
+      "original_sha256": "0f74d24da3082b666de48eea9ec7ff835657575a71576281e383901f3d7c08c2",
+      "snapshot_sha256": "0f74d24da3082b666de48eea9ec7ff835657575a71576281e383901f3d7c08c2",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/README.md",
+      "original_sha256": "88c2c0f3d73292158608b6fb0f6efeca495f4b713252a8ca69da8bc8c4842db9",
+      "snapshot_sha256": "88c2c0f3d73292158608b6fb0f6efeca495f4b713252a8ca69da8bc8c4842db9",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Source/ImportanceSamplingContext.cpp",
+      "original_sha256": "e9bb43cc6fb2cdbb30100d8ec20c382e085f610a58a496efba56318e4b25b235",
+      "snapshot_sha256": "e9bb43cc6fb2cdbb30100d8ec20c382e085f610a58a496efba56318e4b25b235",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Source/ReGIR.cpp",
+      "original_sha256": "06340aa01e75e1b20aa648bf6bc02cc18f8696e6de134449186c3ea329c5b3bd",
+      "snapshot_sha256": "06340aa01e75e1b20aa648bf6bc02cc18f8696e6de134449186c3ea329c5b3bd",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Source/ReSTIRDI.cpp",
+      "original_sha256": "887bad282cf7d7040c13b1ce058a40c043f158ef938a1c8b2dcd0e345bcad8b4",
+      "snapshot_sha256": "887bad282cf7d7040c13b1ce058a40c043f158ef938a1c8b2dcd0e345bcad8b4",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Source/ReSTIRGI.cpp",
+      "original_sha256": "3844cf98fbc83c9f21eb0730cdb3fae9ff605a87b409b943bfc92b972eaeb010",
+      "snapshot_sha256": "3844cf98fbc83c9f21eb0730cdb3fae9ff605a87b409b943bfc92b972eaeb010",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Source/RISBufferSegmentAllocator.cpp",
+      "original_sha256": "603b430a9a6746be38ef17f47f37c4d5f40b9ba18e3b45a8d144a70157bde4db",
+      "snapshot_sha256": "603b430a9a6746be38ef17f47f37c4d5f40b9ba18e3b45a8d144a70157bde4db",
+      "unchanged": true
+    },
+    {
+      "path": "External/Rtxdi/Source/RtxdiUtils.cpp",
+      "original_sha256": "4df37a826b5cc66adbdbcf9294038f01a063ed3b7c837015be5071014ab750b1",
+      "snapshot_sha256": "4df37a826b5cc66adbdbcf9294038f01a063ed3b7c837015be5071014ab750b1",
+      "unchanged": true
+    }
+  ],
+  "SDK_all_unchanged": true,
+  "binary": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxgi-multibounce-20261107\\rtxpt\\bin\\Rtxpt.exe",
+  "binary_sha256": "3be89155ee62358400c3b252dd86ff8cf7c6cca193846b50b7be7cf97556c056",
+  "build_command": "cmake --build D:/work/corona/CoronaEngine/.workspace/experiments/rtxgi-multibounce-20261107/rtxpt-build --config Release --target Rtxpt --parallel 6 -- /p:VCToolsVersion=14.44.35207 /verbosity:minimal",
+  "build_exit_code": 0,
+  "toolchain": "MSVC14.44.35207 Release",
+  "source_frozen_during_build": true,
+  "CPU_DXC_validation": {
+    "target": "lib_6_5",
+    "modes": [
+      0,
+      1,
+      2
+    ],
+    "NVAPI_hit_object": [
+      0,
+      1
+    ],
+    "permutations_passed": 6,
+    "GPU_execution": false
+  },
+  "transport": {
+    "minimum_depth": 5,
+    "minimum_depth_indexing": "Corona zero based bounce index",
+    "first_RR_surface": 6,
+    "max_surface_depth": 16,
+    "primary_surface": 1,
+    "primary_direct_excluded": true,
+    "sun_NEE_surfaces": [
+      2,
+      16
+    ],
+    "RR_q_first": 0.168069988489151,
+    "RR_q_later": 0.699999988079071,
+    "payload_bytes": 96,
+    "native_GI_radiance_representation": "all_later_transport_weighted_by_1_over_primary_proposal_pdf; primary_BRDF_deferred_to_final",
+    "reference": "FP32_unpacked_full_camera_path_NEE_sum_with_same_RR"
+  },
+  "GPU_execution_by_this_agent": false
+}

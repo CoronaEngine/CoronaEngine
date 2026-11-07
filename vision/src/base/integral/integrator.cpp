@@ -8,6 +8,7 @@
 #include "math/warp.h"
 #include "base/color/spectrum.h"
 #include "base/sampler.h"
+#include <cstdlib>
 
 namespace vision {
 using namespace ocarina;
@@ -132,6 +133,15 @@ void IlluminationIntegrator::update_device_data() noexcept {
 void IlluminationIntegrator::compile_path_tracing() noexcept {
     TSensor &camera = scene().sensor();
     TSampler &sampler = renderer().sampler();
+    const char *aligned_value = std::getenv("VISION_PT_ALIGNED_LAMBERT");
+    const bool aligned_lambert = aligned_value && aligned_value[0] != '\0' && aligned_value[0] != '0';
+    if (aligned_lambert) {
+        OC_INFO("PT aligned Lambert benchmark active: albedo=0.7, opaque two-sided interpolated shading normal; native PT sampling/NEE/depth/RR, original geometric ray offsets");
+    }
+    const char *mb_log = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
+    if (mb_log && mb_log[0] == '1') {
+        OC_INFO("PT multibounce benchmark active: min_depth=5 max_depth=16 rr_threshold=1; first_RR_after_surface=6; faceforward_geometric_normals; raw_total=pure_indirect_without_primary_Ld");
+    }
     Kernel kernel = [&](PTParamVar param) {
         Env::instance().clear_global_vars();
         Uint2 pixel = dispatch_idx().xy();
@@ -149,19 +159,31 @@ void IlluminationIntegrator::compile_path_tracing() noexcept {
         sampler->load_data();
         load_data();
         const Uint &frame_index = param.frame_index;
-        render_env.initial(sampler, frame_index, spectrum());
-        sampler->set_seed(pixel, frame_index, param.dimension_index);
+        const char *mb_offset_value = std::getenv("VISION_BENCH_SAMPLE_OFFSET");
+        const uint mb_offset = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH") && mb_offset_value
+            ? uint(std::strtoul(mb_offset_value, nullptr, 10)) : 0u;
+        Uint sample_index = frame_index + mb_offset;
+        render_env.initial(sampler, sample_index, spectrum());
+        sampler->set_seed(pixel, sample_index, param.dimension_index);
         RayDataVar ray_data = param.rays.read(dispatch_id());
         RayState rs = ray_data->to_ray_state();
         Float scatter_pdf = 1e16f;
         RadType3Var Ld;
         RadType3Var Ld_specular;
+        const char *mb = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
+        if (mb && mb[0] == '1') Ld = make_RadType3(make_float3(0.f));
         Float3 bypass = make_float3(0.f);
         Float2 hit_distance = make_float2(0.f);
         HitContext context{Ld, Ld_specular};
+        context.aligned_lambert = aligned_lambert;
         const bool lobe_signals = denoiser_ && denoiser_->requires_lobe_signals();
         if (lobe_signals) { context.bypass = &bypass; context.lobe_hitdist = &hit_distance; }
         Float3 L = Integrator::Li(rs, scatter_pdf, context, render_env);
+        if (mb && mb[0] == '1') {
+            // Ld is the primary-vertex contribution, not the lobe-labelled
+            // `indirect` framebuffer. The benchmark exports true indirect here.
+            L = max(L - make_float3(Ld), make_float3(0.f));
+        }
         // Repurposed channels for the SVGF denoiser: param.direct = DIFFUSE, param.indirect = SPECULAR.
         // diffuse = total - specular keeps diffuse + specular == L exactly (energy conserved);
         // `colors` stays the untouched total (ground truth).
@@ -328,6 +350,13 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         };
 
         it = geometry.compute_surface_interaction(hit, rs.ray);
+        const char *mb = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
+        if (mb && mb[0] == '1' && hc.aligned_lambert) {
+            Float3 n = normalize(it.ng);
+            n = ocarina::select(dot(n, rs.direction()) > 0.f, -n, n);
+            it.ng = n;
+            it.shading.set_frame(Frame<Float3>{n});
+        }
         $if(bounces == 0) {
             frame_buffer().visualizer()->condition_add_normal(it);
         };
@@ -395,6 +424,29 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         Float3 albedo = make_float3(0.f);
 
         auto sample_surface = [&]() {
+            if (hc.aligned_lambert) {
+                // Match the controlled GI's Lambert hemisphere; retain it.ng for
+                // visibility and ray offsets, changing only the BSDF evaluator.
+                auto shading = it.shading;
+                Float side = ocarina::select(dot(shading.normal(), it.wo) < 0.f, -1.f, 1.f);
+                shading.y *= side;
+                shading.z = normalize(shading.normal()) * side;
+                shading.dn_du *= side;
+                shading.dn_dv *= side;
+                Interaction lambert_it = it;
+                lambert_it.shading = shading;
+                lambert_it.ng = shading.normal();
+                MaterialEvaluator evaluator(lambert_it, swl);
+                evaluator.update_frame(shading);
+                evaluator.link(make_unique<DiffuseLobe>(SampledSpectrum{swl, .7f}, swl, shading));
+                Ld = direct_light_mis(it, evaluator, light_sample, occluded,
+                                      sampler, swl, bsdf_sample);
+                albedo = make_float3(.7f);
+                delta_scatter = false;
+                spec_frac_b0 = make_float3(0.f);
+                spec_route = make_float3(0.f);
+                return;
+            }
             if (separate_) {
                 MaterialEvaluator evaluator(it, swl);
                 scene().materials().dispatch(it.material_id(), [&](const Material *material) {

@@ -1,0 +1,129 @@
+{
+  "status": "pass",
+  "scope": "Final read-only source/report peer review. No GPU/build/source modifications. Metrics checked against root independent full96frame/720timing recomputation, not recomputed from raw by this reviewer.",
+  "checks": {
+    "previous_four_rows_exactly_unchanged": true,
+    "source_freeze_unchanged": true,
+    "six_formal_runs_source_route_offset_capture_verified": true,
+    "reported_metrics_match_independent_artifact": true,
+    "candidate_inclusive_sum": true,
+    "report_links_exist": true,
+    "report_contains_outlier_counts_and_MSE_share": true,
+    "full_gpu_unavailable": true
+  },
+  "previous_four_rows": {
+    "original": true,
+    "rtxpt": true,
+    "rtxdi": true,
+    "corona_port": true
+  },
+  "reported_metrics": {
+    "GI_mean_ms": 13.160861866666666,
+    "GI_plus_preparation_mean_ms": 17.149991111111113,
+    "temporal_noise_percent": 252.14141685363617,
+    "NRMSE_percent": 254.01404250443917,
+    "brightness_bias_percent": 4.804870881895434
+  },
+  "metric_checks": {
+    "GI_mean_ms": true,
+    "GI_plus_preparation_mean_ms": true,
+    "temporal_noise_percent": true,
+    "NRMSE_percent": true,
+    "brightness_bias_percent": true
+  },
+  "six_formal_runs": {
+    "quality-r1": {
+      "source_freeze": true,
+      "native_route": true,
+      "offset": true,
+      "physical_diagnostic_off": true,
+      "capture_raw": true
+    },
+    "quality-r2": {
+      "source_freeze": true,
+      "native_route": true,
+      "offset": true,
+      "physical_diagnostic_off": true,
+      "capture_raw": true
+    },
+    "quality-r3": {
+      "source_freeze": true,
+      "native_route": true,
+      "offset": true,
+      "physical_diagnostic_off": true,
+      "capture_raw": true
+    },
+    "timing-r1": {
+      "source_freeze": true,
+      "native_route": true,
+      "offset": true,
+      "physical_diagnostic_off": true,
+      "capture_raw": true
+    },
+    "timing-r2": {
+      "source_freeze": true,
+      "native_route": true,
+      "offset": true,
+      "physical_diagnostic_off": true,
+      "capture_raw": true
+    },
+    "timing-r3": {
+      "source_freeze": true,
+      "native_route": true,
+      "offset": true,
+      "physical_diagnostic_off": true,
+      "capture_raw": true
+    }
+  },
+  "report_links": {
+    "results-final.json": true,
+    "analysis/final-native-v1.json": true,
+    "analysis/manifest-executed-v1.json": true,
+    "source-audit.json": true,
+    "native-contract-regression.json": true,
+    "../rtxgi-multibounce-20261107/report.html": true,
+    "analysis/physical-guide-domain-acceptance-v1.json": true,
+    "independent-native-check.json": true,
+    "outlier-check.json": true
+  },
+  "source_checks": {
+    "vision/src/render_core/sampler/independent.cpp": true,
+    "vision/src/base/scattering/material.cpp": true,
+    "vision/src/render_core/integrator/ReSTIR/indirect.cpp": true,
+    "vision/src/render_core/integrator/rt.cpp": true,
+    "vision/src/base/integral/integrator.cpp": true,
+    "vision/src/render_core/integrator/ReSTIR/direct.cpp": true
+  },
+  "review_conclusions": [
+    "Main table clearly states native13.16ms excludes mandatory fused primary producer; efficiency column includes3.3132ms producer and0.6759ms geometry, total17.15ms. Fused DI inclusion contains some direct-only overhead and is disclosed.",
+    "Four previous renderer rows compare structurally equal to original results-final.json, including every nested metric and native setting.",
+    "Report describes native finite valid-primary bright outliers as observation; retains all samples and makes no unsupported specific algorithm-cause claim.",
+    "Physical exact geometric Lambert is distinguished from preserved interpolated reuse-guide heuristic.",
+    "No native whole-frame GPU value is fabricated; terminal BSDF/RR/trace costs are retained.",
+    "Static gray Kitchen and repeat-dependent RMS limits are stated."
+  ],
+  "artifacts": {
+    "report.html": {
+      "sha256": "1a8b5e93d9b39c0dfa832625502ba6781af236ea56f2e91b7b27e6b37aaf7aa0"
+    },
+    "results-final.json": {
+      "sha256": "b125ab83464a1409f15faffbf4c34d98ffab23ac5c9e5c8a22720f70769d2329"
+    },
+    "analysis/final-native-v1.json": {
+      "sha256": "cbc0d1af8e2a7fe444fd2d9343b339850afddea3fd177baafc3822111d0bdfd5"
+    },
+    "analysis/manifest-executed-v1.json": {
+      "sha256": "09279558826b034b6980d87194eb62e87a1457cfb40f59c9c5bf9f94e82e977f"
+    },
+    "native-contract-regression.json": {
+      "sha256": "a5693b7a116f910ccba7b496a7f274540c4c6c19750d805db4905325abe66309"
+    },
+    "independent-native-check.json": {
+      "sha256": "7243b88eb721cc2a4682003386f237e5801744563b1bf9cfedcd51ad9ca3c2ea"
+    },
+    "outlier-check.json": {
+      "sha256": "be4b698574f2868f875d3b933e66b6cef0518db7a9996573d8d3174459ffab90"
+    }
+  },
+  "actionable_findings": []
+}

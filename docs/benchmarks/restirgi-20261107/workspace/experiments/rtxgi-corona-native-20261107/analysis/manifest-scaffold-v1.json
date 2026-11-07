@@ -1,0 +1,98 @@
+{
+  "schema": "corona-native-fifth-row-manifest.v1",
+  "status": "scaffold_not_accepted",
+  "scene_contract": "../../rtxgi-multibounce-20261107/scene_contract.json",
+  "old_manifest": "../../rtxgi-multibounce-20261107/analysis/manifest-executed-seedstreams-v1.json",
+  "old_results": "../../rtxgi-multibounce-20261107/results-final.json",
+  "immutable_inputs": {
+    "../../rtxgi-multibounce-20261107/results-final.json": "f5ae0700b539810ec35ce2fb37affb61b74db5785804b961e2b7f688e297674b",
+    "../../rtxgi-multibounce-20261107/scene_contract.json": "81eefb82b4f9ba31322eb1ee33b35f0f9a2a61f05d5ae79beb28c846c81b4e73",
+    "../../rtxgi-multibounce-20261107/analysis/manifest-executed-seedstreams-v1.json": "7d12b58cb14b279035573b421b5bce34d01fc64d19c180fb2ee61afceb274bd3",
+    "../../rtxgi-multibounce-20261107/analysis/analyze_multibounce.py": "e5862e92fa578346fa27c8fc87ebc9cf2c92aa374ae33061b90fde5fa068166e",
+    "../../rtxgi-multibounce-20261107/analysis/analyze_timing.py": "6096e5b2e7df65a87c5b6ee332574c4e49a31480ae260558aca412730ed8c9b9",
+    "../../rtxgi-multibounce-20261107/analysis/final-quality-v1.json": "a39de54e54314baad63d80637d6cbda5e8d9843e3081f1005d45c74de1b1fc66",
+    "../../rtxgi-multibounce-20261107/analysis/final-timing-v1.json": "fafd56efcf4b38c7938ecf486f51bd981f5d393388fdbf5815c805ba0e08936b",
+    "../../rtxgi-multibounce-20261107/analysis/reference-acceptance-v1.json": "db455adce9748629b95e2758d7a884803d59860f987dec84f2e8a84de7ece8f3",
+    "../../rtxgi-multibounce-20261107/analysis/common-reference-8192spp.rgba32f": "a6bfe494999dc2e25e7315882f0b58a6a0289351be3c29b0321a3e78cae0c847",
+    "../../rtxgi-multibounce-20261107/runs/reference-reference-a-v1/raw/frame_001023/fresh_pt_sum.bin": "553cc4ced8f7fc7a124a0df24d7e111903e357d26fc0eca0ae234b2a4ed07244",
+    "../../rtxgi-multibounce-20261107/runs/reference-reference-b-v1/raw/frame_001023/fresh_pt_sum.bin": "2a4ea37271848f92013ac2f4e30ea91d8068e0553d0af744adbb2802971345de",
+    "../../rtxgi-multibounce-20261107/runs/rtxpt-reference-a-v1/gi-mean.rgba32f": "919af4ca0d6e9cc37dff91dfb52c1fd76815bb40bc069455958052909202bc9e",
+    "../../rtxgi-multibounce-20261107/runs/rtxpt-reference-b-v1/gi-mean.rgba32f": "005bfa8b085f3d2af72762c11896285993a32f64b5a34cfadc40e11f557dd0d7",
+    "../../rtxgi-multibounce-20261107/runs/rtxdi-reference-a-v1/capture.mean.rgba32f": "0ed7de7c61d8f23c8968ca54f7611d81d2ed1bb6f471166f0893cdd09bcddbc8",
+    "../../rtxgi-multibounce-20261107/runs/rtxdi-reference-b-v1/capture.mean.rgba32f": "114541944882f202c123091d40a2bacef63a525ddcab49763e183fe131d14da8",
+    "../../rtxgi-multibounce-20261107/runs/corona-pt-reference-a-v1/reference.pfm": "83c6a103315347901c26c01f709756aeec2083028c09ee50dd9af569db94e519",
+    "../../rtxgi-multibounce-20261107/runs/corona-pt-reference-b-v1/reference.pfm": "896cdea48649ea03f96f7d715ad9317cd9d5df596e6786f16ff100ff6167a894",
+    "../../rtxgi-multibounce-20261107/runs/reference-pilot-v3/raw/frame_000003/primary_world_position.bin": "425ade7de5d9febf94f6b57c13190e6f7e240f2cb668b6c98efd8b916de6997a",
+    "../../rtxgi-multibounce-20261107/runs/reference-pilot-v3/raw/frame_000003/primary_world_normal.bin": "e07737ccc981b2b8e32a8d248238457607d280a3040d35754e08961bddf73872",
+    "../../rtxgi-multibounce-20261107/runs/rtxpt-pilot-none-v1/primary-position.rgba32f": "5063841f4fe8fe77bb1d66bc825b36aa9f7022fbb4941da46e5924eed49f40fd",
+    "../../rtxgi-multibounce-20261107/runs/rtxpt-pilot-none-v1/primary-geonormal.rgba32f": "8586e1841254358060add7b2b3eeb4d0ffc2cd8c4e7d86efb59e9dd2b2650a95",
+    "../../rtxgi-multibounce-20261107/runs/rtxdi-pilot-none-v1/capture.position.rgba32f": "28a5d4b9de28f864ab6f1d0cf5e94af345de911cf4546d5dd3753b7011df059b",
+    "../../rtxgi-multibounce-20261107/runs/rtxdi-pilot-none-v1/capture.normal.rgba32f": "ae8ff5e6652dee7d6c46ae6f288b2ce5df67e8d095e7e4b6f090b688bdf92e48",
+    "../../rtxgi-multibounce-20261107/runs/corona-port-pilot-v3/raw/frame_0003/reference_position_depth.f32": "c01b430638e20f9c28f5aae7c7221734d9466bd3d176b4cdb0e06a56420b996d",
+    "../../rtxgi-multibounce-20261107/runs/corona-port-pilot-v3/raw/frame_0003/reference_world_normal.f32": "f0e0962064648959e31b242c4d55527f0c41a8ac0d48ab4eb8b65c5153ef6d4a"
+  },
+  "acceptance_evidence": {
+    "physical_guide_domain_audit": {
+      "path": "",
+      "sha256": ""
+    },
+    "native_route_transport_audit": {
+      "path": "",
+      "sha256": ""
+    },
+    "joint_seed_stream_audit": {
+      "path": "",
+      "sha256": ""
+    }
+  },
+  "native_route_log": "PENDING actual native route marker",
+  "required_environment": {
+    "VISION_RESTIR_GI_MULTIBOUNCE_BENCH": "1",
+    "VISION_RESTIR_GI_NATIVE_ALIGNED_LAMBERT": "1",
+    "VISION_RESTIR_GI_NATIVE_MB_DIAGNOSTIC": "0"
+  },
+  "frozen_identity": {},
+  "accepted_pilot_guides": {
+    "position": "../runs/corona-native-pilot-fresh-v1/raw/frame_0000/reference_position_depth.f32",
+    "normal": "../runs/corona-native-pilot-fresh-v1/raw/frame_0000/reference_world_normal.f32"
+  },
+  "accepted_guide_sha256": {
+    "position": "",
+    "normal": ""
+  },
+  "quality_frame_pattern": "raw/frame_{frame:04d}/raw_indirect.f32",
+  "quality": [
+    {
+      "label": "r1",
+      "sample_offset": 0,
+      "run": "../runs/corona-native-quality-r1-v1"
+    },
+    {
+      "label": "r2",
+      "sample_offset": 10000,
+      "run": "../runs/corona-native-quality-r2-v1"
+    },
+    {
+      "label": "r3",
+      "sample_offset": 20000,
+      "run": "../runs/corona-native-quality-r3-v1"
+    }
+  ],
+  "timing": [
+    {
+      "label": "r1",
+      "sample_offset": 0,
+      "run": "../runs/corona-native-timing-r1-v1"
+    },
+    {
+      "label": "r2",
+      "sample_offset": 10000,
+      "run": "../runs/corona-native-timing-r2-v1"
+    },
+    {
+      "label": "r3",
+      "sample_offset": 20000,
+      "run": "../runs/corona-native-timing-r3-v1"
+    }
+  ]
+}

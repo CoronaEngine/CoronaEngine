@@ -1,0 +1,93 @@
+{
+  "schema": "corona-benchmark-seed-streams-regression.v1",
+  "status": "pass",
+  "source": "D:\\work\\corona\\CoronaEngine\\vision\\src\\render_core\\integrator\\restir_gi_experiment.h",
+  "source_sha256": "402d272b0e63b09dcf596d8058ae39abf02cb8728ab84eef259103de1daa2085",
+  "source_hashes": {
+    "D:\\work\\corona\\CoronaEngine\\vision\\src\\render_core\\integrator\\restir_gi_experiment.h": "402d272b0e63b09dcf596d8058ae39abf02cb8728ab84eef259103de1daa2085",
+    "D:\\work\\corona\\CoronaEngine\\vision\\src\\render_core\\integrator\\restir_gi\\literal.h": "d61b3592dad41ae9404378c608168562c562aff4f120288dd6c5ea5004d7d17f",
+    "D:\\work\\corona\\CoronaEngine\\vision\\src\\base\\integral\\integrator.cpp": "7fc0e614ddf3561f11453fe413daf8c26e5ebd3729d8d264f60129fbbfbf7d42"
+  },
+  "test": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\test_corona_seed_streams.py",
+  "test_sha256": "2311db9dce834a02041746c43f25bfff20084d899d1e489339c86576e7fc77a2",
+  "command": "python .workspace/experiments/rtxgi-multibounce-20261107/test_corona_seed_streams.py",
+  "red": {
+    "independently_observed_before_root_all_stream_fix": true,
+    "exit_code": 1,
+    "failed_checks": [
+      "temporal_sampler_frame",
+      "spatial_random_frame_local",
+      "resolve_random_frame_local",
+      "spatial_sampler_argument",
+      "resolve_sampler_argument",
+      "spatial_literal_signature",
+      "resolve_literal_signature",
+      "spatial_rng_key",
+      "spatial_angle_key",
+      "resolve_rng_key",
+      "resolve_quad_key"
+    ],
+    "failed_check_count": 11,
+    "saved_replay_key_passed": true,
+    "logical_phase_guards_passed": true,
+    "sampler_cases": 0,
+    "reason": "Missing random_frame plumbing and unshifted reuse/resolve seed expressions"
+  },
+  "green": {
+    "independently_rerun": true,
+    "exit_code": 0,
+    "report": {
+      "status": "pass",
+      "checks": {
+        "camera_sampler_frame": true,
+        "candidate_sampler_frame": true,
+        "candidate_tail_key": true,
+        "temporal_sampler_frame": true,
+        "spatial_random_frame_local": true,
+        "resolve_random_frame_local": true,
+        "spatial_sampler_argument": true,
+        "resolve_sampler_argument": true,
+        "spatial_literal_signature": true,
+        "resolve_literal_signature": true,
+        "spatial_rng_key": true,
+        "spatial_angle_key": true,
+        "resolve_rng_key": true,
+        "resolve_quad_key": true,
+        "saved_replay_key": true,
+        "logical_validation_phase": true,
+        "logical_history_parity": true,
+        "logical_temporal_permutation": true,
+        "logical_dispatch_frames": true
+      },
+      "failed_checks": [],
+      "sampler_cases": 120,
+      "offsets": [
+        0,
+        10000,
+        20000
+      ],
+      "limitation": "CPU expression and call-argument regression; GPU quality still requires runtime evidence",
+      "unshifted_temporal_negative_control_detected": true
+    }
+  },
+  "negative_control": {
+    "unshifted_temporal_rng_reinjected_in_memory_only": true,
+    "detected": true
+  },
+  "protocol": {
+    "sampler_frame": "uint32(logical_frame + VISION_BENCH_SAMPLE_OFFSET)",
+    "camera_candidate_replay_temporal_spatial_resolve_keys_shift_together": true,
+    "logical_history_parity_validation_and_temporal_permutation_unchanged": true
+  },
+  "previous_regression": {
+    "artifact": "corona-seed-replay-regression-v1.json",
+    "preserved_unchanged": true,
+    "status": "historical; saved replay-key correction remains valid, its unshifted-native-RNG requirement is superseded"
+  },
+  "scope": {
+    "renderer_sources_edited_by_this_agent": false,
+    "renderer_build_by_this_agent": false,
+    "GPU_execution_by_this_agent": false
+  },
+  "limitation": "CPU expression and call-argument regression; GPU quality still requires runtime evidence"
+}

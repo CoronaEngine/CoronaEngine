@@ -1,0 +1,355 @@
+{
+  "spec": {
+    "executable": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxpt-mainloop-wall-20261107\\rtxpt\\bin\\Rtxpt.exe",
+    "args": [
+      "--scene",
+      "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\shared-scene\\kitchen.scene.json",
+      "--width",
+      "1920",
+      "--height",
+      "1080",
+      "--nonInteractive"
+    ],
+    "env": {
+      "RESTIR_REPO_BENCH_OUTPUT": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r2-v1",
+      "RESTIR_REPO_BENCH_FRAMES": 368,
+      "RESTIR_REPO_BENCH_INTERVAL_MS": 0,
+      "RESTIR_GI_MODE": "temporalspatial",
+      "RESTIR_GI_CAPTURE": "none",
+      "RESTIR_GI_SAMPLE_OFFSET": 10000,
+      "RESTIR_MAINLOOP_WALL": "1"
+    },
+    "output": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r2-v1",
+    "timeout_seconds": 1800,
+    "experiment": {
+      "renderer": "rtxpt",
+      "label": "loop-r2",
+      "mode": "temporalspatial",
+      "frames": 240,
+      "warmup": 120,
+      "sample_offset": 0,
+      "scene_contract": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\scene_contract.json",
+      "total_frames": 368,
+      "measured_frames": [
+        120,
+        359
+      ],
+      "terminal_frame_excluded": 367,
+      "mainloop_boundary": "Donut RunMessageLoop top through AnimateRenderPresent return"
+    }
+  },
+  "spec_path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\run-specs\\rtxpt-loop-r2-v1.json",
+  "executable_sha256": "c19960e8b1f7f53c855c885b7596e097987c2b59d90ff866b2fdb135af093210",
+  "working_directory": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxpt-mainloop-wall-20261107\\rtxpt\\bin",
+  "start_utc": "2026-11-07T12:44:43.132828+00:00",
+  "gpu_before": "timestamp, name, driver_version, temperature.gpu, power.draw [W], clocks.current.graphics [MHz], clocks.current.memory [MHz], utilization.gpu [%]\n2026/11/07 20:44:43.170, NVIDIA GeForce RTX 3070 Ti, 610.88, 51, 76.81 W, 1860 MHz, 9501 MHz, 2 %\n",
+  "wall_seconds": 8.850439900008496,
+  "exit_code": 0,
+  "frozen_scene_contract": {
+    "schema": "four-way-restirgi-multibounce-v1",
+    "source_gltf": "D:\\work\\utils\\RTX-Path-Tracing\\Assets\\kitchen\\kitchen.gltf",
+    "source_sha256": "44e2580b8d858397110bdcbe7d593dc32483aaf4f6de06070339a2240a5d9917",
+    "model": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\shared-scene\\kitchen-gray.gltf",
+    "resolution": [
+      1920,
+      1080
+    ],
+    "camera": {
+      "position": [
+        1.211005,
+        1.804751,
+        3.85239
+      ],
+      "forward": [
+        -0.43809995936577284,
+        -0.04167029613503667,
+        -0.8979599167132832
+      ],
+      "up": [
+        0,
+        1,
+        0
+      ],
+      "vertical_fov_degrees": 60,
+      "near": 0.01,
+      "far": 1000,
+      "jitter": false,
+      "aperture": 0,
+      "corona_api": {
+        "position": [
+          1.211005,
+          1.804751,
+          3.85239
+        ],
+        "forward": [
+          -0.43809995936577284,
+          -0.04167029613503659,
+          -0.8979599167132832
+        ],
+        "world_up": [
+          -0.01827162548523565,
+          0.9991314159909188,
+          -0.03745078479963982
+        ],
+        "fov": 59.99999999999999,
+        "projection_x_sign": -1,
+        "near_plane": 0.01,
+        "far_plane": 1000.0
+      }
+    },
+    "materials": {
+      "model": "exact Lambert",
+      "albedo": [
+        0.7,
+        0.7,
+        0.7
+      ],
+      "F0": [
+        0,
+        0,
+        0
+      ],
+      "emission": [
+        0,
+        0,
+        0
+      ],
+      "transmission": 0,
+      "opaque": true,
+      "textures": false,
+      "normal_maps": false,
+      "normals": "geometric"
+    },
+    "clear_window": {
+      "node": "Window_Panels",
+      "node_index": 374,
+      "treatment": "non-scattering clear opening: pane mesh omitted in both apps",
+      "reason": "An opaque gray override on the original glass would seal the sunlight opening."
+    },
+    "authored_disabled_nodes": [
+      {
+        "node": "Mesh_295_togglable_off",
+        "node_index": 384,
+        "triangles": 2,
+        "treatment": "mesh omitted explicitly in both apps; honors authored off state"
+      }
+    ],
+    "lighting": {
+      "environment": [
+        0,
+        0,
+        0
+      ],
+      "to_sun": [
+        0,
+        0.4472135954999579,
+        -0.8944271909999159
+      ],
+      "light_direction": [
+        0,
+        -0.4472135954999579,
+        0.8944271909999159
+      ],
+      "sun_irradiance": [
+        1,
+        1,
+        1
+      ],
+      "angular_diameter_degrees": 0,
+      "other_lights": 0
+    },
+    "transport": {
+      "min_depth": 5,
+      "max_depth": 16,
+      "rr_threshold": 1,
+      "depth_count": "camera0 primary1; max16 counts primary",
+      "indirect_NEE_surface_depths": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "RR_first_after_surface": 6,
+      "roulette": "q=min(.95,beta_camera_before_current_BSDF) if beta<1, then postscatterBeta/=q on success; no.05floor",
+      "primary_direct_in_AOV": false,
+      "environment_and_emission": false,
+      "candidate_radiance": "full outgoing suffix integral at first secondary",
+      "initial_candidate_paths_per_pixel": 1
+    },
+    "sampling": {
+      "initial_candidate_paths_per_pixel_per_frame": 1,
+      "secondary_sun_NEE_samples_per_visited_surface": 1,
+      "same_transport_min_depth": 5,
+      "same_transport_max_depth": 16,
+      "same_roulette_threshold": 1,
+      "note": "Equal newly generated candidate path budget. Native reuse proposals/history/validation remain algorithm-specific and their GPU costs are included."
+    },
+    "quality": {
+      "frames": 128,
+      "raw_frames": [
+        0,
+        63,
+        96,
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        106,
+        107,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        126,
+        127
+      ],
+      "accumulation": false,
+      "denoiser": false,
+      "anti_aliasing": false,
+      "raw_format": "top-left row-major little-endian float32 RGBA"
+    },
+    "reference": {
+      "mode": "unpacked independent full PT paths; min5 max16 RR1",
+      "samples_per_half": 1024,
+      "split_halves": 2,
+      "offsets": [
+        100000,
+        200000
+      ],
+      "common_reference_requires_agreement": true
+    },
+    "timing": {
+      "warmup_frames": 120,
+      "measured_frames": 240,
+      "process_pairs": 3,
+      "raw_readbacks": false,
+      "interval_ms": 0,
+      "vsync": false,
+      "fps_limit": 0,
+      "GI_exclusive": "candidate+temporal+spatial+final"
+    },
+    "changes": {
+      "original_repositories": false,
+      "corona_integration": false,
+      "copied_app_wiring_fixes": true
+    },
+    "files": {
+      "kitchen-gray.gltf": {
+        "sha256": "882e4374c9f582c33e225bbfd7c599cc096ed6e983df2b4a8677d7edffc6a0f4",
+        "bytes": 722463
+      },
+      "kitchen.bin": {
+        "sha256": "aae0d070c6eab6edc6871a232bd4bf6bc80435aeb3882140c2a252b218fef26c",
+        "bytes": 68814088
+      },
+      "kitchen.scene.json": {
+        "sha256": "f5891e585c0e00f7278e5fbf8c302e1772ff31bec372dde6349d5435800eec93",
+        "bytes": 224
+      },
+      "kitchen-world.xml": {
+        "sha256": "122f9901ba0df51f63ea2726ba3bf60f408fcf62ffc66007bb5f7d8004d78b11",
+        "bytes": 90317
+      }
+    },
+    "corona_scene": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\shared-scene\\kitchen-world.xml",
+    "scene_sha256": "122f9901ba0df51f63ea2726ba3bf60f408fcf62ffc66007bb5f7d8004d78b11",
+    "geometry_meshes": 315,
+    "geometry_triangles": 1474261,
+    "geometry_world_float32_triangle_sha256": "86ec4c0e450c428f4f3523800157a464fc2026513e93b6a2ce81985da1ead37e",
+    "original_native_reuse": {
+      "primary_proposal": "uniform hemisphere, retained",
+      "temporal_M_clamp": 20,
+      "W_clamp": 10,
+      "spatial_passes": 2,
+      "interleaved_short_paths": false
+    },
+    "renderers": [
+      "originalRestirGI",
+      "RTXPT",
+      "RTXDI",
+      "CoronaRestirGIport"
+    ],
+    "assumptions": "Equal1candidatepath/frame, commontransport/RR; native reuse algorithms and proposal differences retained, actualpathdepth/costreported.",
+    "renderer_coordinates": {
+      "canonical": "glTF world",
+      "Corona_internal_from_canonical": [
+        1,
+        1,
+        -1
+      ],
+      "Corona_internal_to_sun": [
+        0,
+        0.4472135954999579,
+        0.8944271909999159
+      ],
+      "guide_comparison": "reflect Corona position/normal Z back before matching; same physical light/camera/geometry"
+    },
+    "reuse_profiles": {
+      "RTXPT_RTXDI": {
+        "history": 8,
+        "age": 30,
+        "spatial_neighbors": 2,
+        "spatial_radius": 32,
+        "BASIC": true,
+        "final_visibility": true,
+        "final_MIS": false
+      },
+      "original_RestirGI": {
+        "spatial_pass_proposals": [
+          8,
+          5
+        ],
+        "temporal_sources": 5,
+        "M_clamp": 20,
+        "W_clamp": 10,
+        "resolve_taps": 4,
+        "validation": "native full suffix refresh; actual dispatch/work recorded"
+      },
+      "Corona_port": {
+        "spatial_pass_proposals": [
+          8,
+          5
+        ],
+        "temporal_sources": 5,
+        "M_clamp": 20,
+        "W_clamp": 10,
+        "resolve_taps": 4,
+        "validation": "history and frame modulo3==0; full fresh candidate generated every frame"
+      }
+    }
+  },
+  "scene_contract_sha256": "81eefb82b4f9ba31322eb1ee33b35f0f9a2a61f05d5ae79beb28c846c81b4e73",
+  "pid": 59064,
+  "end_utc": "2026-11-07T12:44:52.029884+00:00",
+  "gpu_after": "timestamp, name, driver_version, temperature.gpu, power.draw [W], clocks.current.graphics [MHz], clocks.current.memory [MHz], utilization.gpu [%]\n2026/11/07 20:44:52.073, NVIDIA GeForce RTX 3070 Ti, 610.88, 57, 180.55 W, 2010 MHz, 9501 MHz, 8 %\n"
+}

@@ -1,0 +1,17 @@
+{
+  "status": "pass",
+  "timed_iterations": 720,
+  "processes": 3,
+  "analytic_tests": 2,
+  "independent_recompute_matches": true,
+  "unchanged_shader_sources": 624,
+  "instrumentation_source_hashes_current": true,
+  "run_evidence_hashes_current": true,
+  "report_links_verified": 5,
+  "hashes": {
+    "report.html": "280e867abcd4bbc141938b456024c4d4a16699eaa7d952133f7f88121a1f43e1",
+    "results-final.json": "b05a4ec14e6b7b28db1131dba0fb97803d1ddfc099fde33b0bf276837f1129e7",
+    "analysis/mainloop-results.json": "2b6e6101b8622110d59eeadcc8219bbf5b00e6eef7ffdf9e5da65f49e6952cf7",
+    "independent-check.json": "70f4ba00e7a889582ffa11ec0c90ea7898c653a57c9e8ab24acf7a995b744958"
+  }
+}

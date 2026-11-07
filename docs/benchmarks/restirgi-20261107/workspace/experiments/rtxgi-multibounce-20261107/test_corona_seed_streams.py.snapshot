@@ -1,0 +1,117 @@
+"""CPU/source regression: shift all benchmark RNG keys, retain logical phases."""
+from pathlib import Path
+import ast
+import json
+import re
+import sys
+
+ROOT = Path(__file__).resolve().parents[3]
+SOURCE = ROOT / 'vision/src/render_core/integrator/restir_gi_experiment.h'
+LITERAL = SOURCE.parent / 'restir_gi/literal.h'
+INTEGRATOR = ROOT / 'vision/src/base/integral/integrator.cpp'
+MASK = 0xffffffff
+
+def hash32(x):
+    x = (x + (x << 10)) & MASK
+    x ^= x >> 6
+    x = (x + (x << 3)) & MASK
+    x ^= x >> 11
+    return (x + (x << 15)) & MASK
+
+def combine(x, y):
+    x = ((x * 1664525 + y + 1013904223) * 1664525) & MASK
+    x ^= x >> 11
+    x ^= (x << 7) & 0x9d2c5680
+    x ^= (x << 15) & 0xefc60000
+    return (x ^ (x >> 18)) & MASK
+
+def seed(pixel, frame):
+    return combine(pixel[0], combine(pixel[1], hash32(frame)))
+
+def evaluate(value, context):
+    value = value.replace('restir_gi::', '').replace('rg_lit_', '')
+    value = value.replace('multibounce_sample_offset_', 'offset').replace('pass', 'pass_index')
+    value = re.sub(r'(?<=[0-9a-fA-F])[uU]\b', '', value)
+    def visit(node):
+        if isinstance(node, ast.Expression): return visit(node.body)
+        if isinstance(node, ast.Constant): return node.value
+        if isinstance(node, ast.Name): return context[node.id]
+        if isinstance(node, ast.BinOp):
+            a, b = visit(node.left), visit(node.right)
+            if isinstance(node.op, ast.Add): return (a + b) & MASK
+            if isinstance(node.op, ast.Mult): return (a * b) & MASK
+            if isinstance(node.op, ast.BitXor): return (a ^ b) & MASK
+            if isinstance(node.op, ast.RShift): return tuple(x >> b for x in a) if isinstance(a, tuple) else a >> b
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            return {'hash': hash32, 'seed': seed}[node.func.id](*(visit(a) for a in node.args))
+        raise AssertionError(ast.dump(node))
+    return visit(ast.parse(value.strip(), mode='eval'))
+
+def audit(source, literal):
+    failures = []
+    compact = lambda x: re.sub(r'\s+', '', x)
+    src, lit = compact(source), compact(literal)
+    temporal = source.split('Kernel temporal=', 1)[1].split('temporal.function()', 1)[0]
+    candidates = source.split('Kernel candidates=', 1)[1].split('for(uint phase=', 1)[0]
+    spatial = source.split('void compile_spatial(', 1)[1].split('void compile_resolve(', 1)[0]
+    resolve = source.split('void compile_resolve(', 1)[1].split('public:', 1)[0]
+    checks = {
+        'camera_sampler_frame': 'Uintsample_index=frame_index+mb_offset;' in compact(INTEGRATOR.read_text()) and 'sampler->set_seed(pixel,sample_index,param.dimension_index);' in compact(INTEGRATOR.read_text()),
+        'candidate_sampler_frame': 'Uintrng=restir_gi::seed(pixel,frame+multibounce_sample_offset_);' in compact(candidates),
+        'candidate_tail_key': 'restir_gi::hash(restir_gi::seed(pixel,frame+multibounce_sample_offset_)^0xa511e9b3u),true)' in compact(candidates),
+        'temporal_sampler_frame': 'Uintrng=restir_gi::seed(pixel,frame+multibounce_sample_offset_);' in compact(temporal),
+        'spatial_random_frame_local': 'Uintrandom_frame=frame+multibounce_sample_offset_;' in compact(spatial),
+        'resolve_random_frame_local': 'Uintrandom_frame=frame+multibounce_sample_offset_;' in compact(resolve),
+        'spatial_sampler_argument': 'OC_EXPR(pixel),OC_EXPR(frame),OC_EXPR(random_frame),OC_EXPR(pass_index)' in compact(spatial),
+        'resolve_sampler_argument': 'OC_EXPR(pixel),OC_EXPR(frame),OC_EXPR(random_frame),OC_EXPR(extent)' in compact(resolve),
+        'spatial_literal_signature': 'restir_gi_literal_spatial(uint2pixel,uintframe,uintrandom_frame,uintpass,' in lit,
+        'resolve_literal_signature': 'restir_gi_literal_resolve(uint2pixel,uintframe,uintrandom_frame,uint2extent,' in lit,
+        'spatial_rng_key': 'rg_lit_seed(pixel,random_frame+pass*123u)' in lit,
+        'spatial_angle_key': 'rg_lit_seed(pixel>>tile_shift,random_frame*2u+pass)' in lit,
+        'resolve_rng_key': 'rg_lit_seed(pixel,random_frame)' in lit,
+        'resolve_quad_key': 'rg_lit_hash(random_frame)' in lit,
+        'saved_replay_key': 'selected.light_seed=restir_gi::hash(restir_gi::seed(pixel,frame+multibounce_sample_offset_)^0xa511e9b3u);' in src,
+        'logical_validation_phase': 'boolvalidation=history&&frame%3u==0u;' in src,
+        'logical_history_parity': 'validate_[frame&1u](frame)' in src and 'temporal_[frame&1u](frame,' in src,
+        'logical_temporal_permutation': 'Uintphase=frame&3u;' in compact(temporal),
+        'logical_dispatch_frames': all(x in src for x in ('spatial0_(frame,', 'spatial1_(frame,', 'resolve_(frame,')),
+    }
+    failures.extend(name for name, ok in checks.items() if not ok)
+    cases = 0
+    if not failures:
+        candidate_primary = re.search(r'Uint rng=([^;]+);', candidates).group(1)
+        candidate_key = re.search(r'result=trace\(.*?,\s*(restir_gi::hash\(.*?\)),true\);', candidates, re.S).group(1)
+        saved_key = re.search(r'selected\.light_seed=([^;]+);', temporal).group(1)
+        temporal_expr = re.search(r'Uint rng=([^;]+);', temporal).group(1)
+        spatial_expr = re.search(r'uint rng\s*=\s*(rg_lit_seed\(pixel,\s*[^;]+);', literal).group(1)
+        angle_expr = re.search(r'uint angular_rng\s*=\s*([^;]+);', literal).group(1)
+        resolve_body = literal.split('float3 restir_gi_literal_resolve(', 1)[1]
+        resolve_expr = re.search(r'uint rng\s*=\s*([^;]+);', resolve_body).group(1)
+        for offset in (0, 10000, 20000):
+            for pixel in ((0, 0), (1, 1), (127, 63), (960, 540), (1919, 1079)):
+                for frame in (0, 1, 2, 3, 63, 96, 127, 0xfffffffe):
+                    sample_frame = (frame + offset) & MASK
+                    ctx = dict(pixel=pixel, frame=frame, offset=offset, random_frame=sample_frame, tile_shift=4)
+                    assert evaluate(candidate_primary, ctx) == seed(pixel, sample_frame)
+                    assert evaluate(candidate_key, ctx) == evaluate(saved_key, ctx) == hash32(seed(pixel, sample_frame) ^ 0xa511e9b3)
+                    assert evaluate(temporal_expr, ctx) == seed(pixel, sample_frame)
+                    assert evaluate(resolve_expr, ctx) == seed(pixel, sample_frame)
+                    for pass_index in (0, 1):
+                        ctx['pass_index'] = pass_index
+                        assert evaluate(spatial_expr, ctx) == seed(pixel, (sample_frame + pass_index * 123) & MASK)
+                        assert evaluate(angle_expr, ctx) == seed(tuple(x >> 4 for x in pixel), (sample_frame * 2 + pass_index) & MASK)
+                    cases += 1
+    return dict(status='pass' if not failures else 'fail', checks=checks, failed_checks=failures,
+                sampler_cases=cases, offsets=[0, 10000, 20000],
+                limitation='CPU expression and call-argument regression; GPU quality still requires runtime evidence')
+
+source, literal = SOURCE.read_text(), LITERAL.read_text()
+result = audit(source, literal)
+if result['status'] == 'pass':
+    negative = source.replace('Uint rng=restir_gi::seed(pixel,frame+multibounce_sample_offset_);',
+                              'Uint rng=restir_gi::seed(pixel,frame);')
+    negative_result = audit(negative, literal)
+    assert negative_result['status'] == 'fail'
+    result['unshifted_temporal_negative_control_detected'] = True
+print(json.dumps(result, indent=2))
+sys.exit(0 if result['status'] == 'pass' else 1)

@@ -1,0 +1,1417 @@
+{
+  "schema": "four-way-multibounce-manifest.v1",
+  "resolution": [
+    1920,
+    1080
+  ],
+  "scene_contract": "../scene_contract.json",
+  "comparison_evidence": {
+    "actual_guides_reviewed": true,
+    "fresh_reference_agreement_reviewed": true,
+    "actual_route_and_transport_reviewed": true,
+    "source_and_runtime_freeze_reviewed": true,
+    "evidence": [
+      "pilot-guide-review-v1.json",
+      "corona-port-v2-handedness-review.json",
+      "corrected-corona-pilot-radiance-v1.json",
+      "reference-review-policy.json",
+      "reference-acceptance-v1.json",
+      "quality-run-audit-v1.json",
+      "quality-run-audit-seedstreams-v1.json",
+      "timing-run-audit-seedstreams-v1.json",
+      "corona-seed-stream-regression-v1.json"
+    ]
+  },
+  "guides": {
+    "original": {
+      "position": "../runs/reference-pilot-v3/raw/frame_000003/primary_world_position.bin",
+      "normal": "../runs/reference-pilot-v3/raw/frame_000003/primary_world_normal.bin",
+      "validity": {
+        "path": "../runs/reference-pilot-v3/raw/frame_000003/primary_world_normal.bin",
+        "channel": 3
+      },
+      "internal_to_canonical_scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "rtxpt": {
+      "position": "../runs/rtxpt-pilot-none-v1/primary-position.rgba32f",
+      "normal": "../runs/rtxpt-pilot-none-v1/primary-geonormal.rgba32f",
+      "validity": {
+        "path": "../runs/rtxpt-pilot-none-v1/primary-position.rgba32f",
+        "channel": 3
+      },
+      "internal_to_canonical_scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "rtxdi": {
+      "position": "../runs/rtxdi-pilot-none-v1/capture.position.rgba32f",
+      "normal": "../runs/rtxdi-pilot-none-v1/capture.normal.rgba32f",
+      "validity": {
+        "path": "../runs/rtxdi-pilot-none-v1/capture.position.rgba32f",
+        "channel": 3
+      },
+      "internal_to_canonical_scale": [
+        1,
+        1,
+        1
+      ]
+    },
+    "corona_port": {
+      "position": "../runs/corona-port-pilot-v3/raw/frame_0003/reference_position_depth.f32",
+      "normal": "../runs/corona-port-pilot-v3/raw/frame_0003/reference_world_normal.f32",
+      "validity": {
+        "path": "../runs/corona-port-pilot-v3/raw/frame_0003/reference_position_depth.f32",
+        "channel": 3
+      },
+      "internal_to_canonical_scale": [
+        1,
+        1,
+        -1
+      ]
+    }
+  },
+  "references": {
+    "original": {
+      "half_a": {
+        "path": "../runs/reference-reference-a-v1/raw/frame_001023/fresh_pt_sum.bin",
+        "divisor": 1024,
+        "spp": 1024,
+        "sample_offset": 100000,
+        "storage": "SUM",
+        "run": "../runs/reference-reference-a-v1",
+        "format": "float32_RGBA_top_left"
+      },
+      "half_b": {
+        "path": "../runs/reference-reference-b-v1/raw/frame_001023/fresh_pt_sum.bin",
+        "divisor": 1024,
+        "spp": 1024,
+        "sample_offset": 200000,
+        "storage": "SUM",
+        "run": "../runs/reference-reference-b-v1",
+        "format": "float32_RGBA_top_left"
+      },
+      "include_in_common": true,
+      "evidence": [
+        "../runs/reference-reference-a-v1/launch-manifest.json",
+        "../runs/reference-reference-b-v1/launch-manifest.json"
+      ]
+    },
+    "rtxpt": {
+      "half_a": {
+        "path": "../runs/rtxpt-reference-a-v1/gi-mean.rgba32f",
+        "divisor": 1,
+        "spp": 1024,
+        "sample_offset": 100000,
+        "storage": "MEAN",
+        "run": "../runs/rtxpt-reference-a-v1",
+        "format": "float32_RGBA_top_left"
+      },
+      "half_b": {
+        "path": "../runs/rtxpt-reference-b-v1/gi-mean.rgba32f",
+        "divisor": 1,
+        "spp": 1024,
+        "sample_offset": 200000,
+        "storage": "MEAN",
+        "run": "../runs/rtxpt-reference-b-v1",
+        "format": "float32_RGBA_top_left"
+      },
+      "include_in_common": true,
+      "evidence": [
+        "../runs/rtxpt-reference-a-v1/launch-manifest.json",
+        "../runs/rtxpt-reference-b-v1/launch-manifest.json"
+      ]
+    },
+    "rtxdi": {
+      "half_a": {
+        "path": "../runs/rtxdi-reference-a-v1/capture.mean.rgba32f",
+        "divisor": 1,
+        "spp": 1024,
+        "sample_offset": 100000,
+        "storage": "MEAN",
+        "run": "../runs/rtxdi-reference-a-v1",
+        "format": "float32_RGBA_top_left"
+      },
+      "half_b": {
+        "path": "../runs/rtxdi-reference-b-v1/capture.mean.rgba32f",
+        "divisor": 1,
+        "spp": 1024,
+        "sample_offset": 200000,
+        "storage": "MEAN",
+        "run": "../runs/rtxdi-reference-b-v1",
+        "format": "float32_RGBA_top_left"
+      },
+      "include_in_common": true,
+      "evidence": [
+        "../runs/rtxdi-reference-a-v1/launch-manifest.json",
+        "../runs/rtxdi-reference-b-v1/launch-manifest.json"
+      ]
+    },
+    "corona_pt": {
+      "half_a": {
+        "path": "../runs/corona-pt-reference-a-v1/reference.pfm",
+        "divisor": 1,
+        "spp": 1024,
+        "sample_offset": 100000,
+        "storage": "MEAN",
+        "run": "../runs/corona-pt-reference-a-v1",
+        "format": "PFM_float32_RGB_bottom_up"
+      },
+      "half_b": {
+        "path": "../runs/corona-pt-reference-b-v1/reference.pfm",
+        "divisor": 1,
+        "spp": 1024,
+        "sample_offset": 200000,
+        "storage": "MEAN",
+        "run": "../runs/corona-pt-reference-b-v1",
+        "format": "PFM_float32_RGB_bottom_up"
+      },
+      "include_in_common": true,
+      "evidence": [
+        "../runs/corona-pt-reference-a-v1/contract.json",
+        "../runs/corona-pt-reference-b-v1/contract.json"
+      ]
+    }
+  },
+  "quality": {
+    "original": {
+      "native_settings": {
+        "primary_proposal": "uniform hemisphere",
+        "temporal_M_clamp": 20,
+        "W_clamp": 10,
+        "spatial_passes": 2,
+        "interleaved_short_paths": false,
+        "spatial_pass_proposals": [
+          8,
+          5
+        ],
+        "temporal_sources": 5,
+        "M_clamp": 20,
+        "resolve_taps": 4,
+        "validation": "native full suffix refresh; actual dispatch/work recorded",
+        "source": "Executed runtime settings plus recorded native reuse implementation profile; only newly generated candidate path budget is matched.",
+        "actual_runtime_by_repeat": {
+          "r1": {
+            "profile": "kitchen_multibounce_v1",
+            "reference_mode": false,
+            "sample_offset": 0,
+            "min_depth": 5,
+            "max_depth": 16,
+            "RR_first_after_surface": 6,
+            "RR_threshold": 1,
+            "RR_survival_cap": 0.95,
+            "RR_floor": 0,
+            "surface16_NEE_before_termination": true,
+            "primary_proposal": "uniform hemisphere",
+            "primary_direct": false,
+            "temporal_M_clamp": 20,
+            "reservoir_W_clamp": 10,
+            "spatial_passes": 2,
+            "native_core_unchanged": true,
+            "interleaved_short_paths": false,
+            "scene_geometry": "canonical world OBJ315 groups, originalAssimp3.3, no axis reflection",
+            "diagnostic_components": [
+              "last_surface",
+              "RR_tests",
+              "RR_survivals",
+              "reason"
+            ],
+            "diagnostic_reasons": {
+              "0": "invalid_primary",
+              "1": "miss",
+              "2": "RR",
+              "3": "max_depth"
+            },
+            "fresh_pt_sum_is_sum": true,
+            "replay_seed": "source pixel and recovered discrete8bit uniform proposal; nativeFP16 history quantization retained"
+          },
+          "r2": {
+            "profile": "kitchen_multibounce_v1",
+            "reference_mode": false,
+            "sample_offset": 10000,
+            "min_depth": 5,
+            "max_depth": 16,
+            "RR_first_after_surface": 6,
+            "RR_threshold": 1,
+            "RR_survival_cap": 0.95,
+            "RR_floor": 0,
+            "surface16_NEE_before_termination": true,
+            "primary_proposal": "uniform hemisphere",
+            "primary_direct": false,
+            "temporal_M_clamp": 20,
+            "reservoir_W_clamp": 10,
+            "spatial_passes": 2,
+            "native_core_unchanged": true,
+            "interleaved_short_paths": false,
+            "scene_geometry": "canonical world OBJ315 groups, originalAssimp3.3, no axis reflection",
+            "diagnostic_components": [
+              "last_surface",
+              "RR_tests",
+              "RR_survivals",
+              "reason"
+            ],
+            "diagnostic_reasons": {
+              "0": "invalid_primary",
+              "1": "miss",
+              "2": "RR",
+              "3": "max_depth"
+            },
+            "fresh_pt_sum_is_sum": true,
+            "replay_seed": "source pixel and recovered discrete8bit uniform proposal; nativeFP16 history quantization retained"
+          },
+          "r3": {
+            "profile": "kitchen_multibounce_v1",
+            "reference_mode": false,
+            "sample_offset": 20000,
+            "min_depth": 5,
+            "max_depth": 16,
+            "RR_first_after_surface": 6,
+            "RR_threshold": 1,
+            "RR_survival_cap": 0.95,
+            "RR_floor": 0,
+            "surface16_NEE_before_termination": true,
+            "primary_proposal": "uniform hemisphere",
+            "primary_direct": false,
+            "temporal_M_clamp": 20,
+            "reservoir_W_clamp": 10,
+            "spatial_passes": 2,
+            "native_core_unchanged": true,
+            "interleaved_short_paths": false,
+            "scene_geometry": "canonical world OBJ315 groups, originalAssimp3.3, no axis reflection",
+            "diagnostic_components": [
+              "last_surface",
+              "RR_tests",
+              "RR_survivals",
+              "reason"
+            ],
+            "diagnostic_reasons": {
+              "0": "invalid_primary",
+              "1": "miss",
+              "2": "RR",
+              "3": "max_depth"
+            },
+            "fresh_pt_sum_is_sum": true,
+            "replay_seed": "source pixel and recovered discrete8bit uniform proposal; nativeFP16 history quantization retained"
+          }
+        }
+      },
+      "repeats": [
+        {
+          "label": "r1",
+          "sample_offset": 0,
+          "frame_indices": [
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "frame_pattern": "../runs/reference-quality-r1-v1/raw/frame_{frame:06d}/raw_gi.bin"
+        },
+        {
+          "label": "r2",
+          "sample_offset": 10000,
+          "frame_indices": [
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "frame_pattern": "../runs/reference-quality-r2-v1/raw/frame_{frame:06d}/raw_gi.bin"
+        },
+        {
+          "label": "r3",
+          "sample_offset": 20000,
+          "frame_indices": [
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "frame_pattern": "../runs/reference-quality-r3-v1/raw/frame_{frame:06d}/raw_gi.bin"
+        }
+      ]
+    },
+    "rtxpt": {
+      "native_settings": {
+        "primary_proposal": "cosine hemisphere",
+        "note": "Fill actual runtime history/spatial/bias/resolve settings.",
+        "history": 8,
+        "age": 30,
+        "spatial_neighbors": 2,
+        "spatial_radius": 32,
+        "BASIC": true,
+        "final_visibility": true,
+        "final_MIS": false,
+        "source": "Executed runtime settings plus recorded native reuse implementation profile; only newly generated candidate path budget is matched.",
+        "actual_runtime_by_repeat": {
+          "r1": {
+            "mode": "temporalspatial",
+            "spp": 1,
+            "minimum_depth": 5,
+            "max_surface_depth": 16,
+            "first_RR_surface": 6,
+            "sun_NEE_per_secondary_surface": 1,
+            "material": "opaque_exact_Lambert_0.7",
+            "environment": "black",
+            "emission": false,
+            "history": 8,
+            "age": 30,
+            "spatial_samples": 2,
+            "radius_pixels": 32,
+            "normal_threshold": 0.6,
+            "depth_threshold": 0.1,
+            "bias": "BASIC",
+            "final_visibility": true,
+            "final_MIS": false,
+            "boiling": false,
+            "fallback": false,
+            "permutation": false,
+            "NRD": false,
+            "AA": false,
+            "jitter": false,
+            "raw": "RGBA32_FLOAT_pure_indirect_before_tonemap"
+          },
+          "r2": {
+            "mode": "temporalspatial",
+            "spp": 1,
+            "minimum_depth": 5,
+            "max_surface_depth": 16,
+            "first_RR_surface": 6,
+            "sun_NEE_per_secondary_surface": 1,
+            "material": "opaque_exact_Lambert_0.7",
+            "environment": "black",
+            "emission": false,
+            "history": 8,
+            "age": 30,
+            "spatial_samples": 2,
+            "radius_pixels": 32,
+            "normal_threshold": 0.6,
+            "depth_threshold": 0.1,
+            "bias": "BASIC",
+            "final_visibility": true,
+            "final_MIS": false,
+            "boiling": false,
+            "fallback": false,
+            "permutation": false,
+            "NRD": false,
+            "AA": false,
+            "jitter": false,
+            "raw": "RGBA32_FLOAT_pure_indirect_before_tonemap"
+          },
+          "r3": {
+            "mode": "temporalspatial",
+            "spp": 1,
+            "minimum_depth": 5,
+            "max_surface_depth": 16,
+            "first_RR_surface": 6,
+            "sun_NEE_per_secondary_surface": 1,
+            "material": "opaque_exact_Lambert_0.7",
+            "environment": "black",
+            "emission": false,
+            "history": 8,
+            "age": 30,
+            "spatial_samples": 2,
+            "radius_pixels": 32,
+            "normal_threshold": 0.6,
+            "depth_threshold": 0.1,
+            "bias": "BASIC",
+            "final_visibility": true,
+            "final_MIS": false,
+            "boiling": false,
+            "fallback": false,
+            "permutation": false,
+            "NRD": false,
+            "AA": false,
+            "jitter": false,
+            "raw": "RGBA32_FLOAT_pure_indirect_before_tonemap"
+          }
+        }
+      },
+      "repeats": [
+        {
+          "label": "r1",
+          "sample_offset": 0,
+          "frame_indices": [
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "frame_pattern": "../runs/rtxpt-quality-r1-v1/gi-frame-{frame}.rgba32f"
+        },
+        {
+          "label": "r2",
+          "sample_offset": 10000,
+          "frame_indices": [
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "frame_pattern": "../runs/rtxpt-quality-r2-v1/gi-frame-{frame}.rgba32f"
+        },
+        {
+          "label": "r3",
+          "sample_offset": 20000,
+          "frame_indices": [
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "frame_pattern": "../runs/rtxpt-quality-r3-v1/gi-frame-{frame}.rgba32f"
+        }
+      ]
+    },
+    "rtxdi": {
+      "native_settings": {
+        "primary_proposal": "cosine hemisphere",
+        "note": "Fill actual runtime history/spatial/bias/resolve settings.",
+        "history": 8,
+        "age": 30,
+        "spatial_neighbors": 2,
+        "spatial_radius": 32,
+        "BASIC": true,
+        "final_visibility": true,
+        "final_MIS": false,
+        "source": "Executed runtime settings plus recorded native reuse implementation profile; only newly generated candidate path budget is matched.",
+        "actual_runtime_by_repeat": {
+          "r1": {
+            "Corona_min5_max16_RR1_match": true,
+            "RR_order": "NEE, scatter beta*=0.7, RR, next ray; terminal surface16 NEE then stop",
+            "RR_survival": "min(0.95,maxRGB(beta_before_current_BSDF)); if beta_before_current_BSDF < 1; no lower clamp",
+            "RR_threshold": 1,
+            "boiling_filter": false,
+            "candidate_RR": true,
+            "candidate_generator": "application multibounce path tail behind native GI secondary vertex",
+            "candidate_has_multibounce_loop": true,
+            "candidate_max_secondary_interactions": 15,
+            "depth_threshold": 0.10000000149011612,
+            "fallback": false,
+            "final_MIS": false,
+            "final_read_buffer": 1,
+            "final_visibility": true,
+            "firefly_clamp": false,
+            "first_RR_after_surface_reflection": 6,
+            "first_RR_survival": 0.16807,
+            "initial_write_buffer": 0,
+            "max_history_length": 8,
+            "max_reservoir_age": 30,
+            "max_surface_reflections_including_primary": 16,
+            "min_depth_zero_based": 5,
+            "min_secondary_roughness": 0.0,
+            "normal_threshold": 0.6000000238418579,
+            "pathstats_RGBA": "last visited surface depth, RR tests, RR survivals, reason:0 invalid/1 miss/2 RR/3 max16",
+            "permutation": false,
+            "reference_estimator": "separate unpacked full path from primary, independent RNG, no GI reuse or reservoir/secondary packing",
+            "resampling_mode_enum": 3,
+            "secondary_DI_spatial_neighbors": 1,
+            "secondary_DI_spatial_reuse_enabled": false,
+            "secondary_NEE_BRDF_candidates": 0,
+            "secondary_NEE_environment_candidates_effective": 0,
+            "secondary_NEE_infinite_candidates": 1,
+            "secondary_NEE_local_candidates": 0,
+            "secondary_NEE_local_sampling_mode_enum": 0,
+            "spatial_bias_enum": 1,
+            "spatial_neighbors": 2,
+            "spatial_radius": 32.0,
+            "stock_candidate_secondary_interactions": 1,
+            "temporal_bias_enum": 1
+          },
+          "r2": {
+            "Corona_min5_max16_RR1_match": true,
+            "RR_order": "NEE, scatter beta*=0.7, RR, next ray; terminal surface16 NEE then stop",
+            "RR_survival": "min(0.95,maxRGB(beta_before_current_BSDF)); if beta_before_current_BSDF < 1; no lower clamp",
+            "RR_threshold": 1,
+            "boiling_filter": false,
+            "candidate_RR": true,
+            "candidate_generator": "application multibounce path tail behind native GI secondary vertex",
+            "candidate_has_multibounce_loop": true,
+            "candidate_max_secondary_interactions": 15,
+            "depth_threshold": 0.10000000149011612,
+            "fallback": false,
+            "final_MIS": false,
+            "final_read_buffer": 1,
+            "final_visibility": true,
+            "firefly_clamp": false,
+            "first_RR_after_surface_reflection": 6,
+            "first_RR_survival": 0.16807,
+            "initial_write_buffer": 0,
+            "max_history_length": 8,
+            "max_reservoir_age": 30,
+            "max_surface_reflections_including_primary": 16,
+            "min_depth_zero_based": 5,
+            "min_secondary_roughness": 0.0,
+            "normal_threshold": 0.6000000238418579,
+            "pathstats_RGBA": "last visited surface depth, RR tests, RR survivals, reason:0 invalid/1 miss/2 RR/3 max16",
+            "permutation": false,
+            "reference_estimator": "separate unpacked full path from primary, independent RNG, no GI reuse or reservoir/secondary packing",
+            "resampling_mode_enum": 3,
+            "secondary_DI_spatial_neighbors": 1,
+            "secondary_DI_spatial_reuse_enabled": false,
+            "secondary_NEE_BRDF_candidates": 0,
+            "secondary_NEE_environment_candidates_effective": 0,
+            "secondary_NEE_infinite_candidates": 1,
+            "secondary_NEE_local_candidates": 0,
+            "secondary_NEE_local_sampling_mode_enum": 0,
+            "spatial_bias_enum": 1,
+            "spatial_neighbors": 2,
+            "spatial_radius": 32.0,
+            "stock_candidate_secondary_interactions": 1,
+            "temporal_bias_enum": 1
+          },
+          "r3": {
+            "Corona_min5_max16_RR1_match": true,
+            "RR_order": "NEE, scatter beta*=0.7, RR, next ray; terminal surface16 NEE then stop",
+            "RR_survival": "min(0.95,maxRGB(beta_before_current_BSDF)); if beta_before_current_BSDF < 1; no lower clamp",
+            "RR_threshold": 1,
+            "boiling_filter": false,
+            "candidate_RR": true,
+            "candidate_generator": "application multibounce path tail behind native GI secondary vertex",
+            "candidate_has_multibounce_loop": true,
+            "candidate_max_secondary_interactions": 15,
+            "depth_threshold": 0.10000000149011612,
+            "fallback": false,
+            "final_MIS": false,
+            "final_read_buffer": 1,
+            "final_visibility": true,
+            "firefly_clamp": false,
+            "first_RR_after_surface_reflection": 6,
+            "first_RR_survival": 0.16807,
+            "initial_write_buffer": 0,
+            "max_history_length": 8,
+            "max_reservoir_age": 30,
+            "max_surface_reflections_including_primary": 16,
+            "min_depth_zero_based": 5,
+            "min_secondary_roughness": 0.0,
+            "normal_threshold": 0.6000000238418579,
+            "pathstats_RGBA": "last visited surface depth, RR tests, RR survivals, reason:0 invalid/1 miss/2 RR/3 max16",
+            "permutation": false,
+            "reference_estimator": "separate unpacked full path from primary, independent RNG, no GI reuse or reservoir/secondary packing",
+            "resampling_mode_enum": 3,
+            "secondary_DI_spatial_neighbors": 1,
+            "secondary_DI_spatial_reuse_enabled": false,
+            "secondary_NEE_BRDF_candidates": 0,
+            "secondary_NEE_environment_candidates_effective": 0,
+            "secondary_NEE_infinite_candidates": 1,
+            "secondary_NEE_local_candidates": 0,
+            "secondary_NEE_local_sampling_mode_enum": 0,
+            "spatial_bias_enum": 1,
+            "spatial_neighbors": 2,
+            "spatial_radius": 32.0,
+            "stock_candidate_secondary_interactions": 1,
+            "temporal_bias_enum": 1
+          }
+        }
+      },
+      "repeats": [
+        {
+          "label": "r1",
+          "sample_offset": 0,
+          "frame_indices": [
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "frame_pattern": "../runs/rtxdi-quality-r1-v1/capture.frame{frame}.rgba32f"
+        },
+        {
+          "label": "r2",
+          "sample_offset": 10000,
+          "frame_indices": [
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "frame_pattern": "../runs/rtxdi-quality-r2-v1/capture.frame{frame}.rgba32f"
+        },
+        {
+          "label": "r3",
+          "sample_offset": 20000,
+          "frame_indices": [
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "frame_pattern": "../runs/rtxdi-quality-r3-v1/capture.frame{frame}.rgba32f"
+        }
+      ]
+    },
+    "corona_port": {
+      "native_settings": {
+        "primary_proposal": "uniform hemisphere",
+        "note": "Fill actual runtime port controls. They differ from RTX native settings.",
+        "spatial_pass_proposals": [
+          8,
+          5
+        ],
+        "temporal_sources": 5,
+        "M_clamp": 20,
+        "W_clamp": 10,
+        "resolve_taps": 4,
+        "validation": "history and frame modulo3==0; full fresh candidate generated every frame",
+        "source": "Executed runtime settings plus recorded native reuse implementation profile; only newly generated candidate path budget is matched.",
+        "actual_runtime_by_repeat": {
+          "r1": {
+            "direct": {
+              "M_bsdf": 0,
+              "M_light": 1,
+              "diffuse_factor": 0.30000001192092896,
+              "max_age": 30,
+              "max_recursion": 1,
+              "open": true,
+              "pairwise": true,
+              "spatial": {
+                "depth": 0.10000000149011612,
+                "open": false,
+                "radius": 30,
+                "sample_num": 1,
+                "theta": 35
+              },
+              "temporal": {
+                "depth": 0.10000000149011612,
+                "history_limit": 20,
+                "open": false,
+                "radius": 0,
+                "theta": 35
+              }
+            },
+            "indirect": {
+              "diffuse_factor": 0.30000001192092896,
+              "max_age": 30,
+              "open": true,
+              "spatial": {
+                "depth": 0.30000001192092896,
+                "open": true,
+                "radius": 12,
+                "sample_num": 2,
+                "theta": 35
+              },
+              "temporal": {
+                "depth": 0.30000001192092896,
+                "history_limit": 5,
+                "open": true,
+                "radius": 0,
+                "theta": 35
+              }
+            },
+            "max_depth": 16,
+            "min_depth": 5,
+            "rr_threshold": 1
+          },
+          "r2": {
+            "direct": {
+              "M_bsdf": 0,
+              "M_light": 1,
+              "diffuse_factor": 0.30000001192092896,
+              "max_age": 30,
+              "max_recursion": 1,
+              "open": true,
+              "pairwise": true,
+              "spatial": {
+                "depth": 0.10000000149011612,
+                "open": false,
+                "radius": 30,
+                "sample_num": 1,
+                "theta": 35
+              },
+              "temporal": {
+                "depth": 0.10000000149011612,
+                "history_limit": 20,
+                "open": false,
+                "radius": 0,
+                "theta": 35
+              }
+            },
+            "indirect": {
+              "diffuse_factor": 0.30000001192092896,
+              "max_age": 30,
+              "open": true,
+              "spatial": {
+                "depth": 0.30000001192092896,
+                "open": true,
+                "radius": 12,
+                "sample_num": 2,
+                "theta": 35
+              },
+              "temporal": {
+                "depth": 0.30000001192092896,
+                "history_limit": 5,
+                "open": true,
+                "radius": 0,
+                "theta": 35
+              }
+            },
+            "max_depth": 16,
+            "min_depth": 5,
+            "rr_threshold": 1
+          },
+          "r3": {
+            "direct": {
+              "M_bsdf": 0,
+              "M_light": 1,
+              "diffuse_factor": 0.30000001192092896,
+              "max_age": 30,
+              "max_recursion": 1,
+              "open": true,
+              "pairwise": true,
+              "spatial": {
+                "depth": 0.10000000149011612,
+                "open": false,
+                "radius": 30,
+                "sample_num": 1,
+                "theta": 35
+              },
+              "temporal": {
+                "depth": 0.10000000149011612,
+                "history_limit": 20,
+                "open": false,
+                "radius": 0,
+                "theta": 35
+              }
+            },
+            "indirect": {
+              "diffuse_factor": 0.30000001192092896,
+              "max_age": 30,
+              "open": true,
+              "spatial": {
+                "depth": 0.30000001192092896,
+                "open": true,
+                "radius": 12,
+                "sample_num": 2,
+                "theta": 35
+              },
+              "temporal": {
+                "depth": 0.30000001192092896,
+                "history_limit": 5,
+                "open": true,
+                "radius": 0,
+                "theta": 35
+              }
+            },
+            "max_depth": 16,
+            "min_depth": 5,
+            "rr_threshold": 1
+          }
+        }
+      },
+      "repeats": [
+        {
+          "label": "r1",
+          "sample_offset": 0,
+          "frame_indices": [
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "frame_pattern": "../runs/corona-port-quality-r1-seedstreams-v1/raw/frame_{frame:04d}/raw_indirect.f32"
+        },
+        {
+          "label": "r2",
+          "sample_offset": 10000,
+          "frame_indices": [
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "frame_pattern": "../runs/corona-port-quality-r2-seedstreams-v1/raw/frame_{frame:04d}/raw_indirect.f32"
+        },
+        {
+          "label": "r3",
+          "sample_offset": 20000,
+          "frame_indices": [
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "frame_pattern": "../runs/corona-port-quality-r3-seedstreams-v1/raw/frame_{frame:04d}/raw_indirect.f32"
+        }
+      ]
+    }
+  },
+  "timing": {
+    "original": {
+      "profile": "original",
+      "repeats": [
+        {
+          "label": "r1",
+          "csv": "../runs/reference-timing-r1-v1/gpu-kernels.csv",
+          "warmup": 120,
+          "measured": 240,
+          "raw_capture_disabled": true,
+          "evidence": [],
+          "full_gpu_csv": "../runs/reference-timing-r1-v1/gpu-frames.csv"
+        },
+        {
+          "label": "r2",
+          "csv": "../runs/reference-timing-r2-v1/gpu-kernels.csv",
+          "warmup": 120,
+          "measured": 240,
+          "raw_capture_disabled": true,
+          "evidence": [],
+          "full_gpu_csv": "../runs/reference-timing-r2-v1/gpu-frames.csv"
+        },
+        {
+          "label": "r3",
+          "csv": "../runs/reference-timing-r3-v1/gpu-kernels.csv",
+          "warmup": 120,
+          "measured": 240,
+          "raw_capture_disabled": true,
+          "evidence": [],
+          "full_gpu_csv": "../runs/reference-timing-r3-v1/gpu-frames.csv"
+        }
+      ]
+    },
+    "rtxpt": {
+      "profile": "rtxpt",
+      "repeats": [
+        {
+          "label": "r1",
+          "csv": "../runs/rtxpt-timing-r1-v1/gpu.csv",
+          "warmup": 120,
+          "measured": 240,
+          "raw_capture_disabled": true,
+          "evidence": []
+        },
+        {
+          "label": "r2",
+          "csv": "../runs/rtxpt-timing-r2-v1/gpu.csv",
+          "warmup": 120,
+          "measured": 240,
+          "raw_capture_disabled": true,
+          "evidence": []
+        },
+        {
+          "label": "r3",
+          "csv": "../runs/rtxpt-timing-r3-v1/gpu.csv",
+          "warmup": 120,
+          "measured": 240,
+          "raw_capture_disabled": true,
+          "evidence": []
+        }
+      ]
+    },
+    "rtxdi": {
+      "profile": "rtxdi",
+      "repeats": [
+        {
+          "label": "r1",
+          "csv": "../runs/rtxdi-timing-r1-v1/capture.gpu.csv",
+          "warmup": 120,
+          "measured": 240,
+          "raw_capture_disabled": true,
+          "evidence": []
+        },
+        {
+          "label": "r2",
+          "csv": "../runs/rtxdi-timing-r2-v1/capture.gpu.csv",
+          "warmup": 120,
+          "measured": 240,
+          "raw_capture_disabled": true,
+          "evidence": []
+        },
+        {
+          "label": "r3",
+          "csv": "../runs/rtxdi-timing-r3-v1/capture.gpu.csv",
+          "warmup": 120,
+          "measured": 240,
+          "raw_capture_disabled": true,
+          "evidence": []
+        }
+      ]
+    },
+    "corona_port": {
+      "profile": "corona",
+      "repeats": [
+        {
+          "label": "r1",
+          "csv": "../runs/corona-port-timing-r1-seedstreams-v1/result.json",
+          "warmup": 120,
+          "measured": 240,
+          "raw_capture_disabled": true,
+          "evidence": []
+        },
+        {
+          "label": "r2",
+          "csv": "../runs/corona-port-timing-r2-seedstreams-v1/result.json",
+          "warmup": 120,
+          "measured": 240,
+          "raw_capture_disabled": true,
+          "evidence": []
+        },
+        {
+          "label": "r3",
+          "csv": "../runs/corona-port-timing-r3-seedstreams-v1/result.json",
+          "warmup": 120,
+          "measured": 240,
+          "raw_capture_disabled": true,
+          "evidence": []
+        }
+      ]
+    }
+  },
+  "exclusions": [
+    {
+      "run": "../runs/corona-port-pilot-v1",
+      "reason": "Old max_depth2 gate selected silent native fallback; wrong route."
+    },
+    {
+      "run": "../runs/corona-port-pilot-v2",
+      "reason": "Candidate sun used canonical negativeZ in internal Z-reflected world; pending corrected rerun."
+    },
+    {
+      "run": "../runs/corona-port-quality-r2-v1",
+      "reason": "Pre-render asset-load startup crash in Windows ngcksp.dll, exceptionC0000409; no frames. Preserved, replaced bysame-offset r2-v2. No renderer/scene mutation.",
+      "evidence": "../../../tmp/rtxgi-multibounce-20261107/corona-startup-failure-event.xml"
+    },
+    {
+      "run": "../runs/corona-port-quality-r1-v1",
+      "reason": "Superseded by coherent replay-seed-corrected refreeze; nonzero-offset suffix seed reconstruction was inconsistent. Offset0 also rerun for common build identity.",
+      "evidence": "corona-offset-replay-diagnosis-v1.json"
+    },
+    {
+      "run": "../runs/corona-port-quality-r2-v2",
+      "reason": "Superseded by coherent replay-seed-corrected refreeze; nonzero-offset suffix seed reconstruction was inconsistent. Offset0 also rerun for common build identity.",
+      "evidence": "corona-offset-replay-diagnosis-v1.json"
+    },
+    {
+      "run": "../runs/corona-port-quality-r3-v1",
+      "reason": "Superseded by coherent replay-seed-corrected refreeze; nonzero-offset suffix seed reconstruction was inconsistent. Offset0 also rerun for common build identity.",
+      "evidence": "corona-offset-replay-diagnosis-v1.json"
+    },
+    {
+      "run": "../runs/corona-port-timing-r1-v1",
+      "reason": "Superseded by coherent replay-seed-corrected refreeze; nonzero-offset suffix seed reconstruction was inconsistent. Offset0 also rerun for common build identity.",
+      "evidence": "corona-offset-replay-diagnosis-v1.json"
+    },
+    {
+      "run": "../runs/corona-port-timing-r2-v1",
+      "reason": "Superseded by coherent replay-seed-corrected refreeze; nonzero-offset suffix seed reconstruction was inconsistent. Offset0 also rerun for common build identity.",
+      "evidence": "corona-offset-replay-diagnosis-v1.json"
+    },
+    {
+      "run": "../runs/corona-port-timing-r3-v1",
+      "reason": "Superseded by coherent replay-seed-corrected refreeze; nonzero-offset suffix seed reconstruction was inconsistent. Offset0 also rerun for common build identity.",
+      "evidence": "corona-offset-replay-diagnosis-v1.json"
+    },
+    {
+      "run": "../runs/corona-port-quality-r1-replayfix-v1",
+      "reason": "Superseded: suffix replay key corrected, but candidate-only random-frame offset changed native cross-pass RNG correlations. Replaced by coherent all-stream sampling-offset refreeze.",
+      "evidence": "corona-offset-replay-diagnosis-v1.json"
+    },
+    {
+      "run": "../runs/corona-port-quality-r2-replayfix-v1",
+      "reason": "Superseded: suffix replay key corrected, but candidate-only random-frame offset changed native cross-pass RNG correlations. Replaced by coherent all-stream sampling-offset refreeze.",
+      "evidence": "corona-offset-replay-diagnosis-v1.json"
+    },
+    {
+      "run": "../runs/corona-port-quality-r3-replayfix-v1",
+      "reason": "Superseded: suffix replay key corrected, but candidate-only random-frame offset changed native cross-pass RNG correlations. Replaced by coherent all-stream sampling-offset refreeze.",
+      "evidence": "corona-offset-replay-diagnosis-v1.json"
+    },
+    {
+      "run": "../runs/corona-port-timing-r1-replayfix-v1",
+      "reason": "Superseded: suffix replay key corrected, but candidate-only random-frame offset changed native cross-pass RNG correlations. Replaced by coherent all-stream sampling-offset refreeze.",
+      "evidence": "corona-offset-replay-diagnosis-v1.json"
+    },
+    {
+      "run": "../runs/corona-port-timing-r2-replayfix-v1",
+      "reason": "Superseded: suffix replay key corrected, but candidate-only random-frame offset changed native cross-pass RNG correlations. Replaced by coherent all-stream sampling-offset refreeze.",
+      "evidence": "corona-offset-replay-diagnosis-v1.json"
+    },
+    {
+      "run": "../runs/corona-port-timing-r3-replayfix-v1",
+      "reason": "Superseded: suffix replay key corrected, but candidate-only random-frame offset changed native cross-pass RNG correlations. Replaced by coherent all-stream sampling-offset refreeze.",
+      "evidence": "corona-offset-replay-diagnosis-v1.json"
+    },
+    {
+      "run": "../runs/corona-port-quality-r3-replayfix-v1",
+      "reason": "Pre-render ngcksp.dll C0000409/WinError10054 during assetload; no frames. Also superseded by joint-stream offset correction.",
+      "evidence": "../runs/corona-port-quality-r3-replayfix-v1/result.json"
+    }
+  ],
+  "corona_sampling_offset_requirement": "All native shader RNG streams share random_frame=logical_frame+sample_offset; history/parity and validation scheduling retain logical_frame.",
+  "execution_status": "all_selected_runs_executed_and_audited",
+  "selected_process_counts": {
+    "quality": 12,
+    "timing": 12,
+    "independent_reference_halves": 8
+  },
+  "implementation_labels": {
+    "original": "Original ReSTIR GI full-resolution controlled multibounce adaptation",
+    "rtxpt": "RTXPT native ReSTIR GI with application multibounce candidate",
+    "rtxdi": "RTXDI native ReSTIR GI with application multibounce candidate",
+    "corona_port": "Current Corona ReSTIR GI port, explicit multibounce route"
+  },
+  "original_baseline_scope": "Frozen reuse shaders match the prior full-resolution controlled baseline; upstream resolution indexing/radii/AO guide differ. Reservoir merge/Jacobian/clamp formulas retained; not all upstream source/weights are claimed unchanged.",
+  "executed_evidence": {
+    "reference-acceptance-v1.json": {
+      "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\reference-acceptance-v1.json",
+      "sha256": "db455adce9748629b95e2758d7a884803d59860f987dec84f2e8a84de7ece8f3"
+    },
+    "quality-run-audit-seedstreams-v1.json": {
+      "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\quality-run-audit-seedstreams-v1.json",
+      "sha256": "10ad1b445b4ce4e9a042d62d4f7355619ed3321c4451352a6aa3bdb082079b56"
+    },
+    "timing-run-audit-seedstreams-v1.json": {
+      "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\timing-run-audit-seedstreams-v1.json",
+      "sha256": "53402c8caa8ed47027821de0459764ed46a87174302ae0de7a9230785b48d4cd"
+    },
+    "corona-seed-stream-regression-v1.json": {
+      "path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\corona-seed-stream-regression-v1.json",
+      "sha256": "7af3e0ffcecd677e68388a72b6dfd0f5102692b360550ec386cdf17ada438f8d"
+    }
+  },
+  "corona_final_source_hashes": {
+    "D:\\work\\corona\\CoronaEngine\\vision\\src\\render_core\\integrator\\restir_gi_experiment.h": "402d272b0e63b09dcf596d8058ae39abf02cb8728ab84eef259103de1daa2085",
+    "D:\\work\\corona\\CoronaEngine\\vision\\src\\render_core\\integrator\\restir_gi\\literal.h": "d61b3592dad41ae9404378c608168562c562aff4f120288dd6c5ea5004d7d17f",
+    "D:\\work\\corona\\CoronaEngine\\vision\\src\\base\\integral\\integrator.cpp": "7fc0e614ddf3561f11453fe413daf8c26e5ebd3729d8d264f60129fbbfbf7d42"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "status": "pass",
+  "command": [
+    "C:\\Users\\Zero\\miniforge3\\envs\\coronaengine-dev\\python.exe",
+    "-B",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\analysis",
+    "-p",
+    "test_native_analysis.py",
+    "-v"
+  ],
+  "exit_code": 0,
+  "test_count": 9,
+  "stdout": "",
+  "stderr": "test_actual_profile_accepts_float32_readback (test_native_analysis.NativeAnalysisTests.test_actual_profile_accepts_float32_readback) ... ok\ntest_duplicate_frame_is_not_an_independent_sample (test_native_analysis.NativeAnalysisTests.test_duplicate_frame_is_not_an_independent_sample) ... ok\ntest_duplicate_gi_dispatch_cannot_be_silently_summed (test_native_analysis.NativeAnalysisTests.test_duplicate_gi_dispatch_cannot_be_silently_summed) ... ok\ntest_invalid_gpu_timestamp_rejected (test_native_analysis.NativeAnalysisTests.test_invalid_gpu_timestamp_rejected) ... ok\ntest_missing_fused_spatial_resolve_is_rejected (test_native_analysis.NativeAnalysisTests.test_missing_fused_spatial_resolve_is_rejected) ... ok\ntest_pooled_noise_has_93_within_repeat_degrees_of_freedom (test_native_analysis.NativeAnalysisTests.test_pooled_noise_has_93_within_repeat_degrees_of_freedom) ... ok\ntest_port_route_events_are_rejected (test_native_analysis.NativeAnalysisTests.test_port_route_events_are_rejected) ... ok\ntest_three_gi_dispatches_and_geometry_plus_fused_candidate_producer (test_native_analysis.NativeAnalysisTests.test_three_gi_dispatches_and_geometry_plus_fused_candidate_producer) ... ok\ntest_unmatched_native_reuse_or_candidate_budget_is_rejected (test_native_analysis.NativeAnalysisTests.test_unmatched_native_reuse_or_candidate_budget_is_rejected) ... ok\n\n----------------------------------------------------------------------\nRan 9 tests in 0.015s\n\nOK\n"
+}

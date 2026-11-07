@@ -1,0 +1,39 @@
+{
+  "executable": "D:\\work\\corona\\CoronaEngine\\.workspace\\cache\\rtxpt-mainloop-wall-20261107\\rtxpt\\bin\\Rtxpt.exe",
+  "args": [
+    "--scene",
+    "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\shared-scene\\kitchen.scene.json",
+    "--width",
+    "1920",
+    "--height",
+    "1080",
+    "--nonInteractive"
+  ],
+  "env": {
+    "RESTIR_REPO_BENCH_OUTPUT": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r2-v1",
+    "RESTIR_REPO_BENCH_FRAMES": 368,
+    "RESTIR_REPO_BENCH_INTERVAL_MS": 0,
+    "RESTIR_GI_MODE": "temporalspatial",
+    "RESTIR_GI_CAPTURE": "none",
+    "RESTIR_GI_SAMPLE_OFFSET": 10000,
+    "RESTIR_MAINLOOP_WALL": "1"
+  },
+  "output": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxpt-mainloop-wall-20261107\\runs\\rtxpt-loop-r2-v1",
+  "timeout_seconds": 1800,
+  "experiment": {
+    "renderer": "rtxpt",
+    "label": "loop-r2",
+    "mode": "temporalspatial",
+    "frames": 240,
+    "warmup": 120,
+    "sample_offset": 0,
+    "scene_contract": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\scene_contract.json",
+    "total_frames": 368,
+    "measured_frames": [
+      120,
+      359
+    ],
+    "terminal_frame_excluded": 367,
+    "mainloop_boundary": "Donut RunMessageLoop top through AnimateRenderPresent return"
+  }
+}

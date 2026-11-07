@@ -1,0 +1,1254 @@
+{
+  "schema": "four-way-multibounce-pilot-acceptance.v1",
+  "status": "pass_with_diagnostic_convention_note",
+  "scope": "RTXPT and RTXDI four-frame no-reuse pilots only; no source/build/GPU mutation",
+  "guides": {
+    "rtxpt_valid_primary": 2026259,
+    "rtxdi_valid_primary": 2026260,
+    "validity_mismatch_pixels": 1,
+    "common_valid_pixels": 2026259,
+    "position_distance_m_percentiles_p50_p95_p99_p999_max": [
+      6.373193555203322e-07,
+      2.0390103439208657e-06,
+      3.216442480857859e-06,
+      4.623107774177865e-06,
+      0.00032761353578425446
+    ],
+    "positions_within_1mm_fraction": 1.0,
+    "normal_dot_percentiles_min_p01_p1_p50": [
+      0.0,
+      0.9999946593132781,
+      0.9999987577315342,
+      1.0
+    ],
+    "normal_dot_above_0999_fraction": 0.9999935842357763,
+    "prior_final_input_guides_byte_identical": {
+      "rtxpt_position": true,
+      "rtxpt_normal": true,
+      "rtxdi_position": true,
+      "rtxdi_normal": true
+    }
+  },
+  "renderers": {
+    "rtxpt": {
+      "frames": [
+        {
+          "frame": 0,
+          "path": {
+            "file": "runs\\rtxpt-pilot-none-v1\\gi-diagnostic-frame-0.rgba32f",
+            "sha256": "8f6a35614a8984c05b0be9c34785b7b42ac526fca32a9b9bb4cf8ce5a87fd47a",
+            "last_depth_histogram": [
+              47375,
+              13646,
+              18046,
+              18471,
+              18760,
+              18646,
+              1616086,
+              99068,
+              68260,
+              47500,
+              32855,
+              23056,
+              15926,
+              10847,
+              7735,
+              5322,
+              12001
+            ],
+            "termination_histogram": [
+              0,
+              144518,
+              1917081,
+              12001
+            ],
+            "RR_tests": 2952716,
+            "RR_survivals": 1035635,
+            "first_RR_tests": 1938656,
+            "first_RR_survivals": 325641,
+            "empirical_first_RR_survival": 0.1679725541818662,
+            "expected_first_RR_survival": 0.16807,
+            "later_RR_tests": 1014060,
+            "later_RR_survivals": 709994,
+            "empirical_later_RR_survival": 0.7001498925112912,
+            "expected_later_RR_survival": 0.7,
+            "malformed_records": 0,
+            "RR_count_mismatches": 0,
+            "RR_before_surface6": 0,
+            "RR_terminal_malformed": 0,
+            "max16_terminal_malformed": 0,
+            "invalid_primary_not_reason0": 47341,
+            "valid_primary_with_depth0": 34,
+            "max_depth_observed": 16,
+            "paths_reaching16": 12001,
+            "mean_last_visited_surface_depth_valid_primary": 6.381917612704003,
+            "visited_secondary_vertices_total": 10905193,
+            "mean_visited_secondary_vertices_per_valid_primary": 5.381934392395049,
+            "reconstructed_scatter_rays_total": 11002336,
+            "mean_reconstructed_scatter_rays_per_valid_primary": 5.429876437316256,
+            "work_note": "secondary vertices equal sun-NEE evaluation attempts at surfaces2..lastDepth; scatter-ray count reconstructed from terminal depth/reason, excluding camera ray and any native reconnect visibility rays"
+          },
+          "native": {
+            "file": "runs\\rtxpt-pilot-none-v1\\gi-frame-0.rgba32f",
+            "sha256": "b71be5ef30107e3f4b7aeb5f756a5885de986c9a4a8f81a9d2bc5e8b8978e27d",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.0052747948087343765,
+              0.005277215618010289,
+              0.005269461374312965
+            ],
+            "whole_frame_scalar_RGB_mean": 0.005273823933685876,
+            "valid_primary_RGB_mean": [
+              0.0053980337732696575,
+              0.005400511141717882,
+              0.0053925757298427125
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.6265557408332825,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.04869900345802307,
+              0.09851956486701965,
+              0.17334694613516527,
+              0.6261530518531799
+            ],
+            "alpha_values": [
+              1.0
+            ]
+          },
+          "fresh": {
+            "file": "runs\\rtxpt-pilot-none-v1\\gi-fresh-frame-0.rgba32f",
+            "sha256": "2678b4adf56a280d2c4ab2c93995ef02a9c6b0d2c6b5afc5f42a158d7be05583",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.005280901273483535,
+              0.005280901273483535,
+              0.005280901273483535
+            ],
+            "whole_frame_scalar_RGB_mean": 0.005280901273483475,
+            "valid_primary_RGB_mean": [
+              0.005404282907908346,
+              0.005404282907908346,
+              0.005404282907908346
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.627774178981781,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.04882687330245972,
+              0.09864547103643417,
+              0.1736842542886734,
+              0.627774178981781
+            ],
+            "alpha_values": [
+              1.0
+            ]
+          },
+          "captured_JSON_histograms_match_raw_RGBA": true
+        },
+        {
+          "frame": 1,
+          "path": {
+            "file": "runs\\rtxpt-pilot-none-v1\\gi-diagnostic-frame-1.rgba32f",
+            "sha256": "5675ac231fc13ab0077db7c1d81a4207998554c1f4cc435176a42bd731e6c56a",
+            "last_depth_histogram": [
+              47375,
+              13533,
+              18166,
+              18679,
+              18893,
+              18394,
+              1615502,
+              99084,
+              68501,
+              47421,
+              33060,
+              23079,
+              15860,
+              11129,
+              7666,
+              5271,
+              11987
+            ],
+            "termination_histogram": [
+              0,
+              144805,
+              1916808,
+              11987
+            ],
+            "RR_tests": 2954257,
+            "RR_survivals": 1037449,
+            "first_RR_tests": 1938560,
+            "first_RR_survivals": 326140,
+            "empirical_first_RR_survival": 0.16823827996038296,
+            "expected_first_RR_survival": 0.16807,
+            "later_RR_tests": 1015697,
+            "later_RR_survivals": 711309,
+            "empirical_later_RR_survival": 0.7003161375882768,
+            "expected_later_RR_survival": 0.7,
+            "malformed_records": 0,
+            "RR_count_mismatches": 0,
+            "RR_before_surface6": 0,
+            "RR_terminal_malformed": 0,
+            "max16_terminal_malformed": 0,
+            "invalid_primary_not_reason0": 47341,
+            "valid_primary_with_depth0": 34,
+            "max_depth_observed": 16,
+            "paths_reaching16": 11987,
+            "mean_last_visited_surface_depth_valid_primary": 6.3824456794516395,
+            "visited_secondary_vertices_total": 10906263,
+            "mean_visited_secondary_vertices_per_valid_primary": 5.382462459142686,
+            "reconstructed_scatter_rays_total": 11003693,
+            "mean_reconstructed_scatter_rays_per_valid_primary": 5.4305461443971375,
+            "work_note": "secondary vertices equal sun-NEE evaluation attempts at surfaces2..lastDepth; scatter-ray count reconstructed from terminal depth/reason, excluding camera ray and any native reconnect visibility rays"
+          },
+          "native": {
+            "file": "runs\\rtxpt-pilot-none-v1\\gi-frame-1.rgba32f",
+            "sha256": "68ab44b0ec815e2ee98a8d8c4986c0ff1de09e923fc42cfd05dc2e20c50b3265",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.0053239914092968405,
+              0.005326434793190793,
+              0.005318608227538211
+            ],
+            "whole_frame_scalar_RGB_mean": 0.005323011476675276,
+            "valid_primary_RGB_mean": [
+              0.005448379790697008,
+              0.005450880261190909,
+              0.005442870837648709
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.5337370038032532,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.048712850175797934,
+              0.09917346499860312,
+              0.17419323238730494,
+              0.5333940386772156
+            ],
+            "alpha_values": [
+              1.0
+            ]
+          },
+          "fresh": {
+            "file": "runs\\rtxpt-pilot-none-v1\\gi-fresh-frame-1.rgba32f",
+            "sha256": "6aa56794e7d7c3cfeca239ab29f0b64be13f7026f3803833cc0c12cc776d5dc4",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.005330097536353121,
+              0.005330097536353121,
+              0.005330097536353121
+            ],
+            "whole_frame_scalar_RGB_mean": 0.005330097536353071,
+            "valid_primary_RGB_mean": [
+              0.005454628579753049,
+              0.005454628579753049,
+              0.005454628579753049
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.536119282245636,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.04882687330245972,
+              0.09877679497003555,
+              0.17392571470142557,
+              0.536119282245636
+            ],
+            "alpha_values": [
+              1.0
+            ]
+          },
+          "captured_JSON_histograms_match_raw_RGBA": true
+        },
+        {
+          "frame": 2,
+          "path": {
+            "file": "runs\\rtxpt-pilot-none-v1\\gi-diagnostic-frame-2.rgba32f",
+            "sha256": "8318e1d5105438fb97224c41a0c461ddf44e8354d1832552b7e4e51355635ca8",
+            "last_depth_histogram": [
+              47375,
+              13737,
+              17989,
+              18695,
+              18542,
+              18504,
+              1616249,
+              99048,
+              68958,
+              47241,
+              32817,
+              22756,
+              15881,
+              10837,
+              7646,
+              5221,
+              12104
+            ],
+            "termination_histogram": [
+              0,
+              144576,
+              1916920,
+              12104
+            ],
+            "RR_tests": 2950731,
+            "RR_survivals": 1033811,
+            "first_RR_tests": 1938758,
+            "first_RR_survivals": 325646,
+            "empirical_first_RR_survival": 0.1679662959482308,
+            "expected_first_RR_survival": 0.16807,
+            "later_RR_tests": 1011973,
+            "later_RR_survivals": 708165,
+            "empirical_later_RR_survival": 0.6997864567532929,
+            "expected_later_RR_survival": 0.7,
+            "malformed_records": 0,
+            "RR_count_mismatches": 0,
+            "RR_before_surface6": 0,
+            "RR_terminal_malformed": 0,
+            "max16_terminal_malformed": 0,
+            "invalid_primary_not_reason0": 47341,
+            "valid_primary_with_depth0": 34,
+            "max_depth_observed": 16,
+            "paths_reaching16": 12104,
+            "mean_last_visited_surface_depth_valid_primary": 6.380780048355121,
+            "visited_secondary_vertices_total": 10902888,
+            "mean_visited_secondary_vertices_per_valid_primary": 5.380796828046168,
+            "reconstructed_scatter_rays_total": 11000089,
+            "mean_reconstructed_scatter_rays_per_valid_primary": 5.428767497146219,
+            "work_note": "secondary vertices equal sun-NEE evaluation attempts at surfaces2..lastDepth; scatter-ray count reconstructed from terminal depth/reason, excluding camera ray and any native reconnect visibility rays"
+          },
+          "native": {
+            "file": "runs\\rtxpt-pilot-none-v1\\gi-frame-2.rgba32f",
+            "sha256": "e11e19d2e6ae6a7324e3b49e89cbabf71009788cad3a7cdeddc92d9c8b30620e",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.005289444182815143,
+              0.005291871710474965,
+              0.005284095931090297
+            ],
+            "whole_frame_scalar_RGB_mean": 0.005288470608126806,
+            "valid_primary_RGB_mean": [
+              0.005413025411601123,
+              0.005415509655399871,
+              0.005407552204683034
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.5581739544868469,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.048703473433852194,
+              0.09869737088680276,
+              0.17326761451363826,
+              0.5578151345252991
+            ],
+            "alpha_values": [
+              1.0
+            ]
+          },
+          "fresh": {
+            "file": "runs\\rtxpt-pilot-none-v1\\gi-fresh-frame-2.rgba32f",
+            "sha256": "74f24c2d33e68d6bb51a278386b26e77cdf118b5a9b868c4c64a2e74fcf9b9b2",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.005295503143236562,
+              0.005295503143236562,
+              0.005295503143236562
+            ],
+            "whole_frame_scalar_RGB_mean": 0.00529550314323651,
+            "valid_primary_RGB_mean": [
+              0.00541922593203304,
+              0.00541922593203304,
+              0.00541922593203304
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.5597285628318787,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.04882687330245972,
+              0.09866037964820862,
+              0.17368188612163102,
+              0.5597285628318787
+            ],
+            "alpha_values": [
+              1.0
+            ]
+          },
+          "captured_JSON_histograms_match_raw_RGBA": true
+        },
+        {
+          "frame": 3,
+          "path": {
+            "file": "runs\\rtxpt-pilot-none-v1\\gi-diagnostic-frame-3.rgba32f",
+            "sha256": "15807605f5662540b86340f8588bfe50e1f332164f070dd02ce6ed33552b8f20",
+            "last_depth_histogram": [
+              47375,
+              13856,
+              18287,
+              18606,
+              18884,
+              18562,
+              1615479,
+              98866,
+              68742,
+              47433,
+              32815,
+              22939,
+              15680,
+              11012,
+              7609,
+              5311,
+              12144
+            ],
+            "termination_histogram": [
+              1,
+              145280,
+              1916175,
+              12144
+            ],
+            "RR_tests": 2951765,
+            "RR_survivals": 1035590,
+            "first_RR_tests": 1938030,
+            "first_RR_survivals": 325633,
+            "empirical_first_RR_survival": 0.1680226828274072,
+            "expected_first_RR_survival": 0.16807,
+            "later_RR_tests": 1013735,
+            "later_RR_survivals": 709957,
+            "empirical_later_RR_survival": 0.7003378594997707,
+            "expected_later_RR_survival": 0.7,
+            "malformed_records": 0,
+            "RR_count_mismatches": 0,
+            "RR_before_surface6": 0,
+            "RR_terminal_malformed": 0,
+            "max16_terminal_malformed": 0,
+            "invalid_primary_not_reason0": 47341,
+            "valid_primary_with_depth0": 34,
+            "max_depth_observed": 16,
+            "paths_reaching16": 12144,
+            "mean_last_visited_surface_depth_valid_primary": 6.38055302900567,
+            "visited_secondary_vertices_total": 10902428,
+            "mean_visited_secondary_vertices_per_valid_primary": 5.380569808696716,
+            "reconstructed_scatter_rays_total": 11000333,
+            "mean_reconstructed_scatter_rays_per_valid_primary": 5.428887916105493,
+            "work_note": "secondary vertices equal sun-NEE evaluation attempts at surfaces2..lastDepth; scatter-ray count reconstructed from terminal depth/reason, excluding camera ray and any native reconnect visibility rays"
+          },
+          "native": {
+            "file": "runs\\rtxpt-pilot-none-v1\\gi-frame-3.rgba32f",
+            "sha256": "9d7c0fd29c593e13e5d2007f09dd8d3c419c56e18032b5cec36ba2772b74aebb",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.005314040215115812,
+              0.0053164790370184845,
+              0.005308667099443225
+            ],
+            "whole_frame_scalar_RGB_mean": 0.00531306211719251,
+            "valid_primary_RGB_mean": [
+              0.005438196099345714,
+              0.00544069190126313,
+              0.0054326974475649315
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.8871690630912781,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.048710646666586394,
+              0.09862729668617248,
+              0.17349999848008157,
+              0.8865988254547119
+            ],
+            "alpha_values": [
+              1.0
+            ]
+          },
+          "fresh": {
+            "file": "runs\\rtxpt-pilot-none-v1\\gi-fresh-frame-3.rgba32f",
+            "sha256": "0a2003866baec1c3bc6dcba8e79b67dff46f5201f057566fb14f86638a056dc8",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.005319811076531061,
+              0.005319811076531061,
+              0.005319811076531061
+            ],
+            "whole_frame_scalar_RGB_mean": 0.005319811076531,
+            "valid_primary_RGB_mean": [
+              0.005444101789699543,
+              0.005444101789699543,
+              0.005444101789699543
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.5918887257575989,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.04882687330245972,
+              0.09866037964820862,
+              0.1736842840909958,
+              0.5918887257575989
+            ],
+            "alpha_values": [
+              1.0
+            ]
+          },
+          "captured_JSON_histograms_match_raw_RGBA": true
+        }
+      ],
+      "four_frame_whole_frame_fresh_scalar_mean": 0.005306578257401014,
+      "four_frame_whole_frame_native_scalar_mean": 0.005299592033920117,
+      "mean_visited_secondary_vertices_per_valid_primary": 5.381440872070155,
+      "mean_reconstructed_scatter_rays_per_valid_primary": 5.429519498741277,
+      "launch_exit_code": 0
+    },
+    "rtxdi": {
+      "frames": [
+        {
+          "frame": 0,
+          "path": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.pathstats.frame0.rgba32f",
+            "sha256": "717a72f1c8601719c966b614f9b7c7cdf75d4e2d7489cf96f39292a9126f6147",
+            "last_depth_histogram": [
+              47340,
+              13642,
+              18153,
+              18622,
+              18581,
+              18538,
+              1616895,
+              98620,
+              68399,
+              47516,
+              32556,
+              22805,
+              16055,
+              11003,
+              7693,
+              5270,
+              11912
+            ],
+            "termination_histogram": [
+              47340,
+              97251,
+              1917097,
+              11912
+            ],
+            "RR_tests": 2950472,
+            "RR_survivals": 1033375,
+            "first_RR_tests": 1938724,
+            "first_RR_survivals": 324981,
+            "empirical_first_RR_survival": 0.16762623251169326,
+            "expected_first_RR_survival": 0.16807,
+            "later_RR_tests": 1011748,
+            "later_RR_survivals": 708394,
+            "empirical_later_RR_survival": 0.7001684213855625,
+            "expected_later_RR_survival": 0.7,
+            "malformed_records": 0,
+            "RR_count_mismatches": 0,
+            "RR_before_surface6": 0,
+            "RR_terminal_malformed": 0,
+            "max16_terminal_malformed": 0,
+            "invalid_primary_not_reason0": 0,
+            "valid_primary_with_depth0": 0,
+            "max_depth_observed": 16,
+            "paths_reaching16": 11912,
+            "mean_last_visited_surface_depth_valid_primary": 6.380638220169178,
+            "visited_secondary_vertices_total": 10902572,
+            "mean_visited_secondary_vertices_per_valid_primary": 5.380638220169178,
+            "reconstructed_scatter_rays_total": 10999823,
+            "mean_reconstructed_scatter_rays_per_valid_primary": 5.428633541598808,
+            "work_note": "secondary vertices equal sun-NEE evaluation attempts at surfaces2..lastDepth; scatter-ray count reconstructed from terminal depth/reason, excluding camera ray and any native reconnect visibility rays"
+          },
+          "native": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.frame0.rgba32f",
+            "sha256": "1fca58d53033c0748b5b3adc66d5d2f4d4b2e4f67933d9a4cc520049d6160161",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.0053054827642947285,
+              0.005307917699772111,
+              0.00530011934457738
+            ],
+            "whole_frame_scalar_RGB_mean": 0.005304506602881409,
+            "valid_primary_RGB_mean": [
+              0.0054294360348827635,
+              0.005431927858343672,
+              0.005423947308299851
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.5169886946678162,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.04883112013339996,
+              0.09873182833194732,
+              0.17374514648318293,
+              0.5166564583778381
+            ],
+            "alpha_values": [
+              0.0,
+              1.0
+            ]
+          },
+          "fresh": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.fresh.frame0.rgba32f",
+            "sha256": "672c2bb97b10ea54ee2db9c5ef034e55f8c988f9341f5581b5449121a2228bdb",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.0053156054955335146,
+              0.0053156054955335146,
+              0.0053156054955335146
+            ],
+            "whole_frame_scalar_RGB_mean": 0.00531560549553347,
+            "valid_primary_RGB_mean": [
+              0.0054397952659275195,
+              0.0054397952659275195,
+              0.0054397952659275195
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.5559525489807129,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.04882687330245972,
+              0.09958913177251816,
+              0.1736842840909958,
+              0.5559525489807129
+            ],
+            "alpha_values": [
+              0.0,
+              1.0
+            ]
+          },
+          "independent_fresh_path": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.freshpathstats.frame0.rgba32f",
+            "sha256": "fc9a8e91feeac85ae398105c92e511abbba5da2ddbd260413ef4d36b9d659518",
+            "last_depth_histogram": [
+              47340,
+              13792,
+              18374,
+              18758,
+              18746,
+              18437,
+              1615175,
+              98399,
+              68779,
+              47716,
+              33193,
+              23068,
+              15950,
+              10870,
+              7511,
+              5361,
+              12131
+            ],
+            "termination_histogram": [
+              47340,
+              97823,
+              1916306,
+              12131
+            ],
+            "RR_tests": 2954676,
+            "RR_survivals": 1038370,
+            "first_RR_tests": 1938153,
+            "first_RR_survivals": 326022,
+            "empirical_first_RR_survival": 0.1682127262398789,
+            "expected_first_RR_survival": 0.16807,
+            "later_RR_tests": 1016523,
+            "later_RR_survivals": 712348,
+            "empirical_later_RR_survival": 0.7007691906626805,
+            "expected_later_RR_survival": 0.7,
+            "malformed_records": 0,
+            "RR_count_mismatches": 0,
+            "RR_before_surface6": 0,
+            "RR_terminal_malformed": 0,
+            "max16_terminal_malformed": 0,
+            "invalid_primary_not_reason0": 0,
+            "valid_primary_with_depth0": 0,
+            "max_depth_observed": 16,
+            "paths_reaching16": 12131,
+            "mean_last_visited_surface_depth_valid_primary": 6.381982075350646,
+            "visited_secondary_vertices_total": 10905295,
+            "mean_visited_secondary_vertices_per_valid_primary": 5.381982075350646,
+            "reconstructed_scatter_rays_total": 11003118,
+            "mean_reconstructed_scatter_rays_per_valid_primary": 5.430259690266797,
+            "work_note": "secondary vertices equal sun-NEE evaluation attempts at surfaces2..lastDepth; scatter-ray count reconstructed from terminal depth/reason, excluding camera ray and any native reconnect visibility rays"
+          },
+          "captured_JSON_histograms_match_raw_RGBA": true
+        },
+        {
+          "frame": 1,
+          "path": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.pathstats.frame1.rgba32f",
+            "sha256": "12a69bae529558a7b2896a70c8dcf7d936351798cf58c5a8713b3bd7bbe2b8c3",
+            "last_depth_histogram": [
+              47340,
+              13782,
+              18020,
+              18855,
+              18700,
+              18593,
+              1616076,
+              99022,
+              68415,
+              47407,
+              32922,
+              22787,
+              15966,
+              10891,
+              7598,
+              5364,
+              11862
+            ],
+            "termination_histogram": [
+              47340,
+              97550,
+              1916848,
+              11862
+            ],
+            "RR_tests": 2949857,
+            "RR_survivals": 1033009,
+            "first_RR_tests": 1938310,
+            "first_RR_survivals": 325281,
+            "empirical_first_RR_survival": 0.16781680948867828,
+            "expected_first_RR_survival": 0.16807,
+            "later_RR_tests": 1011547,
+            "later_RR_survivals": 707728,
+            "empirical_later_RR_survival": 0.6996491512505103,
+            "expected_later_RR_survival": 0.7,
+            "malformed_records": 0,
+            "RR_count_mismatches": 0,
+            "RR_before_surface6": 0,
+            "RR_terminal_malformed": 0,
+            "max16_terminal_malformed": 0,
+            "invalid_primary_not_reason0": 0,
+            "valid_primary_with_depth0": 0,
+            "max_depth_observed": 16,
+            "paths_reaching16": 11862,
+            "mean_last_visited_surface_depth_valid_primary": 6.379941863334419,
+            "visited_secondary_vertices_total": 10901161,
+            "mean_visited_secondary_vertices_per_valid_primary": 5.379941863334419,
+            "reconstructed_scatter_rays_total": 10998711,
+            "mean_reconstructed_scatter_rays_per_valid_primary": 5.428084747268366,
+            "work_note": "secondary vertices equal sun-NEE evaluation attempts at surfaces2..lastDepth; scatter-ray count reconstructed from terminal depth/reason, excluding camera ray and any native reconnect visibility rays"
+          },
+          "native": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.frame1.rgba32f",
+            "sha256": "b2284d769e15576128974f8e16fd338c5c9066b6d490db5159d7224af23159c8",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.005289341317344906,
+              0.005291768841265168,
+              0.005283994212728415
+            ],
+            "whole_frame_scalar_RGB_mean": 0.005288368123779491,
+            "valid_primary_RGB_mean": [
+              0.005412917471423409,
+              0.005415401710169205,
+              0.005407445441114981
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.5638470649719238,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.04883113130927086,
+              0.09856157757341862,
+              0.1737432390600443,
+              0.563484787940979
+            ],
+            "alpha_values": [
+              0.0,
+              1.0
+            ]
+          },
+          "fresh": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.fresh.frame1.rgba32f",
+            "sha256": "d9f7d6bf27c629754096cd98a867e16b2ce77403994c589d0eef15d7ea9cba3b",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.005292194247480416,
+              0.005292194247480416,
+              0.005292194247480416
+            ],
+            "whole_frame_scalar_RGB_mean": 0.005292194247480362,
+            "valid_primary_RGB_mean": [
+              0.005415837055252234,
+              0.005415837055252234,
+              0.005415837055252234
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.6382611989974976,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.04882687330245972,
+              0.09876146733760849,
+              0.1730007380247116,
+              0.6382611989974976
+            ],
+            "alpha_values": [
+              0.0,
+              1.0
+            ]
+          },
+          "independent_fresh_path": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.freshpathstats.frame1.rgba32f",
+            "sha256": "d063844d414e50341e7c5daa173b9ac8b9edf25dc81f810fc09cd68d4a207dc0",
+            "last_depth_histogram": [
+              47340,
+              13659,
+              18038,
+              18718,
+              18713,
+              18382,
+              1615694,
+              99165,
+              68763,
+              47832,
+              32679,
+              22825,
+              15819,
+              10941,
+              7708,
+              5318,
+              12006
+            ],
+            "termination_histogram": [
+              47340,
+              97267,
+              1916987,
+              12006
+            ],
+            "RR_tests": 2952859,
+            "RR_survivals": 1035872,
+            "first_RR_tests": 1938750,
+            "first_RR_survivals": 326118,
+            "empirical_first_RR_survival": 0.16821044487427467,
+            "expected_first_RR_survival": 0.16807,
+            "later_RR_tests": 1014109,
+            "later_RR_survivals": 709754,
+            "empirical_later_RR_survival": 0.6998794015238993,
+            "expected_later_RR_survival": 0.7,
+            "malformed_records": 0,
+            "RR_count_mismatches": 0,
+            "RR_before_surface6": 0,
+            "RR_terminal_malformed": 0,
+            "max16_terminal_malformed": 0,
+            "invalid_primary_not_reason0": 0,
+            "valid_primary_with_depth0": 0,
+            "max_depth_observed": 16,
+            "paths_reaching16": 12006,
+            "mean_last_visited_surface_depth_valid_primary": 6.381839448047141,
+            "visited_secondary_vertices_total": 10905006,
+            "mean_visited_secondary_vertices_per_valid_primary": 5.381839448047141,
+            "reconstructed_scatter_rays_total": 11002273,
+            "mean_reconstructed_scatter_rays_per_valid_primary": 5.429842665798072,
+            "work_note": "secondary vertices equal sun-NEE evaluation attempts at surfaces2..lastDepth; scatter-ray count reconstructed from terminal depth/reason, excluding camera ray and any native reconnect visibility rays"
+          },
+          "captured_JSON_histograms_match_raw_RGBA": true
+        },
+        {
+          "frame": 2,
+          "path": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.pathstats.frame2.rgba32f",
+            "sha256": "346587622f5f60733ae891cc516eeae4a5923097056ddc57cb4814d44a8d12b2",
+            "last_depth_histogram": [
+              47340,
+              13842,
+              18180,
+              18702,
+              18717,
+              18258,
+              1616577,
+              98840,
+              68303,
+              47460,
+              33060,
+              22684,
+              15846,
+              11006,
+              7557,
+              5309,
+              11919
+            ],
+            "termination_histogram": [
+              47340,
+              97196,
+              1917145,
+              11919
+            ],
+            "RR_tests": 2949673,
+            "RR_survivals": 1032528,
+            "first_RR_tests": 1938561,
+            "first_RR_survivals": 325010,
+            "empirical_first_RR_survival": 0.16765528657597054,
+            "expected_first_RR_survival": 0.16807,
+            "later_RR_tests": 1011112,
+            "later_RR_survivals": 707518,
+            "empirical_later_RR_survival": 0.6997424617648688,
+            "expected_later_RR_survival": 0.7,
+            "malformed_records": 0,
+            "RR_count_mismatches": 0,
+            "RR_before_surface6": 0,
+            "RR_terminal_malformed": 0,
+            "max16_terminal_malformed": 0,
+            "invalid_primary_not_reason0": 0,
+            "valid_primary_with_depth0": 0,
+            "max_depth_observed": 16,
+            "paths_reaching16": 11919,
+            "mean_last_visited_surface_depth_valid_primary": 6.379666479129035,
+            "visited_secondary_vertices_total": 10900603,
+            "mean_visited_secondary_vertices_per_valid_primary": 5.379666479129035,
+            "reconstructed_scatter_rays_total": 10997799,
+            "mean_reconstructed_scatter_rays_per_valid_primary": 5.427634656954192,
+            "work_note": "secondary vertices equal sun-NEE evaluation attempts at surfaces2..lastDepth; scatter-ray count reconstructed from terminal depth/reason, excluding camera ray and any native reconnect visibility rays"
+          },
+          "native": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.frame2.rgba32f",
+            "sha256": "2e14af06dc9480d160587ff9603fd80a2ff91a42677ea5045c9917b7586e2603",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.005289556878266134,
+              0.0052919845066208195,
+              0.005284209558253818
+            ],
+            "whole_frame_scalar_RGB_mean": 0.005288583647713594,
+            "valid_primary_RGB_mean": [
+              0.005413138068546315,
+              0.005415622414166461,
+              0.0054076658178097165
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 1.0258936882019043,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.04883112385869026,
+              0.09856314212083817,
+              0.17344915795326302,
+              1.025234580039978
+            ],
+            "alpha_values": [
+              0.0,
+              1.0
+            ]
+          },
+          "fresh": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.fresh.frame2.rgba32f",
+            "sha256": "8052dfbf71a3a4ba6c9afe2244b25994b88debceac62b3f4b3b7a7b58b25ba8e",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.005308873358531709,
+              0.005308873358531709,
+              0.005308873358531709
+            ],
+            "whole_frame_scalar_RGB_mean": 0.005308873358531682,
+            "valid_primary_RGB_mean": [
+              0.00543290584438885,
+              0.00543290584438885,
+              0.00543290584438885
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.47318947315216064,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.04882687330245972,
+              0.09958914667367935,
+              0.1736842840909958,
+              0.47318947315216064
+            ],
+            "alpha_values": [
+              0.0,
+              1.0
+            ]
+          },
+          "independent_fresh_path": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.freshpathstats.frame2.rgba32f",
+            "sha256": "f6c46202b9ec70ebd1910529002b3940798905b38862409c79d1c4eea18d03e9",
+            "last_depth_histogram": [
+              47340,
+              13545,
+              18290,
+              18418,
+              18963,
+              18545,
+              1616469,
+              98350,
+              68412,
+              47500,
+              32853,
+              23105,
+              15996,
+              11015,
+              7616,
+              5214,
+              11969
+            ],
+            "termination_histogram": [
+              47340,
+              97406,
+              1916885,
+              11969
+            ],
+            "RR_tests": 2951766,
+            "RR_survivals": 1034881,
+            "first_RR_tests": 1938499,
+            "first_RR_survivals": 325110,
+            "empirical_first_RR_survival": 0.1677122350849807,
+            "expected_first_RR_survival": 0.16807,
+            "later_RR_tests": 1013267,
+            "later_RR_survivals": 709771,
+            "empirical_later_RR_survival": 0.7004777615376796,
+            "expected_later_RR_survival": 0.7,
+            "malformed_records": 0,
+            "RR_count_mismatches": 0,
+            "RR_before_surface6": 0,
+            "RR_terminal_malformed": 0,
+            "max16_terminal_malformed": 0,
+            "invalid_primary_not_reason0": 0,
+            "valid_primary_with_depth0": 0,
+            "max_depth_observed": 16,
+            "paths_reaching16": 11969,
+            "mean_last_visited_surface_depth_valid_primary": 6.381306446359303,
+            "visited_secondary_vertices_total": 10903926,
+            "mean_visited_secondary_vertices_per_valid_primary": 5.381306446359303,
+            "reconstructed_scatter_rays_total": 11001332,
+            "mean_reconstructed_scatter_rays_per_valid_primary": 5.429378263401538,
+            "work_note": "secondary vertices equal sun-NEE evaluation attempts at surfaces2..lastDepth; scatter-ray count reconstructed from terminal depth/reason, excluding camera ray and any native reconnect visibility rays"
+          },
+          "captured_JSON_histograms_match_raw_RGBA": true
+        },
+        {
+          "frame": 3,
+          "path": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.pathstats.frame3.rgba32f",
+            "sha256": "6892f94dbb4fdc9fad6bc0155874d26460e433901a222d61501aacb313bf232d",
+            "last_depth_histogram": [
+              47340,
+              13731,
+              18185,
+              18635,
+              18643,
+              18490,
+              1616019,
+              98569,
+              68664,
+              47565,
+              32770,
+              22914,
+              16092,
+              11110,
+              7664,
+              5307,
+              11902
+            ],
+            "termination_histogram": [
+              47340,
+              97352,
+              1917006,
+              11902
+            ],
+            "RR_tests": 2953333,
+            "RR_survivals": 1036327,
+            "first_RR_tests": 1938576,
+            "first_RR_survivals": 325663,
+            "empirical_first_RR_survival": 0.16799083450945437,
+            "expected_first_RR_survival": 0.16807,
+            "later_RR_tests": 1014757,
+            "later_RR_survivals": 710664,
+            "empirical_later_RR_survival": 0.7003292413848833,
+            "expected_later_RR_survival": 0.7,
+            "malformed_records": 0,
+            "RR_count_mismatches": 0,
+            "RR_before_surface6": 0,
+            "RR_terminal_malformed": 0,
+            "max16_terminal_malformed": 0,
+            "invalid_primary_not_reason0": 0,
+            "valid_primary_with_depth0": 0,
+            "max_depth_observed": 16,
+            "paths_reaching16": 11902,
+            "mean_last_visited_surface_depth_valid_primary": 6.3817787450771375,
+            "visited_secondary_vertices_total": 10904883,
+            "mean_visited_secondary_vertices_per_valid_primary": 5.3817787450771375,
+            "reconstructed_scatter_rays_total": 11002235,
+            "mean_reconstructed_scatter_rays_per_valid_primary": 5.429823912034981,
+            "work_note": "secondary vertices equal sun-NEE evaluation attempts at surfaces2..lastDepth; scatter-ray count reconstructed from terminal depth/reason, excluding camera ray and any native reconnect visibility rays"
+          },
+          "native": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.frame3.rgba32f",
+            "sha256": "e985886fbb173b6800b53a0cf46872bae0c405ed9507fc9763df826d2abb630d",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.005304800096371586,
+              0.0053072347152258335,
+              0.0052994373654490804
+            ],
+            "whole_frame_scalar_RGB_mean": 0.005303824059015501,
+            "valid_primary_RGB_mean": [
+              0.00542873741762465,
+              0.00543122891706508,
+              0.0054232493959290575
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.4880913197994232,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.04883114621043205,
+              0.09856770470738412,
+              0.1737486155033112,
+              0.4877777099609375
+            ],
+            "alpha_values": [
+              0.0,
+              1.0
+            ]
+          },
+          "fresh": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.fresh.frame3.rgba32f",
+            "sha256": "172bc8bb62bbfcc32dae839c3f07e467da10cadf8bdbb6482567f26869f170f7",
+            "nonfinite_components": 0,
+            "negative_RGB_components": 0,
+            "whole_frame_RGB_mean": [
+              0.005307031146931853,
+              0.005307031146931853,
+              0.005307031146931853
+            ],
+            "whole_frame_scalar_RGB_mean": 0.005307031146931799,
+            "valid_primary_RGB_mean": [
+              0.005431020592756059,
+              0.005431020592756059,
+              0.005431020592756059
+            ],
+            "minimum_RGB": 0.0,
+            "maximum_RGB": 0.7265514135360718,
+            "scalar_RGB_percentiles": [
+              0.0,
+              0.0,
+              0.04882687330245972,
+              0.09981008633971247,
+              0.1736842840909958,
+              0.726551353931427
+            ],
+            "alpha_values": [
+              0.0,
+              1.0
+            ]
+          },
+          "independent_fresh_path": {
+            "file": "runs\\rtxdi-pilot-none-v1\\capture.freshpathstats.frame3.rgba32f",
+            "sha256": "df70f81cc31abedfb32271a4fd5c347c89a4335980d783facb3dbf7e8e16ddfd",
+            "last_depth_histogram": [
+              47340,
+              13569,
+              17976,
+              18368,
+              18845,
+              18735,
+              1616373,
+              98248,
+              68601,
+              47621,
+              33136,
+              22747,
+              16029,
+              11141,
+              7590,
+              5294,
+              11987
+            ],
+            "termination_histogram": [
+              47340,
+              97249,
+              1917024,
+              11987
+            ],
+            "RR_tests": 2953769,
+            "RR_survivals": 1036745,
+            "first_RR_tests": 1938767,
+            "first_RR_survivals": 325509,
+            "empirical_first_RR_survival": 0.16789485275951158,
+            "expected_first_RR_survival": 0.16807,
+            "later_RR_tests": 1015002,
+            "later_RR_survivals": 711236,
+            "empirical_later_RR_survival": 0.7007237424162711,
+            "expected_later_RR_survival": 0.7,
+            "malformed_records": 0,
+            "RR_count_mismatches": 0,
+            "RR_before_surface6": 0,
+            "RR_terminal_malformed": 0,
+            "max16_terminal_malformed": 0,
+            "invalid_primary_not_reason0": 0,
+            "valid_primary_with_depth0": 0,
+            "max_depth_observed": 16,
+            "paths_reaching16": 11987,
+            "mean_last_visited_surface_depth_valid_primary": 6.382828955810212,
+            "visited_secondary_vertices_total": 10907011,
+            "mean_visited_secondary_vertices_per_valid_primary": 5.382828955810212,
+            "reconstructed_scatter_rays_total": 11004260,
+            "mean_reconstructed_scatter_rays_per_valid_primary": 5.430823290199678,
+            "work_note": "secondary vertices equal sun-NEE evaluation attempts at surfaces2..lastDepth; scatter-ray count reconstructed from terminal depth/reason, excluding camera ray and any native reconnect visibility rays"
+          },
+          "captured_JSON_histograms_match_raw_RGBA": true
+        }
+      ],
+      "four_frame_whole_frame_fresh_scalar_mean": 0.005305926062119328,
+      "four_frame_whole_frame_native_scalar_mean": 0.005296320608347499,
+      "mean_visited_secondary_vertices_per_valid_primary": 5.380506326927443,
+      "mean_reconstructed_scatter_rays_per_valid_primary": 5.428544214464087,
+      "launch_exit_code": 0
+    }
+  },
+  "issues": [
+    {
+      "severity": "diagnostic-only",
+      "renderer": "rtxpt",
+      "description": "Depth0 invalid-primary diagnostics use termination reason1 (miss) although declared shared reason0 means invalid primary; some valid-guide pixels also report depth0. Audit uses guide validity independently and does not treat these rows as one-bounce paths.",
+      "invalid_primary_not_reason0_per_frame": [
+        47341,
+        47341,
+        47341,
+        47341
+      ],
+      "valid_primary_with_depth0_per_frame": [
+        34,
+        34,
+        34,
+        34
+      ]
+    }
+  ],
+  "limitations": [
+    "Four-sample whole-frame means are descriptive and do not establish converged reference agreement or brightness bias.",
+    "The old one-indirect-reflection radiance bound is inapplicable to multibounce transport.",
+    "Reconstructed path-work counters describe candidate/fresh path generation, excluding native reconnect visibility and mandatory preparation."
+  ],
+  "rtxdi_actual_secondary_shader": {
+    "USE_RAY_QUERY": 0,
+    "REGIR_MODE": "ONION",
+    "bytes": 156232,
+    "fnv64": "72dbfc65e26cf6cd",
+    "runtime_matches_frozen_shader": true,
+    "note": "Actual per-pass library log overrides the app's broader ray_query=true settings field."
+  },
+  "runtime_transport_gate_passed": true,
+  "reference_agreement_gate": "pending independent high-sample split references"
+}

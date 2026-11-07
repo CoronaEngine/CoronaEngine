@@ -1,0 +1,86 @@
+[
+  {
+    "command": [
+      "C:\\Users\\Zero\\miniforge3\\envs\\coronaengine-dev\\python.exe",
+      "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\run_native.py",
+      "quality-r1-v1",
+      "--phase",
+      "quality",
+      "--offset",
+      "0"
+    ],
+    "exit_code": 0,
+    "start_utc": "2026-11-07T10:43:41.825715+00:00",
+    "end_utc": "2026-11-07T10:44:05.784316+00:00"
+  },
+  {
+    "command": [
+      "C:\\Users\\Zero\\miniforge3\\envs\\coronaengine-dev\\python.exe",
+      "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\run_native.py",
+      "quality-r2-v1",
+      "--phase",
+      "quality",
+      "--offset",
+      "10000"
+    ],
+    "exit_code": 0,
+    "start_utc": "2026-11-07T10:44:05.784778+00:00",
+    "end_utc": "2026-11-07T10:44:43.260439+00:00"
+  },
+  {
+    "command": [
+      "C:\\Users\\Zero\\miniforge3\\envs\\coronaengine-dev\\python.exe",
+      "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\run_native.py",
+      "quality-r3-v1",
+      "--phase",
+      "quality",
+      "--offset",
+      "20000"
+    ],
+    "exit_code": 0,
+    "start_utc": "2026-11-07T10:44:43.260859+00:00",
+    "end_utc": "2026-11-07T10:45:20.496647+00:00"
+  },
+  {
+    "command": [
+      "C:\\Users\\Zero\\miniforge3\\envs\\coronaengine-dev\\python.exe",
+      "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\run_native.py",
+      "timing-r1-v1",
+      "--phase",
+      "timing",
+      "--offset",
+      "0"
+    ],
+    "exit_code": 0,
+    "start_utc": "2026-11-07T10:45:20.497028+00:00",
+    "end_utc": "2026-11-07T10:45:43.736982+00:00"
+  },
+  {
+    "command": [
+      "C:\\Users\\Zero\\miniforge3\\envs\\coronaengine-dev\\python.exe",
+      "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\run_native.py",
+      "timing-r2-v1",
+      "--phase",
+      "timing",
+      "--offset",
+      "10000"
+    ],
+    "exit_code": 0,
+    "start_utc": "2026-11-07T10:45:43.737489+00:00",
+    "end_utc": "2026-11-07T10:46:05.829142+00:00"
+  },
+  {
+    "command": [
+      "C:\\Users\\Zero\\miniforge3\\envs\\coronaengine-dev\\python.exe",
+      "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-corona-native-20261107\\run_native.py",
+      "timing-r3-v1",
+      "--phase",
+      "timing",
+      "--offset",
+      "20000"
+    ],
+    "exit_code": 0,
+    "start_utc": "2026-11-07T10:46:05.829531+00:00",
+    "end_utc": "2026-11-07T10:46:27.973372+00:00"
+  }
+]

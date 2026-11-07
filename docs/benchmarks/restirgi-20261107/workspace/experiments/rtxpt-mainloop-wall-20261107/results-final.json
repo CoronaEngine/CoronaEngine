@@ -1,0 +1,168 @@
+{
+  "status": "complete",
+  "scope": "Actual complete normal pipelined main loop; CPU work and natural GPU/backbuffer waits included; CPU and GPU durations are not summed.",
+  "GPU": "RTX3070Ti",
+  "driver": "610.88",
+  "scene": "sameKitchen",
+  "resolution": [
+    1920,
+    1080
+  ],
+  "min_depth": 5,
+  "max_depth": 16,
+  "RR_threshold": 1,
+  "candidates_per_pixel_per_frame": 1,
+  "denoising": false,
+  "complete_main_loop_wall_ms": {
+    "count": 720,
+    "mean_ms": 12.87895736111111,
+    "median_ms": 12.85,
+    "p10_ms": 12.37329,
+    "p90_ms": 13.40492,
+    "p95_ms": 13.586314999999999,
+    "min_ms": 8.6775,
+    "max_ms": 17.0457
+  },
+  "loop_start_to_next_start_ms": {
+    "count": 720,
+    "mean_ms": 12.87865486111111,
+    "median_ms": 12.849350000000001,
+    "p10_ms": 12.3735,
+    "p90_ms": 13.40515,
+    "p95_ms": 13.586705,
+    "min_ms": 8.6777,
+    "max_ms": 17.046
+  },
+  "full_GPU_ms": {
+    "count": 720,
+    "mean_ms": 12.8240042573025,
+    "median_ms": 12.744192034000001,
+    "p10_ms": 12.3228160664,
+    "p90_ms": 13.2157439366,
+    "p95_ms": 13.36831972,
+    "min_ms": 12.2869759798,
+    "max_ms": 13.9171844348
+  },
+  "GI_GPU_ms": {
+    "count": 720,
+    "mean_ms": 11.112288705364028,
+    "median_ms": 11.0684158426,
+    "p10_ms": 10.6588159979,
+    "p90_ms": 11.52819169806,
+    "p95_ms": 11.65025315564,
+    "min_ms": 10.6301438354,
+    "max_ms": 12.2572798282
+  },
+  "GI_with_preparation_GPU_ms": {
+    "count": 720,
+    "mean_ms": 12.351105407849168,
+    "median_ms": 12.282367824800001,
+    "p10_ms": 11.8640640576,
+    "p90_ms": 12.742758484129999,
+    "p95_ms": 12.89067531474,
+    "min_ms": 11.826175818,
+    "max_ms": 13.4655998554
+  },
+  "host_phase_ms": {
+    "animate_host_ms": {
+      "count": 720,
+      "mean_ms": 0.019054861111111113,
+      "median_ms": 0.0175,
+      "p10_ms": 0.01499,
+      "p90_ms": 0.022410000000000003,
+      "p95_ms": 0.02440999999999999,
+      "min_ms": 0.0136,
+      "max_ms": 0.3279
+    },
+    "beginframe_gap_host_ms": {
+      "count": 720,
+      "mean_ms": 11.282880138888888,
+      "median_ms": 11.29575,
+      "p10_ms": 10.82051,
+      "p90_ms": 11.758180000000001,
+      "p95_ms": 11.889739999999998,
+      "min_ms": 7.2338,
+      "max_ms": 12.4166
+    },
+    "render_host_ms": {
+      "count": 720,
+      "mean_ms": 1.3665183333333333,
+      "median_ms": 1.3486,
+      "p10_ms": 1.15057,
+      "p90_ms": 1.56253,
+      "p95_ms": 1.6074899999999999,
+      "min_ms": 1.024,
+      "max_ms": 5.3123
+    },
+    "present_host_ms": {
+      "count": 720,
+      "mean_ms": 0.15287541666666668,
+      "median_ms": 0.1451,
+      "p10_ms": 0.11679,
+      "p90_ms": 0.18452,
+      "p95_ms": 0.19997999999999994,
+      "min_ms": 0.1032,
+      "max_ms": 1.251
+    },
+    "other_host_ms": {
+      "count": 720,
+      "mean_ms": 0.05762861111111112,
+      "median_ms": 0.0324,
+      "p10_ms": 0.0265,
+      "p90_ms": 0.1268,
+      "p95_ms": 0.14442499999999997,
+      "min_ms": 0.0239,
+      "max_ms": 1.041
+    }
+  },
+  "repeats": [
+    {
+      "run": "rtxpt-loop-r1-v1",
+      "wall": {
+        "count": 240,
+        "mean_ms": 12.9518075,
+        "median_ms": 12.93195,
+        "p10_ms": 12.40124,
+        "p90_ms": 13.54955,
+        "p95_ms": 13.72768,
+        "min_ms": 11.6388,
+        "max_ms": 13.9789
+      }
+    },
+    {
+      "run": "rtxpt-loop-r2-v1",
+      "wall": {
+        "count": 240,
+        "mean_ms": 12.839491666666667,
+        "median_ms": 12.81335,
+        "p10_ms": 12.38322,
+        "p90_ms": 13.3661,
+        "p95_ms": 13.46956,
+        "min_ms": 11.8456,
+        "max_ms": 13.9443
+      }
+    },
+    {
+      "run": "rtxpt-loop-r3-v1",
+      "wall": {
+        "count": 240,
+        "mean_ms": 12.845572916666667,
+        "median_ms": 12.82835,
+        "p10_ms": 12.327050000000002,
+        "p90_ms": 13.30373,
+        "p95_ms": 13.516549999999999,
+        "min_ms": 8.6775,
+        "max_ms": 17.0457
+      }
+    }
+  ],
+  "measurement": "3processes; each368renderedframes; warmup0..119, measured120..359, unmeasuredtail360..367. Terminal367 exits before Present, excluded. CSV written in tail366.",
+  "limitations": "Normal three-buffer pipelined loop wall/throughput. Same-frame start-to-GPU-completion latency not measured. BeginFrame gap includes fence wait and callbacks, not pure GPU execution. Timer units converted ns do not imply 1ns native resolution.",
+  "evidence_sha256": {
+    "analysis/mainloop-results.json": "2b6e6101b8622110d59eeadcc8219bbf5b00e6eef7ffdf9e5da65f49e6952cf7",
+    "independent-check.json": "70f4ba00e7a889582ffa11ec0c90ea7898c653a57c9e8ab24acf7a995b744958",
+    "build-record.json": "e7100a3fa8351fa22324ca821c9c8fcd37e7be4b08f3b40c9475d9d7a253f990",
+    "boundary-audit.json": "f2558271f5c81e2bcfb717d3272dbeddd46d3b065f5eb0e79905ff3652e93843",
+    "mainloop-peer-review.json": "7a7c0e13986b7c72fa546f159bd1f9997815282e183de219c7c9bfe0a4510bdc"
+  }
+}

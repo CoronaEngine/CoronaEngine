@@ -1,0 +1,56 @@
+{
+  "status": "timing_complete",
+  "manifest_path": "D:\\work\\corona\\CoronaEngine\\.workspace\\experiments\\rtxgi-multibounce-20261107\\analysis\\manifest-executed-seedstreams-v1.json",
+  "manifest_sha256": "7d12b58cb14b279035573b421b5bce34d01fc64d19c180fb2ee61afceb274bd3",
+  "rows": [
+    {
+      "renderer": "original",
+      "candidate_ms": 6.439294577777778,
+      "validation_ms": 7.3654144000000015,
+      "temporal_ms": 0.6657607111111111,
+      "spatial_ms": 1.4868522666666666,
+      "resolve_ms": 0.5093802666666666,
+      "prep_ms": 0.8528782222222222,
+      "GI_exclusive_ms": 16.466702222222224,
+      "GI_plus_prep_ms": 17.319580444444444,
+      "full_GPU_mean_ms": 18.05908026666667
+    },
+    {
+      "renderer": "rtxpt",
+      "candidate_ms": 7.928015651931556,
+      "validation_ms": 0.0,
+      "temporal_ms": 0.8014819525770069,
+      "spatial_ms": 1.842130487945153,
+      "resolve_ms": 0.48369777719523055,
+      "prep_ms": 1.2359907507845196,
+      "GI_exclusive_ms": 11.055325869648945,
+      "GI_plus_prep_ms": 12.291316620433463,
+      "full_GPU_mean_ms": 12.7619100320675
+    },
+    {
+      "renderer": "rtxdi",
+      "candidate_ms": 8.826019563518154,
+      "validation_ms": 0.0,
+      "temporal_ms": 0.41504284421939197,
+      "spatial_ms": 0.5483975102025498,
+      "resolve_ms": 0.5625571569705952,
+      "prep_ms": 0.6251804529812135,
+      "GI_exclusive_ms": 10.352017074910691,
+      "GI_plus_prep_ms": 10.977197527891905,
+      "full_GPU_mean_ms": 11.792773701664474
+    },
+    {
+      "renderer": "corona_port",
+      "candidate_ms": 6.627555422222223,
+      "validation_ms": 2.5445183555555557,
+      "temporal_ms": 0.9427473333333334,
+      "spatial_ms": 1.8006448444444447,
+      "resolve_ms": 0.6988398666666668,
+      "prep_ms": 1.090397111111111,
+      "GI_exclusive_ms": 12.614305822222223,
+      "GI_plus_prep_ms": 13.704702933333333,
+      "full_GPU_mean_ms": null
+    }
+  ],
+  "scope_note": "Nonoverlapping per-frame stage costs first, then720frame means. Corona validation includes zero on480nonvalidationframes; spatial totals includebothnativepasses. RTX0validationmeansno separate suffix-validationpass, withnativevisibilitychecks included intheir own kernels."
+}
