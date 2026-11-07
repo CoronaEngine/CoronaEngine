@@ -43,3 +43,19 @@ add_executable(corona_systems_thread_tests
 target_link_libraries(corona_systems_thread_tests PRIVATE CoronaEngineKernel)
 add_test(NAME SystemsThreadTests
          COMMAND corona_systems_thread_tests)
+
+# 跨线程交互原语：入站命令队列（P0）
+add_executable(corona_command_buffer_tests
+    test_command_buffer.cpp
+)
+target_link_libraries(corona_command_buffer_tests PRIVATE CoronaEngineKernel)
+add_test(NAME CommandBufferTests
+         COMMAND corona_command_buffer_tests)
+
+# 跨线程交互原语：只读快照通道 + 单写者断言（P0）
+add_executable(corona_snapshot_channel_tests
+    test_snapshot_channel.cpp
+)
+target_link_libraries(corona_snapshot_channel_tests PRIVATE CoronaEngineKernel)
+add_test(NAME SnapshotChannelTests
+         COMMAND corona_snapshot_channel_tests)
