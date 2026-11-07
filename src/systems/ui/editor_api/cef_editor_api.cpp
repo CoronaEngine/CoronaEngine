@@ -577,7 +577,7 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, get_project_load_status, kNoParams, "", "project.get_project_load_status", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, get_recent_projects, kNoParams, "", "project.get_recent_projects", EditorApiValueType::Array, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, import_portable_asset, kObjectPayloadParam, "", "project.import_portable_asset", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectLauncher, open_project, kOpenProjectParams, "project.openProject", "project.open_project", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, open_project, kOpenProjectParams, "", "project.open_project", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, open_project_file, kNoParams, "", "project.open_project_file", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, validate_portable_scene, kObjectPayloadParam, "", "project.validate_portable_scene", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectSettings, read_project_document, kObjectPayloadParam, "", "project_settings.read_project_document", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),

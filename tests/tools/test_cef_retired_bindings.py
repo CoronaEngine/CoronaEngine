@@ -548,3 +548,18 @@ def test_project_picker_has_named_binding_and_no_generic_timeout_exception():
     assert "call_manifest_editor_api('project.openProjectFile'" not in facade
     view = (root / 'CoronaEditor/editor/Frontend/src/views/layout/RecentGames.vue').read_text(encoding='utf-8')
     assert 'result?.data?.path' not in view
+
+
+def test_project_open_uses_one_owner_and_retires_generic_web_contract():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8')
+    line = next(line for line in manifest.splitlines() if 'ProjectLauncher, open_project,' in line)
+    assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
+    assert ', "", "project.open_project"' in line
+    owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8')
+    assert 'NativeResult open_launcher_project(' in owner
+    assert 'return open_launcher_project(' in owner
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
+    assert 'project->SetValue("openProject"' in binding
+    service = (root / 'CoronaEditor/editor/Frontend/src/services/projectLauncherService.js').read_text(encoding='utf-8')
+    assert 'projectOpenResult' not in service and 'result?.data ?? result' not in service

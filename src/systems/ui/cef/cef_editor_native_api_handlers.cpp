@@ -6742,9 +6742,122 @@ NativeResult create_launcher_project(const std::string& prompt, const std::strin
     return native_success(std::move(result));
 }
 
+NativeResult open_launcher_project(const std::string& requested_path, const std::string& load_policy) {
+    const auto path = normalize_route(requested_path);
+    CFW_LOG_INFO("[ProjectLauncher] open_project request path='{}'", path);
+    if (path.empty()) {
+        return native_success({{"ok", false}, {"path", std::string{}}, {"status", "cancelled"}});
+    }
+    auto prepared = prepare_archive_load(path, load_policy);
+    if (!prepared.service_ok) {
+        if (!python_script_service_dispatcher_registered()) {
+            return native_success({
+                {"ok", false},
+                {"status", "service_initializing"},
+                {"path", path},
+                {"message", "Archive service is initializing"},
+            });
+        }
+        return native_success({
+            {"ok", false},
+            {"status", "archive_service_error"},
+            {"path", path},
+            {"message", prepared.error.empty() ? "Python archive parser failed"
+                                               : prepared.error},
+        });
+    }
+    if (!prepared.ready) {
+        return native_success({
+            {"ok", false}, {"status", prepared.status}, {"path", path},
+            {"diagnostics", prepared.diagnostics},
+        });
+    }
+
+    auto& state = native_editor_state();
+    // A file run can start between the Web launcher's cleanup and this open.
+    // Fence the actual replacement on the editor thread with the old scene still installed.
+    if (auto error = stop_before_scene_replacement(state)) {
+        return native_success({{"ok", false}, {"status", "script_cleanup_failed"}, {"path", path},
+            {"message", *error}});
+    }
+    try {
+        materialize_scene_snapshot_into_state(
+            state,
+            prepared.snapshot,
+            load_policy == "degraded",
+            prepared.diagnostics);
+    } catch (const std::exception& error) {
+        prepared.diagnostics.push_back({
+            {"severity", "error"}, {"recoverable", false},
+            {"stage", "scene_commit"}, {"code", "SCENE_COMMIT_FAILED"},
+            {"message", error.what()}, {"path", path},
+        });
+        return native_success({
+            {"ok", false}, {"status", "invalid_archive"}, {"path", path},
+            {"diagnostics", prepared.diagnostics},
+        });
+    }
+    if (!state.scene->read_only) {
+        add_recent_project_native(state.scene->project_root);
+    }
+    std::size_t unresolved_count = 0;
+    for (const auto& actor : state.scene->actors) {
+        if (actor.load_status != ActorLoadStatus::Loaded) ++unresolved_count;
+    }
+    CFW_LOG_INFO("[ProjectLauncher] open_project opened path='{}' status='{}'",
+                 state.project_path, prepared.status);
+    ++state.scene->tree_revision;
+    return native_success({
+        {"ok", true}, {"status", prepared.status}, {"path", state.project_path},
+        {"degraded", prepared.status == "opened_degraded" || unresolved_count > 0},
+        {"unresolved_actor_count", unresolved_count},
+        {"diagnostics", prepared.diagnostics},
+        {"scene", {{"path", state.scene->route}, {"name", state.scene->name}}},
+    });
+}
+
 ProjectLauncherReply execute_project_launcher_operation(const ProjectLauncherRequest& request) {
     ProjectLauncherReply reply;
     reply.method = request.method;
+    if (request.method == ProjectLauncherMethod::Open) {
+        const auto result = open_launcher_project(request.path, request.load_policy);
+        if (!result.success) {
+            reply.error_code = "PROJECT_OPEN_FAILED"; reply.error_message = result.error;
+            return reply;
+        }
+        const auto& value = result.data;
+        auto& opened = reply.opened;
+        opened.ok = value.at("ok").get<bool>();
+        opened.status = value.at("status").get<std::string>();
+        opened.path = value.at("path").get<std::string>();
+        if (value.contains("message")) opened.message = value.at("message").get<std::string>();
+        if (value.contains("degraded")) opened.degraded = value.at("degraded").get<bool>();
+        if (value.contains("unresolved_actor_count")) opened.unresolved_actor_count = value.at("unresolved_actor_count").get<std::uint64_t>();
+        if (value.contains("scene")) opened.scene = SelectedProjectSnapshot{
+            value.at("scene").at("name").get<std::string>(), value.at("scene").at("path").get<std::string>()};
+        if (value.contains("diagnostics")) {
+            opened.diagnostics.emplace();
+            for (const auto& item : value.at("diagnostics")) {
+                ProjectOpenDiagnostic diagnostic;
+                if (item.contains("severity")) diagnostic.severity = item.at("severity").get<std::string>();
+                if (item.contains("stage")) diagnostic.stage = item.at("stage").get<std::string>();
+                if (item.contains("code")) diagnostic.code = item.at("code").get<std::string>();
+                if (item.contains("message")) diagnostic.message = item.at("message").get<std::string>();
+                if (item.contains("path")) diagnostic.path = item.at("path").get<std::string>();
+                if (item.contains("actor_name")) diagnostic.actor_name = item.at("actor_name").get<std::string>();
+                if (item.contains("actor_guid")) diagnostic.actor_guid = item.at("actor_guid").get<std::string>();
+                if (item.contains("shape_type")) diagnostic.shape_type = item.at("shape_type").get<std::string>();
+                if (item.contains("resource_path")) diagnostic.resource_path = item.at("resource_path").get<std::string>();
+                if (item.contains("field")) diagnostic.field = item.at("field").get<std::string>();
+                if (item.contains("camera_id")) diagnostic.camera_id = item.at("camera_id").get<std::string>();
+                if (item.contains("recoverable")) diagnostic.recoverable = item.at("recoverable").get<bool>();
+                if (item.contains("requires_confirmation")) diagnostic.requires_confirmation = item.at("requires_confirmation").get<bool>();
+                if (item.contains("count")) diagnostic.count = item.at("count").get<std::uint64_t>();
+                opened.diagnostics->push_back(std::move(diagnostic));
+            }
+        }
+        return reply;
+    }
     if (request.method == ProjectLauncherMethod::SelectFile) {
         if (const auto selected = open_project_file_native())
             reply.selected = {path_to_utf8(selected->stem()), path_to_utf8(*selected)};
@@ -6835,79 +6948,8 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
         }},
 
         {"open_project", [](const NativeRequest& request, const NativeContext&) {
-            const auto path = normalize_route(arg_string(request.args, 0));
-            const auto options = arg_object(request.args, 1);
-            const auto load_policy = options.value("load_policy", std::string{"prompt"});
-            CFW_LOG_INFO("[ProjectLauncher] open_project request path='{}'", path);
-            if (path.empty()) {
-                return native_success({{"ok", false}, {"path", std::string{}}, {"status", "cancelled"}});
-            }
-            auto prepared = prepare_archive_load(path, load_policy);
-            if (!prepared.service_ok) {
-                if (!python_script_service_dispatcher_registered()) {
-                    return native_success({
-                        {"ok", false},
-                        {"status", "service_initializing"},
-                        {"path", path},
-                        {"message", "Archive service is initializing"},
-                    });
-                }
-                return native_success({
-                    {"ok", false},
-                    {"status", "archive_service_error"},
-                    {"path", path},
-                    {"message", prepared.error.empty() ? "Python archive parser failed"
-                                                       : prepared.error},
-                });
-            }
-            if (!prepared.ready) {
-                return native_success({
-                    {"ok", false}, {"status", prepared.status}, {"path", path},
-                    {"diagnostics", prepared.diagnostics},
-                });
-            }
-
-            auto& state = native_editor_state();
-            // A file run can start between the Web launcher's cleanup and this open.
-            // Fence the actual replacement on the editor thread with the old scene still installed.
-            if (auto error = stop_before_scene_replacement(state)) {
-                return native_success({{"ok", false}, {"status", "script_cleanup_failed"}, {"path", path},
-                    {"message", *error}});
-            }
-            try {
-                materialize_scene_snapshot_into_state(
-                    state,
-                    prepared.snapshot,
-                    load_policy == "degraded",
-                    prepared.diagnostics);
-            } catch (const std::exception& error) {
-                prepared.diagnostics.push_back({
-                    {"severity", "error"}, {"recoverable", false},
-                    {"stage", "scene_commit"}, {"code", "SCENE_COMMIT_FAILED"},
-                    {"message", error.what()}, {"path", path},
-                });
-                return native_success({
-                    {"ok", false}, {"status", "invalid_archive"}, {"path", path},
-                    {"diagnostics", prepared.diagnostics},
-                });
-            }
-            if (!state.scene->read_only) {
-                add_recent_project_native(state.scene->project_root);
-            }
-            std::size_t unresolved_count = 0;
-            for (const auto& actor : state.scene->actors) {
-                if (actor.load_status != ActorLoadStatus::Loaded) ++unresolved_count;
-            }
-            CFW_LOG_INFO("[ProjectLauncher] open_project opened path='{}' status='{}'",
-                         state.project_path, prepared.status);
-            ++state.scene->tree_revision;
-            return native_success({
-                {"ok", true}, {"status", prepared.status}, {"path", state.project_path},
-                {"degraded", prepared.status == "opened_degraded" || unresolved_count > 0},
-                {"unresolved_actor_count", unresolved_count},
-                {"diagnostics", prepared.diagnostics},
-                {"scene", {{"path", state.scene->route}, {"name", state.scene->name}}},
-            });
+            return open_launcher_project(arg_string(request.args, 0),
+                arg_object(request.args, 1).value("load_policy", std::string{"prompt"}));
         }},
         {"open_project_file", [](const NativeRequest&, const NativeContext&) {
             const auto selected = open_project_file_native();

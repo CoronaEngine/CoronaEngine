@@ -119,6 +119,20 @@ enum class GizmoMethod { SetTarget, Pointer };
 bool object_keys(CefRefPtr<CefV8Value> object, std::initializer_list<const char*> allowed);
 
 bool read_project_launcher(ProjectLauncherRequest& request, const CefV8ValueList& arguments) {
+    if (request.method == ProjectLauncherMethod::Open) {
+        if (arguments.empty() || arguments.size() > 2 || !arguments[0] || !arguments[0]->IsString()) return false;
+        request.path = arguments[0]->GetStringValue().ToString();
+        if (request.path.find('\0') != std::string::npos) return false;
+        if (arguments.size() == 2) {
+            if (!object_keys(arguments[1], {"load_policy"})) return false;
+            if (arguments[1]->HasValue("load_policy")) {
+                const auto policy = arguments[1]->GetValue("load_policy");
+                if (!policy || !policy->IsString()) return false;
+                request.load_policy = policy->GetStringValue().ToString();
+            }
+        }
+        return request.load_policy == "prompt" || request.load_policy == "degraded";
+    }
     const bool world = request.method == ProjectLauncherMethod::CreateWorld;
     if (!world && request.method != ProjectLauncherMethod::CreateMultiplayer) return arguments.empty();
     if (arguments.size() != 1 || !object_keys(arguments[0], world
@@ -172,7 +186,49 @@ CefRefPtr<CefV8Value> file_tree_value(const FileTreeEntry& entry) {
     return value;
 }
 
+CefRefPtr<CefV8Value> project_open_diagnostic_value(const ProjectOpenDiagnostic& diagnostic) {
+    auto value = CefV8Value::CreateObject(nullptr, nullptr);
+    if (diagnostic.severity) value->SetValue("severity", CefV8Value::CreateString(*diagnostic.severity), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (diagnostic.stage) value->SetValue("stage", CefV8Value::CreateString(*diagnostic.stage), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (diagnostic.code) value->SetValue("code", CefV8Value::CreateString(*diagnostic.code), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (diagnostic.message) value->SetValue("message", CefV8Value::CreateString(*diagnostic.message), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (diagnostic.path) value->SetValue("path", CefV8Value::CreateString(*diagnostic.path), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (diagnostic.actor_name) value->SetValue("actor_name", CefV8Value::CreateString(*diagnostic.actor_name), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (diagnostic.actor_guid) value->SetValue("actor_guid", CefV8Value::CreateString(*diagnostic.actor_guid), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (diagnostic.shape_type) value->SetValue("shape_type", CefV8Value::CreateString(*diagnostic.shape_type), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (diagnostic.resource_path) value->SetValue("resource_path", CefV8Value::CreateString(*diagnostic.resource_path), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (diagnostic.field) value->SetValue("field", CefV8Value::CreateString(*diagnostic.field), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (diagnostic.camera_id) value->SetValue("camera_id", CefV8Value::CreateString(*diagnostic.camera_id), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (diagnostic.recoverable) value->SetValue("recoverable", CefV8Value::CreateBool(*diagnostic.recoverable), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (diagnostic.requires_confirmation) value->SetValue("requires_confirmation", CefV8Value::CreateBool(*diagnostic.requires_confirmation), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (diagnostic.count) value->SetValue("count", CefV8Value::CreateDouble(*diagnostic.count), V8_PROPERTY_ATTRIBUTE_NONE);
+    return value;
+}
+
 CefRefPtr<CefV8Value> project_launcher_value(const ProjectLauncherReply& reply) {
+    if (reply.method == ProjectLauncherMethod::Open) {
+        const auto& opened = reply.opened;
+        auto value = CefV8Value::CreateObject(nullptr, nullptr);
+        value->SetValue("ok", CefV8Value::CreateBool(opened.ok), V8_PROPERTY_ATTRIBUTE_NONE);
+        value->SetValue("status", CefV8Value::CreateString(opened.status), V8_PROPERTY_ATTRIBUTE_NONE);
+        value->SetValue("path", CefV8Value::CreateString(opened.path), V8_PROPERTY_ATTRIBUTE_NONE);
+        if (opened.message) value->SetValue("message", CefV8Value::CreateString(*opened.message), V8_PROPERTY_ATTRIBUTE_NONE);
+        if (opened.degraded) value->SetValue("degraded", CefV8Value::CreateBool(*opened.degraded), V8_PROPERTY_ATTRIBUTE_NONE);
+        if (opened.unresolved_actor_count) value->SetValue("unresolved_actor_count", CefV8Value::CreateDouble(*opened.unresolved_actor_count), V8_PROPERTY_ATTRIBUTE_NONE);
+        if (opened.scene) {
+            auto scene = CefV8Value::CreateObject(nullptr, nullptr);
+            scene->SetValue("name", CefV8Value::CreateString(opened.scene->name), V8_PROPERTY_ATTRIBUTE_NONE);
+            scene->SetValue("path", CefV8Value::CreateString(opened.scene->path), V8_PROPERTY_ATTRIBUTE_NONE);
+            value->SetValue("scene", scene, V8_PROPERTY_ATTRIBUTE_NONE);
+        }
+        if (opened.diagnostics) {
+            auto diagnostics = CefV8Value::CreateArray(static_cast<int>(opened.diagnostics->size()));
+            for (int index = 0; index < static_cast<int>(opened.diagnostics->size()); ++index)
+                diagnostics->SetValue(index, project_open_diagnostic_value(opened.diagnostics->at(index)));
+            value->SetValue("diagnostics", diagnostics, V8_PROPERTY_ATTRIBUTE_NONE);
+        }
+        return value;
+    }
     if (reply.method == ProjectLauncherMethod::SelectFile) {
         auto value = CefV8Value::CreateObject(nullptr, nullptr);
         if (!reply.selected.path.empty()) {
@@ -2912,6 +2968,7 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     }
     auto root = CefV8Value::CreateObject(nullptr, nullptr);
     auto project = CefV8Value::CreateObject(nullptr, nullptr);
+    project->SetValue("openProject", CefV8Value::CreateFunction("openProject", new NativeHandler(endpoint, ProjectLauncherMethod::Open)), V8_PROPERTY_ATTRIBUTE_READONLY);
     project->SetValue("openProjectFile", CefV8Value::CreateFunction("openProjectFile", new NativeHandler(endpoint, ProjectLauncherMethod::SelectFile)), V8_PROPERTY_ATTRIBUTE_READONLY);
     project->SetValue("createWorldProject", CefV8Value::CreateFunction("createWorldProject", new NativeHandler(endpoint, ProjectLauncherMethod::CreateWorld)), V8_PROPERTY_ATTRIBUTE_READONLY);
     project->SetValue("createMultiplayerProject", CefV8Value::CreateFunction("createMultiplayerProject", new NativeHandler(endpoint, ProjectLauncherMethod::CreateMultiplayer)), V8_PROPERTY_ATTRIBUTE_READONLY);
