@@ -2693,9 +2693,9 @@ void set_render_backend(const std::string& mode, std::uintptr_t camera_handle) {
 std::string get_render_backend(std::uintptr_t camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
-        if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(resolved_handle)) {
-            return camera->render_backend == CameraRenderBackend::Vision ? "vision" : "native";
-        }
+        // 读快照 + 待处理命令（快照 ⊕ pending）：外部线程不再拿相机槽锁。
+        const auto camera_view = SharedDataHub::instance().camera_view(resolved_handle);
+        return camera_view.render_backend == CameraRenderBackend::Vision ? "vision" : "native";
     }
     return "native";
 }
@@ -2727,9 +2727,9 @@ void set_vision_render_mode(const std::string& mode, std::uintptr_t camera_handl
 std::string get_vision_render_mode(std::uintptr_t camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
-        if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(resolved_handle)) {
-            return vision_render_mode_to_string(camera->vision_render_mode);
-        }
+        // 读快照 + 待处理命令（快照 ⊕ pending）：外部线程不再拿相机槽锁。
+        const auto camera_view = SharedDataHub::instance().camera_view(resolved_handle);
+        return vision_render_mode_to_string(camera_view.vision_render_mode);
     }
     return "path_tracing";
 }
@@ -2773,9 +2773,9 @@ void set_vision_denoiser(const std::string& type, std::uintptr_t camera_handle) 
 std::string get_vision_denoiser(std::uintptr_t camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
-        if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(resolved_handle)) {
-            return vision_denoiser_name(camera->vision_denoiser);
-        }
+        // 读快照 + 待处理命令（快照 ⊕ pending）：外部线程不再拿相机槽锁。
+        const auto camera_view = SharedDataHub::instance().camera_view(resolved_handle);
+        return vision_denoiser_name(camera_view.vision_denoiser);
     }
     return "scene";
 }
@@ -2791,9 +2791,9 @@ std::string get_requested_vision_denoiser(std::uintptr_t camera_handle) {
 bool get_vision_denoise(std::uintptr_t camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
-        if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(resolved_handle)) {
-            return camera->vision_denoise;
-        }
+        // 读快照 + 待处理命令（快照 ⊕ pending）：外部线程不再拿相机槽锁。
+        const auto camera_view = SharedDataHub::instance().camera_view(resolved_handle);
+        return camera_view.vision_denoise;
     }
     return false;
 }
@@ -2926,9 +2926,9 @@ void set_vision_accumulation(bool enabled, std::uintptr_t camera_handle) {
 bool get_vision_accumulation(std::uintptr_t camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
-        if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(resolved_handle)) {
-            return camera->vision_accumulation;
-        }
+        // 读快照 + 待处理命令（快照 ⊕ pending）：外部线程不再拿相机槽锁。
+        const auto camera_view = SharedDataHub::instance().camera_view(resolved_handle);
+        return camera_view.vision_accumulation;
     }
     return false;
 }
@@ -2961,9 +2961,9 @@ void set_vision_stable_planes(bool enabled, std::uintptr_t camera_handle) {
 bool get_vision_stable_planes(std::uintptr_t camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
-        if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(resolved_handle)) {
-            return camera->vision_stable_planes;
-        }
+        // 读快照 + 待处理命令（快照 ⊕ pending）：外部线程不再拿相机槽锁。
+        const auto camera_view = SharedDataHub::instance().camera_view(resolved_handle);
+        return camera_view.vision_stable_planes;
     }
     return false;
 }
