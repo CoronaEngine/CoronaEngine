@@ -2046,6 +2046,8 @@ Corona::API::Camera::Camera()
         accessor->aspect = static_cast<float>(width_) / static_cast<float>(height_);
         accessor->surface = get_default_surface();
         accessor->actor_pick_handle = actor_pick_handle;
+        // 播种首帧快照：外部线程从这一刻起就能读到这台相机，不必等第一个 DAG tick。
+        SharedDataHub::instance().seed_camera_snapshot_from_storage(handle_);
     } else {
         CFW_LOG_ERROR("[Camera::Camera] Failed to acquire write access to camera storage");
         SharedDataHub::instance().camera_storage().deallocate(handle_);
@@ -2083,6 +2085,8 @@ Corona::API::Camera::Camera(const std::array<float, 3>& position, const std::arr
         accessor->aspect = static_cast<float>(width_) / static_cast<float>(height_);
         accessor->surface = get_default_surface();
         accessor->actor_pick_handle = actor_pick_handle;
+        // 播种首帧快照：外部线程从这一刻起就能读到这台相机，不必等第一个 DAG tick。
+        SharedDataHub::instance().seed_camera_snapshot_from_storage(handle_);
     } else {
         CFW_LOG_ERROR("[Camera::Camera] Failed to acquire write access to camera storage");
         SharedDataHub::instance().camera_storage().deallocate(handle_);
@@ -2126,15 +2130,16 @@ void Corona::API::Camera::set(const std::array<float, 3>& position, const std::a
     up_vec.y = world_up[1];
     up_vec.z = world_up[2];
 
-    if (auto accessor = SharedDataHub::instance().camera_storage().acquire_write(handle_)) {
-        accessor->position = pos_vec;
-        accessor->forward = fwd_vec;
-        accessor->world_up = up_vec;
-        accessor->fov = fov;
-        accessor->aspect = static_cast<float>(width_) / static_cast<float>(height_);
-    } else {
-        CFW_LOG_ERROR("[Camera::set] Failed to acquire write access to camera storage");
-    }
+    // 走命令队列（P1）：相机 pose 的唯一入站通道。
+    // 注意：不再顺带改写 aspect —— aspect 属于尺寸/投影，由 set_size / set_projection
+    // 负责，pose 更新不应该把它重置成 API 侧镜像值。
+    CameraMoveCommand command{};
+    command.camera_handle = handle_;
+    command.position = pos_vec;
+    command.forward = fwd_vec;
+    command.world_up = up_vec;
+    command.fov = fov;
+    SharedDataHub::instance().enqueue_camera_move(command);
 }
 
 std::array<float, 3> Corona::API::Camera::get_position() const {
@@ -2143,17 +2148,12 @@ std::array<float, 3> Corona::API::Camera::get_position() const {
         return {0.0f, 0.0f, 0.0f};
     }
 
-    std::array result = {0.0f, 0.0f, 0.0f};
-    if (auto accessor = SharedDataHub::instance().camera_storage().acquire_read(handle_)) {
-        result[0] = accessor->position.x;
-        result[1] = accessor->position.y;
-        result[2] = accessor->position.z;
-    } else {
-        CFW_LOG_ERROR("[Camera::get_position] Failed to acquire read access to camera storage");
-    }
-
-    return result;
+    // 读相机快照（已提交）+ 待处理命令（pending）：不拿相机槽锁，
+    // 且"写完立刻读"能读到刚提交的值。
+    const auto view = SharedDataHub::instance().camera_view(handle_);
+    return {view.position.x, view.position.y, view.position.z};
 }
+
 
 std::array<float, 3> Corona::API::Camera::get_forward() const {
     if (handle_ == 0) {
@@ -2161,17 +2161,10 @@ std::array<float, 3> Corona::API::Camera::get_forward() const {
         return {0.0f, 0.0f, 1.0f};
     }
 
-    std::array result = {0.0f, 0.0f, 1.0f};
-    if (auto accessor = SharedDataHub::instance().camera_storage().acquire_read(handle_)) {
-        result[0] = accessor->forward.x;
-        result[1] = accessor->forward.y;
-        result[2] = accessor->forward.z;
-    } else {
-        CFW_LOG_ERROR("[Camera::get_forward] Failed to acquire read access to camera storage");
-    }
-
-    return result;
+    const auto view = SharedDataHub::instance().camera_view(handle_);
+    return {view.forward.x, view.forward.y, view.forward.z};
 }
+
 
 std::array<float, 3> Corona::API::Camera::get_world_up() const {
     if (handle_ == 0) {
@@ -2179,17 +2172,10 @@ std::array<float, 3> Corona::API::Camera::get_world_up() const {
         return {0.0f, 1.0f, 0.0f};
     }
 
-    std::array result = {0.0f, 1.0f, 0.0f};
-    if (auto accessor = SharedDataHub::instance().camera_storage().acquire_read(handle_)) {
-        result[0] = accessor->world_up.x;
-        result[1] = accessor->world_up.y;
-        result[2] = accessor->world_up.z;
-    } else {
-        CFW_LOG_ERROR("[Camera::get_world_up] Failed to acquire read access to camera storage");
-    }
-
-    return result;
+    const auto view = SharedDataHub::instance().camera_view(handle_);
+    return {view.world_up.x, view.world_up.y, view.world_up.z};
 }
+
 
 float Corona::API::Camera::get_fov() const {
     if (handle_ == 0) {
@@ -2197,15 +2183,9 @@ float Corona::API::Camera::get_fov() const {
         return 45.0f;
     }
 
-    float result = 45.0f;
-    if (auto accessor = SharedDataHub::instance().camera_storage().acquire_read(handle_)) {
-        result = accessor->fov;
-    } else {
-        CFW_LOG_ERROR("[Camera::get_fov] Failed to acquire read access to camera storage");
-    }
-
-    return result;
+    return SharedDataHub::instance().camera_view(handle_).fov;
 }
+
 
 std::uintptr_t Corona::API::Camera::get_handle() const {
     return handle_;
@@ -2234,13 +2214,9 @@ void* Corona::API::Camera::get_surface() const {
         return nullptr;
     }
 
-    if (auto accessor = SharedDataHub::instance().camera_storage().acquire_read(handle_)) {
-        return accessor->surface;
-    }
-
-    CFW_LOG_ERROR("[Camera::get_surface] Failed to acquire read access to camera storage");
-    return nullptr;
+    return SharedDataHub::instance().camera_view(handle_).surface;
 }
+
 
 void Corona::API::Camera::set_offscreen_capture_mode(bool enabled) {
     if (handle_ == 0) {
@@ -2248,19 +2224,21 @@ void Corona::API::Camera::set_offscreen_capture_mode(bool enabled) {
         return;
     }
 
-    if (auto accessor = SharedDataHub::instance().camera_storage().acquire_write(handle_)) {
-        if (enabled) {
-            accessor->surface = nullptr;
-            accessor->follows_default_surface = false;
-            accessor->view_open = false;
-        } else {
-            accessor->follows_default_surface = true;
-            accessor->surface = get_default_surface();
-        }
-        return;
+    // 走命令队列（P1）：离屏采集开关同时改 surface / view_open / 默认 surface 跟随。
+    CameraStateUpdateCommand command{};
+    command.camera_handle = handle_;
+    if (enabled) {
+        command.fields = CameraStateUpdateField::Surface | CameraStateUpdateField::ViewState;
+        command.surface = nullptr;
+        command.follows_default_surface = false;
+        command.view_open = false;
+    } else {
+        command.fields = CameraStateUpdateField::Surface |
+                         CameraStateUpdateField::FollowsDefaultSurface;
+        command.surface = get_default_surface();
+        command.follows_default_surface = true;
     }
-
-    CFW_LOG_ERROR("[Camera::set_offscreen_capture_mode] Failed to acquire write access to camera storage");
+    SharedDataHub::instance().enqueue_camera_state_update(command);
 }
 
 void Corona::API::Camera::save_screenshot(const std::string& path) const {
@@ -2513,18 +2491,17 @@ std::array<float, 6> Corona::API::Camera::get_view_state() const {
         return {0.0f, 120.0f, 120.0f, 960.0f, 540.0f, 1.0f};
     }
 
-    if (auto accessor = SharedDataHub::instance().camera_storage().acquire_read(handle_)) {
-        return {
-            accessor->view_open ? 1.0f : 0.0f,
-            static_cast<float>(accessor->view_x),
-            static_cast<float>(accessor->view_y),
-            static_cast<float>(accessor->view_width),
-            static_cast<float>(accessor->view_height),
-            accessor->move_speed,
-        };
-    }
-    return {0.0f, 120.0f, 120.0f, 960.0f, 540.0f, 1.0f};
+    const auto view = SharedDataHub::instance().camera_view(handle_);
+    return {
+        view.view_open ? 1.0f : 0.0f,
+        static_cast<float>(view.view_x),
+        static_cast<float>(view.view_y),
+        static_cast<float>(view.view_width),
+        static_cast<float>(view.view_height),
+        view.move_speed,
+    };
 }
+
 
 // ########################
 //      ImageEffects
@@ -2609,16 +2586,13 @@ std::array<int, 2> Corona::API::Camera::get_size() const {
         return {width_, height_};
     }
 
-    if (auto accessor = SharedDataHub::instance().camera_storage().acquire_read(handle_)) {
-        return {
-            static_cast<int>(accessor->width),
-            static_cast<int>(accessor->height),
-        };
-    }
-
-    CFW_LOG_ERROR("[Camera::get_size] Failed to acquire read access to camera storage");
-    return {width_, height_};
+    const auto view = SharedDataHub::instance().camera_view(handle_);
+    return {
+        static_cast<int>(view.width),
+        static_cast<int>(view.height),
+    };
 }
+
 
 void Corona::API::Camera::set_viewport_rect(int x, int y, int width, int height) {
     // TODO: Implement viewport rectangle settings

@@ -748,21 +748,27 @@ bool handle_actor_transform_fast(const CefRefPtr<CefProcessMessage>& message) {
         if (!geometry || geometry->transform_handle == 0) {
             continue;
         }
-        if (auto transform = hub.model_transform_storage().try_acquire_write(geometry->transform_handle)) {
-            switch (operation) {
-                case 0:
-                    transform->position = value;
-                    break;
-                case 1:
-                    transform->euler_rotation = value;
-                    break;
-                case 2:
-                    transform->scale = value;
-                    break;
-                default:
-                    break;
-            }
+        // fast path 也走命令队列：属性面板连续拖拽由 LatestWins 合并，
+        // 不会在 DAG 的槽锁上阻塞 CEF 线程。
+        Corona::TransformUpdateCommand command{};
+        command.transform_handle = geometry->transform_handle;
+        switch (operation) {
+            case 0:
+                command.fields = Corona::TransformField::Position;
+                command.position = value;
+                break;
+            case 1:
+                command.fields = Corona::TransformField::Rotation;
+                command.euler_rotation = value;
+                break;
+            case 2:
+                command.fields = Corona::TransformField::Scale;
+                command.scale = value;
+                break;
+            default:
+                continue;
         }
+        hub.enqueue_transform_update(command);
     }
 
     return true;
@@ -967,9 +973,10 @@ std::optional<ktm::fvec3> actor_gizmo_position(std::uintptr_t actor_handle) {
         if (!geometry || geometry->transform_handle == 0) {
             continue;
         }
-        if (auto transform =
-                hub.model_transform_storage().try_acquire_read(geometry->transform_handle)) {
-            return transform->position;
+        // 读快照（已提交）+ pending（待提交）：gizmo 拖动时能立刻看到自己刚提交的位置，
+        // 不必等 Optics 在下一 tick 应用，也不会卡在 DAG 的槽锁上。
+        if (auto view = hub.transform_view(geometry->transform_handle)) {
+            return view->position;
         }
     }
     return std::nullopt;
@@ -977,7 +984,9 @@ std::optional<ktm::fvec3> actor_gizmo_position(std::uintptr_t actor_handle) {
 
 bool write_actor_gizmo_position(std::uintptr_t actor_handle,
                                 const ktm::fvec3& position) {
-    bool wrote = false;
+    // 走命令队列，不再直写槽位：CEF 与脚本 / 网络写者现在共用同一条入站通道，
+    // 由 Optics 在 tick 内按序应用（LatestWins，按 transform_handle 合并）。
+    bool submitted = false;
     auto& hub = Corona::SharedDataHub::instance();
     for (const auto geometry_handle :
          hub.resolve_actor_geometry_handles(actor_handle)) {
@@ -985,13 +994,14 @@ bool write_actor_gizmo_position(std::uintptr_t actor_handle,
         if (!geometry || geometry->transform_handle == 0) {
             continue;
         }
-        if (auto transform =
-                hub.model_transform_storage().try_acquire_write(geometry->transform_handle)) {
-            transform->position = position;
-            wrote = true;
-        }
+        Corona::TransformUpdateCommand command{};
+        command.transform_handle = geometry->transform_handle;
+        command.fields = Corona::TransformField::Position;
+        command.position = position;
+        hub.enqueue_transform_update(command);
+        submitted = true;
     }
-    return wrote;
+    return submitted;
 }
 
 ktm::fvec3 viewport_gizmo_pointer_ray(const Corona::CameraDevice& camera,

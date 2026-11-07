@@ -1,5 +1,7 @@
 #pragma once
 #include <horizon/core/storage.h>
+#include <corona/kernel/command/command_buffer.h>
+#include <corona/kernel/command/snapshot_channel.h>
 #include <corona/memory/gpu_mem_ledger.h>
 #include <corona/resource/types/scene.h>  // Resource::IkChain（GeometryDevice::ik_chains）
 #include <corona/resource/model_import_options.h>
@@ -424,6 +426,101 @@ struct ActorPickDevice {
     bool result_ready{false};
 };
 
+// ---------------------------------------------------------------------------
+// 相机快照（P1：跨线程只读视图）
+//
+// CameraDevice 是 DAG 的内部状态；外部线程（CEF / 脚本 / 主线程）过去直接
+// try_acquire_read 槽位来读它，于是 UI 的读要么被 DAG 的临界区阻塞，要么
+// 在 _nowait 版本下丢一整帧。这里改为每 tick 发布一份只读投影：
+//   - 发布者：Optics（DAG 线程），tick 内应用完相机命令之后重建一次
+//   - 读者：任意线程，读到的永远是某个完整 tick 的状态
+// 字段只做投影：蒙皮/字符串设置等内部状态不进来。
+// ---------------------------------------------------------------------------
+struct CameraSnapshotRow {
+    std::uintptr_t handle{0};
+    ktm::fvec3 position{};
+    ktm::fvec3 forward{};
+    ktm::fvec3 world_up{};
+    float fov{60.0f};
+    float aspect{16.0f / 9.0f};
+    float near_plane{0.1f};
+    float far_plane{100.0f};
+    float projection_x_sign{1.0f};
+    std::uint32_t width{1920};
+    std::uint32_t height{1080};
+    void* surface{nullptr};
+    bool follows_default_surface{true};
+    bool view_open{false};
+    int view_x{120};
+    int view_y{120};
+    int view_width{960};
+    int view_height{540};
+    float move_speed{1.0f};
+    CameraOutputMode output_mode{CameraOutputMode::FinalColor};
+    CameraRenderBackend render_backend{CameraRenderBackend::Native};
+    CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
+    bool vision_denoise{true};
+    CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
+    bool vision_accumulation{false};
+    bool vision_stable_planes{true};
+};
+
+struct CameraSnapshot {
+    std::uint64_t tick{0};
+    std::vector<CameraSnapshotRow> rows;
+};
+
+// ---------------------------------------------------------------------------
+// 变换（P2：跨线程写命令 + 读快照）
+//
+// ModelTransform 有 3 个非 DAG 写者（CEF gizmo、脚本、网络）和 4 个 DAG 写者。
+// 过去外部写者直接 try_acquire_write 槽位，与 DAG 写者之间没有顺序保证；
+// 现在外部写只走 TransformUpdateCommand，由 Optics 在 tick 内应用。
+// ---------------------------------------------------------------------------
+enum class TransformField : std::uint32_t {
+    None = 0,
+    Position = 1u << 0,
+    Rotation = 1u << 1,
+    Scale = 1u << 2,
+    All = Position | Rotation | Scale,
+};
+
+constexpr TransformField operator|(TransformField lhs, TransformField rhs) {
+    return static_cast<TransformField>(static_cast<std::uint32_t>(lhs) |
+                                       static_cast<std::uint32_t>(rhs));
+}
+
+constexpr bool has_transform_field(TransformField fields, TransformField field) {
+    return (static_cast<std::uint32_t>(fields) & static_cast<std::uint32_t>(field)) != 0;
+}
+
+struct TransformUpdateCommand {
+    std::uintptr_t transform_handle{};
+    TransformField fields{TransformField::None};
+    ktm::fvec3 position{};
+    ktm::fvec3 euler_rotation{};
+    ktm::fvec3 scale{1.0f, 1.0f, 1.0f};
+};
+
+struct TransformUpdateKey {
+    static std::uintptr_t get(const TransformUpdateCommand& command) noexcept {
+        return command.transform_handle;
+    }
+};
+
+/// 一份变换快照行：外部线程读这份投影，不再对槽位加锁。
+struct TransformSnapshotRow {
+    std::uintptr_t handle{0};
+    ktm::fvec3 position{};
+    ktm::fvec3 euler_rotation{};
+    ktm::fvec3 scale{1.0f, 1.0f, 1.0f};
+};
+
+struct TransformSnapshot {
+    std::uint64_t tick{0};
+    std::vector<TransformSnapshotRow> rows;
+};
+
 // Runtime-only actor pick request/completion messages. These are deliberately
 // kept outside ActorPickDevice so multiple clicks can be in flight without a
 // newer request overwriting an older one.
@@ -490,6 +587,7 @@ enum class CameraStateUpdateField : std::uint32_t {
     VisionPtSettings = 1u << 14,
     VisionRestirSettings = 1u << 15,
     Projection = 1u << 16,
+    FollowsDefaultSurface = 1u << 17,
 };
 
 constexpr CameraStateUpdateField operator|(CameraStateUpdateField lhs,
@@ -525,6 +623,7 @@ struct CameraStateUpdateCommand {
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
     bool view_open{false};
+    bool follows_default_surface{false};
     int view_x{120};
     int view_y{120};
     int view_width{960};
@@ -747,6 +846,34 @@ class SharedDataHub {
     ImageStorage& image_storage();
     const ImageStorage& image_storage() const;
 
+    // ---- 变换（P2）：外部写走命令，外部读走快照 ----
+    void enqueue_transform_update(TransformUpdateCommand command);
+    std::vector<TransformUpdateCommand> drain_transform_updates();
+    void publish_transform_snapshot_from_storage();
+    [[nodiscard]] std::shared_ptr<const TransformSnapshot> transform_snapshot() const;
+    [[nodiscard]] std::optional<TransformSnapshotRow> transform_row(
+        std::uintptr_t transform_handle) const;
+    /// 有效值 = 快照（已提交）+ 待处理命令（pending）
+    [[nodiscard]] std::optional<TransformSnapshotRow> transform_view(
+        std::uintptr_t transform_handle) const;
+    void clear_transform_updates(std::uintptr_t transform_handle);
+
+    // ---- 相机快照（P1）：DAG 每 tick 发布，外部线程只读 ----
+    /// 用一整份新快照替换当前快照（Optics，DAG 线程）
+    void publish_camera_snapshot(CameraSnapshot snapshot);
+    /// 从相机槽位重建整份快照（Optics，DAG 线程；tick 内应用完命令之后调用）
+    void publish_camera_snapshot_from_storage();
+    /// 当前快照（任意线程，可为 nullptr）
+    [[nodiscard]] std::shared_ptr<const CameraSnapshot> camera_snapshot() const;
+    /// 创建相机时从槽位播种一行（主线程，仅创建路径），避免首帧读到空快照
+    void seed_camera_snapshot_from_storage(std::uintptr_t camera_handle);
+    /// 销毁相机时移除该行（避免把已释放的槽位暴露给读者）
+    void remove_camera_snapshot_row(std::uintptr_t camera_handle);
+    /// 读一行的已提交值（快照）
+    [[nodiscard]] std::optional<CameraSnapshotRow> camera_row(std::uintptr_t camera_handle) const;
+    /// 有效值 = 快照（已提交）+ 待处理命令（pending），用于 get_* 的读己之写
+    [[nodiscard]] CameraSnapshotRow camera_view(std::uintptr_t camera_handle) const;
+
     void publish_camera_frame_timing(std::uintptr_t camera_handle, double render_ms, double denoise_ms,
                                      CameraVisionRenderMode mode,
                                      std::chrono::steady_clock::time_point completed_at =
@@ -825,6 +952,11 @@ class SharedDataHub {
     std::unordered_map<std::uintptr_t, std::string> actor_guids_;
     EnvironmentStorage environment_storage_;
     CameraStorage camera_storage_;
+    Kernel::SnapshotChannel<CameraSnapshot> camera_snapshot_;
+    Kernel::CommandBuffer<TransformUpdateCommand, TransformUpdateKey,
+                          Kernel::CoalescePolicy::LatestWins>
+        transform_updates_;
+    Kernel::SnapshotChannel<TransformSnapshot> transform_snapshot_;
     mutable std::mutex camera_timing_mutex_;
     std::unordered_map<std::uintptr_t, CameraFrameTiming> camera_timings_;
     ActorPickStorage actor_pick_storage_;
@@ -833,7 +965,7 @@ class SharedDataHub {
     std::vector<ActorPickCompletion> actor_pick_completions_;
     SceneStorage scene_storage_;
     ImageStorage image_storage_;
-    std::mutex camera_move_mutex_;
+    mutable std::mutex camera_move_mutex_;
     std::unordered_map<std::uintptr_t, CameraMoveCommand> pending_camera_moves_;
     std::uint64_t camera_move_sequence_{0};
     std::mutex camera_viewport_update_mutex_;

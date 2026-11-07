@@ -205,6 +205,293 @@ std::optional<CameraFrameTiming> SharedDataHub::camera_frame_timing(
     return it == camera_timings_.end() ? std::nullopt : std::optional{it->second};
 }
 
+namespace {
+
+// CameraDevice -> 外部可读投影。只搬运"读者需要的字段"，内部状态（字符串设置、
+// actor_pick_handle 等）留在 DAG 内部。
+CameraSnapshotRow make_camera_row(std::uintptr_t handle, const CameraDevice& camera) {
+    CameraSnapshotRow row;
+    row.handle = handle;
+    row.position = camera.position;
+    row.forward = camera.forward;
+    row.world_up = camera.world_up;
+    row.fov = camera.fov;
+    row.aspect = camera.aspect;
+    row.near_plane = camera.near_plane;
+    row.far_plane = camera.far_plane;
+    row.projection_x_sign = camera.projection_x_sign;
+    row.width = camera.width;
+    row.height = camera.height;
+    row.surface = camera.surface;
+    row.follows_default_surface = camera.follows_default_surface;
+    row.view_open = camera.view_open;
+    row.view_x = camera.view_x;
+    row.view_y = camera.view_y;
+    row.view_width = camera.view_width;
+    row.view_height = camera.view_height;
+    row.move_speed = camera.move_speed;
+    row.output_mode = camera.output_mode;
+    row.render_backend = camera.render_backend;
+    row.vision_render_mode = camera.vision_render_mode;
+    row.vision_denoise = camera.vision_denoise;
+    row.vision_denoiser = camera.vision_denoiser;
+    row.vision_accumulation = camera.vision_accumulation;
+    row.vision_stable_planes = camera.vision_stable_planes;
+    return row;
+}
+
+}  // namespace
+
+void SharedDataHub::publish_camera_snapshot(CameraSnapshot snapshot) {
+    camera_snapshot_.publish(std::move(snapshot));
+}
+
+void SharedDataHub::publish_camera_snapshot_from_storage() {
+    CameraSnapshot snapshot;
+    snapshot.tick = camera_snapshot_.revision() + 1;
+    const auto& storage = camera_storage_;
+    for (const auto& camera : std::as_const(storage)) {
+        const auto handle = reinterpret_cast<std::uintptr_t>(static_cast<const void*>(&camera));
+        if (handle == 0) {
+            continue;
+        }
+        snapshot.rows.push_back(make_camera_row(handle, camera));
+    }
+    camera_snapshot_.publish(std::move(snapshot));
+}
+
+std::shared_ptr<const CameraSnapshot> SharedDataHub::camera_snapshot() const {
+    return camera_snapshot_.read();
+}
+
+void SharedDataHub::seed_camera_snapshot_from_storage(std::uintptr_t camera_handle) {
+    if (camera_handle == 0) {
+        return;
+    }
+
+    // 建相机时槽位刚分配，除创建者外无人持有引用；这里读一次把首行播种下去，
+    // 避免"创建后到首个 Optics tick 之间"的 get_* 读到默认值。
+    std::optional<CameraSnapshotRow> seeded;
+    if (auto camera = camera_storage_.try_acquire_read(camera_handle)) {
+        seeded = make_camera_row(camera_handle, *camera);
+    }
+    if (!seeded.has_value()) {
+        return;
+    }
+
+    CameraSnapshot next;
+    if (auto current = camera_snapshot_.read()) {
+        next = *current;
+    }
+    auto it = std::find_if(next.rows.begin(), next.rows.end(),
+                           [camera_handle](const CameraSnapshotRow& candidate) {
+                               return candidate.handle == camera_handle;
+                           });
+    if (it == next.rows.end()) {
+        next.rows.push_back(*seeded);
+    } else {
+        *it = *seeded;
+    }
+    camera_snapshot_.publish(std::move(next));
+}
+
+void SharedDataHub::remove_camera_snapshot_row(std::uintptr_t camera_handle) {
+    if (camera_handle == 0) {
+        return;
+    }
+
+    auto current = camera_snapshot_.read();
+    if (!current) {
+        return;
+    }
+    CameraSnapshot next = *current;
+    const auto before = next.rows.size();
+    next.rows.erase(std::remove_if(next.rows.begin(), next.rows.end(),
+                                   [camera_handle](const CameraSnapshotRow& row) {
+                                       return row.handle == camera_handle;
+                                   }),
+                    next.rows.end());
+    if (next.rows.size() != before) {
+        camera_snapshot_.publish(std::move(next));
+    }
+}
+
+std::optional<CameraSnapshotRow> SharedDataHub::camera_row(std::uintptr_t camera_handle) const {
+    if (camera_handle == 0) {
+        return std::nullopt;
+    }
+    auto snapshot = camera_snapshot_.read();
+    if (!snapshot) {
+        return std::nullopt;
+    }
+    for (const auto& row : snapshot->rows) {
+        if (row.handle == camera_handle) {
+            return row;
+        }
+    }
+    return std::nullopt;
+}
+
+CameraSnapshotRow SharedDataHub::camera_view(std::uintptr_t camera_handle) const {
+    CameraSnapshotRow view;
+    view.handle = camera_handle;
+    if (auto committed = camera_row(camera_handle)) {
+        view = *committed;
+    }
+
+    // 叠加待处理的姿态命令（读己之写）
+    {
+        std::lock_guard<std::mutex> lock(camera_move_mutex_);
+        if (auto it = pending_camera_moves_.find(camera_handle); it != pending_camera_moves_.end()) {
+            view.position = it->second.position;
+            view.forward = it->second.forward;
+            view.world_up = it->second.world_up;
+            view.fov = it->second.fov;
+        }
+    }
+
+    // 叠加待处理的状态命令（按 fields 位掩码部分更新）
+    {
+        std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+        if (auto it = pending_camera_state_updates_.find(camera_handle);
+            it != pending_camera_state_updates_.end()) {
+            const auto& update = it->second;
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::Projection)) {
+                view.projection_x_sign = update.projection_x_sign;
+                view.near_plane = update.near_plane;
+                view.far_plane = update.far_plane;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::Surface)) {
+                view.surface = update.surface;
+                view.follows_default_surface = false;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::Size)) {
+                view.width = update.width;
+                view.height = update.height;
+                view.aspect = static_cast<float>(update.width) /
+                              static_cast<float>(std::max(update.height, 1u));
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::OutputMode)) {
+                view.output_mode = update.output_mode;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::RenderBackend)) {
+                view.render_backend = update.render_backend;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::VisionRenderMode)) {
+                view.vision_render_mode = update.vision_render_mode;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::VisionDenoise)) {
+                view.vision_denoise = update.vision_denoise;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::VisionDenoiser)) {
+                view.vision_denoiser = update.vision_denoiser;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::VisionAccumulation)) {
+                view.vision_accumulation = update.vision_accumulation;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::VisionStablePlanes)) {
+                view.vision_stable_planes = update.vision_stable_planes;
+            }
+            if (has_camera_state_field(update.fields,
+                                       CameraStateUpdateField::FollowsDefaultSurface)) {
+                view.follows_default_surface = update.follows_default_surface;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::ViewState)) {
+                view.view_open = update.view_open;
+                view.view_x = update.view_x;
+                view.view_y = update.view_y;
+                view.view_width = update.view_width;
+                view.view_height = update.view_height;
+                view.move_speed = update.move_speed;
+            }
+        }
+    }
+
+    return view;
+}
+
+void SharedDataHub::enqueue_transform_update(TransformUpdateCommand command) {
+    if (command.transform_handle == 0 || command.fields == TransformField::None) {
+        return;
+    }
+    // LatestWins：同一个 transform 只保留最后一条，出队时按 CommandBuffer 内部
+    // 单调序列排序，因此应用顺序与生产者线程的调度顺序无关。
+    transform_updates_.push(command);
+}
+
+std::vector<TransformUpdateCommand> SharedDataHub::drain_transform_updates() {
+    return transform_updates_.drain();
+}
+
+void SharedDataHub::clear_transform_updates(std::uintptr_t transform_handle) {
+    transform_updates_.erase(transform_handle);
+}
+
+void SharedDataHub::publish_transform_snapshot_from_storage() {
+    TransformSnapshot snapshot;
+    snapshot.tick = transform_snapshot_.revision() + 1;
+    const auto& storage = model_transform_storage_;
+    for (const auto& transform : std::as_const(storage)) {
+        const auto handle = reinterpret_cast<std::uintptr_t>(static_cast<const void*>(&transform));
+        if (handle == 0) {
+            continue;
+        }
+        TransformSnapshotRow row;
+        row.handle = handle;
+        row.position = transform.position;
+        row.euler_rotation = transform.euler_rotation;
+        row.scale = transform.scale;
+        snapshot.rows.push_back(row);
+    }
+    transform_snapshot_.publish(std::move(snapshot));
+}
+
+std::shared_ptr<const TransformSnapshot> SharedDataHub::transform_snapshot() const {
+    return transform_snapshot_.read();
+}
+
+std::optional<TransformSnapshotRow> SharedDataHub::transform_row(
+    std::uintptr_t transform_handle) const {
+    if (transform_handle == 0) {
+        return std::nullopt;
+    }
+    auto snapshot = transform_snapshot_.read();
+    if (!snapshot) {
+        return std::nullopt;
+    }
+    for (const auto& row : snapshot->rows) {
+        if (row.handle == transform_handle) {
+            return row;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<TransformSnapshotRow> SharedDataHub::transform_view(
+    std::uintptr_t transform_handle) const {
+    if (transform_handle == 0) {
+        return std::nullopt;
+    }
+
+    std::optional<TransformSnapshotRow> view = transform_row(transform_handle);
+    if (auto pending = transform_updates_.peek(transform_handle)) {
+        if (!view.has_value()) {
+            view.emplace();
+            view->handle = transform_handle;
+        }
+        if (has_transform_field(pending->fields, TransformField::Position)) {
+            view->position = pending->position;
+        }
+        if (has_transform_field(pending->fields, TransformField::Rotation)) {
+            view->euler_rotation = pending->euler_rotation;
+        }
+        if (has_transform_field(pending->fields, TransformField::Scale)) {
+            view->scale = pending->scale;
+        }
+    }
+    return view;
+}
+
 void SharedDataHub::enqueue_camera_move(CameraMoveCommand command) {
     if (command.camera_handle == 0) {
         return;

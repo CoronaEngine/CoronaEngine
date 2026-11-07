@@ -215,13 +215,19 @@ void CameraFollowController::update_camera(const ktm::fvec3& obj_pos, const ktm:
     ktm::fvec3 cam_fwd = normalize(ktm::fvec3{-offset.x, -offset.y, -offset.z});
     ktm::fvec3 cam_up{0.0f, 1.0f, 0.0f};
 
-    // Write camera state into SharedDataHub in ONE acquire_write
-    auto& hub = SharedDataHub::instance();
-    if (auto cam = hub.camera_storage().try_acquire_write(camera_handle_)) {
-        cam->position = cam_pos;
-        cam->forward = cam_fwd;
-        cam->world_up = cam_up;
-    }
+    // 走命令队列，不再直写相机槽位（P1）。
+    //
+    // 同一台相机的 pose 有两个生产者：CEF 视角拖拽（早就走 enqueue_camera_move）
+    // 和这里的脚本跟随。过去两者一个走队列、一个直写，谁最后落锁谁生效，
+    // 没有任何仲裁；现在统一为命令，由 Optics 在 tick 内按 sequence 顺序应用，
+    // 并且命令带 camera_handle 作为合并键 —— 同一台相机只保留最后一条。
+    CameraMoveCommand command{};
+    command.camera_handle = camera_handle_;
+    command.position = cam_pos;
+    command.forward = cam_fwd;
+    command.world_up = cam_up;
+    command.fov = SharedDataHub::instance().camera_view(camera_handle_).fov;
+    SharedDataHub::instance().enqueue_camera_move(command);
 }
 
 }  // namespace Corona::Systems

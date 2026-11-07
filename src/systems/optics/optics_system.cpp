@@ -779,6 +779,10 @@ void apply_pending_camera_state_updates() {
                 camera->follows_default_surface = false;
             }
             if (Corona::has_camera_state_field(
+                    update.fields, Corona::CameraStateUpdateField::FollowsDefaultSurface)) {
+                camera->follows_default_surface = update.follows_default_surface;
+            }
+            if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::Size)) {
                 camera->width = update.width;
                 camera->height = update.height;
@@ -866,6 +870,29 @@ void apply_pending_camera_state_updates() {
     }
 }
 
+void apply_pending_transform_updates() {
+    auto& hub = Corona::SharedDataHub::instance();
+    auto updates = hub.drain_transform_updates();
+    if (updates.empty()) {
+        return;
+    }
+
+    auto& transform_storage = hub.model_transform_storage();
+    for (const auto& update : updates) {
+        if (auto transform = transform_storage.try_acquire_write(update.transform_handle)) {
+            if (Corona::has_transform_field(update.fields, Corona::TransformField::Position)) {
+                transform->position = update.position;
+            }
+            if (Corona::has_transform_field(update.fields, Corona::TransformField::Rotation)) {
+                transform->euler_rotation = update.euler_rotation;
+            }
+            if (Corona::has_transform_field(update.fields, Corona::TransformField::Scale)) {
+                transform->scale = update.scale;
+            }
+        }
+    }
+}
+
 void apply_pending_camera_releases() {
     auto& hub = Corona::SharedDataHub::instance();
     for (const auto& release : hub.drain_camera_releases()) {
@@ -874,6 +901,8 @@ void apply_pending_camera_releases() {
             hub.actor_pick_storage().deallocate(release.actor_pick_handle);
         }
         hub.camera_storage().deallocate(release.camera_handle);
+        // 槽位已回收：立刻把该相机从对外快照里摘掉，避免读者拿到已释放的句柄。
+        hub.remove_camera_snapshot_row(release.camera_handle);
     }
 }
 
@@ -3239,6 +3268,15 @@ void OpticsSystem::update() {
     apply_pending_camera_viewport_updates();
     apply_pending_camera_state_updates();
     apply_pending_camera_releases();
+    // 相机命令全部应用完毕 —— 这一刻的状态就是本 tick 的对外视图。
+    // 外部线程（CEF / 脚本 / 主线程）此后只读这份快照，不再拿相机槽锁。
+    SharedDataHub::instance().publish_camera_snapshot_from_storage();
+
+    // 变换命令（CEF gizmo / 脚本 / 网络）在本 tick 应用，随后发布变换快照。
+    // Mechanics 与 Geometry 已经在本 tick 更早的位置写完变换，因此这份快照
+    // 覆盖了本 tick 的全部写入者。
+    apply_pending_transform_updates();
+    SharedDataHub::instance().publish_transform_snapshot_from_storage();
 
     // �ӳٻ�ȡ GeometrySystem ָ�루������ initialize() �л�ȡ����������
     // initialize_all() ��������ϵͳ��get_system() Ҳ��ͬ�� �� �ǵݹ� mutex �������
