@@ -668,3 +668,13 @@ def test_lanchat_events_use_named_owned_subscription_and_retire_generic_web_even
     assert ', "", "events.on_lan_chat_event"' in line
     owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8')
     assert 'notify_corona_lanchat_event' in owner
+
+
+def test_unused_network_events_keep_only_non_web_permissions_and_aliases():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8')
+    events = [line for line in manifest.splitlines() if '{"Network.' in line]
+    assert len(events) == 8
+    for line in events:
+        assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line, line
+        assert ', "", "events.on_network_' in line, line

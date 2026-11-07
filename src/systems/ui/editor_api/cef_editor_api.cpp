@@ -679,14 +679,14 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
 
 constexpr auto kEditorApiEvents = std::to_array<EditorApiEventSpec>({
     {"LANChat.event", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_lan_chat_event"},
-    {"Network.actorDeleteSyncBroadcastRequested", EditorApiValueType::Object, all_callers(), "events.onNetworkActorDeleteSyncBroadcastRequested", "events.on_network_actor_delete_sync_broadcast_requested"},
-    {"Network.actorOwnershipClaimed", EditorApiValueType::Object, all_callers(), "events.onNetworkActorOwnershipClaimed", "events.on_network_actor_ownership_claimed"},
-    {"Network.actorStateSyncBroadcastRequested", EditorApiValueType::Object, all_callers(), "events.onNetworkActorStateSyncBroadcastRequested", "events.on_network_actor_state_sync_broadcast_requested"},
-    {"Network.actorSyncBroadcastRequested", EditorApiValueType::Object, all_callers(), "events.onNetworkActorSyncBroadcastRequested", "events.on_network_actor_sync_broadcast_requested"},
-    {"Network.actorTransformSyncBroadcastRequested", EditorApiValueType::Object, all_callers(), "events.onNetworkActorTransformSyncBroadcastRequested", "events.on_network_actor_transform_sync_broadcast_requested"},
-    {"Network.assetImportCompleted", EditorApiValueType::Object, all_callers(), "events.onNetworkAssetImportCompleted", "events.on_network_asset_import_completed"},
-    {"Network.fileSyncStatusChanged", EditorApiValueType::Object, all_callers(), "events.onNetworkFileSyncStatusChanged", "events.on_network_file_sync_status_changed"},
-    {"Network.syncPauseRequested", EditorApiValueType::Object, all_callers(), "events.onNetworkSyncPauseRequested", "events.on_network_sync_pause_requested"},
+    {"Network.actorDeleteSyncBroadcastRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_actor_delete_sync_broadcast_requested"},
+    {"Network.actorOwnershipClaimed", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_actor_ownership_claimed"},
+    {"Network.actorStateSyncBroadcastRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_actor_state_sync_broadcast_requested"},
+    {"Network.actorSyncBroadcastRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_actor_sync_broadcast_requested"},
+    {"Network.actorTransformSyncBroadcastRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_actor_transform_sync_broadcast_requested"},
+    {"Network.assetImportCompleted", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_asset_import_completed"},
+    {"Network.fileSyncStatusChanged", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_file_sync_status_changed"},
+    {"Network.syncPauseRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_sync_pause_requested"},
 });
 
 static_assert([] {
