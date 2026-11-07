@@ -1,6 +1,6 @@
 """Inspect the local engine's CEF test endpoint (enable it only for the test run).
 
-This exercises the deployed frontend and native manifest transport. Start the
+This exercises the deployed frontend and named V8 bindings. Start the
 engine with the thermal watchdog, CORONA_CEF_REMOTE_DEBUG_PORT=9222, and a low
 CORONA_OPTICS_MAX_FPS for visual checks. It never launches an unguarded engine.
 """
@@ -53,9 +53,6 @@ class Frontend:
             raise RuntimeError(result["exceptionDetails"])
         return result.get("result", {}).get("value")
 
-    def api(self, name, args):
-        return self.evaluate("corona.editor.invoke(" + json.dumps(name) + "," + json.dumps(args) + ")")
-
     def click_text(self, text):
         # Derive the click location from the deployed DOM, then send a real CEF
         # pointer event so normal application handlers perform navigation.
@@ -76,9 +73,7 @@ if __name__ == "__main__":
     operations.add_argument("--text", action="store_true")
     operations.add_argument("--click")
     operations.add_argument("--expression")
-    operations.add_argument("--api")
     operations.add_argument("--screenshot", type=Path)
-    parser.add_argument("--args", default="[]")
     args = parser.parse_args()
     frontend = Frontend(args.port, args.host)
     if args.text:
@@ -87,8 +82,6 @@ if __name__ == "__main__":
         result = frontend.click_text(args.click)
     elif args.expression:
         result = frontend.evaluate(args.expression)
-    elif args.api:
-        result = frontend.api(args.api, json.loads(args.args))
     else:
         result = frontend.call("Page.captureScreenshot", dict(format="png"))
         args.screenshot.parent.mkdir(parents=True, exist_ok=True)
