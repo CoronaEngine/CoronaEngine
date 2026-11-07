@@ -703,10 +703,20 @@ void apply_pending_camera_viewport_updates() {
         return;
     }
 
-    CFW_LOG_INFO("Optics: applying {} camera viewport update(s)", updates.size());
+    // 逐帧都会收到视口更新：聚合行降到 DEBUG（历史上 70 秒刷过 899 行完全相同的 INFO）。
+    CFW_LOG_DEBUG("Optics: applying {} camera viewport update(s)", updates.size());
 
     for (const auto& update : updates) {
-        if (Corona::Systems::apply_camera_viewport_update(hub, update)) {
+        // 只在视口真的变化时打一条 INFO；重复的相同更新不再刷屏。
+        bool viewport_changed = false;
+        if (auto camera = hub.camera_storage().try_acquire_read(update.camera_handle)) {
+            viewport_changed = camera->surface != update.surface ||
+                               camera->view_open != update.view_open ||
+                               camera->view_x != update.x || camera->view_y != update.y ||
+                               camera->view_width != update.width ||
+                               camera->view_height != update.height;
+        }
+        if (Corona::Systems::apply_camera_viewport_update(hub, update) && viewport_changed) {
             CFW_LOG_INFO("Optics: camera viewport handle={} surface={} open={} rect={}x{}+{},{} render={}x{}",
                          update.camera_handle, update.surface, update.view_open, update.width,
                          update.height, update.x, update.y, update.render_width,
