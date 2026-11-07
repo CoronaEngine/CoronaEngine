@@ -563,3 +563,45 @@ def test_project_open_uses_one_owner_and_retires_generic_web_contract():
     assert 'project->SetValue("openProject"' in binding
     service = (root / 'CoronaEditor/editor/Frontend/src/services/projectLauncherService.js').read_text(encoding='utf-8')
     assert 'projectOpenResult' not in service and 'result?.data ?? result' not in service
+
+
+def test_unused_network_and_chat_routes_keep_non_web_contracts_only():
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "src/systems/ui/editor_api/cef_editor_api.cpp").read_text(encoding="utf-8")
+    retired = {'Network': ['broadcast_actor_create',
+                 'broadcast_actor_delete',
+                 'broadcast_actor_state_update',
+                 'broadcast_actor_transform',
+                 'broadcast_intent',
+                 'broadcast_actor_scene_snapshot',
+                 'check_preview_collision',
+                 'claim_actor_ownership',
+                 'get_lock_owner',
+                 'get_peer_count',
+                 'lock_object',
+                 'poll_pending_actor_create',
+                 'poll_pending_actor_delete',
+                 'poll_pending_actor_state_update',
+                 'poll_pending_actor_transform',
+                 'poll_pending_actor_scene_snapshot',
+                 'poll_pending_actor_scene_snapshot_request',
+                 'register_actor_identity',
+                 'request_actor_scene_snapshot',
+                 'set_sync_paused',
+                 'unlock_object'],
+     'LANChat': ['get_history',
+                 'list_agents',
+                 'poll_agent_trigger',
+                 'poll_coordinator_sync_message',
+                 'poll_room_event',
+                 'poll_sync_event',
+                 'send_agent_reply',
+                 'send_system_message',
+                 'send_system_message_to_host',
+                 'send_system_message_to_user']}
+    for module, methods in retired.items():
+        for method in methods:
+            line = next(line for line in source.splitlines() if f'({module}, {method},' in line)
+            assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line, (module, method)
+            assert ', "", ' in line, (module, method)
+            assert ('"network.' if module == 'Network' else '"lan_chat.') in line
