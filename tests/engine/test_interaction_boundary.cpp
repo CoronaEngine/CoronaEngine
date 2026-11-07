@@ -573,29 +573,42 @@ void test_camera_viewport_queue_coalescing() {
     hub.camera_storage().deallocate(camera);
 }
 
-void test_viewport_ui_pointer_queue_is_fifo() {
+void test_viewport_ui_pointer_state_and_owner_cleanup() {
     auto& hub = SharedDataHub::instance();
-    (void)hub.drain_viewport_ui_pointer_commands();
-
     const auto camera = hub.camera_storage().allocate();
-    for (int i = 0; i < 3; ++i) {
-        Corona::ViewportUiPointerCommand command{};
-        command.camera_handle = camera;
-        command.event_type = (i == 0) ? "down" : ((i == 1) ? "move" : "up");
-        command.x = static_cast<float>(i);
-        hub.enqueue_viewport_ui_pointer(command);
-    }
+    const auto other = hub.camera_storage().allocate();
+    using Cursor = Corona::ViewportUiCursorShape;
+    CHECK(hub.viewport_ui_state(camera).pointer.cursor_shape == Cursor::Hidden);
 
-    const auto commands = hub.drain_viewport_ui_pointer_commands();
-    CHECK(commands.size() == 3);                    // Fifo：不合并
-    CHECK(commands[0].event_type == "down");
-    CHECK(commands[1].event_type == "move");
-    CHECK(commands[2].event_type == "up");
-    // 生产侧序列仍单调递增 —— Optics 靠它丢弃过期的 cursor 事件
-    CHECK(commands[0].sequence < commands[1].sequence);
-    CHECK(commands[1].sequence < commands[2].sequence);
-    CHECK(hub.drain_viewport_ui_pointer_commands().empty());
+    // Cursor state is now a camera-local session snapshot, not an event FIFO.
+    hub.set_viewport_ui_mode(camera, Corona::ViewportUiMode::Stereo3D);
+    Corona::ViewportUiCalibration calibration;
+    calibration.lenticular_pitch = 6.f;
+    hub.set_viewport_ui_calibration(camera, calibration);
+    hub.set_viewport_ui_pointer(camera, {1.f, 2.f, Cursor::Hand, 101});
+    const auto before = hub.viewport_ui_state(camera);
+    hub.set_viewport_ui_pointer(camera, {3.f, 4.f, Cursor::Grabbing, 202});
+    hub.set_viewport_ui_pointer(other, {5.f, 6.f, Cursor::Crosshair, 303});
+    const auto latest = hub.viewport_ui_state(camera);
+    CHECK(before.pointer.owner_context == 101 && before.pointer.x == 1.f);
+    CHECK(latest.camera_handle == camera);
+    CHECK(latest.pointer.x == 3.f && latest.pointer.y == 4.f);
+    CHECK(latest.pointer.cursor_shape == Cursor::Grabbing);
+    CHECK(latest.pointer.owner_context == 202);
+    CHECK(latest.mode == Corona::ViewportUiMode::Stereo3D);
+    CHECK(latest.calibration.lenticular_pitch == 6.f);
 
+    // Retiring an old context must not remove the replacement window's cursor.
+    hub.clear_viewport_ui_pointer(camera, 101);
+    CHECK(hub.viewport_ui_state(camera).pointer.owner_context == 202);
+    hub.clear_viewport_ui_pointer(camera, 202);
+    CHECK(hub.viewport_ui_state(camera).pointer.cursor_shape == Cursor::Hidden);
+    CHECK(hub.viewport_ui_state(other).pointer.owner_context == 303);
+    hub.clear_viewport_ui_pointer(other, 0); // Unconditional session teardown.
+    CHECK(hub.viewport_ui_state(other).pointer.cursor_shape == Cursor::Hidden);
+    hub.set_viewport_ui_pointer(0, {1.f, 2.f, Cursor::Hand, 101});
+    CHECK(hub.viewport_ui_state(0).pointer.cursor_shape == Cursor::Hidden);
+    hub.camera_storage().deallocate(other);
     hub.camera_storage().deallocate(camera);
 }
 
@@ -636,7 +649,7 @@ int main() {
     test_mechanics_structural_commands();
     test_camera_release_queue_is_fifo();
     test_camera_viewport_queue_coalescing();
-    test_viewport_ui_pointer_queue_is_fifo();
+    test_viewport_ui_pointer_state_and_owner_cleanup();
     test_camera_api_construction_does_not_self_deadlock();
 
     if (g_failures == 0) {

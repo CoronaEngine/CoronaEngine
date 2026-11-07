@@ -94,6 +94,8 @@ class OpticsSystem : public Kernel::SystemBase {
    private:
     friend struct VisionEngineSceneTest;
     friend struct VisionDeviceLifetimeTest;
+    /// Apply a frame's camera/transform commands and publish committed camera state.
+    void apply_camera_and_transform_updates();
     bool initialize_vision_backend_if_enabled();
     bool initialize_hardware_resources();
     bool initialize_render_pipelines();

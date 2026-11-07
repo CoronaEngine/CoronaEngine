@@ -728,11 +728,11 @@ void apply_pending_camera_viewport_updates() {
     }
 }
 
-void apply_pending_camera_state_updates() {
+std::vector<Corona::CameraStateUpdateCommand> apply_pending_camera_state_updates() {
     auto& hub = Corona::SharedDataHub::instance();
     auto updates = hub.drain_camera_state_updates();
     if (updates.empty()) {
-        return;
+        return updates;
     }
 
     auto& camera_storage = hub.camera_storage();
@@ -807,7 +807,14 @@ void apply_pending_camera_state_updates() {
                 camera->move_speed = update.move_speed;
             }
         }
-        // Retain the accepted preference until the camera write is committed.
+    }
+    return updates;
+}
+
+void acknowledge_camera_state_updates(const std::vector<Corona::CameraStateUpdateCommand>& updates) {
+    auto& hub = Corona::SharedDataHub::instance();
+    for (const auto& update : updates) {
+        // Retire requests only after the committed snapshot is published.
         // A newer request may arrive during this batch; its sequence must survive.
         if (Corona::has_camera_state_field(
                 update.fields, Corona::CameraStateUpdateField::VisionDenoise)) {
@@ -3247,6 +3254,18 @@ void apply_pending_optics_updates() {
     }
 }
 
+void OpticsSystem::apply_camera_and_transform_updates() {
+    // Explicit viewport/state commands take precedence over default surface size.
+    apply_pending_default_surface_camera_update();
+    apply_pending_camera_viewport_updates();
+    const auto state_updates = apply_pending_camera_state_updates();
+    apply_pending_camera_moves();
+    apply_pending_transform_updates();
+    apply_pending_camera_releases();
+    SharedDataHub::instance().publish_camera_snapshot_from_storage();
+    acknowledge_camera_state_updates(state_updates);
+}
+
 void OpticsSystem::update() {
     // [P3/P5 合并保留] DAG 降级路径没有 tick 边界阶段：这里保证 Environment
     // 与 Optics 标量命令、相机姿态命令仍会被应用（DAG 模式下边界阶段已 drain，
@@ -3278,14 +3297,7 @@ void OpticsSystem::update() {
     // Promote requests first, then drain those changes. Requests arriving later
     // must wait for the next frame instead of capturing this frame's old state.
     begin_screenshot_frame();
-    // Explicit camera viewport/state commands below take precedence over the
-    // default surface size, matching the previous follows_default_surface rule.
-    apply_pending_default_surface_camera_update();
-    apply_pending_camera_viewport_updates();
-    apply_pending_camera_state_updates();
-    apply_pending_camera_moves();
-    apply_pending_transform_updates();
-    apply_pending_camera_releases();
+    apply_camera_and_transform_updates();
 
     // �ӳٻ�ȡ GeometrySystem ָ�루������ initialize() �л�ȡ����������
     // initialize_all() ��������ϵͳ��get_system() Ҳ��ͬ�� �� �ǵݹ� mutex �������
