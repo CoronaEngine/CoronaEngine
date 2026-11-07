@@ -284,12 +284,7 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             });
         }
     }
-    if (auto* hover = manager.get_tab(hovered_tab_); hover) {
-        const bool hide = hover->hide_system_cursor.load() &&
-            (!hover->use_custom_system_cursor.load() || hover->cursor_inside_camera_image.load());
-        if (hide) SDL_HideCursor();
-        else SDL_ShowCursor();
-    }
+    if (auto* hover = manager.get_tab(hovered_tab_); hover && hover->hide_system_cursor.load()) SDL_HideCursor();
     render_imgui_platform_windows(*context.vulkan_backend);
     for (auto [tab_id, tab] : manager.tabs_snapshot()) {
         if (tab && !tab->open) {

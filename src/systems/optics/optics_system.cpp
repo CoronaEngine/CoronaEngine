@@ -806,10 +806,6 @@ void apply_pending_camera_state_updates() {
                 camera->view_height = update.view_height;
                 camera->move_speed = update.move_speed;
             }
-            if (Corona::has_camera_state_field(
-                    update.fields, Corona::CameraStateUpdateField::MoveSpeed)) {
-                camera->move_speed = update.move_speed;
-            }
         }
         // Retain the accepted preference until the camera write is committed.
         // A newer request may arrive during this batch; its sequence must survive.
