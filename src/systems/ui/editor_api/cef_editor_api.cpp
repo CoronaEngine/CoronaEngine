@@ -966,7 +966,7 @@ Script::Python::PythonRuntimeResponse execute_editor_python_callback(
     {
         std::lock_guard<std::mutex> lock(g_callback_mutex);
         const auto it = g_callbacks.find(request.callback_token);
-        if (it == g_callbacks.end() || !it->second.python_script || !it->second.python_callable) {
+        if (it == g_callbacks.end() || !it->second.python_callable) {
             return request.function == "release"
                        ? PythonRuntimeResponse::success()
                        : PythonRuntimeResponse::failure("editor callback token is no longer registered");
