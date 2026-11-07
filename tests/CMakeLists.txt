@@ -1,5 +1,6 @@
 # Engine tests mirror the main source modules; cross-system tests live in integration.
 add_subdirectory(kernel)
+add_subdirectory(engine)
 add_subdirectory(systems/display)
 add_subdirectory(systems/geometry)
 add_subdirectory(systems/mechanics)
