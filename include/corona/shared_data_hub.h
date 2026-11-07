@@ -568,7 +568,13 @@ struct CameraViewportUpdateCommand {
     int height{540};
     int render_width{960};
     int render_height{540};
-    std::uint64_t sequence{};
+};
+
+/// 视口更新命令的合并键（LatestWins：同一台相机只保留最后一次视口状态）
+struct CameraViewportUpdateKey {
+    static std::uintptr_t get(const CameraViewportUpdateCommand& command) noexcept {
+        return command.camera_handle;
+    }
 };
 
 struct DefaultSurfaceCameraUpdateCommand {
@@ -982,10 +988,12 @@ class SharedDataHub {
     Kernel::CommandBuffer<CameraMoveCommand, CameraMoveKey,
                           Kernel::CoalescePolicy::LatestWins>
         camera_moves_;
-    std::mutex camera_viewport_update_mutex_;
-    std::unordered_map<std::uintptr_t, CameraViewportUpdateCommand>
-        pending_camera_viewport_updates_;
-    std::uint64_t camera_viewport_update_sequence_{0};
+    // 视口更新：LatestWins（同一台相机只保留最后一次），P5 起统一走 CommandBuffer
+    Kernel::CommandBuffer<CameraViewportUpdateCommand, CameraViewportUpdateKey,
+                          Kernel::CoalescePolicy::LatestWins>
+        camera_viewport_updates_;
+    // 默认 surface 更新仍是"单槽"语义，单独一把锁（不与视口队列共用）
+    mutable std::mutex default_surface_camera_update_mutex_;
     std::optional<DefaultSurfaceCameraUpdateCommand> pending_default_surface_camera_update_;
     mutable std::mutex camera_state_update_mutex_;
     std::unordered_map<std::uintptr_t, CameraStateUpdateCommand>

@@ -506,37 +506,22 @@ void SharedDataHub::enqueue_camera_viewport_update(CameraViewportUpdateCommand c
     if (command.camera_handle == 0) {
         return;
     }
-
-    std::lock_guard<std::mutex> lock(camera_viewport_update_mutex_);
-    command.sequence = ++camera_viewport_update_sequence_;
-    pending_camera_viewport_updates_[command.camera_handle] = command;
+    // LatestWins：同一台相机只保留最后一次视口状态；出队顺序由 buffer 内部序列决定。
+    camera_viewport_updates_.push(std::move(command));
 }
 
 std::vector<CameraViewportUpdateCommand> SharedDataHub::drain_camera_viewport_updates() {
-    std::vector<CameraViewportUpdateCommand> updates;
-    {
-        std::lock_guard<std::mutex> lock(camera_viewport_update_mutex_);
-        updates.reserve(pending_camera_viewport_updates_.size());
-        for (auto& [_, command] : pending_camera_viewport_updates_) {
-            updates.push_back(command);
-        }
-        pending_camera_viewport_updates_.clear();
-    }
-
-    std::sort(updates.begin(), updates.end(), [](const auto& lhs, const auto& rhs) {
-        return lhs.sequence < rhs.sequence;
-    });
-    return updates;
+    return camera_viewport_updates_.drain();
 }
 
 void SharedDataHub::enqueue_default_surface_camera_update(DefaultSurfaceCameraUpdateCommand command) {
     if (!command.surface || command.width == 0 || command.height == 0) return;
-    std::lock_guard lock(camera_viewport_update_mutex_);
+    std::lock_guard lock(default_surface_camera_update_mutex_);
     pending_default_surface_camera_update_ = command;
 }
 
 std::optional<DefaultSurfaceCameraUpdateCommand> SharedDataHub::take_default_surface_camera_update() {
-    std::lock_guard lock(camera_viewport_update_mutex_);
+    std::lock_guard lock(default_surface_camera_update_mutex_);
     return std::exchange(pending_default_surface_camera_update_, std::nullopt);
 }
 

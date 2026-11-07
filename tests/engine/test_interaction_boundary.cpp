@@ -524,6 +524,44 @@ void test_camera_release_queue_is_fifo() {
     hub.camera_storage().deallocate(second);
 }
 
+void test_camera_viewport_queue_coalescing() {
+    auto& hub = SharedDataHub::instance();
+    (void)hub.drain_camera_viewport_updates();
+
+    const auto camera = hub.camera_storage().allocate();
+    for (int i = 0; i < 4; ++i) {
+        hub.enqueue_camera_viewport_update({
+            .camera_handle = camera,
+            .surface = nullptr,
+            .view_open = true,
+            .x = i,
+            .y = 0,
+            .width = 100 + i,
+            .height = 100,
+            .render_width = 100,
+            .render_height = 100,
+        });
+    }
+
+    const auto updates = hub.drain_camera_viewport_updates();
+    CHECK(updates.size() == 1);              // LatestWins
+    CHECK(updates[0].width == 103);          // 最后一次提交生效
+    CHECK(updates[0].x == 3);
+    CHECK(hub.drain_camera_viewport_updates().empty());
+
+    // 默认 surface 仍保持"单槽"语义（与视口队列不共用锁）
+    hub.enqueue_default_surface_camera_update({.surface = nullptr, .width = 0, .height = 0});
+    CHECK(!hub.take_default_surface_camera_update().has_value());  // 无效输入被丢弃
+    hub.enqueue_default_surface_camera_update(
+        {.surface = reinterpret_cast<void*>(0x1), .width = 64, .height = 32});
+    const auto taken = hub.take_default_surface_camera_update();
+    CHECK(taken.has_value());
+    CHECK(taken->width == 64);
+    CHECK(!hub.take_default_surface_camera_update().has_value());
+
+    hub.camera_storage().deallocate(camera);
+}
+
 }  // namespace
 
 int main() {
@@ -538,6 +576,7 @@ int main() {
     test_environment_boundary_stage();
     test_mechanics_structural_commands();
     test_camera_release_queue_is_fifo();
+    test_camera_viewport_queue_coalescing();
 
     if (g_failures == 0) {
         std::printf("OK: %d checks passed\n", g_checks);
