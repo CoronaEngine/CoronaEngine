@@ -59,8 +59,6 @@ class DisplaySystem : public Kernel::SystemBase {
     void shutdown() override;
 
    private:
-    using CallbackGate = Detail::OwnerCallbackGate<DisplaySystem>;
-
     struct PendingLayer : Detail::ImageFrameMetadata {
         std::uintptr_t image_handle = 0;
         Detail::PublishedImage published_image;
@@ -109,17 +107,14 @@ class DisplaySystem : public Kernel::SystemBase {
                                     uint32_t height);
     /// tick 开头应用入站 surface 命令（原先是发布线程同步回调）
     void apply_pending_surface_commands();
+    /// tick 开头应用入站帧命令（Optics / UI 帧就绪）
+    void apply_pending_frame_commands();
     void handle_surface_changed(const Events::DisplaySurfaceChangedEvent& event);
     void handle_surface_removed(const Events::DisplaySurfaceRemovedEvent& event);
     void handle_optics_frame(const Events::OpticsFrameReadyEvent& event);
     void handle_ui_frame(const Events::UIFrameReadyEvent& event);
     void on_thread_stopped() override;
 
-    std::optional<Kernel::EventId> surface_changed_sub_id_;
-    std::optional<Kernel::EventId> surface_removed_sub_id_;
-    std::optional<Kernel::EventId> optics_frame_sub_id_;
-    std::optional<Kernel::EventId> ui_frame_sub_id_;
-    std::shared_ptr<CallbackGate> callback_gate_;
     std::shared_ptr<Detail::ForwardCompletionFence>
         forward_completion_fence_;
 

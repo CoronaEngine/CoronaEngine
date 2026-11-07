@@ -1,4 +1,5 @@
 #include "native_material.h"
+#include <corona/systems/display/display_frame_commands.h>
 #include "native_camera.h"
 #include <corona/utils/runtime_paths.h>
 #include <corona/utils/scene_path_key.h>
@@ -5055,7 +5056,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         }
 
         if (auto* event_bus = context()->event_bus()) {
-            event_bus->publish<Events::OpticsFrameReadyEvent>({surface,
+            Corona::push_optics_frame({surface,
                                                                target.image_handle,
                                                                frame_index,
                                                                presented_extent.width,
@@ -6424,7 +6425,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                 }
 
                 if (auto* event_bus = context()->event_bus()) {
-                    event_bus->publish<Events::OpticsFrameReadyEvent>(
+                    Corona::push_optics_frame(
                         {surface,
                          target.image_handle,
                          frame_index,

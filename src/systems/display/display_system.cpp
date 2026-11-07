@@ -1,4 +1,5 @@
 #include "../common/render_resource_bindings.h"
+#include <corona/systems/display/display_frame_commands.h>
 #include <corona/events/display_system_events.h>
 #include <corona/events/engine_events.h>
 #include <horizon/core/logging.h>
@@ -261,7 +262,7 @@ void DisplaySystem::handle_ui_frame(const Events::UIFrameReadyEvent& event) {
 }
 
 bool DisplaySystem::initialize(Kernel::ISystemContext* ctx) {
-    if (callback_gate_) {
+    if (forward_completion_fence_) {
         stop();
         shutdown();
     }
@@ -271,61 +272,10 @@ bool DisplaySystem::initialize(Kernel::ISystemContext* ctx) {
     forward_completion_fence_ =
         std::make_shared<Detail::ForwardCompletionFence>();
     const auto forward_completion_fence = forward_completion_fence_;
-    callback_gate_ = std::make_shared<CallbackGate>(*this);
-    const auto callback_gate = callback_gate_;
-    auto* event_bus = ctx->event_bus();
-    if (event_bus == nullptr) {
-        CFW_LOG_WARNING("DisplaySystem: No event bus available");
-        return true;
-    }
-
-    // surface 注册/移除不再走同步事件（处理器会跑在发布线程上）；
-    // 改为入站命令，由 apply_pending_surface_commands() 在 update() 开头处理。
-    optics_frame_sub_id_ = event_bus->subscribe<Events::OpticsFrameReadyEvent>(
-        [callback_gate, forward_completion_fence](
-            const Events::OpticsFrameReadyEvent& event) {
-            auto access = callback_gate->try_acquire();
-            if (access) {
-                (void)forward_completion_fence->run([&]() {
-                    access.owner().handle_optics_frame(event);
-                });
-            }
-        });
-    ui_frame_sub_id_ = event_bus->subscribe<Events::UIFrameReadyEvent>(
-        [callback_gate, forward_completion_fence](
-            const Events::UIFrameReadyEvent& event) {
-            auto access = callback_gate->try_acquire();
-            if (!access || !forward_completion_fence->run([&]() {
-                    access.owner().handle_ui_frame(event);
-                })) {
-                callback_gate->defer_first_present(event.first_present_ticket);
-            }
-        });
-
     const auto initialization_failed =
         [this,
-         event_bus,
-         callback_gate,
          forward_completion_fence](std::string message) {
             forward_completion_fence->close();
-            callback_gate->close();
-            if (surface_changed_sub_id_) {
-                event_bus->unsubscribe(*surface_changed_sub_id_);
-                surface_changed_sub_id_.reset();
-            }
-            if (surface_removed_sub_id_) {
-                event_bus->unsubscribe(*surface_removed_sub_id_);
-                surface_removed_sub_id_.reset();
-            }
-            if (optics_frame_sub_id_) {
-                event_bus->unsubscribe(*optics_frame_sub_id_);
-                optics_frame_sub_id_.reset();
-            }
-            if (ui_frame_sub_id_) {
-                event_bus->unsubscribe(*ui_frame_sub_id_);
-                ui_frame_sub_id_.reset();
-            }
-            callback_gate->wait_for_quiescence();
 
             std::unordered_set<std::uint64_t> surface_ids;
             std::vector<std::shared_ptr<Detail::SurfaceLifecycleAcks>>
@@ -421,9 +371,6 @@ bool DisplaySystem::initialize(Kernel::ISystemContext* ctx) {
                     pending_acknowledgements->removal_succeeded();
                 }
             }
-            callback_gate->complete_deferred_after_resources_destroyed(
-                UI::DisplaySurfaceResult::Status::Failed,
-                message);
             CFW_LOG_ERROR("DisplaySystem: {}", message);
             return false;
         };
@@ -492,10 +439,24 @@ void DisplaySystem::apply_pending_surface_commands() {
     }
 }
 
+void DisplaySystem::apply_pending_frame_commands() {
+    auto optics_commands = OpticsFrameCommandChannel::instance().commands().drain();
+    for (auto& command : optics_commands) {
+        handle_optics_frame(command.event);
+    }
+    auto ui_commands = UIFrameCommandChannel::instance().commands().drain();
+    for (auto& command : ui_commands) {
+        handle_ui_frame(command.event);
+    }
+}
+
 void DisplaySystem::update() {
     // 入站 surface 命令必须在任何早退之前处理：发布方在等回执，
     // 漏掉就会让主线程等到超时（5s）。
     apply_pending_surface_commands();
+    // 帧命令只在本线程消费（Optics 在 DAG 线程、UI 帧在主线程发布），
+    // 原先由跨线程同步回调送进来。
+    apply_pending_frame_commands();
     if (!frame_submission_enabled_.load(std::memory_order_acquire)) {
         return;
     }
@@ -1224,45 +1185,11 @@ void DisplaySystem::shutdown() {
     if (forward_completion_fence) {
         forward_completion_fence->close();
     }
-    const auto callback_gate = callback_gate_;
-    if (callback_gate) {
-        callback_gate->close();
-    }
-
-    const bool has_subscriptions = surface_changed_sub_id_ ||
-                                   surface_removed_sub_id_ ||
-                                   optics_frame_sub_id_ || ui_frame_sub_id_;
-    if (has_subscriptions) {
-        if (auto* system_context = context(); system_context != nullptr) {
-            auto* event_bus = system_context->event_bus();
-            if (event_bus != nullptr) {
-                if (surface_changed_sub_id_) {
-                    event_bus->unsubscribe(*surface_changed_sub_id_);
-                }
-                if (surface_removed_sub_id_) {
-                    event_bus->unsubscribe(*surface_removed_sub_id_);
-                }
-                if (optics_frame_sub_id_) {
-                    event_bus->unsubscribe(*optics_frame_sub_id_);
-                }
-                if (ui_frame_sub_id_) {
-                    event_bus->unsubscribe(*ui_frame_sub_id_);
-                }
-            }
-        }
-    }
-    surface_changed_sub_id_.reset();
-    surface_removed_sub_id_.reset();
-    optics_frame_sub_id_.reset();
-    ui_frame_sub_id_.reset();
 
     // Unsubscribe does not stop a handler already copied by EventBus. The
     // owner-independent gate rejects callbacks that have not started and this
     // wait lets callbacks already holding owner access finish. Never wait while
     // holding frame_mutex_: active callbacks may need that mutex to exit.
-    if (callback_gate) {
-        callback_gate->wait_for_quiescence();
-    }
 
     std::unordered_set<std::uint64_t> surface_ids;
     std::vector<std::shared_ptr<Detail::SurfaceLifecycleAcks>> acknowledgements;
@@ -1356,11 +1283,6 @@ void DisplaySystem::shutdown() {
     for (const auto& pending_acknowledgements : acknowledgements) {
         pending_acknowledgements->cancel_forward(shutdown_message);
         pending_acknowledgements->removal_succeeded();
-    }
-    if (callback_gate) {
-        callback_gate->complete_deferred_after_resources_destroyed(
-            UI::DisplaySurfaceResult::Status::Cancelled,
-            shutdown_message);
     }
     device_lost_.store(false, std::memory_order_release);
 

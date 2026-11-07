@@ -1,4 +1,5 @@
 #include <corona/systems/ui/vulkan_backend.h>
+#include <corona/systems/display/display_frame_commands.h>
 #include <corona/systems/display/display_surface_commands.h>
 
 #include <corona/events/display_system_events.h>
@@ -343,7 +344,7 @@ void VulkanBackend::present_surface(void* surface) {
             render->first_present_published = true;
         }
         frame.published_image = render->published_image;
-        event_bus->publish<Events::UIFrameReadyEvent>(frame);
+        Corona::push_ui_frame(frame);
     }
 
     render->resources.frame_ready = false;
