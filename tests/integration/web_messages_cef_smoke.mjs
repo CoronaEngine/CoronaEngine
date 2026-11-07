@@ -565,11 +565,28 @@ try {
     assert.equal(typeof localIp.port, 'number');
     assert.deepEqual(await chatCall('loadHistoryRoom', ''), { ok: false, room: '', history: [], agents: [], error: 'ROOM_REQUIRED' });
     stage = 'named LANChat event ownership, callback isolation and structured metadata';
+    assert.equal(await main.evaluate('typeof corona.lanChat.onEvent'), 'function', 'LANChat events require a named native binding');
     for (const args of ['', 'null', '{}', '"callback"', '()=>{}, true']) {
       assert.match(await main.evaluate(`(()=>{try{corona.lanChat.onEvent(${args});return 'unexpected';}catch(e){return String(e);}})()`), /INVALID_ARGUMENT/);
     }
     assert.equal(await main.evaluate("corona.editor.on('LANChat.event',()=>{}).catch(e=>e.code)"), 'INVALID_ARGUMENT');
     await main.evaluate(`corona.network.setProjectRoot(${JSON.stringify(cameraWorld)})`);
+    await main.evaluate(`(() => {
+      window.__chatFromFrame = [];
+      window.__eventFrame = document.createElement('iframe');
+      window.__eventFrame.srcdoc = '<!doctype html><title>LANChat event context</title>';
+      document.body.append(window.__eventFrame);
+      return true;
+    })()`);
+    await waitFor(() => main.evaluate('typeof window.__eventFrame?.contentWindow?.corona?.lanChat?.onEvent === "function"'));
+    assert.match(await main.evaluate(`(()=>{try{
+      window.__eventFrame.contentWindow.corona.lanChat.onEvent(()=>{});return 'unexpected';
+    }catch(e){return String(e);}})()`), /PERMISSION_DENIED/);
+    await main.evaluate(`window.__eventFrame.contentWindow.eval(
+      "window.__frameStop=corona.lanChat.onEvent(event=>parent.__chatFromFrame.push(event)); true")`);
+    assert.match(await main.evaluate(`(()=>{try{
+      window.__eventFrame.contentWindow.__frameStop();return 'unexpected';
+    }catch(e){return String(e);}})()`), /PERMISSION_DENIED/);
     await main.evaluate(`(() => {
       window.__chatEvents = []; window.__retiredChatEvents = [];
       window.__stopThrowingChat = corona.lanChat.onEvent(() => { throw Error('isolate this callback'); });
@@ -610,6 +627,14 @@ try {
       assert.equal(events[1].agents[0].name, 'Agent 中文');
       assert.equal(events[1].agents[0].agent_id, agent.agent_id);
       assert.deepEqual(events[2].agents, []);
+      await waitFor(async () => (await main.evaluate('window.__chatFromFrame.length')) === 3);
+      assert.deepEqual(await main.evaluate('window.__chatFromFrame'), events);
+      await main.evaluate('window.__eventFrame.remove(); window.__eventFrame=null; true');
+      const afterRelease = await chatCall('sendMessage', 'after context release');
+      assert.equal(afterRelease.ok, true);
+      await waitFor(async () => (await main.evaluate('window.__chatEvents.length')) === 4);
+      await delay(200);
+      assert.equal(await main.evaluate('window.__chatFromFrame.length'), 3, 'released context must receive no further events');
       const rooms = await chatCall('listHistoryRooms');
       assert.equal(rooms.ok, true);
       const savedRoom = rooms.rooms.find(row => row.display_room_id === 'cef-owned-events');
@@ -630,9 +655,9 @@ try {
       assert.ok(restored.history.some(row => row.message_id === sent.message_id));
     } finally {
       await chatCall('stopLocalRoom');
-      await main.evaluate('window.__stopChat(); window.__stopChat(); window.__stopThrowingChat(); window.__stopMutatingChat(); true');
+      await main.evaluate('window.__stopChat(); window.__stopChat(); window.__stopThrowingChat(); window.__stopMutatingChat(); window.__eventFrame?.remove(); true');
     }
-    evidence[0].lanChatEvents = 'local message and roster event compatibility with JSON disabled; exact text/identity, stable prior roster snapshot, unsubscribe; named methods/subscription and metadata objects, callback mutation/throw isolation, idempotent unsubscribe, retired generic event denied';
+    evidence[0].lanChatEvents = 'local message and roster event compatibility with JSON disabled; exact text/identity, stable prior roster snapshot, unsubscribe; named methods/subscription and metadata objects, callback mutation/throw isolation, idempotent unsubscribe, context ownership and release, retired generic event denied';
     const listed = await listCameras();
     const camera = listed.data.cameras.find(item => item.camera_id === 'smoke-camera');
     assert.ok(camera?.archive_session);
@@ -1653,7 +1678,28 @@ try {
   result = { date: new Date().toISOString(), passed: true, documents: evidence, nativeBindings: testNativeBindings,
     fixture: 'file-origin HTML in production BrowserManager windows; test-owned scene loaded through named project V8 binding; no user world',
     limitations: ['Packaged Vue collaboration and CameraView UI remain untested', 'Minimized-window and separate-engine isolation remain untested'] };
+  console.log('CEF smoke: all business assertions completed; cleaning up');
+} catch (error) {
+  console.error(`CEF smoke failed at ${stage}:`, error);
+  throw error;
 } finally {
+  // Ask the existing application owner to shut down SDL/CEF/GPU resources
+  // before resorting to forced termination of this test-owned process tree.
+  if (child.pid && child.exitCode === null && clients[0]) {
+    let requestTimer, exitTimer;
+    const exited = new Promise(resolve => child.once('close', resolve));
+    try {
+      await Promise.race([
+        clients[0].evaluate("corona.editor.invoke('CoronaEditor.close_process',[])"),
+        new Promise((_, reject) => { requestTimer = setTimeout(() => reject(Error('Quit request deadline')), 3000); }),
+      ]);
+      await Promise.race([exited, new Promise(resolve => { exitTimer = setTimeout(resolve, 10_000); })]);
+    } catch (error) {
+      console.warn('CEF smoke: graceful quit unavailable:', error.message);
+    } finally {
+      clearTimeout(requestTimer); clearTimeout(exitTimer);
+    }
+  }
   for (const client of clients) client.close();
   if (child.pid && child.exitCode === null) {
     const exited = new Promise(resolve => child.once('close', resolve));
