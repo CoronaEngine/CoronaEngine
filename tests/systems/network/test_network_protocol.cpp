@@ -10,6 +10,9 @@
 #include <corona/utils/scene_path_key.h>
 
 #include <cstring>
+#include <chrono>
+#include <functional>
+#include <type_traits>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -26,6 +29,55 @@ void expect_true(bool condition, const char* message) {
         std::cerr << "FAIL: " << message << '\n';
         ++g_failed;
     }
+}
+
+void test_lanchat_callback_owns_message_and_agent_snapshots() {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("corona_lanchat_owned_events_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    std::vector<std::function<void()>> delayed_checks;
+    int messages = 0, rosters = 0;
+    {
+        Corona::Systems::NetworkSystem sys;
+        sys.set_project_root(root.string());
+        sys.set_lanchat_event_callback([&](const auto& event) {
+            if constexpr (std::is_same_v<std::decay_t<decltype(event)>, std::string>) {
+                expect_true(false, "LANChat callback must carry owned values rather than serialized JSON");
+            } else {
+                using Kind = decltype(event.kind);
+                if (event.kind == Kind::Message) {
+                    ++messages;
+                    delayed_checks.push_back([event] {
+                        expect_true(event.message.text == "quoted \"text\"\n中文",
+                                    "queued event preserves exact message text after room retirement");
+                        expect_true(event.message.correlation_id == "correlation-1" &&
+                                    event.message.seq == 1 && event.message.sender_name == "Host",
+                                    "queued event preserves structured message identity");
+                    });
+                } else if (event.kind == Kind::Agents) {
+                    ++rosters;
+                    if (rosters == 1) {
+                        delayed_checks.push_back([event] {
+                            expect_true(event.agents.size() == 1 && event.agents.front().name == "Agent 中文",
+                                        "agent event snapshot survives subsequent roster removal");
+                        });
+                    } else {
+                        expect_true(event.agents.empty(), "removed agent produces an empty roster snapshot");
+                    }
+                }
+            }
+        });
+        expect_true(sys.lanchat_start_local_room("owned-events", "Host"), "owned event fixture opens local room");
+        expect_true(sys.lanchat_send_message_ex("quoted \"text\"\n中文", "chat", "", "", "correlation-1").accepted,
+                    "owned event fixture sends message");
+        expect_true(sys.lanchat_register_agent("agent-1", "Agent 中文", "persona", "local-single-player").ok,
+                    "owned event fixture registers agent");
+        expect_true(sys.lanchat_remove_agent("agent-1").ok, "owned event fixture removes agent");
+        sys.lanchat_stop_local_room();
+    }
+    expect_true(messages == 1 && rosters == 2, "message and both roster updates arrive exactly once");
+    for (const auto& check : delayed_checks) check();
+    std::filesystem::remove_all(root);
 }
 
 void test_editor_sync_upsert_round_trips_with_lww_version() {
@@ -2275,6 +2327,7 @@ void test_sync_engine_rejects_legacy_dirty_for_resolved_actor() {
 }  // namespace
 
 int main() {
+    test_lanchat_callback_owns_message_and_agent_snapshots();
     test_editor_sync_upsert_round_trips_with_lww_version();
     test_editor_sync_rejects_truncated_and_oversized_packets();
     test_editor_sync_has_distinct_message_type();

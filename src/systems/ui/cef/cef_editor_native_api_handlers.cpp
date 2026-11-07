@@ -28,6 +28,7 @@
 #include "cef_project_settings_operations.h"
 #include "cef_files_operations.h"
 #include "cef_project_launcher_operations.h"
+#include "cef_network_operations.h"
 #include "cef_viewport_pick.h"
 #include "cef_editor_native_api_handlers.h"
 #include "editor_dispatch.h"
@@ -4407,50 +4408,47 @@ std::string detect_wlan_ipv4() {
 #endif
 }
 
-nlohmann::json build_network_session_info(
+std::vector<NetworkPeerSnapshot> read_network_peers(
     const std::shared_ptr<Corona::Systems::NetworkSystem>& sys) {
-    nlohmann::json payload;
-    payload["ok"] = true;
-    payload["active"] =
-        sys->session_state() == Corona::Systems::NetworkSystem::SessionState::Active;
-    payload["role"] = std::string(sys->session_role_name());
-    payload["peer_count"] = static_cast<int>(sys->peer_count());
-    payload["host_address"] = sys->host_address();
-    payload["host_port"] = sys->host_port();
-    payload["listen_port"] = sys->session_port();
-    payload["local_ip"] = detect_wlan_ipv4();
-    payload["discovered_peers"] = nlohmann::json::array();
+    std::vector<NetworkPeerSnapshot> result;
     for (const auto& peer : sys->discovered_peers()) {
-        payload["discovered_peers"].push_back({
-            {"ip", peer.ip},
-            {"name", peer.name},
-            {"port", peer.port},
-            {"project_id", peer.project_id},
-            {"role", peer.role == Corona::Systems::NetworkSystem::SessionRole::Host
-                ? "host" : peer.role == Corona::Systems::NetworkSystem::SessionRole::Client
-                    ? "client" : "none"},
-            {"stable_id", peer.stable_id},
-            {"last_seen_ms", peer.last_seen_ms},
-        });
+        result.push_back({peer.ip, peer.name,
+            peer.role == Corona::Systems::NetworkSystem::SessionRole::Host ? "host" :
+            peer.role == Corona::Systems::NetworkSystem::SessionRole::Client ? "client" : "none",
+            peer.stable_id, peer.port, peer.project_id, peer.last_seen_ms});
     }
-    return payload;
+    return result;
 }
 
-void emit_lanchat_event_json(const std::string& event_json) {
-    if (event_json.empty()) {
-        return;
-    }
-    nlohmann::json event_payload = nlohmann::json::object();
-    try {
-        event_payload = nlohmann::json::parse(event_json);
-        if (!event_payload.is_object()) {
-            event_payload = {{"payload", event_payload}};
-        }
-    } catch (...) {
-        event_payload = {{"raw", event_json}};
-    }
-    emit_editor_api_event("LANChat.event", event_payload);
+NetworkSessionSnapshot read_network_session(
+    const std::shared_ptr<Corona::Systems::NetworkSystem>& sys) {
+    NetworkSessionSnapshot result;
+    result.active = sys->session_state() == Corona::Systems::NetworkSystem::SessionState::Active;
+    result.role = std::string(sys->session_role_name());
+    result.peer_count = sys->peer_count();
+    result.host_address = sys->host_address();
+    result.host_port = sys->host_port();
+    result.listen_port = sys->session_port();
+    result.local_ip = detect_wlan_ipv4();
+    result.discovered_peers = read_network_peers(sys);
+    return result;
 }
+
+nlohmann::json network_peers_json(const std::vector<NetworkPeerSnapshot>& peers) {
+    auto result = nlohmann::json::array();
+    for (const auto& peer : peers) result.push_back({
+        {"ip", peer.ip}, {"name", peer.name}, {"port", peer.port}, {"project_id", peer.project_id},
+        {"role", peer.role}, {"stable_id", peer.stable_id}, {"last_seen_ms", peer.last_seen_ms}});
+    return result;
+}
+
+nlohmann::json network_session_json(const NetworkSessionSnapshot& session) {
+    return {{"ok", true}, {"active", session.active}, {"role", session.role},
+        {"peer_count", session.peer_count}, {"host_address", session.host_address},
+        {"host_port", session.host_port}, {"listen_port", session.listen_port},
+        {"local_ip", session.local_ip}, {"discovered_peers", network_peers_json(session.discovered_peers)}};
+}
+
 
 nlohmann::json build_lanchat_members(
     const std::vector<Corona::Network::LanChatMember>& members) {
@@ -4528,6 +4526,37 @@ nlohmann::json build_lanchat_agents(
         });
     }
     return result;
+}
+
+void emit_lanchat_event(const Corona::Network::LanChatEvent& event) {
+    nlohmann::json payload;
+    using Kind = Corona::Network::LanChatEvent::Kind;
+    switch (event.kind) {
+    case Kind::Message:
+        payload = build_lanchat_history({event.message}).front();
+        payload["event"] = "message";
+        break;
+    case Kind::Members:
+        payload = {{"event", "member_update"}, {"peer_id", event.peer_id},
+            {"members", build_lanchat_members(event.members)},
+            {"member_details", build_lanchat_member_details(event.members)}};
+        break;
+    case Kind::History:
+        payload = {{"event", "history_snapshot"}, {"history", build_lanchat_history(event.history)}};
+        break;
+    case Kind::Agents:
+        payload = {{"event", "agent_roster"}, {"agents", build_lanchat_agents(event.agents)}};
+        break;
+    case Kind::Closed:
+        payload = {{"event", "room_closed"}, {"room_id", event.room_id}};
+        break;
+    case Kind::Error:
+        payload = {{"event", "error"}, {"code", event.code}};
+        if (!event.error_message.empty()) payload["message"] = event.error_message;
+        break;
+    }
+    payload["channel"] = "lanchat";
+    emit_editor_api_event("LANChat.event", payload);
 }
 
 nlohmann::json build_lanchat_message(
@@ -6746,9 +6775,122 @@ NativeResult create_launcher_project(const std::string& prompt, const std::strin
     return native_success(std::move(result));
 }
 
+NativeResult open_launcher_project(const std::string& requested_path, const std::string& load_policy) {
+    const auto path = normalize_route(requested_path);
+    CFW_LOG_INFO("[ProjectLauncher] open_project request path='{}'", path);
+    if (path.empty()) {
+        return native_success({{"ok", false}, {"path", std::string{}}, {"status", "cancelled"}});
+    }
+    auto prepared = prepare_archive_load(path, load_policy);
+    if (!prepared.service_ok) {
+        if (!python_script_service_dispatcher_registered()) {
+            return native_success({
+                {"ok", false},
+                {"status", "service_initializing"},
+                {"path", path},
+                {"message", "Archive service is initializing"},
+            });
+        }
+        return native_success({
+            {"ok", false},
+            {"status", "archive_service_error"},
+            {"path", path},
+            {"message", prepared.error.empty() ? "Python archive parser failed"
+                                               : prepared.error},
+        });
+    }
+    if (!prepared.ready) {
+        return native_success({
+            {"ok", false}, {"status", prepared.status}, {"path", path},
+            {"diagnostics", prepared.diagnostics},
+        });
+    }
+
+    auto& state = native_editor_state();
+    // A file run can start between the Web launcher's cleanup and this open.
+    // Fence the actual replacement on the editor thread with the old scene still installed.
+    if (auto error = stop_before_scene_replacement(state)) {
+        return native_success({{"ok", false}, {"status", "script_cleanup_failed"}, {"path", path},
+            {"message", *error}});
+    }
+    try {
+        materialize_scene_snapshot_into_state(
+            state,
+            prepared.snapshot,
+            load_policy == "degraded",
+            prepared.diagnostics);
+    } catch (const std::exception& error) {
+        prepared.diagnostics.push_back({
+            {"severity", "error"}, {"recoverable", false},
+            {"stage", "scene_commit"}, {"code", "SCENE_COMMIT_FAILED"},
+            {"message", error.what()}, {"path", path},
+        });
+        return native_success({
+            {"ok", false}, {"status", "invalid_archive"}, {"path", path},
+            {"diagnostics", prepared.diagnostics},
+        });
+    }
+    if (!state.scene->read_only) {
+        add_recent_project_native(state.scene->project_root);
+    }
+    std::size_t unresolved_count = 0;
+    for (const auto& actor : state.scene->actors) {
+        if (actor.load_status != ActorLoadStatus::Loaded) ++unresolved_count;
+    }
+    CFW_LOG_INFO("[ProjectLauncher] open_project opened path='{}' status='{}'",
+                 state.project_path, prepared.status);
+    ++state.scene->tree_revision;
+    return native_success({
+        {"ok", true}, {"status", prepared.status}, {"path", state.project_path},
+        {"degraded", prepared.status == "opened_degraded" || unresolved_count > 0},
+        {"unresolved_actor_count", unresolved_count},
+        {"diagnostics", prepared.diagnostics},
+        {"scene", {{"path", state.scene->route}, {"name", state.scene->name}}},
+    });
+}
+
 ProjectLauncherReply execute_project_launcher_operation(const ProjectLauncherRequest& request) {
     ProjectLauncherReply reply;
     reply.method = request.method;
+    if (request.method == ProjectLauncherMethod::Open) {
+        const auto result = open_launcher_project(request.path, request.load_policy);
+        if (!result.success) {
+            reply.error_code = "PROJECT_OPEN_FAILED"; reply.error_message = result.error;
+            return reply;
+        }
+        const auto& value = result.data;
+        auto& opened = reply.opened;
+        opened.ok = value.at("ok").get<bool>();
+        opened.status = value.at("status").get<std::string>();
+        opened.path = value.at("path").get<std::string>();
+        if (value.contains("message")) opened.message = value.at("message").get<std::string>();
+        if (value.contains("degraded")) opened.degraded = value.at("degraded").get<bool>();
+        if (value.contains("unresolved_actor_count")) opened.unresolved_actor_count = value.at("unresolved_actor_count").get<std::uint64_t>();
+        if (value.contains("scene")) opened.scene = SelectedProjectSnapshot{
+            value.at("scene").at("name").get<std::string>(), value.at("scene").at("path").get<std::string>()};
+        if (value.contains("diagnostics")) {
+            opened.diagnostics.emplace();
+            for (const auto& item : value.at("diagnostics")) {
+                ProjectOpenDiagnostic diagnostic;
+                if (item.contains("severity")) diagnostic.severity = item.at("severity").get<std::string>();
+                if (item.contains("stage")) diagnostic.stage = item.at("stage").get<std::string>();
+                if (item.contains("code")) diagnostic.code = item.at("code").get<std::string>();
+                if (item.contains("message")) diagnostic.message = item.at("message").get<std::string>();
+                if (item.contains("path")) diagnostic.path = item.at("path").get<std::string>();
+                if (item.contains("actor_name")) diagnostic.actor_name = item.at("actor_name").get<std::string>();
+                if (item.contains("actor_guid")) diagnostic.actor_guid = item.at("actor_guid").get<std::string>();
+                if (item.contains("shape_type")) diagnostic.shape_type = item.at("shape_type").get<std::string>();
+                if (item.contains("resource_path")) diagnostic.resource_path = item.at("resource_path").get<std::string>();
+                if (item.contains("field")) diagnostic.field = item.at("field").get<std::string>();
+                if (item.contains("camera_id")) diagnostic.camera_id = item.at("camera_id").get<std::string>();
+                if (item.contains("recoverable")) diagnostic.recoverable = item.at("recoverable").get<bool>();
+                if (item.contains("requires_confirmation")) diagnostic.requires_confirmation = item.at("requires_confirmation").get<bool>();
+                if (item.contains("count")) diagnostic.count = item.at("count").get<std::uint64_t>();
+                opened.diagnostics->push_back(std::move(diagnostic));
+            }
+        }
+        return reply;
+    }
     if (request.method == ProjectLauncherMethod::SelectFile) {
         if (const auto selected = open_project_file_native())
             reply.selected = {path_to_utf8(selected->stem()), path_to_utf8(*selected)};
@@ -6839,79 +6981,8 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
         }},
 
         {"open_project", [](const NativeRequest& request, const NativeContext&) {
-            const auto path = normalize_route(arg_string(request.args, 0));
-            const auto options = arg_object(request.args, 1);
-            const auto load_policy = options.value("load_policy", std::string{"prompt"});
-            CFW_LOG_INFO("[ProjectLauncher] open_project request path='{}'", path);
-            if (path.empty()) {
-                return native_success({{"ok", false}, {"path", std::string{}}, {"status", "cancelled"}});
-            }
-            auto prepared = prepare_archive_load(path, load_policy);
-            if (!prepared.service_ok) {
-                if (!python_script_service_dispatcher_registered()) {
-                    return native_success({
-                        {"ok", false},
-                        {"status", "service_initializing"},
-                        {"path", path},
-                        {"message", "Archive service is initializing"},
-                    });
-                }
-                return native_success({
-                    {"ok", false},
-                    {"status", "archive_service_error"},
-                    {"path", path},
-                    {"message", prepared.error.empty() ? "Python archive parser failed"
-                                                       : prepared.error},
-                });
-            }
-            if (!prepared.ready) {
-                return native_success({
-                    {"ok", false}, {"status", prepared.status}, {"path", path},
-                    {"diagnostics", prepared.diagnostics},
-                });
-            }
-
-            auto& state = native_editor_state();
-            // A file run can start between the Web launcher's cleanup and this open.
-            // Fence the actual replacement on the editor thread with the old scene still installed.
-            if (auto error = stop_before_scene_replacement(state)) {
-                return native_success({{"ok", false}, {"status", "script_cleanup_failed"}, {"path", path},
-                    {"message", *error}});
-            }
-            try {
-                materialize_scene_snapshot_into_state(
-                    state,
-                    prepared.snapshot,
-                    load_policy == "degraded",
-                    prepared.diagnostics);
-            } catch (const std::exception& error) {
-                prepared.diagnostics.push_back({
-                    {"severity", "error"}, {"recoverable", false},
-                    {"stage", "scene_commit"}, {"code", "SCENE_COMMIT_FAILED"},
-                    {"message", error.what()}, {"path", path},
-                });
-                return native_success({
-                    {"ok", false}, {"status", "invalid_archive"}, {"path", path},
-                    {"diagnostics", prepared.diagnostics},
-                });
-            }
-            if (!state.scene->read_only) {
-                add_recent_project_native(state.scene->project_root);
-            }
-            std::size_t unresolved_count = 0;
-            for (const auto& actor : state.scene->actors) {
-                if (actor.load_status != ActorLoadStatus::Loaded) ++unresolved_count;
-            }
-            CFW_LOG_INFO("[ProjectLauncher] open_project opened path='{}' status='{}'",
-                         state.project_path, prepared.status);
-            ++state.scene->tree_revision;
-            return native_success({
-                {"ok", true}, {"status", prepared.status}, {"path", state.project_path},
-                {"degraded", prepared.status == "opened_degraded" || unresolved_count > 0},
-                {"unresolved_actor_count", unresolved_count},
-                {"diagnostics", prepared.diagnostics},
-                {"scene", {{"path", state.scene->route}, {"name", state.scene->name}}},
-            });
+            return open_launcher_project(arg_string(request.args, 0),
+                arg_object(request.args, 1).value("load_policy", std::string{"prompt"}));
         }},
         {"open_project_file", [](const NativeRequest&, const NativeContext&) {
             const auto selected = open_project_file_native();
@@ -8570,6 +8641,61 @@ void register_python_script_api_handlers(NativeApiRegistry& registry) {
     register_script_module("Scripts", script_files);
 }
 
+NetworkReply execute_network_operation(const NetworkRequest& request) {
+    NetworkReply reply;
+    reply.method = request.method;
+    const auto sys = require_network_system();
+    if (!sys) {
+        reply.error_code = "NATIVE_UNAVAILABLE";
+        reply.error_message = "NetworkSystem unavailable";
+        return reply;
+    }
+    switch (request.method) {
+    case NetworkMethod::StartSession: {
+        const auto role = request.role == "client" ? Corona::Systems::NetworkSystem::SessionRole::Client :
+            request.role == "none" ? Corona::Systems::NetworkSystem::SessionRole::None :
+            Corona::Systems::NetworkSystem::SessionRole::Host;
+        const bool was_active = sys->session_state() == Corona::Systems::NetworkSystem::SessionState::Active;
+        reply.ok = sys->start_session(request.name, request.project_id, request.port, role);
+        reply.session = read_network_session(sys);
+        reply.seeded_actor_count = reply.ok && !was_active ? seed_network_editor_state(*sys, role) : 0;
+        break;
+    }
+    case NetworkMethod::StopSession: sys->stop_session(); break;
+    case NetworkMethod::GetSessionInfo: reply.session = read_network_session(sys); break;
+    case NetworkMethod::GetDiscoveredPeers: reply.peers = read_network_peers(sys); break;
+    case NetworkMethod::ClearDiscoveredPeers: sys->clear_discovered_peers(); break;
+    case NetworkMethod::SearchLan:
+        reply.ok = sys->start_discovery(request.name, request.project_id);
+        reply.discovered_count = sys->discovered_peers().size();
+        break;
+    case NetworkMethod::ConnectToPeer:
+        reply.ok = sys->connect_to_peer(request.ip, request.port, request.name);
+        reply.session = read_network_session(sys);
+        break;
+    case NetworkMethod::SetProjectRoot:
+        if (!request.project_root.empty()) sys->set_project_root(request.project_root);
+        break;
+    }
+    return reply;
+}
+
+namespace {
+NativeResult execute_legacy_network_operation(const NetworkRequest& request) {
+    const auto reply = execute_network_operation(request);
+    if (!reply.error_code.empty()) return native_failure(reply.error_message, 2);
+    nlohmann::json payload = {{"ok", reply.ok}};
+    if (request.method == NetworkMethod::StartSession || request.method == NetworkMethod::GetSessionInfo ||
+        request.method == NetworkMethod::ConnectToPeer) {
+        payload = network_session_json(reply.session);
+        payload["ok"] = reply.ok;
+        if (request.method == NetworkMethod::StartSession) payload["seeded_actor_count"] = reply.seeded_actor_count;
+    } else if (request.method == NetworkMethod::GetDiscoveredPeers) payload["peers"] = network_peers_json(reply.peers);
+    else if (request.method == NetworkMethod::SearchLan) payload["peers"] = reply.discovered_count;
+    return native_success(payload);
+}
+} // namespace
+
 void register_network_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
         {"lock_object", [](const NativeRequest& request, const NativeContext&) {
@@ -8632,92 +8758,49 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             });
         }},
         {"start_session", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
+            NetworkRequest typed{NetworkMethod::StartSession};
+            typed.name = arg_string(request.args, 0);
+            typed.project_id = arg_uint64(request.args, 1);
+            typed.port = arg_uint16(request.args, 2, 27960);
+            if (request.args.size() > 3) {
+                const auto role = parse_network_session_role(request.args[3]);
+                typed.role = role == Corona::Systems::NetworkSystem::SessionRole::Client ? "client" :
+                    role == Corona::Systems::NetworkSystem::SessionRole::None ? "none" : "host";
             }
-            const std::string name = arg_string(request.args, 0);
-            const uint64_t project_id = arg_uint64(request.args, 1);
-            const uint16_t port = arg_uint16(request.args, 2, 27960);
-            const auto role = request.args.size() > 3
-                ? parse_network_session_role(request.args[3])
-                : Corona::Systems::NetworkSystem::SessionRole::Host;
-
-            const bool was_active =
-                sys->session_state() == Corona::Systems::NetworkSystem::SessionState::Active;
-            const bool ok = sys->start_session(name, project_id, port, role);
-            auto payload = build_network_session_info(sys);
-            payload["ok"] = ok;
-            payload["seeded_actor_count"] =
-                ok && !was_active ? seed_network_editor_state(*sys, role) : 0;
-            return native_success(payload);
+            return execute_legacy_network_operation(typed);
         }},
         {"stop_session", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            sys->stop_session();
-            return native_success({{"ok", true}});
+            return execute_legacy_network_operation({NetworkMethod::StopSession});
         }},
         {"get_peer_count", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            return native_success(build_network_session_info(sys));
+            return execute_legacy_network_operation({NetworkMethod::GetSessionInfo});
         }},
         {"get_session_info", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            return native_success(build_network_session_info(sys));
+            return execute_legacy_network_operation({NetworkMethod::GetSessionInfo});
         }},
         {"get_discovered_peers", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) return native_failure("NetworkSystem unavailable", 2);
-            auto payload = build_network_session_info(sys);
-            return native_success({{"ok", true},
-                                   {"peers", payload.value("discovered_peers", nlohmann::json::array())}});
+            return execute_legacy_network_operation({NetworkMethod::GetDiscoveredPeers});
         }},
         {"search_lan", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) return native_failure("NetworkSystem unavailable", 2);
-            const auto name = arg_string(request.args, 0, "Corona Peer");
-            const auto project_id = arg_uint64(request.args, 1, 0);
-            const bool ok = sys->start_discovery(name, project_id);
-            return native_success({{"ok", ok}, {"peers", sys->discovered_peers().size()}});
+            NetworkRequest typed{NetworkMethod::SearchLan};
+            typed.name = arg_string(request.args, 0, "Corona Peer");
+            typed.project_id = arg_uint64(request.args, 1, 0);
+            return execute_legacy_network_operation(typed);
         }},
         {"clear_discovered_peers", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) return native_failure("NetworkSystem unavailable", 2);
-            sys->clear_discovered_peers();
-            return native_success({{"ok", true}});
+            return execute_legacy_network_operation({NetworkMethod::ClearDiscoveredPeers});
         }},
         {"connect_to_peer", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const std::string ip = arg_string(request.args, 0);
-            const uint16_t port = arg_uint16(request.args, 1, 27960);
-            const std::string peer_name = arg_string(request.args, 2);
-            const bool ok = sys->connect_to_peer(ip, port, peer_name);
-            auto payload = build_network_session_info(sys);
-            payload["ok"] = ok;
-            return native_success(payload);
+            NetworkRequest typed{NetworkMethod::ConnectToPeer};
+            typed.ip = arg_string(request.args, 0);
+            typed.port = arg_uint16(request.args, 1, 27960);
+            typed.name = arg_string(request.args, 2);
+            return execute_legacy_network_operation(typed);
         }},
         {"set_project_root", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const std::string root = arg_string(request.args, 0);
-            if (!root.empty()) {
-                sys->set_project_root(root);
-            }
-            return native_success({{"ok", true}});
+            NetworkRequest typed{NetworkMethod::SetProjectRoot};
+            typed.project_root = arg_string(request.args, 0);
+            return execute_legacy_network_operation(typed);
         }},
         {"poll_pending_actor_create", [](const NativeRequest&, const NativeContext& context) {
             auto sys = require_network_system();
@@ -9054,7 +9137,7 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            sys->set_lanchat_event_callback(emit_lanchat_event_json);
+            sys->set_lanchat_event_callback(emit_lanchat_event);
             const auto payload_arg = arg_object(request.args, 0);
             const std::string room = payload_arg.value("room", "");
             const uint16_t port = payload_arg.value("port", 27960);
@@ -9087,7 +9170,7 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            sys->set_lanchat_event_callback(emit_lanchat_event_json);
+            sys->set_lanchat_event_callback(emit_lanchat_event);
             const auto payload_arg = arg_object(request.args, 0);
             const std::string room = payload_arg.value("room", "");
             const std::string nickname = payload_arg.value("nickname", "房主");
@@ -9177,7 +9260,7 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            sys->set_lanchat_event_callback(emit_lanchat_event_json);
+            sys->set_lanchat_event_callback(emit_lanchat_event);
             const auto payload_arg = arg_object(request.args, 0);
             const std::string ip = payload_arg.value("ip", "");
             const uint16_t port = payload_arg.value("port", 27960);

@@ -22,13 +22,15 @@ import web_focus_smoke
 import web_graph_target_smoke
 import web_actor_properties_smoke
 import web_panel_lifecycle_smoke
+import web_project_creation_smoke
+import web_project_picker_smoke
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('runtime', type=Path)
     parser.add_argument('--output', type=Path, default=Path('build/web-packaged-ui-smoke'))
-    parser.add_argument('--suite', choices=['focus', 'environment', 'graph', 'properties', 'panels', 'all'], default='all')
+    parser.add_argument('--suite', choices=['focus', 'environment', 'graph', 'properties', 'panels', 'creation', 'picker', 'all'], default='all')
     args = parser.parse_args()
     runtime = args.runtime.resolve()
     executable = runtime / 'corona_engine.exe'
@@ -89,9 +91,16 @@ def main():
             client = Frontend(port, target_id=target['id'])
             web_environment_smoke.wait(lambda: client.evaluate('typeof globalThis.corona?.scene?.readActive'),
                                        lambda value: value == 'function', 'typed scene binding')
+            for suite, methods in [('creation', ['createWorldProject', 'createMultiplayerProject']),
+                                   ('picker', ['openProjectFile'])]:
+                if args.suite in (suite, 'all'):
+                    stage = f'{suite} binding availability'
+                    for method in methods:
+                        assert client.evaluate(f'typeof corona.project?.{method}') == 'function', method
+            assert client.evaluate('typeof corona.project?.openProject') == 'function', 'openProject'
             stage = 'open disposable creative world'
-            opened = client.api('ProjectLauncher.open_project', [str(world)])
-            assert opened.get('status') == 'success' and opened['data'].get('ok'), opened
+            opened = client.evaluate('corona.project.openProject(' + json.dumps(str(world)) + ')')
+            assert opened.get('ok') and 'data' not in opened, opened
             session = client.evaluate('corona.scene.readActive()')['archive_session']
             created = client.evaluate('corona.scene.createActor("scene.ini",' + json.dumps(str(model)) + ','
                                       + json.dumps({'archive_session': session, 'actor_type': 'model', 'actor_name': 'Probe'}) + ')')
@@ -100,13 +109,18 @@ def main():
             client = None
             for name, suite in [('focus', web_focus_smoke), ('environment', web_environment_smoke),
                                 ('graph', web_graph_target_smoke), ('properties', web_actor_properties_smoke),
-                                ('panels', web_panel_lifecycle_smoke)]:
+                                ('panels', web_panel_lifecycle_smoke),
+                                ('creation', web_project_creation_smoke), ('picker', web_project_picker_smoke)]:
                 if args.suite not in ('all', name):
                     continue
                 stage = f'packaged Vue {name}'
                 print(stage, flush=True)
-                evidence['results'][name] = (suite.run(port, world, child.pid) if name == 'panels'
-                                             else suite.run(port, world))
+                if name in ('panels', 'picker'):
+                    evidence['results'][name] = suite.run(port, world, child.pid)
+                elif name == 'creation':
+                    evidence['results'][name] = suite.run(port, world, runtime)
+                else:
+                    evidence['results'][name] = suite.run(port, world)
             evidence['passed'] = True
     except Exception:
         evidence.update(failed_stage=stage, error=traceback.format_exc())

@@ -85,8 +85,8 @@ def run(port, root):
         for client in clients:
             assert client.evaluate('window.__oldEnvironmentRequests') == []
         old_scope = session
-        reopened = main.api('ProjectLauncher.open_project', [str(root)])
-        assert reopened['status'] == 'success' and reopened['data']['ok'], reopened
+        reopened = main.evaluate('corona.project.openProject(' + json.dumps(str(root)) + ')')
+        assert reopened['ok'] and 'data' not in reopened, reopened
         # Project replacement retires these tabs. Never close their obsolete
         # numeric IDs a second time from cleanup; verify document retirement.
         opened.clear()

@@ -33,6 +33,7 @@ let launchError;
 child.on('error', error => { launchError = error; });
 const clients = [];
 let stage = 'starting engine';
+let result;
 const waitFor = async (fn, timeout = 90_000) => {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
@@ -115,7 +116,7 @@ try {
   for (const method of ['getFileTree', 'createFolder', 'createActorTemplate', 'renameItem', 'deleteItem', 'openFile']) {
     assert.equal(await main.evaluate(`typeof corona.files?.${method}`), 'function', `files.${method} requires a direct V8 binding`);
   }
-  for (const method of ['getAppVersion', 'getRecentProjects', 'getProjectLoadStatus']) {
+  for (const method of ['getAppVersion', 'getRecentProjects', 'getProjectLoadStatus', 'openProject', 'openProjectFile', 'createWorldProject', 'createMultiplayerProject']) {
     assert.equal(await main.evaluate(`typeof corona.project?.${method}`), 'function', `project.${method} requires a direct V8 binding`);
   }
   for (const method of ['readProjectDocument', 'commitProjectDocument', 'getActiveProjectInfo', 'saveActiveProjectInfo']) {
@@ -237,6 +238,63 @@ try {
   assert.equal(await docs[1].client.evaluate('window.__graphCalls'), savedCalls, 'success removes the retired graph closure');
   evidence[0].graphSaveCoordination = 'real CEF documents with JSON disabled: requestAll typed arrays, delayed known participant discovery, archive isolation, failed unmount retained, explicit retry and removal';
   if (testNativeBindings) {
+    const fixtureApi = (api, args) => main.evaluate(`window.__fixtureApi(${JSON.stringify({ api, args })})`);
+    stage = 'named native network session and discovery operations';
+    for (const method of ['startSession', 'stopSession', 'getSessionInfo', 'getDiscoveredPeers',
+      'clearDiscoveredPeers', 'searchLan', 'connectToPeer', 'setProjectRoot']) {
+      assert.equal(await main.evaluate(`typeof corona.network?.${method}`), 'function', method);
+    }
+    for (const [method, args] of [
+      ['startSession', []], ['startSession', ['Name', -1]],
+      ['startSession', ['Name', 9007199254740992]], ['startSession', ['Name', 0, 65536]],
+      ['startSession', ['Name', 0, 1.5]], ['startSession', ['Name', 0, 0, 'other']],
+      ['startSession', ['Name', 0, 0, 'host', true]],
+      ['connectToPeer', ['', 27960, 'Peer']], ['connectToPeer', ['127.0.0.1', 0, 'Peer']],
+      ['connectToPeer', ['127.0.0.1', 27960]], ['setProjectRoot', [1]],
+      ['setProjectRoot', ['invalid\0root']], ['stopSession', [true]],
+      ['getSessionInfo', [{}]], ['getDiscoveredPeers', [true]],
+      ['clearDiscoveredPeers', [1]], ['searchLan', ['other']],
+    ]) {
+      assert.equal(await main.evaluate(`corona.network.${method}(...${JSON.stringify(args)}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    }
+    assert.deepEqual(await main.evaluate('corona.network.stopSession()'), { ok: true });
+    assert.equal((await main.evaluate('corona.network.getSessionInfo()')).active, false);
+    assert.equal((await main.evaluate('corona.network.connectToPeer("127.0.0.1",27960,"Smoke")')).ok, false);
+    assert.deepEqual(await main.evaluate('corona.network.clearDiscoveredPeers()'), { ok: true });
+    assert.deepEqual(await main.evaluate('corona.network.getDiscoveredPeers()'), { ok: true, peers: [] });
+    const discovery = await main.evaluate('corona.network.searchLan()');
+    assert.equal(discovery.ok, true);
+    assert.equal(typeof discovery.peers, 'number');
+    assert.equal((await main.evaluate('corona.network.getSessionInfo()')).active, false);
+    assert.deepEqual(await main.evaluate('corona.network.stopSession()'), { ok: true });
+    for (const role of ['host', 'client']) {
+      const session = await main.evaluate(`corona.network.startSession('Typed 网络 smoke',0,0,${JSON.stringify(role)})`);
+      assert.equal(session.ok, true);
+      assert.equal(session.active, true);
+      assert.equal(session.role, role);
+      assert.equal(typeof session.local_ip, 'string');
+      assert.equal(typeof session.listen_port, 'number');
+      assert.ok(Array.isArray(session.discovered_peers));
+      assert.equal(Object.hasOwn(session, 'data'), false);
+      assert.equal(typeof session.seeded_actor_count, 'number');
+      const unchanged = await main.evaluate(`corona.network.startSession('Again',0,0,${JSON.stringify(role)})`);
+      assert.equal(unchanged.listen_port, session.listen_port);
+      assert.equal(unchanged.seeded_actor_count, 0);
+      assert.deepEqual(await main.evaluate('corona.network.setProjectRoot("")'), { ok: true });
+      assert.deepEqual(await main.evaluate('corona.network.stopSession()'), { ok: true });
+      assert.deepEqual(await main.evaluate('corona.network.stopSession()'), { ok: true });
+    }
+    for (const method of ['start_session', 'stop_session', 'get_session_info', 'get_discovered_peers',
+      'clear_discovered_peers', 'search_lan', 'connect_to_peer', 'set_project_root',
+      'broadcast_actor_create', 'broadcast_actor_delete', 'broadcast_actor_state_update',
+      'broadcast_actor_transform', 'broadcast_intent', 'broadcast_actor_scene_snapshot',
+      'check_preview_collision', 'claim_actor_ownership', 'get_lock_owner', 'get_peer_count',
+      'lock_object', 'unlock_object', 'poll_pending_actor_create', 'poll_pending_actor_delete',
+      'poll_pending_actor_state_update', 'poll_pending_actor_transform', 'poll_pending_scene_snapshot',
+      'poll_pending_scene_snapshot_request', 'register_actor_identity', 'request_actor_scene_snapshot', 'set_sync_paused']) {
+      assert.match(await fixtureApi(`Network.${method}`, []).then(() => 'unexpected retired route', error => error.message), /not allowed|not defined/);
+    }
+    evidence[0].network = 'named V8 direct replies with JSON disabled; strict arguments, inactive connect, discovery, host/client start, active reuse and idempotent stop; legacy CEF routes denied';
     stage = 'native window task burst';
     // Several documents share this queue with input. A frame must drain its
     // existing batch rather than serializing every request behind another frame.
@@ -452,7 +510,6 @@ try {
     await mkdir(path.join(cameraWorld, 'Assets'), { recursive: true });
     await writeFile(path.join(cameraWorld, 'scene.ini'), `[format]\ntype=corona_scene_folder\nversion=1\n[scene]\nname=CEF camera smoke\n[world]\ntype=creative\n[actors]\n[scripts]\npath=\n[terrain]\ntype=\npath=\n[camera]\ncount=2\ncamera0.id=main-camera\ncamera1.id=smoke-camera\ncamera1.width=320\ncamera1.height=240\n`);
     await writeFile(path.join(cameraWorld, 'assets.manifest.json'), '{"format":"corona_scene_assets","version":1,"bundles":[]}');
-    const fixtureApi = (api, args) => main.evaluate(`window.__fixtureApi(${JSON.stringify({ api, args })})`);
     const listCameras = async () => ({ data: await main.evaluate(`(async()=>{
       const state=await corona.scene.readActive();
       return corona.scene.readCameras(state.scene,{archive_session:state.archive_session});})()`) });
@@ -466,8 +523,44 @@ try {
     assert.match(await main.evaluate("corona.editor.on('SceneTools.meshMoveResult', () => {})")
       .then(() => 'unexpected subscription', error => error.message), /event is unavailable/);
     evidence[0].orphanMeshMovement = 'legacy bridge absent in every window; retired mesh and Gizmo events absent and subscriptions refused';
-    const opened = await fixtureApi('ProjectLauncher.open_project', [cameraWorld]);
-    assert.equal(opened.data?.ok, true, JSON.stringify(opened));
+    const opened = await main.evaluate(`corona.project.openProject(${JSON.stringify(cameraWorld)})`);
+    assert.equal(opened.ok, true, JSON.stringify(opened));
+    assert.equal(Object.hasOwn(opened, 'data'), false);
+    for (const args of [[], [7], [cameraWorld, { load_policy: 'story' }],
+      [cameraWorld, { mode: 'story' }], [cameraWorld, {}, true]]) {
+      assert.equal(await main.evaluate(`corona.project.openProject(...${JSON.stringify(args)}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    }
+    assert.deepEqual(await main.evaluate("corona.project.openProject('')"), { ok: false, path: '', status: 'cancelled' });
+    assert.match(await fixtureApi('ProjectLauncher.open_project', [cameraWorld])
+      .then(() => 'unexpected retired route', error => error.message), /not allowed/);
+    stage = 'LANChat message and roster event compatibility';
+    await main.evaluate(`corona.network.setProjectRoot(${JSON.stringify(cameraWorld)})`);
+    const chatToken = await main.evaluate(`(() => {
+      window.__chatEvents = [];
+      return corona.editor.on('LANChat.event', event => window.__chatEvents.push(event));
+    })()`);
+    try {
+      assert.equal((await fixtureApi('LANChat.start_local_room', [{ room: 'cef-owned-events', nickname: 'Host' }])).data.ok, true);
+      const chatText = 'quoted "text"\n中文';
+      assert.equal((await fixtureApi('LANChat.send_message', [{ text: chatText, correlation_id: 'cef-correlation' }])).data.ok, true);
+      const agent = (await fixtureApi('LANChat.add_agent', [{ name: 'Agent 中文', persona: 'smoke' }])).data;
+      assert.equal(agent.ok, true);
+      assert.equal((await fixtureApi('LANChat.remove_agent', [{ agent_id: agent.agent_id }])).data.ok, true);
+      await waitFor(async () => (await main.evaluate('window.__chatEvents.length')) === 3);
+      const events = await main.evaluate('window.__chatEvents');
+      assert.ok(events.every(event => event.channel === 'lanchat'));
+      assert.deepEqual(events.map(event => event.event), ['message', 'agent_roster', 'agent_roster']);
+      assert.equal(events[0].text, chatText);
+      assert.equal(events[0].correlation_id, 'cef-correlation');
+      assert.equal(events[0].from, 'Host');
+      assert.equal(events[1].agents[0].name, 'Agent 中文');
+      assert.equal(events[1].agents[0].agent_id, agent.agent_id);
+      assert.deepEqual(events[2].agents, []);
+    } finally {
+      await fixtureApi('LANChat.stop_local_room', []);
+      assert.equal(await main.evaluate(`corona.editor.off(${chatToken})`), true);
+    }
+    evidence[0].lanChatEvents = 'local message and roster event compatibility with JSON disabled; exact text/identity, stable prior roster snapshot, unsubscribe; named LANChat migration still pending';
     const listed = await listCameras();
     const camera = listed.data.cameras.find(item => item.camera_id === 'smoke-camera');
     assert.ok(camera?.archive_session);
@@ -740,7 +833,7 @@ try {
     await main.evaluate(`corona.scene.setEnvironment('scene.ini',${JSON.stringify({ ...environmentScope,
       sun: originalEnvironment.sun, grid: originalEnvironment.grid, physics: originalEnvironment.physics })})`);
     evidence[0].environment = 'two direct V8 environment methods replace six Web routes: scoped live reads, mixed/partial patches, strict validation before any mutation, no JSON and no authored-lighting transport';
-    assert.equal(sceneRead.scene, opened.data.scene.path);
+    assert.equal(sceneRead.scene, opened.scene.path);
     assert.equal(typeof sceneRead.tree_revision, 'string');
     assert.deepEqual(sceneRead.selection, {});
     assert.equal(typeof camera.opaque_handle, 'string');
@@ -1054,7 +1147,7 @@ try {
       assert.match(await main.evaluate(`window.__fixtureApi(${JSON.stringify({api,args:api.endsWith('select_actor')?['scene.ini','scene','']:[]})}).catch(error=>error.message)`), /not allowed/);
     }
     evidence[0].sceneReadAndSelection = 'direct V8 with JSON disabled: empty/active state, uint64 identity, uint32 node index, validation/no mutation, old CEF query denied';
-    const options = { archiveSession: camera.archive_session, sceneId: opened.data.scene.path,
+    const options = { archiveSession: camera.archive_session, sceneId: opened.scene.path,
       cameraId: camera.camera_id, width: 320, height: 240, x: 160, y: 160,
       routePath: '/CameraView?uiWindow=real-camera&scene=scene.ini&camera=smoke-camera' };
     const toolPanel = await main.evaluate(`corona.window.createPanel({panelId:'SceneTools',nativeDocked:true,
@@ -1085,7 +1178,7 @@ try {
     const bounds = { x: 10, y: 20, width: 320, height: 240, renderWidth: 320, renderHeight: 240 };
     const configuredViewport = await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d', calibration, bounds }));
     assert.equal(configuredViewport.archive_session, camera.archive_session);
-    assert.equal(configuredViewport.scene, opened.data.scene.path);
+    assert.equal(configuredViewport.scene, opened.scene.path);
     assert.equal(configuredViewport.camera_id, 'smoke-camera');
     assert.equal(configuredViewport.mode, 'stereo3d');
     assert.deepEqual(configuredViewport.bounds, bounds);
@@ -1437,8 +1530,8 @@ try {
     assert.equal(recreated.existing, false);
     assert.deepEqual(await main.evaluate('corona.window.suspendCameraViews("scene.ini")'), { closed: 1 });
     assert.equal((await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d', pointer: pointerState }))).systemCursorHidden, true);
-    const reloaded = await fixtureApi('ProjectLauncher.open_project', [cameraWorld]);
-    assert.equal(reloaded.data?.ok, true);
+    const reloaded = await main.evaluate(`corona.project.openProject(${JSON.stringify(cameraWorld)})`);
+    assert.equal(reloaded.ok, true);
     assert.equal(await main.evaluate(`corona.window.createCameraView(${JSON.stringify(options)}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.equal(await main.evaluate(`corona.scene.selectActor('scene.ini','scene','').catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.equal(await main.evaluate(`corona.scene.setActorTransform('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(patch)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
@@ -1485,17 +1578,33 @@ try {
     evidence.push({ document: 'real-camera', roundtrip: 'bidirectional structured-clone typed arrays with JSON disabled', nativeCameraLifecycle: 'passed with JSON disabled: create/existing, identity, permissions, geometry, close, recreate, suspend, archive replacement',
       fixtureScene: cameraWorld });
   }
-  const result = { date: new Date().toISOString(), passed: true, documents: evidence, nativeBindings: testNativeBindings,
-    fixture: 'file-origin HTML in production BrowserManager windows; test-owned scene loaded through unmigrated scene adapter; no user world',
+  result = { date: new Date().toISOString(), passed: true, documents: evidence, nativeBindings: testNativeBindings,
+    fixture: 'file-origin HTML in production BrowserManager windows; test-owned scene loaded through named project V8 binding; no user world',
     limitations: ['Packaged Vue collaboration and CameraView UI remain untested', 'Minimized-window and separate-engine isolation remain untested'] };
-  await writeFile(path.join(output, 'result.json'), JSON.stringify(result, null, 2));
-  console.log(JSON.stringify(result, null, 2));
 } finally {
   for (const client of clients) client.close();
   if (child.pid && child.exitCode === null) {
+    const exited = new Promise(resolve => child.once('close', resolve));
     await new Promise(resolve => {
       const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
       killer.once('exit', resolve); killer.once('error', resolve);
     });
+    if (child.exitCode === null && child.signalCode === null) {
+      let cleanupTimer;
+      try {
+        await Promise.race([exited, new Promise((_, reject) => {
+          cleanupTimer = setTimeout(() => reject(new Error(
+            `Test-owned engine ${child.pid} did not exit after cleanup`)), 30_000);
+        })]);
+      } finally {
+        clearTimeout(cleanupTimer);
+      }
+    }
   }
 }
+
+// Publish success only after confirming the test-owned engine has exited.
+// taskkill accepting termination does not mean the child has already exited.
+result.cleanup_ok = true;
+await writeFile(path.join(output, 'result.json'), JSON.stringify(result, null, 2));
+console.log(JSON.stringify(result, null, 2));

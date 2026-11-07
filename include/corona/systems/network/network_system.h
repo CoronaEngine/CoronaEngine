@@ -141,8 +141,8 @@ public:
     bool connect_to_peer(const std::string& ip, uint16_t port,
                          const std::string& peer_name);
 
-    /// LANChat 事件回调。参数是可直接传给 window.__coronaEmit 的 JSON 对象字符串。
-    void set_lanchat_event_callback(std::function<void(const std::string&)> callback);
+    /// LANChat event callback with an owned domain snapshot.
+    void set_lanchat_event_callback(std::function<void(const Network::LanChatEvent&)> callback);
 
     bool lanchat_start_room(const std::string& room_id,
                             const std::string& nickname,
