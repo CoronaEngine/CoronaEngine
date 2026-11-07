@@ -516,13 +516,16 @@ std::vector<CameraViewportUpdateCommand> SharedDataHub::drain_camera_viewport_up
 
 void SharedDataHub::enqueue_default_surface_camera_update(DefaultSurfaceCameraUpdateCommand command) {
     if (!command.surface || command.width == 0 || command.height == 0) return;
-    std::lock_guard lock(default_surface_camera_update_mutex_);
-    pending_default_surface_camera_update_ = command;
+    // 容量 1 + LatestWins = 单槽：新命令覆盖旧命令。
+    default_surface_camera_update_.push(command);
 }
 
 std::optional<DefaultSurfaceCameraUpdateCommand> SharedDataHub::take_default_surface_camera_update() {
-    std::lock_guard lock(default_surface_camera_update_mutex_);
-    return std::exchange(pending_default_surface_camera_update_, std::nullopt);
+    auto updates = default_surface_camera_update_.drain();
+    if (updates.empty()) {
+        return std::nullopt;
+    }
+    return updates.front();
 }
 
 void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command) {

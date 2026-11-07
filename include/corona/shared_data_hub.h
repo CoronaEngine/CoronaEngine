@@ -992,9 +992,12 @@ class SharedDataHub {
     Kernel::CommandBuffer<CameraViewportUpdateCommand, CameraViewportUpdateKey,
                           Kernel::CoalescePolicy::LatestWins>
         camera_viewport_updates_;
-    // 默认 surface 更新仍是"单槽"语义，单独一把锁（不与视口队列共用）
-    mutable std::mutex default_surface_camera_update_mutex_;
-    std::optional<DefaultSurfaceCameraUpdateCommand> pending_default_surface_camera_update_;
+    // 默认 surface 更新是"单槽"语义：容量 1 的 LatestWins —— 新命令覆盖旧命令，
+    // 取走即清空。key 恒为 0（结构体里没有句柄字段），因此共用默认 CommandKey。
+    Kernel::CommandBuffer<DefaultSurfaceCameraUpdateCommand,
+                          Kernel::CommandKey<DefaultSurfaceCameraUpdateCommand>,
+                          Kernel::CoalescePolicy::LatestWins>
+        default_surface_camera_update_{1};
     mutable std::mutex camera_state_update_mutex_;
     std::unordered_map<std::uintptr_t, CameraStateUpdateCommand>
         pending_camera_state_updates_;

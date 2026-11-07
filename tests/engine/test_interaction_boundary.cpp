@@ -559,6 +559,16 @@ void test_camera_viewport_queue_coalescing() {
     CHECK(taken->width == 64);
     CHECK(!hub.take_default_surface_camera_update().has_value());
 
+    // 单槽语义：连续两次提交只保留最后一次
+    hub.enqueue_default_surface_camera_update(
+        {.surface = reinterpret_cast<void*>(0x2), .width = 10, .height = 20});
+    hub.enqueue_default_surface_camera_update(
+        {.surface = reinterpret_cast<void*>(0x3), .width = 30, .height = 40});
+    const auto latest = hub.take_default_surface_camera_update();
+    CHECK(latest.has_value());
+    CHECK(latest->width == 30);
+    CHECK(latest->height == 40);
+
     hub.camera_storage().deallocate(camera);
 }
 
