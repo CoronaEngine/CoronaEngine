@@ -88,7 +88,17 @@ class CommandBuffer {
         if constexpr (Policy == CoalescePolicy::LatestWins) {
             auto it = latest_.find(key);
             if (it != latest_.end()) {
-                it->second = std::move(entry);
+                // Partial property commands can preserve unrelated fields while
+                // keeping the latest value for each field. Merge under the same
+                // lock as push/peek/drain so producers cannot lose updates.
+                if constexpr (requires(Command& pending, const Command& next) {
+                    KeyOf::merge(pending, next);
+                }) {
+                    KeyOf::merge(it->second.command, entry.command);
+                    it->second.sequence = entry.sequence;
+                } else {
+                    it->second = std::move(entry);
+                }
                 ++stats_.pushed;
                 ++stats_.coalesced;
                 return true;

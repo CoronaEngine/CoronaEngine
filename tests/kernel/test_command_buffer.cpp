@@ -46,6 +46,37 @@ using FifoMoves = Corona::Kernel::CommandBuffer<Move, MoveKey,
 using LatestMoves = Corona::Kernel::CommandBuffer<Move, MoveKey,
                                                   Corona::Kernel::CoalescePolicy::LatestWins>;
 
+struct PropertyPatch {
+    std::uintptr_t handle{};
+    unsigned fields{};
+    int mass{}, damping{};
+};
+struct PropertyPatchKey {
+    static std::uintptr_t get(const PropertyPatch& patch) { return patch.handle; }
+    static void merge(PropertyPatch& pending, const PropertyPatch& next) {
+        if (next.fields & 1) pending.mass = next.mass;
+        if (next.fields & 2) pending.damping = next.damping;
+        pending.fields |= next.fields;
+    }
+};
+
+void test_partial_properties_coalesce_without_erasing_other_fields() {
+    Corona::Kernel::CommandBuffer<PropertyPatch, PropertyPatchKey,
+        Corona::Kernel::CoalescePolicy::LatestWins> buffer;
+    buffer.push({7, 1, 20, 0});
+    buffer.push({7, 2, 0, 5});
+    buffer.push({9, 1, 30, 0});
+    buffer.push({7, 1, 40, 0});
+    const auto pending = buffer.peek(7);
+    CHECK(pending && pending->fields == 3 && pending->mass == 40 && pending->damping == 5);
+    const auto drained = buffer.drain();
+    CHECK(drained.size() == 2);
+    CHECK(drained[0].handle == 9 && drained[0].mass == 30);
+    CHECK(drained[1].handle == 7 && drained[1].fields == 3 && drained[1].mass == 40 && drained[1].damping == 5);
+    CHECK(!buffer.peek(7));
+    CHECK(buffer.stats().coalesced == 2);
+}
+
 void test_fifo_preserves_order() {
     FifoMoves buffer;
     for (int i = 0; i < 8; ++i) {
@@ -247,6 +278,7 @@ int main() {
     test_fifo_preserves_order();
     test_fifo_rejects_when_full();
     test_latest_wins_coalesces_per_key();
+    test_partial_properties_coalesce_without_erasing_other_fields();
     test_latest_wins_orders_by_sequence();
     test_latest_wins_evicts_oldest_key_at_capacity();
     test_peek_is_pending_view();

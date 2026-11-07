@@ -70,6 +70,16 @@ struct MechanicsUpdateKey {
     static std::uintptr_t get(const MechanicsUpdateCommand& command) noexcept {
         return command.mechanics_handle;
     }
+
+    static void merge(MechanicsUpdateCommand& pending, const MechanicsUpdateCommand& next) noexcept {
+        if (has_mechanics_field(next.fields, MechanicsField::Mass)) pending.mass = next.mass;
+        if (has_mechanics_field(next.fields, MechanicsField::Restitution)) pending.restitution = next.restitution;
+        if (has_mechanics_field(next.fields, MechanicsField::Damping)) pending.damping = next.damping;
+        if (has_mechanics_field(next.fields, MechanicsField::BodyType)) pending.body_type = next.body_type;
+        if (has_mechanics_field(next.fields, MechanicsField::LinearLock)) pending.linear_lock_mask = next.linear_lock_mask;
+        if (has_mechanics_field(next.fields, MechanicsField::AngularLock)) pending.angular_lock_mask = next.angular_lock_mask;
+        pending.fields = pending.fields | next.fields;
+    }
 };
 
 /// 对外的力学参数投影（不含回调与几何句柄）
