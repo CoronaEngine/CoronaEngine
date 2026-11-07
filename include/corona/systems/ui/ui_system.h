@@ -44,6 +44,18 @@ class UiSystem : public Kernel::ISystem {
     // 主线程系统不需要线程控制，提供空实现
     void start() override;
     void stop() override;
+
+    /**
+     * @brief 在 DAG（Display）仍然运行时先拆主 surface
+     *
+     * 退出顺序问题：SystemManager::stop_all() 会先停 DAG 线程（Display 就在那条线上），
+     * 之后 UiSystem::stop() 才请求拆主 surface —— 此时没有任何线程能把拆除做完，
+     * 于是发布方等满 10s 超时、再在 shutdown_sdl_ui 等 5s，退出多耗约 15 秒，
+     * 并且 swapchain 不会被释放（"keeping hidden windows and Vulkan resources"）。
+     *
+     * 由 Engine::shutdown() 在 stop_all() 之前调用；幂等。
+     */
+    void teardown_main_surface_before_stop();
     void pause() override {}
     void resume() override {}
 
@@ -69,6 +81,8 @@ class UiSystem : public Kernel::ISystem {
     [[nodiscard]] bool is_ui_running() const { return running_; }
 
    private:
+    bool main_surface_torn_down_{false};
+
     Kernel::SystemState state_ = Kernel::SystemState::idle;
 
     SDL_Event event_{};
