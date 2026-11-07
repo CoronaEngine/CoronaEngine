@@ -7,6 +7,7 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 using namespace std::chrono_literals;
 using Corona::Script::Python::PythonRuntimeCoordinator;
@@ -35,6 +36,28 @@ PythonRuntimeResponse callback_handler(const PythonRuntimeRequest& value) {
 }  // namespace
 
 int main() {
+    {
+        PythonRuntimeCoordinator coordinator(2);
+        auto value = request();
+        nlohmann::json arguments = {{{"id", std::uint64_t{18446744073709551615ULL}}, {"nodes", {1, 2, 3}}}};
+        value.service_args = std::make_shared<const nlohmann::json>(arguments);
+        auto ticket = coordinator.submit(std::move(value));
+        arguments[0]["nodes"] = nullptr;
+        auto queued = coordinator.wait_pop(50ms);
+        if (!require(queued && queued->service_args && queued->payload_json.empty(),
+                     "service arguments must travel as owned values") ||
+            !require(queued->service_args->at(0).at("nodes").size() == 3,
+                     "queued service arguments must not depend on caller mutation")) return 1;
+        auto reply = PythonRuntimeResponse::success();
+        reply.service_result = queued->service_args;
+        coordinator.complete(queued->request_id, std::move(reply));
+        queued.reset();
+        const auto received = ticket.wait(50ms);
+        if (!require(received.service_result && received.payload_json.empty(),
+                     "service response values must outlive the executing request") ||
+            !require(received.service_result->at(0).at("id").get<std::uint64_t>() == 18446744073709551615ULL,
+                     "service result must preserve opaque uint64 values")) return 1;
+    }
     {
         PythonRuntimeCoordinator coordinator(2);
         if (!require(coordinator.bind_consumer_thread(),

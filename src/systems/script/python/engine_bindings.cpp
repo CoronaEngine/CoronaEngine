@@ -14,6 +14,7 @@
 #include <unordered_map>
 
 #include <nlohmann/json.hpp>
+#include "python_value.h"
 
 #include <corona/systems/script/script_input.h>
 
@@ -25,44 +26,6 @@ namespace EngineScripts {
 namespace {
 std::atomic<std::uint64_t> g_next_python_callback_token{1};
 std::unordered_map<std::uint64_t, PyObject*> g_python_callback_registry;
-
-PyObject* json_to_python(const nlohmann::json& value) {
-    if (value.is_null()) return Py_NewRef(Py_None);
-    if (value.is_boolean()) return PyBool_FromLong(value.get<bool>() ? 1 : 0);
-    if (value.is_number_integer()) return PyLong_FromLongLong(value.get<long long>());
-    if (value.is_number_unsigned()) return PyLong_FromUnsignedLongLong(value.get<unsigned long long>());
-    if (value.is_number_float()) return PyFloat_FromDouble(value.get<double>());
-    if (value.is_string()) return PyUnicode_FromString(value.get_ref<const std::string&>().c_str());
-    if (value.is_array()) {
-        PyObject* tuple = PyTuple_New(static_cast<Py_ssize_t>(value.size()));
-        if (!tuple) return nullptr;
-        for (std::size_t index = 0; index < value.size(); ++index) {
-            PyObject* item = json_to_python(value[index]);
-            if (!item) {
-                Py_DECREF(tuple);
-                return nullptr;
-            }
-            PyTuple_SET_ITEM(tuple, static_cast<Py_ssize_t>(index), item);
-        }
-        return tuple;
-    }
-    if (value.is_object()) {
-        PyObject* dict = PyDict_New();
-        if (!dict) return nullptr;
-        for (auto it = value.begin(); it != value.end(); ++it) {
-            PyObject* item = json_to_python(it.value());
-            if (!item || PyDict_SetItemString(dict, it.key().c_str(), item) != 0) {
-                Py_XDECREF(item);
-                Py_DECREF(dict);
-                return nullptr;
-            }
-            Py_DECREF(item);
-        }
-        return dict;
-    }
-    PyErr_SetString(PyExc_TypeError, "unsupported callback JSON value");
-    return nullptr;
-}
 
 Corona::Script::Python::PythonRuntimeResponse execute_python_callback(
     const Corona::Script::Python::PythonRuntimeRequest& request) {
@@ -89,7 +52,7 @@ Corona::Script::Python::PythonRuntimeResponse execute_python_callback(
     if (args_json.is_discarded() || !args_json.is_array()) {
         return PythonRuntimeResponse::failure("python callback arguments are invalid");
     }
-    PyObject* args = json_to_python(args_json);
+    PyObject* args = Corona::Script::Python::json_to_python(args_json, true);
     if (!args) {
         PyErr_Print();
         return PythonRuntimeResponse::failure("failed to convert python callback arguments");

@@ -438,6 +438,40 @@ bool read_camera_rename(const CefV8ValueList& arguments, SceneRequest& request) 
     return true;
 }
 
+bool read_actor_create(const CefV8ValueList& arguments, SceneRequest& request) {
+    if (arguments.size() != 3 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty() ||
+        !arguments[1]->IsString() || arguments[1]->GetStringValue().empty() ||
+        !object_keys(arguments[2], {"archive_session", "actor_type", "actor_name", "audio_resource_id"})) return false;
+    const auto options = arguments[2];
+    const auto session = options->GetValue("archive_session");
+    if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
+    request.archive_session = session->GetStringValue().ToString();
+    auto& patch = request.actor_create;
+    patch.scene = arguments[0]->GetStringValue().ToString();
+    patch.path = arguments[1]->GetStringValue().ToString();
+    if (options->HasValue("actor_type")) {
+        const auto type = options->GetValue("actor_type");
+        if (!type || !type->IsString()) return false;
+        patch.actor_type = type->GetStringValue().ToString();
+    }
+    if (patch.actor_type != "model" && patch.actor_type != "ui_image" && patch.actor_type != "actor" && patch.actor_type != "audio") return false;
+    if (options->HasValue("actor_name")) {
+        const auto name = options->GetValue("actor_name");
+        if (!name || !name->IsString() || name->GetStringValue().empty()) return false;
+        patch.actor_name = name->GetStringValue().ToString();
+    }
+    if (options->HasValue("audio_resource_id")) {
+        const auto value = options->GetValue("audio_resource_id");
+        if (!value || !value->IsString() || patch.actor_type != "audio") return false;
+        const auto text = value->GetStringValue().ToString();
+        std::uint64_t id = 0;
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), id);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || !id) return false;
+        patch.audio_resource_id = id;
+    }
+    return patch.actor_type != "audio" || patch.audio_resource_id.has_value();
+}
+
 bool read_actor_rename(const CefV8ValueList& arguments, SceneRequest& request) {
     if (arguments.size() != 4 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty() ||
         !arguments[1]->IsString() || arguments[1]->GetStringValue().empty() ||
@@ -1033,6 +1067,79 @@ bool read_select_model_file(const CefV8ValueList& arguments, SceneRequest& reque
     request.archive_session = session->GetStringValue().ToString();
     request.file_type = file_type->GetStringValue().ToString();
     return true;
+}
+
+bool read_audio_resource(const CefV8ValueList& arguments, SceneRequest& request, bool loop) {
+    if (arguments.size() != (loop ? 2u : 1u)) return false;
+    const auto value = arguments[0];
+    if (!value || !value->IsString()) return false;
+    const auto id = value->GetStringValue().ToString();
+    const auto parsed = std::from_chars(id.data(), id.data() + id.size(), request.audio.resource_id);
+    if (parsed.ec != std::errc{} || parsed.ptr != id.data() + id.size() || request.audio.resource_id == 0) return false;
+    if (loop) {
+        if (!arguments[1] || !arguments[1]->IsBool()) return false;
+        request.audio.loop = arguments[1]->GetBoolValue();
+    }
+    return true;
+}
+
+bool read_actor_audio(const CefV8ValueList& arguments, SceneRequest& request, bool loop) {
+    if (arguments.size() != 3 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty() ||
+        !arguments[1]->IsString() || arguments[1]->GetStringValue().empty() ||
+        !object_keys(arguments[2], loop ? std::initializer_list<const char*> {"archive_session", "loop"}
+                                      : std::initializer_list<const char*> {"archive_session"})) return false;
+    const auto scope = arguments[2];
+    const auto session = scope->GetValue("archive_session");
+    if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
+    request.archive_session = session->GetStringValue().ToString();
+    request.audio.scene = arguments[0]->GetStringValue().ToString();
+    request.audio.actor = arguments[1]->GetStringValue().ToString();
+    if (loop) {
+        const auto value = scope->GetValue("loop");
+        if (!value || !value->IsBool()) return false;
+        request.audio.loop = value->GetBoolValue();
+    }
+    return true;
+}
+
+CefRefPtr<CefV8Value> audio_value(const AudioSnapshot& snapshot) {
+    auto result = CefV8Value::CreateObject(nullptr, nullptr);
+    result->SetValue("status", CefV8Value::CreateString(snapshot.status), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("archive_session", CefV8Value::CreateString(snapshot.archive_session), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("scene", CefV8Value::CreateString(snapshot.scene), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("actor", CefV8Value::CreateString(snapshot.actor), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("resource_id", CefV8Value::CreateString(std::to_string(snapshot.resource_id)), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("spatial", CefV8Value::CreateBool(snapshot.spatial), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("playing", CefV8Value::CreateBool(snapshot.playing), V8_PROPERTY_ATTRIBUTE_NONE);
+    return result;
+}
+
+CefRefPtr<CefV8Value> resource_import_value(const ResourceImportSnapshot& snapshot) {
+    auto result = CefV8Value::CreateObject(nullptr, nullptr);
+    const auto text = [&](const char* key, const std::string& value) {
+        result->SetValue(key, CefV8Value::CreateString(value), V8_PROPERTY_ATTRIBUTE_NONE);
+    };
+    text("status", snapshot.status); text("archive_session", snapshot.archive_session);
+    text("scene", snapshot.scene); text("file_type", snapshot.file_type);
+    text("path", snapshot.path); text("file_path", snapshot.path);
+    text("actor_type", snapshot.actor_type); text("message", snapshot.message); text("code", snapshot.code);
+    if (!snapshot.media_name.empty()) {
+        auto media = CefV8Value::CreateObject(nullptr, nullptr);
+        text("media_name", snapshot.media_name);
+        media->SetValue("name", CefV8Value::CreateString(snapshot.media_name), V8_PROPERTY_ATTRIBUTE_NONE);
+        media->SetValue("path", CefV8Value::CreateString(snapshot.path), V8_PROPERTY_ATTRIBUTE_NONE);
+        media->SetValue("type", CefV8Value::CreateString(snapshot.media_type), V8_PROPERTY_ATTRIBUTE_NONE);
+        media->SetValue("resource_id", CefV8Value::CreateString(snapshot.resource_id), V8_PROPERTY_ATTRIBUTE_NONE);
+        media->SetValue("duration", CefV8Value::CreateDouble(snapshot.duration), V8_PROPERTY_ATTRIBUTE_NONE);
+        media->SetValue("codec", CefV8Value::CreateString(snapshot.codec), V8_PROPERTY_ATTRIBUTE_NONE);
+        media->SetValue("width", CefV8Value::CreateDouble(snapshot.width), V8_PROPERTY_ATTRIBUTE_NONE);
+        media->SetValue("height", CefV8Value::CreateDouble(snapshot.height), V8_PROPERTY_ATTRIBUTE_NONE);
+        media->SetValue("fps", CefV8Value::CreateDouble(snapshot.fps), V8_PROPERTY_ATTRIBUTE_NONE);
+        media->SetValue("sample_rate", CefV8Value::CreateInt(snapshot.sample_rate), V8_PROPERTY_ATTRIBUTE_NONE);
+        media->SetValue("channels", CefV8Value::CreateInt(snapshot.channels), V8_PROPERTY_ATTRIBUTE_NONE);
+        result->SetValue("media", media, V8_PROPERTY_ATTRIBUTE_NONE);
+    }
+    return result;
 }
 
 bool read_actor_context(const CefV8ValueList& arguments, SceneRequest& request) {
@@ -1783,7 +1890,11 @@ public:
         SceneRequest request{method};
         if (((method == SceneMethod::ReadActive || method == SceneMethod::ReadVisionAvailability) && !arguments.empty()) ||
             (method == SceneMethod::ReadActorIndex && !read_actor_index(arguments, request)) ||
-            (method == SceneMethod::SelectModelFile && !read_select_model_file(arguments, request)) ||
+            ((method == SceneMethod::SelectModelFile || method == SceneMethod::ImportResourceFile) && !read_select_model_file(arguments, request)) ||
+            (method == SceneMethod::PlayAudioResource && !read_audio_resource(arguments, request, true)) ||
+            (method == SceneMethod::StopAudioResource && !read_audio_resource(arguments, request, false)) ||
+            (method == SceneMethod::PlayActorAudio && !read_actor_audio(arguments, request, true)) ||
+            (method == SceneMethod::StopActorAudio && !read_actor_audio(arguments, request, false)) ||
             (method == SceneMethod::ReadCameras && !read_actor_index(arguments, request)) ||
             (method == SceneMethod::ReadTree && !read_actor_index(arguments, request)) ||
             (method == SceneMethod::ReadActorContext && !read_actor_context(arguments, request)) ||
@@ -1797,6 +1908,7 @@ public:
             (method == SceneMethod::SelectActor && !read_selection(arguments, request.selection)) ||
             (method == SceneMethod::SetActorTransform && !read_transform(arguments, request)) ||
             (method == SceneMethod::SetActorProperties && !read_properties(arguments, request)) ||
+            (method == SceneMethod::CreateActor && !read_actor_create(arguments, request)) ||
             (method == SceneMethod::RenameActor && !read_actor_rename(arguments, request)) ||
             (method == SceneMethod::DeleteActor && !read_actor_delete(arguments, request)) ||
             (method == SceneMethod::RebindActorResource && !read_actor_resource_rebind(arguments, request)) ||
@@ -2106,6 +2218,13 @@ private:
             pending.promise->ResolvePromise(value);
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SelectModelFile) {
             pending.promise->ResolvePromise(CefV8Value::CreateString(reply.selected_file));
+        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ImportResourceFile) {
+            pending.promise->ResolvePromise(resource_import_value(reply.resource_import));
+        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::PlayAudioResource ||
+                   std::get<SceneMethod>(pending.method) == SceneMethod::StopAudioResource ||
+                   std::get<SceneMethod>(pending.method) == SceneMethod::PlayActorAudio ||
+                   std::get<SceneMethod>(pending.method) == SceneMethod::StopActorAudio) {
+            pending.promise->ResolvePromise(audio_value(reply.audio));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActorIndex) {
             pending.promise->ResolvePromise(actor_index_value(reply.actor_index));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadCameras) {
@@ -2118,7 +2237,8 @@ private:
             pending.promise->ResolvePromise(model_node_page_value(reply.model_nodes));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SetModelNodeState) {
             pending.promise->ResolvePromise(model_node_page_value(reply.model_node));
-        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActorProperties) {
+        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActorProperties ||
+                   std::get<SceneMethod>(pending.method) == SceneMethod::CreateActor) {
             pending.promise->ResolvePromise(actor_read_value(reply.actor_read));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActorSkeleton) {
             pending.promise->ResolvePromise(skeleton_value(reply.actor_skeleton));
@@ -2320,6 +2440,8 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
         new NativeHandler(endpoint, SceneMethod::ReadActorIndex)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("selectModelFile", CefV8Value::CreateFunction("selectModelFile",
         new NativeHandler(endpoint, SceneMethod::SelectModelFile)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    scene->SetValue("importResourceFile", CefV8Value::CreateFunction("importResourceFile",
+        new NativeHandler(endpoint, SceneMethod::ImportResourceFile)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("readCameras", CefV8Value::CreateFunction("readCameras",
         new NativeHandler(endpoint, SceneMethod::ReadCameras)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("readTree", CefV8Value::CreateFunction("readTree",
@@ -2330,6 +2452,8 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
         new NativeHandler(endpoint, SceneMethod::ReadModelNodes)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("setModelNodeState", CefV8Value::CreateFunction("setModelNodeState",
         new NativeHandler(endpoint, SceneMethod::SetModelNodeState)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    scene->SetValue("createActor", CefV8Value::CreateFunction("createActor",
+        new NativeHandler(endpoint, SceneMethod::CreateActor)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("readActorProperties", CefV8Value::CreateFunction("readActorProperties",
         new NativeHandler(endpoint, SceneMethod::ReadActorProperties)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("readActorSkeleton", CefV8Value::CreateFunction("readActorSkeleton",
@@ -2375,6 +2499,16 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     scene->SetValue("setEnvironment", CefV8Value::CreateFunction("setEnvironment",
         new NativeHandler(endpoint, SceneMethod::SetEnvironment)), V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("scene", scene, V8_PROPERTY_ATTRIBUTE_READONLY);
+    auto audio = CefV8Value::CreateObject(nullptr, nullptr);
+    audio->SetValue("playResource", CefV8Value::CreateFunction("playResource",
+        new NativeHandler(endpoint, SceneMethod::PlayAudioResource)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    audio->SetValue("stopResource", CefV8Value::CreateFunction("stopResource",
+        new NativeHandler(endpoint, SceneMethod::StopAudioResource)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    audio->SetValue("playActor", CefV8Value::CreateFunction("playActor",
+        new NativeHandler(endpoint, SceneMethod::PlayActorAudio)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    audio->SetValue("stopActor", CefV8Value::CreateFunction("stopActor",
+        new NativeHandler(endpoint, SceneMethod::StopActorAudio)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    root->SetValue("audio", audio, V8_PROPERTY_ATTRIBUTE_READONLY);
     auto window = CefV8Value::CreateObject(nullptr, nullptr);
     window->SetValue("getCurrent", CefV8Value::CreateFunction("getCurrent",
         new NativeHandler(endpoint, WindowMethod::GetCurrent)), V8_PROPERTY_ATTRIBUTE_READONLY);

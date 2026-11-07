@@ -535,8 +535,8 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(LANChat, start_room, kObjectPayloadParam, "lanChat.startRoom", "lan_chat.start_room", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(LANChat, stop_local_room, kNoParams, "lanChat.stopLocalRoom", "lan_chat.stop_local_room", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(LANChat, stop_room, kNoParams, "lanChat.stopRoom", "lan_chat.stop_room", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(MainView, import_resource_file, kMainViewImportResourceFileParams, "main.importResourceFile", "main.import_resource_file", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(MainView, on_init, kPathOptionalParam, "main.onInit", "main.on_init", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(MainView, import_resource_file, kMainViewImportResourceFileParams, "", "main.import_resource_file", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(MainView, on_init, kPathOptionalParam, "", "main.on_init", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(MainView, scene_save, kSceneSaveParams, "main.sceneSave", "main.scene_save", EditorApiValueType::Object, non_cef_animation_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, broadcast_actor_create, kNetworkBroadcastActorCreateParams, "network.broadcastActorCreate", "network.broadcast_actor_create", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, broadcast_actor_delete, kNetworkBroadcastActorDeleteParams, "network.broadcastActorDelete", "network.broadcast_actor_delete", EditorApiValueType::Object),
@@ -591,10 +591,10 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ResourceSearch, mark_index_dirty, kResourceSearchMarkIndexDirtyParams, "resourceSearch.markIndexDirty", "resource_search.mark_index_dirty", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ResourceSearch, prepare_index, kCallerParam, "resourceSearch.prepareIndex", "resource_search.prepare_index", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ResourceSearch, rebuild_index, kCallerParam, "resourceSearch.rebuildIndex", "resource_search.rebuild_index", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, actor_play_audio, kSceneToolsActorPlayAudioParams, "sceneTools.actorPlayAudio", "scene_tools.actor_play_audio", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, actor_stop_audio, kActorNameParam, "sceneTools.actorStopAudio", "scene_tools.actor_stop_audio", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, actor_play_audio, kSceneToolsActorPlayAudioParams, "", "scene_tools.actor_play_audio", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, actor_stop_audio, kActorNameParam, "", "scene_tools.actor_stop_audio", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, close_camera_view, kSceneCameraParams, "", "scene_tools.close_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, create_actor, kSceneToolsCreateActorParams, "sceneTools.createActor", "scene_tools.create_actor", EditorApiValueType::Object, animation_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, create_actor, kSceneToolsCreateActorParams, "", "scene_tools.create_actor", EditorApiValueType::Object, non_cef_animation_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, create_camera_view, kSceneToolsCreateCameraViewParams, "", "scene_tools.create_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, delete_camera, kSceneCameraParams, "", "scene_tools.delete_camera", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, floor_grid, kSceneToolsFloorGridParams, "", "scene_tools.floor_grid", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
@@ -624,7 +624,7 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, list_scene_tree, kReadTreeParams, "", "scene_tools.list_scene_tree", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript) | caller_mask(EditorApiCaller::ScriptRuntime)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, open_camera_view, kSceneCameraParams, "", "scene_tools.open_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, pick_actor_at_pixel, kSceneToolsPickActorParams, "", "scene_tools.pick_actor", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, play_audio, kSceneToolsPlayAudioParams, "sceneTools.playAudio", "scene_tools.play_audio", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, play_audio, kSceneToolsPlayAudioParams, "", "scene_tools.play_audio", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, reload_scene, kSceneToolsReloadSceneParams, "", "scene_tools.reload_scene", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, rebind_actor_resource, kSceneToolsRebindActorResourceParams, "", "scene_tools.rebind_actor_resource", EditorApiValueType::Object, cef_and_script_runtime_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, remove_actor, kSceneActorParams, "", "scene_tools.remove_actor", EditorApiValueType::Object, cef_and_script_runtime_callers() & ~caller_mask(EditorApiCaller::Cef)),
@@ -649,9 +649,9 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_relax_settings, kSceneCameraParams, "", "scene_tools.get_relax_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_accumulation, kSceneToolsSetCameraBoolParams, "", "scene_tools.set_vision_accumulation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_stable_planes, kSceneToolsSetCameraBoolParams, "", "scene_tools.set_vision_stable_planes", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, stop_audio, kResourceIdParam, "sceneTools.stopAudio", "scene_tools.stop_audio", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, stop_audio, kResourceIdParam, "", "scene_tools.stop_audio", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, sun_direction, kSceneToolsSunDirectionParams, "", "scene_tools.sun_direction", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_actor_skeleton_leaves, kSceneActorParams, "sceneTools.getActorSkeletonLeaves", "scene_tools.get_actor_skeleton_leaves", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_actor_skeleton_leaves, kSceneActorParams, "", "scene_tools.get_actor_skeleton_leaves", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_animation, kSceneToolsSetAnimationParams, "", "scene_tools.set_actor_animation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, pause_actor_animation, kSceneActorParams, "", "scene_tools.pause_actor_animation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, resume_actor_animation, kSceneActorParams, "", "scene_tools.resume_actor_animation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
@@ -1109,14 +1109,6 @@ std::size_t emit_callbacks(std::string_view event_name,
     return emitted;
 }
 
-std::string python_script_request_json(const NativeRequest& request) {
-    nlohmann::json payload;
-    payload["module"] = request.module;
-    payload["function"] = request.function;
-    payload["args"] = request.args.is_null() ? nlohmann::json::array() : request.args;
-    return payload.dump();
-}
-
 std::string python_script_error_message(const nlohmann::json& payload) {
     if (auto it = payload.find("error"); it != payload.end() && it->is_string()) {
         return it->get<std::string>();
@@ -1429,7 +1421,8 @@ NativeResult invoke_python_script_service(const NativeRequest& request, const ch
     runtime_request.source = route_name;
     runtime_request.module = request.module;
     runtime_request.function = request.function;
-    runtime_request.payload_json = python_script_request_json(request);
+    runtime_request.service_args = std::make_shared<const nlohmann::json>(
+        request.args.is_null() ? nlohmann::json::array() : request.args);
     // 从这里到 submit_and_wait 返回为止，owner 线程不在碰编辑器状态：于是 Python 消费
     // 线程此刻若回调编辑器 API，可以就地执行（见 editor_dispatch.h 的三段交接协议）。
     Detail::EditorWaitingForPythonScope waiting_for_python;
@@ -1449,12 +1442,10 @@ NativeResult invoke_python_script_service(const NativeRequest& request, const ch
                               route_name);
     }
 
-    const auto& result_text = response.payload_json;
-
-    const auto parsed = nlohmann::json::parse(result_text, nullptr, false);
-    if (parsed.is_discarded()) {
-        return native_success(result_text, route_name);
+    if (!response.service_result) {
+        return native_failure("Python script service returned no structured result", 500, route_name);
     }
+    const auto& parsed = *response.service_result;
     if (parsed.is_object() && parsed.value("success", true) == false) {
         return native_failure(python_script_error_message(parsed),
                               500,

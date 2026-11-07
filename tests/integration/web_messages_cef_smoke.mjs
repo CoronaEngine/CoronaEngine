@@ -219,6 +219,20 @@ try {
   assert.equal(await docs[1].client.evaluate('window.__graphCalls'), savedCalls, 'success removes the retired graph closure');
   evidence[0].graphSaveCoordination = 'real CEF documents with JSON disabled: requestAll typed arrays, delayed known participant discovery, archive isolation, failed unmount retained, explicit retry and removal';
   if (testNativeBindings) {
+    stage = 'native window task burst';
+    // Several documents share this queue with input. A frame must drain its
+    // existing batch rather than serializing every request behind another frame.
+    const burst = await main.evaluate(`(async () => {
+      let timer;
+      try {
+        return await Promise.race([
+          Promise.all(Array.from({length: 512}, () => corona.window.getCurrent())),
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Native task queue starved')), 5000); }),
+        ]).then(values => ({count: values.length, sameTab: values.every(value => value.tabId === values[0].tabId)}));
+      } finally { clearTimeout(timer); }
+    })()`);
+    assert.deepEqual(burst, {count: 512, sameTab: true});
+    evidence[0].nativeTaskBurst = '512 queued native operations complete without frame-per-request starvation';
     stage = 'native window event subscriptions';
     for (const doc of docs) {
       assert.equal(await doc.client.evaluate('typeof corona.window.onClosed'), 'function', 'native close events require direct V8 callbacks');
@@ -439,6 +453,7 @@ try {
     const listed = await listCameras();
     const camera = listed.data.cameras.find(item => item.camera_id === 'smoke-camera');
     assert.ok(camera?.archive_session);
+    assert.equal(await main.evaluate("corona.editor.invoke('MainView.on_init',[]).then(()=>false,()=>true)"), true);
     const sceneRead = await main.evaluate('corona.scene.readActive()');
     assert.equal(await main.evaluate('typeof corona.scene.focusActor'), 'function');
     assert.equal(await main.evaluate('typeof corona.scene.setActorTransform'), 'function');
@@ -454,6 +469,35 @@ try {
         assert.equal(typeof value[field], 'boolean');
     }
     const cameraReadScope = { archive_session: sceneRead.archive_session };
+    stage = 'typed resource import validation without opening a dialog';
+    assert.equal(await main.evaluate('typeof corona.scene.importResourceFile'), 'function');
+    const unsupportedImport = await main.evaluate(`corona.scene.importResourceFile('scene.ini',${JSON.stringify({ ...cameraReadScope, file_type: 'unsupported' })})`);
+    assert.equal(unsupportedImport.status, 'error');
+    assert.equal(unsupportedImport.code, 'unsupported_file_type');
+    assert.equal(unsupportedImport.archive_session, sceneRead.archive_session);
+    assert.equal(unsupportedImport.scene, 'scene.ini');
+    for (const args of [[], ['scene.ini'], ['', { ...cameraReadScope, file_type: 'model' }],
+      ['scene.ini', {}], ['scene.ini', { ...cameraReadScope, file_type: 1 }],
+      ['scene.ini', { ...cameraReadScope, file_type: 'model', extra: true }]])
+      assert.equal(await main.evaluate(`corona.scene.importResourceFile(...${JSON.stringify(args)}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    for (const [scene, session] of [['other.ini', sceneRead.archive_session], ['scene.ini', 'retired']])
+      assert.equal(await main.evaluate(`corona.scene.importResourceFile(${JSON.stringify(scene)},${JSON.stringify({ archive_session: session, file_type: 'model' })}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
+    assert.equal(await main.evaluate("corona.editor.invoke('MainView.import_resource_file',[]).then(()=>false,()=>true)"), true);
+    evidence[0].resourceImportValidation = 'JSON disabled: typed import rejects malformed arguments and inactive scope before prompting; unsupported type result retains scope; old Web route denied';
+    stage = 'typed audio validation and retired manifest routes';
+    for (const name of ['playResource', 'stopResource', 'playActor', 'stopActor'])
+      assert.equal(await main.evaluate(`typeof corona.audio.${name}`), 'function');
+    for (const id of [0, 1, 1.5, null, '', '0', '-1', '18446744073709551616', '12suffix']) {
+      assert.equal(await main.evaluate(`corona.audio.playResource(${JSON.stringify(id)},false).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+      assert.equal(await main.evaluate(`corona.audio.stopResource(${JSON.stringify(id)}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    }
+    for (const name of ['playActor', 'stopActor']) {
+      for (const [scene, session] of [['other.ini', sceneRead.archive_session], ['scene.ini', 'retired']])
+        assert.equal(await main.evaluate(`corona.audio.${name}(${JSON.stringify(scene)},'missing-actor',${JSON.stringify({ archive_session: session, ...(name === 'playActor' ? { loop: false } : {}) })}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
+    }
+    for (const method of ['play_audio', 'stop_audio', 'actor_play_audio', 'actor_stop_audio'])
+      assert.equal(await main.evaluate(`corona.editor.invoke('SceneTools.${method}',[]).then(()=>false,()=>true)`), true);
+    evidence[0].audioValidation = 'typed audio methods exist; invalid resource IDs and inactive scene/archive rejected; old manifest routes refused';
     assert.equal(await main.evaluate('typeof corona.scene.readTree'), 'function');
     const readTree = () => main.evaluate(`corona.scene.readTree('scene.ini',${JSON.stringify(cameraReadScope)})`);
     const initialTree = await readTree();
@@ -552,10 +596,29 @@ try {
     await writeFile(path.join(cameraWorld, 'replacement.ply'), 'ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0\n2 0 0\n0 2 0\n3 0 1 2\n');
     stage = 'creating native transform fixture Actor';
     console.log(`CEF smoke: ${stage}`);
-    const createdActor = await fixtureApi('SceneTools.create_actor', ['scene.ini', path.join(cameraWorld, 'triangle.ply'),
-      'model', { archive_session: camera.archive_session, actor_name: 'Transform probe' }]);
-    assert.equal(createdActor.data?.status, 'success', JSON.stringify(createdActor));
-    const actor = createdActor.data.actor;
+    const createPath = path.join(cameraWorld, 'triangle.ply');
+    const createOptions = { archive_session: camera.archive_session, actor_type: 'model', actor_name: 'Transform probe' };
+    const actor = await main.evaluate(`corona.scene.createActor('scene.ini',${JSON.stringify(createPath)},${JSON.stringify(createOptions)})`);
+    assert.equal(actor.name, 'Transform probe');
+    assert.equal(actor.actor_type, 'model');
+    assert.equal(actor.archive_session, camera.archive_session);
+    assert.equal(typeof actor.handle, 'string');
+    assert.equal(typeof actor.actor_guid, 'string');
+    assert.match(await main.evaluate("corona.editor.invoke('SceneTools.create_actor',[]).catch(error=>error.message)"), /not allowed/);
+    const beforeInvalidCreation = await readTree();
+    for (const [scene, options, expected] of [
+      ['scene.ini', {}, 'INVALID_ARGUMENT'],
+      ['scene.ini', {...createOptions, archive_session: 'retired'}, 'PROJECT_CONTEXT_CHANGED'],
+      ['wrong.ini', createOptions, 'PROJECT_CONTEXT_CHANGED'],
+      ['scene.ini', {...createOptions, actor_type: 'story'}, 'INVALID_ARGUMENT'],
+      ['scene.ini', {...createOptions, actor_type: 'audio', audio_resource_id: 42}, 'INVALID_ARGUMENT'],
+      ['scene.ini', {...createOptions, actor_type: 'audio', audio_resource_id: '18446744073709551616'}, 'INVALID_ARGUMENT'],
+      ['scene.ini', {...createOptions, extra: true}, 'INVALID_ARGUMENT'],
+    ]) {
+      assert.equal(await main.evaluate(`corona.scene.createActor(${JSON.stringify(scene)},${JSON.stringify(createPath)},${JSON.stringify(options)}).catch(error=>error.code)`), expected);
+    }
+    assert.equal((await readTree()).tree_revision, beforeInvalidCreation.tree_revision);
+    evidence[0].actorCreation = 'typed V8 with JSON disabled, scoped Actor projection, retired CEF route denied, invalid requests leave scene unchanged';
     stage = 'renaming Actor through scoped typed V8';
     console.log(`CEF smoke: ${stage}`);
     await waitFor(async () => (await readTree()).actors.some(value =>
@@ -601,7 +664,7 @@ try {
     const rebindAfter = await main.evaluate(`corona.scene.readActorIndex('scene.ini',${JSON.stringify(rebindScope)})`);
     assert.equal(rebindAfter.tree_revision, rebindBefore.tree_revision + 1);
     assert.deepEqual(rebindAfter.actors.find(value => value.actor_guid === actor.actor_guid),
-      { actor_guid: actor.actor_guid, name: actor.name, type: actor.type });
+      { actor_guid: actor.actor_guid, name: actor.name, type: 'ply' });
     const missingResource = await main.evaluate(`corona.scene.rebindActorResource('scene.ini',${JSON.stringify(actor.actor_guid)},'missing-resource.ply',${JSON.stringify(rebindScope)})`);
     assert.equal(missingResource.ok, false);
     assert.equal(missingResource.status, 'resource_error');
@@ -624,7 +687,7 @@ try {
     assert.equal(actorIndex.scene, 'scene.ini');
     assert.ok(Number.isSafeInteger(actorIndex.tree_revision));
     const indexedActor = actorIndex.actors.find(value => value.actor_guid === actor.actor_guid);
-    assert.deepEqual(indexedActor, { actor_guid: actor.actor_guid, name: actor.name, type: actor.type });
+    assert.deepEqual(indexedActor, { actor_guid: actor.actor_guid, name: actor.name, type: 'ply' });
     assert.equal('cameras' in actorIndex, false);
     for (const invalid of [[], ['scene.ini'], ['', indexScope], ['scene.ini', {}],
       ['scene.ini', { ...indexScope, actors: [] }], ['scene.ini', indexScope, 'extra']]) {

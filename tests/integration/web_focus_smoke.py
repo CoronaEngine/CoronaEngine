@@ -52,7 +52,7 @@ def run(port, root):
           const m=await import(document.querySelector('script[type=module]').src);
           const api=Object.values(m).find(v=>typeof v?.scene?.setCameraProperties==='function');
           if(!api)throw Error('Shared camera properties facade missing');
-          if(typeof api.scene.getSnapshot!=='undefined'||typeof api.sceneTools.listCameraViews!=='undefined'||typeof api.sceneTools.listSceneTree!=='undefined')
+          if(typeof api.scene.getSnapshot!=='undefined'||typeof api.sceneTools?.listCameraViews!=='undefined'||typeof api.sceneTools?.listSceneTree!=='undefined')
             throw Error('Retired scene read facade exists');
           window.__cameraReads=[];const readCameras=api.scene.readCameras;
           api.scene.readCameras=(...args)=>readCameras(...args).then(result=>{
@@ -63,17 +63,17 @@ def run(port, root):
           if(typeof globalThis.coronaBridge?.cameraMove!=='undefined')throw Error('Retired camera Fast route exists');
           for(const method of ['setCameraViewport','setViewportUiMode','setViewportUiCalibration','viewportUiPointer','setViewportSystemCursorHidden']){
             if(typeof globalThis.coronaBridge?.[method]!=='undefined')throw Error('Retired viewport Fast route exists: '+method);}
-          window.__viewportCalls=[];const configure=api.viewport.configure;
-          api.viewport.configure=(...args)=>configure(...args).then(result=>{
-            window.__viewportCalls.push({args,result});return result;});
+          window.__viewportRequests=[];window.__viewportCalls=[];const configure=api.viewport.configure;
+          api.viewport.configure=(...args)=>{const request={args,status:'pending'};window.__viewportRequests.push(request);
+            return configure(...args).then(result=>{request.status='resolved';window.__viewportCalls.push({args,result});return result;},error=>{request.status='rejected';request.error=String(error);throw error;});};
           window.__pickCalls=[];const pick=api.viewport.pick;
           api.viewport.pick=(...args)=>pick(...args).then(result=>{
             window.__pickCalls.push({args,result});return result;});
           window.__scriptInputs=[];const dispatch=api.input.dispatch;
           api.input.dispatch=(...args)=>dispatch(...args).then(result=>{
             window.__scriptInputs.push({args,result});return result;});
-          window.__cameraMoveCalls=[];const move=api.scene.setCameraProperties;
-          api.scene.setCameraProperties=(...args)=>{window.__cameraMoveCalls.push(args);return move(...args);};return true;})()"""
+          window.__cameraMoveResults=[];window.__cameraMoveCalls=[];const move=api.scene.setCameraProperties;
+          api.scene.setCameraProperties=(...args)=>{window.__cameraMoveCalls.push(args);return move(...args).then(result=>{window.__cameraMoveResults.push({result});return result;},error=>{window.__cameraMoveResults.push({error:String(error),code:error.code});throw error;});};return true;})()"""
         main.evaluate(monitor)
         panel.evaluate(monitor)
         time.sleep(.4)
@@ -111,7 +111,15 @@ def run(port, root):
                                          and 'camera=focus-camera' in target['url']), None), bool, 'CameraView document')
         assert parse_qs(urlsplit(camera_target['url']).fragment.split('?', 1)[1])['archive'] == [scope], camera_target
         camera_view = Frontend(port, target_id=camera_target['id'])
+        camera_view.call('Runtime.enable')
         wait(lambda: camera_view.evaluate("!!document.querySelector('.input-layer')"), bool, 'CameraView mount')
+        # The root is rendered before async camera setup finishes. In this
+        # isolated CameraView document its movement listener is installed only
+        # after camera load, selection subscription and initial size sync.
+        wait(lambda: camera_view.call('Runtime.evaluate', {
+            'expression': "Boolean(getEventListeners(window).keydown?.some(e=>e.listener.toString().includes('KeyW')) && getEventListeners(window).blur?.length)",
+            'includeCommandLineAPI': True, 'returnByValue': True,
+        })['result'].get('value'), bool, 'CameraView input lifecycle ready')
         assert next(camera for camera in cameras() if camera['camera_id'] == 'focus-camera')['view_open'] is True
         tree_reads = wait(lambda: panel.evaluate('window.__treeReads'), bool, 'SceneBar scoped tree refresh after camera open')
         assert tree_reads[-1]['args'] == ['scene.ini', {'archive_session': scope}], tree_reads
@@ -136,14 +144,14 @@ def run(port, root):
         assert camera_view.evaluate('window.__cameraMoveCalls') == []
         camera_view.evaluate("window.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,code:'KeyW',key:'w'}));true")
         try:
-            wait(lambda: camera_view.evaluate('window.__cameraMoveCalls.length'), lambda count: count > 0, 'CameraView movement')
+            wait(lambda: camera_view.evaluate('window.__cameraMoveCalls.filter(call=>Array.isArray(call[2]?.position)).length'), lambda count: count > 0, 'CameraView movement')
         finally:
             camera_view.evaluate("window.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,code:'KeyW',key:'w'}));true")
         moved_secondary = wait(
             lambda: next(camera for camera in cameras() if camera['camera_id'] == 'focus-camera'),
             lambda camera: camera['position'] != focused_secondary['position'],
             'CameraView native movement from applied focus pose')
-        movement_calls = camera_view.evaluate('window.__cameraMoveCalls')
+        movement_calls = camera_view.evaluate('window.__cameraMoveCalls.filter(call=>Array.isArray(call[2]?.position))')
         assert movement_calls, 'CameraView must submit movement'
         assert movement_calls[0][0:2] == ['scene.ini', 'focus-camera'], movement_calls
         assert movement_calls[0][2]['archive_session'] == scope, movement_calls
@@ -180,6 +188,7 @@ def run(port, root):
         assert pointer_calls[-1]['args'][2]['archive_session'] == scope, pointer_calls[-1]
         for cancel in ["window.dispatchEvent(new Event('blur'))",
                        "document.querySelector('.input-layer').dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:9}))"]:
+            print('CameraView cancel check: ' + cancel, flush=True)
             camera_view.evaluate(cancel + ';true')
             wait(lambda: camera_view.evaluate('window.__viewportCalls'),
                  lambda calls: calls[-1]['args'][2].get('pointer', {}).get('cursor') == 'hidden'
@@ -260,12 +269,36 @@ def run(port, root):
                 'retiredViewportBindings': 0, 'viewportPointer': 'typed scoped state, actual DOM movement, blur/cancel restore OS cursor',
                 'viewportPick': 'actual main and CameraView DOM clicks, one V8 Promise each, GPU hit and source-scoped selection',
                 'scriptInput': 'actual main and CameraView click uses one scoped typed input with picked Actor; DOM keyboard does not duplicate SDL'}
-    finally:
+    except Exception as error:
+        diagnostic = {}
+        for name, client in [('main', main), ('panel', panel), ('camera', camera_view)]:
+            if client is None:
+                continue
+            try:
+                diagnostic[name] = client.evaluate("({url:location.href,text:document.body.innerText.slice(0,2000),moves:window.__cameraMoveCalls,results:window.__cameraMoveResults,viewportRequests:window.__viewportRequests})")
+            except Exception as failure:
+                diagnostic[name] = str(failure)
         if camera_view:
-            main.evaluate("corona.window.closeCameraView('scene.ini','focus-camera')")
-            camera_view.socket.close()
-        if tab_id is not None:
-            main.evaluate(f'corona.window.closeTab({tab_id})')
-        if panel:
-            panel.socket.close()
-        main.socket.close()
+            diagnostic['camera_events'] = [event for event in camera_view.events if event.get('method') in ('Runtime.exceptionThrown', 'Runtime.consoleAPICalled')]
+        print('Focus failure: ' + repr(error), flush=True)
+        print('Focus failure diagnostics: ' + json.dumps(diagnostic, ensure_ascii=False), flush=True)
+        raise
+    finally:
+        # Preserve the first assertion when native cleanup fails as well. The
+        # owning runner still retires this launch's complete process tree.
+        failed = sys.exc_info()[0] is not None
+        cleanup_errors = []
+        for expression in (["corona.window.closeCameraView('scene.ini','focus-camera')"] if camera_view else []) + (
+                [f'corona.window.closeTab({tab_id})'] if tab_id is not None else []):
+            try:
+                main.evaluate(expression)
+            except Exception as error:
+                cleanup_errors.append(str(error))
+        for client in [camera_view, panel, main]:
+            if client:
+                client.socket.close()
+        if cleanup_errors:
+            if failed:
+                print('Focus cleanup failures: ' + repr(cleanup_errors), flush=True)
+            else:
+                raise RuntimeError('Focus cleanup failures: ' + repr(cleanup_errors))

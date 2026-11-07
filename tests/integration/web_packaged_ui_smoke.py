@@ -21,13 +21,14 @@ import web_environment_smoke
 import web_focus_smoke
 import web_graph_target_smoke
 import web_actor_properties_smoke
+import web_panel_lifecycle_smoke
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('runtime', type=Path)
     parser.add_argument('--output', type=Path, default=Path('build/web-packaged-ui-smoke'))
-    parser.add_argument('--suite', choices=['focus', 'environment', 'graph', 'properties', 'all'], default='all')
+    parser.add_argument('--suite', choices=['focus', 'environment', 'graph', 'properties', 'panels', 'all'], default='all')
     args = parser.parse_args()
     runtime = args.runtime.resolve()
     executable = runtime / 'corona_engine.exe'
@@ -61,6 +62,11 @@ def main():
                     runtime=str(runtime), world=str(world), suite=args.suite, results={},
                     engine_sha256=hashlib.sha256(executable.read_bytes()).hexdigest(),
                     frontend_sha256=hashlib.sha256((runtime / 'CabbageEditor/Frontend/dist/index.html').read_bytes()).hexdigest())
+    if args.suite in ('panels', 'all'):
+        source_manifest = Path(__file__).resolve().parents[2] / 'CoronaEditor/editor/Frontend/src/config/pluginManifest.js'
+        deployed_manifest = runtime / 'CabbageEditor/Frontend/src/config/pluginManifest.js'
+        assert source_manifest.read_bytes() == deployed_manifest.read_bytes(), 'deployed panel registry differs from the acceptance registry'
+        evidence['panel_manifest_sha256'] = hashlib.sha256(source_manifest.read_bytes()).hexdigest()
     stage = 'launch'
     job, child, client, target = _Job(), None, None, None
     try:
@@ -87,13 +93,14 @@ def main():
             opened = client.api('ProjectLauncher.open_project', [str(world)])
             assert opened.get('status') == 'success' and opened['data'].get('ok'), opened
             session = client.evaluate('corona.scene.readActive()')['archive_session']
-            created = client.api('SceneTools.create_actor', ['scene.ini', str(model), 'model',
-                                 {'archive_session': session, 'actor_name': 'Probe'}])
-            assert created.get('status') == 'success' and created['data'].get('status') == 'success', created
+            created = client.evaluate('corona.scene.createActor("scene.ini",' + json.dumps(str(model)) + ','
+                                      + json.dumps({'archive_session': session, 'actor_type': 'model', 'actor_name': 'Probe'}) + ')')
+            assert created.get('name') == 'Probe' and created.get('archive_session') == session, created
             client.socket.close()
             client = None
             for name, suite in [('focus', web_focus_smoke), ('environment', web_environment_smoke),
-                                ('graph', web_graph_target_smoke), ('properties', web_actor_properties_smoke)]:
+                                ('graph', web_graph_target_smoke), ('properties', web_actor_properties_smoke),
+                                ('panels', web_panel_lifecycle_smoke)]:
                 if args.suite not in ('all', name):
                     continue
                 stage = f'packaged Vue {name}'

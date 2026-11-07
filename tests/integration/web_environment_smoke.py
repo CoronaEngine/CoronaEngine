@@ -78,8 +78,9 @@ def run(port, root):
         changed = wait(environment, lambda value: value['physics']['floor_y'] == 6, 'physics form patch')
         assert changed['physics']['gravity'] == original['physics']['gravity'], changed
         assert changed['sun']['direction'][0] == 3 and changed['grid']['enabled'] is not original['grid']['enabled'], changed
-        saved = main.api('MainView.scene_save', ['scene.ini', {'archive_session': session}])
-        assert saved['status'] == 'success' and saved['data']['ok'], saved
+        saved = main.evaluate("corona.scene.save('scene.ini'," + json.dumps({'archive_session': session}) + ")")
+        assert saved['status'] == 'saved' and saved['archive_session'] == session and saved['scene'] == 'scene.ini', saved
+        assert saved['filepath'], saved
         # Reopening retires detached documents; inspect their monitors while alive.
         for client in clients:
             assert client.evaluate('window.__oldEnvironmentRequests') == []

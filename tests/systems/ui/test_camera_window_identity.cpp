@@ -1,4 +1,5 @@
 #include <corona/kernel/core/kernel_context.h>
+#include <corona/events/acoustics_system_events.h>
 #include <corona/engine/engine_runtime_api.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
@@ -146,6 +147,97 @@ Json snapshot() {
             {"cameras",Json::array({camera("primary","Primary camera",false),
                                    camera("secondary","Secondary camera",true)})},
             {"active_camera_id","primary"}}}};
+}
+
+void test_resource_import_results_and_modal_retirement() {
+    const auto info = [] (const std::string&) {
+        Corona::API::MediaInfo media;
+        media.resource_id = std::numeric_limits<std::uint64_t>::max();
+        media.media_type = "audio"; media.codec = "pcm_s16le";
+        media.duration_seconds = 2.5; media.sample_rate = 48000; media.channels = 2;
+        return media;
+    };
+    UI::SceneRequest request{UI::SceneMethod::ImportResourceFile};
+    request.archive_session = "camera-test-archive"; request.read_scene = "scene.ini";
+    int picks = 0, imports = 0;
+    const UI::ResourceFilePicker picker = [&](const auto& root, const auto& type) {
+        ++picks;
+        require(type == request.file_type, "the dialog receives the requested type");
+        return std::optional(root / "selected.wav");
+    };
+    const UI::MediaFileImporter importer = [&](const auto& path) {
+        ++imports;
+        require(std::filesystem::path(path).is_absolute(), "decoder receives the absolute selected path");
+        return info(path);
+    };
+    for (const auto* type : {"model", "actor", "ui_image", "multimedia"}) {
+        request.file_type = type;
+        const auto result = UI::import_native_resource_for_test(request, picker, importer);
+        const auto& value = result.resource_import;
+        require(result.error_code.empty() && value.status == "success" && value.scene == request.read_scene &&
+            value.archive_session == *request.archive_session && !value.path.empty(), "import retains its observed scope and selected route");
+        if (request.file_type == "multimedia") {
+            require(value.resource_id == "18446744073709551615" && value.media_type == "audio" &&
+                value.codec == "pcm_s16le" && value.duration == 2.5 && value.sample_rate == 48000 && value.channels == 2,
+                "typed import preserves the complete audio metadata and opaque resource identity");
+        }
+    }
+    require(picks == 4 && imports == 1, "only multimedia import invokes the decoder, exactly once");
+    request.file_type = "unsupported";
+    require(UI::import_native_resource_for_test(request, picker, importer).resource_import.code == "unsupported_file_type" && picks == 4,
+        "unsupported types never open the dialog");
+    request.file_type = "multimedia";
+    require(UI::import_native_resource_for_test(request, [](const auto&, const auto&) {
+        return std::optional<std::filesystem::path>{};
+    }, importer).resource_import.status == "canceled" && imports == 1, "cancel does not import a resource");
+    require(UI::import_native_resource_for_test(request, picker, [](const auto&) {
+        return Corona::API::MediaInfo{};
+    }).resource_import.code == "media_unrecognized", "decoder failure preserves the import error contract");
+    auto stale = request; stale.archive_session = "retired";
+    const auto before = picks;
+    require(UI::import_native_resource_for_test(stale, picker, importer).error_code == "PROJECT_CONTEXT_CHANGED" && picks == before,
+        "stale scope must be rejected before prompting");
+    for (bool canceled : {false, true}) {
+        // Recreate even the same archive ID: modal work belongs to the old owner.
+        UI::load_native_editor_scene_for_test(snapshot());
+        const auto imported_before = imports;
+        const auto result = UI::import_native_resource_for_test(request, [&](const auto& root, const auto&) {
+            UI::load_native_editor_scene_for_test(snapshot());
+            return canceled ? std::optional<std::filesystem::path>{} : std::optional(root / "selected.wav");
+        }, importer);
+        require(result.error_code == "PROJECT_CONTEXT_CHANGED" && imports == imported_before,
+            "a dialog returning after scene replacement must reject before decoding, even on cancel or a reused archive ID");
+    }
+    UI::load_native_editor_scene_for_test(snapshot());
+}
+
+void test_audio_adapters_publish_once_with_exact_identity() {
+    auto* bus = Corona::Kernel::KernelContext::instance().event_bus();
+    std::vector<Corona::Events::PlayAudioEvent> plays;
+    std::vector<Corona::Events::StopAudioEvent> stops;
+    const auto playing = bus->subscribe<Corona::Events::PlayAudioEvent>([&](const auto& e) { plays.push_back(e); });
+    const auto stopping = bus->subscribe<Corona::Events::StopAudioEvent>([&](const auto& e) { stops.push_back(e); });
+    UI::SceneRequest request{UI::SceneMethod::PlayAudioResource};
+    request.audio.resource_id = std::numeric_limits<std::uint64_t>::max(); request.audio.loop = true;
+    const auto reply = UI::execute_scene_operation(request);
+    require(reply.error_code.empty() && reply.audio.playing && reply.audio.resource_id == request.audio.resource_id,
+        "typed audio replies preserve opaque resource identity and accepted state");
+    request.method = UI::SceneMethod::StopAudioResource;
+    require(!UI::execute_scene_operation(request).audio.playing, "stop returns the accepted stopped state");
+    const auto legacy_play = UI::NativeApiRegistry::instance().dispatch({"SceneTools", "play_audio", {request.audio.resource_id, true}}, {});
+    const auto legacy_stop = UI::NativeApiRegistry::instance().dispatch({"SceneTools", "stop_audio", {request.audio.resource_id}}, {});
+    require(legacy_play && legacy_play->success && legacy_play->data.value("ok", false) &&
+        legacy_stop && legacy_stop->success && legacy_stop->data.value("ok", false), "Python adapters retain their success contract");
+    require(plays.size() == 2 && stops.size() == 2, "one event per action across both adapters");
+    for (const auto& event : plays) require(event.resource_id == request.audio.resource_id && event.loop && !event.acoustics_handle,
+        "play adapters preserve full uint64 resource ID and loop flag");
+    for (const auto& event : stops) require(event.resource_id == request.audio.resource_id && !event.acoustics_handle,
+        "stop adapters address the same global resource");
+    request.audio.resource_id = 0;
+    require(UI::execute_scene_operation(request).error_code == "INVALID_ARGUMENT", "typed audio rejects zero");
+    const auto invalid = UI::NativeApiRegistry::instance().dispatch({"SceneTools", "play_audio", {0, false}}, {});
+    require(invalid && !invalid->success && plays.size() == 2 && stops.size() == 2, "invalid adapters cannot publish events");
+    bus->unsubscribe(playing); bus->unsubscribe(stopping);
 }
 
 void test_native_scene_values_and_non_web_adapters() {
@@ -969,6 +1061,8 @@ int main() {
         require(kernel.initialize(), "kernel initialization failed");
         UI::register_builtin_native_api_handlers();
         UI::load_native_editor_scene_for_test(snapshot());
+        test_resource_import_results_and_modal_retirement();
+        test_audio_adapters_publish_once_with_exact_identity();
         test_native_scene_values_and_non_web_adapters();
         test_owned_actor_index_projection();
         test_owned_actor_property_projection();

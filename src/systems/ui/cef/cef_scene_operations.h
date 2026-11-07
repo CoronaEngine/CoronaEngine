@@ -96,6 +96,12 @@ struct ActorPropertiesSnapshot {
     std::optional<std::vector<std::string>> requested_animation_sources;
 };
 
+struct ActorCreateRequest {
+    std::string scene, path, actor_type = "model";
+    std::optional<std::string> actor_name;
+    std::optional<std::uint64_t> audio_resource_id;
+};
+
 struct ActorRenameRequest {
     std::string scene, actor, name;
 };
@@ -137,6 +143,24 @@ struct ActorResourceRebindSnapshot {
 struct SceneSaveSnapshot {
     std::string status, archive_session, scene, filepath, message;
     std::size_t unresolved_actor_count = 0;
+};
+
+struct ResourceImportSnapshot {
+    std::string status, archive_session, scene, file_type, path, actor_type, message, code;
+    std::string media_name, media_type, resource_id, codec;
+    double duration = 0, width = 0, height = 0, fps = 0;
+    int sample_rate = 0, channels = 0;
+};
+
+struct AudioRequest {
+    std::string scene, actor;
+    std::uint64_t resource_id = 0;
+    bool loop = false;
+};
+struct AudioSnapshot {
+    std::string status, archive_session, scene, actor;
+    std::uint64_t resource_id = 0;
+    bool spatial = false, playing = false;
 };
 
 struct EnvironmentSunPatch {
@@ -337,7 +361,7 @@ struct ModelNodePageRequest {
     std::size_t offset{0}, limit{100};
 };
 
-enum class SceneMethod { ReadActive, ReadVisionAvailability, ReadTransforms, SelectActor, SelectModelFile, SetActorTransform, SetActorProperties, RenameActor, DeleteActor, RebindActorResource, Save, GetEnvironment, SetEnvironment, FocusActor, CaptureScreenshot, SetCameraProperties, ReadCameraRenderSettings, SetCameraRenderSettings, CreateCamera, RenameCamera, DeleteCamera, ReadActorIndex, ReadActorProperties, ReadCameras, ReadTree, ReadActorContext, ReadActorSkeleton, ReadActorIkChains, SetActorIkChains, ReadModelNodes, SetModelNodeState };
+enum class SceneMethod { CreateActor, ReadActive, ReadVisionAvailability, ReadTransforms, SelectActor, SelectModelFile, ImportResourceFile, PlayAudioResource, StopAudioResource, PlayActorAudio, StopActorAudio, SetActorTransform, SetActorProperties, RenameActor, DeleteActor, RebindActorResource, Save, GetEnvironment, SetEnvironment, FocusActor, CaptureScreenshot, SetCameraProperties, ReadCameraRenderSettings, SetCameraRenderSettings, CreateCamera, RenameCamera, DeleteCamera, ReadActorIndex, ReadActorProperties, ReadCameras, ReadTree, ReadActorContext, ReadActorSkeleton, ReadActorIkChains, SetActorIkChains, ReadModelNodes, SetModelNodeState };
 struct SceneRequest {
     SceneMethod method;
     ActorSelection selection;
@@ -346,9 +370,11 @@ struct SceneRequest {
     std::vector<std::string> actor_guids;
     ActorTransformPatch transform;
     ActorPropertiesPatch properties;
+    ActorCreateRequest actor_create;
     ActorRenameRequest actor_rename;
     ActorDeleteRequest actor_delete;
     ActorResourceRebindRequest actor_resource_rebind;
+    AudioRequest audio;
     bool save_actors_only = false;
     EnvironmentPatch environment;
     ActorFocusRequest focus;
@@ -378,6 +404,7 @@ struct SceneReply {
     ActorResourceRebindSnapshot actor_resource_rebind;
     SceneSaveSnapshot save;
     std::string selected_file;
+    ResourceImportSnapshot resource_import;
     EnvironmentSnapshot environment;
     ActorFocusSnapshot focus;
     ScreenshotSnapshot screenshot;
@@ -393,6 +420,7 @@ struct SceneReply {
     ActorContextSnapshot actor_context;
     ModelNodePageSnapshot model_nodes;
     ModelNodePageSnapshot model_node;
+    AudioSnapshot audio;
 };
 
 // Execute on the native editor scene owner (CEF UI) thread. Non-Web adapters

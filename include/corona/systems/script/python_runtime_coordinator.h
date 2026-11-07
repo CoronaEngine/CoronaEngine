@@ -12,6 +12,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <nlohmann/json_fwd.hpp>
 
 namespace Corona::Script::Python {
 
@@ -51,6 +52,8 @@ struct PythonRuntimeRequest {
     std::string module;
     std::string function;
     std::string payload_json;
+    // Owned service values; no Python handles or serialized DTOs cross threads.
+    std::shared_ptr<const nlohmann::json> service_args;
     Handler handler = nullptr;
     std::shared_ptr<PythonRuntimeCancellation> cancellation;
     std::chrono::steady_clock::time_point deadline =
@@ -65,6 +68,7 @@ struct PythonRuntimeResponse {
     PythonRuntimeResponseStatus status = PythonRuntimeResponseStatus::Error;
     std::string payload_json;
     std::string error;
+    std::shared_ptr<const nlohmann::json> service_result;
 
     static PythonRuntimeResponse success(std::string payload = {});
     static PythonRuntimeResponse failure(std::string message);

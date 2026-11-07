@@ -601,6 +601,8 @@ struct NativeEditorScene {
     }
     std::string archive_session;
     std::uint64_t tree_revision{1};
+    // Modal dialogs can dispatch scene replacement even with a reused session.
+    const std::shared_ptr<const int> identity = std::make_shared<const int>(0);
     std::optional<ActorSelection> selection;
     bool read_only{false};
     bool frame_when_ready{false};
@@ -3972,6 +3974,94 @@ std::optional<std::filesystem::path> select_resource_file_native(
     return show_native_file_dialog(options);
 }
 
+SceneReply import_native_resource(const SceneRequest& request,
+    const ResourceFilePicker& picker = select_resource_file_native,
+    const MediaFileImporter& importer = Corona::API::import_media) {
+    SceneReply reply;
+    if (!request.archive_session || request.archive_session->empty() || request.read_scene.empty() || request.file_type.empty()) {
+        reply.error_code = "INVALID_ARGUMENT";
+        reply.error_message = "Resource import requires scene scope and file type";
+        return reply;
+    }
+    auto* scene = native_editor_state().scene.get();
+    if (!scene || *request.archive_session != scene->archive_session ||
+        !native_scene_request_matches(*scene, request.read_scene)) {
+        reply.error_code = "PROJECT_CONTEXT_CHANGED";
+        reply.error_message = "Resource import belongs to an inactive scene";
+        return reply;
+    }
+    auto& imported = reply.resource_import;
+    imported.archive_session = scene->archive_session;
+    imported.scene = scene->route;
+    imported.file_type = request.file_type;
+    if (!resource_dialog_filters(request.file_type)) {
+        imported.status = "error";
+        imported.code = "unsupported_file_type";
+        imported.message = "Unsupported resource type: " + request.file_type;
+        return reply;
+    }
+    const auto project_root = scene->project_root;
+    const auto identity = scene->identity;
+    const auto current = [&] {
+        const auto* active = native_editor_state().scene.get();
+        return active && active->identity == identity && active->archive_session == *request.archive_session
+            && native_scene_request_matches(*active, request.read_scene);
+    };
+    const auto selected = picker(project_root, request.file_type);
+    // The modal dialog can pump scene replacement; never dereference its old
+    // scene or accept a selection (including cancel) on behalf of a new owner.
+    if (!current()) {
+        reply.error_code = "PROJECT_CONTEXT_CHANGED";
+        reply.error_message = "Archive changed while choosing a resource";
+        return reply;
+    }
+    if (!selected) {
+        imported.status = "canceled";
+        imported.message = "用户取消了文件选择";
+        return reply;
+    }
+    const auto absolute_path = absolute_normalized_path(*selected);
+    imported.path = route_for_project_storage(project_root, path_to_utf8(absolute_path));
+    imported.actor_type = request.file_type;
+    if (request.file_type != "multimedia") {
+        imported.status = "success";
+        return reply;
+    }
+    const auto info = importer(path_to_utf8(absolute_path));
+    if (info.resource_id == 0 || info.media_type.empty()) {
+        imported.status = "error";
+        imported.code = "media_unrecognized";
+        imported.message = "无法识别的音视频文件: " + imported.path;
+        return reply;
+    }
+    imported.status = "success";
+    imported.media_name = path_to_utf8(absolute_path.stem());
+    imported.media_type = info.media_type;
+    imported.resource_id = std::to_string(info.resource_id);
+    imported.duration = info.duration_seconds;
+    imported.codec = info.codec;
+    imported.width = info.width;
+    imported.height = info.height;
+    imported.fps = info.fps;
+    imported.sample_rate = info.sample_rate;
+    imported.channels = info.channels;
+    return reply;
+}
+
+std::string change_native_resource_audio(std::uint64_t resource_id, bool playing, bool loop = false) {
+    auto* event_bus = Corona::Kernel::KernelContext::instance().event_bus();
+    if (!event_bus) return "event_bus unavailable";
+    if (!resource_id) return "invalid resource_id";
+    if (playing) event_bus->publish<::Corona::Events::PlayAudioEvent>({resource_id, loop});
+    else event_bus->publish<::Corona::Events::StopAudioEvent>({resource_id});
+    return {};
+}
+
+void change_native_actor_audio(NativeEditorActor& actor, bool playing, bool loop = false) {
+    if (playing) actor.acoustics->play(loop);
+    else actor.acoustics->stop();
+}
+
 std::string compact_timestamp() {
     const auto now = std::chrono::system_clock::now();
     const std::time_t raw = std::chrono::system_clock::to_time_t(now);
@@ -5108,6 +5198,47 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         reply.vision_available = Corona::API::is_vision_available();
         return reply;
     }
+    if (request.method == SceneMethod::CreateActor) {
+        SceneReply reply;
+        const auto& patch = request.actor_create;
+        if (patch.scene.empty() || patch.path.empty() || !request.archive_session || request.archive_session->empty() ||
+            (patch.actor_type != "model" && patch.actor_type != "ui_image" && patch.actor_type != "actor" && patch.actor_type != "audio") ||
+            (patch.actor_type == "audio" && (!patch.audio_resource_id || !*patch.audio_resource_id)) ||
+            (patch.actor_type != "audio" && patch.audio_resource_id) ||
+            (patch.actor_name && trim_ascii(*patch.actor_name).empty())) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Actor creation requires an observed archive, scene, source and supported Actor type";
+            return reply;
+        }
+        auto* scene = native_editor_state().scene.get();
+        if (!scene || scene->archive_session != *request.archive_session || !native_scene_request_matches(*scene, patch.scene)) {
+            reply.error_code = "PROJECT_CONTEXT_CHANGED";
+            reply.error_message = "Actor creation belongs to an inactive archive";
+            return reply;
+        }
+        if (scene->read_only) {
+            reply.error_code = "READ_ONLY";
+            reply.error_message = "Cannot create an Actor in a read-only scene";
+            return reply;
+        }
+        nlohmann::json data = {{"archive_session", *request.archive_session}};
+        if (patch.actor_name) data["actor_name"] = *patch.actor_name;
+        if (patch.audio_resource_id) data["audio_resource_id"] = std::to_string(*patch.audio_resource_id);
+        // Reuse the same native business operation as Python/ScriptRuntime.
+        // Its internal JSON object stays on this owner thread, never serialized
+        // or passed to the renderer. Only the owned Actor projection crosses.
+        const auto created = create_native_editor_actor(scene->route, patch.path, patch.actor_type, data);
+        if (!created.success) {
+            reply.error_code = "ACTOR_CREATE_FAILED";
+            reply.error_message = created.error;
+            return reply;
+        }
+        SceneRequest read{SceneMethod::ReadActorProperties};
+        read.archive_session = request.archive_session;
+        read.read_scene = scene->route;
+        read.read_actor = created.data.at("actor").at("actor_guid").get<std::string>();
+        return execute_scene_operation(read);
+    }
     if (request.method == SceneMethod::CreateCamera) {
         SceneReply reply;
         if (request.camera_create.scene.empty() || !request.archive_session || request.archive_session->empty()) {
@@ -5480,6 +5611,49 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             reply.selected_file = route_for_project_storage(
                 scene->project_root, path_to_utf8(absolute_normalized_path(*selected)));
         }
+        return reply;
+    }
+    if (request.method == SceneMethod::ImportResourceFile) return import_native_resource(request);
+    if (request.method == SceneMethod::PlayAudioResource || request.method == SceneMethod::StopAudioResource) {
+        const auto error = change_native_resource_audio(request.audio.resource_id,
+            request.method == SceneMethod::PlayAudioResource, request.audio.loop);
+        if (!error.empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = error;
+            return reply;
+        }
+        reply.audio.status = "success";
+        reply.audio.resource_id = request.audio.resource_id;
+        reply.audio.playing = request.method == SceneMethod::PlayAudioResource;
+        return reply;
+    }
+    if (request.method == SceneMethod::PlayActorAudio || request.method == SceneMethod::StopActorAudio) {
+        if (!request.archive_session || request.archive_session->empty() || request.audio.scene.empty() || request.audio.actor.empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Actor audio requires archive, scene and actor scope";
+            return reply;
+        }
+        auto* scene = state.scene.get();
+        if (!scene || *request.archive_session != scene->archive_session ||
+            !native_scene_request_matches(*scene, request.audio.scene)) {
+            reply.error_code = "PROJECT_CONTEXT_CHANGED";
+            reply.error_message = "Actor audio belongs to an inactive scene";
+            return reply;
+        }
+        auto* actor = find_native_actor_by_guid(*scene, request.audio.actor);
+        if (!actor) actor = find_native_actor(*scene, request.audio.actor);
+        if (!actor || !actor->acoustics) {
+            reply.error_code = "ACTOR_AUDIO_UNAVAILABLE";
+            reply.error_message = "Actor not found or has no acoustics component";
+            return reply;
+        }
+        change_native_actor_audio(*actor, request.method == SceneMethod::PlayActorAudio, request.audio.loop);
+        reply.audio.status = "success";
+        reply.audio.archive_session = scene->archive_session;
+        reply.audio.scene = scene->route;
+        reply.audio.actor = actor->actor_guid;
+        reply.audio.spatial = true;
+        reply.audio.playing = request.method == SceneMethod::PlayActorAudio;
         return reply;
     }
     if (request.method == SceneMethod::ReadActorIndex) {
@@ -5941,6 +6115,11 @@ void load_native_editor_scene_for_test(const nlohmann::json& snapshot) {
     nlohmann::json diagnostics = nlohmann::json::array();
     materialize_scene_snapshot_into_state(
         native_editor_state(), snapshot, false, diagnostics);
+}
+
+SceneReply import_native_resource_for_test(const SceneRequest& request,
+    const ResourceFilePicker& picker, const MediaFileImporter& importer) {
+    return import_native_resource(request, picker, importer);
 }
 
 void reset_native_editor_scene_for_test() {
@@ -6643,55 +6822,28 @@ void register_main_view_api_handlers(NativeApiRegistry& registry) {
                                        {"message", "scene_name is required"},
                                        {"code", "scene_name_missing"}});
             }
-            if (!resource_dialog_filters(file_type)) {
-                return native_success({{"status", "error"},
-                                       {"message", "Unsupported resource type: " + file_type},
-                                       {"code", "unsupported_file_type"}});
+            SceneRequest imported_request{SceneMethod::ImportResourceFile};
+            imported_request.read_scene = scene->route;
+            imported_request.archive_session = scene->archive_session;
+            imported_request.file_type = file_type;
+            const auto result = import_native_resource(imported_request);
+            if (!result.error_code.empty()) return native_failure(result.error_code, 409);
+            const auto& imported = result.resource_import;
+            if (imported.status != "success") {
+                nlohmann::json payload = {{"status", imported.status}, {"message", imported.message}};
+                if (!imported.code.empty()) payload["code"] = imported.code;
+                return native_success(std::move(payload));
             }
-
-            const auto selected = select_resource_file_native(scene->project_root, file_type);
-            if (!selected) {
-                return native_success({{"status", "canceled"},
-                                       {"message", "用户取消了文件选择"}});
-            }
-
-            const auto absolute_path = absolute_normalized_path(*selected);
-            const auto route = route_for_project_storage(
-                scene->project_root, path_to_utf8(absolute_path));
-            if (file_type != "multimedia") {
-                return native_success({
-                    {"status", "success"},
-                    {"scene", scene_name},
-                    {"path", route},
-                    {"file_path", route},
-                    {"actor_type", file_type},
-                });
-            }
-
-            const auto info = Corona::API::import_media(path_to_utf8(absolute_path));
-            if (info.resource_id == 0 || info.media_type.empty()) {
-                return native_success({
-                    {"status", "error"},
-                    {"message", "无法识别的音视频文件: " + route},
-                    {"code", "media_unrecognized"},
-                });
-            }
-            return native_success({
-                {"status", "success"},
-                {"media", {
-                    {"name", path_to_utf8(absolute_path.stem())},
-                    {"path", route},
-                    {"type", info.media_type},
-                    {"resource_id", std::to_string(info.resource_id)},
-                    {"duration", info.duration_seconds},
-                    {"codec", info.codec},
-                    {"width", info.width},
-                    {"height", info.height},
-                    {"fps", info.fps},
-                    {"sample_rate", info.sample_rate},
-                    {"channels", info.channels},
-                }},
+            if (file_type != "multimedia") return native_success({
+                {"status", "success"}, {"scene", scene_name}, {"path", imported.path},
+                {"file_path", imported.path}, {"actor_type", imported.actor_type},
             });
+            return native_success({{"status", "success"}, {"media", {
+                {"name", imported.media_name}, {"path", imported.path}, {"type", imported.media_type},
+                {"resource_id", imported.resource_id}, {"duration", imported.duration}, {"codec", imported.codec},
+                {"width", imported.width}, {"height", imported.height}, {"fps", imported.fps},
+                {"sample_rate", imported.sample_rate}, {"channels", imported.channels},
+            }}});
         }},
         {"on_init", [](const NativeRequest& request, const NativeContext&) {
             auto& state = native_editor_state();
@@ -7888,63 +8040,29 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             });
         }},
         {"play_audio", [](const NativeRequest& request, const NativeContext&) {
-            auto* event_bus = Corona::Kernel::KernelContext::instance().event_bus();
-            if (!event_bus) {
-                return native_failure("event_bus unavailable", 2);
-            }
-            const uint64_t rid = arg_uint64(request.args, 0);
-            if (rid == 0) {
-                return native_failure("invalid resource_id", 2);
-            }
-            const bool loop = arg_bool(request.args, 1, false);
-            event_bus->publish<::Corona::Events::PlayAudioEvent>({rid, loop});
-
-            nlohmann::json payload;
-            payload["ok"] = true;
-            return native_success(payload);
+            const auto error = change_native_resource_audio(arg_uint64(request.args, 0), true,
+                arg_bool(request.args, 1, false));
+            return error.empty() ? native_success({{"ok", true}}) : native_failure(error, 2);
         }},
         {"stop_audio", [](const NativeRequest& request, const NativeContext&) {
-            auto* event_bus = Corona::Kernel::KernelContext::instance().event_bus();
-            if (!event_bus) {
-                return native_failure("event_bus unavailable", 2);
-            }
-            const uint64_t rid = arg_uint64(request.args, 0);
-            if (rid == 0) {
-                return native_failure("invalid resource_id", 2);
-            }
-            event_bus->publish<::Corona::Events::StopAudioEvent>({rid});
-
-            nlohmann::json payload;
-            payload["ok"] = true;
-            return native_success(payload);
+            const auto error = change_native_resource_audio(arg_uint64(request.args, 0), false);
+            return error.empty() ? native_success({{"ok", true}}) : native_failure(error, 2);
         }},
         {"actor_play_audio", [](const NativeRequest& request, const NativeContext&) {
-            // 在指定 actor 的世界位置播放其绑定的音频（空间音频）。
             auto* scene = ensure_native_editor_scene();
-            const auto actor_name = arg_string(request.args, 0);
-            const bool loop = arg_bool(request.args, 1, false);
-            auto* actor = find_native_actor(*scene, actor_name);
-            if (!actor || !actor->acoustics) {
+            auto* actor = find_native_actor(*scene, arg_string(request.args, 0));
+            if (!actor || !actor->acoustics)
                 return native_failure("actor not found or has no acoustics component", 2);
-            }
-            actor->acoustics->play(loop);
-
-            nlohmann::json payload;
-            payload["ok"] = true;
-            return native_success(payload);
+            change_native_actor_audio(*actor, true, arg_bool(request.args, 1, false));
+            return native_success({{"ok", true}});
         }},
         {"actor_stop_audio", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = ensure_native_editor_scene();
-            const auto actor_name = arg_string(request.args, 0);
-            auto* actor = find_native_actor(*scene, actor_name);
-            if (!actor || !actor->acoustics) {
+            auto* actor = find_native_actor(*scene, arg_string(request.args, 0));
+            if (!actor || !actor->acoustics)
                 return native_failure("actor not found or has no acoustics component", 2);
-            }
-            actor->acoustics->stop();
-
-            nlohmann::json payload;
-            payload["ok"] = true;
-            return native_success(payload);
+            change_native_actor_audio(*actor, false);
+            return native_success({{"ok", true}});
         }},
         // ---- Per-instance IK configuration and runtime inspection ----
         {"get_actor_skeleton_leaves", [](const NativeRequest& request, const NativeContext&) {

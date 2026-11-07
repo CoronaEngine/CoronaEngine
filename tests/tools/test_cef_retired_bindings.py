@@ -2,6 +2,70 @@
 from pathlib import Path
 
 
+def test_native_python_service_transport_uses_owned_values_without_json_text():
+    root = Path(__file__).resolve().parents[2]
+    owner = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    invoke = owner.split('NativeResult invoke_python_script_service(', 1)[1]
+    assert 'service_args' in invoke
+    assert 'service_result' in invoke
+    assert 'payload_json' not in invoke
+    assert 'json::parse' not in invoke
+    assert 'python_script_request_json' not in owner
+    runtime = (root / 'src/systems/script/python/python_api.cpp').read_text(encoding='utf-8-sig')
+    service = runtime.split('if (request.kind == PythonRuntimeRequestKind::ServiceCall)', 1)[1].split(
+        'if (request.kind == PythonRuntimeRequestKind::Callback', 1)[0]
+    assert 'dispatch_script_values_from_cpp' in service
+    assert 'payload_json' not in service
+
+
+def test_actor_creation_retires_only_cef_and_shares_native_business_operation():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    declaration = next(line for line in manifest.splitlines() if 'SceneTools, create_actor,' in line)
+    assert ', "", ' in declaration
+    assert 'non_cef_animation_callers()' in declaration
+    native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
+    typed = native.split('if (request.method == SceneMethod::CreateActor)', 1)[1].split('if (request.method == SceneMethod::CreateCamera)', 1)[0]
+    assert 'create_native_editor_actor(' in typed
+    assert 'ReadActorProperties' in typed
+    legacy = native.split('{"create_actor",', 1)[1].split('{"rename_actor",', 1)[0]
+    assert 'create_native_editor_actor(' in legacy
+    assert 'context.script_runtime' in legacy
+
+
+def test_audio_and_resource_import_have_one_native_business_implementation():
+    root = Path(__file__).resolve().parents[2]
+    native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
+    assert native.count('event_bus->publish<::Corona::Events::PlayAudioEvent>') == 1
+    assert native.count('event_bus->publish<::Corona::Events::StopAudioEvent>') == 1
+    assert native.count('actor.acoustics->play(') == 1
+    assert native.count('actor.acoustics->stop(') == 1
+    legacy_import = native.split('{"import_resource_file",', 1)[1].split('{"on_init",', 1)[0]
+    assert 'import_native_resource(' in legacy_import
+    assert 'select_resource_file_native(' not in legacy_import
+    assert 'Corona::API::import_media(' not in legacy_import
+
+
+def test_typed_resource_import_preserves_audio_metadata():
+    root = Path(__file__).resolve().parents[2]
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
+    projection = binding.split('resource_import_value(', 1)[1].split('bool read_actor_context(', 1)[0]
+    assert '"sample_rate"' in projection
+    assert '"channels"' in projection
+
+
+def test_audio_and_import_keep_original_python_permissions_after_cef_retirement():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    for module, method in [('MainView', 'import_resource_file'), ('SceneTools', 'play_audio'),
+                           ('SceneTools', 'stop_audio'), ('SceneTools', 'actor_play_audio'),
+                           ('SceneTools', 'actor_stop_audio')]:
+        declaration = next(line for line in manifest.splitlines() if f'{module}, {method},' in line)
+        assert 'WRAPPED_CALLERS' in declaration
+        assert ', "", ' in declaration
+        assert declaration.endswith('caller_mask(EditorApiCaller::PythonScript)),')
+
+
 def test_camera_reads_retire_full_scene_and_camera_list_web_routes():
     root = Path(__file__).resolve().parents[2]
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
@@ -75,7 +139,7 @@ def test_vision_availability_uses_typed_scene_binding():
     assert 'caller_mask(EditorApiCaller::PythonScript)' in declaration
     assert '"sceneTools.isVisionAvailable"' not in declaration
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
-    assert 'isVisionAvailable:' not in facade.split('sceneTools:', 1)[1].split('\n  },', 1)[0]
+    assert 'sceneTools:' not in facade
     assert 'isVisionAvailable: () => window.corona.scene.isVisionAvailable()' in facade
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
     assert 'SceneMethod::ReadVisionAvailability' in binding
@@ -172,7 +236,7 @@ def test_actor_resource_rebinding_uses_scoped_scene_v8_and_retires_web_manifest(
     assert '~caller_mask(EditorApiCaller::Cef)' in declaration
 
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
-    assert 'rebindActorResource:' not in facade.split('sceneTools:', 1)[1].split('\n  },', 1)[0]
+    assert 'sceneTools:' not in facade
     assert 'window.corona.scene.rebindActorResource(sceneName, actorGuid, path, scope)' in facade
 
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
@@ -230,7 +294,7 @@ def test_model_file_selection_uses_scoped_v8_and_retires_manifest_route():
     assert 'CreateFunction("selectModelFile"' in binding
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert "window.corona.scene.selectModelFile(sceneName" in facade
-    assert 'selectModelFile:' not in facade.split('sceneTools:', 1)[1]
+    assert 'sceneTools:' not in facade
     assert "'SceneTools.select_model_file'" not in facade
 
 
@@ -351,3 +415,13 @@ def test_gizmo_has_no_realtime_transport_shim():
     assert 'OnProcessMessageReceived' not in client
     assert 'OnProcessMessageReceived' not in renderer
     assert 'RendererMessage' not in client
+
+
+def test_main_init_is_python_only_and_has_no_web_facade():
+    root = Path(__file__).resolve().parents[2]
+    source = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    declaration = next(line for line in source.splitlines() if 'MainView, on_init,' in line)
+    assert 'WRAPPED_CALLERS' in declaration and ', "", ' in declaration
+    assert declaration.endswith('caller_mask(EditorApiCaller::PythonScript)),')
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert 'onInit:' not in facade

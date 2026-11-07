@@ -261,15 +261,15 @@ void BrowserManager::update() {
     ++frame_index_;
     retire_deferred_tab_textures();
 
-    std::function<void()> task;
+    // Drain this turn's snapshot so multiple Web documents cannot produce
+    // work faster than a one-task-per-frame consumer. Tasks posted while this
+    // batch runs belong to the next turn (including lifecycle acknowledgments).
+    std::vector<std::function<void()>> tasks;
     {
         std::lock_guard lock(pending_tasks_mutex_);
-        if (!pending_tasks_.empty()) {
-            task = std::move(pending_tasks_.front());
-            pending_tasks_.erase(pending_tasks_.begin());
-        }
+        tasks.swap(pending_tasks_);
     }
-    if (task) {
+    for (auto& task : tasks) {
         try {
             task();
         } catch (const std::exception& exception) {
