@@ -29,6 +29,7 @@
 #include "cef_files_operations.h"
 #include "cef_project_launcher_operations.h"
 #include "cef_network_operations.h"
+#include "cef_lanchat_operations.h"
 #include "cef_viewport_pick.h"
 #include "cef_editor_native_api_handlers.h"
 #include "editor_dispatch.h"
@@ -9130,89 +9131,168 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
     });
 }
 
+namespace {
+struct LanChatOutcome {
+    LanChatReply value;
+    std::vector<Corona::Network::LanChatMessage> history;
+};
+
+// The business owner is shared by V8 and the independent Python/native adapter.
+// Serialized metadata enters only the existing network/history boundary here.
+LanChatOutcome run_lanchat_operation(const LanChatRequest& request, const std::string& wire_metadata) {
+    LanChatOutcome outcome;
+    auto& reply = outcome.value;
+    reply.method = request.method;
+    const auto sys = require_network_system();
+    if (!sys) {
+        reply.error_code = "NATIVE_UNAVAILABLE"; reply.error_message = "NetworkSystem unavailable";
+        return outcome;
+    }
+    const auto capture_room = [&] {
+        reply.members = sys->lanchat_members();
+        reply.agents = sys->lanchat_agents();
+        outcome.history = sys->lanchat_history();
+    };
+    switch (request.method) {
+    case LanChatMethod::StartRoom:
+    case LanChatMethod::StartLocalRoom: {
+        sys->set_lanchat_event_callback(emit_lanchat_event);
+        const bool local = request.method == LanChatMethod::StartLocalRoom;
+        reply.you = request.nickname.empty() ? "房主" : request.nickname;
+        reply.ok = local ? sys->lanchat_start_local_room(request.room, reply.you)
+                         : sys->lanchat_start_room(request.room, reply.you, request.port);
+        if (reply.ok && request.restore_history)
+            reply.restored_history = sys->lanchat_restore_history_room(request.history_room.value_or(request.room));
+        reply.ip = local ? "" : detect_wlan_ipv4();
+        reply.port = local ? 0 : sys->session_port() != 0 ? sys->session_port() : request.port;
+        reply.room = request.room;
+        reply.peer_id = local ? "local-single-player" : sys->local_peer_id();
+        if (local) reply.mode = "single";
+        capture_room();
+        break;
+    }
+    case LanChatMethod::StopRoom: sys->lanchat_leave_room(); sys->stop_session(); break;
+    case LanChatMethod::StopLocalRoom: sys->lanchat_stop_local_room(); break;
+    case LanChatMethod::LeaveRoom: sys->lanchat_leave_room(); break;
+    case LanChatMethod::JoinRoom:
+        sys->set_lanchat_event_callback(emit_lanchat_event);
+        reply.ok = sys->lanchat_join_room(request.ip, request.port, request.room, request.nickname);
+        reply.you = request.nickname;
+        reply.peer_id = sys->local_peer_id();
+        reply.port = sys->host_port() != 0 ? sys->host_port() : request.port;
+        capture_room();
+        if (!reply.ok) reply.error = "JOIN_FAILED";
+        break;
+    case LanChatMethod::SendMessage: {
+        const auto result = sys->lanchat_send_message_ex(request.text, request.message_kind,
+            request.target_agent_id, request.source_user_id, request.correlation_id, wire_metadata);
+        reply.ok = result.accepted;
+        if (reply.ok) { reply.message_id = result.message.message_id; reply.seq = result.message.seq; }
+        else reply.error = result.error.empty() ? "SEND_FAILED" : result.error;
+        break;
+    }
+    case LanChatMethod::ListHistoryRooms: reply.rooms = sys->lanchat_history_rooms(); break;
+    case LanChatMethod::LoadHistoryRoom:
+        reply.ok = !request.room.empty();
+        reply.room = request.room;
+        if (reply.ok) {
+            outcome.history = sys->lanchat_load_history_room(request.room);
+            reply.agents = sys->lanchat_load_history_agents(request.room);
+        } else reply.error = "ROOM_REQUIRED";
+        break;
+    case LanChatMethod::GetLocalIp:
+        reply.ip = detect_wlan_ipv4();
+        reply.port = sys->session_port() != 0 ? sys->session_port() : 27960;
+        break;
+    case LanChatMethod::AddAgent: {
+        const auto peer_id = sys->local_peer_id().empty() ? "local-single-player" : sys->local_peer_id();
+        reply.agent_id = make_agent_id(peer_id, request.name);
+        reply.name = request.name;
+        const auto result = sys->lanchat_register_agent(reply.agent_id, request.name, request.persona);
+        reply.ok = result.ok;
+        if (!reply.ok) reply.error = result.error;
+        break;
+    }
+    case LanChatMethod::RemoveAgent: {
+        const auto result = sys->lanchat_remove_agent(request.agent_id);
+        reply.ok = result.ok;
+        if (!reply.ok) reply.error = result.error;
+        break;
+    }
+    }
+    return outcome;
+}
+
+NativeResult execute_legacy_lanchat_operation(const LanChatRequest& request, const std::string& wire_metadata = {}) {
+    const auto outcome = run_lanchat_operation(request, wire_metadata);
+    const auto& reply = outcome.value;
+    if (!reply.error_code.empty()) return native_failure(reply.error_message, 2);
+    nlohmann::json data = {{"ok", reply.ok}};
+    if (!reply.error.empty()) data["error"] = reply.error;
+    if (request.method == LanChatMethod::StartRoom || request.method == LanChatMethod::StartLocalRoom ||
+        request.method == LanChatMethod::JoinRoom) {
+        data["you"] = reply.you; data["peer_id"] = reply.peer_id; data["port"] = reply.port;
+        data["members"] = build_lanchat_members(reply.members);
+        data["member_details"] = build_lanchat_member_details(reply.members);
+        data["history"] = build_lanchat_history(outcome.history);
+        data["agents"] = build_lanchat_agents(reply.agents);
+        if (request.method != LanChatMethod::JoinRoom) {
+            data["ip"] = reply.ip; data["room"] = reply.room; data["restored_history"] = reply.restored_history;
+            if (request.method == LanChatMethod::StartLocalRoom) data["mode"] = reply.mode;
+        }
+    } else if (request.method == LanChatMethod::ListHistoryRooms) data["rooms"] = build_lanchat_history_rooms(reply.rooms);
+    else if (request.method == LanChatMethod::LoadHistoryRoom) {
+        data["room"] = reply.room; data["history"] = build_lanchat_history(outcome.history);
+        data["agents"] = build_lanchat_agents(reply.agents);
+    } else if (request.method == LanChatMethod::GetLocalIp) { data["ip"] = reply.ip; data["port"] = reply.port; }
+    else if (request.method == LanChatMethod::AddAgent) { data["agent_id"] = reply.agent_id; data["name"] = reply.name; }
+    else if (request.method == LanChatMethod::SendMessage && reply.ok) {
+        data["message_id"] = reply.message_id; data["seq"] = reply.seq;
+    }
+    return native_success(data);
+}
+} // namespace
+
+LanChatReply execute_lanchat_operation(const LanChatRequest& request) {
+    auto outcome = run_lanchat_operation(request, request.metadata ? request.metadata->dump() : std::string{});
+    for (const auto& message : outcome.history) {
+        auto metadata = message.metadata_json.empty() ? nlohmann::json::object() :
+            nlohmann::json::parse(message.metadata_json, nullptr, false);
+        if (!metadata.is_object() && !metadata.is_array()) metadata = nlohmann::json::object();
+        outcome.value.history.push_back({message.message_id, message.sender_id, message.room_id,
+            message.sender_name, message.text, message.sender_type, message.message_kind,
+            message.target_agent_id, message.source_user_id, message.correlation_id,
+            message.seq, message.timestamp_ms / 1000, std::move(metadata)});
+    }
+    return std::move(outcome.value);
+}
+
 void register_lanchat_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
         {"start_room", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            sys->set_lanchat_event_callback(emit_lanchat_event);
-            const auto payload_arg = arg_object(request.args, 0);
-            const std::string room = payload_arg.value("room", "");
-            const uint16_t port = payload_arg.value("port", 27960);
-            const std::string nickname = payload_arg.value("nickname", "房主");
-            const bool restore_history = payload_arg.value("restore_history", false);
-            const std::string history_room = payload_arg.value("history_room", room);
-            const std::string host_nickname = nickname.empty() ? "房主" : nickname;
-            const bool ok = sys->lanchat_start_room(room, host_nickname, port);
-            bool restored_history = false;
-            if (ok && restore_history) {
-                restored_history = sys->lanchat_restore_history_room(history_room);
-            }
-            const uint16_t actual_port = sys->session_port() != 0 ? sys->session_port() : port;
-            nlohmann::json data;
-            data["ok"] = ok;
-            data["you"] = host_nickname;
-            data["ip"] = detect_wlan_ipv4();
-            data["port"] = actual_port;
-            data["room"] = room;
-            data["peer_id"] = sys->local_peer_id();
-            data["members"] = build_lanchat_members(sys->lanchat_members());
-            data["member_details"] = build_lanchat_member_details(sys->lanchat_members());
-            data["history"] = build_lanchat_history(sys->lanchat_history());
-            data["agents"] = build_lanchat_agents(sys->lanchat_agents());
-            data["restored_history"] = restored_history;
-            return native_success(data);
+            LanChatRequest typed{LanChatMethod::StartRoom};
+            const auto payload = arg_object(request.args, 0);
+            typed.room = payload.value("room", ""); typed.nickname = payload.value("nickname", "房主");
+            typed.port = payload.value("port", std::uint16_t{27960});
+            typed.restore_history = payload.value("restore_history", false);
+            if (payload.contains("history_room")) typed.history_room = payload.value("history_room", "");
+            return execute_legacy_lanchat_operation(typed);
         }},
         {"start_local_room", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            sys->set_lanchat_event_callback(emit_lanchat_event);
-            const auto payload_arg = arg_object(request.args, 0);
-            const std::string room = payload_arg.value("room", "");
-            const std::string nickname = payload_arg.value("nickname", "房主");
-            const bool restore_history = payload_arg.value("restore_history", false);
-            const std::string history_room = payload_arg.value("history_room", room);
-            const std::string host_nickname = nickname.empty() ? "房主" : nickname;
-            const bool ok = sys->lanchat_start_local_room(room, host_nickname);
-            bool restored_history = false;
-            if (ok && restore_history) {
-                restored_history = sys->lanchat_restore_history_room(history_room);
-            }
-            nlohmann::json data;
-            data["ok"] = ok;
-            data["you"] = host_nickname;
-            data["ip"] = "";
-            data["port"] = 0;
-            data["room"] = room;
-            data["mode"] = "single";
-            data["peer_id"] = "local-single-player";
-            data["members"] = build_lanchat_members(sys->lanchat_members());
-            data["member_details"] = build_lanchat_member_details(sys->lanchat_members());
-            data["history"] = build_lanchat_history(sys->lanchat_history());
-            data["agents"] = build_lanchat_agents(sys->lanchat_agents());
-            data["restored_history"] = restored_history;
-            return native_success(data);
+            LanChatRequest typed{LanChatMethod::StartLocalRoom};
+            const auto payload = arg_object(request.args, 0);
+            typed.room = payload.value("room", ""); typed.nickname = payload.value("nickname", "房主");
+            typed.restore_history = payload.value("restore_history", false);
+            if (payload.contains("history_room")) typed.history_room = payload.value("history_room", "");
+            return execute_legacy_lanchat_operation(typed);
         }},
-        {"stop_room", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            sys->lanchat_leave_room();
-            sys->stop_session();
-            return native_success({{"ok", true}});
+        {"stop_room", [](const NativeRequest& request, const NativeContext&) {
+            LanChatRequest typed{LanChatMethod::StopRoom};
+            return execute_legacy_lanchat_operation(typed);
         }},
-        {"stop_local_room", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            sys->lanchat_stop_local_room();
-            return native_success({{"ok", true}});
+        {"stop_local_room", [](const NativeRequest& request, const NativeContext&) {
+            LanChatRequest typed{LanChatMethod::StopLocalRoom};
+            return execute_legacy_lanchat_operation(typed);
         }},
         {"get_history", [](const NativeRequest&, const NativeContext&) {
             auto sys = require_network_system();
@@ -9224,100 +9304,36 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
                 {"history", build_lanchat_history(sys->lanchat_history())},
             });
         }},
-        {"list_history_rooms", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            return native_success({
-                {"ok", true},
-                {"rooms", build_lanchat_history_rooms(sys->lanchat_history_rooms())},
-            });
+        {"list_history_rooms", [](const NativeRequest& request, const NativeContext&) {
+            LanChatRequest typed{LanChatMethod::ListHistoryRooms};
+            return execute_legacy_lanchat_operation(typed);
         }},
         {"load_history_room", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const auto payload_arg = arg_object(request.args, 0);
-            const std::string room = payload_arg.value("room", "");
-            nlohmann::json data;
-            data["ok"] = !room.empty();
-            data["room"] = room;
-            data["history"] = room.empty()
-                ? nlohmann::json::array()
-                : build_lanchat_history(sys->lanchat_load_history_room(room));
-            data["agents"] = room.empty()
-                ? nlohmann::json::array()
-                : build_lanchat_agents(sys->lanchat_load_history_agents(room));
-            if (room.empty()) {
-                data["error"] = "ROOM_REQUIRED";
-            }
-            return native_success(data);
+            LanChatRequest typed{LanChatMethod::LoadHistoryRoom};
+            typed.room = arg_object(request.args, 0).value("room", "");
+            return execute_legacy_lanchat_operation(typed);
         }},
         {"join_room", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            sys->set_lanchat_event_callback(emit_lanchat_event);
-            const auto payload_arg = arg_object(request.args, 0);
-            const std::string ip = payload_arg.value("ip", "");
-            const uint16_t port = payload_arg.value("port", 27960);
-            const std::string room = payload_arg.value("room", "");
-            const std::string nickname = payload_arg.value("nickname", "Guest");
-            const bool ok = sys->lanchat_join_room(ip, port, room, nickname);
-            nlohmann::json data;
-            data["ok"] = ok;
-            data["you"] = nickname;
-            data["peer_id"] = sys->local_peer_id();
-            data["port"] = sys->host_port() != 0 ? sys->host_port() : port;
-            data["members"] = build_lanchat_members(sys->lanchat_members());
-            data["member_details"] = build_lanchat_member_details(sys->lanchat_members());
-            data["history"] = build_lanchat_history(sys->lanchat_history());
-            data["agents"] = build_lanchat_agents(sys->lanchat_agents());
-            if (!ok) {
-                data["error"] = "JOIN_FAILED";
-            }
-            return native_success(data);
+            LanChatRequest typed{LanChatMethod::JoinRoom};
+            const auto payload = arg_object(request.args, 0);
+            typed.room = payload.value("room", ""); typed.nickname = payload.value("nickname", "Guest");
+            typed.ip = payload.value("ip", ""); typed.port = payload.value("port", std::uint16_t{27960});
+            return execute_legacy_lanchat_operation(typed);
         }},
-        {"leave_room", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            sys->lanchat_leave_room();
-            return native_success({{"ok", true}});
+        {"leave_room", [](const NativeRequest& request, const NativeContext&) {
+            LanChatRequest typed{LanChatMethod::LeaveRoom};
+            return execute_legacy_lanchat_operation(typed);
         }},
         {"send_message", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const auto payload_arg = arg_object(request.args, 0);
-            const std::string text = payload_arg.value("text", "");
-            const std::string message_kind = payload_arg.value("message_kind", "chat");
-            const std::string target_agent_id = payload_arg.value("target_agent_id", "");
-            const std::string source_user_id = payload_arg.value("source_user_id", "");
-            const std::string correlation_id = payload_arg.value("correlation_id", "");
-            std::string metadata_json;
-            if (payload_arg.contains("metadata_json")) {
-                metadata_json = payload_arg.value("metadata_json", "");
-            } else if (payload_arg.contains("metadata")) {
-                metadata_json = payload_arg["metadata"].dump();
-            }
-            const auto result = sys->lanchat_send_message_ex(
-                text, message_kind, target_agent_id, source_user_id,
-                correlation_id, metadata_json);
-            nlohmann::json data;
-            data["ok"] = result.accepted;
-            if (result.accepted) {
-                data["message_id"] = result.message.message_id;
-                data["seq"] = result.message.seq;
-            } else {
-                data["error"] = result.error.empty() ? "SEND_FAILED" : result.error;
-            }
-            return native_success(data);
+            LanChatRequest typed{LanChatMethod::SendMessage};
+            const auto payload = arg_object(request.args, 0);
+            typed.text = payload.value("text", ""); typed.message_kind = payload.value("message_kind", "chat");
+            typed.target_agent_id = payload.value("target_agent_id", "");
+            typed.source_user_id = payload.value("source_user_id", "");
+            typed.correlation_id = payload.value("correlation_id", "");
+            const auto metadata = payload.contains("metadata_json") ? payload.value("metadata_json", "") :
+                payload.contains("metadata") ? payload["metadata"].dump() : std::string{};
+            return execute_legacy_lanchat_operation(typed, metadata);
         }},
         {"send_agent_reply", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
@@ -9436,40 +9452,15 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
             });
         }},
         {"add_agent", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const auto payload_arg = arg_object(request.args, 0);
-            const std::string name = payload_arg.value("name", "Agent");
-            const std::string persona = payload_arg.value("persona", "");
-            const std::string peer_id = sys->local_peer_id().empty()
-                ? "local-single-player"
-                : sys->local_peer_id();
-            const std::string agent_id = make_agent_id(peer_id, name);
-            const auto result = sys->lanchat_register_agent(agent_id, name, persona);
-            nlohmann::json data;
-            data["ok"] = result.ok;
-            data["agent_id"] = agent_id;
-            data["name"] = name;
-            if (!result.ok) {
-                data["error"] = result.error;
-            }
-            return native_success(data);
+            LanChatRequest typed{LanChatMethod::AddAgent};
+            const auto payload = arg_object(request.args, 0);
+            typed.name = payload.value("name", "Agent"); typed.persona = payload.value("persona", "");
+            return execute_legacy_lanchat_operation(typed);
         }},
         {"remove_agent", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const auto payload_arg = arg_object(request.args, 0);
-            const auto result = sys->lanchat_remove_agent(payload_arg.value("agent_id", ""));
-            nlohmann::json data;
-            data["ok"] = result.ok;
-            if (!result.ok) {
-                data["error"] = result.error;
-            }
-            return native_success(data);
+            LanChatRequest typed{LanChatMethod::RemoveAgent};
+            typed.agent_id = arg_object(request.args, 0).value("agent_id", "");
+            return execute_legacy_lanchat_operation(typed);
         }},
         {"list_agents", [](const NativeRequest&, const NativeContext&) {
             auto sys = require_network_system();
@@ -9481,16 +9472,9 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
                 {"agents", build_lanchat_agents(sys->lanchat_agents())},
             });
         }},
-        {"get_local_ip", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            return native_success({
-                {"ok", true},
-                {"ip", detect_wlan_ipv4()},
-                {"port", sys->session_port() != 0 ? sys->session_port() : 27960},
-            });
+        {"get_local_ip", [](const NativeRequest& request, const NativeContext&) {
+            LanChatRequest typed{LanChatMethod::GetLocalIp};
+            return execute_legacy_lanchat_operation(typed);
         }},
     };
 

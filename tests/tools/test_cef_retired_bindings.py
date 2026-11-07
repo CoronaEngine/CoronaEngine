@@ -2,6 +2,23 @@
 from pathlib import Path
 
 
+def test_lanchat_methods_have_named_v8_and_keep_only_non_web_manifest_routes():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    for method in ['start_room', 'start_local_room', 'stop_room', 'stop_local_room', 'join_room',
+                   'leave_room', 'send_message', 'list_history_rooms', 'load_history_room',
+                   'get_local_ip', 'add_agent', 'remove_agent']:
+        line = next(line for line in manifest.splitlines() if f'LANChat, {method},' in line)
+        assert 'WRAPPED_CALLERS(LANChat,' in line
+        assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
+        assert ', "", "lan_chat.' in line
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
+    for name in ['startRoom', 'startLocalRoom', 'stopRoom', 'stopLocalRoom', 'joinRoom', 'leaveRoom',
+                 'sendMessage', 'listHistoryRooms', 'loadHistoryRoom', 'getLocalIp', 'addAgent', 'removeAgent']:
+        assert f'lan_chat->SetValue("{name}"' in binding
+    assert 'execute_lanchat_operation(request)' in binding
+
+
 def test_lanchat_native_callbacks_do_not_serialize_and_parse_event_dtos():
     root = Path(__file__).resolve().parents[2]
     network = (root / 'src/systems/network/network_system.cpp').read_text(encoding='utf-8')

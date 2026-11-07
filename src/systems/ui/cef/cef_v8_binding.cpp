@@ -9,6 +9,7 @@
 #include "cef_files_operations.h"
 #include "cef_project_launcher_operations.h"
 #include "cef_network_operations.h"
+#include "cef_lanchat_operations.h"
 #include "cef_viewport_pick.h"
 #include "cef_viewport_gizmo.h"
 #include "cef_editor_native_api_handlers.h"
@@ -118,6 +119,148 @@ bool read_editor_api_call(const CefV8ValueList& arguments, std::string& api_name
 enum class GizmoMethod { SetTarget, Pointer };
 
 bool object_keys(CefRefPtr<CefV8Value> object, std::initializer_list<const char*> allowed);
+
+bool read_lanchat(LanChatRequest& request, const CefV8ValueList& arguments) {
+    const auto text = [](CefRefPtr<CefV8Value> value, std::string& target) {
+        if (!value || !value->IsString()) return false;
+        target = value->GetStringValue().ToString();
+        return target.find('\0') == std::string::npos;
+    };
+    const bool start = request.method == LanChatMethod::StartRoom || request.method == LanChatMethod::StartLocalRoom;
+    const bool join = request.method == LanChatMethod::JoinRoom;
+    if (start || join || request.method == LanChatMethod::AddAgent) {
+        if (arguments.size() != 1) return false;
+        const auto object = arguments[0];
+        if (request.method == LanChatMethod::AddAgent) {
+            if (!object_keys(object, {"name", "persona"})) return false;
+            return (!object->HasValue("name") || text(object->GetValue("name"), request.name)) &&
+                (!object->HasValue("persona") || text(object->GetValue("persona"), request.persona));
+        }
+        if (!object_keys(object, join ? std::initializer_list<const char*>{"room", "nickname", "ip", "port"} :
+            request.method == LanChatMethod::StartLocalRoom ? std::initializer_list<const char*>{"room", "nickname", "restore_history", "history_room"} :
+            std::initializer_list<const char*>{"room", "nickname", "port", "restore_history", "history_room"})) return false;
+        if (join) request.nickname = "Guest";
+        for (auto [key, target] : {std::pair{"room", &request.room}, {"nickname", &request.nickname}, {"ip", &request.ip}})
+            if (object->HasValue(key) && !text(object->GetValue(key), *target)) return false;
+        if (object->HasValue("port")) {
+            const auto value = object->GetValue("port");
+            if (!value || !(value->IsInt() || value->IsUInt() || value->IsDouble())) return false;
+            const double port = value->GetDoubleValue();
+            if (!std::isfinite(port) || port < (join ? 1 : 0) || port > 65535 || std::trunc(port) != port) return false;
+            request.port = static_cast<std::uint16_t>(port);
+        }
+        if (join && request.ip.empty()) return false;
+        if (object->HasValue("restore_history")) {
+            const auto value = object->GetValue("restore_history");
+            if (!value || !value->IsBool()) return false;
+            request.restore_history = value->GetBoolValue();
+        }
+        if (object->HasValue("history_room")) {
+            std::string room;
+            if (!text(object->GetValue("history_room"), room)) return false;
+            request.history_room = std::move(room);
+        }
+        return true;
+    }
+    if (request.method == LanChatMethod::LoadHistoryRoom || request.method == LanChatMethod::RemoveAgent)
+        return arguments.size() == 1 && text(arguments[0], request.method == LanChatMethod::LoadHistoryRoom ? request.room : request.agent_id);
+    if (request.method == LanChatMethod::SendMessage) {
+        if (arguments.empty() || arguments.size() > 2 || !text(arguments[0], request.text)) return false;
+        if (arguments.size() == 1) return true;
+        const auto options = arguments[1];
+        if (!object_keys(options, {"message_kind", "target_agent_id", "source_user_id", "correlation_id", "metadata"})) return false;
+        for (auto [key, target] : {std::pair{"message_kind", &request.message_kind}, {"target_agent_id", &request.target_agent_id},
+            {"source_user_id", &request.source_user_id}, {"correlation_id", &request.correlation_id}})
+            if (options->HasValue(key) && !text(options->GetValue(key), *target)) return false;
+        if (options->HasValue("metadata")) {
+            nlohmann::json metadata;
+            if (!v8_to_json(options->GetValue("metadata"), metadata) || !metadata.is_object()) return false;
+            request.metadata = std::move(metadata);
+        }
+        return true;
+    }
+    return arguments.empty();
+}
+
+CefRefPtr<CefV8Value> lanchat_history_value(const std::vector<LanChatMessageSnapshot>& history) {
+    auto result = CefV8Value::CreateArray(static_cast<int>(history.size()));
+    int index = 0;
+    for (const auto& row : history) {
+        auto value = CefV8Value::CreateObject(nullptr, nullptr);
+        for (const auto& [key, text] : {std::pair{"message_id", &row.message_id}, {"sender_id", &row.sender_id},
+            {"room_id", &row.room_id}, {"from", &row.from}, {"text", &row.text}, {"sender_type", &row.sender_type},
+            {"message_kind", &row.message_kind}, {"target_agent_id", &row.target_agent_id},
+            {"source_user_id", &row.source_user_id}, {"correlation_id", &row.correlation_id}})
+            value->SetValue(key, CefV8Value::CreateString(*text), V8_PROPERTY_ATTRIBUTE_NONE);
+        value->SetValue("seq", CefV8Value::CreateDouble(static_cast<double>(row.seq)), V8_PROPERTY_ATTRIBUTE_NONE);
+        value->SetValue("ts", CefV8Value::CreateDouble(static_cast<double>(row.ts)), V8_PROPERTY_ATTRIBUTE_NONE);
+        value->SetValue("metadata", json_to_v8(row.metadata), V8_PROPERTY_ATTRIBUTE_NONE);
+        result->SetValue(index++, value);
+    }
+    return result;
+}
+
+CefRefPtr<CefV8Value> lanchat_agents_value(const std::vector<Corona::Network::LanChatAgent>& agents) {
+    auto result = CefV8Value::CreateArray(static_cast<int>(agents.size()));
+    int index = 0;
+    for (const auto& row : agents) {
+        auto value = CefV8Value::CreateObject(nullptr, nullptr);
+        for (const auto& [key, text] : {std::pair{"agent_id", &row.agent_id}, {"name", &row.name},
+            {"persona", &row.persona}, {"owner", &row.owner_id}})
+            value->SetValue(key, CefV8Value::CreateString(*text), V8_PROPERTY_ATTRIBUTE_NONE);
+        result->SetValue(index++, value);
+    }
+    return result;
+}
+
+CefRefPtr<CefV8Value> lanchat_value(const LanChatReply& reply) {
+    auto result = CefV8Value::CreateObject(nullptr, nullptr);
+    const auto set = [&](const char* key, CefRefPtr<CefV8Value> value) { result->SetValue(key, value, V8_PROPERTY_ATTRIBUTE_NONE); };
+    const auto text = [&](const char* key, const std::string& value) { set(key, CefV8Value::CreateString(value)); };
+    set("ok", CefV8Value::CreateBool(reply.ok));
+    if (!reply.error.empty()) text("error", reply.error);
+    if (reply.method == LanChatMethod::StartRoom || reply.method == LanChatMethod::StartLocalRoom || reply.method == LanChatMethod::JoinRoom) {
+        text("you", reply.you); text("peer_id", reply.peer_id); set("port", CefV8Value::CreateUInt(reply.port));
+        auto members = CefV8Value::CreateArray(static_cast<int>(reply.members.size()));
+        auto details = CefV8Value::CreateArray(static_cast<int>(reply.members.size()));
+        int index = 0;
+        for (const auto& row : reply.members) {
+            members->SetValue(index, CefV8Value::CreateString(row.nickname));
+            auto value = CefV8Value::CreateObject(nullptr, nullptr);
+            for (const auto& [key, entry] : {std::pair{"member_id", &row.member_id}, {"nickname", &row.nickname}, {"status", &row.status}})
+                value->SetValue(key, CefV8Value::CreateString(*entry), V8_PROPERTY_ATTRIBUTE_NONE);
+            details->SetValue(index++, value);
+        }
+        set("members", members); set("member_details", details);
+        set("history", lanchat_history_value(reply.history)); set("agents", lanchat_agents_value(reply.agents));
+        if (reply.method != LanChatMethod::JoinRoom) {
+            text("ip", reply.ip); text("room", reply.room); set("restored_history", CefV8Value::CreateBool(reply.restored_history));
+            if (reply.method == LanChatMethod::StartLocalRoom) text("mode", reply.mode);
+        }
+    } else if (reply.method == LanChatMethod::LoadHistoryRoom) {
+        text("room", reply.room); set("history", lanchat_history_value(reply.history)); set("agents", lanchat_agents_value(reply.agents));
+    } else if (reply.method == LanChatMethod::ListHistoryRooms) {
+        auto rooms = CefV8Value::CreateArray(static_cast<int>(reply.rooms.size()));
+        int index = 0;
+        for (const auto& row : reply.rooms) {
+            auto value = CefV8Value::CreateObject(nullptr, nullptr);
+            const auto id = row.session_id.empty() ? row.room_id : row.session_id;
+            for (const auto& [key, entry] : {std::pair{"room_id", &id}, {"session_id", &id},
+                {"display_room_id", &row.room_id}, {"last_sender_name", &row.last_sender_name}, {"last_text", &row.last_text}})
+                value->SetValue(key, CefV8Value::CreateString(*entry), V8_PROPERTY_ATTRIBUTE_NONE);
+            value->SetValue("message_count", CefV8Value::CreateDouble(static_cast<double>(row.message_count)), V8_PROPERTY_ATTRIBUTE_NONE);
+            value->SetValue("last_timestamp_ms", CefV8Value::CreateDouble(static_cast<double>(row.last_timestamp_ms)), V8_PROPERTY_ATTRIBUTE_NONE);
+            value->SetValue("last_ts", CefV8Value::CreateDouble(static_cast<double>(row.last_timestamp_ms / 1000)), V8_PROPERTY_ATTRIBUTE_NONE);
+            rooms->SetValue(index++, value);
+        }
+        set("rooms", rooms);
+    } else if (reply.method == LanChatMethod::GetLocalIp) { text("ip", reply.ip); set("port", CefV8Value::CreateUInt(reply.port)); }
+    else if (reply.method == LanChatMethod::AddAgent) { text("agent_id", reply.agent_id); text("name", reply.name); }
+    else if (reply.method == LanChatMethod::SendMessage && reply.ok) {
+        text("message_id", reply.message_id); set("seq", CefV8Value::CreateDouble(static_cast<double>(reply.seq)));
+    }
+    return result;
+}
 
 bool read_network(NetworkRequest& request, const CefV8ValueList& arguments) {
     auto text = [&](std::size_t index, std::string& target) {
@@ -2189,6 +2332,34 @@ public:
         return promise;
     }
 
+    CefRefPtr<CefV8Value> invoke(LanChatMethod method, const CefV8ValueList& arguments) {
+        CEF_REQUIRE_RENDERER_THREAD();
+        auto promise = CefV8Value::CreatePromise();
+        if (!owns_current_context()) {
+            if (active() && context_ && context_->IsValid()) reject(context_, promise, "PERMISSION_DENIED", "LANChat binding belongs to another context");
+            else promise->RejectPromise("CONTEXT_CHANGED");
+            return promise;
+        }
+        LanChatRequest request{method};
+        if (!read_lanchat(request, arguments)) {
+            reject(context_, promise, "INVALID_ARGUMENT", "Expected named LANChat arguments"); return promise;
+        }
+        const auto id = ++sequence_;
+        pending_.emplace(id, Pending{method, promise});
+        const bool posted = CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
+            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id, LanChatRequest request) {
+                const auto endpoint = weak.lock();
+                if (!endpoint || !endpoint->active()) return;
+                LanChatReply reply;
+                try { reply = execute_lanchat_operation(request); }
+                catch (const std::exception& error) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = error.what(); }
+                catch (...) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = "LANChat operation failed"; }
+                endpoint->complete(id, std::move(reply));
+            }, weak_from_this(), id, std::move(request))));
+        if (!posted) { pending_.erase(id); reject(context_, promise, "NATIVE_UNAVAILABLE", "LANChat owner unavailable"); }
+        return promise;
+    }
+
     CefRefPtr<CefV8Value> invoke(NetworkMethod method, const CefV8ValueList& arguments) {
         CEF_REQUIRE_RENDERER_THREAD();
         auto promise = CefV8Value::CreatePromise();
@@ -2746,6 +2917,18 @@ private:
         context_->Exit();
     }
 
+    void resolve(std::uint64_t id, const LanChatReply& reply) {
+        CEF_REQUIRE_RENDERER_THREAD();
+        const auto entry = pending_.find(id);
+        if (entry == pending_.end()) return;
+        const auto promise = entry->second.promise;
+        pending_.erase(entry);
+        if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
+        if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
+        else promise->ResolvePromise(lanchat_value(reply));
+        context_->Exit();
+    }
+
     void resolve(std::uint64_t id, const NetworkReply& reply) {
         CEF_REQUIRE_RENDERER_THREAD();
         const auto entry = pending_.find(id);
@@ -3003,7 +3186,7 @@ private:
     const std::uint64_t context_id_ = ++context_sequence_;
     std::uint64_t sequence_ = 0;
     std::string scene_archive_session_;
-    struct Pending { std::variant<WindowMethod, SceneMethod, ViewportMethod, ScriptInputMethod, GizmoMethod, ScriptsMethod, ProjectFilesMethod, ProjectSettingsMethod, ProjectLauncherMethod, NetworkMethod, FilesMethod, EditorApiMethod> method; CefRefPtr<CefV8Value> promise; };
+    struct Pending { std::variant<WindowMethod, SceneMethod, ViewportMethod, ScriptInputMethod, GizmoMethod, ScriptsMethod, ProjectFilesMethod, ProjectSettingsMethod, ProjectLauncherMethod, NetworkMethod, LanChatMethod, FilesMethod, EditorApiMethod> method; CefRefPtr<CefV8Value> promise; };
     std::unordered_map<std::uint64_t, Pending> pending_;
     std::map<std::uint64_t, Subscriber> subscribers_;
 };
@@ -3085,6 +3268,21 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
         endpoints.push_back(endpoint);
     }
     auto root = CefV8Value::CreateObject(nullptr, nullptr);
+    auto lan_chat = CefV8Value::CreateObject(nullptr, nullptr);
+    lan_chat->SetValue("startRoom", CefV8Value::CreateFunction("startRoom", new NativeHandler(endpoint, LanChatMethod::StartRoom)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    lan_chat->SetValue("startLocalRoom", CefV8Value::CreateFunction("startLocalRoom", new NativeHandler(endpoint, LanChatMethod::StartLocalRoom)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    lan_chat->SetValue("stopRoom", CefV8Value::CreateFunction("stopRoom", new NativeHandler(endpoint, LanChatMethod::StopRoom)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    lan_chat->SetValue("stopLocalRoom", CefV8Value::CreateFunction("stopLocalRoom", new NativeHandler(endpoint, LanChatMethod::StopLocalRoom)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    lan_chat->SetValue("joinRoom", CefV8Value::CreateFunction("joinRoom", new NativeHandler(endpoint, LanChatMethod::JoinRoom)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    lan_chat->SetValue("leaveRoom", CefV8Value::CreateFunction("leaveRoom", new NativeHandler(endpoint, LanChatMethod::LeaveRoom)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    lan_chat->SetValue("sendMessage", CefV8Value::CreateFunction("sendMessage", new NativeHandler(endpoint, LanChatMethod::SendMessage)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    lan_chat->SetValue("listHistoryRooms", CefV8Value::CreateFunction("listHistoryRooms", new NativeHandler(endpoint, LanChatMethod::ListHistoryRooms)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    lan_chat->SetValue("loadHistoryRoom", CefV8Value::CreateFunction("loadHistoryRoom", new NativeHandler(endpoint, LanChatMethod::LoadHistoryRoom)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    lan_chat->SetValue("getLocalIp", CefV8Value::CreateFunction("getLocalIp", new NativeHandler(endpoint, LanChatMethod::GetLocalIp)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    lan_chat->SetValue("addAgent", CefV8Value::CreateFunction("addAgent", new NativeHandler(endpoint, LanChatMethod::AddAgent)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    lan_chat->SetValue("removeAgent", CefV8Value::CreateFunction("removeAgent", new NativeHandler(endpoint, LanChatMethod::RemoveAgent)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    root->SetValue("lanChat", lan_chat, V8_PROPERTY_ATTRIBUTE_READONLY);
+
     auto network = CefV8Value::CreateObject(nullptr, nullptr);
     network->SetValue("startSession", CefV8Value::CreateFunction("startSession", new NativeHandler(endpoint, NetworkMethod::StartSession)), V8_PROPERTY_ATTRIBUTE_READONLY);
     network->SetValue("stopSession", CefV8Value::CreateFunction("stopSession", new NativeHandler(endpoint, NetworkMethod::StopSession)), V8_PROPERTY_ATTRIBUTE_READONLY);
