@@ -54,9 +54,7 @@ class Frontend:
         return result.get("result", {}).get("value")
 
     def api(self, name, args):
-        request = json.dumps(dict(api=name, args=args))
-        return self.evaluate("new Promise((resolve,reject)=>window.cefQuery({request:" + json.dumps(request) +
-                             ",persistent:false,onSuccess:r=>resolve(JSON.parse(r)),onFailure:(c,m)=>reject(new Error(c+':'+m))}))")
+        return self.evaluate("corona.editor.invoke(" + json.dumps(name) + "," + json.dumps(args) + ")")
 
     def click_text(self, text):
         # Derive the click location from the deployed DOM, then send a real CEF

@@ -14,21 +14,9 @@
 #include <unordered_map>
 
 #include <nlohmann/json.hpp>
+#include "python_value.h"
 
-// Forward declare InputEvent from cef_bridge_helpers.h (UI system header,
-// avoid adding UI include dirs to script system which lives in its own
-// namespace).  Definition lives in Corona::Systems::UI in cef_bridge_helpers.h.
-namespace Corona::Systems::UI {
-struct InputEvent {
-    int type;
-    std::string arg0;
-    std::string arg1;
-    std::string arg2;
-    double arg3;
-    double arg4;
-};
-std::vector<InputEvent> drain_input_events();
-}  // namespace Corona::Systems::UI
+#include <corona/systems/script/script_input.h>
 
 namespace nb = nanobind;
 using namespace Corona::API;
@@ -38,44 +26,6 @@ namespace EngineScripts {
 namespace {
 std::atomic<std::uint64_t> g_next_python_callback_token{1};
 std::unordered_map<std::uint64_t, PyObject*> g_python_callback_registry;
-
-PyObject* json_to_python(const nlohmann::json& value) {
-    if (value.is_null()) return Py_NewRef(Py_None);
-    if (value.is_boolean()) return PyBool_FromLong(value.get<bool>() ? 1 : 0);
-    if (value.is_number_integer()) return PyLong_FromLongLong(value.get<long long>());
-    if (value.is_number_unsigned()) return PyLong_FromUnsignedLongLong(value.get<unsigned long long>());
-    if (value.is_number_float()) return PyFloat_FromDouble(value.get<double>());
-    if (value.is_string()) return PyUnicode_FromString(value.get_ref<const std::string&>().c_str());
-    if (value.is_array()) {
-        PyObject* tuple = PyTuple_New(static_cast<Py_ssize_t>(value.size()));
-        if (!tuple) return nullptr;
-        for (std::size_t index = 0; index < value.size(); ++index) {
-            PyObject* item = json_to_python(value[index]);
-            if (!item) {
-                Py_DECREF(tuple);
-                return nullptr;
-            }
-            PyTuple_SET_ITEM(tuple, static_cast<Py_ssize_t>(index), item);
-        }
-        return tuple;
-    }
-    if (value.is_object()) {
-        PyObject* dict = PyDict_New();
-        if (!dict) return nullptr;
-        for (auto it = value.begin(); it != value.end(); ++it) {
-            PyObject* item = json_to_python(it.value());
-            if (!item || PyDict_SetItemString(dict, it.key().c_str(), item) != 0) {
-                Py_XDECREF(item);
-                Py_DECREF(dict);
-                return nullptr;
-            }
-            Py_DECREF(item);
-        }
-        return dict;
-    }
-    PyErr_SetString(PyExc_TypeError, "unsupported callback JSON value");
-    return nullptr;
-}
 
 Corona::Script::Python::PythonRuntimeResponse execute_python_callback(
     const Corona::Script::Python::PythonRuntimeRequest& request) {
@@ -102,7 +52,7 @@ Corona::Script::Python::PythonRuntimeResponse execute_python_callback(
     if (args_json.is_discarded() || !args_json.is_array()) {
         return PythonRuntimeResponse::failure("python callback arguments are invalid");
     }
-    PyObject* args = json_to_python(args_json);
+    PyObject* args = Corona::Script::Python::json_to_python(args_json, true);
     if (!args) {
         PyErr_Print();
         return PythonRuntimeResponse::failure("failed to convert python callback arguments");
@@ -553,9 +503,7 @@ void BindAll(nanobind::module_& m) {
               } }, nb::arg("level"), nb::arg("message"), "Send a log message to the engine logger with specified level");
 
     // ============================================================================
-    // Input 事件队列：积木脚本键盘/鼠标注入 → CEF ProcessMessage → 队列 → Python 消费
-    // InputEvent / drain_input_events 定义在 src/systems/ui/cef/cef_bridge_helpers.h
-    // (forward-declared above because script system shouldn't depend on UI includes)
+    // SDL and scoped Web V8 events share one owned native queue.
     // ============================================================================
     nb::class_<Corona::Systems::UI::InputEvent>(m, "InputEvent")
         .def_ro("type", &Corona::Systems::UI::InputEvent::type,
@@ -569,11 +517,16 @@ void BindAll(nanobind::module_& m) {
         .def_ro("arg3", &Corona::Systems::UI::InputEvent::arg3,
                 "x (mouse)")
         .def_ro("arg4", &Corona::Systems::UI::InputEvent::arg4,
-                "y (mouse)");
+                "y (mouse)")
+        .def_ro("viewport_x", &Corona::Systems::UI::InputEvent::viewport_x)
+        .def_ro("viewport_y", &Corona::Systems::UI::InputEvent::viewport_y)
+        .def_ro("viewport_width", &Corona::Systems::UI::InputEvent::viewport_width)
+        .def_ro("viewport_height", &Corona::Systems::UI::InputEvent::viewport_height)
+        .def_ro("picked_actor", &Corona::Systems::UI::InputEvent::picked_actor);
 
     m.def("drain_input_events", []() -> std::vector<Corona::Systems::UI::InputEvent> {
         return Corona::Systems::UI::drain_input_events();
-    }, "Drain all pending input events from the CEF InputInject queue");
+    }, "Drain current SDL and scoped Web input events");
 
     m.def("python_runtime_phase", [](const std::string& phase) {
         if (auto* coordinator = Corona::Script::Python::active_python_runtime_coordinator()) {

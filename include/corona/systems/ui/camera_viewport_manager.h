@@ -1,13 +1,18 @@
 #pragma once
 
+#include <corona/camera_command_authority.h>
+
 #include <cstdint>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace Corona::Systems::UI {
+
+struct CameraWindowState;
 
 enum class DetachedWindowCloseAction {
     CloseTab,
@@ -32,6 +37,8 @@ struct CameraViewportRecord {
     int height{540};
     int render_width{960};
     int render_height{540};
+    std::shared_ptr<CameraWindowState> window_state;
+    std::shared_ptr<CameraCommandAuthority> camera_authority;
 };
 
 class CameraViewportManager {
@@ -39,7 +46,9 @@ class CameraViewportManager {
     static CameraViewportManager& instance();
 
     bool register_view(std::string scene_id, std::string camera_id,
-                       std::uintptr_t camera_handle, int tab_id);
+                       std::uintptr_t camera_handle, int tab_id,
+                       std::shared_ptr<CameraWindowState> window_state = {},
+                       std::shared_ptr<CameraCommandAuthority> camera_authority = {});
     bool bind_surface(int tab_id, void* surface, int x, int y, int width, int height);
     bool update_layout(int tab_id, int x, int y, int width, int height);
     bool unregister_view(int tab_id, bool preserve_open);

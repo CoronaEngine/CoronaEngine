@@ -62,9 +62,6 @@ std::string unsupported_editor_api_route_json(const NativeRequest& request);
 
 void register_builtin_native_api_handlers();
 void tick_native_animation_updates();
-std::string current_viewport_session();
-void retain_viewport_result(const CefRefPtr<CefFrame>& frame, const std::string& session,
-                            const char* kind, nlohmann::json payload);
 
 /// Reports a native editor API request that entered dispatch and never returned.
 /// A blocked CEF UI thread runs no handler completion, so nothing else in the

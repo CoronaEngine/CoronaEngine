@@ -842,6 +842,30 @@ ViewportUiState SharedDataHub::viewport_ui_state(std::uintptr_t camera_handle) c
     return state;
 }
 
+void SharedDataHub::set_viewport_ui_pointer(std::uintptr_t camera_handle,
+                                              ViewportUiPointerState pointer) {
+    if (camera_handle == 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(viewport_ui_mutex_);
+    auto& state = viewport_ui_states_[camera_handle];
+    state.camera_handle = camera_handle;
+    state.pointer = pointer;
+}
+
+void SharedDataHub::clear_viewport_ui_pointer(std::uintptr_t camera_handle,
+                                                std::uint64_t owner_context) {
+    std::lock_guard<std::mutex> lock(viewport_ui_mutex_);
+    const auto it = viewport_ui_states_.find(camera_handle);
+    if (it == viewport_ui_states_.end()) {
+        return;
+    }
+    if (owner_context != 0 && it->second.pointer.owner_context != owner_context) {
+        return;
+    }
+    viewport_ui_states_.erase(it);
+}
+
 void SharedDataHub::enqueue_viewport_ui_pointer(ViewportUiPointerCommand command) {
     if (command.camera_handle == 0) {
         return;

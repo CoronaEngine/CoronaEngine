@@ -1,6 +1,10 @@
 #include "native_material.h"
-#include <corona/systems/display/display_frame_commands.h>
+#include <corona/systems/acoustics/acoustics_commands.h>
+#include <corona/systems/mechanics/mechanics_commands.h>
+#include <corona/systems/optics/environment_commands.h>
+#include <corona/systems/optics/optics_commands.h>
 #include "native_camera.h"
+#include "camera_viewport_updates.h"
 #include <corona/utils/runtime_paths.h>
 #include <corona/utils/scene_path_key.h>
 #include <corona/diagnostics/thread_phase.h>
@@ -16,11 +20,7 @@
 #include <corona/shared_data_hub.h>
 #include <corona/systems/geometry/geometry_system.h>
 #include <corona/systems/geometry/native_render_load_guard.h>
-#include <corona/systems/mechanics/mechanics_commands.h>
 #include <corona/systems/optics/optics_system.h>
-#include <corona/systems/acoustics/acoustics_commands.h>
-#include <corona/systems/optics/optics_commands.h>
-#include <corona/systems/optics/environment_commands.h>
 
 #include "shadow_culling.h"
 
@@ -695,92 +695,6 @@ void mix_hash_float(std::size_t& sig, float value) {
 
 constexpr uint64_t kVisionRuntimeIdleEvictFrames = 240;
 
-/// 应用入站 Optics 标量材质命令（P3）。
-/// 单写者入口：只在 DAG tick 开头执行一次；同一 optics_handle 的连续命令
-/// 已在入队侧按 LatestWins 合并。
-void apply_pending_optics_updates() {
-    auto& channel = Corona::OpticsCommandChannel::instance();
-    auto commands = channel.commands().drain();
-    if (commands.empty()) {
-        return;
-    }
-
-    auto& storage = Corona::SharedDataHub::instance().optics_storage();
-    for (const auto& command : commands) {
-        auto device = storage.try_acquire_write(command.optics_handle);
-        if (!device) {
-            continue;
-        }
-        const auto fields = command.fields;
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Visible)) {
-            device->visible = command.visible;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::EnableLighting)) {
-            device->bEnableLighting = command.enable_lighting;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Metallic)) {
-            device->metallic = command.metallic;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Roughness)) {
-            device->roughness = command.roughness;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Subsurface)) {
-            device->subsurface = command.subsurface;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Specular)) {
-            device->specular = command.specular;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::SpecularTint)) {
-            device->specularTint = command.specular_tint;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Anisotropic)) {
-            device->anisotropic = command.anisotropic;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Sheen)) {
-            device->sheen = command.sheen;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::SheenTint)) {
-            device->sheenTint = command.sheen_tint;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Clearcoat)) {
-            device->clearcoat = command.clearcoat;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::ClearcoatGloss)) {
-            device->clearcoatGloss = command.clearcoat_gloss;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Ambient)) {
-            device->ambient = command.ambient;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Diffuse)) {
-            device->diffuse = command.diffuse;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::SpecularColor)) {
-            device->specular_color = command.specular_color;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Shininess)) {
-            device->shininess = command.shininess;
-        }
-    }
-}
-
-void apply_pending_camera_moves() {
-    auto& hub = Corona::SharedDataHub::instance();
-    auto moves = hub.drain_camera_moves();
-    if (moves.empty()) {
-        return;
-    }
-
-    auto& camera_storage = hub.camera_storage();
-    for (const auto& move : moves) {
-        if (auto camera = camera_storage.try_acquire_write(move.camera_handle)) {
-            camera->position = move.position;
-            camera->forward = move.forward;
-            camera->world_up = move.world_up;
-            camera->fov = move.fov;
-        }
-    }
-}
-
 void apply_pending_camera_viewport_updates() {
     auto& hub = Corona::SharedDataHub::instance();
     auto updates = hub.drain_camera_viewport_updates();
@@ -788,54 +702,14 @@ void apply_pending_camera_viewport_updates() {
         return;
     }
 
-    // 逐帧都会收到视口更新，这里只在真的有变化时打日志（原先是无条件 INFO，
-    // 实测 70 秒内刷了 899 行，把真正的问题淹没了）。
-    CFW_LOG_DEBUG("Optics: applying {} camera viewport update(s)", updates.size());
+    CFW_LOG_INFO("Optics: applying {} camera viewport update(s)", updates.size());
 
-    auto& camera_storage = hub.camera_storage();
     for (const auto& update : updates) {
-        if (auto camera = camera_storage.acquire_write(update.camera_handle)) {
-            const bool viewport_changed =
-                camera->surface != update.surface || camera->view_open != update.view_open ||
-                camera->view_x != update.x || camera->view_y != update.y ||
-                camera->view_width != update.width || camera->view_height != update.height;
-            if (viewport_changed) {
-                CFW_LOG_INFO(
-                    "Optics: camera viewport handle={} surface={} open={} rect={}x{}+{},{} render={}x{}",
-                    update.camera_handle, update.surface, update.view_open, update.width,
-                    update.height, update.x, update.y, update.render_width,
-                    update.render_height);
-            }
-            camera->surface = update.surface;
-            camera->follows_default_surface = false;
-            camera->view_open = update.view_open;
-            camera->viewport_rect_active = true;
-            camera->view_x = update.x;
-            camera->view_y = update.y;
-            camera->view_width = update.width;
-            camera->view_height = update.height;
-            const auto render_width =
-                static_cast<std::uint32_t>(std::max(update.render_width, 1));
-            const auto render_height =
-                static_cast<std::uint32_t>(std::max(update.render_height, 1));
-            camera->width = render_width;
-            camera->height = render_height;
-            camera->aspect = static_cast<float>(render_width) /
-                             static_cast<float>(render_height);
-        }
-        if(update.surface && !update.view_open) {
-            // One embedded viewport owns a surface. Explicit floating camera
-            // windows remain independent; old saved cameras must not render
-            // an additional backend behind the active story viewport.
-            std::vector<std::uintptr_t> obsolete;
-            for(const auto& camera:std::as_const(camera_storage)) {
-                const auto handle=reinterpret_cast<std::uintptr_t>(&camera);
-                if(handle!=update.camera_handle && camera.surface==update.surface && !camera.view_open)
-                    obsolete.push_back(handle);
-            }
-            for(auto handle:obsolete)if(auto camera=camera_storage.try_acquire_write(handle)) {
-                if(camera->surface==update.surface && !camera->view_open){camera->surface=nullptr;camera->follows_default_surface=false;}
-            }
+        if (Corona::Systems::apply_camera_viewport_update(hub, update)) {
+            CFW_LOG_INFO("Optics: camera viewport handle={} surface={} open={} rect={}x{}+{},{} render={}x{}",
+                         update.camera_handle, update.surface, update.view_open, update.width,
+                         update.height, update.x, update.y, update.render_width,
+                         update.render_height);
         }
     }
 }
@@ -859,10 +733,6 @@ void apply_pending_camera_state_updates() {
                     update.fields, Corona::CameraStateUpdateField::Surface)) {
                 camera->surface = update.surface;
                 camera->follows_default_surface = false;
-            }
-            if (Corona::has_camera_state_field(
-                    update.fields, Corona::CameraStateUpdateField::FollowsDefaultSurface)) {
-                camera->follows_default_surface = update.follows_default_surface;
             }
             if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::Size)) {
@@ -913,6 +783,9 @@ void apply_pending_camera_state_updates() {
             if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::ViewState)) {
                 camera->view_open = update.view_open;
+            }
+            if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::ViewState) ||
+                Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::ViewSettings)) {
                 camera->view_x = update.view_x;
                 camera->view_y = update.view_y;
                 camera->view_width = update.view_width;
@@ -952,29 +825,6 @@ void apply_pending_camera_state_updates() {
     }
 }
 
-void apply_pending_transform_updates() {
-    auto& hub = Corona::SharedDataHub::instance();
-    auto updates = hub.drain_transform_updates();
-    if (updates.empty()) {
-        return;
-    }
-
-    auto& transform_storage = hub.model_transform_storage();
-    for (const auto& update : updates) {
-        if (auto transform = transform_storage.try_acquire_write(update.transform_handle)) {
-            if (Corona::has_transform_field(update.fields, Corona::TransformField::Position)) {
-                transform->position = update.position;
-            }
-            if (Corona::has_transform_field(update.fields, Corona::TransformField::Rotation)) {
-                transform->euler_rotation = update.euler_rotation;
-            }
-            if (Corona::has_transform_field(update.fields, Corona::TransformField::Scale)) {
-                transform->scale = update.scale;
-            }
-        }
-    }
-}
-
 void apply_pending_camera_releases() {
     auto& hub = Corona::SharedDataHub::instance();
     for (const auto& release : hub.drain_camera_releases()) {
@@ -983,8 +833,6 @@ void apply_pending_camera_releases() {
             hub.actor_pick_storage().deallocate(release.actor_pick_handle);
         }
         hub.camera_storage().deallocate(release.camera_handle);
-        // 槽位已回收：立刻把该相机从对外快照里摘掉，避免读者拿到已释放的句柄。
-        hub.remove_camera_snapshot_row(release.camera_handle);
     }
 }
 
@@ -3318,7 +3166,78 @@ bool OpticsSystem::ensure_native_frame_slot() {
     return throttle.try_acquire_slot();
 }
 
+void apply_pending_optics_updates() {
+    auto& channel = Corona::OpticsCommandChannel::instance();
+    auto commands = channel.commands().drain();
+    if (commands.empty()) {
+        return;
+    }
+
+    auto& storage = Corona::SharedDataHub::instance().optics_storage();
+    for (const auto& command : commands) {
+        auto device = storage.try_acquire_write(command.optics_handle);
+        if (!device) {
+            continue;
+        }
+        const auto fields = command.fields;
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Visible)) {
+            device->visible = command.visible;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::EnableLighting)) {
+            device->bEnableLighting = command.enable_lighting;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Metallic)) {
+            device->metallic = command.metallic;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Roughness)) {
+            device->roughness = command.roughness;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Subsurface)) {
+            device->subsurface = command.subsurface;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Specular)) {
+            device->specular = command.specular;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::SpecularTint)) {
+            device->specularTint = command.specular_tint;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Anisotropic)) {
+            device->anisotropic = command.anisotropic;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Sheen)) {
+            device->sheen = command.sheen;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::SheenTint)) {
+            device->sheenTint = command.sheen_tint;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Clearcoat)) {
+            device->clearcoat = command.clearcoat;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::ClearcoatGloss)) {
+            device->clearcoatGloss = command.clearcoat_gloss;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Ambient)) {
+            device->ambient = command.ambient;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Diffuse)) {
+            device->diffuse = command.diffuse;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::SpecularColor)) {
+            device->specular_color = command.specular_color;
+        }
+        if (Corona::has_optics_field(fields, Corona::OpticsField::Shininess)) {
+            device->shininess = command.shininess;
+        }
+    }
+}
+
 void OpticsSystem::update() {
+    // [P3/P5 合并保留] DAG 降级路径没有 tick 边界阶段：这里保证 Environment
+    // 与 Optics 标量命令、相机姿态命令仍会被应用（DAG 模式下边界阶段已 drain，
+    // 这些调用是幂等的空操作）。
+    Corona::apply_pending_environment_updates();
+    apply_pending_optics_updates();
+
     // Event-driven wakes may bypass SystemBase's periodic wait. An explicitly
     // requested render cap must still bound GPU submissions during such bursts.
     const auto now = std::chrono::steady_clock::now();
@@ -3343,34 +3262,12 @@ void OpticsSystem::update() {
     // Promote requests first, then drain those changes. Requests arriving later
     // must wait for the next frame instead of capturing this frame's old state.
     begin_screenshot_frame();
-    // 兜底：DAG 降级路径（每系统一条线程）没有 tick 边界阶段，
-    // 这里保证 Environment 命令仍然会被应用；DAG 模式下边界阶段已 drain，
-    // 这次调用是空操作（helper 幂等，不重复重建快照）。
-    Corona::apply_pending_environment_updates();
-    // 标量材质命令先落地，本 tick 的渲染就用到新参数。
-    apply_pending_optics_updates();
-    apply_pending_camera_moves();
     // Explicit camera viewport/state commands below take precedence over the
     // default surface size, matching the previous follows_default_surface rule.
     apply_pending_default_surface_camera_update();
     apply_pending_camera_viewport_updates();
     apply_pending_camera_state_updates();
     apply_pending_camera_releases();
-    // 相机命令全部应用完毕 —— 这一刻的状态就是本 tick 的对外视图。
-    // 外部线程（CEF / 脚本 / 主线程）此后只读这份快照，不再拿相机槽锁。
-    SharedDataHub::instance().publish_camera_snapshot_from_storage();
-
-    // 变换命令（CEF gizmo / 脚本 / 网络）在本 tick 应用，随后发布变换快照。
-    // Mechanics 与 Geometry 已经在本 tick 更早的位置写完变换，因此这份快照
-    // 覆盖了本 tick 的全部写入者。
-    apply_pending_transform_updates();
-    SharedDataHub::instance().publish_transform_snapshot_from_storage();
-
-    // Mechanics 在本 tick 更早的位置已完成写入，这里把它的对外投影一并发布。
-    Corona::publish_mechanics_snapshot_from_storage();
-    Corona::publish_optics_snapshot_from_storage();
-    // Acoustics 与 Geometry 同层、在本 tick 更早的位置跑完，这里一并发布。
-    Corona::publish_acoustics_snapshot_from_storage();
 
     // �ӳٻ�ȡ GeometrySystem ָ�루������ initialize() �л�ȡ����������
     // initialize_all() ��������ϵͳ��get_system() Ҳ��ͬ�� �� �ǵݹ� mutex �������
@@ -3476,7 +3373,6 @@ std::optional<OpticsSystem::LockedRenderView> OpticsSystem::lock_render_view(
 }
 
 void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
-    drain_viewport_ui_pointer_commands();
     fail_expired_pending_screenshots();
     fail_unrenderable_pending_screenshots();
 
@@ -4930,7 +4826,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 presented_target = compose_surface_ui_overlay(
                     *stream,
                     cam_handle, *camera, scene, target, render_target,
-                    ui_state.mode, ui_state.calibration, frame_index);
+                    ui_state, frame_index);
             }
 
             // Recorded draws retain resource handles; no scene/asset contents
@@ -5056,7 +4952,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         }
 
         if (auto* event_bus = context()->event_bus()) {
-            Corona::push_optics_frame({surface,
+            event_bus->publish<Events::OpticsFrameReadyEvent>({surface,
                                                                target.image_handle,
                                                                frame_index,
                                                                presented_extent.width,
@@ -5070,37 +4966,6 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
     }
 }
 
-void OpticsSystem::drain_viewport_ui_pointer_commands() {
-    auto commands = SharedDataHub::instance().drain_viewport_ui_pointer_commands();
-    for (const auto& command : commands) {
-        if (command.camera_handle == 0) {
-            continue;
-        }
-
-        auto& state = viewport_cursor_states_[command.camera_handle];
-        if (command.sequence < state.sequence) {
-            continue;
-        }
-
-        std::string event_type = command.event_type;
-        std::transform(event_type.begin(), event_type.end(), event_type.begin(), [](unsigned char ch) {
-            return static_cast<char>(std::tolower(ch));
-        });
-        const bool hide_event =
-            event_type == "leave" || event_type == "mouseout" ||
-            event_type == "pointerleave" || event_type == "cancel" ||
-            event_type == "pointercancel" || event_type == "blur";
-
-        state.x = command.x;
-        state.y = command.y;
-        state.buttons = command.buttons;
-        state.modifiers = command.modifiers;
-        state.cursor_shape = command.cursor_shape;
-        state.sequence = command.sequence;
-        state.visible = !hide_event && command.cursor_shape != ViewportUiCursorShape::Hidden;
-    }
-}
-
 Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
     Horizon::HardwareStream& stream,
     std::uintptr_t camera_handle,
@@ -5108,8 +4973,7 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
     const SceneDevice& scene,
     SurfaceRenderTarget& target,
     Horizon::HardwareImage& background,
-    ViewportUiMode mode,
-    const ViewportUiCalibration& calibration,
+    const ViewportUiState& ui_state,
     uint64_t frame_index) {
     auto& uiVisibility = *hardware_->uiVisibilityPipeline;
     auto& opticsOverlay = *hardware_->opticsOverlayPipeline;
@@ -5153,15 +5017,13 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
                                                ui_indirect_buffers);
     stream << RetainSubmission{uiBatch.resource_keep_alive};
 
-    const bool stereo_ui = mode == ViewportUiMode::Stereo3D;
+    const auto& calibration = ui_state.calibration;
+    const bool stereo_ui = ui_state.mode == ViewportUiMode::Stereo3D;
     const bool cursor_icon_ready = stereo_ui && ensure_cursor_icon_texture();
-    const auto cursor_it = viewport_cursor_states_.find(camera_handle);
-    const bool cursor_visible =
-        stereo_ui && cursor_icon_ready && cursor_it != viewport_cursor_states_.end() && cursor_it->second.visible &&
-        cursor_it->second.cursor_shape != ViewportUiCursorShape::Hidden &&
-        std::isfinite(cursor_it->second.x) && std::isfinite(cursor_it->second.y);
-    const ViewportCursorState* cursor_state =
-        cursor_visible ? &cursor_it->second : nullptr;
+    const auto& pointer = ui_state.pointer;
+    const bool cursor_visible = stereo_ui && cursor_icon_ready &&
+        pointer.cursor_shape != ViewportUiCursorShape::Hidden && std::isfinite(pointer.x) && std::isfinite(pointer.y);
+    const auto* cursor_state = cursor_visible ? &pointer : nullptr;
 
     const auto gizmo_state =
         SharedDataHub::instance().viewport_gizmo_state(camera_handle);
@@ -5470,7 +5332,6 @@ void OpticsSystem::complete_actor_pick(const ActorPickRequest& request,
         pick->node_index = resolved.node_index;
         pick->result_x = request.x;
         pick->result_y = request.y;
-        // result_request_id 是遗留镜像：全仓只写不读（grep 仅剩这一处写入），已删除。
         pick->result_ready = true;
     }
     hub.enqueue_actor_pick_completion({request.camera_handle, request.scene_id, request.request_id,
@@ -6383,7 +6244,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                     if (!scene || !scene->enabled) return;
                     presented = compose_surface_ui_overlay(
                         stream, cam_handle, camera, *scene, target, target.final_output,
-                        ui_state.mode, ui_state.calibration, frame_index);
+                        ui_state, frame_index);
                 }
 
                 vision_phase.set("vision:publish");
@@ -6425,7 +6286,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                 }
 
                 if (auto* event_bus = context()->event_bus()) {
-                    Corona::push_optics_frame(
+                    event_bus->publish<Events::OpticsFrameReadyEvent>(
                         {surface,
                          target.image_handle,
                          frame_index,

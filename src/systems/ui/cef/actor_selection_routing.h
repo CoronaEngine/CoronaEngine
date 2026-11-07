@@ -14,7 +14,7 @@ namespace Corona::Systems::UI {
     std::string_view actor,
     const nlohmann::json& context) {
     std::string source_viewport = "main";
-    std::uint64_t source_camera_handle = 0;
+    std::string source_camera_id;
 
     if (context.is_object()) {
         const auto viewport_it = context.find("sourceViewport");
@@ -25,18 +25,13 @@ namespace Corona::Systems::UI {
             }
         }
 
-        const auto camera_it = context.find("sourceCameraHandle");
-        if (source_viewport == "cameraView" && camera_it != context.end()) {
-            if (camera_it->is_number_unsigned()) {
-                source_camera_handle = camera_it->get<std::uint64_t>();
-            } else if (camera_it->is_number_integer()) {
-                const auto value = camera_it->get<std::int64_t>();
-                if (value > 0) source_camera_handle = static_cast<std::uint64_t>(value);
-            }
+        const auto camera_it = context.find("sourceCameraId");
+        if (source_viewport == "cameraView" && camera_it != context.end() && camera_it->is_string()) {
+            source_camera_id = camera_it->get<std::string>();
         }
     }
 
-    if (source_viewport == "cameraView" && source_camera_handle == 0) {
+    if (source_viewport == "cameraView" && source_camera_id.empty()) {
         source_viewport = "main";
     }
 
@@ -45,7 +40,7 @@ namespace Corona::Systems::UI {
         {"scene", scene},
         {"actor", actor},
         {"source_viewport", source_viewport},
-        {"source_camera_handle", source_camera_handle},
+        {"source_camera_id", source_camera_id},
     };
     if (context.is_object()) {
         const auto node = context.find("node_index");

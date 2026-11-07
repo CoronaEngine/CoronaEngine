@@ -34,13 +34,6 @@ class CoronaCefApp final : public CefApp {
 
 }  // namespace
 
-CefMessageRouterConfig make_cef_message_router_config() {
-    CefMessageRouterConfig config;
-    config.js_query_function = "cefQuery";
-    config.js_cancel_function = "cefQueryCancel";
-    return config;
-}
-
 CefRefPtr<CefApp> create_cef_app() {
     return new CoronaCefApp();
 }
@@ -57,7 +50,7 @@ void append_cef_command_line_switches(CefRefPtr<CefCommandLine> command_line,
 
     // Removed 2026-10-06 (P0-2 in docs/development/cef-ui-risk-optimization-tasks.md):
     //  * "disable-web-security" - disabled the same-origin policy outright. Not needed: every
-    //    native call goes through the cefQuery manifest contract, and the UI was verified to
+    //    native call goes through the typed V8 contract, and the UI was verified to
     //    load, resolve resources and drive a real project with the switch gone.
     //  * "allow-file-access"    - not a Chromium switch: its only occurrence in libcef.dll is
     //    the prefix of "allow-file-access-from-files", so it never did anything.

@@ -7,6 +7,7 @@
 #include "imgui_workspace.h"
 #include "cef/browser_manager.h"
 #include "cef/cef_client.h"
+#include "cef/cef_v8_binding.h"
 #include "sdl/sdl_utils.h"
 #include <imgui.h>
 #include <imgui_internal.h> // DockBuilder default layout; pinned with the core library.
@@ -43,8 +44,7 @@ void request_close(BrowserTab& tab) {
     // Legacy camera pages retain their existing native close path.
     if (!tab.panel_id.empty() && tab.client) {
         if (auto browser = tab.client->GetBrowser()) {
-            browser->GetMainFrame()->ExecuteJavaScript(
-                "window.__coronaEmit?.('native-panel-close')", "", 0);
+            request_corona_window_close(browser->GetIdentifier());
             return;
         }
     }
@@ -280,6 +280,7 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
                 .height = main ? std::max(1, pixel_h) : std::max(1, static_cast<int>(tab->web_camera_height * sy)),
                 .render_width = std::max(1, static_cast<int>(tab->web_camera_render_width * sx)),
                 .render_height = std::max(1, static_cast<int>(tab->web_camera_render_height * sy)),
+                .authority = tab->web_camera_authority,
             });
         }
     }

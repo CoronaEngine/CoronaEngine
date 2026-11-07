@@ -251,17 +251,6 @@ class OpticsSystem : public Kernel::SystemBase {
         std::vector<std::uint32_t> node_indices,
         OpticsDetail::ActorPickReadbackWorker::Reservation reservation);
 
-    struct ViewportCursorState {
-        bool visible = false;
-        float x = 0.0f;
-        float y = 0.0f;
-        std::uint32_t buttons = 0;
-        std::uint32_t modifiers = 0;
-        ViewportUiCursorShape cursor_shape = ViewportUiCursorShape::Arrow;
-        std::uint64_t sequence = 0;
-    };
-    void drain_viewport_ui_pointer_commands();
-
     // ========================================================================
     // Per-surface optics render output
     // ========================================================================
@@ -307,8 +296,7 @@ class OpticsSystem : public Kernel::SystemBase {
                                                        const SceneDevice& scene,
                                                        SurfaceRenderTarget& target,
                                                        Horizon::HardwareImage& background,
-                                                       ViewportUiMode mode,
-                                                       const ViewportUiCalibration& calibration,
+                                                       const ViewportUiState& ui_state,
                                                        uint64_t frame_index);
 
     std::unordered_map<void*, SurfaceRenderTarget> surface_targets_;
@@ -328,7 +316,6 @@ class OpticsSystem : public Kernel::SystemBase {
         std::uint32_t height = 0;
     };
     std::unordered_map<std::uintptr_t, UiPassLogState> ui_pass_log_states_;
-    std::unordered_map<std::uintptr_t, ViewportCursorState> viewport_cursor_states_;
 
     struct NativeViewResources;
     std::unordered_map<std::uintptr_t, std::unique_ptr<NativeViewResources>>

@@ -10,6 +10,7 @@
 #include <corona/utils/path_utils.h>
 #include <nanobind/stl/string.h>
 #include <nlohmann/json.hpp>
+#include "python_value.h"
 #include <windows.h>
 
 #include <array>
@@ -514,23 +515,19 @@ PythonRuntimeResponse PythonAPI::execute_runtime_request(const PythonRuntimeRequ
             if (!pEditor.is_valid()) {
                 return PythonRuntimeResponse::failure("python editor is unavailable");
             }
-            auto dispatcher = nanobind::getattr(pEditor, "dispatch_script_request_from_cpp");
-            auto result = dispatcher(request.payload_json.c_str());
-            if (request.cancelled()) {
-                return PythonRuntimeResponse::timeout();
+            if (!request.service_args) {
+                return PythonRuntimeResponse::failure("Python service arguments are missing");
             }
-            // The bridge contract is a JSON string. Use CPython's length-aware
-            // conversion and diagnose a protocol mismatch explicitly instead
-            // of surfacing an opaque type-caster "bad cast" to the launcher.
-            if (!PyUnicode_Check(result.ptr())) {
-                return PythonRuntimeResponse::failure(
-                    std::string("Python script dispatcher must return JSON text, got ") +
-                    Py_TYPE(result.ptr())->tp_name);
-            }
-            Py_ssize_t result_size = 0;
-            const char* result_utf8 = PyUnicode_AsUTF8AndSize(result.ptr(), &result_size);
-            if (!result_utf8) throw nanobind::python_error();
-            return PythonRuntimeResponse::success(std::string(result_utf8, static_cast<std::size_t>(result_size)));
+            PythonValue arguments(json_to_python(*request.service_args));
+            if (!arguments) throw nanobind::python_error();
+            auto dispatcher = nanobind::getattr(pEditor, "dispatch_script_values_from_cpp");
+            auto result = dispatcher(request.module, request.function, nanobind::handle(arguments.get()));
+            if (request.cancelled()) return PythonRuntimeResponse::timeout();
+            nlohmann::json value;
+            if (!python_to_json(result.ptr(), value)) throw nanobind::python_error();
+            auto response = PythonRuntimeResponse::success();
+            response.service_result = std::make_shared<const nlohmann::json>(std::move(value));
+            return response;
         }
         if (request.kind == PythonRuntimeRequestKind::Callback && request.handler) {
             if (request.cancelled()) {

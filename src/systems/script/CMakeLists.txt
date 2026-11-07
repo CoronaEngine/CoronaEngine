@@ -18,6 +18,7 @@ target_include_directories(CoronaPythonRuntimeCoordinator PUBLIC
     ${PROJECT_SOURCE_DIR}/include
 )
 target_compile_features(CoronaPythonRuntimeCoordinator PUBLIC cxx_std_20)
+target_link_libraries(CoronaPythonRuntimeCoordinator PUBLIC nlohmann_json::nlohmann_json)
 
 # Create system library
 corona_add_system(script

@@ -9,7 +9,9 @@
 
 #include "cef_client.h"
 #include "cef_paths.h"
-#include "cef_bridge_helpers.h"
+#include "cef_v8_binding.h"
+#include "cef_window_operations.h"
+#include "cef_viewport_pick.h"
 #include "cef_osr_mode.h"
 #include "horizon/core/logging.h"
 #include "corona/systems/ui/camera_viewport_manager.h"
@@ -223,6 +225,7 @@ void BrowserManager::remove_tab(int tab_id) {
     }
     BrowserTab* tab = removed.get();
     if (!tab) return;
+    release_viewport_pointer(*tab, tab->viewport_pointer_owner);
 
     CFW_LOG_INFO("[CEF/Tab] remove_tab id={} camera_view={} floating={} open={}", tab_id,
                  tab->camera_view, tab->floating, tab->open);
@@ -238,6 +241,7 @@ void BrowserManager::remove_tab(int tab_id) {
     }
 
     destroy_tab_texture(tab);
+    notify_corona_window_closed(tab_id, tab->panel_id);
     // `removed` releases the tab here, once every reference above is dropped.
 }
 
@@ -257,15 +261,15 @@ void BrowserManager::update() {
     ++frame_index_;
     retire_deferred_tab_textures();
 
-    std::function<void()> task;
+    // Drain this turn's snapshot so multiple Web documents cannot produce
+    // work faster than a one-task-per-frame consumer. Tasks posted while this
+    // batch runs belong to the next turn (including lifecycle acknowledgments).
+    std::vector<std::function<void()>> tasks;
     {
         std::lock_guard lock(pending_tasks_mutex_);
-        if (!pending_tasks_.empty()) {
-            task = std::move(pending_tasks_.front());
-            pending_tasks_.erase(pending_tasks_.begin());
-        }
+        tasks.swap(pending_tasks_);
     }
-    if (task) {
+    for (auto& task : tasks) {
         try {
             task();
         } catch (const std::exception& exception) {
@@ -275,9 +279,14 @@ void BrowserManager::update() {
         }
     }
 
+    // Retire cached viewport bindings and restore the OS cursor with their scene.
+    for (const auto& entry : tabs_snapshot()) {
+        if (entry.tab) refresh_viewport_state(*entry.tab);
+    }
+
     // GPU actor-pick completions are produced by OpticsSystem on another thread;
-    // broadcast them only from this CEF/UI-thread tick.
-    drain_actor_pick_completion_events();
+    // resolve owned native requests only from this main-thread tick.
+    drain_viewport_picks();
 
     // Texture uploads are driven by UiFrameRunner after this frame's SDL/CEF input has
     // already been routed. Keeping uploads out of this queue drain prevents a GPU receipt

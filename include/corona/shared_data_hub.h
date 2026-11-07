@@ -1,5 +1,6 @@
 #pragma once
 #include <horizon/core/storage.h>
+#include <corona/camera_command_authority.h>
 #include <corona/kernel/command/command_buffer.h>
 #include <corona/kernel/command/snapshot_channel.h>
 #include <corona/memory/gpu_mem_ledger.h>
@@ -568,6 +569,11 @@ struct CameraViewportUpdateCommand {
     int height{540};
     int render_width{960};
     int render_height{540};
+    /// 远端 CEF 重构引入：命令序号（诊断用）
+    std::uint64_t sequence{};
+    /// 远端 CEF 重构引入：相机命令租约。owner 退役时等待在手命令，
+    /// apply_camera_viewport_update() 校验 active 后才写入。
+    std::shared_ptr<CameraCommandAuthority> authority;
 };
 
 /// 视口更新命令的合并键（LatestWins：同一台相机只保留最后一次视口状态）
@@ -600,6 +606,9 @@ enum class CameraStateUpdateField : std::uint32_t {
     VisionRestirSettings = 1u << 15,
     Projection = 1u << 16,
     FollowsDefaultSurface = 1u << 17,
+    /// 远端 CEF 重构引入（原本也占用 1u<<17，与本字段撞车，改到 1u<<18）：
+    /// 只影响几何/速度，不改变窗口生命周期。
+    ViewSettings = 1u << 18,
 };
 
 constexpr CameraStateUpdateField operator|(CameraStateUpdateField lhs,
@@ -680,11 +689,20 @@ struct ViewportUiCalibration {
     float parallax_scale{19.1849f};
 };
 
+struct ViewportUiPointerState {
+    float x{0.0f};
+    float y{0.0f};
+    ViewportUiCursorShape cursor_shape{ViewportUiCursorShape::Hidden};
+    std::uint64_t owner_context{};
+};
+
 struct ViewportUiState {
     std::uintptr_t camera_handle{};
     ViewportUiMode mode{ViewportUiMode::Flat2D};
     ViewportUiCursorShape cursor_shape{ViewportUiCursorShape::Arrow};
     ViewportUiCalibration calibration{};
+    /// 远端 CEF 重构引入：指针状态并入 session store
+    ViewportUiPointerState pointer{};
 };
 
 struct ViewportUiPointerCommand {
@@ -954,6 +972,9 @@ class SharedDataHub {
                                      const ViewportUiCalibration& calibration);
     [[nodiscard]] ViewportUiState viewport_ui_state(std::uintptr_t camera_handle) const;
     void enqueue_viewport_ui_pointer(ViewportUiPointerCommand command);
+    /// 远端 CEF 重构引入：直接写/清 session store 里的指针状态
+    void set_viewport_ui_pointer(std::uintptr_t camera_handle, ViewportUiPointerState pointer);
+    void clear_viewport_ui_pointer(std::uintptr_t camera_handle, std::uint64_t owner_context);
     std::vector<ViewportUiPointerCommand> drain_viewport_ui_pointer_commands();
     void set_viewport_gizmo_target(ViewportGizmoTarget target);
     void clear_viewport_gizmo_target(std::uintptr_t camera_handle);

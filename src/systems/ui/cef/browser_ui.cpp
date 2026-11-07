@@ -15,7 +15,7 @@
 #endif
 
 #include "browser_manager.h"
-#include "cef_bridge_helpers.h"
+#include "cef_script_input.h"
 #include "cef_client.h"
 #include "sdl/sdl_utils.h"
 

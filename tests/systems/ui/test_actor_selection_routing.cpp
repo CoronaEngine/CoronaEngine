@@ -17,24 +17,24 @@ int main() {
         "scene.ini",
         "model",
         "Ball",
-        {{"sourceViewport", "cameraView"}, {"sourceCameraHandle", 22}});
+        {{"sourceViewport", "cameraView"}, {"sourceCameraId", "camera/22"}});
     expect(camera_view.at("scene") == "scene.ini");
     expect(camera_view.at("actor") == "Ball");
     expect(camera_view.at("source_viewport") == "cameraView");
-    expect(camera_view.at("source_camera_handle") == 22);
+    expect(camera_view.at("source_camera_id") == "camera/22");
 
     const auto default_main =
         make_actor_selection_event_payload("scene.ini", "model", "Ball", {});
     expect(default_main.at("source_viewport") == "main");
-    expect(default_main.at("source_camera_handle") == 0);
+    expect(default_main.at("source_camera_id") == "");
 
     const auto invalid_source = make_actor_selection_event_payload(
         "scene.ini",
         "model",
         "Ball",
-        {{"sourceViewport", "unknown"}, {"sourceCameraHandle", -1}});
+        {{"sourceViewport", "unknown"}, {"sourceCameraId", ""}});
     expect(invalid_source.at("source_viewport") == "main");
-    expect(invalid_source.at("source_camera_handle") == 0);
+    expect(invalid_source.at("source_camera_id") == "");
     const auto node = make_actor_selection_event_payload(
         "scene.ini", "model", "Temple", {{"node_index", 12}});
     expect(node.contains("node_index") && node.at("node_index") == 12);
