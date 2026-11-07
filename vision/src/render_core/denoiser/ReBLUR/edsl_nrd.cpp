@@ -377,7 +377,7 @@ struct EdslReblur::Impl {
             if (capture_prepass) snapshot(commands, r->prepass_probe, common.frameIndex, layer, ordinal, 3u, file);
         }
         commands << replay_end(parameters).dispatch(size);
-        commands << ocarina::retain_until_complete(r);
+        commands << ocarina::keep_alive(true, r);
         return commands;
     }
     CommandBatch readback_replay_outputs(uint2 size, uint layer, std::shared_ptr<PackedNrdOutputs> outputs) {
@@ -454,8 +454,8 @@ struct EdslReblur::Impl {
         CommandBatch commands;
         // ImageDesc contains borrowed bindless slots. Keep this resource
         // generation alive even if another resolution is queued before commit.
-        // The final lifetime hold owns these descriptors through the covering
-        // GPU fence without splitting the EDSL command batch.
+        // The final async host callback owns these descriptors until the
+        // preceding GPU work completes.
         if (prepare_and_pack) commands << prepare_and_pack(parameters);
         else commands << pack(parameters).dispatch(p.size);
         const Storage *packed[]{&r.input_d, &r.input_s, &r.normal, &r.view_z, &r.motion, &r.disocclusion};
@@ -559,7 +559,7 @@ struct EdslReblur::Impl {
             }
         } else if (composition) commands << unpack_compose(parameters, *composition).dispatch(p.size);
         else commands << unpack(parameters).dispatch(p.size);
-        commands << ocarina::retain_until_complete(resources);
+        commands << ocarina::keep_alive(true, resources);
         r.frames[layer] = p.frame;
         return commands;
     }
