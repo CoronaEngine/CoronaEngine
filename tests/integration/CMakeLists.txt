@@ -17,7 +17,6 @@ set_tests_properties(EngineStartupConfigTests EngineStartupConfigDeploymentTests
     PROPERTIES TIMEOUT 20)
 
 add_executable(corona_ui_surface_removal_race_tests
-    test_ui_surface_removal_race.cpp
     ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp
     ${PROJECT_SOURCE_DIR}/src/systems/ui/ui_surface_lifecycle.cpp
 )

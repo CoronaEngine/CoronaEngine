@@ -1,7 +1,6 @@
 ﻿#pragma once
 
 #include "horizon.h"
-#include "corona/systems/display/display_callback_gate.h"
 #include "corona/systems/display/surface_frame_coordinator.h"
 #include "corona/systems/display/surface_lifecycle_acks.h"
 #include "corona/systems/display/scene_present_cadence.h"
