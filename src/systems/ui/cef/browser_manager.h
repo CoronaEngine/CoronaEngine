@@ -22,6 +22,7 @@ class VulkanBackend;
 
 namespace Corona::Systems::UI {
 class OffscreenCefClient;
+struct CameraWindowAuthority;
 
 // ImGui-free texture identifier (Phase 6 of the ImGui-removal plan). This carries the
 // same value the ImGui path used to store in ImTextureID: a bindless sampled-image
@@ -108,7 +109,9 @@ struct BrowserTab {
     bool cef_creation_failed = false;
     bool transparent_overlay = false;
     std::atomic_bool hide_system_cursor{false};
-    std::atomic_bool use_custom_system_cursor{false};
+    std::uint64_t viewport_pointer_owner = 0;
+    std::uintptr_t viewport_pointer_camera = 0;
+    std::weak_ptr<CameraWindowAuthority> viewport_pointer_authority;
     bool preserve_camera_open_on_close = false;
     SDL_WindowID platform_window_id = 0;
     void* platform_handle_raw = nullptr;
@@ -119,7 +122,7 @@ struct BrowserTab {
     //   nullptr  ⇒ docked in the main window (composed into the main layout)
     //   non-null ⇒ detached, rendered full-bleed into its own secondary OS window (this is
     //             that window's native surface handle / DisplaySystem key).
-    // host_surface is owned/driven by the UI thread only (frame runner + DockCommand tasks).
+    // host_surface is owned/driven by the UI thread only (frame runner + native window tasks).
     void* host_surface = nullptr;
     // Detach lifecycle state. Only the UI thread mutates it; guards against double-detach and
     // detach-during-teardown (ABA). Docked is the initial/redocked state.

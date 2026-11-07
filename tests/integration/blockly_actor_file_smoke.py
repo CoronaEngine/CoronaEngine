@@ -102,6 +102,19 @@ def wait_for(read, condition, description):
     raise AssertionError(f"{description}: {value!r}")
 
 
+def dispatch_script_key(web, event_type, code='KeyD', key='d'):
+    """Programmatic input uses the same scoped V8 entrypoint as viewport input."""
+    scope = web.evaluate('corona.scene.readActive()')
+    cameras = web.api('SceneTools.list_camera_views', [scope['scene']])
+    assert cameras['success'], cameras
+    camera_id = cameras['data']['cameras'][0]['camera_id']
+    event = {'archive_session': scope['archive_session'], 'type': event_type, 'code': code, 'key': key}
+    if event_type == 'keyDown':
+        event['modifiers'] = ''
+    result = web.evaluate(f'corona.input.dispatch({json.dumps(scope["scene"])},{json.dumps(camera_id)},{json.dumps(event)})')
+    assert result == {'status': 'queued'}, result
+
+
 def verify(port, root, switch_root=None):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
     from vision_frontend_probe import Frontend
@@ -122,17 +135,17 @@ def verify(port, root, switch_root=None):
                 for p in project.rglob("*") if p.is_file()}
 
     def scope():
-        return api("SceneTools.read_active_scene")["archive_session"]
+        return web.evaluate("corona.scene.readActive()")["archive_session"]
 
     def edit_position(value):
-        result = api("SceneTools.set_actor_transform", "scene.ini", "Probe", {"position": value, "archive_session": scope()})
+        result = web.evaluate(f"corona.scene.setActorTransform('scene.ini','Probe',{json.dumps({'position': value, 'archive_session': scope()})})")
         assert result["status"] == "success" and position() == value, result
 
     def key_down():
-        assert web.evaluate("window.coronaBridge.injectInput(0, 'KeyD', '', 'd')")
+        dispatch_script_key(web, 'keyDown')
 
     def key_up():
-        assert web.evaluate("window.coronaBridge.injectInput(1, 'KeyD', 'd')")
+        dispatch_script_key(web, 'keyUp')
 
     wait_for(lambda: web.evaluate("document.readyState === 'complete' && !!document.querySelector('#app[data-v-app] button')"),
              bool, "editor startup page")
@@ -290,9 +303,8 @@ def verify(port, root, switch_root=None):
             ):
                 reply = api(name, payload)
                 assert reply.get("code") == "PROJECT_CONTEXT_CHANGED", reply
-            request = json.dumps({"api": "Scripts.run_file", "args": [stale_run]})
-            rejected = web.evaluate("new Promise(resolve=>window.cefQuery({request:" + json.dumps(request) +
-                                     ",onSuccess:r=>resolve(JSON.parse(r)),onFailure:(code,error)=>resolve({code,error})}))")
+            rejected = web.evaluate("corona.editor.invoke('Scripts.run_file'," + json.dumps([stale_run]) +
+                                    ").then(value=>value,error=>({code:error.code,error:error.message}))")
             assert not rejected.get("success") and "PROJECT_CONTEXT_CHANGED" in str(rejected), rejected
             assert not status()["snapshotCaptured"]
             assert project_files() == saved_files and project_files(switch_root) == peer_files

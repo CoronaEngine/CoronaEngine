@@ -3,6 +3,8 @@
 import os
 import shutil
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -87,6 +89,14 @@ def test_loader_configuration_and_cef_copy_order(project):
     for name in ("data.pak", "locales/en-US.pak", "locales/zh-CN.pak"):
         (resources / name).write_text("CEF resource")
     (source / "python-runtime.dll").write_text("Python runtime fixture")
+    python_env = source / "python-env"
+    (python_env / "Lib" / "encodings").mkdir(parents=True)
+    (python_env / "Lib" / "site-packages").mkdir(parents=True)
+    (python_env / "DLLs").mkdir()
+    (python_env / "Lib" / "site.py").write_text("# standard library fixture")
+    (python_env / "Lib" / "encodings" / "__init__.py").write_text("")
+    (python_env / "Lib" / "site-packages" / "example.py").write_text("value = 1")
+    (python_env / "DLLs" / "_test.pyd").write_text("extension fixture")
     (source / "main.c").write_text("int main(void) { return 0; }\n")
     runtime_module = (REPO_ROOT / "build_tools/cmake/corona_runtime_deps.cmake").as_posix()
     (source / "CMakeLists.txt").write_text(
@@ -104,6 +114,8 @@ def test_loader_configuration_and_cef_copy_order(project):
     result = subprocess.run(
         [cmake, "-S", str(source), "-B", str(build), "-G", "Ninja Multi-Config",
          f"-DCMAKE_MAKE_PROGRAM={ninja}", "-DCMAKE_C_COMPILER=cl",
+         f"-DPython_EXECUTABLE={Path(sys.executable).as_posix()}",
+         f"-DPython_RUNTIME_LIBRARY_DIRS={python_env.as_posix()}",
          "-DCMAKE_DISABLE_FIND_PACKAGE_Vulkan=TRUE"],
         env=env, capture_output=True, text=True, timeout=60,
     )
@@ -115,6 +127,11 @@ def test_loader_configuration_and_cef_copy_order(project):
         deployed = build / config / "vulkan-1.dll"
         assert deployed.read_text() == f"Conan {config}"
         assert (build / config / "locales/en-US.pak").is_file()
+        python_runtime = build / config / "python-runtime"
+        assert (python_runtime / "Lib/site.py").is_file()
+        assert (python_runtime / "Lib/encodings/__init__.py").is_file()
+        assert (python_runtime / "Lib/site-packages/example.py").is_file()
+        assert (python_runtime / "DLLs/_test.pyd").is_file()
         # A replacement package must refresh the copied DLL without touching code.
         (package / config / "vulkan-1.dll").write_text(f"Updated Conan {config}")
         result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=60)

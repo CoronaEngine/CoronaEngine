@@ -7,6 +7,8 @@
 #include <corona/systems/script/python_runtime_coordinator.h>
 
 #include <include/cef_task.h>
+#include <include/base/cef_callback.h>
+#include <wrapper/cef_closure_task.h>
 
 #include <array>
 #include <atomic>
@@ -120,15 +122,6 @@ constexpr std::array<EditorApiParamSpec, 1> kObjectPayloadParam = {{
     param("payload", EditorApiValueType::Object),
 }};
 
-constexpr std::array<EditorApiParamSpec, 2> kEditorApiRegisterCallbackParams = {{
-    param("event_name", EditorApiValueType::String),
-    param("callback_spec", EditorApiValueType::Object, true),
-}};
-
-constexpr std::array<EditorApiParamSpec, 1> kCallbackTokenParam = {{
-    param("callback_token", EditorApiValueType::Integer),
-}};
-
 constexpr std::array<EditorApiParamSpec, 2> kMainViewImportResourceFileParams = {{
     param("scene_name", EditorApiValueType::String),
     param("file_type", EditorApiValueType::String, true),
@@ -183,12 +176,6 @@ constexpr std::array<EditorApiParamSpec, 4> kResourceSearchImageSearchParams = {
 
 constexpr std::array<EditorApiParamSpec, 2> kResourceSearchMarkIndexDirtyParams = {{
     param("reason", EditorApiValueType::String),
-    param("caller", EditorApiValueType::String),
-}};
-
-constexpr std::array<EditorApiParamSpec, 3> kResourceSearchFocusActorParams = {{
-    param("scene_name", EditorApiValueType::String),
-    param("actor_name", EditorApiValueType::String),
     param("caller", EditorApiValueType::String),
 }};
 
@@ -477,28 +464,8 @@ constexpr std::array<EditorApiParamSpec, 2> kSceneToolsActorPlayAudioParams = {{
     param("loop", EditorApiValueType::Boolean, true),
 }};
 
-constexpr std::array<EditorApiParamSpec, 3> kScriptKeyEventParams = {{
-    param("key", EditorApiValueType::String),
-    param("modifiers", EditorApiValueType::String, true),
-    param("display_key", EditorApiValueType::String, true),
-}};
 
-constexpr std::array<EditorApiParamSpec, 2> kScriptKeyReleaseParams = {{
-    param("key", EditorApiValueType::String),
-    param("display_key", EditorApiValueType::String, true),
-}};
 
-constexpr std::array<EditorApiParamSpec, 9> kScriptMouseEventParams = {{
-    param("event_type", EditorApiValueType::String),
-    param("button", EditorApiValueType::String, true),
-    param("x", EditorApiValueType::Number),
-    param("y", EditorApiValueType::Number),
-    param("viewport_x", EditorApiValueType::Number, true),
-    param("viewport_y", EditorApiValueType::Number, true),
-    param("viewport_width", EditorApiValueType::Number, true),
-    param("viewport_height", EditorApiValueType::Number, true),
-    param("picked_actor", EditorApiValueType::String, true),
-}};
 
 #define EDITOR_API_METHOD0_WRAPPED(module, function, js_path, python_path, return_type) \
     {#module "." #function, #module, #function, nullptr, 0, returns(return_type), js_path, python_path, true, all_callers()}
@@ -526,8 +493,6 @@ constexpr std::array<EditorApiParamSpec, 9> kScriptMouseEventParams = {{
 // manifest grows, instead of identifying the actual entry that drifted.
 constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(CoronaEditor, close_process, kNoParams, "app.closeProcess", "app.close_process", EditorApiValueType::Null),
-    EDITOR_API_METHOD_SCHEMA(EditorApi, register_callback, kEditorApiRegisterCallbackParams, EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA(EditorApi, unregister_callback, kCallbackTokenParam, EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA(EditorApi, list_events, kNoParams, EditorApiValueType::Object),
     // ScriptRuntime discovers its allowed methods through this same manifest.
     // Individual calls still enforce each method's caller mask.
@@ -611,7 +576,6 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectSettings, commit_project_document, kObjectPayloadParam, "projectSettings.commitProjectDocument", "project_settings.commit_project_document", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectSettings, get_active_project_info, kNoParams, "projectSettings.getActiveProjectInfo", "project_settings.get_active_project_info", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ProjectSettings, save_active_project_info, kObjectPayloadParam, "projectSettings.saveActiveProjectInfo", "project_settings.save_active_project_info", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(ResourceSearch, focus_actor, kResourceSearchFocusActorParams, "resourceSearch.focusActor", "resource_search.focus_actor", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ResourceSearch, fuzzy_search, kResourceSearchFuzzySearchParams, "resourceSearch.fuzzySearch", "resource_search.fuzzy_search", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ResourceSearch, get_stats, kCallerParam, "resourceSearch.getStats", "resource_search.get_stats", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(ResourceSearch, image_search, kResourceSearchImageSearchParams, "resourceSearch.imageSearch", "resource_search.image_search", EditorApiValueType::Object),
@@ -625,28 +589,27 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, create_actor, kSceneToolsCreateActorParams, "sceneTools.createActor", "scene_tools.create_actor", EditorApiValueType::Object, animation_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, create_camera_view, kSceneToolsCreateCameraViewParams, "sceneTools.createCameraView", "scene_tools.create_camera_view", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, delete_camera, kSceneCameraParams, "sceneTools.deleteCamera", "scene_tools.delete_camera", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, floor_grid, kSceneToolsFloorGridParams, "sceneTools.floorGrid", "scene_tools.floor_grid", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, focus_actor, kSceneToolsFocusActorParams, "sceneTools.focusActor", "scene_tools.focus_actor", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, floor_grid, kSceneToolsFloorGridParams, "", "scene_tools.floor_grid", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, focus_actor, kSceneToolsFocusActorParams, "", "scene_tools.focus_actor", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_output_mode, kSceneToolsCameraOptionalParams, "sceneTools.getOutputMode", "scene_tools.get_output_mode", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_physics_params, kSceneNameParam, "sceneTools.getPhysicsParams", "scene_tools.get_physics_params", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_physics_params, kSceneNameParam, "", "scene_tools.get_physics_params", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_render_backend, kSceneToolsCameraOptionalParams, "sceneTools.getRenderBackend", "scene_tools.get_render_backend", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_render_mode, kSceneToolsCameraOptionalParams, "sceneTools.getVisionRenderMode", "scene_tools.get_vision_render_mode", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_denoise, kSceneToolsCameraOptionalParams, "sceneTools.getVisionDenoise", "scene_tools.get_vision_denoise", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_accumulation, kSceneToolsCameraOptionalParams, "sceneTools.getVisionAccumulation", "scene_tools.get_vision_accumulation", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_stable_planes, kSceneToolsCameraOptionalParams, "sceneTools.getVisionStablePlanes", "scene_tools.get_vision_stable_planes", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, is_vision_available, kNoParams, "sceneTools.isVisionAvailable", "scene_tools.is_vision_available", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_active_scene, kNoParams, "scene.readActive", "scene.read_active_scene", EditorApiValueType::Object, animation_callers() | caller_mask(EditorApiCaller::Native)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_active_scene, kNoParams, "", "scene.read_active_scene", EditorApiValueType::Object, (animation_callers() & ~caller_mask(EditorApiCaller::Cef)) | caller_mask(EditorApiCaller::Native)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_actor, kObjectPayloadParam, "scene.readActor", "scene.read_actor", EditorApiValueType::Object, animation_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_transforms, kObjectPayloadParam, "scene.readTransforms", "scene.read_transforms", EditorApiValueType::Object, animation_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_transforms, kObjectPayloadParam, "", "scene.read_transforms", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_archive_scene, kObjectPayloadParam, "scene.readArchive", "scene.read_archive_scene", EditorApiValueType::Object, animation_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, take_viewport_results, kObjectPayloadParam, "scene.takeViewportResults", "scene.take_viewport_results", EditorApiValueType::Array, caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_scene_snapshot, kSceneNameOptionalParam, "scene.getSnapshot", "scene.get_snapshot", EditorApiValueType::Object, animation_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_environment, kSceneNameParam, "", "scene.get_environment", EditorApiValueType::Object, cef_and_script_runtime_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_environment, kSceneEnvironmentStateParams, "", "scene.set_environment", EditorApiValueType::Object, cef_and_script_runtime_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_transform, kSceneActorTransformParams, "scene.setActorTransform", "scene.set_actor_transform", EditorApiValueType::Object, cef_and_script_runtime_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_state, kSceneActorStateParams, "sceneTools.setActorState", "scene_tools.set_actor_state", EditorApiValueType::Object, animation_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_physics, kSceneActorPhysicsParams, "sceneTools.setActorPhysics", "scene_tools.set_actor_physics", EditorApiValueType::Object, cef_and_script_runtime_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_actor_camera_lock, kSceneActorCameraLockParams, "sceneTools.setActorCameraLock", "scene_tools.set_actor_camera_lock", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_environment, kSceneNameParam, "", "scene.get_environment", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_environment, kSceneEnvironmentStateParams, "", "scene.set_environment", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_transform, kSceneActorTransformParams, "", "scene.set_actor_transform", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_state, kSceneActorStateParams, "", "scene_tools.set_actor_state", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript) | caller_mask(EditorApiCaller::ScriptRuntime)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_physics, kSceneActorPhysicsParams, "", "scene_tools.set_actor_physics", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_camera_lock, kSceneActorCameraLockParams, "", "scene_tools.set_actor_camera_lock", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, save_actor, kSaveActorParams, "sceneTools.saveActor", "scene_tools.save_actor", EditorApiValueType::Object, cef_and_script_runtime_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, select_model_file, kSceneToolsSelectModelFileParams, "sceneTools.selectModelFile", "scene_tools.select_model_file", EditorApiValueType::String, cef_and_script_runtime_callers()),
     EDITOR_API_METHOD1_WRAPPED(SceneTools, list_actor_tree, "scene.listActorTree", "scene.list_actor_tree", "scene_name", EditorApiValueType::String, EditorApiValueType::Array),
@@ -654,18 +617,18 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, list_scene_tree, kReadTreeParams, "sceneTools.listSceneTree", "scene_tools.list_scene_tree", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, open_actor, kSceneActorParams, "sceneTools.openActor", "scene_tools.open_actor", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, open_camera_view, kSceneCameraParams, "sceneTools.openCameraView", "scene_tools.open_camera_view", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, pick_actor_at_pixel, kSceneToolsPickActorParams, "sceneTools.pickActor", "scene_tools.pick_actor", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, pick_actor_at_pixel, kSceneToolsPickActorParams, "", "scene_tools.pick_actor", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, play_audio, kSceneToolsPlayAudioParams, "sceneTools.playAudio", "scene_tools.play_audio", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, reload_scene, kSceneToolsReloadSceneParams, "sceneTools.reloadScene", "scene_tools.reload_scene", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, rebind_actor_resource, kSceneToolsRebindActorResourceParams, "sceneTools.rebindActorResource", "scene_tools.rebind_actor_resource", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, remove_actor, kSceneActorParams, "sceneTools.removeActor", "scene_tools.remove_actor", EditorApiValueType::Object, cef_and_script_runtime_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, rename_actor, kSceneToolsRenameActorParams, "sceneTools.renameActor", "scene_tools.rename_actor", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, rename_camera_view, kSceneToolsRenameCameraViewParams, "sceneTools.renameCameraView", "scene_tools.rename_camera_view", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, save_screenshot, kSceneToolsSaveScreenshotParams, "sceneTools.saveScreenshot", "scene_tools.save_screenshot", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, select_actor, kSceneToolsSelectActorParams, "sceneTools.selectActor", "scene.select_actor", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, select_screenshot_path, kSceneToolsCameraOptionalParams, "sceneTools.selectScreenshotPath", "scene_tools.select_screenshot_path", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, save_screenshot, kSceneToolsSaveScreenshotParams, "", "scene_tools.save_screenshot", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, select_actor, kSceneToolsSelectActorParams, "", "scene.select_actor", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, select_screenshot_path, kSceneToolsCameraOptionalParams, "", "scene_tools.select_screenshot_path", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_output_mode, kSceneToolsSetOutputModeParams, "sceneTools.setOutputMode", "scene_tools.set_output_mode", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_physics_params, kSceneToolsSetPhysicsParams, "sceneTools.setPhysicsParams", "scene_tools.set_physics_params", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_physics_params, kSceneToolsSetPhysicsParams, "", "scene_tools.set_physics_params", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_render_backend, kSceneToolsSetRenderBackendParams, "sceneTools.setRenderBackend", "scene_tools.set_render_backend", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_render_mode, kSceneToolsSetVisionRenderModeParams, "sceneTools.setVisionRenderMode", "scene_tools.set_vision_render_mode", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_denoise, kSceneToolsSetCameraBoolParams, "sceneTools.setVisionDenoise", "scene_tools.set_vision_denoise", EditorApiValueType::Object),
@@ -681,7 +644,7 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_accumulation, kSceneToolsSetCameraBoolParams, "sceneTools.setVisionAccumulation", "scene_tools.set_vision_accumulation", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_stable_planes, kSceneToolsSetCameraBoolParams, "sceneTools.setVisionStablePlanes", "scene_tools.set_vision_stable_planes", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, stop_audio, kResourceIdParam, "sceneTools.stopAudio", "scene_tools.stop_audio", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, sun_direction, kSceneToolsSunDirectionParams, "sceneTools.sunDirection", "scene_tools.sun_direction", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, sun_direction, kSceneToolsSunDirectionParams, "", "scene_tools.sun_direction", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_actor_skeleton_leaves, kSceneActorParams, "sceneTools.getActorSkeletonLeaves", "scene_tools.get_actor_skeleton_leaves", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_animation, kSceneToolsSetAnimationParams, "sceneTools.setActorAnimation", "scene_tools.set_actor_animation", EditorApiValueType::Object, animation_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, pause_actor_animation, kSceneActorParams, "sceneTools.pauseActorAnimation", "scene_tools.pause_actor_animation", EditorApiValueType::Object, animation_callers()),
@@ -690,9 +653,9 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_model_node_state, kModelNodeStateParams, "sceneTools.setModelNodeState", "scene_tools.set_model_node_state", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_actor_ik_chains, kSceneActorParams, "sceneTools.getActorIkChains", "scene_tools.get_actor_ik_chains", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_actor_ik_chains, kSceneToolsSetIkChainsParams, "sceneTools.setActorIkChains", "scene_tools.set_actor_ik_chains", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, update_camera_view, kSceneToolsUpdateCameraViewParams, "sceneTools.updateCameraView", "scene_tools.update_camera_view", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, capture_viewport, kViewportCaptureParams, "viewport.capture", "viewport.capture", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_camera_pose, kViewportSetCameraPoseParams, "viewport.setCameraPose", "viewport.set_camera_pose", EditorApiValueType::Object, cef_and_script_runtime_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, update_camera_view, kSceneToolsUpdateCameraViewParams, "", "scene_tools.update_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, capture_viewport, kViewportCaptureParams, "", "viewport.capture", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_camera_pose, kViewportSetCameraPoseParams, "", "viewport.set_camera_pose", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, run_path, kObjectPayloadParam, "", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Native)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, run_file, kObjectPayloadParam, "scripts.runFile", "", EditorApiValueType::Object, (caller_mask(EditorApiCaller::Cef) | caller_mask(EditorApiCaller::Native))),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, get_run, kObjectPayloadParam, "scripts.getRun", "", EditorApiValueType::Object, (caller_mask(EditorApiCaller::Cef) | caller_mask(EditorApiCaller::Native))),
@@ -700,9 +663,6 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, get_status, kNoParams, "scripts.getStatus", "", EditorApiValueType::Object, (caller_mask(EditorApiCaller::Cef) | caller_mask(EditorApiCaller::Native))),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectFiles, load, kObjectPayloadParam, "projectFiles.load", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectFiles, save, kObjectPayloadParam, "projectFiles.save", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, key_event, kScriptKeyEventParams, "scripts.sendKeyEvent", "", EditorApiValueType::Any, caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, key_release, kScriptKeyReleaseParams, "scripts.sendKeyUpEvent", "", EditorApiValueType::Any, caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, mouse_event, kScriptMouseEventParams, "scripts.sendMouseEvent", "", EditorApiValueType::Any, caller_mask(EditorApiCaller::Cef)),
 });
 
 #undef EDITOR_API_METHOD_SCHEMA
@@ -723,15 +683,6 @@ constexpr auto kEditorApiEvents = std::to_array<EditorApiEventSpec>({
     {"Network.assetImportCompleted", EditorApiValueType::Object, all_callers(), "events.onNetworkAssetImportCompleted", "events.on_network_asset_import_completed"},
     {"Network.fileSyncStatusChanged", EditorApiValueType::Object, all_callers(), "events.onNetworkFileSyncStatusChanged", "events.on_network_file_sync_status_changed"},
     {"Network.syncPauseRequested", EditorApiValueType::Object, all_callers(), "events.onNetworkSyncPauseRequested", "events.on_network_sync_pause_requested"},
-    {"SceneTools.meshMoveResult", EditorApiValueType::Object, all_callers(), "events.onMeshMoveResult", "events.on_mesh_move_result"},
-    {"SceneTools.actorPickResult", EditorApiValueType::Object, all_callers(), "events.onActorPickResult", "events.on_actor_pick_result"},
-    {"SceneTools.actorChanged", EditorApiValueType::Object, all_callers(), "events.onActorChanged", "events.on_actor_changed"},
-    {"SceneTools.actorSelectionChanged", EditorApiValueType::Object, all_callers(), "events.onActorSelectionChanged", "events.on_actor_selection_changed"},
-    {"SceneTools.actorTransformUpdated", EditorApiValueType::Object, all_callers(), "events.onActorTransformUpdated", "events.on_actor_transform_updated"},
-    {"SceneTools.viewportGizmoPointerResult", EditorApiValueType::Object, all_callers(), "events.onViewportGizmoPointerResult", "events.on_viewport_gizmo_pointer_result"},
-    {"SceneTools.focusPoseResult", EditorApiValueType::Object, all_callers(), "events.onFocusPoseResult", "events.on_focus_pose_result"},
-    {"SceneTools.sceneTreeChanged", EditorApiValueType::Object, all_callers(), "events.onSceneTreeChanged", "events.on_scene_tree_changed"},
-    {"ProjectLauncher.projectOpened", EditorApiValueType::Object, all_callers(), "events.onProjectOpened", "events.on_project_opened"},
 });
 
 static_assert([] {
@@ -754,9 +705,31 @@ struct CallbackRecord {
     NativeContext context;
     bool python_script = false;
     PyObject* python_callable = nullptr;
+    CefRefPtr<CefV8Context> v8_context;
+    CefRefPtr<CefV8Value> v8_callback;
+    std::optional<int> v8_browser_id;
 };
 
 std::unordered_map<std::uint64_t, CallbackRecord> g_callbacks;
+
+CefRefPtr<CefV8Value> event_value(const nlohmann::json& value) {
+    if (value.is_null()) return CefV8Value::CreateNull();
+    if (value.is_boolean()) return CefV8Value::CreateBool(value.get<bool>());
+    if (value.is_number_integer()) return CefV8Value::CreateDouble(value.get<double>());
+    if (value.is_number_unsigned()) return CefV8Value::CreateDouble(value.get<double>());
+    if (value.is_number_float()) return CefV8Value::CreateDouble(value.get<double>());
+    if (value.is_string()) return CefV8Value::CreateString(value.get<std::string>());
+    if (value.is_array()) {
+        auto array = CefV8Value::CreateArray(static_cast<int>(value.size()));
+        for (int index = 0; index < static_cast<int>(value.size()); ++index)
+            array->SetValue(index, event_value(value[index]));
+        return array;
+    }
+    auto object = CefV8Value::CreateObject(nullptr, nullptr);
+    for (auto it = value.begin(); it != value.end(); ++it)
+        object->SetValue(it.key(), event_value(it.value()), V8_PROPERTY_ATTRIBUTE_NONE);
+    return object;
+}
 
 bool caller_allowed(const EditorApiMethodSpec& spec, EditorApiCaller caller) {
     return (spec.allowed_callers & caller_mask(caller)) != 0u;
@@ -1079,6 +1052,15 @@ bool enqueue_editor_python_callback(std::uint64_t callback_token,
     return coordinator->submit(std::move(request)).accepted;
 }
 
+void emit_v8_callback(CallbackRecord record, nlohmann::json payload) {
+    if (!record.v8_context->IsValid() || !record.v8_context->Enter()) return;
+    CefV8ValueList arguments;
+    arguments.push_back(event_value(payload));
+    arguments.push_back(CefV8Value::CreateString(record.event_name));
+    record.v8_callback->ExecuteFunction(nullptr, arguments);
+    record.v8_context->Exit();
+}
+
 std::size_t emit_callbacks(std::string_view event_name,
                            const nlohmann::json& payload,
                            bool python_script) {
@@ -1112,15 +1094,9 @@ std::size_t emit_callbacks(std::string_view event_name,
 
     std::size_t emitted = 0;
     for (const auto& record : records) {
-        if (record.context.frame) {
-            nlohmann::json event_payload;
-            event_payload["event"] = record.event_name;
-            event_payload["payload"] = payload;
-            event_payload["token"] = record.token;
-            const auto script = "window.__coronaEditorApiDispatch && "
-                                "window.__coronaEditorApiDispatch(" +
-                                event_payload.dump() + ");";
-            record.context.frame->ExecuteJavaScript(script, record.context.frame->GetURL(), 0);
+        if (record.v8_context && record.v8_callback) {
+            record.v8_context->GetTaskRunner()->PostTask(
+                CefCreateClosureTask(base::BindOnce(&emit_v8_callback, record, payload)));
             ++emitted;
         }
     }
@@ -1247,21 +1223,24 @@ EditorApiCallbackRegistry& EditorApiCallbackRegistry::instance() {
     return registry;
 }
 
-std::uint64_t EditorApiCallbackRegistry::register_cef_callback(
+std::uint64_t EditorApiCallbackRegistry::register_cef_v8_callback(
     const std::string& event_name,
-    const nlohmann::json& callback_spec,
-    const NativeContext& context) {
+    CefRefPtr<CefV8Context> context,
+    CefRefPtr<CefV8Value> callback) {
     const auto event_spec = find_editor_api_event(event_name);
-    if (!event_spec || !event_caller_allowed(*event_spec, EditorApiCaller::Cef)) {
+    if (!event_spec || !event_caller_allowed(*event_spec, EditorApiCaller::Cef) ||
+        !context || !context->IsValid() || !callback || !callback->IsFunction()) {
         return 0;
     }
     const auto token = g_next_callback_token.fetch_add(1);
     CallbackRecord record;
     record.token = token;
     record.event_name = event_name;
-    record.callback_spec = callback_spec;
-    record.context = context;
-    record.python_script = false;
+    record.v8_context = context;
+    record.v8_callback = callback;
+    if (const auto browser = context->GetBrowser()) {
+        record.v8_browser_id = browser->GetIdentifier();
+    }
     std::lock_guard<std::mutex> lock(g_callback_mutex);
     g_callbacks[token] = std::move(record);
     return token;
@@ -1332,7 +1311,9 @@ bool EditorApiCallbackRegistry::unregister(std::uint64_t callback_token) {
 void EditorApiCallbackRegistry::clear_cef_callbacks_for_browser(int browser_id) {
     std::lock_guard<std::mutex> lock(g_callback_mutex);
     for (auto it = g_callbacks.begin(); it != g_callbacks.end();) {
-        const auto record_browser_id = browser_identifier(it->second.context);
+        const auto record_browser_id = it->second.python_script
+            ? browser_identifier(it->second.context)
+            : it->second.v8_browser_id;
         if (!it->second.python_script && record_browser_id && *record_browser_id == browser_id) {
             it = g_callbacks.erase(it);
         } else {
@@ -1365,14 +1346,8 @@ void EditorApiCallbackRegistry::clear_python_script_callbacks() {
     }
 }
 
-// Scene state (including changes and viewport results) is returned only to an active reader.
-static bool pull_only_event(std::string_view name) {
-    return name.starts_with("SceneTools.") || name == "ProjectLauncher.projectOpened";
-}
-
 std::size_t EditorApiCallbackRegistry::emit_editor_api_event(std::string_view event_name,
                                                              const nlohmann::json& payload) {
-    if (pull_only_event(event_name)) return 0;
     const auto event_spec = find_editor_api_event(event_name);
     if (!event_spec || !event_caller_allowed(*event_spec, EditorApiCaller::Cef) ||
         !validate_editor_api_event_payload(*event_spec, payload)) {
@@ -1383,7 +1358,6 @@ std::size_t EditorApiCallbackRegistry::emit_editor_api_event(std::string_view ev
 
 std::size_t EditorApiCallbackRegistry::emit_python_script_event(std::string_view event_name,
                                                                 const nlohmann::json& payload) {
-    if (pull_only_event(event_name)) return 0;
     const auto event_spec = find_editor_api_event(event_name);
     if (!event_spec || !event_caller_allowed(*event_spec, EditorApiCaller::PythonScript) ||
         !validate_editor_api_event_payload(*event_spec, payload)) {
@@ -1403,50 +1377,6 @@ std::optional<EditorApiEventSpec> find_editor_api_event(std::string_view event_n
 
 std::size_t emit_editor_api_event(std::string_view event_name, const nlohmann::json& payload) {
     return EditorApiCallbackRegistry::instance().emit_editor_api_event(event_name, payload);
-}
-
-std::size_t emit_editor_api_event_to_frame(std::string_view event_name,
-                                            const nlohmann::json& payload,
-                                            const CefRefPtr<CefFrame>& frame) {
-    if (pull_only_event(event_name)) return 0;
-    const auto event_spec = find_editor_api_event(event_name);
-    if (!frame || !event_spec || !event_caller_allowed(*event_spec, EditorApiCaller::Cef) ||
-        !validate_editor_api_event_payload(*event_spec, payload)) {
-        return 0;
-    }
-
-    std::vector<CallbackRecord> records;
-    const auto browser = frame->GetBrowser();
-    const int browser_id = browser ? browser->GetIdentifier() : 0;
-    {
-        std::lock_guard<std::mutex> lock(g_callback_mutex);
-        for (const auto& [_, record] : g_callbacks) {
-            if (record.python_script || record.event_name != event_name || !record.context.frame) {
-                continue;
-            }
-            if (record.context.frame->GetIdentifier() != frame->GetIdentifier() ||
-                !record.context.browser || browser_id !=
-                    record.context.browser->GetIdentifier()) {
-                continue;
-            }
-            records.push_back(record);
-        }
-    }
-
-    std::size_t emitted = 0;
-    for (const auto& record : records) {
-        nlohmann::json event_payload = {
-            {"event", record.event_name},
-            {"payload", payload},
-            {"token", record.token},
-        };
-        frame->ExecuteJavaScript(
-            "window.__coronaEditorApiDispatch && window.__coronaEditorApiDispatch(" +
-                event_payload.dump() + ");",
-            frame->GetURL(), 0);
-        ++emitted;
-    }
-    return emitted;
 }
 
 std::size_t emit_python_script_event(std::string_view event_name, const nlohmann::json& payload) {

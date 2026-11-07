@@ -74,6 +74,47 @@ add_custom_command(TARGET corona_cef_app_tests POST_BUILD
     VERBATIM
 )
 add_test(NAME CefAppTests COMMAND corona_cef_app_tests)
+
+add_executable(corona_camera_window_identity_tests
+    test_camera_window_identity.cpp
+    ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp)
+target_include_directories(corona_camera_window_identity_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_camera_window_identity_tests PRIVATE corona_ui_system corona::resource::manager)
+if(COMMAND helicon_install_runtime_deps)
+    helicon_install_runtime_deps(corona_camera_window_identity_tests)
+endif()
+add_custom_command(TARGET corona_camera_window_identity_tests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/libcef.dll,${CEF_ROOT}/Release/libcef.dll>"
+        "$<TARGET_FILE_DIR:corona_camera_window_identity_tests>/libcef.dll"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/chrome_elf.dll,${CEF_ROOT}/Release/chrome_elf.dll>"
+        "$<TARGET_FILE_DIR:corona_camera_window_identity_tests>/chrome_elf.dll"
+    VERBATIM)
+add_test(NAME CameraWindowIdentityTests COMMAND corona_camera_window_identity_tests)
+set_tests_properties(CameraWindowIdentityTests PROPERTIES TIMEOUT 30)
+
+# Runs against the separately built production engine, including its real Dock
+# windows. Keep the runtime explicit because the tests family omits examples.
+find_program(CORONA_CEF_SMOKE_NODE NAMES node DOC "Node 22+ for the real CEF communication smoke")
+string(TOLOWER "${CORONA_DEV_CONFIGURATION}" _corona_cef_configuration)
+set(CORONA_CEF_SMOKE_RUNTIME
+    "${PROJECT_SOURCE_DIR}/build/conan/examples/${_corona_cef_configuration}/examples/engine/$<CONFIG>"
+    CACHE STRING "Production engine runtime directory for CEF communication tests")
+if(CORONA_CEF_SMOKE_NODE)
+    add_test(NAME CefWebCommunicationSmoke
+        COMMAND "${CORONA_CEF_SMOKE_NODE}"
+            "${PROJECT_SOURCE_DIR}/tests/integration/web_messages_cef_smoke.mjs"
+            "${CORONA_CEF_SMOKE_RUNTIME}" --native-bindings --ctest)
+    set_tests_properties(CefWebCommunicationSmoke PROPERTIES
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        RUN_SERIAL TRUE
+        TIMEOUT 180
+        SKIP_RETURN_CODE 77
+        LABELS "cef;integration;gpu")
+endif()
+unset(_corona_cef_configuration)
 get_filename_component(_CORONA_CEF_TESTS_PYTHON_DIR "${Python_EXECUTABLE}" DIRECTORY)
 set(_CORONA_CEF_TESTS_PATH_DIRS "${_CORONA_CEF_TESTS_PYTHON_DIR}")
 foreach(_tbb_runtime IN LISTS CORONA_TBB_REDIS_DLLS)
@@ -147,19 +188,6 @@ add_test(NAME CameraViewportManagerTests
          COMMAND corona_camera_viewport_manager_tests)
 
 
-
-add_executable(corona_request_response_broker_tests
-    test_request_response_broker.cpp
-    ${PROJECT_SOURCE_DIR}/src/systems/ui/cef/request_response_broker.cpp
-)
-target_include_directories(corona_request_response_broker_tests
-    PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui/cef
-)
-target_link_libraries(corona_request_response_broker_tests
-    PRIVATE Horizon nlohmann_json::nlohmann_json
-)
-add_test(NAME RequestResponseBrokerTests
-         COMMAND corona_request_response_broker_tests)
 
 add_executable(corona_viewport_gizmo_state_tests
     test_viewport_gizmo_state.cpp

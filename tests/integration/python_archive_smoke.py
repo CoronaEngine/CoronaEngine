@@ -24,7 +24,7 @@ def verify(port, project, peer):
         opened = wait_for(lambda: call("ProjectLauncher.open_project", str(root)),
                           lambda r: r.get("status") != "service_initializing", "open archive")
         assert opened["ok"], opened
-        return call("SceneTools.read_active_scene")["archive_session"]
+        return web.evaluate("corona.scene.readActive()")["archive_session"]
 
     def fingerprint():
         return {p.relative_to(project): (p.stat().st_mtime_ns, hashlib.sha256(p.read_bytes()).hexdigest())
@@ -63,9 +63,8 @@ def verify(port, project, peer):
         ("ProjectLauncher.import_portable_asset", [{**scope, "category": "model", "sourcePath": "missing.ply"}]),
         ("SceneTools.create_actor", ["scene.ini", original["route"], "model", scope]),
     ):
-        request = json.dumps({"api": name, "args": args})
-        reply = web.evaluate("new Promise(resolve => window.cefQuery({request:" + json.dumps(request)
-                             + ",onSuccess:r=>resolve(JSON.parse(r)),onFailure:(code,error)=>resolve({code,error})}))")
+        reply = web.evaluate("corona.editor.invoke(" + json.dumps(name) + "," + json.dumps(args) +
+                             ").then(value=>value, error=>({code:error.code,error:error.message}))")
         assert reply.get("code") == 409 and "PROJECT_CONTEXT_CHANGED" in reply["error"], (name, reply)
     assert not (project / "stale.actor").exists()
     scope = {**scope, "archive_session": session}

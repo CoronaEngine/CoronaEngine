@@ -794,7 +794,7 @@ Corona::API::Geometry::Geometry(const std::string& model_path, Resource::ModelIm
 
     // ---- 全异步加载（方案 A）：构造函数不做任何磁盘 IO / 解析 ----
     // 此前这里同步 import_sync（磁盘 + assimp 解析，数百 ms~数秒），由于 Python
-    // Geometry() 通常在 CEF UI 线程（OnQuery 持 GIL）同步执行，会独占该线程，
+    // Geometry() 通常在 CEF UI 线程（持 GIL）同步执行，会独占该线程，
     // 导致"加载一个模型时无法打开页面加载其他模型"。
     //
     // 现改为：仅分配三个 SharedDataHub 槽（微秒级），记录 model_path 并标记

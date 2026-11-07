@@ -69,7 +69,7 @@ SDL_HitTestResult SDLCALL secondary_window_hit_test(SDL_Window* win, const SDL_P
         return SDL_HITTEST_NORMAL;
     }
 
-    // drag_regions is written by setDragRegions on the CEF IPC thread; lock to read.
+    // Read the same protected snapshot updated by the native window binding.
     std::lock_guard<std::mutex> lock(tab->drag_mutex);
     for (const DragRegion& region : tab->drag_regions) {
         if (static_cast<float>(area->x) >= region.x &&

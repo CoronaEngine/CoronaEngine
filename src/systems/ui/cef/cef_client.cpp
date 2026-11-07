@@ -24,11 +24,10 @@
 
 #include "browser_manager.h"
 #include "cef_app.h"
-#include "cef_bridge_helpers.h"
 #include "cef_editor_api.h"
 #include "cef_osr_mode.h"
 #include "cef_shared_texture_probe.h"
-#include "request_response_broker.h"
+#include "cef_viewport_pick.h"
 
 namespace Corona::Systems::UI {
 
@@ -319,9 +318,7 @@ void OffscreenRenderHandler::OnImeCompositionRangeChanged(CefRefPtr<CefBrowser>,
 
 OffscreenCefClient::OffscreenCefClient()
     : browser_(nullptr),
-      render_handler_(new OffscreenRenderHandler()),
-      browser_side_router_(nullptr),
-      js_handler_(nullptr) {
+      render_handler_(new OffscreenRenderHandler()) {
 }
 
 CefRefPtr<CefRenderHandler> OffscreenCefClient::GetRenderHandler() {
@@ -348,14 +345,6 @@ void OffscreenCefClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
             browser_ = browser;
         }
         close_requested = close_requested_;
-    }
-
-    if (!browser_side_router_) {
-        browser_side_router_ =
-            CefMessageRouterBrowserSide::Create(make_cef_message_router_config());
-
-        js_handler_ = new BrowserSideJSHandler();
-        browser_side_router_->AddHandler(js_handler_, true);
     }
 
     if (close_requested) {
@@ -402,12 +391,9 @@ void OffscreenCefClient::OnLoadError(CefRefPtr<CefBrowser> browser,
 void OffscreenCefClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     CEF_REQUIRE_UI_THREAD();
     if (browser) {
-        cef_request_response_broker().cancel_browser(browser->GetIdentifier());
+        viewport_pick_requests().cancel_browser(browser->GetIdentifier());
         EditorApiCallbackRegistry::instance().clear_cef_callbacks_for_browser(
             browser->GetIdentifier());
-    }
-    if (browser_side_router_) {
-        browser_side_router_->OnBeforeClose(browser);
     }
     {
         std::lock_guard lock(browser_mutex_);
@@ -482,9 +468,6 @@ bool OffscreenCefClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
                                         bool user_gesture,
                                         bool is_redirect) {
     CEF_REQUIRE_UI_THREAD();
-    if (browser_side_router_) {
-        browser_side_router_->OnBeforeBrowse(browser, frame);
-    }
     return false;
 }
 
@@ -546,8 +529,7 @@ bool OffscreenCefClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
     }
 
     const auto msg = message.ToString();
-    if (level == LOGSEVERITY_ERROR || msg.find("ActorTransformFast") != std::string::npos ||
-        msg.find("coronaBridge") != std::string::npos) {
+    if (level == LOGSEVERITY_ERROR) {
         VUE_LOG_INFO("[{}] {}", levelStr, msg.c_str());
     }
     return true;
@@ -560,26 +542,6 @@ void OffscreenCefClient::OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser
     CEF_REQUIRE_UI_THREAD();
     CFW_LOG_ERROR("CEF: Renderer terminated tab={} status={} code={} error={}",
                   tab_id_, static_cast<int>(status), error_code, error_string.ToString());
-    if (browser_side_router_) {
-        browser_side_router_->OnRenderProcessTerminated(browser);
-    }
-}
-
-bool OffscreenCefClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-                                                  CefRefPtr<CefFrame> frame,
-                                                  CefProcessId source_process,
-                                                  CefRefPtr<CefProcessMessage> message) {
-    CEF_REQUIRE_UI_THREAD();
-    if (handle_realtime_process_message(browser, frame, message)) {
-        return true;
-    }
-    if (message->GetName() == "RendererMessage") {
-        std::string msg = message->GetArgumentList()->GetString(0);
-        CFW_LOG_INFO("CEF: Received message from Renderer: {}", msg);
-        return true;
-    }
-
-    return forward_process_message_to_router(browser_side_router_, browser, frame, source_process, message);
 }
 
 // ============================================================================

@@ -690,24 +690,6 @@ void mix_hash_float(std::size_t& sig, float value) {
 
 constexpr uint64_t kVisionRuntimeIdleEvictFrames = 240;
 
-void apply_pending_camera_moves() {
-    auto& hub = Corona::SharedDataHub::instance();
-    auto moves = hub.drain_camera_moves();
-    if (moves.empty()) {
-        return;
-    }
-
-    auto& camera_storage = hub.camera_storage();
-    for (const auto& move : moves) {
-        if (auto camera = camera_storage.try_acquire_write(move.camera_handle)) {
-            camera->position = move.position;
-            camera->forward = move.forward;
-            camera->world_up = move.world_up;
-            camera->fov = move.fov;
-        }
-    }
-}
-
 void apply_pending_camera_viewport_updates() {
     auto& hub = Corona::SharedDataHub::instance();
     auto updates = hub.drain_camera_viewport_updates();
@@ -3232,7 +3214,6 @@ void OpticsSystem::update() {
     // Promote requests first, then drain those changes. Requests arriving later
     // must wait for the next frame instead of capturing this frame's old state.
     begin_screenshot_frame();
-    apply_pending_camera_moves();
     // Explicit camera viewport/state commands below take precedence over the
     // default surface size, matching the previous follows_default_surface rule.
     apply_pending_default_surface_camera_update();
@@ -3344,7 +3325,6 @@ std::optional<OpticsSystem::LockedRenderView> OpticsSystem::lock_render_view(
 }
 
 void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
-    drain_viewport_ui_pointer_commands();
     fail_expired_pending_screenshots();
     fail_unrenderable_pending_screenshots();
 
@@ -4798,7 +4778,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 presented_target = compose_surface_ui_overlay(
                     *stream,
                     cam_handle, *camera, scene, target, render_target,
-                    ui_state.mode, ui_state.calibration, frame_index);
+                    ui_state, frame_index);
             }
 
             // Recorded draws retain resource handles; no scene/asset contents
@@ -4938,37 +4918,6 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
     }
 }
 
-void OpticsSystem::drain_viewport_ui_pointer_commands() {
-    auto commands = SharedDataHub::instance().drain_viewport_ui_pointer_commands();
-    for (const auto& command : commands) {
-        if (command.camera_handle == 0) {
-            continue;
-        }
-
-        auto& state = viewport_cursor_states_[command.camera_handle];
-        if (command.sequence < state.sequence) {
-            continue;
-        }
-
-        std::string event_type = command.event_type;
-        std::transform(event_type.begin(), event_type.end(), event_type.begin(), [](unsigned char ch) {
-            return static_cast<char>(std::tolower(ch));
-        });
-        const bool hide_event =
-            event_type == "leave" || event_type == "mouseout" ||
-            event_type == "pointerleave" || event_type == "cancel" ||
-            event_type == "pointercancel" || event_type == "blur";
-
-        state.x = command.x;
-        state.y = command.y;
-        state.buttons = command.buttons;
-        state.modifiers = command.modifiers;
-        state.cursor_shape = command.cursor_shape;
-        state.sequence = command.sequence;
-        state.visible = !hide_event && command.cursor_shape != ViewportUiCursorShape::Hidden;
-    }
-}
-
 Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
     Horizon::HardwareStream& stream,
     std::uintptr_t camera_handle,
@@ -4976,8 +4925,7 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
     const SceneDevice& scene,
     SurfaceRenderTarget& target,
     Horizon::HardwareImage& background,
-    ViewportUiMode mode,
-    const ViewportUiCalibration& calibration,
+    const ViewportUiState& ui_state,
     uint64_t frame_index) {
     auto& uiVisibility = *hardware_->uiVisibilityPipeline;
     auto& opticsOverlay = *hardware_->opticsOverlayPipeline;
@@ -5021,15 +4969,13 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
                                                ui_indirect_buffers);
     stream << RetainSubmission{uiBatch.resource_keep_alive};
 
-    const bool stereo_ui = mode == ViewportUiMode::Stereo3D;
+    const auto& calibration = ui_state.calibration;
+    const bool stereo_ui = ui_state.mode == ViewportUiMode::Stereo3D;
     const bool cursor_icon_ready = stereo_ui && ensure_cursor_icon_texture();
-    const auto cursor_it = viewport_cursor_states_.find(camera_handle);
-    const bool cursor_visible =
-        stereo_ui && cursor_icon_ready && cursor_it != viewport_cursor_states_.end() && cursor_it->second.visible &&
-        cursor_it->second.cursor_shape != ViewportUiCursorShape::Hidden &&
-        std::isfinite(cursor_it->second.x) && std::isfinite(cursor_it->second.y);
-    const ViewportCursorState* cursor_state =
-        cursor_visible ? &cursor_it->second : nullptr;
+    const auto& pointer = ui_state.pointer;
+    const bool cursor_visible = stereo_ui && cursor_icon_ready &&
+        pointer.cursor_shape != ViewportUiCursorShape::Hidden && std::isfinite(pointer.x) && std::isfinite(pointer.y);
+    const auto* cursor_state = cursor_visible ? &pointer : nullptr;
 
     const auto gizmo_state =
         SharedDataHub::instance().viewport_gizmo_state(camera_handle);
@@ -6251,7 +6197,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                     if (!scene || !scene->enabled) return;
                     presented = compose_surface_ui_overlay(
                         stream, cam_handle, camera, *scene, target, target.final_output,
-                        ui_state.mode, ui_state.calibration, frame_index);
+                        ui_state, frame_index);
                 }
 
                 vision_phase.set("vision:publish");

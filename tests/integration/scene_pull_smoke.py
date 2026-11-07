@@ -60,7 +60,8 @@ def run():
     finally:
         for name, value in originals.items(): setattr(CoronaEngine, name, value)
         for token in tokens:
-            CoronaEngine._invoke_cpp_editor_api('EditorApi.unregister_callback', json.dumps([token]))
+            # Python callback tokens are owned by the Python callback registry.
+            CoronaEngine.unregister_python_script_callback(token)
 """
 
 
@@ -72,6 +73,15 @@ def wait(read, predicate, label, seconds=18):
             return last
         time.sleep(.1)
     raise AssertionError(f"{label}: {last!r}")
+
+
+def wait_json_file(path, label):
+    def read():
+        try:
+            return json.loads(path.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+    return wait(read, lambda value: value is not None, label)
 
 
 def run(port, root, control):
@@ -91,7 +101,7 @@ def run(port, root, control):
     opened = wait(lambda: api(main, "ProjectLauncher.open_project", str(root)),
                   lambda r: r.get("status") != "service_initializing", "open")
     assert opened.get("ok"), opened
-    state = api(main, "SceneTools.read_active_scene")
+    state = main.evaluate("corona.scene.readActive()")
     scope = {"archive_session": state["archive_session"]}
     actor = api(main, "SceneTools.read_actor", {**scope, "actor": "Probe"})
     guid, initial = actor["actor_guid"], actor["geometry"]["position"]
@@ -114,36 +124,32 @@ def run(port, root, control):
     })()"""
     wait(lambda: main.evaluate(f"{service_lookup}.then(service=>service.readEditorUiPolicy())"),
          lambda p: p and p.get("enabled"), "main window policy")
-    main.evaluate(f"{service_lookup}.then(service=>service.openNativePanel({{cmd:'createDetachedPanel', "
+    main.evaluate(f"{service_lookup}.then(service=>service.openNativePanel({{detached:true, "
                   "panelId:'Object', routePath:'/Object', width:560, height:600, x:100, y:80}))")
     second_target = wait(lambda: [p for p in targets() if p["id"] != main_id and "/Object" in p["url"]],
                          bool, "detached Object window")[0]
     second = Frontend(port, target_id=second_target["id"])
     panels = [main, second]
     wait(lambda: second.evaluate("!!document.querySelector('.object-panel-shell')"), bool, "second Object panel")
-    api(main, "SceneTools.select_actor", state["scene"], "actor", "Probe", {})
+    main.evaluate(f"corona.scene.selectActor({json.dumps(state['scene'])}, 'actor', 'Probe')")
     def x(web):
         return web.evaluate("(()=>{const input=document.querySelector('[data-guidance=object-position-x]'); return input?Number(input.value):null})()")
     for panel in panels:
         wait(lambda: x(panel), lambda value: value == initial[0], "initial Actor value")
-        panel.evaluate("""(() => {
-          window.probeEvents=[]; window.probeReads=[];
-          const dispatch=window.__coronaEditorApiDispatch;
-          window.__coronaEditorApiDispatch=function(e){
-            const name=(typeof e==='string'?JSON.parse(e):e).event;
-            if (name.startsWith('SceneTools.') || name==='ProjectLauncher.projectOpened') window.probeEvents.push(name);
-            return dispatch?.call(this,e)};
-          // The native cefQuery binding is read-only. Count its serialized manifest requests.
-          const serialize=JSON.stringify;
-          JSON.stringify=function(value,...args){
-            if (value && Array.isArray(value.args) && /^SceneTools\\.(read_|get_|list_|take_)/.test(value.api)) {
-              window.probeReads.push(value.api);
-            }
-            return serialize.call(this,value,...args)};
-        })()""")
-        for event in EVENTS:
-            token = api(panel, "EditorApi.register_callback", event, {})
-            assert token.get("callback_token"), token
+        panel.evaluate(f"""(async () => {{
+          window.probeEvents=[]; window.probeReads=[]; window.probeTokens=[];
+          const invoke=corona.editor.invoke;
+          corona.editor.invoke=async (api,args) => {{
+            if (/^SceneTools\\.(read_|get_|list_|take_)/.test(api)) window.probeReads.push(api);
+            return invoke(api,args);
+          }};
+          for (const event of {json.dumps(EVENTS)}) {{
+            const token=await corona.editor.on(event, name => {{
+              if (event.startsWith('SceneTools.') || event==='ProjectLauncher.projectOpened') window.probeEvents.push(event);
+            }});
+            window.probeTokens.push(token);
+          }}
+        }})()""")
         wait(lambda: panel.evaluate("window.probeReads"), lambda reads: "SceneTools.read_transforms" in reads,
              "window reads the selected Actor before pause")
 
@@ -161,35 +167,38 @@ def run(port, root, control):
     try:
         wait(lambda: (control / "ready").is_file(), bool, "Python reader")
         for panel in panels:
-            panel.evaluate("window.dispatchEvent(new Event('pagehide'))")
+            # Simulate hidden windows, not document destruction: pagehide retires
+            # the Web messaging owner permanently and cannot be used as a pause.
+            panel.evaluate("Object.defineProperty(document,'hidden',{configurable:true,value:true}); document.dispatchEvent(new Event('visibilitychange'))")
         time.sleep(.5)  # Drain requests already issued before pause.
         for panel in panels:
             panel.evaluate("window.probeReads=[];window.probeEvents=[]")
-        # The fast bridge changes the native geometry; it has no scene-valued reply.
-        ok = main.evaluate(f"window.coronaBridge.actorTransform({actor['handle']},0,{json.dumps(changed)})")
-        assert ok is not False, ok
+        # The sole V8 transform patch updates the same native state used by pull readers.
+        updated = main.evaluate(f"corona.scene.setActorTransform({json.dumps(state['scene'])},{json.dumps(guid)},{json.dumps({**scope, 'position': changed})})")
+        assert updated["status"] == "success", updated
         # This command also used to push a scene event even when no queries were in progress.
-        api(main, "SceneTools.select_actor", state["scene"], "actor", "Probe", {})
+        main.evaluate(f"corona.scene.selectActor({json.dumps(state['scene'])}, 'actor', 'Probe')")
         time.sleep(.9)
         paused = [panel.evaluate("({reads:window.probeReads,events:window.probeEvents})") for panel in panels]
         assert all(p == {"reads": [], "events": []} for p in paused), paused
         assert [x(p) for p in panels] == [initial[0], initial[0]]
         (control / "resume").touch()
         for panel in panels:
-            panel.evaluate("window.dispatchEvent(new Event('pageshow'))")
+            panel.evaluate("delete document.hidden; document.dispatchEvent(new Event('visibilitychange'))")
         for panel in panels:
             wait(lambda: x(panel), lambda value: value == changed[0], "resumed panel")
-        wait(lambda: (control / "result").is_file(), bool, "Python reading resumed")
-        py = json.loads((control / "result").read_text())
+        py = wait_json_file(control / "result", "Python reading resumed")
         assert py == {"before": initial, "after": changed, "pausedReads": [], "deliveries": []}, py
         resumed_reads = [p.evaluate("window.probeReads") for p in panels]
         assert all("SceneTools.read_transforms" in reads for reads in resumed_reads), resumed_reads
         report = {"windows": [main_id, second_target["id"]], "actorGuid": guid, "before": initial,
                 "pausedWindows": paused, "resumedWindowX": [x(p) for p in panels],
-                "resumedWindowReads": [sorted(set(reads)) for reads in resumed_reads], "python": py}
+                "resumedWindowReads": [sorted(set(reads)) for reads in resumed_reads], "python": py,
+                "vuePropertyWrites": ['body_type', 'mass', 'follow_camera', 'linear_lock', 'camera_lock']}
     finally:
         (control / "resume").touch()
-        api(main, "Scripts.stop", {"runId": started["runId"], "restore_state": True})
+        stopped = api(main, "Scripts.stop", {"runId": started["runId"], "restore_state": True})
+        assert stopped.get("restored"), stopped
     restored = api(main, "SceneTools.read_transforms", {**scope, "actors": [guid]})["actors"][0]["position"]
     assert restored == initial, restored
     other = start_file("separate_run.py", f"""
@@ -199,21 +208,47 @@ def run():
     result = [str(id(sys.modules)), globals().get('isolation_probe', 'unset')]
     Path({str(control / 'isolation')!r}).write_text(json.dumps(result))
 """)
+    assert other.get("runId"), {"start": other, "previousStop": stopped}
     try:
-        wait(lambda: (control / "isolation").is_file(), bool, "independent file run")
-        isolated = json.loads((control / "isolation").read_text())
+        isolated = wait_json_file(control / "isolation", "independent file run")
         assert isolated == [(control / "interpreter").read_text(), "unset"], isolated
         assert other["runId"] != started["runId"]
         assert (root / "scene.ini").read_bytes() == saved_ini
         assert api(main, "Scripts.stop", {"runId": other["runId"]})["restored"]
+        # Exercise production Vue event handlers, not only direct binding calls.
+        def read_probe():
+            return api(main, "SceneTools.read_actor", {**scope, "actor": guid})
+        original_properties = read_probe()
+        main.evaluate("[...document.querySelectorAll('#actor-body-type button')].find(b=>b.textContent==='动态').click()")
+        wait(read_probe, lambda actor: actor['mechanics']['body_type'] == 'dynamic', 'Vue body-type patch')
+        main.evaluate("(()=>{const input=document.querySelector('[data-guidance=object-physics-mass]'); input.value='3'; input.dispatchEvent(new Event('input',{bubbles:true})); input.dispatchEvent(new Event('change',{bubbles:true}));})()")
+        wait(read_probe, lambda actor: actor['mechanics']['mass'] == 3, 'Vue mass patch')
+        main.evaluate("[...document.querySelectorAll('.object-panel-shell .segmented button')].find(b=>b.textContent==='屏幕 UI').click()")
+        wait(read_probe, lambda actor: actor['follow_camera'] is True, 'Vue render-space patch')
+        assert read_probe()['mechanics']['body_type'] == 'dynamic', 'render-space does not implicitly change mechanics'
+        second.evaluate("[...document.querySelectorAll('#actor-body-type button')].find(b=>b.textContent==='动态').click()")
+        wait(lambda: second.evaluate("!!document.querySelector('.lock-row input')"), bool, 'second Vue lock controls')
+        second.evaluate("document.querySelector('.lock-row input').click()")
+        wait(read_probe, lambda actor: actor['mechanics']['linear_lock'][0] != original_properties['mechanics']['linear_lock'][0], 'second Vue window lock patch')
+        main.evaluate("document.querySelector('.switch-label input').click()")
+        wait(read_probe, lambda actor: actor['camera_lock']['enabled'] is True, 'Vue camera-lock patch')
+        main.evaluate("document.querySelector('.switch-label input').click()")
+        wait(read_probe, lambda actor: actor['camera_lock']['enabled'] is False, 'Vue camera-lock disable')
+        restore_properties = {**scope, 'visible': original_properties['visible'],
+            'follow_camera': original_properties['follow_camera'], 'mechanics': original_properties['mechanics'],
+            'camera_lock': {key: original_properties['camera_lock'][key] for key in ['enabled', 'position_offset', 'rotation_offset']}}
+        main.evaluate(f"corona.scene.setActorProperties({json.dumps(state['scene'])},{json.dumps(guid)},{json.dumps(restore_properties)})")
+        restore_transform = {**scope, **{key: original_properties['geometry'][key] for key in ['position', 'rotation', 'scale']}}
+        main.evaluate(f"corona.scene.setActorTransform({json.dumps(state['scene'])},{json.dumps(guid)},{json.dumps(restore_transform)})")
+
         # Save the Actor from one real window after the other has saved the name.
         new_name = "Two windows"
         moved = [initial[0] + 2, *initial[1:]]
-        api(panels[1], "SceneTools.set_actor_transform", state["scene"], guid, {**scope, "position": moved})
+        assert panels[1].evaluate(f"corona.scene.setActorTransform({json.dumps(state['scene'])},{json.dumps(guid)},{json.dumps({**scope, 'position': moved})})")["status"] == "success"
         api(panels[0], "ProjectSettings.save_active_project_info", {**scope, "name": new_name})
         assert api(panels[1], "MainView.scene_save", state["scene"], scope)["ok"]
         assert api(main, "ProjectLauncher.open_project", str(root))["ok"]
-        fresh = api(main, "SceneTools.read_active_scene")
+        fresh = main.evaluate("corona.scene.readActive()")
         assert fresh["archive_session"] != scope["archive_session"]
         assert api(main, "ProjectSettings.get_active_project_info")["name"] == new_name
         assert api(main, "SceneTools.read_actor", {"archive_session": fresh["archive_session"], "actor": guid})["geometry"]["position"] == moved

@@ -446,15 +446,6 @@ struct ActorPickCompletion {
     std::uint32_t node_index{UINT32_MAX};
 };
 
-struct CameraMoveCommand {
-    std::uintptr_t camera_handle{};
-    ktm::fvec3 position{};
-    ktm::fvec3 forward{};
-    ktm::fvec3 world_up{};
-    float fov{45.0f};
-    std::uint64_t sequence{};
-};
-
 struct CameraViewportUpdateCommand {
     std::uintptr_t camera_handle{};
     void* surface{};
@@ -562,22 +553,18 @@ struct ViewportUiCalibration {
     float parallax_scale{19.1849f};
 };
 
+struct ViewportUiPointerState {
+    float x{0.0f};
+    float y{0.0f};
+    ViewportUiCursorShape cursor_shape{ViewportUiCursorShape::Hidden};
+    std::uint64_t owner_context{};
+};
+
 struct ViewportUiState {
     std::uintptr_t camera_handle{};
     ViewportUiMode mode{ViewportUiMode::Flat2D};
-    ViewportUiCursorShape cursor_shape{ViewportUiCursorShape::Arrow};
     ViewportUiCalibration calibration{};
-};
-
-struct ViewportUiPointerCommand {
-    std::uintptr_t camera_handle{};
-    std::string event_type;
-    float x{0.0f};
-    float y{0.0f};
-    std::uint32_t buttons{0};
-    std::uint32_t modifiers{0};
-    ViewportUiCursorShape cursor_shape{ViewportUiCursorShape::Arrow};
-    std::uint64_t sequence{};
+    ViewportUiPointerState pointer{};
 };
 
 struct ViewportGizmoTarget {
@@ -585,31 +572,6 @@ struct ViewportGizmoTarget {
     std::string scene_id;
     std::string actor_name;
     std::uintptr_t actor_handle{};
-};
-
-struct ViewportGizmoPointerCommand {
-    std::uintptr_t camera_handle{};
-    std::string request_id;
-    std::string event_type;
-    float x{0.0f};
-    float y{0.0f};
-    float viewport_width{0.0f};
-    float viewport_height{0.0f};
-    std::uint32_t button{0};
-    std::uint32_t buttons{0};
-    std::uint32_t modifiers{0};
-    std::uint64_t sequence{};
-};
-
-struct ViewportGizmoPointerResult {
-    std::uintptr_t camera_handle{};
-    std::string request_id;
-    ViewportGizmoAxis axis{ViewportGizmoAxis::None};
-    bool consumed{false};
-    bool dragging{false};
-    bool ended{false};
-    bool cancelled{false};
-    ktm::fvec3 position{};
 };
 
 struct ViewportGizmoState {
@@ -753,8 +715,6 @@ class SharedDataHub {
                                          std::chrono::steady_clock::now());
     [[nodiscard]] std::optional<CameraFrameTiming> camera_frame_timing(
         std::uintptr_t camera_handle) const;
-    void enqueue_camera_move(CameraMoveCommand command);
-    std::vector<CameraMoveCommand> drain_camera_moves();
     void enqueue_camera_viewport_update(CameraViewportUpdateCommand command);
     std::vector<CameraViewportUpdateCommand> drain_camera_viewport_updates();
     void enqueue_default_surface_camera_update(DefaultSurfaceCameraUpdateCommand command);
@@ -800,8 +760,8 @@ class SharedDataHub {
     void set_viewport_ui_calibration(std::uintptr_t camera_handle,
                                      const ViewportUiCalibration& calibration);
     [[nodiscard]] ViewportUiState viewport_ui_state(std::uintptr_t camera_handle) const;
-    void enqueue_viewport_ui_pointer(ViewportUiPointerCommand command);
-    std::vector<ViewportUiPointerCommand> drain_viewport_ui_pointer_commands();
+    void set_viewport_ui_pointer(std::uintptr_t camera_handle, ViewportUiPointerState pointer);
+    void clear_viewport_ui_pointer(std::uintptr_t camera_handle, std::uint64_t owner_context);
     void set_viewport_gizmo_target(ViewportGizmoTarget target);
     void clear_viewport_gizmo_target(std::uintptr_t camera_handle);
     [[nodiscard]] ViewportGizmoState viewport_gizmo_state(
@@ -833,9 +793,6 @@ class SharedDataHub {
     std::vector<ActorPickCompletion> actor_pick_completions_;
     SceneStorage scene_storage_;
     ImageStorage image_storage_;
-    std::mutex camera_move_mutex_;
-    std::unordered_map<std::uintptr_t, CameraMoveCommand> pending_camera_moves_;
-    std::uint64_t camera_move_sequence_{0};
     std::mutex camera_viewport_update_mutex_;
     std::unordered_map<std::uintptr_t, CameraViewportUpdateCommand>
         pending_camera_viewport_updates_;
@@ -885,8 +842,6 @@ class SharedDataHub {
     std::vector<CameraReleaseCommand> pending_camera_releases_;
     mutable std::mutex viewport_ui_mutex_;
     std::unordered_map<std::uintptr_t, ViewportUiState> viewport_ui_states_;
-    std::vector<ViewportUiPointerCommand> pending_viewport_ui_pointer_commands_;
-    std::uint64_t viewport_ui_pointer_sequence_{0};
     mutable std::mutex viewport_gizmo_mutex_;
     std::unordered_map<std::uintptr_t, ViewportGizmoState> viewport_gizmo_states_;
     std::uint64_t viewport_gizmo_sequence_{0};

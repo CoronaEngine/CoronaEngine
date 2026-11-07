@@ -5,7 +5,6 @@
 #include <cef_browser.h>
 #include <cef_render_handler.h>
 #include <wrapper/cef_helpers.h>
-#include <wrapper/cef_message_router.h>
 
 #include <array>
 #include <chrono>
@@ -61,35 +60,6 @@ class OffscreenRenderHandler : public CefRenderHandler {
     std::uint64_t covered_cells_total_ = 0;
     std::uint64_t popup_paints_ = 0;
     std::array<std::uint8_t, 64 * 32> dirty_cells_{};
-};
-
-// ============================================================================
-// JS 请求处理器（处理来自浏览器的 cefQuery 调用）
-// ============================================================================
-
-class BrowserSideJSHandler : public CefMessageRouterBrowserSide::Handler,
-                             public CefBaseRefCounted {
-   public:
-    BrowserSideJSHandler() = default;
-    ~BrowserSideJSHandler() override = default;
-
-    bool OnQuery(CefRefPtr<CefBrowser> browser,
-                 CefRefPtr<CefFrame> frame,
-                 int64_t query_id,
-                 const CefString& request,
-                 bool persistent,
-                 CefRefPtr<Callback> callback) override;
-
-    void OnQueryCanceled(CefRefPtr<CefBrowser> browser,
-                         CefRefPtr<CefFrame> frame,
-                         int64_t query_id) override {
-        CEF_REQUIRE_UI_THREAD();
-        std::cout << "[Browser] Query canceled: " << query_id << std::endl;
-    }
-
-   private:
-    IMPLEMENT_REFCOUNTING(BrowserSideJSHandler);
-    DISALLOW_COPY_AND_ASSIGN(BrowserSideJSHandler);
 };
 
 // ============================================================================
@@ -165,11 +135,6 @@ class OffscreenCefClient : public CefClient,
                                    int error_code,
                                    const CefString& error_string) override;
 
-    bool OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-                                  CefRefPtr<CefFrame> frame,
-                                  CefProcessId source_process,
-                                  CefRefPtr<CefProcessMessage> message) override;
-
     void OnBeforeContextMenu(CefRefPtr<CefBrowser> browser,
                              CefRefPtr<CefFrame> frame,
                              CefRefPtr<CefContextMenuParams> params,
@@ -192,8 +157,6 @@ class OffscreenCefClient : public CefClient,
     bool close_requested_ = false;
     bool browser_closed_ = false;
     CefRefPtr<OffscreenRenderHandler> render_handler_;
-    CefRefPtr<CefMessageRouterBrowserSide> browser_side_router_;
-    BrowserSideJSHandler* js_handler_;
 
     static constexpr int MENU_ID_REFRESH = 1001;
 

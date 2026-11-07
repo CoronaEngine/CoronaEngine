@@ -7,7 +7,7 @@ import sys
 import time
 import uuid
 
-from blockly_actor_file_smoke import wait_for
+from blockly_actor_file_smoke import wait_for, dispatch_script_key
 
 
 def verify(port, project, peer, relative, control):
@@ -41,7 +41,7 @@ def verify(port, project, peer, relative, control):
         result = wait_for(lambda: view("ProjectLauncher.open_project", str(path)),
                           lambda r: r.get("status") != "service_initializing", "open project")
         assert result["ok"], result
-        return view("SceneTools.read_active_scene")["archive_session"]
+        return web.evaluate("corona.scene.readActive()")["archive_session"]
 
     def position():
         snapshot = view("SceneTools.get_scene_snapshot", "scene.ini")
@@ -52,8 +52,8 @@ def verify(port, project, peer, relative, control):
                 for p in root.rglob("*") if p.is_file()}
 
     def tap(code="KeyD"):
-        assert web.evaluate(f"window.coronaBridge.injectInput(0,{json.dumps(code)},'','d')")
-        assert web.evaluate(f"window.coronaBridge.injectInput(1,{json.dumps(code)},'d')")
+        dispatch_script_key(web, 'keyDown', code)
+        dispatch_script_key(web, 'keyUp', code)
 
     wait_for(lambda: web.evaluate("!!document.querySelector('#app[data-v-app] button')"), bool, "editor ready")
     session = open_project(project)

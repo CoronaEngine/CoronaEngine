@@ -29,10 +29,12 @@ set(UI_SYSTEM_SOURCES
     cef/cef_editor_native_api_handlers.cpp
     cef/scene_folder.cpp
     cef/scene_archive_rpc.cpp
-    cef/cef_query_bridge.cpp
-    cef/cef_realtime_bridge.cpp
-    cef/request_response_broker.cpp
+    cef/cef_viewport_gizmo.cpp
+    cef/cef_viewport_pick.cpp
+    cef/cef_script_input.cpp
     cef/cef_renderer_bridge.cpp
+    cef/cef_v8_binding.cpp
+    cef/cef_window_operations.cpp
     cef/cef_runtime.cpp
     cef/cef_py_bind.cpp
     cef/cef_osr_mode.cpp
@@ -48,8 +50,10 @@ set(UI_SYSTEM_SOURCES
     cef/browser_manager.h
     cef/browser_ui.h
     cef/cef_app.h
-    cef/cef_bridge_helpers.h
-    cef/request_response_broker.h
+    cef/cef_viewport_pick.h
+    cef/cef_viewport_gizmo.h
+    cef/cef_editor_native_api_handlers.h
+    cef/cef_script_input.h
     cef/cef_client.h
     cef/cef_editor_native_api_registry.h
     cef/cef_editor_native_api_test_support.h

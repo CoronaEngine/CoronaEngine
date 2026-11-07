@@ -28,12 +28,6 @@ void require(bool condition, std::string_view message) {
     std::exit(1);
 }
 
-void test_message_router_config() {
-    const auto config = Corona::Systems::UI::make_cef_message_router_config();
-    require(config.js_query_function == "cefQuery", "unexpected query function");
-    require(config.js_cancel_function == "cefQueryCancel", "unexpected cancel function");
-}
-
 // Switches this app appends. `allow-file-access` and `disable-web-security` used to sit here;
 // both were removed deliberately (see expect_exact_switch_set and the P0-2 record in
 // docs/development/cef-ui-risk-optimization-tasks.md).
@@ -65,7 +59,7 @@ void expect_common_switches(CefRefPtr<CefCommandLine> command_line) {
 // Pins the *exact* set of Chromium switches we append, so neither an accidental addition nor an
 // accidental removal can slip through unnoticed. `disable-web-security` in particular must never
 // come back without a deliberate, documented reason: it disables the same-origin policy outright,
-// and the app does not need it (all native calls go through the cefQuery manifest contract).
+// and the app does not need it because native calls use the typed V8 binding.
 void expect_exact_switch_set(CefRefPtr<CefCommandLine> command_line, bool gpu_enabled,
                             bool browser_process = false) {
     std::set<std::string> expected;
@@ -370,7 +364,6 @@ int main(int argc, char* argv[]) {
         return run_cef_lifecycle_test(has_argument("--close-before-created"));
     }
     test_popup_wiring();
-    test_message_router_config();
     test_cpp_single_process_policy();
     test_app_contract();
     test_windowless_frame_rate_resolution();

@@ -205,33 +205,6 @@ std::optional<CameraFrameTiming> SharedDataHub::camera_frame_timing(
     return it == camera_timings_.end() ? std::nullopt : std::optional{it->second};
 }
 
-void SharedDataHub::enqueue_camera_move(CameraMoveCommand command) {
-    if (command.camera_handle == 0) {
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(camera_move_mutex_);
-    command.sequence = ++camera_move_sequence_;
-    pending_camera_moves_[command.camera_handle] = command;
-}
-
-std::vector<CameraMoveCommand> SharedDataHub::drain_camera_moves() {
-    std::vector<CameraMoveCommand> moves;
-    {
-        std::lock_guard<std::mutex> lock(camera_move_mutex_);
-        moves.reserve(pending_camera_moves_.size());
-        for (auto& [_, command] : pending_camera_moves_) {
-            moves.push_back(command);
-        }
-        pending_camera_moves_.clear();
-    }
-
-    std::sort(moves.begin(), moves.end(), [](const auto& lhs, const auto& rhs) {
-        return lhs.sequence < rhs.sequence;
-    });
-    return moves;
-}
-
 void SharedDataHub::enqueue_camera_viewport_update(CameraViewportUpdateCommand command) {
     if (command.camera_handle == 0) {
         return;
@@ -537,6 +510,10 @@ void SharedDataHub::enqueue_camera_release(CameraReleaseCommand command) {
     }
 
     clear_camera_state_updates(command.camera_handle);
+    {
+        std::lock_guard lock(viewport_ui_mutex_);
+        viewport_ui_states_.erase(command.camera_handle);
+    }
     std::lock_guard<std::mutex> lock(camera_release_mutex_);
     pending_camera_releases_.push_back(command);
 }
@@ -588,23 +565,19 @@ ViewportUiState SharedDataHub::viewport_ui_state(std::uintptr_t camera_handle) c
     return state;
 }
 
-void SharedDataHub::enqueue_viewport_ui_pointer(ViewportUiPointerCommand command) {
-    if (command.camera_handle == 0) {
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(viewport_ui_mutex_);
-    command.sequence = ++viewport_ui_pointer_sequence_;
-    pending_viewport_ui_pointer_commands_.push_back(std::move(command));
+void SharedDataHub::set_viewport_ui_pointer(std::uintptr_t camera_handle, ViewportUiPointerState pointer) {
+    if (!camera_handle) return;
+    std::lock_guard lock(viewport_ui_mutex_);
+    auto& state = viewport_ui_states_[camera_handle];
+    state.camera_handle = camera_handle;
+    state.pointer = pointer;
 }
 
-std::vector<ViewportUiPointerCommand> SharedDataHub::drain_viewport_ui_pointer_commands() {
-    std::vector<ViewportUiPointerCommand> commands;
-    {
-        std::lock_guard<std::mutex> lock(viewport_ui_mutex_);
-        commands.swap(pending_viewport_ui_pointer_commands_);
-    }
-    return commands;
+void SharedDataHub::clear_viewport_ui_pointer(std::uintptr_t camera_handle, std::uint64_t owner_context) {
+    std::lock_guard lock(viewport_ui_mutex_);
+    const auto state = viewport_ui_states_.find(camera_handle);
+    if (state != viewport_ui_states_.end() && state->second.pointer.owner_context == owner_context)
+        state->second.pointer = {};
 }
 
 void SharedDataHub::set_viewport_gizmo_target(ViewportGizmoTarget target) {
