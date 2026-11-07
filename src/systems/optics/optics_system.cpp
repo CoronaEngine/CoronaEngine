@@ -825,6 +825,47 @@ void apply_pending_camera_state_updates() {
     }
 }
 
+void apply_pending_camera_moves() {
+    auto& hub = Corona::SharedDataHub::instance();
+    auto moves = hub.drain_camera_moves();
+    if (moves.empty()) {
+        return;
+    }
+
+    auto& camera_storage = hub.camera_storage();
+    for (const auto& move : moves) {
+        if (auto camera = camera_storage.try_acquire_write(move.camera_handle)) {
+            camera->position = move.position;
+            camera->forward = move.forward;
+            camera->world_up = move.world_up;
+            camera->fov = move.fov;
+        }
+    }
+}
+
+void apply_pending_transform_updates() {
+    auto& hub = Corona::SharedDataHub::instance();
+    auto updates = hub.drain_transform_updates();
+    if (updates.empty()) {
+        return;
+    }
+
+    auto& transform_storage = hub.model_transform_storage();
+    for (const auto& update : updates) {
+        if (auto transform = transform_storage.try_acquire_write(update.transform_handle)) {
+            if (Corona::has_transform_field(update.fields, Corona::TransformField::Position)) {
+                transform->position = update.position;
+            }
+            if (Corona::has_transform_field(update.fields, Corona::TransformField::Rotation)) {
+                transform->euler_rotation = update.euler_rotation;
+            }
+            if (Corona::has_transform_field(update.fields, Corona::TransformField::Scale)) {
+                transform->scale = update.scale;
+            }
+        }
+    }
+}
+
 void apply_pending_camera_releases() {
     auto& hub = Corona::SharedDataHub::instance();
     for (const auto& release : hub.drain_camera_releases()) {
@@ -3267,6 +3308,8 @@ void OpticsSystem::update() {
     apply_pending_default_surface_camera_update();
     apply_pending_camera_viewport_updates();
     apply_pending_camera_state_updates();
+    apply_pending_camera_moves();
+    apply_pending_transform_updates();
     apply_pending_camera_releases();
 
     // �ӳٻ�ȡ GeometrySystem ָ�루������ initialize() �л�ȡ����������
