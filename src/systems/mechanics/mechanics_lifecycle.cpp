@@ -1,6 +1,7 @@
 #include <horizon/core/logging.h>
 #include <corona/diagnostics/thread_phase.h>
 #include <corona/systems/geometry/geometry_system.h>
+#include <corona/systems/mechanics/mechanics_commands.h>
 #include <corona/systems/mechanics/mechanics_system.h>
 
 #include <algorithm>
@@ -239,10 +240,51 @@ bool MechanicsSystem::initialize(Kernel::ISystemContext* ctx) {
     return true;
 }
 
+namespace {
+
+/// 应用入站力学参数命令（P3）。
+/// 单写者入口：只在 DAG tick 的开头执行一次，顺序由 CommandBuffer 的单调序列决定，
+/// 同一个 mechanics_handle 的连续命令已在入队侧合并成最后一条。
+void apply_pending_mechanics_updates() {
+    auto& channel = Corona::MechanicsCommandChannel::instance();
+    auto commands = channel.commands().drain();
+    if (commands.empty()) {
+        return;
+    }
+
+    auto& storage = Corona::SharedDataHub::instance().mechanics_storage();
+    for (const auto& command : commands) {
+        if (auto device = storage.try_acquire_write(command.mechanics_handle)) {
+            if (Corona::has_mechanics_field(command.fields, Corona::MechanicsField::Mass)) {
+                device->mass = command.mass;
+            }
+            if (Corona::has_mechanics_field(command.fields, Corona::MechanicsField::Restitution)) {
+                device->restitution = command.restitution;
+            }
+            if (Corona::has_mechanics_field(command.fields, Corona::MechanicsField::Damping)) {
+                device->damping = command.damping;
+            }
+            if (Corona::has_mechanics_field(command.fields, Corona::MechanicsField::BodyType)) {
+                device->body_type = command.body_type;
+            }
+            if (Corona::has_mechanics_field(command.fields, Corona::MechanicsField::LinearLock)) {
+                device->linear_lock_mask = command.linear_lock_mask;
+            }
+            if (Corona::has_mechanics_field(command.fields, Corona::MechanicsField::AngularLock)) {
+                device->angular_lock_mask = command.angular_lock_mask;
+            }
+        }
+    }
+}
+
+}  // namespace
+
 void MechanicsSystem::update() {
     if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
         return;
     }
+    // tick 边界：先把外部提交的力学参数落到槽位，再跑本帧的蒙皮与物理。
+    apply_pending_mechanics_updates();
     // Stage marker: this loop holds Scene read handles for the whole skinning pass
     // (frame_scenes) and blocks on scene/geometry slot locks, so a stall here also
     // stalls every writer that wants the same Scene entry.

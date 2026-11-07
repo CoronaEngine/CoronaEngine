@@ -8,6 +8,7 @@
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
 #include <corona/shared_data_hub.h>
+#include <corona/systems/mechanics/mechanics_commands.h>
 #include <corona/engine/engine_runtime_api.h>
 #include <corona/systems/script/camera_follow_controller.h>
 #include <corona/systems/geometry/geometry_system.h>
@@ -1509,118 +1510,137 @@ void Corona::API::Mechanics::set_mass(float mass) {
         CFW_LOG_WARNING("[Mechanics::set_mass] Invalid mechanics handle");
         return;
     }
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().acquire_write(handle_)) {
-        accessor->mass = mass;
-    }
+    // 走命令队列（P3）：外部线程不再直接写 Mechanics 槽位，由 Mechanics 在 tick 开头应用。
+    MechanicsUpdateCommand command{};
+    command.mechanics_handle = handle_;
+    command.fields = MechanicsField::Mass;
+    command.mass = mass;
+    MechanicsCommandChannel::instance().commands().push(command);
 }
+
 
 float Corona::API::Mechanics::get_mass() const {
     if (handle_ == 0) return 1.0f;
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().try_acquire_read(handle_)) {
-        return accessor->mass;
-    }
+    if (const auto view = Corona::mechanics_view(handle_)) return view->mass;
     return 1.0f;
 }
+
 
 void Corona::API::Mechanics::set_restitution(float restitution) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Mechanics::set_restitution] Invalid mechanics handle");
         return;
     }
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().acquire_write(handle_)) {
-        accessor->restitution = restitution;
-    }
+    MechanicsUpdateCommand command{};
+    command.mechanics_handle = handle_;
+    command.fields = MechanicsField::Restitution;
+    command.restitution = restitution;
+    MechanicsCommandChannel::instance().commands().push(command);
 }
+
 
 float Corona::API::Mechanics::get_restitution() const {
     if (handle_ == 0) return 0.8f;
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().try_acquire_read(handle_)) {
-        return accessor->restitution;
-    }
+    if (const auto view = Corona::mechanics_view(handle_)) return view->restitution;
     return 0.8f;
 }
+
 
 void Corona::API::Mechanics::set_damping(float damping) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Mechanics::set_damping] Invalid mechanics handle");
         return;
     }
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().acquire_write(handle_)) {
-        accessor->damping = damping;
-    }
+    MechanicsUpdateCommand command{};
+    command.mechanics_handle = handle_;
+    command.fields = MechanicsField::Damping;
+    command.damping = damping;
+    MechanicsCommandChannel::instance().commands().push(command);
 }
+
 
 float Corona::API::Mechanics::get_damping() const {
     if (handle_ == 0) return 0.99f;
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().try_acquire_read(handle_)) {
-        return accessor->damping;
-    }
+    if (const auto view = Corona::mechanics_view(handle_)) return view->damping;
     return 0.99f;
 }
+
 
 void Corona::API::Mechanics::set_body_type(std::string_view type) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Mechanics::set_body_type] Invalid mechanics handle");
         return;
     }
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().acquire_write(handle_)) {
-        accessor->body_type = body_type_from_string(type);
-    }
+    MechanicsUpdateCommand command{};
+    command.mechanics_handle = handle_;
+    command.fields = MechanicsField::BodyType;
+    command.body_type = body_type_from_string(type);
+    MechanicsCommandChannel::instance().commands().push(command);
 }
+
 
 std::string Corona::API::Mechanics::get_body_type() const {
     if (handle_ == 0) return "dynamic";
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().try_acquire_read(handle_)) {
-        return std::string(body_type_to_string(accessor->body_type));
+    if (const auto view = Corona::mechanics_view(handle_)) {
+        return std::string(body_type_to_string(view->body_type));
     }
     return "dynamic";
 }
+
 
 void Corona::API::Mechanics::set_linear_lock(bool lock_x, bool lock_y, bool lock_z) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Mechanics::set_linear_lock] Invalid mechanics handle");
         return;
     }
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().acquire_write(handle_)) {
-        uint8_t mask = 0;
-        if (lock_x) mask |= 0b001;
-        if (lock_y) mask |= 0b010;
-        if (lock_z) mask |= 0b100;
-        accessor->linear_lock_mask = mask;
-    }
+    MechanicsUpdateCommand command{};
+    command.mechanics_handle = handle_;
+    command.fields = MechanicsField::LinearLock;
+    std::uint8_t mask = 0;
+    if (lock_x) mask |= 0b001;
+    if (lock_y) mask |= 0b010;
+    if (lock_z) mask |= 0b100;
+    command.linear_lock_mask = mask;
+    MechanicsCommandChannel::instance().commands().push(command);
 }
+
 
 std::tuple<bool, bool, bool> Corona::API::Mechanics::get_linear_lock() const {
     if (handle_ == 0) return {false, false, false};
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().try_acquire_read(handle_)) {
-        uint8_t mask = accessor->linear_lock_mask;
+    if (const auto view = Corona::mechanics_view(handle_)) {
+        const std::uint8_t mask = view->linear_lock_mask;
         return {(mask & 0b001) != 0, (mask & 0b010) != 0, (mask & 0b100) != 0};
     }
     return {false, false, false};
 }
+
 
 void Corona::API::Mechanics::set_angular_lock(bool lock_x, bool lock_y, bool lock_z) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Mechanics::set_angular_lock] Invalid mechanics handle");
         return;
     }
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().acquire_write(handle_)) {
-        uint8_t mask = 0;
-        if (lock_x) mask |= 0b001;
-        if (lock_y) mask |= 0b010;
-        if (lock_z) mask |= 0b100;
-        accessor->angular_lock_mask = mask;
-    }
+    MechanicsUpdateCommand command{};
+    command.mechanics_handle = handle_;
+    command.fields = MechanicsField::AngularLock;
+    std::uint8_t mask = 0;
+    if (lock_x) mask |= 0b001;
+    if (lock_y) mask |= 0b010;
+    if (lock_z) mask |= 0b100;
+    command.angular_lock_mask = mask;
+    MechanicsCommandChannel::instance().commands().push(command);
 }
+
 
 std::tuple<bool, bool, bool> Corona::API::Mechanics::get_angular_lock() const {
     if (handle_ == 0) return {false, false, false};
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().try_acquire_read(handle_)) {
-        uint8_t mask = accessor->angular_lock_mask;
+    if (const auto view = Corona::mechanics_view(handle_)) {
+        const std::uint8_t mask = view->angular_lock_mask;
         return {(mask & 0b001) != 0, (mask & 0b010) != 0, (mask & 0b100) != 0};
     }
     return {false, false, false};
 }
+
 
 void Corona::API::Mechanics::set_collision_callback(
     std::function<void(std::uintptr_t, bool, const std::array<float, 3>&, const std::array<float, 3>&)> callback) {

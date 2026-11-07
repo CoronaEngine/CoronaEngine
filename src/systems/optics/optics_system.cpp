@@ -15,6 +15,7 @@
 #include <corona/shared_data_hub.h>
 #include <corona/systems/geometry/geometry_system.h>
 #include <corona/systems/geometry/native_render_load_guard.h>
+#include <corona/systems/mechanics/mechanics_commands.h>
 #include <corona/systems/optics/optics_system.h>
 
 #include "shadow_culling.h"
@@ -3277,6 +3278,9 @@ void OpticsSystem::update() {
     // 覆盖了本 tick 的全部写入者。
     apply_pending_transform_updates();
     SharedDataHub::instance().publish_transform_snapshot_from_storage();
+
+    // Mechanics 在本 tick 更早的位置已完成写入，这里把它的对外投影一并发布。
+    Corona::publish_mechanics_snapshot_from_storage();
 
     // �ӳٻ�ȡ GeometrySystem ָ�루������ initialize() �л�ȡ����������
     // initialize_all() ��������ϵͳ��get_system() Ҳ��ͬ�� �� �ǵݹ� mutex �������

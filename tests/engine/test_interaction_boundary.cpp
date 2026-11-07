@@ -11,6 +11,7 @@
  */
 
 #include <corona/shared_data_hub.h>
+#include <corona/systems/mechanics/mechanics_commands.h>
 
 #include <cstdio>
 #include <cstdint>
@@ -186,6 +187,66 @@ void test_transform_command_and_snapshot() {
     hub.model_transform_storage().deallocate(handle);
 }
 
+void test_mechanics_command_and_snapshot() {
+    auto& hub = SharedDataHub::instance();
+    auto& channel = Corona::MechanicsCommandChannel::instance();
+    channel.commands().clear();
+
+    const auto handle = hub.mechanics_storage().allocate();
+    CHECK(handle != 0);
+    {
+        auto device = hub.mechanics_storage().acquire_write(handle);
+        device->mass = 3.0f;
+        device->restitution = 0.5f;
+    }
+
+    CHECK(!Corona::mechanics_row(handle).has_value());
+
+    Corona::publish_mechanics_snapshot_from_storage();
+    CHECK(Corona::mechanics_row(handle).has_value());
+    CHECK(Corona::mechanics_row(handle)->mass == 3.0f);
+    CHECK(Corona::mechanics_row(handle)->restitution == 0.5f);
+
+    // 命令：pending 立刻可见，已提交值不变
+    Corona::MechanicsUpdateCommand command{};
+    command.mechanics_handle = handle;
+    command.fields = Corona::MechanicsField::Mass | Corona::MechanicsField::BodyType;
+    command.mass = 7.5f;
+    command.body_type = Corona::BodyType::Static;
+    channel.commands().push(command);
+
+    CHECK(Corona::mechanics_view(handle)->mass == 7.5f);
+    CHECK(Corona::mechanics_view(handle)->body_type == Corona::BodyType::Static);
+    CHECK(Corona::mechanics_row(handle)->mass == 3.0f);
+    CHECK(Corona::mechanics_row(handle)->body_type == Corona::BodyType::Dynamic);
+
+    // LatestWins：同 handle 再推一条，合并成最后一条
+    command.mass = 8.5f;
+    channel.commands().push(command);
+    const auto drained = channel.commands().drain();
+    CHECK(drained.size() == 1);
+    CHECK(drained[0].mass == 8.5f);
+    CHECK(Corona::has_mechanics_field(drained[0].fields, Corona::MechanicsField::BodyType));
+
+    // 模拟 Mechanics 应用后再发布：pending 视图与已提交值收敛
+    for (const auto& incoming : drained) {
+        if (auto device = hub.mechanics_storage().try_acquire_write(incoming.mechanics_handle)) {
+            if (Corona::has_mechanics_field(incoming.fields, Corona::MechanicsField::Mass)) {
+                device->mass = incoming.mass;
+            }
+            if (Corona::has_mechanics_field(incoming.fields, Corona::MechanicsField::BodyType)) {
+                device->body_type = incoming.body_type;
+            }
+        }
+    }
+    Corona::publish_mechanics_snapshot_from_storage();
+    CHECK(Corona::mechanics_view(handle)->mass == 8.5f);
+    CHECK(Corona::mechanics_row(handle)->mass == 8.5f);
+
+    channel.commands().clear();
+    hub.mechanics_storage().deallocate(handle);
+}
+
 }  // namespace
 
 int main() {
@@ -194,6 +255,7 @@ int main() {
     test_camera_pending_overlay();
     test_camera_move_coalescing();
     test_transform_command_and_snapshot();
+    test_mechanics_command_and_snapshot();
 
     if (g_failures == 0) {
         std::printf("OK: %d checks passed\n", g_checks);
