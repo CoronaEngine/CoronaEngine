@@ -6,3 +6,7 @@ add_executable(corona_interaction_boundary_tests
 target_link_libraries(corona_interaction_boundary_tests PRIVATE CoronaEngine)
 add_test(NAME InteractionBoundaryTests
          COMMAND corona_interaction_boundary_tests)
+
+add_executable(corona_optics_command_tests test_optics_commands.cpp)
+target_link_libraries(corona_optics_command_tests PRIVATE CoronaEngine)
+add_test(NAME OpticsCommandTests COMMAND corona_optics_command_tests)

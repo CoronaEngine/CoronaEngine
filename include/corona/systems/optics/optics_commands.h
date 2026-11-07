@@ -2,8 +2,8 @@
 
 /// Optics 的跨线程交互边界（P3：写走命令，读走快照）。
 ///
-/// 只覆盖**标量**材质/可见性参数：`material_overrides` / `principled` 是
-/// shared_ptr 换绑，属于结构变更，走 P4 的结构命令通道。
+/// 标量、可见性与不可变材质载荷按字段合并，由 Optics 消费线程统一应用。
+/// `material_overrides` / `principled` 的换绑携带 geometry_handle 归属守卫。
 ///
 /// 通道放在领域自己的头里（理由见 mechanics_commands.h）：不进 shared_data_hub.h，
 /// 避免每加一个命令类型就让全仓 600 个 TU 重编。
@@ -55,7 +55,8 @@ constexpr bool has_optics_field(OpticsField fields, OpticsField field) {
 
 struct OpticsUpdateCommand {
     std::uintptr_t optics_handle{};
-    /// 非 0 时作为守卫：只有 optics 设备的 geometry_handle 匹配才应用。
+    /// 非 0 时作为材质守卫：只有 optics 设备的 geometry_handle 匹配才应用材质。
+    /// 标量与可见性更新不受此守卫影响。
     /// 编辑器按 profile 找到 optics 设备后，会用它确认"这份材质属于当前几何"。
     std::uintptr_t geometry_handle{};
     std::shared_ptr<const Materials::Overrides> material_overrides;
@@ -83,7 +84,70 @@ struct OpticsUpdateKey {
     static std::uintptr_t get(const OpticsUpdateCommand& command) noexcept {
         return command.optics_handle;
     }
+
+    static void merge(OpticsUpdateCommand& pending, const OpticsUpdateCommand& next) noexcept {
+        if (has_optics_field(next.fields, OpticsField::Visible)) pending.visible = next.visible;
+        if (has_optics_field(next.fields, OpticsField::EnableLighting)) pending.enable_lighting = next.enable_lighting;
+        if (has_optics_field(next.fields, OpticsField::Metallic)) pending.metallic = next.metallic;
+        if (has_optics_field(next.fields, OpticsField::Roughness)) pending.roughness = next.roughness;
+        if (has_optics_field(next.fields, OpticsField::Subsurface)) pending.subsurface = next.subsurface;
+        if (has_optics_field(next.fields, OpticsField::Specular)) pending.specular = next.specular;
+        if (has_optics_field(next.fields, OpticsField::SpecularTint)) pending.specular_tint = next.specular_tint;
+        if (has_optics_field(next.fields, OpticsField::Anisotropic)) pending.anisotropic = next.anisotropic;
+        if (has_optics_field(next.fields, OpticsField::Sheen)) pending.sheen = next.sheen;
+        if (has_optics_field(next.fields, OpticsField::SheenTint)) pending.sheen_tint = next.sheen_tint;
+        if (has_optics_field(next.fields, OpticsField::Clearcoat)) pending.clearcoat = next.clearcoat;
+        if (has_optics_field(next.fields, OpticsField::ClearcoatGloss)) pending.clearcoat_gloss = next.clearcoat_gloss;
+        if (has_optics_field(next.fields, OpticsField::Ambient)) pending.ambient = next.ambient;
+        if (has_optics_field(next.fields, OpticsField::Diffuse)) pending.diffuse = next.diffuse;
+        if (has_optics_field(next.fields, OpticsField::SpecularColor)) pending.specular_color = next.specular_color;
+        if (has_optics_field(next.fields, OpticsField::Shininess)) pending.shininess = next.shininess;
+
+        constexpr auto material_fields = OpticsField::MaterialOverrides | OpticsField::Principled;
+        if (has_optics_field(next.fields, material_fields)) {
+            // Both material payloads share one geometry guard. A new owner must
+            // not relabel a retained payload from the previous geometry.
+            if (pending.geometry_handle != next.geometry_handle) {
+                pending.fields = static_cast<OpticsField>(
+                    static_cast<std::uint32_t>(pending.fields) &
+                    ~static_cast<std::uint32_t>(material_fields));
+                pending.material_overrides.reset();
+                pending.principled.reset();
+            }
+            pending.geometry_handle = next.geometry_handle;
+            // A flagged null payload explicitly clears the existing material.
+            if (has_optics_field(next.fields, OpticsField::MaterialOverrides))
+                pending.material_overrides = next.material_overrides;
+            if (has_optics_field(next.fields, OpticsField::Principled))
+                pending.principled = next.principled;
+        }
+        pending.fields = pending.fields | next.fields;
+    }
 };
+
+/// Apply a drained update while the caller owns the device's write access.
+inline void apply_optics_update(OpticsDevice& device, const OpticsUpdateCommand& command) {
+    const auto fields = command.fields;
+    if (has_optics_field(fields, OpticsField::Visible)) device.visible = command.visible;
+    if (has_optics_field(fields, OpticsField::EnableLighting)) device.bEnableLighting = command.enable_lighting;
+    if (has_optics_field(fields, OpticsField::Metallic)) device.metallic = command.metallic;
+    if (has_optics_field(fields, OpticsField::Roughness)) device.roughness = command.roughness;
+    if (has_optics_field(fields, OpticsField::Subsurface)) device.subsurface = command.subsurface;
+    if (has_optics_field(fields, OpticsField::Specular)) device.specular = command.specular;
+    if (has_optics_field(fields, OpticsField::SpecularTint)) device.specularTint = command.specular_tint;
+    if (has_optics_field(fields, OpticsField::Anisotropic)) device.anisotropic = command.anisotropic;
+    if (has_optics_field(fields, OpticsField::Sheen)) device.sheen = command.sheen;
+    if (has_optics_field(fields, OpticsField::SheenTint)) device.sheenTint = command.sheen_tint;
+    if (has_optics_field(fields, OpticsField::Clearcoat)) device.clearcoat = command.clearcoat;
+    if (has_optics_field(fields, OpticsField::ClearcoatGloss)) device.clearcoatGloss = command.clearcoat_gloss;
+    if (has_optics_field(fields, OpticsField::Ambient)) device.ambient = command.ambient;
+    if (has_optics_field(fields, OpticsField::Diffuse)) device.diffuse = command.diffuse;
+    if (has_optics_field(fields, OpticsField::SpecularColor)) device.specular_color = command.specular_color;
+    if (has_optics_field(fields, OpticsField::Shininess)) device.shininess = command.shininess;
+    if (command.geometry_handle != 0 && device.geometry_handle != command.geometry_handle) return;
+    if (has_optics_field(fields, OpticsField::MaterialOverrides)) device.material_overrides = command.material_overrides;
+    if (has_optics_field(fields, OpticsField::Principled)) device.principled = command.principled;
+}
 
 /// 对外投影：标量材质参数 + 可见性（材质句柄不进来）
 struct OpticsSnapshotRow {

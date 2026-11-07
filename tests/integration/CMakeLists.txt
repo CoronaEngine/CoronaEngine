@@ -118,7 +118,8 @@ target_link_libraries(corona_vision_engine_scene_tests PRIVATE
 add_test(NAME VisionEngineSceneTests COMMAND corona_vision_engine_scene_tests)
 add_test(NAME VisionCameraSettingsTests COMMAND corona_vision_engine_scene_tests --cpu-only)
 add_test(NAME VisionSharedDisplayTests COMMAND corona_vision_engine_scene_tests --shared-display)
-set_tests_properties(VisionCameraSettingsTests VisionSharedDisplayTests PROPERTIES
+add_test(NAME VisionImportedEmissionTests COMMAND corona_vision_engine_scene_tests --imported-emission)
+set_tests_properties(VisionCameraSettingsTests VisionSharedDisplayTests VisionImportedEmissionTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
     RUN_SERIAL TRUE TIMEOUT 300)
 set_tests_properties(VisionEngineSceneTests PROPERTIES

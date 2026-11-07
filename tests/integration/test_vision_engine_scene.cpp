@@ -1,13 +1,16 @@
 #include <corona/systems/optics/optics_system.h>
+#include <corona/systems/optics/optics_commands.h>
 #include <corona/engine/engine_runtime_api.h>
 #include "base/mgr/global.h"
 #include "base/mgr/pipeline.h"
 #include "base/mgr/switch_profile.h"
 #include "base/scattering/material.h"
+#include "base/illumination/light.h"
 #include "base/sensor/sensor.h"
 #include "vision/vision_camera_adapter.h"
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
+#include <nlohmann/json.hpp>
 #include "vision/vision_zero_copy_bridge.h"
 #include <filesystem>
 #include <fstream>
@@ -1197,7 +1200,7 @@ struct VisionEngineSceneTest {
         std::cout << "PASS: Vulkan shared display, reuse, resize, failure latch and recreation\n";
     }
 
-    static void run(bool shared_display_only = false) {
+    static void run(bool shared_display_only = false, bool imported_emission_only = false) {
         namespace fs = std::filesystem;
         const auto base = fs::current_path() / "engine-scene-test-assets";
         fs::create_directories(base);
@@ -1226,6 +1229,37 @@ struct VisionEngineSceneTest {
         { auto w = hub.actor_storage().acquire_write(actor); w->profile_handles = {profile}; }
         { auto w = hub.environment_storage().acquire_write(environment); w->sun_intensity = 0; w->sky_intensity = 1; }
         { auto w = hub.scene_storage().acquire_write(scene); w->actor_handles = {actor}; w->environment = environment; }
+        if (imported_emission_only) {
+            // Both external importers publish emission through Principled,
+            // then materialization queues visibility for the same optics.
+            auto material = std::make_shared<Materials::Principled>();
+            material->surface.emissive = {2.f, 2.f, 2.f};
+            material->emission_two_sided = true;
+            material->expressions = std::make_shared<const nlohmann::json>(nlohmann::json{
+                {"base_color", {0.f, 0.f, 0.f}}, {"emission", {2.f, 2.f, 2.f}},
+                {"roughness", 1.f}, {"specular", 0.f}, {"two_sided", true}});
+            OpticsUpdateCommand appearance;
+            appearance.optics_handle = optics;
+            appearance.geometry_handle = geometry;
+            appearance.fields = OpticsField::Principled | OpticsField::MaterialOverrides;
+            appearance.principled = material;
+            appearance.material_overrides = std::make_shared<const Materials::Overrides>();
+            OpticsUpdateCommand visible;
+            visible.optics_handle = optics;
+            visible.fields = OpticsField::Visible;
+            visible.visible = true;
+            OpticsCommandChannel::Buffer queue;
+            queue.push(appearance);
+            queue.push(visible);
+            for (const auto& update : queue.drain()) {
+                auto w = hub.optics_storage().acquire_write(update.optics_handle);
+                apply_optics_update(*w, update);
+            }
+            auto env = hub.environment_storage().acquire_write(environment);
+            env->sky_intensity = 0.f;
+            env->authored_lighting = std::make_shared<const nlohmann::json>(nlohmann::json{
+                {"directionals", nlohmann::json::array()}, {"environments", nlohmann::json::array()}});
+        }
         {
             OpticsSystem system;
             expect(system.load_engine_built_vision_scene(CameraVisionRenderMode::PathTracing), "Corona scene must initialize PT");
@@ -1235,7 +1269,18 @@ struct VisionEngineSceneTest {
             camera.width = 16; camera.height = 16; camera.position = {0,0,-3}; camera.forward = {0,0,1}; camera.world_up = {0,1,0};
             Vision::sync_vision_camera(*pt, camera);
             render(*pt, "Corona-PT");
-            if (shared_display_only) {
+            if (imported_emission_only) {
+                unsigned area_lights = 0;
+                for (const auto& light : pt->scene().light_manager().lights()) {
+                    if (light->match(vision::LightType::Area)) ++area_lights;
+                }
+                expect(area_lights == 1, "imported emission must create a Vision area light after visibility coalescing");
+                system.apply_vision_render_mode(CameraVisionRenderMode::ReSTIR);
+                auto restir = vision::Global::instance().pipeline_shared();
+                Vision::sync_vision_camera(*restir, camera);
+                render(*restir, "Imported-emission-ReSTIR");
+                std::cout << "PASS: imported emission survives visibility and lights PT/ReSTIR without a sky\n";
+            } else if (shared_display_only) {
                 check_shared_display(*pt);
             } else {
                 check_pt_settings(system, *pt);
@@ -1271,7 +1316,7 @@ struct VisionEngineSceneTest {
         hub.geometry_storage().deallocate(geometry);
         hub.model_transform_storage().deallocate(transform);
         hub.model_resource_storage().deallocate(model);
-        if (!shared_display_only) {
+        if (!shared_display_only && !imported_emission_only) {
             // Exercise the embedded base fallback after removing the fixture's
             // geometry/environment, so its deterministic output is black.
             vision::Global::instance().set_device(&device);
@@ -1295,6 +1340,12 @@ int main(int argc, char** argv) {
         }
     } runtime_cleanup;
     try {
+        // Keep the imported-material regression independent of the camera API
+        // contract suite; its fixture supplies the camera directly.
+        if (argc == 2 && std::string(argv[1]) == "--imported-emission") {
+            Corona::Systems::VisionEngineSceneTest::run(false, true);
+            return 0;
+        }
         Corona::Systems::VisionEngineSceneTest::check_mode_api();
         Corona::Systems::VisionEngineSceneTest::check_accumulation_api();
         Corona::Systems::VisionEngineSceneTest::check_stable_planes_api();

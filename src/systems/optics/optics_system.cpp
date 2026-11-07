@@ -3243,65 +3243,7 @@ void apply_pending_optics_updates() {
         if (!device) {
             continue;
         }
-        const auto fields = command.fields;
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Visible)) {
-            device->visible = command.visible;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::EnableLighting)) {
-            device->bEnableLighting = command.enable_lighting;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Metallic)) {
-            device->metallic = command.metallic;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Roughness)) {
-            device->roughness = command.roughness;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Subsurface)) {
-            device->subsurface = command.subsurface;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Specular)) {
-            device->specular = command.specular;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::SpecularTint)) {
-            device->specularTint = command.specular_tint;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Anisotropic)) {
-            device->anisotropic = command.anisotropic;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Sheen)) {
-            device->sheen = command.sheen;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::SheenTint)) {
-            device->sheenTint = command.sheen_tint;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Clearcoat)) {
-            device->clearcoat = command.clearcoat;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::ClearcoatGloss)) {
-            device->clearcoatGloss = command.clearcoat_gloss;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Ambient)) {
-            device->ambient = command.ambient;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Diffuse)) {
-            device->diffuse = command.diffuse;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::SpecularColor)) {
-            device->specular_color = command.specular_color;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Shininess)) {
-            device->shininess = command.shininess;
-        }
-        // 编辑器会带上 geometry_handle 作为归属守卫：材质只应用到同一几何的 optics 设备上。
-        if (command.geometry_handle != 0 && device->geometry_handle != command.geometry_handle) {
-            continue;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::MaterialOverrides)) {
-            device->material_overrides = command.material_overrides;
-        }
-        if (Corona::has_optics_field(fields, Corona::OpticsField::Principled)) {
-            device->principled = command.principled;
-        }
+        Corona::apply_optics_update(*device, command);
     }
 }
 
