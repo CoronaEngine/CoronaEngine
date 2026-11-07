@@ -688,3 +688,15 @@ def test_unused_network_events_keep_only_non_web_permissions_and_aliases():
     for line in events:
         assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line, line
         assert ', "", "events.on_network_' in line, line
+
+
+def test_application_exit_is_named_and_keeps_non_web_contract():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8')
+    line = next(line for line in manifest.splitlines() if '(CoronaEditor, close_process,' in line)
+    assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
+    assert ', "", "app.close_process"' in line
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
+    assert 'app->SetValue("closeProcess"' in binding
+    owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8')
+    assert 'request_application_exit()' in owner

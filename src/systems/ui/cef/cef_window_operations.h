@@ -8,7 +8,8 @@ namespace Corona::Systems::UI {
 
 enum class WindowMethod { GetCurrent, SetDragRegions, Close, CloseTab, FocusTab, CreatePanel, DetachPanel, RedockPanel,
                           SuspendCameraViews, CloseCameraView, ToggleCameraMaximized, CycleCameraWindowMode,
-                          ToggleCameraBorderless, ResizeCameraView, ToggleMainBorderless, CreateCameraView, ConfigureViewport };
+                          ToggleCameraBorderless, ResizeCameraView, ToggleMainBorderless, CreateCameraView, ConfigureViewport,
+                          CloseProcess };
 
 struct ViewportBounds {
     int x = 0, y = 0, width = 0, height = 0, render_width = 0, render_height = 0;
@@ -86,6 +87,7 @@ struct WindowReply {
 
 // Invoked only by the BrowserManager main-thread task queue.
 WindowReply execute_window_operation(const WindowRequest& request);
+bool request_application_exit();
 WindowReply apply_viewport_configuration(const WindowRequest& request, BrowserTab& source);
 void release_viewport_pointer(BrowserTab& source, std::uint64_t context_id);
 void refresh_viewport_state(BrowserTab& source);

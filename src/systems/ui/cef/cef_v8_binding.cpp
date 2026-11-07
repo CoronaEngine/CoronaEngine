@@ -2781,7 +2781,8 @@ public:
             (panel_operation && !read_panel_options(arguments, request)) ||
             (method == WindowMethod::ConfigureViewport && !read_viewport_configuration(arguments, request)) ||
             (method == WindowMethod::SetDragRegions && !request.regions) ||
-            ((method == WindowMethod::GetCurrent || method == WindowMethod::Close || method == WindowMethod::ToggleMainBorderless) && !arguments.empty()) ||
+            ((method == WindowMethod::GetCurrent || method == WindowMethod::Close || method == WindowMethod::ToggleMainBorderless ||
+              method == WindowMethod::CloseProcess) && !arguments.empty()) ||
             (targeted && (arguments.size() != 1 || !arguments[0]->IsInt() || arguments[0]->GetIntValue() < 0))) {
             reject(context_, promise, "INVALID_ARGUMENT", "Invalid native window operation arguments");
             return promise;
@@ -3205,6 +3206,8 @@ private:
             promise->ResolvePromise(viewport_configuration_value(*reply.viewport));
         else if (method == WindowMethod::GetCurrent || method == WindowMethod::SetDragRegions)
             promise->ResolvePromise(snapshot_value(reply.snapshot, browser_id_, frame_id_));
+        else if (method == WindowMethod::CloseProcess)
+            promise->ResolvePromise(CefV8Value::CreateNull());
         else if (method == WindowMethod::CreatePanel || method == WindowMethod::CreateCameraView) {
             auto created = CefV8Value::CreateObject(nullptr, nullptr);
             created->SetValue("tab_id", CefV8Value::CreateInt(reply.snapshot.tab_id), V8_PROPERTY_ATTRIBUTE_NONE);
@@ -3503,6 +3506,10 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     input->SetValue("dispatch", CefV8Value::CreateFunction("dispatch",
         new NativeHandler(endpoint, ScriptInputMethod::Dispatch)), V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("input", input, V8_PROPERTY_ATTRIBUTE_READONLY);
+    auto app = CefV8Value::CreateObject(nullptr, nullptr);
+    app->SetValue("closeProcess", CefV8Value::CreateFunction("closeProcess",
+        new NativeHandler(endpoint, WindowMethod::CloseProcess)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    root->SetValue("app", app, V8_PROPERTY_ATTRIBUTE_READONLY);
     auto editor = CefV8Value::CreateObject(nullptr, nullptr);
     editor->SetValue("invoke", CefV8Value::CreateFunction("invoke",
         new NativeHandler(endpoint, EditorApiMethod::Invoke)), V8_PROPERTY_ATTRIBUTE_READONLY);

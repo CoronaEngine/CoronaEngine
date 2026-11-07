@@ -567,6 +567,12 @@ WindowReply apply_viewport_configuration(const WindowRequest& request, BrowserTa
     return result;
 }
 
+bool request_application_exit() {
+    SDL_Event event{};
+    event.type = SDL_EVENT_QUIT;
+    return SDL_PushEvent(&event);
+}
+
 WindowReply execute_window_operation(const WindowRequest& request) {
     auto& manager = BrowserManager::instance();
     BrowserTab* source = nullptr;
@@ -625,6 +631,13 @@ WindowReply execute_window_operation(const WindowRequest& request) {
     // Closing an already removed tab is an idempotent cleanup, not a retry.
     if (!target || !target->open) return result;
     switch (request.method) {
+    case WindowMethod::CloseProcess:
+        result.accepted = request_application_exit();
+        if (!result.accepted) {
+            result.error_code = "NATIVE_FAILURE";
+            result.error_message = "Unable to queue engine exit";
+        }
+        break;
     case WindowMethod::ConfigureViewport:
         return apply_viewport_configuration(request, *source);
     case WindowMethod::ToggleMainBorderless:

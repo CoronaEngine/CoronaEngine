@@ -8608,9 +8608,7 @@ void register_python_script_api_handlers(NativeApiRegistry& registry) {
     };
     static const NativeMethodTable corona_editor_methods = {
         {"close_process", [](const NativeRequest&, const NativeContext&) {
-            SDL_Event event{};
-            event.type = SDL_EVENT_QUIT;
-            if (!SDL_PushEvent(&event)) return native_failure("Unable to queue engine exit", 500);
+            if (!request_application_exit()) return native_failure("Unable to queue engine exit", 500);
             return native_success(nullptr);
         }},
     };

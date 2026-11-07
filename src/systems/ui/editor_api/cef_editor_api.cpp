@@ -500,7 +500,7 @@ constexpr std::array<EditorApiParamSpec, 2> kSceneToolsActorPlayAudioParams = {{
 // count here makes MSVC diagnostics point at the whole initializer when the
 // manifest grows, instead of identifying the actual entry that drifted.
 constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(CoronaEditor, close_process, kNoParams, "app.closeProcess", "app.close_process", EditorApiValueType::Null),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(CoronaEditor, close_process, kNoParams, "", "app.close_process", EditorApiValueType::Null, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA(EditorApi, list_events, kNoParams, EditorApiValueType::Object),
     // ScriptRuntime discovers its allowed methods through this same manifest.
     // Individual calls still enforce each method's caller mask.

@@ -96,6 +96,8 @@ try {
   await waitFor(() => main.evaluate('typeof window.corona?.window?.getCurrent === "function"'));
   assert.equal(await main.evaluate('typeof corona.viewport?.pick'), 'function');
   assert.equal(await main.evaluate('typeof corona.input?.dispatch'), 'function');
+  assert.equal(await main.evaluate('typeof corona.app?.closeProcess'), 'function');
+  assert.equal(await main.evaluate('corona.app.closeProcess(null).catch(error=>error.code)'), 'INVALID_ARGUMENT');
   // Use a file-origin fixture in the real BrowserManager windows. The editor
   // correctly retires panels without an active world, so loading its Vue app
   // would test world policy rather than channel reachability.
@@ -579,6 +581,7 @@ try {
       return true;
     })()`);
     await waitFor(() => main.evaluate('typeof window.__eventFrame?.contentWindow?.corona?.lanChat?.onEvent === "function"'));
+    assert.equal(await main.evaluate('window.__eventFrame.contentWindow.corona.app.closeProcess().catch(error=>error.code)'), 'PERMISSION_DENIED');
     assert.match(await main.evaluate(`(()=>{try{
       window.__eventFrame.contentWindow.corona.lanChat.onEvent(()=>{});return 'unexpected';
     }catch(e){return String(e);}})()`), /PERMISSION_DENIED/);
@@ -1690,15 +1693,19 @@ try {
     const exited = new Promise(resolve => child.once('close', resolve));
     try {
       await Promise.race([
-        clients[0].evaluate("corona.editor.invoke('CoronaEditor.close_process',[])"),
+        clients[0].evaluate("corona.app.closeProcess()"),
         new Promise((_, reject) => { requestTimer = setTimeout(() => reject(Error('Quit request deadline')), 3000); }),
       ]);
-      await Promise.race([exited, new Promise(resolve => { exitTimer = setTimeout(resolve, 10_000); })]);
     } catch (error) {
-      console.warn('CEF smoke: graceful quit unavailable:', error.message);
+      console.warn('CEF smoke: quit acknowledgement unavailable:', error.message);
     } finally {
-      clearTimeout(requestTimer); clearTimeout(exitTimer);
+      clearTimeout(requestTimer);
     }
+    // Shutdown can close CDP before the quit Promise is acknowledged.
+    // Still allow the native teardown to finish before forcing termination.
+    try {
+      await Promise.race([exited, new Promise(resolve => { exitTimer = setTimeout(resolve, 15_000); })]);
+    } finally { clearTimeout(exitTimer); }
   }
   for (const client of clients) client.close();
   if (child.pid && child.exitCode === null) {
