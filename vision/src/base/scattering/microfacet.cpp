@@ -165,7 +165,7 @@ template<EPort p>
     oc_float<p> cos_theta_i = cos_theta(wi);
     oc_float<p> cos_theta_o = cos_theta(wo);
     oc_float<p> numerator = bsdf_D<p>(wh, alpha_x, alpha_y, type) * bsdf_G<p>(wo, wi, alpha_x, alpha_y, type) *
-                            ocarina::abs(dot(wi, wh) * dot(wo, wh));
+                            ocarina::abs(dot(wi, wh) * dot(wo, wh)) * ocarina::sqr(eta);
     oc_float<p> denom = ocarina::sqr(dot(wi, wh) * eta + dot(wo, wh)) * ocarina::abs(cos_theta_i * cos_theta_o);
     oc_float<p> ft = numerator / denom;
     oc_float<p> factor = tm == Radiance ? ocarina::rcp(ocarina::sqr(eta)) : 1.f;

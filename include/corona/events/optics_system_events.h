@@ -45,6 +45,11 @@ struct ScreenshotRequestEvent {
     std::string file_path;
     std::shared_ptr<std::promise<bool>> completion_promise;
     std::chrono::steady_clock::time_point deadline{};
+    // Zero preserves the normal next-frame screenshot. Fixed-frame captures
+    // reset Vision history and render continuously before the same readback.
+    unsigned render_frames{};
+    unsigned warmup_frames{};
+    std::string timings_path;
 };
 
 /**

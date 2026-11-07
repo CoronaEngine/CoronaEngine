@@ -503,3 +503,5 @@ void check_di_light_context_equivalence(vision::Pipeline& pipeline, const char* 
 void check_di_light_context_equivalence(vision::Pipeline& pipeline) {
     check_di_light_context_equivalence(pipeline, "existing-fixture", 0u);
 }
+
+#include "test_vision_restir_winner_target.h"

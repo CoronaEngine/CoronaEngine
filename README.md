@@ -38,7 +38,9 @@ Horizon 和 CoronaEditor 统一由 `build_tools/git_workspace.py` 管理，分�
 `Horizon/` 和 `CoronaEditor/`。CMake bootstrap 及
 `build_tools/dev.py install/configure/build` 会准备这两个工作区。
 
-仓库地址、分支及完整 commit 固定在 `build_tools/source_workspaces.py` 中，不再读取 JSON lock 文件。
+仓库地址、分支及完整 commit 统一固定在 `build_tools/source_workspaces.py` 中。
+每次更新锁定提交时，必须保证该提交已包含引擎所需的功能；功能实现随对应依赖仓库的提交交付。
+构建直接使用锁定源码，不再应用引擎维护的 Horizon 补丁，也不读取额外的补丁基线或 JSON lock 文件。
 首次准备直接非浅克隆到根目录的 `Horizon/` 或 `CoronaEditor/`，检出指定 commit、建立跟踪分支，
 并递归初始化该提交记录的子模块，不经过临时克隆目录。失败时清理本次新建的目录，以便重试。
 Python 中的 commit 是构建基准。已有副本的 HEAD 与它一致时直接复用；不一致时切换到该 commit 并更新子模块，目标提交本地缺失时才获取远端。
@@ -122,3 +124,26 @@ conda run -n coronaengine-dev python -m pytest build_tools/tests
 ```
 
 引擎核心测试统一放在根目录 `tests/`，按模块组织；目录约定和运行方式见 [测试说明](tests/README.md)。
+
+## 本地文件与临时目录
+
+根目录保留源码、项目配置和正式工具入口。构建产物放在 `build/`；CLion 使用
+`cmake-build-relwithdebinfo/`。`Horizon/`、`CoronaEditor/` 是构建管理的源码工作区。
+
+临时文件统一放在已被 Git 忽略的 `.workspace/`，不要再在根目录新建缓存、日志或实验目录：
+
+| 路径 | 用途 |
+| --- | --- |
+| `.workspace/tmp/<任务>/` | 一次性脚本和验证输出 |
+| `.workspace/experiments/<任务>/` | 实验及性能对比资料 |
+| `.workspace/cache/` | 可再生缓存；pytest 缓存位于其下的 `pytest/` |
+| `.workspace/cache/tools/` | 本地下载的工具 |
+| `.workspace/downloads/` | 下载资料 |
+| `.workspace/notes/` | 本地计划和交接笔记 |
+| `.workspace/archive/` | 需要保留的旧资料和录制结果 |
+
+可复用脚本放入 `tools/`，构建专用脚本放入 `build_tools/`。Mitsuba 下载入口为
+`tools/download_mitsuba_scenes.cmd`，默认下载到 `.workspace/downloads/mitsuba/`。
+批量出图入口为 `tools/render_mitsuba_scenes.py`，统一使用引擎正常截图接口；参数和采样口径见
+[Mitsuba 批量截图说明](docs/mitsuba-batch-rendering.md)。
+运行引擎时以可执行文件目录为工作目录，避免运行时缓存散落到仓库根目录。

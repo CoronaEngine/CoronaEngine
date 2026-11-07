@@ -68,7 +68,7 @@ public:
     TemporalResamplingParam() = default;
     explicit TemporalResamplingParam(const ParameterSet &ps)
         : limit(ps["history_limit"].as_uint(5)),
-          sampling_radius(ps["radius"].as_float(8)),
+          sampling_radius(ps["radius"].as_float(0)),
           theta(ps["theta"].as_float(35)),
           depth_threshold(ps["depth"].as_float(0.3)),
           open{ps["open"].as_bool(true)},
@@ -161,7 +161,7 @@ public:
                 {"temporal", {{"open", temporal_.open}, {"history_limit", temporal_.limit},
                               {"theta", temporal_.theta}, {"depth", temporal_.depth_threshold},
                               {"radius", temporal_.sampling_radius}}},
-                {"spatial", {{"open", spatial_.open}, {"theta", spatial_.theta},
+                {"spatial", {{"open", spatial_.open}, {"sample_num", spatial_.sample_num}, {"theta", spatial_.theta},
                              {"depth", spatial_.depth_threshold}, {"radius", spatial_.sampling_radius}}}};
     }
     // Called only after the complete request has been validated by the integrator.
@@ -177,6 +177,7 @@ public:
         temporal_.sampling_radius = temporal["radius"].get<float>();
         const auto &spatial = settings["spatial"];
         spatial_.open = spatial["open"].get<bool>();
+        spatial_.sample_num = spatial["sample_num"].get<uint>();
         spatial_.theta = spatial["theta"].get<float>();
         spatial_.depth_threshold = spatial["depth"].get<float>();
         spatial_.sampling_radius = spatial["radius"].get<float>();

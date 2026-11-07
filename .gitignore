@@ -5,13 +5,12 @@
 /out/
 /dist/
 /cmake-build-*/
-/downloads/mitsuba/
 
 # Managed source workspaces (baselines live in build_tools/source_workspaces.py).
 /Horizon/
 /CoronaEditor/
 
-# Local experiment and validation artifacts
+# Unified local scratch space: experiments, caches, downloads, notes and archives.
 /.workspace/
 
 # CMake intermediate files
@@ -50,22 +49,17 @@ __pycache__/
 
 # Log files
 *.log
+/CoronaEditor.ini
 .codex/
 
 # CodeGraph (本地代码索引工具产物 + 含机器绝对路径，仅本地使用)
 .codegraph/
 .mcp.json
 
-# Thoth local dashboard/runtime cache
-/research.db
-/research.db-*
+# Legacy scratch locations (new artifacts belong under .workspace/).
 /.tmp/
 /temp/
 /.pytest_cache/
-/.pre-commit-config.yaml
-/scripts/
-/tests/test_structure.py
-/tools/dashboard/
 *.py[cod]
 
 # 密钥文件 —— 严禁提交

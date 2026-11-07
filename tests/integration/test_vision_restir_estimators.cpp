@@ -39,6 +39,7 @@ void check_glass_runtime_depth(vision::Pipeline&, vision::Pipeline&, unsigned);
 void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<vision::SurfaceData>& surfaces);
 void check_restir_gi_depth_one_continuation(vision::Pipeline& pipeline);
 void check_restir_gi_receiver_support(vision::Pipeline& pipeline);
+void check_restir_gi_winner_target(vision::Pipeline& pipeline, const char* label);
 void check_di_light_context_equivalence(vision::Pipeline& pipeline);
 void check_di_light_context_equivalence(vision::Pipeline& pipeline, const char* label, unsigned coverage);
 void check_di_temporal_gather_equivalence(vision::Pipeline& pipeline);
@@ -494,6 +495,30 @@ int main(int argc, char **argv) {
         device.init_rtx();
         vision::Global::instance().set_device(&device);
         vision::Global::instance().set_scene_path(fixture);
+        if (std::getenv("VISION_TEST_GI_WINNER_TARGET_ONLY")) {
+            // Keep primary rays clear; secondary GI segments with x~2 cross
+            // this actual triangle baffle and exercise world-space occlusion.
+            write_file(fixture / "receiver-oracle.obj",
+                "v -4 -4 -1\nv 4 -4 -1\nv 0 4 -1\n"
+                "v 0.6 -2 -0.25\nv 1.3 -2 -0.25\nv 1.3 2 -0.25\nv 0.6 2 -0.25\n"
+                "vn 0.7071067812 0 0.7071067812\n"
+                "f 1//1 2//1 3//1\nf 4//1 5//1 6//1\nf 4//1 6//1 7//1\n");
+            for (bool glossy : {false, true}) {
+                auto oracle_scene = support_scene;
+                oracle_scene["scene"]["shapes"][0]["param"]["fn"] = "receiver-oracle.obj";
+                if (glossy) {
+                    oracle_scene["scene"]["materials"][0]["param"]["roughness"] = 0.17f;
+                    oracle_scene["scene"]["materials"][0]["param"]["ior"] = 1.65f;
+                }
+                const auto oracle = Corona::Tests::make_vision_test_pipeline(oracle_scene, fixture);
+                expect(bool(oracle), "could not import GI winner target fixture");
+                check_restir_gi_winner_target(*oracle, glossy ? "tilted-glossy-baffle" : "tilted-diffuse-baffle");
+            }
+            fs::remove(fixture / "receiver-oracle.obj");
+            fs::remove(fixture / "receiver.obj"); fs::remove(fixture / "receiver-tilted.obj");
+            std::error_code cleanup_error; fs::remove(fixture, cleanup_error);
+            return 0;
+        }
         const auto direct_pipeline = Corona::Tests::make_vision_test_pipeline(scene_description(true), fixture);
         expect(bool(direct_pipeline), "could not import direct-channel fixture");
         if (std::getenv("VISION_TEST_STORAGE_RESTORE_ONLY")) {

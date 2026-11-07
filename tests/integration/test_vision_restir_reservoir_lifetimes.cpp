@@ -456,13 +456,27 @@ void check_slices(vision::Pipeline& pipeline, const char* label) {
         const auto a = pipeline.bindless_array()->buffer_view(base);
         const auto b = pipeline.bindless_array()->buffer_view(base + 1u);
         const auto allocated_bytes = pipeline.device().get_aligned_memory_size(a.head());
-        constexpr size_t stride = std::is_same_v<Impl, ReSTIRDI> ? 32u : sizeof(Reservoir);
+        constexpr size_t stride = std::is_same_v<Impl, ReSTIRDI> ? sizeof(DIReservoirStorage) : sizeof(GIReservoirStorage);
         const size_t slice_bytes = count * stride;
         require(allocated_bytes >= 2u * slice_bytes && allocated_bytes < 3u * slice_bytes,
                 "ReSTIR device allocation must contain two reservoir slices, allowing alignment but excluding a third");
         require(a.head() == b.head() && a.offset == 0u && b.offset == slice_bytes &&
                     a.size == slice_bytes && b.size == slice_bytes,
                 "ReSTIR final/scratch descriptors must be two disjoint complete screen views after prepare/resize");
+        if constexpr (std::is_same_v<Impl, ReSTIRGI>) {
+            require(gi_reservoir_storage_matches(GIReservoirStorage::Name, a, b, count),
+                    "GI storage must accept its exact current ABI");
+            require(!gi_reservoir_storage_matches("ReSTIRGI::reservoirs_ x 2", a, b, count),
+                    "GI storage must reject the old logical reservoir ABI");
+            auto aliased = b;
+            aliased.offset = 0u;
+            require(!gi_reservoir_storage_matches(GIReservoirStorage::Name, a, aliased, count),
+                    "GI storage must reject overlapping history and scratch");
+            auto old_stride = b;
+            old_stride.size = count * 52u;
+            require(!gi_reservoir_storage_matches(GIReservoirStorage::Name, a, old_stride, count),
+                    "GI storage must reject a stale 52-byte view");
+        }
         if constexpr (std::is_same_v<Impl, ReSTIRDI>) {
             require(di_reservoir_storage_matches(DIReservoirStorage::Name, a, b, count),
                     "DI storage must accept its exact current ABI");

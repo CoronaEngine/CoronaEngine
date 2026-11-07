@@ -437,6 +437,10 @@ public:
     bool suppress_initial_emission{false};
     const Bool *suppress_initial_emission_if{};
     bool complete_terminal_direct{false};
+    // Roulette counts all surface scatters, including a caller-owned prefix.
+    const Uint *rr_depth_offset{};
+    // A caller may tune roulette without weighting the returned radiance.
+    const Float *rr_survival_scale{};
     // ReSTIR's direct channel also owns emission reached by its first BSDF ray.
     bool restir_direct_split{false};
 
@@ -474,6 +478,7 @@ template<typename T>
     T dir = p_target - p_start;
     n_start *= select(dot(n_start, dir) > 0, 1.f, -1.f);
     T org = offset_ray_origin(p_start, n_start);
+    dir = p_target - org;
     return make_ray(org, dir, 1 - ShadowEpsilon);
 }
 
@@ -484,6 +489,7 @@ template<typename T>
     p_target = offset_ray_origin(p_target, n_target);
     n_start *= select(dot(n_start, dir) > 0, 1.f, -1.f);
     T org = offset_ray_origin(p_start, n_start);
+    dir = p_target - org;
     return make_ray(org, dir, 1 - ShadowEpsilon);
 }
 

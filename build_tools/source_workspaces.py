@@ -2,6 +2,8 @@
 
 Build preparation aligns local HEAD to these pins, preserving nonconflicting
 edits. A different live remote branch tip only produces a warning.
+Each pinned commit must already contain the functionality the engine requires;
+source preparation does not apply engine-owned patches to either workspace.
 """
 
 from __future__ import annotations
@@ -43,7 +45,7 @@ HORIZON = SourceWorkspace(
     directory=Path("Horizon"),
     url="https://github.com/CoronaEngine/Horizon.git",
     ref="main",
-    commit="fc35ba8b79d354f446dd7a4e6c2b02e22cbf323e",
+    commit="d8c140168c386c28ae027eea0938fd1de42dbae3",
 )
 
 EDITOR = SourceWorkspace(

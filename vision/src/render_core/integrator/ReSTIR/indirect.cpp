@@ -14,9 +14,53 @@ ReSTIRGI::ReSTIRGI(IntegratorPtr integrator,
     sample_num_(desc["sample_num"].as_uint(1u)),
     ratio_(desc["ratio"].as_uint(2u)),
     debias_(desc["debias"].as_bool(true)) {
-    // Spend the extra reuse work on GI; explicit scene settings take priority.
-    spatial_.sample_num = spatial_.open ? desc["spatial"]["sample_num"].as_uint(4u) : 1u;
+    // Two GI neighbors balance reuse quality and the cost of support queries.
+    spatial_.sample_num = spatial_.open ? desc["spatial"]["sample_num"].as_uint(2u) : 1u;
     spatial_.sampling_radius = desc["spatial"]["radius"].as_float(12.f);
+}
+
+namespace {
+// Branches occupy two bits: transmission 01, reflection 10. The root
+// sentinel is also 01, so inspect only the depth encoded branch pairs.
+Bool gi_prefix_has_transmission(const Uint &sequence, const Uint &depth) {
+    Uint prefix_mask = (Uint{1u} << (min(depth, 15u) * 2u)) - 1u;
+    Uint transmission_bits = sequence & ~(sequence >> 1u) & 0x55555555u;
+    return (transmission_bits & prefix_mask) != 0u;
+}
+
+// The cached secondary Lo is direction dependent through transmission. Keep
+// its fresh BSDF estimate, but do not reconnect its receiver to other streams.
+Bool gi_receiver_has_transmission(const MaterialEvaluator &bsdf, uint dimension) {
+    Bool transmissive = false;
+    auto visit = [&](const Lobe *lobe, const Float &sample_weight, const Float &weight) {
+        if (dynamic_cast<const DielectricLobe *>(lobe)) {
+            SampledSpectrum transmission{dimension}, reflection{dimension};
+            Float2 roughness;
+            lobe->reuse_material(transmission, reflection, roughness);
+            transmissive |= sample_weight > 0.f && weight > 0.f && transmission.max() > 0.f;
+        }
+    };
+    bsdf.dispatch([&](const Lobe *root) {
+        if (root->is_multi()) {
+            static_cast<const LobeSet *>(root)->for_each([&](const WeightedLobe &lobe) {
+                visit(lobe.get(), lobe.sample_weight(), lobe.weight());
+            });
+        } else {
+            visit(root, Float{1.f}, Float{1.f});
+        }
+    });
+    return transmissive;
+}
+}// namespace
+
+Bool ReSTIRGI::receiver_reuse_allowed(const SurfaceDataVar &surface) const noexcept {
+    auto it = pipeline()->geometry().compute_surface_interaction(surface.hit, cur_view_pos(surface.is_replaced));
+    Bool allowed = true;
+    scene().materials().dispatch(it.material_id(), [&](const Material *material) {
+        auto bsdf = material->create_evaluator(it, sampled_wavelengths());
+        allowed = !gi_receiver_has_transmission(bsdf, spectrum()->dimension());
+    });
+    return allowed;
 }
 
 Float ReSTIRGI::Jacobian_det(Float3 cur_pos, Float3 neighbor_pos,
@@ -94,6 +138,12 @@ GISampleVar ReSTIRGI::init_sample(const Interaction &it, const SensorSample &ss,
         auto surface = cur_surfaces().read(dispatch_id());
         Uint prefix_depth = 0u;
         $if(surface.is_replaced) { prefix_depth = cur_surface_extends().read(dispatch_id()).prefix_depth; };
+        Uint rr_depth_offset = prefix_depth + 1u;
+        hit_context.rr_depth_offset = addressof(rr_depth_offset);
+        // Keep reusable Lo independent of the receiver, including zero channels.
+        Float3 rr_throughput = hit_bsdf->safe_throughput();
+        Float rr_survival_scale = clamp(max(max(rr_throughput.x, rr_throughput.y), rr_throughput.z), 0.25f, 1.f);
+        hit_context.rr_survival_scale = addressof(rr_survival_scale);
         Uint suffix_depth = integrator()->runtime_suffix_depth();
         Uint remaining = suffix_depth - min(prefix_depth, suffix_depth);
         // complete_terminal_direct handles the runtime terminal budget itself.
@@ -133,7 +183,11 @@ void ReSTIRGI::compile_initial_samples() noexcept {
 }
 
 ScatterEval ReSTIRGI::eval_bsdf(const Interaction &it, const GISampleVar &sample,
-                                MaterialEvalMode mode) const noexcept {
+                                MaterialEvalMode mode, MaterialEvaluator *bsdf) const noexcept {
+    if (bsdf) {
+        Float3 wi = normalize(sample.sp->position() - it.pos);
+        return bsdf->evaluate(it.wo, wi, mode);
+    }
     return outline("ReSTIRGI::eval_bsdf", [&] {
         ScatterEval ret{spectrum()->dimension(), 1};
         scene().materials().dispatch(it.material_id(), [&](const Material *material) {
@@ -146,15 +200,15 @@ ScatterEval ReSTIRGI::eval_bsdf(const Interaction &it, const GISampleVar &sample
 }
 
 Float ReSTIRGI::compute_p_hat(const vision::Interaction &it,
-                              const vision::GISampleVar &sample) const noexcept {
+                              const vision::GISampleVar &sample, MaterialEvaluator *bsdf) const noexcept {
     Float ret = 0.f;
     $if(sample.sp->valid() && luminance(sample.Lo.as_vec3()) > 0.f &&
         length_squared(sample.sp->position() - it.pos) > 0.f) {
-        ScatterEval eval = eval_bsdf(it, sample, MaterialEvalMode::All);
-        // Shading normals can leave F positive when the geometric hemisphere
-        // rejects the PDF. Match PT's receiver support before reusing a sample.
+        // The target is a PDF proxy; final shading still evaluates exact F.
+        // Retain the receiver proposal's geometric/material support.
+        ScatterEval eval = eval_bsdf(it, sample, MaterialEvalMode::PDF, bsdf);
         $if(eval.valid() && !ocarina::isinf(eval.pdf())) {
-            ret = ocarina::max(ocarina::zero_if_nan_inf(sample->p_hat(eval.f.vec3())), 0.f);
+            ret = ocarina::max(ocarina::zero_if_nan_inf(luminance(sample.Lo.as_vec3()) * eval.pdf()), 0.f);
         };
     };
     return ret;
@@ -168,9 +222,10 @@ Float ReSTIRGI::selected_sample_support(const Interaction &target_it,
     Float support = 0.f;
     Float jacobian = Jacobian_det(target_it.pos, source_it.pos, sample.sp);
     $if(jacobian > 0.f) {
-        ScatterEval eval = eval_bsdf(source_it, sample, MaterialEvalMode::All);
-        Float p_hat = ocarina::zero_if_nan_inf(sample->p_hat(eval.f.vec3()));
+        ScatterEval eval = eval_bsdf(source_it, sample, MaterialEvalMode::PDF);
         Float pdf = eval.pdf();
+        // A positive proposal can support a proxy winner even when F*Lo is zero.
+        Float p_hat = ocarina::zero_if_nan_inf(luminance(sample.Lo.as_vec3()) * pdf);
         $if(p_hat > 0.f && eval.valid() && !ocarina::isinf(pdf)) {
             support = cast<float>(pipeline()->geometry().visibility(source_it, sample.sp->position()));
         };
@@ -185,42 +240,56 @@ GIReservoirVar ReSTIRGI::combine_temporal(const GIReservoirVar &cur_rsv, Surface
     TSensor &camera = scene().sensor();
     Interaction it = pipeline()->geometry().compute_surface_interaction(cur_surf.hit, view_pos);
     GIReservoirVar ret;
-    Float cur_p_hat = compute_p_hat(it, cur_rsv.sample);
-    ret->update(sampler()->next_1d(), cur_rsv.sample,
-                GIReservoir::safe_weight(cur_rsv.C, cur_p_hat, cur_rsv.W), cur_rsv.C);
-    Float other_weight = 0.f;
-    Interaction neighbor_it{false};
-    if (neighbor_surf) {
-        neighbor_it = pipeline()->geometry().compute_surface_interaction(neighbor_surf->hit, prev_view_pos);
-        $if(other_rsv.W > 0.f && other_rsv.sample.sp->valid()) {
-            Float other_p_hat = compute_p_hat(it, other_rsv.sample);
-            Float jacobian = Jacobian_det(it.pos, neighbor_it.pos, other_rsv.sample.sp);
-            $if(other_p_hat > 0.f && jacobian > 0.f) {
-                Float visibility = pipeline()->geometry().visibility(it, other_rsv.sample.sp->position());
-                other_weight = GIReservoir::safe_weight(other_rsv.C, other_p_hat * jacobian, other_rsv.W) * visibility;
-            };
-        };
-    }
-    // A null or occluded realization still represents its original stream.
-    ret->update(sampler()->next_1d(), other_rsv.sample, other_weight, other_rsv.C);
-    Float p_hat = compute_p_hat(it, ret.sample);
-    if (debias_) {
-        Float normalization = 0.f;
-        $if(ret.weight_sum > 0.f && p_hat > 0.f && ret.sample.sp->valid()) {
-            // Every positive-weight winner is supported at the current receiver.
-            normalization = ocarina::max(ocarina::zero_if_nan_inf(cur_rsv.C), 0.f);
-            if (neighbor_surf) {
-                Float count = ocarina::max(ocarina::zero_if_nan_inf(other_rsv.C), 0.f);
-                $if(count > 0.f) {
-                    // Test the final winner, even if the history's own sample is null.
-                    normalization += count * selected_sample_support(it, neighbor_it, ret.sample);
+    auto combine = [&](MaterialEvaluator *bsdf) {
+        Float cur_p_hat = compute_p_hat(it, cur_rsv.sample, bsdf);
+        Bool selected_cur = ret->update(sampler()->next_1d(), cur_rsv.sample,
+                    GIReservoir::safe_weight(cur_rsv.C, cur_p_hat, cur_rsv.W), cur_rsv.C);
+        Float winner_p_hat = ocarina::select(selected_cur, cur_p_hat, 0.f);
+        Float other_p_hat = 0.f;
+        Float other_weight = 0.f;
+        Interaction neighbor_it{false};
+        if (neighbor_surf) {
+            neighbor_it = pipeline()->geometry().compute_surface_interaction(neighbor_surf->hit, prev_view_pos);
+            $if(other_rsv.W > 0.f && other_rsv.sample.sp->valid()) {
+                other_p_hat = compute_p_hat(it, other_rsv.sample, bsdf);
+                Float jacobian = Jacobian_det(it.pos, neighbor_it.pos, other_rsv.sample.sp);
+                $if(other_p_hat > 0.f && jacobian > 0.f) {
+                    Float visibility = pipeline()->geometry().visibility(it, other_rsv.sample.sp->position());
+                    other_weight = GIReservoir::safe_weight(other_rsv.C, other_p_hat * jacobian, other_rsv.W) * visibility;
                 };
-            }
-        };
-        ret->update_W_with_support(p_hat, normalization);
-    } else {
-        ret->update_W(p_hat);
+            };
+        }
+        // A null or occluded realization still represents its original stream.
+        Bool selected_other = ret->update(sampler()->next_1d(), other_rsv.sample, other_weight, other_rsv.C);
+        Float p_hat = ocarina::select(selected_other, other_p_hat, winner_p_hat);
+        if (debias_) {
+            Float normalization = 0.f;
+            $if(ret.weight_sum > 0.f && p_hat > 0.f && ret.sample.sp->valid()) {
+                // Every positive-weight winner is supported at the current receiver.
+                normalization = ocarina::max(ocarina::zero_if_nan_inf(cur_rsv.C), 0.f);
+                if (neighbor_surf) {
+                    Float count = ocarina::max(ocarina::zero_if_nan_inf(other_rsv.C), 0.f);
+                    $if(count > 0.f) {
+                        // Test the final winner, even if the history's own sample is null.
+                        normalization += count * selected_sample_support(it, neighbor_it, ret.sample);
+                    };
+                }
+            };
+            ret->update_W_with_support(p_hat, normalization);
+        } else {
+            ret->update_W(p_hat);
+        }
+    };
+    $if(it.has_material()) {
+        scene().materials().dispatch(it.material_id(), [&](const Material *material) {
+            auto bsdf = material->create_evaluator(it, sampled_wavelengths());
+            combine(addressof(bsdf));
+        });
     }
+    $else {
+        // Null receivers still carry the original streams' confidence counts.
+        combine(nullptr);
+    };
     return ret;
 }
 
@@ -248,7 +317,7 @@ GIReservoirVar ReSTIRGI::temporal_reuse(GIReservoirVar rsv, const SurfaceDataVar
         return make_pair(surf, prev_rsv);
     };
 
-    $if(in_screen(prev_p, res) && param.temporal) {
+    $if(in_screen(prev_p, res) && param.temporal && receiver_reuse_allowed(cur_surf)) {
         auto data = get_prev_data(make_uint2(prev_p), prev_view_pos);
         auto prev_surf = data.first;
         auto prev_rsv = data.second;
@@ -259,17 +328,23 @@ GIReservoirVar ReSTIRGI::temporal_reuse(GIReservoirVar rsv, const SurfaceDataVar
                                    view_pos, prev_view_pos);
         }
         $else {
-            $for(i, temporal_.N) {
-                Int2 p = reservoir_pixel(square_to_disk(sampler()->next_2d()) * param.t_radius + prev_p_film);
-                $if(!in_screen(p, res)) { $continue; };
-                auto data = get_prev_data(make_uint2(p), prev_view_pos);
-                auto another_surf = data.first;
-                auto another_rsv = data.second;
-                $if(is_temporal_valid(cur_surf, another_surf,
-                                      param, addressof(another_rsv.sample))) {
-                    rsv = combine_temporal(rsv, cur_surf, another_rsv, addressof(another_surf),
-                                           view_pos, prev_view_pos);
-                    $break;
+            $if(param.t_radius == 0.f) {
+                // The rejected pixel is unchanged; preserve all fallback RNG.
+                $for(i, temporal_.N) { (void)sampler()->next_2d(); };
+            }
+            $else {
+                $for(i, temporal_.N) {
+                    Int2 p = reservoir_pixel(square_to_disk(sampler()->next_2d()) * param.t_radius + prev_p_film);
+                    $if(!in_screen(p, res)) { $continue; };
+                    auto data = get_prev_data(make_uint2(p), prev_view_pos);
+                    auto another_surf = data.first;
+                    auto another_rsv = data.second;
+                    $if(is_temporal_valid(cur_surf, another_surf,
+                                          param, addressof(another_rsv.sample))) {
+                        rsv = combine_temporal(rsv, cur_surf, another_rsv, addressof(another_surf),
+                                               view_pos, prev_view_pos);
+                        $break;
+                    };
                 };
             };
         };
@@ -302,15 +377,103 @@ void ReSTIRGI::compile_temporal_reuse() noexcept {
         GISampleVar sample = samples_.read(dispatch_id());
         HitBSDFVar hit_bsdf = frame_buffer().hit_bsdfs().read(dispatch_id());
         GIReservoirVar rsv;
-        Float p_hat = sample->p_hat(hit_bsdf.bsdf.as_vec3());
+        Float p_hat = 0.f;
+        $if(sample.sp->valid() && hit_bsdf.pdf > 0.f && !ocarina::isinf(hit_bsdf.pdf)) {
+            p_hat = ocarina::max(ocarina::zero_if_nan_inf(luminance(sample.Lo.as_vec3()) * hit_bsdf.pdf), 0.f);
+        };
         Float weight = GIReservoir::safe_weight(1, p_hat, 1.f / hit_bsdf.pdf);
         rsv->update(0.5f, sample, weight);
         rsv->update_W(p_hat);
         Float2 motion_vec = frame_buffer().motion_vectors().read(dispatch_id());
-        rsv = temporal_reuse(rsv, surf, motion_vec, ss, param);
+        Bool temporal_allowed = param.temporal != 0u;
+        // Virtual receiver history does not preserve a refractive camera prefix.
+        // Keep fresh GI and same-frame spatial reuse; only mask this temporal kernel.
+        // denoiser_layered carries the runtime SP switch even for raw rendering.
+        $if(param.denoiser_layered != 0u && temporal_allowed && surf.is_replaced) {
+            Uint dominant = frame_buffer().stable_dominant().read(dispatch_id());
+            $if(dominant < StablePlaneCount) {
+                Uint address = dominant * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
+                StablePlaneDataVar plane = frame_buffer().stable_planes().read(address);
+                $if(plane->valid() != 0u && plane->reservoir_eligible() != 0u) {
+                    temporal_allowed = !gi_prefix_has_transmission(plane.branch_sequence, plane.depth);
+                };
+            };
+        };
+        $if(temporal_allowed) {
+            rsv = temporal_reuse(rsv, surf, motion_vec, ss, param);
+        };
         passthrough_reservoirs().write(dispatch_id(), rsv);
     };
     temporal_pass_ = device().compile(kernel, "ReSTIR indirect temporal reuse");
+}
+
+GIReservoirVar ReSTIRGI::constant_combine_cached(const GIReservoirVar &canonical_rsv,
+                                                 const Container<uint> &rsv_idx,
+                                                 const Interaction &canonical_it,
+                                                 MaterialEvaluator *cached_bsdf) const noexcept {
+    GIReservoirVar ret = canonical_rsv;
+
+    auto combine = [&](MaterialEvaluator *bsdf) {
+        // Re-express the canonical stream under this receiver's current target.
+        Float canonical_p_hat = compute_p_hat(canonical_it, ret.sample, bsdf);
+        ret.weight_sum = GIReservoir::safe_weight(ret.C, canonical_p_hat, ret.W);
+        Float winner_p_hat = canonical_p_hat;
+        rsv_idx.for_each([&](const Uint &idx) {
+            GIReservoirVar rsv = passthrough_reservoirs().read(idx);
+            Float weight = 0.f;
+            Float donor_p_hat = 0.f;
+            $if(rsv.W > 0.f && rsv.sample.sp->valid()) {
+                SurfaceDataVar neighbor_surf = cur_surfaces().read(idx);
+                Float3 neighbor_pos = neighbor_surf->position();
+                donor_p_hat = compute_p_hat(canonical_it, rsv.sample, bsdf);
+                Float p_hat = donor_p_hat;
+                p_hat = p_hat * Jacobian_det(canonical_it.pos, neighbor_pos, rsv.sample.sp);
+                $if(p_hat > 0.f) {
+                    Float v = pipeline()->geometry().visibility(canonical_it, rsv.sample.sp->position());
+                    weight = GIReservoir::safe_weight(rsv.C, p_hat, rsv.W) * v;
+                };
+            };
+            // Do not condition the denominator on this donor's sampled radiance
+            // or visibility. Cross-domain support correction is a separate step.
+            Bool selected = ret->update(sampler()->next_1d(), rsv.sample, weight, rsv.C);
+            winner_p_hat = ocarina::select(selected, donor_p_hat, winner_p_hat);
+        });
+        Float p_hat = winner_p_hat;
+        if (debias_) {
+            Float normalization = 0.f;
+            $if(ret.weight_sum > 0.f && p_hat > 0.f && ret.sample.sp->valid()) {
+                normalization = ocarina::max(ocarina::zero_if_nan_inf(canonical_rsv.C), 0.f);
+                rsv_idx.for_each([&](const Uint &idx) {
+                    GIReservoirVar source_rsv = passthrough_reservoirs().read(idx);
+                    Float count = ocarina::max(ocarina::zero_if_nan_inf(source_rsv.C), 0.f);
+                    $if(count > 0.f) {
+                        SurfaceDataVar source_surf = cur_surfaces().read(idx);
+                        Interaction source_it = pipeline()->geometry().compute_surface_interaction(source_surf.hit, cur_view_pos(source_surf.is_replaced, idx));
+                        // Zero Lo/W in this source's realization does not remove its support.
+                        normalization += count * selected_sample_support(canonical_it, source_it, ret.sample);
+                    };
+                });
+            };
+            ret->update_W_with_support(p_hat, normalization);
+        } else {
+            ret->update_W(p_hat);
+        }
+    };
+    if (cached_bsdf) {
+        combine(cached_bsdf);
+    } else {
+        $if(canonical_it.has_material()) {
+            scene().materials().dispatch(canonical_it.material_id(), [&](const Material *material) {
+                auto bsdf = material->create_evaluator(canonical_it, sampled_wavelengths());
+                combine(addressof(bsdf));
+            });
+        }
+        $else {
+            // Null receivers still carry the original streams' confidence counts.
+            combine(nullptr);
+        };
+    }
+    return ret;
 }
 
 GIReservoirVar ReSTIRGI::constant_combine(const GIReservoirVar &canonical_rsv,
@@ -320,46 +483,7 @@ GIReservoirVar ReSTIRGI::constant_combine(const GIReservoirVar &canonical_rsv,
     Float3 view_pos = cur_view_pos(cur_surf.is_replaced);
     Interaction canonical_it = pipeline()->geometry().compute_surface_interaction(cur_surf.hit, view_pos);
 
-    GIReservoirVar ret = canonical_rsv;
-
-    rsv_idx.for_each([&](const Uint &idx) {
-        GIReservoirVar rsv = passthrough_reservoirs().read(idx);
-        Float weight = 0.f;
-        $if(rsv.W > 0.f && rsv.sample.sp->valid()) {
-            SurfaceDataVar neighbor_surf = cur_surfaces().read(idx);
-            Float3 neighbor_pos = neighbor_surf->position();
-            Float p_hat = compute_p_hat(canonical_it, rsv.sample);
-            p_hat = p_hat * Jacobian_det(canonical_it.pos, neighbor_pos, rsv.sample.sp);
-            $if(p_hat > 0.f) {
-                Float v = pipeline()->geometry().visibility(canonical_it, rsv.sample.sp->position());
-                weight = GIReservoir::safe_weight(rsv.C, p_hat, rsv.W) * v;
-            };
-        };
-        // Do not condition the denominator on this donor's sampled radiance
-        // or visibility. Cross-domain support correction is a separate step.
-        ret->update(sampler()->next_1d(), rsv.sample, weight, rsv.C);
-    });
-    Float p_hat = compute_p_hat(canonical_it, ret.sample);
-    if (debias_) {
-        Float normalization = 0.f;
-        $if(ret.weight_sum > 0.f && p_hat > 0.f && ret.sample.sp->valid()) {
-            normalization = ocarina::max(ocarina::zero_if_nan_inf(canonical_rsv.C), 0.f);
-            rsv_idx.for_each([&](const Uint &idx) {
-                GIReservoirVar source_rsv = passthrough_reservoirs().read(idx);
-                Float count = ocarina::max(ocarina::zero_if_nan_inf(source_rsv.C), 0.f);
-                $if(count > 0.f) {
-                    SurfaceDataVar source_surf = cur_surfaces().read(idx);
-                    Interaction source_it = pipeline()->geometry().compute_surface_interaction(source_surf.hit, cur_view_pos(source_surf.is_replaced, idx));
-                    // Zero Lo/W in this source's realization does not remove its support.
-                    normalization += count * selected_sample_support(canonical_it, source_it, ret.sample);
-                };
-            });
-        };
-        ret->update_W_with_support(p_hat, normalization);
-    } else {
-        ret->update_W(p_hat);
-    }
-    return ret;
+    return constant_combine_cached(canonical_rsv, rsv_idx, canonical_it, nullptr);
 }
 
 GIReservoirVar ReSTIRGI::combine_spatial(GIReservoirVar cur_rsv,
@@ -370,9 +494,17 @@ GIReservoirVar ReSTIRGI::combine_spatial(GIReservoirVar cur_rsv,
     return cur_rsv;
 }
 
-GIReservoirVar ReSTIRGI::spatial_reuse(GIReservoirVar rsv, const SurfaceDataVar &cur_surf,
-                                       const Int2 &pixel, const Var<GIParam> &param) const noexcept {
-    $if(param.spatial) {
+GIReservoirVar ReSTIRGI::spatial_reuse_cached(GIReservoirVar rsv, const SurfaceDataVar &cur_surf,
+                                              const Int2 &pixel, const Var<GIParam> &param,
+                                              const Interaction *cached_it,
+                                              MaterialEvaluator *cached_bsdf) const noexcept {
+    // A supplied evaluator already applied this receiver's normal map once.
+    // Null evaluators in the cached path are the material-less kernel branch.
+    Bool reuse_allowed = cached_it ? Bool{true} : receiver_reuse_allowed(cur_surf);
+    if (cached_bsdf) {
+        reuse_allowed = !gi_receiver_has_transmission(*cached_bsdf, spectrum()->dimension());
+    }
+    $if(param.spatial && reuse_allowed) {
         Int2 res = make_int2(dispatch_dim().xy());
         Container<uint> rsv_idx{spatial_.sample_num};
         $for(i, spatial_.sample_num) {
@@ -387,10 +519,19 @@ GIReservoirVar ReSTIRGI::spatial_reuse(GIReservoirVar rsv, const SurfaceDataVar 
             };
         };
         $if(cur_surf.hit->is_hit()) {
-            rsv = combine_spatial(rsv, rsv_idx);
+            if (cached_it) {
+                rsv = constant_combine_cached(rsv, rsv_idx, *cached_it, cached_bsdf);
+            } else {
+                rsv = combine_spatial(rsv, rsv_idx);
+            }
         };
     };
     return rsv;
+}
+
+GIReservoirVar ReSTIRGI::spatial_reuse(GIReservoirVar rsv, const SurfaceDataVar &cur_surf,
+                                       const Int2 &pixel, const Var<GIParam> &param) const noexcept {
+    return spatial_reuse_cached(rsv, cur_surf, pixel, param, nullptr, nullptr);
 }
 
 Float3 ReSTIRGI::shading(GIReservoirVar rsv,
@@ -407,18 +548,18 @@ Float3 ReSTIRGI::shading(GIReservoirVar rsv,
     Float3 ret = make_float3(0.f);
     $if(rsv.W > 0.f && rsv.sample.sp->valid() &&
         length_squared(rsv.sample.sp->position() - it.pos) > 0.f) {
-        ScatterEval scatter_eval = eval_bsdf(it, rsv.sample, MaterialEvalMode::All);
-        $if(scatter_eval.valid() && !ocarina::isinf(scatter_eval.pdf())) {
-            ret = ocarina::zero_if_nan_inf(throughput * rsv.sample.Lo.as_vec3() * scatter_eval.f.vec3() * rsv.W);
-            if (specular) {
-                Float3 delta = rsv.sample.sp->position() - it.pos;
-                scene().materials().dispatch(it.material_id(), [&](const Material *material) {
-                    auto bsdf = material->create_evaluator(it, sampled_wavelengths());
+        scene().materials().dispatch(it.material_id(), [&](const Material *material) {
+            auto bsdf = material->create_evaluator(it, sampled_wavelengths());
+            ScatterEval scatter_eval = eval_bsdf(it, rsv.sample, MaterialEvalMode::All, addressof(bsdf));
+            $if(scatter_eval.valid() && !ocarina::isinf(scatter_eval.pdf())) {
+                ret = ocarina::zero_if_nan_inf(throughput * rsv.sample.Lo.as_vec3() * scatter_eval.f.vec3() * rsv.W);
+                if (specular) {
+                    Float3 delta = rsv.sample.sp->position() - it.pos;
                     *specular = ret * bsdf.specular_fraction_rgb(it.wo, normalize(delta));
-                });
-                *hit_distance = max(length(delta), 1e-5f);
-            }
-        };
+                    *hit_distance = max(length(delta), 1e-5f);
+                }
+            };
+        });
     };
     return ret;
 }
@@ -480,7 +621,24 @@ void ReSTIRGI::compile_spatial_shading() noexcept {
         sampler()->set_seed(dispatch_idx().xy(), frame_index, 5);
         camera->load_data();
         GIReservoirVar rsv = passthrough_reservoirs().read(dispatch_id());
-        rsv = spatial_reuse(rsv, surf, make_int2(dispatch_idx().xy()), param);
+        // Retain temporal history before spatial reuse spreads shared samples.
+        // This dispatch only gathers scratch B, so writing history A is safe.
+        cur_reservoirs().write(dispatch_id(), rsv);
+        // Share the current receiver only for its transmission gate and PDF
+        // resampling. End this material scope before exact-F shading below.
+        Interaction it = pipeline()->geometry().compute_surface_interaction(
+            surf.hit, cur_view_pos(surf.is_replaced));
+        $if(it.has_material()) {
+            scene().materials().dispatch(it.material_id(), [&](const Material *material) {
+                auto bsdf = material->create_evaluator(it, sampled_wavelengths());
+                rsv = spatial_reuse_cached(rsv, surf, make_int2(dispatch_idx().xy()), param,
+                                          addressof(it), addressof(bsdf));
+            });
+        }
+        $else {
+            rsv = spatial_reuse_cached(rsv, surf, make_int2(dispatch_idx().xy()), param,
+                                      addressof(it), nullptr);
+        };
         Float3 specular = make_float3(0.f); Float distance = 0.f;
         Float3 L = shading(rsv, surf, lobes ? &specular : nullptr, lobes ? &distance : nullptr);
         write_radiance(dispatch_id(), make_float4(L, 1.f));
@@ -488,7 +646,6 @@ void ReSTIRGI::compile_spatial_shading() noexcept {
             $if(param.precise_lobes != 0u) { finish_lobes(L, specular, distance); }
             $else { frame_buffer().denoiser_gi_specular().write(dispatch_id(), make_float4(specular, distance)); };
         }
-        cur_reservoirs().write(dispatch_id(), rsv);
     };
     kernel.function()->set_block_dim(8u, 8u, 1u);
     spatial_shading_ = device().compile(kernel, "ReSTIR indirect spatial reuse and shading");
@@ -541,11 +698,11 @@ void ReSTIRGI::update_resolution(ocarina::uint2 res) noexcept {
         vector<uint2> zero(rp->pixel_num(), make_uint2(0u));
         raw_radiance_.upload_immediately(zero.data());
     }
-    reservoirs_.super() = device().create_buffer<GIReservoir>(rp->pixel_num() * 2,
-                                                              "ReSTIRGI::reservoirs_ x 2");
+    reservoirs_.super() = device().create_buffer<GIReservoirStorage>(rp->pixel_num() * 2,
+                                                                     GIReservoirStorage::Name);
     reservoirs_.register_self(0, rp->pixel_num());
     reservoirs_.register_view_index(1, rp->pixel_num(), rp->pixel_num());
-    vector<GIReservoir> host{rp->pixel_num() * 2, GIReservoir{}};
+    vector<GIReservoirStorage> host{rp->pixel_num() * 2, GIReservoirStorage{}};
     reservoirs_.upload_immediately(host.data());
 
     samples_.super() = device().create_buffer<GISample>(rp->pixel_num(),
@@ -558,14 +715,25 @@ void ReSTIRGI::update_resolution(ocarina::uint2 res) noexcept {
 void ReSTIRGI::download_storage(vector<GISample> &samples, vector<GIReservoir> &reservoirs) const noexcept {
     samples.resize(pipeline()->pixel_num());
     reservoirs.resize(pipeline()->pixel_num() * 2u);
+    vector<GIReservoirStorage> stored(reservoirs.size());
     pipeline()->stream() << samples_.view().download(samples.data())
-                         << reservoirs_.view().download(reservoirs.data()) << synchronize() << commit();
+                         << reservoirs_.view().download(stored.data()) << synchronize() << commit();
+    for (size_t i = 0u; i < stored.size(); ++i) reservoirs[i] = unpack_gi_reservoir_host(stored[i]);
 }
 
 void ReSTIRGI::restore(RuntimeObject *old_obj) noexcept {
     const auto *previous = dynamic_cast<ReSTIRGI *>(old_obj);
     OC_ERROR_IF(!previous->radiance_->name().ends_with(" [gi-radiance-v1]"),
                 "GI radiance storage ABI changed; restart the engine before loading the new shaders.");
+    if (previous->reservoirs_.has_registered()) {
+        const auto &buffer = previous->reservoirs_;
+        const uint base = buffer.index().hv();
+        const auto *bindings = buffer.bindless_array()->impl();
+        OC_ERROR_IF(base + 1u >= bindings->buffer_num() ||
+                        !gi_reservoir_storage_matches(buffer.name(), bindings->buffer_view(base),
+                                                      bindings->buffer_view(base + 1u), buffer.length().hv()),
+                    "GI reservoir storage or target changed; restart the engine before loading the new shaders.");
+    }
     ReSTIR::restore(old_obj);
     VS_HOTFIX_MOVE_ATTRS(radiance_, reservoirs_, samples_, sample_num_, ratio_, debias_,
                        initial_samples_, temporal_pass_, spatial_shading_, raw_radiance_, compact_radiance_, radiance_prepared_)
@@ -619,11 +787,11 @@ void ReSTIRGI::prepare(bool compact_radiance) noexcept {
 
     set_compact_radiance(compact_radiance);
 
-    reservoirs_.super() = device().create_buffer<GIReservoir>(rp->pixel_num() * 2,
-                                                              "ReSTIRGI::reservoirs_ x 2");
+    reservoirs_.super() = device().create_buffer<GIReservoirStorage>(rp->pixel_num() * 2,
+                                                                     GIReservoirStorage::Name);
     reservoirs_.register_self(0, rp->pixel_num());
     reservoirs_.register_view(rp->pixel_num(), rp->pixel_num());
-    vector<GIReservoir> host{rp->pixel_num() * 2, GIReservoir{}};
+    vector<GIReservoirStorage> host{rp->pixel_num() * 2, GIReservoirStorage{}};
     reservoirs_.upload_immediately(host.data());
 
     samples_.super() = device().create_buffer<GISample>(rp->pixel_num(),

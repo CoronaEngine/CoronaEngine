@@ -159,7 +159,7 @@ template<EPort p = EPort::D>
 [[nodiscard]] oc_float<p> PDF_wi_transmission(const oc_float<p> &PDF_wh, const oc_float3<p> &wo, const oc_float3<p> &wh,
                                               const oc_float3<p> &wi, const oc_float<p> &eta) {
     oc_float<p> denom = sqr(dot(wi, wh) * eta + dot(wo, wh));
-    oc_float<p> dwh_dwi = abs_dot(wi, wh) / denom;
+    oc_float<p> dwh_dwi = sqr(eta) * abs_dot(wi, wh) / denom;
     oc_float<p> ret = PDF_wh * dwh_dwi;
     return ret;
 }

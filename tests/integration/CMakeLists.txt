@@ -137,6 +137,11 @@ target_include_directories(corona_vision_restir_estimator_tests PRIVATE
 target_link_libraries(corona_vision_restir_estimator_tests PRIVATE
     corona::engine vision-all_libs vision-integrator-ReSTIR)
 add_test(NAME VisionReSTIREstimatorTests COMMAND corona_vision_restir_estimator_tests)
+add_test(NAME VisionReSTIRWinnerTargetTests COMMAND corona_vision_restir_estimator_tests)
+set_tests_properties(VisionReSTIRWinnerTargetTests PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:corona_engine>"
+    ENVIRONMENT "VISION_TEST_GI_WINNER_TARGET_ONLY=1"
+    RUN_SERIAL TRUE TIMEOUT 180)
 add_test(NAME VisionPrincipledStablePlanes
     COMMAND corona_vision_restir_estimator_tests --principled-stable-planes)
 set_tests_properties(VisionPrincipledStablePlanes PROPERTIES

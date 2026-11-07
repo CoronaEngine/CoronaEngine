@@ -269,22 +269,27 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             CameraViewportManager::instance().update_layout(content.tab_id, x, y, width, height);
         }
         if (tab->web_camera_handle && tab->web_camera_width > 0) {
-            // Main camera is the native surface background, never a dock-node
-            // viewport. Web still controls its render-resolution budget.
-            const bool main = tab->docking_pos == "main";
+            // The DOM rectangle is also the picking/gizmo coordinate boundary.
+            // Use it for the main view too, rather than stretching its image
+            // across a different native-window rectangle.
             SharedDataHub::instance().enqueue_camera_viewport_update({
                 .camera_handle = tab->web_camera_handle, .surface = surface, .view_open = false,
-                .x = main ? 0 : x + static_cast<int>(tab->web_camera_x * sx),
-                .y = main ? 0 : y + static_cast<int>(tab->web_camera_y * sy),
-                .width = main ? std::max(1, pixel_w) : std::max(1, static_cast<int>(tab->web_camera_width * sx)),
-                .height = main ? std::max(1, pixel_h) : std::max(1, static_cast<int>(tab->web_camera_height * sy)),
+                .x = x + static_cast<int>(tab->web_camera_x * sx),
+                .y = y + static_cast<int>(tab->web_camera_y * sy),
+                .width = std::max(1, static_cast<int>(tab->web_camera_width * sx)),
+                .height = std::max(1, static_cast<int>(tab->web_camera_height * sy)),
                 .render_width = std::max(1, static_cast<int>(tab->web_camera_render_width * sx)),
                 .render_height = std::max(1, static_cast<int>(tab->web_camera_render_height * sy)),
                 .authority = tab->web_camera_authority,
             });
         }
     }
-    if (auto* hover = manager.get_tab(hovered_tab_); hover && hover->hide_system_cursor.load()) SDL_HideCursor();
+    if (auto* hover = manager.get_tab(hovered_tab_); hover) {
+        const bool hide = hover->hide_system_cursor.load() &&
+            (!hover->use_custom_system_cursor.load() || hover->cursor_inside_camera_image.load());
+        if (hide) SDL_HideCursor();
+        else SDL_ShowCursor();
+    }
     render_imgui_platform_windows(*context.vulkan_backend);
     for (auto [tab_id, tab] : manager.tabs_snapshot()) {
         if (tab && !tab->open) {
