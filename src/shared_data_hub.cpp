@@ -339,15 +339,12 @@ CameraSnapshotRow SharedDataHub::camera_view(std::uintptr_t camera_handle) const
         view = *committed;
     }
 
-    // 叠加待处理的姿态命令（读己之写）
-    {
-        std::lock_guard<std::mutex> lock(camera_move_mutex_);
-        if (auto it = pending_camera_moves_.find(camera_handle); it != pending_camera_moves_.end()) {
-            view.position = it->second.position;
-            view.forward = it->second.forward;
-            view.world_up = it->second.world_up;
-            view.fov = it->second.fov;
-        }
+    // 叠加待处理的姿态命令（读己之写）：peek 内部自带锁，不再需要单独的互斥量
+    if (const auto pending = camera_moves_.peek(camera_handle)) {
+        view.position = pending->position;
+        view.forward = pending->forward;
+        view.world_up = pending->world_up;
+        view.fov = pending->fov;
     }
 
     // 叠加待处理的状态命令（按 fields 位掩码部分更新）
@@ -496,27 +493,13 @@ void SharedDataHub::enqueue_camera_move(CameraMoveCommand command) {
     if (command.camera_handle == 0) {
         return;
     }
-
-    std::lock_guard<std::mutex> lock(camera_move_mutex_);
-    command.sequence = ++camera_move_sequence_;
-    pending_camera_moves_[command.camera_handle] = command;
+    // LatestWins：同一台相机只保留最后一条；出队顺序由 CommandBuffer 内部
+    // 单调序列决定，与生产者线程的调度顺序无关。
+    camera_moves_.push(std::move(command));
 }
 
 std::vector<CameraMoveCommand> SharedDataHub::drain_camera_moves() {
-    std::vector<CameraMoveCommand> moves;
-    {
-        std::lock_guard<std::mutex> lock(camera_move_mutex_);
-        moves.reserve(pending_camera_moves_.size());
-        for (auto& [_, command] : pending_camera_moves_) {
-            moves.push_back(command);
-        }
-        pending_camera_moves_.clear();
-    }
-
-    std::sort(moves.begin(), moves.end(), [](const auto& lhs, const auto& rhs) {
-        return lhs.sequence < rhs.sequence;
-    });
-    return moves;
+    return camera_moves_.drain();
 }
 
 void SharedDataHub::enqueue_camera_viewport_update(CameraViewportUpdateCommand command) {

@@ -549,7 +549,13 @@ struct CameraMoveCommand {
     ktm::fvec3 forward{};
     ktm::fvec3 world_up{};
     float fov{45.0f};
-    std::uint64_t sequence{};
+};
+
+/// 相机姿态命令的合并键（LatestWins：同一台相机只保留最后一条）
+struct CameraMoveKey {
+    static std::uintptr_t get(const CameraMoveCommand& command) noexcept {
+        return command.camera_handle;
+    }
 };
 
 struct CameraViewportUpdateCommand {
@@ -972,9 +978,10 @@ class SharedDataHub {
     std::vector<ActorPickCompletion> actor_pick_completions_;
     SceneStorage scene_storage_;
     ImageStorage image_storage_;
-    mutable std::mutex camera_move_mutex_;
-    std::unordered_map<std::uintptr_t, CameraMoveCommand> pending_camera_moves_;
-    std::uint64_t camera_move_sequence_{0};
+    // 相机姿态：LatestWins（拖拽在 120Hz 下只需最后一次），P5 起统一走 CommandBuffer
+    Kernel::CommandBuffer<CameraMoveCommand, CameraMoveKey,
+                          Kernel::CoalescePolicy::LatestWins>
+        camera_moves_;
     std::mutex camera_viewport_update_mutex_;
     std::unordered_map<std::uintptr_t, CameraViewportUpdateCommand>
         pending_camera_viewport_updates_;

@@ -151,6 +151,27 @@ void test_camera_move_coalescing() {
     CHECK(moves.size() == 1);
     CHECK(moves[0].position.x == 4.0f);
 
+    // 出队顺序 = 各 key 最后一次提交的顺序（与线程调度无关）
+    const auto other = hub.camera_storage().allocate();
+    auto push_move = [&hub](std::uintptr_t camera, float x) {
+        Corona::CameraMoveCommand move{};
+        move.camera_handle = camera;
+        move.position = vec3(x, 0.0f, 0.0f);
+        move.fov = 45.0f;
+        hub.enqueue_camera_move(move);
+    };
+    push_move(handle, 10.0f);
+    push_move(other, 20.0f);
+    push_move(handle, 11.0f);  // 覆盖 handle 的第一条，sequence 变成最后
+
+    const auto ordered = hub.drain_camera_moves();
+    CHECK(ordered.size() == 2);
+    CHECK(ordered[0].camera_handle == other);
+    CHECK(ordered[0].position.x == 20.0f);
+    CHECK(ordered[1].camera_handle == handle);
+    CHECK(ordered[1].position.x == 11.0f);
+
+    hub.camera_storage().deallocate(other);
     hub.camera_storage().deallocate(handle);
 }
 
