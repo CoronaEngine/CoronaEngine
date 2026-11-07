@@ -1,5 +1,6 @@
 #include "native_material.h"
 #include "native_camera.h"
+#include "camera_viewport_updates.h"
 #include <corona/utils/runtime_paths.h>
 #include <corona/utils/scene_path_key.h>
 #include <corona/diagnostics/thread_phase.h>
@@ -699,43 +700,12 @@ void apply_pending_camera_viewport_updates() {
 
     CFW_LOG_INFO("Optics: applying {} camera viewport update(s)", updates.size());
 
-    auto& camera_storage = hub.camera_storage();
     for (const auto& update : updates) {
-        if (auto camera = camera_storage.acquire_write(update.camera_handle)) {
+        if (Corona::Systems::apply_camera_viewport_update(hub, update)) {
             CFW_LOG_INFO("Optics: camera viewport handle={} surface={} open={} rect={}x{}+{},{} render={}x{}",
                          update.camera_handle, update.surface, update.view_open, update.width,
                          update.height, update.x, update.y, update.render_width,
                          update.render_height);
-            camera->surface = update.surface;
-            camera->follows_default_surface = false;
-            camera->view_open = update.view_open;
-            camera->viewport_rect_active = true;
-            camera->view_x = update.x;
-            camera->view_y = update.y;
-            camera->view_width = update.width;
-            camera->view_height = update.height;
-            const auto render_width =
-                static_cast<std::uint32_t>(std::max(update.render_width, 1));
-            const auto render_height =
-                static_cast<std::uint32_t>(std::max(update.render_height, 1));
-            camera->width = render_width;
-            camera->height = render_height;
-            camera->aspect = static_cast<float>(render_width) /
-                             static_cast<float>(render_height);
-        }
-        if(update.surface && !update.view_open) {
-            // One embedded viewport owns a surface. Explicit floating camera
-            // windows remain independent; old saved cameras must not render
-            // an additional backend behind the active story viewport.
-            std::vector<std::uintptr_t> obsolete;
-            for(const auto& camera:std::as_const(camera_storage)) {
-                const auto handle=reinterpret_cast<std::uintptr_t>(&camera);
-                if(handle!=update.camera_handle && camera.surface==update.surface && !camera.view_open)
-                    obsolete.push_back(handle);
-            }
-            for(auto handle:obsolete)if(auto camera=camera_storage.try_acquire_write(handle)) {
-                if(camera->surface==update.surface && !camera->view_open){camera->surface=nullptr;camera->follows_default_surface=false;}
-            }
         }
     }
 }
@@ -809,6 +779,9 @@ void apply_pending_camera_state_updates() {
             if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::ViewState)) {
                 camera->view_open = update.view_open;
+            }
+            if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::ViewState) ||
+                Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::ViewSettings)) {
                 camera->view_x = update.view_x;
                 camera->view_y = update.view_y;
                 camera->view_width = update.view_width;

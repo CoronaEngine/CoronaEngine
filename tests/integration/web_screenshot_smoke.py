@@ -105,6 +105,9 @@ def run(port, root, engine_pid):
             raise errors[0]
 
     main = Frontend(port, target_id=targets()[0]['id'])
+    def cameras():
+        return main.evaluate("(async()=>{const s=await corona.scene.readActive();return "
+                             "(await corona.scene.readCameras(s.scene,{archive_session:s.archive_session})).cameras;})()")
     panel = camera_view = None
     tab_id = None
     try:
@@ -124,7 +127,7 @@ def run(port, root, engine_pid):
             window.__retiredScreenshotRequests.push(api);throw Error('Retired screenshot request');}
             return invoke(api,args);};return true;})()"""
         panel.evaluate(monitor)
-        initial = main.api('SceneTools.list_camera_views', ['scene.ini'])['data']['cameras']
+        initial = cameras()
         output = root.parent / 'scene-ui-screenshot.png'
         click_with_dialog(panel, "document.querySelector('button[title=截图]').click();true", output)
         wait(output.exists, bool, 'SceneBar PNG')
@@ -141,7 +144,7 @@ def run(port, root, engine_pid):
         camera_view = Frontend(port, target_id=camera_target['id'])
         wait(lambda: camera_view.evaluate("[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='Screenshot')"), bool, 'CameraView ready')
         viewport_size = camera_view.evaluate('({width:Math.max(Math.round(innerWidth),64),height:Math.max(Math.round(innerHeight),64)})')
-        secondary = wait(lambda: next(camera for camera in main.api('SceneTools.list_camera_views', ['scene.ini'])['data']['cameras']
+        secondary = wait(lambda: next(camera for camera in cameras()
                                       if camera['camera_id'] == 'focus-camera'),
                          lambda camera: all(camera[key] == viewport_size[key] for key in ['width', 'height']),
                          'CameraView initial native size synchronization')
@@ -155,7 +158,7 @@ def run(port, root, engine_pid):
         assert camera_view.evaluate("document.querySelector('.error')?.textContent || ''") == ''
         assert panel.evaluate('window.__retiredScreenshotRequests') == []
         assert camera_view.evaluate('window.__retiredScreenshotRequests') == []
-        after = main.api('SceneTools.list_camera_views', ['scene.ini'])['data']['cameras']
+        after = cameras()
         for before in initial:
             current = next(camera for camera in after if camera['camera_id'] == before['camera_id'])
             for field in ['position', 'forward', 'world_up', 'fov', 'output_mode']:

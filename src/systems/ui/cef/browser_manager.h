@@ -1,5 +1,7 @@
 #pragma once
 
+#include "camera_window_lifetime.h"
+
 #include "horizon.h"
 #include <SDL3/SDL.h>
 #include <include/internal/cef_types.h>
@@ -22,7 +24,6 @@ class VulkanBackend;
 
 namespace Corona::Systems::UI {
 class OffscreenCefClient;
-struct CameraWindowAuthority;
 
 // ImGui-free texture identifier (Phase 6 of the ImGui-removal plan). This carries the
 // same value the ImGui path used to store in ImTextureID: a bindless sampled-image
@@ -68,6 +69,7 @@ struct BrowserTab {
     CefRect ime_caret{0, 0, 1, 18};
     // Last Web-local camera rectangle; composed with the ImGui content origin each frame.
     std::uintptr_t web_camera_handle = 0;
+    std::shared_ptr<Corona::CameraCommandAuthority> web_camera_authority;
     int web_camera_x = 0, web_camera_y = 0;
     int web_camera_width = 0, web_camera_height = 0;
     int web_camera_render_width = 0, web_camera_render_height = 0;

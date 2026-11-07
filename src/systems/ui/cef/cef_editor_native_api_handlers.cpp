@@ -395,6 +395,14 @@ float parse_float(const std::string& value, float fallback) {
 }
 
 struct NativeEditorCamera {
+    // First for move assignment: retire the overwritten identity before its
+    // engine camera is released. Vector relocation transfers the same lease.
+    CameraWindowLifetime camera_window_lifetime;
+    NativeEditorCamera() = default;
+    NativeEditorCamera(NativeEditorCamera&&) noexcept = default;
+    NativeEditorCamera& operator=(NativeEditorCamera&&) noexcept = default;
+    ~NativeEditorCamera() { camera_window_lifetime.retire(); }
+    std::shared_ptr<CameraWindowState> window_state = std::make_shared<CameraWindowState>();
     std::string camera_id;
     std::string name;
     bool deletable{true};
@@ -588,8 +596,9 @@ std::string normalize_body_type(std::string value) {
 }
 
 struct NativeEditorScene {
-    CameraWindowLifetime camera_window_lifetime;
-    ~NativeEditorScene() { camera_window_lifetime.retire(); }
+    ~NativeEditorScene() {
+        for (auto& camera : cameras) camera.camera_window_lifetime.retire();
+    }
     std::string archive_session;
     std::uint64_t tree_revision{1};
     std::optional<ActorSelection> selection;
@@ -1762,6 +1771,11 @@ std::string current_viewport_session() {
     return scene ? scene->archive_session : "";
 }
 
+bool requested_camera_view_open(const NativeEditorCamera& camera) {
+    const auto state = camera.window_state->requested_open.load();
+    return state < 0 ? camera.view_open : state != 0;
+}
+
 nlohmann::json camera_to_json(const NativeEditorCamera& camera) {
     nlohmann::json item;
     item["archive_session"] = current_viewport_session();
@@ -1803,7 +1817,7 @@ nlohmann::json camera_to_json(const NativeEditorCamera& camera) {
     item["vision_accumulation"] = camera.engine_camera ? camera.engine_camera->get_vision_accumulation() : false;
     item["vision_stable_planes"] = camera.engine_camera ? camera.engine_camera->get_vision_stable_planes() : true;
     item["move_speed"] = camera.move_speed;
-    item["view_open"] = camera.view_open;
+    item["view_open"] = requested_camera_view_open(camera);
     item["view_x"] = camera.view_x;
     item["view_y"] = camera.view_y;
     item["view_width"] = camera.view_width;
@@ -2076,7 +2090,7 @@ std::string unique_camera_name(const NativeEditorScene& scene, const std::string
     return base + "_" + std::to_string(scene.cameras.size() + 1);
 }
 
-NativeEditorCamera& create_native_camera_view(NativeEditorScene& scene, const std::string& requested_name) {
+NativeEditorCamera& create_native_camera_view(NativeEditorScene& scene, const std::string& requested_name, bool initially_open = true) {
     NativeEditorCamera item;
     ++scene.tree_revision;
     item.name = unique_camera_name(scene, requested_name);
@@ -2084,7 +2098,7 @@ NativeEditorCamera& create_native_camera_view(NativeEditorScene& scene, const st
     item.deletable = true;
     item.width = 1920;
     item.height = 1080;
-    item.view_open = true;
+    item.view_open = initially_open;
     item.view_x = 120;
     item.view_y = 120;
     item.view_width = 960;
@@ -3025,6 +3039,21 @@ SceneReply apply_native_actor_transform(const SceneRequest& request) {
     return reply;
 }
 
+ActorPropertiesSnapshot actor_properties_snapshot(const NativeEditorScene& scene, const NativeEditorActor& actor) {
+    ActorPropertiesSnapshot result;
+    result.scene = scene.route; result.actor = actor.name; result.actor_guid = actor.actor_guid;
+    result.actor_version = actor.actor_version; result.follow_camera = actor.follow_camera;
+    if (actor.optics) result.visible = actor.optics->get_visible();
+    if (actor.mechanics) {
+        const auto [lx, ly, lz] = actor.mechanics->get_linear_lock();
+        const auto [ax, ay, az] = actor.mechanics->get_angular_lock();
+        result.mechanics = ActorMechanicsSnapshot{actor.mechanics->get_mass(), actor.mechanics->get_restitution(),
+            actor.mechanics->get_damping(), actor.mechanics->get_body_type(), {lx, ly, lz}, {ax, ay, az}};
+    }
+    result.camera_lock = {actor.camera_lock_enabled, actor.camera_lock_position_offset, actor.camera_lock_rotation_offset};
+    return result;
+}
+
 SceneReply apply_native_actor_properties(const SceneRequest& request) {
     SceneReply reply;
     const auto fail = [&](const char* code, const std::string& message) {
@@ -3107,18 +3136,8 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
     }
     actor->actor_version = std::max(actor->actor_version + 1, 1);
     ++scene->tree_revision;
-    auto& result = reply.properties;
-    result.scene = scene->route; result.actor = actor->name; result.actor_guid = actor->actor_guid;
-    result.actor_version = actor->actor_version; result.follow_camera = actor->follow_camera;
-    if (actor->optics) result.visible = actor->optics->get_visible();
-    if (actor->mechanics) {
-        const auto [lx, ly, lz] = actor->mechanics->get_linear_lock();
-        const auto [ax, ay, az] = actor->mechanics->get_angular_lock();
-        result.mechanics = ActorMechanicsSnapshot{actor->mechanics->get_mass(), actor->mechanics->get_restitution(),
-            actor->mechanics->get_damping(), actor->mechanics->get_body_type(), {lx, ly, lz}, {ax, ay, az}};
-    }
-    result.camera_lock = {actor->camera_lock_enabled, position_offset, rotation_offset};
-    result.requested_animation_sources = std::move(sources);
+    reply.properties = actor_properties_snapshot(*scene, *actor);
+    reply.properties.requested_animation_sources = std::move(sources);
     return reply;
 }
 
@@ -4705,12 +4724,70 @@ std::uintptr_t resolve_native_actor_handle_by_guid(const std::string& scene_id,
     return actor->engine_actor->get_handle();
 }
 
+CameraPropertiesSnapshot camera_properties_snapshot(const NativeEditorScene& scene, const NativeEditorCamera& camera) {
+    CameraPropertiesSnapshot result;
+    const auto& engine = *camera.engine_camera;
+    const auto projection = engine.get_projection();
+    result.archive_session = scene.archive_session; result.scene = scene.route;
+    result.camera_id = camera.camera_id; result.name = camera.name; result.handle = engine.get_handle();
+    result.position = engine.get_position(); result.forward = engine.get_forward(); result.world_up = engine.get_world_up(); result.fov = engine.get_fov();
+    result.projection_x_sign = projection[0]; result.near_plane = projection[1]; result.far_plane = projection[2];
+    result.width = camera.width; result.height = camera.height; result.move_speed = camera.move_speed;
+    result.view_open = requested_camera_view_open(camera); result.view_x = camera.view_x; result.view_y = camera.view_y;
+    result.view_width = camera.view_width; result.view_height = camera.view_height;
+    return result;
+}
+
+bool camera_list_snapshot(const NativeEditorScene& scene, CameraListSnapshot& result) {
+    result.archive_session = scene.archive_session; result.scene = scene.route;
+    if (!scene.cameras.empty())
+        result.active_camera_id = scene.cameras[std::min(scene.active_camera_index, scene.cameras.size() - 1)].camera_id;
+    result.cameras.reserve(scene.cameras.size());
+    for (const auto& camera : scene.cameras) {
+        if (!camera.engine_camera) return false;
+        CameraReadSnapshot value;
+        value.properties = camera_properties_snapshot(scene, camera);
+        const auto& engine = *camera.engine_camera;
+        value.output_mode = engine.get_output_mode(); value.render_backend = engine.get_render_backend();
+        value.vision_render_mode = engine.get_vision_render_mode(); value.vision_denoiser = engine.get_vision_denoiser();
+        value.vision_accumulation = engine.get_vision_accumulation(); value.vision_denoise = engine.get_vision_denoise();
+        value.vision_stable_planes = engine.get_vision_stable_planes(); value.deletable = camera.deletable;
+        result.cameras.push_back(std::move(value));
+    }
+    return true;
+}
+
+Corona::Ui::Cef::SceneTreeActorRow scene_tree_actor_row(const NativeEditorActor& actor) {
+    Corona::Ui::Cef::SceneTreeActorRow row;
+    row.name = actor.name; row.actor_guid = actor.actor_guid; row.route = actor.route;
+    row.actor_type = actor.actor_type;
+    row.handle = actor.engine_actor ? actor.engine_actor->get_handle() : 0;
+    row.visible = actor.optics ? actor.optics->get_visible() : true;
+    row.gpu_build_state = actor.geometry ? actor.geometry->get_gpu_build_state() : "Ready";
+    const bool pending = row.gpu_build_state == "PendingImport" || row.gpu_build_state == "PendingBuild";
+    row.load_status = row.gpu_build_state == "Failed" ? "gpu_failed"
+        : (pending ? "gpu_uploading" : actor_load_status_name(actor.load_status));
+    row.audio_resource_id = actor.actor_type == "audio" ? std::to_string(actor.audio_resource_id) : std::string{};
+    row.has_load_error = actor.load_status != ActorLoadStatus::Loaded;
+    if (row.has_load_error) {
+        row.load_error_code = actor.load_error_code; row.load_error_message = actor.load_error_message;
+        row.load_error_resource_path = actor.route; row.load_error_path = actor.resolved_asset_path;
+    }
+    if (actor.geometry) {
+        const auto counts = actor.geometry->get_model_node_counts();
+        row.model_node_count = counts.total; row.model_node_root_count = counts.roots;
+    }
+    return row;
+}
+
 SceneReply apply_native_camera_properties(const SceneRequest& request, bool editor_input = true) {
     SceneReply reply;
     const auto fail = [&](const char* code, const char* message) {
         reply.error_code = code; reply.error_message = message; return reply;
     };
     const auto& patch = request.camera_properties;
+    if (editor_input && patch.view_open)
+        return fail("INVALID_ARGUMENT", "Camera window lifecycle belongs to window operations");
     if (patch.scene.empty() || patch.camera_id.empty() || !request.archive_session || request.archive_session->empty() || patch.empty())
         return fail("INVALID_ARGUMENT", "Camera patch requires archive, scene, camera identity and properties");
     auto* scene = native_editor_state().scene.get();
@@ -4755,16 +4832,15 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
         camera.view_x = patch.view_x.value_or(camera.view_x); camera.view_y = patch.view_y.value_or(camera.view_y);
         camera.view_width = patch.view_width.value_or(camera.view_width); camera.view_height = patch.view_height.value_or(camera.view_height);
         camera.move_speed = patch.move_speed.value_or(camera.move_speed);
-        engine.set_view_state(camera.view_open, camera.view_x, camera.view_y, camera.view_width, camera.view_height, camera.move_speed);
+        if (!editor_input && patch.view_open) {
+            camera.window_state->requested_open.store(camera.view_open ? 1 : 0);
+            engine.set_view_state(camera.view_open, camera.view_x, camera.view_y, camera.view_width, camera.view_height, camera.move_speed);
+        } else {
+            engine.set_view_settings(camera.view_x, camera.view_y, camera.view_width, camera.view_height, camera.move_speed);
+        }
     }
-    auto& result = reply.camera;
-    result.archive_session = scene->archive_session; result.scene = scene->route;
-    result.camera_id = camera.camera_id; result.name = camera.name; result.handle = engine.get_handle();
-    result.position = engine.get_position(); result.forward = engine.get_forward(); result.world_up = engine.get_world_up(); result.fov = engine.get_fov();
-    result.projection_x_sign = sign; result.near_plane = near_plane; result.far_plane = far_plane;
-    result.width = camera.width; result.height = camera.height; result.move_speed = camera.move_speed;
-    result.view_open = camera.view_open; result.view_x = camera.view_x; result.view_y = camera.view_y;
-    result.view_width = camera.view_width; result.view_height = camera.view_height;
+    reply.camera = camera_properties_snapshot(*scene, camera);
+    reply.camera.projection_x_sign = sign; reply.camera.near_plane = near_plane; reply.camera.far_plane = far_plane;
     return reply;
 }
 
@@ -4808,6 +4884,29 @@ NativeResult apply_non_web_camera_properties(const NativeRequest& request, bool 
 }
 
 SceneReply execute_scene_operation(const SceneRequest& request) {
+    if (request.method == SceneMethod::CreateCamera) {
+        SceneReply reply;
+        if (request.camera_create.scene.empty() || !request.archive_session || request.archive_session->empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Camera creation requires the observed archive and scene";
+            return reply;
+        }
+        auto* scene = native_editor_state().scene.get();
+        if (!scene || scene->archive_session != *request.archive_session ||
+            !native_scene_request_matches(*scene, request.camera_create.scene)) {
+            reply.error_code = "PROJECT_CONTEXT_CHANGED";
+            reply.error_message = "Camera creation belongs to an inactive archive";
+            return reply;
+        }
+        if (scene->read_only) {
+            reply.error_code = "READ_ONLY";
+            reply.error_message = "Cannot create a camera in a read-only scene";
+            return reply;
+        }
+        const auto& camera = create_native_camera_view(*scene, request.camera_create.name.value_or(""), false);
+        reply.camera = camera_properties_snapshot(*scene, camera);
+        return reply;
+    }
     if (request.method == SceneMethod::SetCameraProperties) return apply_native_camera_properties(request);
     if (request.method == SceneMethod::CaptureScreenshot) return capture_native_screenshot(request);
     if (request.method == SceneMethod::FocusActor) return apply_native_actor_focus(request);
@@ -4823,6 +4922,97 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             reply.active = {scene->archive_session, scene->route, scene->name,
                 state.project_path, scene->read_only, scene->tree_revision, scene->selection};
         }
+        return reply;
+    }
+    if (request.method == SceneMethod::ReadActorIndex) {
+        if (!request.archive_session || request.archive_session->empty() || request.read_scene.empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Actor index requires the observed archive and scene";
+            return reply;
+        }
+        const auto* scene = state.scene.get();
+        if (!scene || *request.archive_session != scene->archive_session ||
+            !native_scene_request_matches(*scene, request.read_scene)) {
+            reply.error_code = "PROJECT_CONTEXT_CHANGED";
+            reply.error_message = "Actor index belongs to an inactive scene";
+            return reply;
+        }
+        reply.actor_index = {scene->archive_session, scene->route, scene->tree_revision, {}};
+        reply.actor_index.actors.reserve(scene->actors.size());
+        // Identity and names only: no geometry locks, render settings or storage
+        // adapter, and a read must never materialize a default editor scene.
+        for (const auto& actor : scene->actors) {
+            const auto extension = actor_file_extension(actor.route);
+            reply.actor_index.actors.push_back({actor.actor_guid, actor.name,
+                extension.empty() ? actor.actor_type : extension});
+        }
+        return reply;
+    }
+    if (request.method == SceneMethod::ReadCameras || request.method == SceneMethod::ReadTree) {
+        if (!request.archive_session || request.archive_session->empty() || trim_ascii(request.read_scene).empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Scene reads require the observed archive and scene";
+            return reply;
+        }
+        const auto* scene = state.scene.get();
+        if (!scene || *request.archive_session != scene->archive_session ||
+            !native_scene_request_matches(*scene, request.read_scene)) {
+            reply.error_code = "PROJECT_CONTEXT_CHANGED";
+            reply.error_message = "Read belongs to an inactive scene";
+            return reply;
+        }
+        auto& result = request.method == SceneMethod::ReadTree ? reply.tree.cameras : reply.camera_list;
+        if (!camera_list_snapshot(*scene, result)) {
+            reply.error_code = "CAMERA_NOT_FOUND";
+            reply.error_message = "Camera runtime is unavailable";
+            return reply;
+        }
+        if (request.method == SceneMethod::ReadTree) {
+            reply.tree.tree_revision = scene->tree_revision;
+            reply.tree.actors.reserve(scene->actors.size());
+            for (const auto& actor : scene->actors) reply.tree.actors.push_back(scene_tree_actor_row(actor));
+        }
+        // No actor geometry or serialized advanced rendering settings are read.
+        return reply;
+    }
+    if (request.method == SceneMethod::ReadActorProperties) {
+        if (!request.archive_session || request.archive_session->empty() ||
+            trim_ascii(request.read_scene).empty() || trim_ascii(request.read_actor).empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Actor properties require the observed archive, scene and Actor";
+            return reply;
+        }
+        auto* scene = state.scene.get();
+        if (!scene || *request.archive_session != scene->archive_session ||
+            !native_scene_request_matches(*scene, request.read_scene)) {
+            reply.error_code = "PROJECT_CONTEXT_CHANGED";
+            reply.error_message = "Actor properties belong to an inactive scene";
+            return reply;
+        }
+        const auto* actor = find_native_actor(*scene, request.read_actor);
+        if (!actor) {
+            reply.error_code = "ACTOR_NOT_FOUND";
+            reply.error_message = "Actor not found: " + request.read_actor;
+            return reply;
+        }
+        auto& value = reply.actor_read;
+        value.properties = actor_properties_snapshot(*scene, *actor);
+        value.archive_session = scene->archive_session;
+        value.actor_type = actor->actor_type; value.model = actor->route;
+        value.body_type = actor->load_status == ActorLoadStatus::Loaded && actor->mechanics
+            ? actor->mechanics->get_body_type() : actor->persisted_body_type;
+        value.properties.visible = actor->load_status == ActorLoadStatus::Loaded && actor->optics
+            ? actor->optics->get_visible() : actor->persisted_visible;
+        if (value.properties.mechanics) value.properties.mechanics->body_type = value.body_type;
+        value.load_status = actor_load_status_name(actor->load_status);
+        if (actor->load_status != ActorLoadStatus::Loaded) {
+            value.load_error_code = actor->load_error_code; value.load_error_message = actor->load_error_message;
+            value.resolved_asset_path = actor->resolved_asset_path;
+        }
+        value.handle = actor->engine_actor ? actor->engine_actor->get_handle() : 0;
+        value.position = actor->geometry ? actor->geometry->get_position() : actor->position;
+        value.rotation = actor->geometry ? actor->geometry->get_rotation() : actor->rotation;
+        value.scale = actor->geometry ? actor->geometry->get_scale() : actor->scale;
         return reply;
     }
     if (request.method == SceneMethod::ReadTransforms) {
@@ -4868,6 +5058,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
 WindowReply prepare_camera_window_request(WindowRequest& request) {
     request.camera_handle = 0;
     request.camera_authority.reset();
+    request.camera_state.reset();
     WindowReply reply;
     const auto* scene = native_editor_state().scene.get();
     if (!scene || request.archive_session.empty() || request.scene_id.empty() ||
@@ -4886,7 +5077,8 @@ WindowReply prepare_camera_window_request(WindowRequest& request) {
     }
     request.scene_id = scene->route;
     request.camera_handle = camera->engine_camera->get_handle();
-    request.camera_authority = scene->camera_window_lifetime.token();
+    request.camera_authority = camera->camera_window_lifetime.token();
+    request.camera_state = camera->window_state;
     return reply;
 }
 
@@ -6173,6 +6365,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 return camera_not_found_result(camera_name);
             }
             camera->view_open = false;
+            camera->window_state->requested_open.store(0);
             camera->engine_camera->set_view_state(false, camera->view_x, camera->view_y,
                                                   camera->view_width, camera->view_height,
                                                   camera->move_speed);
@@ -6210,7 +6403,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 return native_failure("The main camera cannot be deleted", 2);
             }
             const auto removed_id = it->camera_id;
-            scene->camera_window_lifetime = CameraWindowLifetime{};
+            it->camera_window_lifetime.retire();
             if (it->engine_camera) {
                 it->engine_camera->set_surface(0);
                 if (scene->engine_scene) {
@@ -6244,46 +6437,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                          scene->actors.size(), scene->cameras.size());
             nlohmann::json actors = nlohmann::json::array();
             for (const auto& actor : scene->actors) {
-                const std::string gpu_build_state = actor.geometry
-                    ? actor.geometry->get_gpu_build_state()
-                    : std::string{"Ready"};
-                const bool gpu_pending = gpu_build_state == "PendingImport" ||
-                                         gpu_build_state == "PendingBuild";
-                const bool gpu_failed = gpu_build_state == "Failed";
-                // This handler runs on the CEF UI thread, together with the offscreen
-                // paint of the whole editor.  Building the full actor JSON here would
-                // re-derive AABBs, materials and mechanics for every actor, so a row
-                // only carries what the tree UI reads (see scene_tree_actor.h).
-                Corona::Ui::Cef::SceneTreeActorRow row;
-                row.name = actor.name;
-                row.actor_guid = actor.actor_guid;
-                row.route = actor.route;
-                row.actor_type = actor.actor_type;
-                row.handle = actor.engine_actor ? actor.engine_actor->get_handle() : 0;
-                row.visible = actor.optics ? actor.optics->get_visible() : true;
-                // The persisted actor remains in the tree while its GPU
-                // resources are built. UI identity must never depend on
-                // mesh_handles becoming ready.
-                row.load_status = gpu_failed ? "gpu_failed"
-                    : (gpu_pending ? "gpu_uploading" : actor_load_status_name(actor.load_status));
-                row.gpu_build_state = gpu_build_state;
-                row.audio_resource_id = actor.actor_type == "audio"
-                    ? std::to_string(actor.audio_resource_id) : std::string{};
-                row.has_load_error = actor.load_status != ActorLoadStatus::Loaded;
-                if (row.has_load_error) {
-                    row.load_error_code = actor.load_error_code;
-                    row.load_error_message = actor.load_error_message;
-                    row.load_error_resource_path = actor.route;
-                    row.load_error_path = actor.resolved_asset_path;
-                }
-                if (actor.geometry) {
-                    // Counts only: materializing every node state here would copy
-                    // thousands of strings per refresh on this thread.
-                    const auto node_counts = actor.geometry->get_model_node_counts();
-                    row.model_node_count = node_counts.total;
-                    row.model_node_root_count = node_counts.roots;
-                }
-                actors.push_back(Corona::Ui::Cef::scene_tree_actor_to_json(row));
+                actors.push_back(Corona::Ui::Cef::scene_tree_actor_to_json(scene_tree_actor_row(actor)));
             }
             nlohmann::json cameras = nlohmann::json::array();
             for (const auto& camera : scene->cameras) {
@@ -7063,6 +7217,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 return camera_not_found_result(camera_name);
             }
             camera->view_open = true;
+            camera->window_state->requested_open.store(1);
             camera->engine_camera->set_view_state(true, camera->view_x, camera->view_y,
                                                   camera->view_width, camera->view_height,
                                                   camera->move_speed);

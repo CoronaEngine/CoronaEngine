@@ -105,9 +105,9 @@ def wait_for(read, condition, description):
 def dispatch_script_key(web, event_type, code='KeyD', key='d'):
     """Programmatic input uses the same scoped V8 entrypoint as viewport input."""
     scope = web.evaluate('corona.scene.readActive()')
-    cameras = web.api('SceneTools.list_camera_views', [scope['scene']])
-    assert cameras['success'], cameras
-    camera_id = cameras['data']['cameras'][0]['camera_id']
+    cameras = web.evaluate(f'corona.scene.readCameras({json.dumps(scope["scene"])},'
+                           f'{json.dumps({"archive_session": scope["archive_session"]})})')
+    camera_id = cameras['cameras'][0]['camera_id']
     event = {'archive_session': scope['archive_session'], 'type': event_type, 'code': code, 'key': key}
     if event_type == 'keyDown':
         event['modifiers'] = ''
@@ -127,8 +127,8 @@ def verify(port, root, switch_root=None):
         return result["data"]
 
     def position():
-        actors = api("SceneTools.get_scene_snapshot", "scene.ini")["actors"]
-        return next(a["geometry"]["position"] for a in actors if a["name"] == "Probe")
+        return web.evaluate("(async()=>{const s=await corona.scene.readActive();return "
+                            "(await corona.scene.readActorProperties(s.scene,'Probe',{archive_session:s.archive_session})).geometry.position;})()")
 
     def project_files(project=root):
         return {p.relative_to(project).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
@@ -278,7 +278,7 @@ def verify(port, root, switch_root=None):
         wait_for(position, lambda p: p == moved, "move in old project")
         key_up()
         web.evaluate("(" + row + ").dispatchEvent(new MouseEvent('dblclick', {bubbles:true}))")
-        wait_for(lambda: api("SceneTools.get_scene_snapshot", "scene.ini"),
+        wait_for(lambda: web.evaluate('corona.scene.readActive()'),
                  lambda s: Path(s["project_path"]).resolve() == switch_root, "project switch")
         assert position() == peer_start
         assert project_files() == saved_files

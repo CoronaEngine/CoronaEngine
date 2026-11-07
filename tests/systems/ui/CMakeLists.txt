@@ -79,7 +79,8 @@ add_executable(corona_camera_window_identity_tests
     test_camera_window_identity.cpp
     ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp)
 target_include_directories(corona_camera_window_identity_tests PRIVATE
-    ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui)
+    ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui
+    ${PROJECT_SOURCE_DIR}/src/systems)
 target_link_libraries(corona_camera_window_identity_tests PRIVATE corona_ui_system corona::resource::manager)
 if(COMMAND helicon_install_runtime_deps)
     helicon_install_runtime_deps(corona_camera_window_identity_tests)

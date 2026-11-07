@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import time
 from urllib.request import urlopen
+from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools'))
 from vision_frontend_probe import Frontend
@@ -16,7 +17,9 @@ def run(port, root):
             return [target for target in json.load(response) if target['type'] == 'page'
                     and '/CabbageEditor/Frontend/' in target['url']]
 
-    main = Frontend(port, target_id=targets()[0]['id'])
+    main_targets = [target for target in targets() if 'uiOwner=' not in target['url'] and 'standalone=1' not in target['url']]
+    assert len(main_targets) == 1, main_targets
+    main = Frontend(port, target_id=main_targets[0]['id'])
     panel = None
     camera_view = None
     tab_id = None
@@ -27,9 +30,7 @@ def run(port, root):
         scope = main.evaluate('corona.scene.readActive()')['archive_session']
 
         def cameras():
-            result = main.api('SceneTools.list_camera_views', ['scene.ini'])
-            assert result['success'], result
-            return result['data']['cameras']
+            return main.evaluate('corona.scene.readCameras("scene.ini",' + json.dumps({'archive_session': scope}) + ')')['cameras']
 
         initial = cameras()[0]
         service = """(async()=>{const m=await import(document.querySelector('script[type=module]').src);
@@ -44,14 +45,24 @@ def run(port, root):
         wait(lambda: panel.evaluate("!!document.querySelector('[data-actor-name=Probe]')"), bool, 'SceneBar Actor row')
         monitor = """(async()=>{window.__oldFocusRequests=[];const invoke=corona.editor.invoke;
           corona.editor.invoke=(api,args)=>{if(['SceneTools.focus_actor','ResourceSearch.focus_actor',
-            'SceneTools.set_camera_pose','SceneTools.update_camera_view'].includes(api)){
+            'SceneTools.set_camera_pose','SceneTools.update_camera_view',
+            'SceneTools.open_camera_view','SceneTools.close_camera_view','SceneTools.create_camera_view',
+            'SceneTools.get_scene_snapshot','SceneTools.list_scene_tree','SceneTools.list_camera_views'].includes(api)){
             window.__oldFocusRequests.push(api);throw Error('Retired focus route');}return invoke(api,args);};
           const m=await import(document.querySelector('script[type=module]').src);
           const api=Object.values(m).find(v=>typeof v?.scene?.setCameraProperties==='function');
           if(!api)throw Error('Shared camera properties facade missing');
-          if(typeof coronaBridge.cameraMove!=='undefined')throw Error('Retired camera Fast route exists');
+          if(typeof api.scene.getSnapshot!=='undefined'||typeof api.sceneTools.listCameraViews!=='undefined'||typeof api.sceneTools.listSceneTree!=='undefined')
+            throw Error('Retired scene read facade exists');
+          window.__cameraReads=[];const readCameras=api.scene.readCameras;
+          api.scene.readCameras=(...args)=>readCameras(...args).then(result=>{
+            window.__cameraReads.push({args,result});return result;});
+          window.__treeReads=[];const readTree=api.scene.readTree;
+          api.scene.readTree=(...args)=>readTree(...args).then(result=>{
+            window.__treeReads.push({args,result});return result;});
+          if(typeof globalThis.coronaBridge?.cameraMove!=='undefined')throw Error('Retired camera Fast route exists');
           for(const method of ['setCameraViewport','setViewportUiMode','setViewportUiCalibration','viewportUiPointer','setViewportSystemCursorHidden']){
-            if(typeof coronaBridge[method]!=='undefined')throw Error('Retired viewport Fast route exists: '+method);}
+            if(typeof globalThis.coronaBridge?.[method]!=='undefined')throw Error('Retired viewport Fast route exists: '+method);}
           window.__viewportCalls=[];const configure=api.viewport.configure;
           api.viewport.configure=(...args)=>configure(...args).then(result=>{
             window.__viewportCalls.push({args,result});return result;});
@@ -81,17 +92,33 @@ def run(port, root):
         assert len(main.evaluate('window.__cameraMoveCalls')) == 1
         assert main.evaluate('window.__oldFocusRequests') == []
         assert panel.evaluate('window.__oldFocusRequests') == []
-        assert main.evaluate('typeof coronaBridge.computeActorFocusPose') == 'undefined'
-        assert panel.evaluate('typeof coronaBridge.computeActorFocusPose') == 'undefined'
+        assert main.evaluate('typeof globalThis.coronaBridge?.computeActorFocusPose') == 'undefined'
+        assert panel.evaluate('typeof globalThis.coronaBridge?.computeActorFocusPose') == 'undefined'
         secondary = next(camera for camera in cameras() if camera['camera_id'] == 'focus-camera')
-        opened_camera = main.api('SceneTools.open_camera_view', ['scene.ini', secondary['camera_id']])
-        assert opened_camera['success'], opened_camera
-        camera_snapshot = {**opened_camera['data']['camera'], 'scene_id': 'scene.ini'}
-        main.evaluate(f'{service}.then(s=>s.createCameraView({json.dumps(camera_snapshot)}))')
+        panel.evaluate("window.__cameraReads=[];(()=>{const row=[...document.querySelectorAll('span[title]')].find(item=>item.title==="
+                       + json.dumps(secondary['name']) + ");if(!row)throw Error('Camera row missing');"
+                       "row.parentElement.dispatchEvent(new MouseEvent('mouseenter'));})()")
+        hover_reads = wait(lambda: panel.evaluate('window.__cameraReads'), bool, 'SceneBar scoped camera hover read')
+        assert hover_reads[0]['args'] == ['scene.ini', {'archive_session': scope}], hover_reads
+        assert hover_reads[0]['result']['archive_session'] == scope, hover_reads
+        assert hover_reads[0]['result']['scene'] == 'scene.ini', hover_reads
+        # The production camera row owns the only window-open operation. Do not
+        # prime view_open through a retired sceneTools toggle before clicking it.
+        panel.evaluate("(()=>{const row=[...document.querySelectorAll('span[title]')].find(item=>item.title==="
+                       + json.dumps(secondary['name']) + ");if(!row)throw Error('Camera row missing');"
+                       "row.parentElement.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,detail:2}));})()")
         camera_target = wait(lambda: next((target for target in targets() if '#/CameraView?' in target['url']
                                          and 'camera=focus-camera' in target['url']), None), bool, 'CameraView document')
+        assert parse_qs(urlsplit(camera_target['url']).fragment.split('?', 1)[1])['archive'] == [scope], camera_target
         camera_view = Frontend(port, target_id=camera_target['id'])
         wait(lambda: camera_view.evaluate("!!document.querySelector('.input-layer')"), bool, 'CameraView mount')
+        assert next(camera for camera in cameras() if camera['camera_id'] == 'focus-camera')['view_open'] is True
+        tree_reads = wait(lambda: panel.evaluate('window.__treeReads'), bool, 'SceneBar scoped tree refresh after camera open')
+        assert tree_reads[-1]['args'] == ['scene.ini', {'archive_session': scope}], tree_reads
+        assert tree_reads[-1]['result']['archive_session'] == scope, tree_reads
+        assert tree_reads[-1]['result']['scene'] == 'scene.ini', tree_reads
+        assert any(actor['name'] == 'Probe' and isinstance(actor['opaque_handle'], str)
+                   for actor in tree_reads[-1]['result']['actors']), tree_reads
         camera_view.evaluate(monitor)
         # Select the displayed secondary camera using its actual production row.
         panel.evaluate("(()=>{const row=[...document.querySelectorAll('span[title]')].find(item=>item.title==="
@@ -163,7 +190,7 @@ def run(port, root):
              lambda calls: calls[-1]['result']['mode'] == 'flat2d', 'CameraView returns to 2D')
         # Exercise actual production click handlers, including Promise delivery into
         # selection, after the movement and pointer regressions above have finished.
-        tree = main.api('SceneTools.list_scene_tree', ['scene.ini'])['data']
+        tree = main.evaluate('corona.scene.readTree("scene.ini",' + json.dumps({'archive_session': scope}) + ')')
         probe_actor = next(actor for actor in tree['actors'] if actor['name'] == 'Probe')
         main.evaluate("corona.scene.setActorTransform('scene.ini'," + json.dumps(probe_actor['actor_guid'])
                       + "," + json.dumps({'archive_session': scope, 'position': [0, 0, 0],
@@ -175,10 +202,32 @@ def run(port, root):
             document.evaluate("corona.scene.setCameraProperties('scene.ini'," + json.dumps(camera_id)
                               + "," + json.dumps({'archive_session': scope, 'position': [-.25, -.25, 3],
                                                   'forward': [0, 0, -1], 'world_up': [0, 1, 0], 'fov': 60}) + ")")
+            # CameraView renders behind the title bar as well; its input layer
+            # excludes that bar. Aim at the render center, inside the hit layer.
+            point = document.evaluate("(()=>{const el=document.querySelector(" + json.dumps(selector)
+                                      + "),r=el.getBoundingClientRect();return {x:"
+                                      + ("innerWidth/2,y:innerHeight/2" if source == 'cameraView'
+                                         else "r.left+r.width/2,y:r.top+r.height/2") + "};})()")
+            # Property acceptance precedes the next GPU frame. Establish the
+            # known fixture hit with read-only picks before exercising one DOM
+            # click, rather than retrying the production event on stale frames.
+            render = document.evaluate("({width:innerWidth,height:innerHeight})" if source == 'cameraView'
+                                       else "(()=>{const r=document.querySelector('[data-viewport-pick-surface]').getBoundingClientRect();return {width:r.width,height:r.height,x:r.left,y:r.top};})()")
+            pick_options = {'archive_session': scope, 'x': int(point['x'] - render.get('x', 0)),
+                            'y': int(point['y'] - render.get('y', 0)),
+                            'width': int(render['width']), 'height': int(render['height'])}
+            print(f'{source} GPU fixture ready: waiting for first rendered hit', flush=True)
+            wait(lambda: document.evaluate("corona.viewport.pick('scene.ini'," + json.dumps(camera_id)
+                                           + "," + json.dumps(pick_options)
+                                           + ").catch(error=>{if(error.message==='Viewport pick failed: timeout')"
+                                             "return {status:'pending-frame'};throw error;})"),
+                 lambda value: value.get('actor_guid') == probe_actor['actor_guid'],
+                 f'{source} GPU fixture ready', seconds=60)
             document.evaluate("window.__pickCalls=[];window.__scriptInputs=[];true")
             document.evaluate("(()=>{const el=document.querySelector(" + json.dumps(selector)
                               + "),r=el.getBoundingClientRect();el.dispatchEvent(new MouseEvent('click',"
-                                "{bubbles:true,detail:1,clientX:r.left+r.width/2,clientY:r.top+r.height/2}));return true;})()")
+                                "{bubbles:true,detail:1,clientX:" + json.dumps(point['x'])
+                              + ",clientY:" + json.dumps(point['y']) + "}));return true;})()")
             picked = wait(lambda: document.evaluate('window.__pickCalls'), bool, f'{source} production click pick Promise')
             assert len(picked) == 1, picked
             assert picked[0]['args'][0:2] == ['scene.ini', camera_id], picked
@@ -189,7 +238,7 @@ def run(port, root):
             wait(lambda: main.evaluate('corona.scene.readActive()')['selection'],
                  lambda selection: selection.get('actor_guid') == probe_actor['actor_guid']
                  and selection.get('source_viewport') == source, f'{source} picked Actor selection')
-            assert document.evaluate('typeof coronaBridge.pickActor') == 'undefined'
+            assert document.evaluate('typeof globalThis.coronaBridge?.pickActor') == 'undefined'
             inputs = wait(lambda: document.evaluate('window.__scriptInputs'), bool, f'{source} scoped script click')
             clicks = [call for call in inputs if call['args'][2].get('event') == 'click']
             assert len(clicks) == 1, inputs
@@ -199,10 +248,13 @@ def run(port, root):
             assert clicks[0]['args'][2]['viewport_width'] > 0 and clicks[0]['result'] == {'status': 'queued'}, clicks
             document.evaluate("window.__scriptInputs=[];window.dispatchEvent(new KeyboardEvent('keydown',{key:'d',code:'KeyD'}));window.dispatchEvent(new KeyboardEvent('keyup',{key:'d',code:'KeyD'}));true")
             assert not any(call['args'][2]['type'].startswith('key') for call in document.evaluate('window.__scriptInputs'))
-            assert document.evaluate('typeof coronaBridge.injectInput') == 'undefined'
+            assert document.evaluate('typeof globalThis.coronaBridge?.injectInput') == 'undefined'
         return {'documents': 3, 'archiveSession': scope, 'cameraId': focused['camera_id'],
                 'focusPosition': focused['position'], 'movementFromFocusPosition': moved['position'],
                 'focusResubmissions': 0, 'movementSubmissions': 1, 'retiredFocusRequests': 0,
+                'cameraHoverRead': 'scoped typed V8 projection', 'cameraViewArchiveInRoute': True,
+                'retiredSceneReadRequests': 0,
+                'sceneTreeRead': 'actual SceneBar scoped V8 refresh preserves Actor rows and camera windows',
                 'secondaryFocusPosition': focused_secondary['position'], 'secondaryMovementPosition': moved_secondary['position'],
                 'secondaryFocusDoesNotRebindMain': True, 'viewportModeAndCalibration': 'shared scoped V8 operation',
                 'retiredViewportBindings': 0, 'viewportPointer': 'typed scoped state, actual DOM movement, blur/cancel restore OS cursor',

@@ -1,6 +1,7 @@
 #include <corona/shared_data_hub.h>
 #include <horizon/core/logging.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
+#include "cef/camera_window_lifetime.h"
 
 #include <algorithm>
 
@@ -19,6 +20,7 @@ void enqueue_update(const CameraViewportRecord& record, bool view_open) {
         .height = record.height,
         .render_width = record.render_width,
         .render_height = record.render_height,
+        .authority = record.camera_authority,
     });
 }
 
@@ -30,7 +32,9 @@ CameraViewportManager& CameraViewportManager::instance() {
 }
 
 bool CameraViewportManager::register_view(std::string scene_id, std::string camera_id,
-                                          std::uintptr_t camera_handle, int tab_id) {
+                                          std::uintptr_t camera_handle, int tab_id,
+                                          std::shared_ptr<CameraWindowState> window_state,
+                                          std::shared_ptr<CameraCommandAuthority> camera_authority) {
     if (scene_id.empty() || camera_id.empty() || camera_handle == 0 || tab_id < 0) {
         return false;
     }
@@ -40,10 +44,13 @@ bool CameraViewportManager::register_view(std::string scene_id, std::string came
         .camera_id = std::move(camera_id),
         .camera_handle = camera_handle,
         .tab_id = tab_id,
+        .window_state = std::move(window_state),
+        .camera_authority = std::move(camera_authority),
     };
     {
         std::lock_guard lock(mutex_);
         views_[tab_id] = record;
+        if (record.window_state) record.window_state->requested_open.store(1);
     }
     CFW_LOG_INFO("CameraViewport: registered tab={} camera={} scene={} handle={}",
                  tab_id, camera_id, record.scene_id, camera_handle);
@@ -124,6 +131,7 @@ bool CameraViewportManager::unregister_view(int tab_id, bool preserve_open) {
         }
         record = std::move(it->second);
         views_.erase(it);
+        if (record.window_state) record.window_state->requested_open.store(preserve_open ? 1 : 0);
     }
 
     record.surface = nullptr;

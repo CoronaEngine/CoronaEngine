@@ -440,7 +440,18 @@ void release_viewport_pointer(BrowserTab& source, std::uint64_t context_id) {
     source.viewport_pointer_authority.reset();
 }
 
-void refresh_viewport_pointer(BrowserTab& source) {
+void refresh_viewport_state(BrowserTab& source) {
+    if (source.web_camera_handle) {
+        const auto authority = source.web_camera_authority;
+        std::unique_lock<std::mutex> lease;
+        if (authority) lease = std::unique_lock(authority->mutex);
+        if (!source.open || !authority || !authority->active) {
+            source.web_camera_handle = 0;
+            source.web_camera_authority.reset();
+            source.web_camera_width = source.web_camera_height = 0;
+            source.web_camera_render_width = source.web_camera_render_height = 0;
+        }
+    }
     if (!source.viewport_pointer_owner) return;
     const auto authority = source.viewport_pointer_authority.lock();
     std::unique_lock<std::mutex> lease;
@@ -521,6 +532,7 @@ WindowReply apply_viewport_configuration(const WindowRequest& request, BrowserTa
     if (patch.bounds) {
         const auto& bounds = *patch.bounds;
         source.web_camera_handle = request.camera_handle;
+        source.web_camera_authority = authority;
         source.web_camera_x = bounds.x; source.web_camera_y = bounds.y;
         source.web_camera_width = bounds.width; source.web_camera_height = bounds.height;
         source.web_camera_render_width = bounds.render_width; source.web_camera_render_height = bounds.render_height;
@@ -698,7 +710,7 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         tab->detach_w = options.width;
         tab->detach_h = options.height;
         tab->detach_state = BrowserTab::DetachState::Detaching;
-        if (!cameras.register_view(request.scene_id, request.camera_id, request.camera_handle, id)) {
+        if (!cameras.register_view(request.scene_id, request.camera_id, request.camera_handle, id, request.camera_state, request.camera_authority)) {
             manager.remove_tab(id);
             result.error_code = "CREATE_FAILED";
             result.error_message = "Native camera surface could not be registered";

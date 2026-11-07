@@ -103,7 +103,11 @@ def run(port, root, control):
     assert opened.get("ok"), opened
     state = main.evaluate("corona.scene.readActive()")
     scope = {"archive_session": state["archive_session"]}
-    actor = api(main, "SceneTools.read_actor", {**scope, "actor": "Probe"})
+    def read_actor(actor_id, archive=scope["archive_session"]):
+        # Test-host serialization only; the production request and reply use V8 values.
+        return main.evaluate(f"corona.scene.readActorProperties({json.dumps(state['scene'])},"
+                             f"{json.dumps(actor_id)},{{archive_session:{json.dumps(archive)}}})")
+    actor = read_actor("Probe")
     guid, initial = actor["actor_guid"], actor["geometry"]["position"]
     saved_ini = (root / "scene.ini").read_bytes()
     changed = [initial[0] + 5, *initial[1:]]
@@ -217,7 +221,7 @@ def run():
         assert api(main, "Scripts.stop", {"runId": other["runId"]})["restored"]
         # Exercise production Vue event handlers, not only direct binding calls.
         def read_probe():
-            return api(main, "SceneTools.read_actor", {**scope, "actor": guid})
+            return read_actor(guid)
         original_properties = read_probe()
         main.evaluate("[...document.querySelectorAll('#actor-body-type button')].find(b=>b.textContent==='动态').click()")
         wait(read_probe, lambda actor: actor['mechanics']['body_type'] == 'dynamic', 'Vue body-type patch')
@@ -251,7 +255,7 @@ def run():
         fresh = main.evaluate("corona.scene.readActive()")
         assert fresh["archive_session"] != scope["archive_session"]
         assert api(main, "ProjectSettings.get_active_project_info")["name"] == new_name
-        assert api(main, "SceneTools.read_actor", {"archive_session": fresh["archive_session"], "actor": guid})["geometry"]["position"] == moved
+        assert read_actor(guid, fresh["archive_session"])["geometry"]["position"] == moved
         return {**report, "restored": restored, "sceneIniUnchangedDuringRun": True, "sameInterpreter": True,
                 "separateRunValue": isolated[1], "twoWindowSave": {"name": new_name, "position": moved}}
     finally:

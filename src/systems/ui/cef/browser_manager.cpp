@@ -279,9 +279,9 @@ void BrowserManager::update() {
         }
     }
 
-    // Restore the OS cursor when its scene/context/surface stops owning the overlay.
+    // Retire cached viewport bindings and restore the OS cursor with their scene.
     for (const auto& entry : tabs_snapshot()) {
-        if (entry.tab) refresh_viewport_pointer(*entry.tab);
+        if (entry.tab) refresh_viewport_state(*entry.tab);
     }
 
     // GPU actor-pick completions are produced by OpticsSystem on another thread;

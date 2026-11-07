@@ -25,8 +25,10 @@ def run(port, root):
         with urlopen(f"http://127.0.0.1:{port}/json/list", timeout=3) as response:
             return [p for p in json.load(response) if p["type"] == "page" and "/CabbageEditor/Frontend/" in p["url"]]
 
-    main = Frontend(port, target_id=targets()[0]["id"])
-    clients, opened = [main], []
+    main_targets = [target for target in targets() if 'uiOwner=' not in target['url'] and 'standalone=1' not in target['url']]
+    assert len(main_targets) == 1, main_targets
+    main = Frontend(port, target_id=main_targets[0]["id"])
+    clients, opened, panel_targets = [main], [], []
     session = main.evaluate("corona.scene.readActive()")['archive_session']
     def environment():
         return main.evaluate("corona.scene.getEnvironment('scene.ini'," + json.dumps({'archive_session': session}) + ")")
@@ -42,6 +44,7 @@ def run(port, root):
         assert result.get('tab_id'), result
         opened.append(result['tab_id'])
         target = wait(lambda: next((p for p in targets() if 'standalone=1' in p['url'] and f'#/{route.lstrip("/")}?' in p['url']), None), bool, panel_id)
+        panel_targets.append(target['id'])
         client = Frontend(port, target_id=target['id'])
         clients.append(client)
         wait(lambda: client.evaluate(f"!!document.querySelector({json.dumps(selector)})"), bool, panel_id + ' ready')
@@ -76,13 +79,18 @@ def run(port, root):
         assert changed['physics']['gravity'] == original['physics']['gravity'], changed
         assert changed['sun']['direction'][0] == 3 and changed['grid']['enabled'] is not original['grid']['enabled'], changed
         saved = main.api('MainView.scene_save', ['scene.ini', {'archive_session': session}])
-        assert saved['success'] and saved['data']['ok'], saved
+        assert saved['status'] == 'success' and saved['data']['ok'], saved
         # Reopening retires detached documents; inspect their monitors while alive.
         for client in clients:
             assert client.evaluate('window.__oldEnvironmentRequests') == []
         old_scope = session
         reopened = main.api('ProjectLauncher.open_project', [str(root)])
-        assert reopened['success'] and reopened['data']['ok'], reopened
+        assert reopened['status'] == 'success' and reopened['data']['ok'], reopened
+        # Project replacement retires these tabs. Never close their obsolete
+        # numeric IDs a second time from cleanup; verify document retirement.
+        opened.clear()
+        wait(lambda: {target['id'] for target in targets()}.intersection(panel_targets),
+             lambda remaining: not remaining, 'old project panel documents retired')
         session = main.evaluate('corona.scene.readActive()')['archive_session']
         assert session != old_scope
         assert environment()['physics']['floor_y'] == 6

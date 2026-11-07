@@ -280,6 +280,7 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
                 .height = main ? std::max(1, pixel_h) : std::max(1, static_cast<int>(tab->web_camera_height * sy)),
                 .render_width = std::max(1, static_cast<int>(tab->web_camera_render_width * sx)),
                 .render_height = std::max(1, static_cast<int>(tab->web_camera_render_height * sy)),
+                .authority = tab->web_camera_authority,
             });
         }
     }

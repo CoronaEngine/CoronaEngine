@@ -2,6 +2,72 @@
 from pathlib import Path
 
 
+def test_camera_reads_retire_full_scene_and_camera_list_web_routes():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    for name in ['get_scene_snapshot', 'list_camera_views']:
+        declaration = next(line for line in manifest.splitlines() if f'SceneTools, {name},' in line)
+        assert 'WRAPPED_CALLERS' in declaration and '"", "scene' in declaration
+        assert '~caller_mask(EditorApiCaller::Cef)' in declaration or 'caller_mask(EditorApiCaller::PythonScript)' in declaration
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert 'getSnapshot:' not in facade and 'listCameraViews:' not in facade
+    assert 'window.corona.scene.readCameras(sceneName, scope)' in facade
+
+
+def test_tree_read_retires_manifest_and_shares_owned_rows():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    declaration = next(line for line in manifest.splitlines() if 'SceneTools, list_scene_tree,' in line)
+    assert 'WRAPPED_CALLERS' in declaration and '"", "scene_tools.list_scene_tree"' in declaration
+    assert 'caller_mask(EditorApiCaller::Cef)' not in declaration
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert 'listSceneTree:' not in facade
+    assert 'window.corona.scene.readTree(sceneName, scope)' in facade
+    native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
+    assert 'scene_tree_actor_to_json(scene_tree_actor_row(actor))' in native
+    assert 'reply.tree.actors.push_back(scene_tree_actor_row(actor))' in native
+
+
+def test_archive_read_is_not_exposed_to_web_without_a_production_consumer():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    declaration = next(line for line in manifest.splitlines() if 'SceneTools, read_archive_scene,' in line)
+    assert '"", "scene.read_archive_scene"' in declaration
+    assert 'animation_callers() & ~caller_mask(EditorApiCaller::Cef)' in declaration
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert 'readArchive:' not in facade
+    native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
+    assert '{"read_archive_scene", [](const NativeRequest& request, const NativeContext&) {' in native
+
+
+def test_actor_property_read_retires_duplicate_web_routes():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    declaration = next(line for line in manifest.splitlines() if 'SceneTools, read_actor,' in line)
+    assert '"", "scene.read_actor"' in declaration
+    assert '~caller_mask(EditorApiCaller::Cef)' in declaration
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert 'getActor:' not in facade and 'readActor:' not in facade
+    assert 'window.corona.scene.readActorProperties(sceneName, actor, scope)' in facade
+
+
+def test_camera_window_toggles_are_not_cef_manifest_routes():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    for name in ['open_camera_view', 'close_camera_view', 'create_camera_view']:
+        declaration = next(line for line in manifest.splitlines() if f'SceneTools, {name},' in line)
+        assert 'WRAPPED_CALLERS' in declaration
+        assert 'caller_mask(EditorApiCaller::PythonScript)' in declaration
+        assert '"", "scene_tools.' in declaration
+
+
+def test_camera_v8_properties_cannot_write_window_lifecycle():
+    root = Path(__file__).resolve().parents[2]
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
+    parser = binding.split('bool read_camera_properties(')[1].split('return vector(')[0]
+    assert '"view_open"' not in parser
+
+
 def test_script_input_retires_all_legacy_web_routes_and_duplicate_native_type():
     root = Path(__file__).resolve().parents[2]
     for name in ['cef_renderer_bridge.cpp', 'cef_viewport_gizmo.cpp']:

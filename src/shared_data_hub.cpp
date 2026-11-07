@@ -321,6 +321,9 @@ void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command
     }
     if (has_camera_state_field(command.fields, CameraStateUpdateField::ViewState)) {
         pending.view_open = command.view_open;
+    }
+    if (has_camera_state_field(command.fields, CameraStateUpdateField::ViewState) ||
+        has_camera_state_field(command.fields, CameraStateUpdateField::ViewSettings)) {
         pending.view_x = command.view_x;
         pending.view_y = command.view_y;
         pending.view_width = command.view_width;
@@ -510,6 +513,10 @@ void SharedDataHub::enqueue_camera_release(CameraReleaseCommand command) {
     }
 
     clear_camera_state_updates(command.camera_handle);
+    {
+        std::lock_guard lock(camera_viewport_update_mutex_);
+        pending_camera_viewport_updates_.erase(command.camera_handle);
+    }
     {
         std::lock_guard lock(viewport_ui_mutex_);
         viewport_ui_states_.erase(command.camera_handle);

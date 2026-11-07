@@ -1,4 +1,5 @@
 #pragma once
+#include <corona/camera_command_authority.h>
 #include <horizon/core/storage.h>
 #include <corona/memory/gpu_mem_ledger.h>
 #include <corona/resource/types/scene.h>  // Resource::IkChain（GeometryDevice::ik_chains）
@@ -457,6 +458,7 @@ struct CameraViewportUpdateCommand {
     int render_width{960};
     int render_height{540};
     std::uint64_t sequence{};
+    std::shared_ptr<CameraCommandAuthority> authority;
 };
 
 struct DefaultSurfaceCameraUpdateCommand {
@@ -481,6 +483,7 @@ enum class CameraStateUpdateField : std::uint32_t {
     VisionPtSettings = 1u << 14,
     VisionRestirSettings = 1u << 15,
     Projection = 1u << 16,
+    ViewSettings = 1u << 17, // Geometry/speed only; never changes window lifetime.
 };
 
 constexpr CameraStateUpdateField operator|(CameraStateUpdateField lhs,

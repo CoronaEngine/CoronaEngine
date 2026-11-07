@@ -44,8 +44,8 @@ def verify(port, project, peer, relative, control):
         return web.evaluate("corona.scene.readActive()")["archive_session"]
 
     def position():
-        snapshot = view("SceneTools.get_scene_snapshot", "scene.ini")
-        return next(a["geometry"]["position"] for a in snapshot["actors"] if a["name"] == "Probe")
+        return web.evaluate("(async()=>{const s=await corona.scene.readActive();return "
+                            "(await corona.scene.readActorProperties(s.scene,'Probe',{archive_session:s.archive_session})).geometry.position;})()")
 
     def files():
         return {p: hashlib.sha256(p.read_bytes()).hexdigest() for root in (project, peer)

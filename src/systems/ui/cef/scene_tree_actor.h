@@ -1,5 +1,7 @@
 #pragma once
 
+#include "scene_tree_actor_row.h"
+
 #include <nlohmann/json.hpp>
 
 #include <cstddef>
@@ -7,35 +9,6 @@
 #include <string>
 
 namespace Corona::Ui::Cef {
-
-/// One actor row of the native editor scene tree.
-///
-/// The scene tree is refreshed from the CEF UI thread, which is also the thread
-/// that paints the editor. Re-deriving the full actor JSON for every refresh
-/// (AABBs, materials, mechanics, render status) is what made a scene with a
-/// large model stall the whole UI, so a row is built from values the caller has
-/// already read and carries only what the scene dock, the viewport pick index
-/// and the model node panel consume.
-struct SceneTreeActorRow {
-    std::string name;
-    std::string actor_guid;
-    std::string route;
-    std::string actor_type;
-    std::string audio_resource_id;
-    std::string gpu_build_state;
-    /// Dock-facing status: "loaded", "gpu_uploading", "gpu_failed" or the raw
-    /// actor load status name.
-    std::string load_status;
-    std::string load_error_code;
-    std::string load_error_message;
-    std::string load_error_resource_path;
-    std::string load_error_path;
-    std::uintptr_t handle{0};
-    bool visible{true};
-    bool has_load_error{false};
-    std::size_t model_node_count{0};
-    std::size_t model_node_root_count{0};
-};
 
 [[nodiscard]] inline nlohmann::json scene_tree_actor_to_json(const SceneTreeActorRow& row) {
     nlohmann::json item = nlohmann::json::object();

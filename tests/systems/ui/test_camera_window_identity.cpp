@@ -1,14 +1,17 @@
 #include <corona/kernel/core/kernel_context.h>
 #include <corona/engine/engine_runtime_api.h>
 #include <corona/shared_data_hub.h>
+#include <corona/systems/ui/camera_viewport_manager.h>
 #include "cef/cef_editor_native_api_registry.h"
 #include "cef/cef_editor_native_api_test_support.h"
 #include "cef/cef_window_operations.h"
 #include "cef/cef_scene_operations.h"
+#include "cef/scene_tree_actor.h"
 #include "cef/cef_viewport_pick.h"
 #include "cef/cef_script_input.h"
 #include "cef/browser_ui.h"
 #include "editor_api/cef_editor_api.h"
+#include "optics/camera_viewport_updates.h"
 
 #include <filesystem>
 #include <future>
@@ -41,6 +44,88 @@ void test_identity_lifetime() {
     guard.unlock();
     completion.get();
     require(!first->active, "retired authority must reject late native work");
+}
+
+void test_camera_release_discards_queued_viewport_updates() {
+    auto& hub = Corona::SharedDataHub::instance();
+    hub.drain_camera_viewport_updates();
+    hub.drain_camera_releases();
+    const auto retired = hub.camera_storage().allocate();
+    const auto live = hub.camera_storage().allocate();
+    hub.enqueue_camera_viewport_update({.camera_handle = retired, .width = 400});
+    hub.enqueue_camera_viewport_update({.camera_handle = live, .width = 800});
+    hub.enqueue_camera_release({.camera_handle = retired});
+    const auto updates = hub.drain_camera_viewport_updates();
+    const auto releases = hub.drain_camera_releases();
+    hub.camera_storage().deallocate(retired);
+    hub.camera_storage().deallocate(live);
+    require(releases.size() == 1 && releases[0].camera_handle == retired,
+        "viewport cleanup must preserve the render owner's release command");
+    require(updates.size() == 1 && updates[0].camera_handle == live && updates[0].width == 800,
+        "camera retirement must discard its queued viewport updates without dropping another live camera");
+}
+
+void test_deferred_viewports_use_the_original_camera_authority() {
+    auto& hub = Corona::SharedDataHub::instance();
+    const auto camera_handle = hub.camera_storage().allocate();
+    const auto peer_handle = hub.camera_storage().allocate();
+    auto* surface = reinterpret_cast<void*>(std::uintptr_t{0x1234});
+    { auto peer = hub.camera_storage().acquire_write(peer_handle); peer->surface = surface; }
+    UI::CameraWindowLifetime old_scene;
+    const auto retired = old_scene.token();
+    old_scene.retire();
+    // The address is occupied by a live camera, as after storage-slot reuse.
+    // Occupancy alone must not authorize work captured under the old scene.
+    Corona::CameraViewportUpdateCommand command{
+        .camera_handle = camera_handle, .surface = surface, .view_open = false,
+        .x = 10, .y = 20, .width = 400, .height = 300,
+        .render_width = 800, .render_height = 600, .authority = retired,
+    };
+    const bool retired_applied = Corona::Systems::apply_camera_viewport_update(hub, command);
+    { auto camera = hub.camera_storage().acquire_read(camera_handle);
+      auto peer = hub.camera_storage().acquire_read(peer_handle);
+      require(!retired_applied && !camera->viewport_rect_active && peer->surface == surface,
+          "retired viewport commands cannot mutate a reused camera address or detach a live peer"); }
+    UI::CameraWindowLifetime current_scene;
+    command.authority = current_scene.token();
+    require(Corona::Systems::apply_camera_viewport_update(hub, command), "live scoped viewport updates must apply");
+    { auto camera = hub.camera_storage().acquire_read(camera_handle);
+      auto peer = hub.camera_storage().acquire_read(peer_handle);
+      require(camera->surface == surface && camera->view_x == 10 && camera->view_y == 20 &&
+          camera->view_width == 400 && camera->width == 800 && camera->height == 600 &&
+          camera->aspect == 800.0f / 600 && !camera->follows_default_surface && !peer->surface,
+          "valid viewport updates preserve geometry, resolution, aspect and exclusive embedded-surface ownership"); }
+    { auto peer = hub.camera_storage().acquire_write(peer_handle); peer->surface = surface; peer->view_open = true; }
+    require(Corona::Systems::apply_camera_viewport_update(hub, command), "live viewport updates remain idempotent");
+    { auto peer = hub.camera_storage().acquire_read(peer_handle);
+      require(peer->surface == surface, "embedded viewport updates cannot detach a floating camera"); }
+    hub.camera_storage().deallocate(camera_handle);
+    command.authority.reset();
+    require(!Corona::Systems::apply_camera_viewport_update(hub, command),
+        "an unscoped late viewport for missing storage must not abort the Optics tick");
+    { auto peer = hub.camera_storage().acquire_read(peer_handle);
+      require(peer->surface == surface, "missing-camera commands cannot perform surface cleanup"); }
+    hub.camera_storage().deallocate(peer_handle);
+}
+
+void test_cached_web_viewport_binding_retires_with_its_camera() {
+    UI::WindowRequest request{UI::WindowMethod::ConfigureViewport, 1};
+    request.archive_session = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.archive_session;
+    request.scene_id = "scene.ini"; request.camera_id = "primary";
+    require(UI::prepare_camera_window_request(request).error_code.empty(), "viewport fixture camera resolves");
+    UI::CameraWindowLifetime lifetime;
+    request.camera_authority = lifetime.token();
+    request.viewport.emplace(); request.viewport->bounds = UI::ViewportBounds{10,20,400,300,800,600};
+    UI::BrowserTab tab; tab.open = true; tab.docking_pos = "main";
+    require(UI::apply_viewport_configuration(request, tab).error_code.empty() &&
+        tab.web_camera_authority == request.camera_authority, "cached bounds retain their original scene authority");
+    UI::refresh_viewport_state(tab);
+    require(tab.web_camera_handle == request.camera_handle, "refresh preserves a live camera binding");
+    lifetime.retire();
+    UI::refresh_viewport_state(tab);
+    require(!tab.web_camera_handle && !tab.web_camera_authority && !tab.web_camera_width &&
+        !tab.web_camera_height && !tab.web_camera_render_width && !tab.web_camera_render_height,
+        "scene retirement clears cached bounds before another native UI frame can submit the old camera");
 }
 
 Json snapshot() {
@@ -98,6 +183,146 @@ void test_native_scene_values_and_non_web_adapters() {
     const auto python_selection = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.selection;
     require(python_selection && python_selection->node_index == 0 && !python_selection->actor_guid,
             "Python and V8 selections must update the same typed state including node zero");
+}
+
+void test_owned_actor_index_projection() {
+    const auto before = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
+    UI::SceneRequest read{UI::SceneMethod::ReadActorIndex};
+    read.read_scene = before.scene;
+    read.archive_session = before.archive_session;
+    const auto reply = UI::execute_scene_operation(read);
+    require(reply.error_code.empty() && reply.actor_index.archive_session == before.archive_session &&
+            reply.actor_index.scene == before.scene && reply.actor_index.tree_revision == before.tree_revision,
+            "actor index must carry observed scene identity and revision");
+    require(reply.actor_index.actors.size() == 1 && reply.actor_index.actors[0].actor_guid == "transform-probe" &&
+            reply.actor_index.actors[0].name == "Transform probe",
+            "actor index must contain stable identity and names without requiring geometry");
+    require(reply.actor_index.actors[0].type == "audio",
+            "an Actor without a file extension must retain its semantic type in the lightweight index");
+    auto bad = read; bad.archive_session.reset();
+    require(UI::execute_scene_operation(bad).error_code == "INVALID_ARGUMENT", "an actor index requires an explicit archive");
+    bad = read; bad.read_scene.clear();
+    require(UI::execute_scene_operation(bad).error_code == "INVALID_ARGUMENT", "an actor index requires an explicit scene");
+    bad = read; bad.archive_session = "retired";
+    require(UI::execute_scene_operation(bad).error_code == "PROJECT_CONTEXT_CHANGED", "actor index must reject an old archive");
+    bad = read; bad.read_scene = "other.ini";
+    require(UI::execute_scene_operation(bad).error_code == "PROJECT_CONTEXT_CHANGED", "actor index must reject another scene");
+    const auto after = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
+    require(after.tree_revision == before.tree_revision && after.archive_session == before.archive_session &&
+            after.selection.has_value() == before.selection.has_value(), "actor index reads must not mutate scene state");
+}
+
+void test_owned_actor_property_projection() {
+    const auto before = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
+    UI::SceneRequest read{UI::SceneMethod::ReadActorProperties};
+    read.read_scene = before.scene; read.archive_session = before.archive_session; read.read_actor = "transform-probe";
+    const auto reply = UI::execute_scene_operation(read);
+    require(reply.error_code.empty() && reply.actor_read.archive_session == before.archive_session &&
+        reply.actor_read.properties.scene == before.scene && reply.actor_read.properties.actor == "Transform probe" &&
+        reply.actor_read.properties.actor_guid == "transform-probe", "property projection carries stable scope and Actor identity");
+    require(reply.actor_read.actor_type == "audio" && reply.actor_read.load_status == "loaded" &&
+        reply.actor_read.position == std::array<float,3>{1,2,3} && reply.actor_read.rotation == std::array<float,3>{4,5,6} &&
+        reply.actor_read.scale == std::array<float,3>{1,1,1}, "property reads preserve transforms and load state without bounds");
+    read.read_actor = "Transform probe";
+    require(UI::execute_scene_operation(read).actor_read.properties.actor_guid == "transform-probe", "names resolve to the same authoritative Actor");
+    for (int kind = 0; kind < 6; ++kind) {
+        auto invalid = read;
+        if (kind == 0) invalid.archive_session.reset();
+        if (kind == 1) invalid.archive_session = "retired";
+        if (kind == 2) invalid.read_scene = "wrong.ini";
+        if (kind == 3) invalid.read_scene.clear();
+        if (kind == 4) invalid.read_actor.clear();
+        if (kind == 5) invalid.read_actor = "missing";
+        const auto error = UI::execute_scene_operation(invalid).error_code;
+        require(error == (kind == 0 || kind == 3 || kind == 4 ? "INVALID_ARGUMENT" :
+            kind == 5 ? "ACTOR_NOT_FOUND" : "PROJECT_CONTEXT_CHANGED"), "property reads reject missing or retired identity");
+    }
+    const auto after = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
+    require(after.tree_revision == before.tree_revision && after.selection.has_value() == before.selection.has_value(),
+        "property reads cannot change tree revision or selection");
+    UI::CefEditorApiEndpoint cef;
+    const auto* spec = UI::EditorApiRegistry::instance().find("SceneTools.read_actor");
+    require(spec && std::string(spec->js_wrapper).empty() && !cef.invoke("SceneTools.read_actor", Json::array(), {}).success,
+        "the migrated Web actor reader must not retain a manifest path");
+}
+
+void test_owned_camera_projection() {
+    const auto before = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
+    UI::SceneRequest read{UI::SceneMethod::ReadCameras};
+    read.read_scene = before.scene; read.archive_session = before.archive_session;
+    const auto reply = UI::execute_scene_operation(read);
+    require(reply.error_code.empty() && reply.camera_list.archive_session == before.archive_session &&
+        reply.camera_list.scene == before.scene && reply.camera_list.active_camera_id == "primary" &&
+        reply.camera_list.cameras.size() == 2, "camera projection carries observed scope and active camera identity");
+    const auto legacy = UI::NativeApiRegistry::instance().dispatch({"SceneTools","list_camera_views", {before.scene}}, {});
+    require(legacy && legacy->success, "non-Web camera reads retain their original contract");
+    for (size_t index = 0; index < reply.camera_list.cameras.size(); ++index) {
+        const auto& value = reply.camera_list.cameras[index]; const auto& expected = legacy->data["cameras"][index];
+        require(value.properties.camera_id == expected["camera_id"].get<std::string>() && value.properties.handle == expected["handle"].get<std::uint64_t>() &&
+            value.properties.position == expected["position"].get<std::array<float,3>>() &&
+            value.properties.width == expected["width"].get<int>() && value.properties.view_open == expected["view_open"].get<bool>() &&
+            value.output_mode == expected["output_mode"].get<std::string>() && value.render_backend == expected["render_backend"].get<std::string>() &&
+            value.vision_render_mode == expected["vision_render_mode"].get<std::string>() && value.vision_denoiser == expected["vision_denoiser"].get<std::string>() &&
+            value.vision_accumulation == expected["vision_accumulation"].get<bool>() && value.vision_denoise == expected["vision_denoise"].get<bool>() &&
+            value.vision_stable_planes == expected["vision_stable_planes"].get<bool>() && value.deletable == expected["deletable"].get<bool>(),
+            "typed camera values preserve pose, window and rendering control state");
+    }
+    for (int kind = 0; kind < 4; ++kind) {
+        auto invalid = read;
+        if (kind == 0) invalid.archive_session.reset();
+        if (kind == 1) invalid.read_scene.clear();
+        if (kind == 2) invalid.archive_session = "retired";
+        if (kind == 3) invalid.read_scene = "other.ini";
+        require(UI::execute_scene_operation(invalid).error_code == (kind < 2 ? "INVALID_ARGUMENT" : "PROJECT_CONTEXT_CHANGED"),
+            "camera reads reject missing or retired scene identity");
+    }
+    require(UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.tree_revision == before.tree_revision,
+        "camera reads cannot mutate the tree");
+    UI::CefEditorApiEndpoint cef;
+    for (const auto* method : {"SceneTools.list_camera_views", "SceneTools.get_scene_snapshot"}) {
+        const auto* spec = UI::EditorApiRegistry::instance().find(method);
+        require(spec && std::string(spec->js_wrapper).empty() && !cef.invoke(method, Json::array(), {}).success,
+            "migrated camera and full snapshot Web routes must remain retired");
+    }
+}
+
+void test_owned_scene_tree_projection() {
+    const auto before = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
+    UI::SceneRequest read{UI::SceneMethod::ReadTree};
+    read.read_scene = before.scene; read.archive_session = before.archive_session;
+    const auto reply = UI::execute_scene_operation(read);
+    require(reply.error_code.empty() && reply.tree.cameras.archive_session == before.archive_session &&
+        reply.tree.cameras.scene == before.scene && reply.tree.tree_revision == before.tree_revision,
+        "tree reads carry the observed archive, scene and revision");
+    const auto legacy = UI::NativeApiRegistry::instance().dispatch({"SceneTools", "list_scene_tree", {before.scene}}, {});
+    require(legacy && legacy->success && legacy->data["actors"].size() == reply.tree.actors.size(),
+        "non-Web tree reads preserve their contract");
+    for (size_t index = 0; index < reply.tree.actors.size(); ++index) {
+        require(Corona::Ui::Cef::scene_tree_actor_to_json(reply.tree.actors[index]) == legacy->data["actors"][index],
+            "tree projections share all Actor row values with the non-Web adapter");
+    }
+    read.method = UI::SceneMethod::ReadCameras;
+    const auto cameras = UI::execute_scene_operation(read).camera_list;
+    require(cameras.active_camera_id == reply.tree.cameras.active_camera_id &&
+        cameras.cameras.size() == reply.tree.cameras.cameras.size(), "tree reuses the scoped camera projection");
+    read.method = UI::SceneMethod::ReadTree;
+    for (int kind = 0; kind < 4; ++kind) {
+        auto invalid = read;
+        if (kind == 0) invalid.archive_session.reset();
+        if (kind == 1) invalid.read_scene.clear();
+        if (kind == 2) invalid.archive_session = "retired";
+        if (kind == 3) invalid.read_scene = "other.ini";
+        require(UI::execute_scene_operation(invalid).error_code == (kind < 2 ? "INVALID_ARGUMENT" : "PROJECT_CONTEXT_CHANGED"),
+            "tree reads reject missing or retired scene identity");
+    }
+    const auto after = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
+    require(after.tree_revision == before.tree_revision && after.selection.has_value() == before.selection.has_value(),
+        "tree reads cannot mutate revision or selection");
+    UI::CefEditorApiEndpoint cef;
+    const auto* spec = UI::EditorApiRegistry::instance().find("SceneTools.list_scene_tree");
+    require(spec && std::string(spec->js_wrapper).empty() &&
+        !cef.invoke("SceneTools.list_scene_tree", Json::array({before.scene}), {}).success,
+        "the old Web tree route must remain retired");
 }
 
 void test_one_native_transform_authority() {
@@ -160,6 +385,13 @@ void test_one_native_property_authority() {
         "one mixed native property patch must update all groups and advance Actor version only once");
     require(UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.tree_revision == before.tree_revision + 1,
         "one mixed patch advances tree revision once");
+    UI::SceneRequest property_read{UI::SceneMethod::ReadActorProperties};
+    property_read.archive_session = write.archive_session; property_read.read_scene = patch.scene; property_read.read_actor = patch.actor;
+    const auto projected = UI::execute_scene_operation(property_read).actor_read.properties;
+    require(projected.actor_version == applied.properties.actor_version && projected.visible == applied.properties.visible &&
+        projected.follow_camera == applied.properties.follow_camera && projected.mechanics->mass == applied.properties.mechanics->mass &&
+        projected.camera_lock.position_offset == applied.properties.camera_lock.position_offset,
+        "property reads and mutation replies share one native property snapshot");
     for (int kind = 0; kind < 6; ++kind) {
         auto invalid = write;
         if (kind == 0) invalid.archive_session = "old";
@@ -334,6 +566,118 @@ void test_one_scoped_native_focus_application() {
         "camera focus preserves the existing scene-tree revision policy");
 }
 
+void test_camera_settings_cannot_change_window_lifecycle() {
+    auto& hub = Corona::SharedDataHub::instance();
+    hub.drain_camera_state_updates();
+    const auto active = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
+    UI::SceneRequest request{UI::SceneMethod::SetCameraProperties};
+    request.archive_session = active.archive_session;
+    request.camera_properties.scene = "scene.ini";
+    request.camera_properties.camera_id = "primary";
+    request.camera_properties.move_speed = 0.75f;
+    require(UI::execute_scene_operation(request).error_code.empty(), "camera settings must remain editable");
+    const auto updates = hub.drain_camera_state_updates();
+    require(updates.size() == 1 && !Corona::has_camera_state_field(updates[0].fields, Corona::CameraStateUpdateField::ViewState),
+        "ordinary camera settings must not enqueue a window open/close state write");
+    for (const bool open : {true, false}) {
+        hub.enqueue_camera_state_update({.camera_handle = updates[0].camera_handle,
+            .fields = Corona::CameraStateUpdateField::ViewState, .view_open = open});
+        require(UI::execute_scene_operation(request).error_code.empty(), "settings can follow a queued lifecycle write");
+        const auto merged = hub.drain_camera_state_updates();
+        require(merged.size() == 1 && merged[0].view_open == open && merged[0].move_speed == 0.75f,
+            "settings coalescing must preserve the accepted lifecycle state in either direction");
+    }
+    auto invalid = request;
+    invalid.camera_properties.view_open = true;
+    invalid.camera_properties.width = 123;
+    require(UI::execute_scene_operation(invalid).error_code == "INVALID_ARGUMENT",
+        "typed editor properties must reject lifecycle mutation atomically");
+    require(hub.drain_camera_state_updates().empty(), "rejected lifecycle patch must not partially enqueue width or settings");
+    auto& registry = UI::EditorApiRegistry::instance();
+    for (const auto* name : {"SceneTools.open_camera_view", "SceneTools.close_camera_view"}) {
+        require(registry.find(name) && std::string(registry.find(name)->js_wrapper).empty(),
+            "old camera lifecycle methods must have no Web wrapper");
+        require(!UI::CefEditorApiEndpoint{}.invoke(name, {"scene.ini", "primary"}, {}).success,
+            "old CEF state-only camera lifecycle routes must reject");
+        require(registry.invoke({name, {"scene.ini", "Primary camera"}, UI::EditorApiCaller::PythonScript}, {}).success,
+            "retiring Web lifecycle routes must preserve the existing Python contract");
+    }
+    hub.drain_camera_state_updates();
+}
+
+void test_window_owner_publishes_camera_open_state() {
+    const auto active = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
+    UI::WindowRequest request{UI::WindowMethod::CreateCameraView, 0};
+    request.archive_session = active.archive_session;
+    request.scene_id = "scene.ini"; request.camera_id = "primary";
+    require(UI::prepare_camera_window_request(request).error_code.empty(), "window state needs exact native camera authority");
+    auto& views = UI::CameraViewportManager::instance();
+    const auto opened = [&] {
+        const auto result = UI::NativeApiRegistry::instance().dispatch({"SceneTools", "list_camera_views", {"scene.ini"}}, {});
+        require(result && result->success, "camera state projection must remain readable");
+        return result->data["cameras"][0].value("view_open", false);
+    };
+    require(views.register_view(request.scene_id, request.camera_id, request.camera_handle, 6060, request.camera_state, request.camera_authority),
+        "window owner must be able to register a camera once");
+    require(opened(), "accepted window registration must publish open state without a Web toggle");
+    auto& hub = Corona::SharedDataHub::instance();
+    hub.drain_camera_viewport_updates();
+    require(views.bind_surface(6060, reinterpret_cast<void*>(std::uintptr_t{0x1234}), 0, 0, 320, 240),
+        "CameraView surface binds before queuing its update");
+    const auto pending = hub.drain_camera_viewport_updates();
+    require(pending.size() == 1 && pending[0].authority == request.camera_authority,
+        "CameraView surface updates retain the resolved camera lifetime through the queue");
+    require(views.unregister_view(6060, false) && !opened(), "native close must publish closed state without a Web toggle");
+    require(views.register_view(request.scene_id, request.camera_id, request.camera_handle, 6060, request.camera_state),
+        "closed camera can be reopened");
+    require(views.unregister_view(6060, true) && opened(), "world retirement preserves the explicit restore preference");
+    require(!views.unregister_view(6060, false) && opened(), "duplicate retirement must not change the saved open preference");
+}
+
+void test_typed_camera_creation_has_no_window_side_effect() {
+    const auto active = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
+    UI::WindowRequest survivor{UI::WindowMethod::ConfigureViewport, 1};
+    survivor.archive_session = active.archive_session; survivor.scene_id = "scene.ini"; survivor.camera_id = "primary";
+    require(UI::prepare_camera_window_request(survivor).error_code.empty(), "surviving camera authority resolves before vector growth");
+    UI::SceneRequest request{UI::SceneMethod::CreateCamera};
+    request.archive_session = active.archive_session;
+    request.camera_create = {"scene.ini", "Typed camera probe"};
+    for (int kind = 0; kind < 3; ++kind) {
+        auto invalid = request;
+        if (kind == 0) invalid.archive_session.reset();
+        if (kind == 1) invalid.archive_session = "retired";
+        if (kind == 2) invalid.camera_create.scene = "other.ini";
+        require(!UI::execute_scene_operation(invalid).error_code.empty(), "invalid creation identity must reject");
+        require(UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.tree_revision == active.tree_revision,
+            "invalid camera creation must not partially change the scene");
+    }
+    const auto created = UI::execute_scene_operation(request);
+    require(created.error_code.empty() && created.camera.archive_session == active.archive_session &&
+        created.camera.scene == "scene.ini" && created.camera.name == "Typed camera probe" &&
+        !created.camera.camera_id.empty() && created.camera.handle != 0 && !created.camera.view_open,
+        "typed creation returns an owned camera identity without claiming its window is open");
+    require(!UI::CameraViewportManager::instance().find_by_camera("scene.ini", created.camera.camera_id),
+        "creating a scene object must not allocate a window surface");
+    require(survivor.camera_authority->active, "camera vector growth must preserve surviving viewport authority");
+    auto retiring = survivor; retiring.camera_id = created.camera.camera_id;
+    require(UI::prepare_camera_window_request(retiring).error_code.empty(), "new camera authority resolves before deletion");
+    request.camera_create.name = "Moved camera survivor";
+    const auto later = UI::execute_scene_operation(request);
+    require(later.error_code.empty(), "second temporary camera creates a vector erase-move fixture");
+    auto moved = survivor; moved.camera_id = later.camera.camera_id;
+    require(UI::prepare_camera_window_request(moved).error_code.empty(), "later camera authority resolves before erase-move");
+    require(!UI::CefEditorApiEndpoint{}.invoke("SceneTools.create_camera_view", {"scene.ini", "legacy"}, {}).success,
+        "old create-camera Web route must reject");
+    const auto removed = UI::NativeApiRegistry::instance().dispatch({"SceneTools", "delete_camera", {"scene.ini", created.camera.camera_id}}, {});
+    require(removed && removed->success, "test-owned camera must be removed after creation verification");
+    require(!retiring.camera_authority->active && survivor.camera_authority->active,
+        "deleting one camera must retire only its commands and preserve other open viewports");
+    require(moved.camera_authority->active, "vector erase-move must preserve the surviving camera's authority");
+    const auto removed_later = UI::NativeApiRegistry::instance().dispatch({"SceneTools", "delete_camera", {"scene.ini", later.camera.camera_id}}, {});
+    require(removed_later && removed_later->success && !moved.camera_authority->active && survivor.camera_authority->active,
+        "deleting a relocated camera retires its own authority without invalidating the main viewport");
+}
+
 void test_scoped_screenshot_rejects_invalid_identity_without_mutation() {
     const auto before = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
     UI::SceneRequest request{UI::SceneMethod::CaptureScreenshot};
@@ -375,12 +719,12 @@ void test_camera_properties_share_pose_view_and_native_authority() {
     patch.scene = "scene.ini"; patch.camera_id = "primary";
     patch.position = std::array<float, 3>{7, 8, -9};
     patch.fov = 58; patch.width = 320; patch.height = 240;
-    patch.view_open = false; patch.move_speed = 0.5f;
+    patch.move_speed = 0.5f;
     const auto applied = UI::execute_scene_operation(request);
     require(applied.error_code.empty() && applied.camera.archive_session == active.archive_session &&
         applied.camera.scene == "scene.ini" && applied.camera.camera_id == "primary" &&
         applied.camera.position == *patch.position && applied.camera.fov == 58 && applied.camera.width == 320 &&
-        applied.camera.height == 240 && !applied.camera.view_open && applied.camera.move_speed == 0.5f,
+        applied.camera.height == 240 && applied.camera.move_speed == 0.5f,
         "one typed camera patch must apply pose and view fields and report actual values");
     const auto after = read();
     require(after[1] == before[1] && after[0]["forward"] == before[0]["forward"] &&
@@ -510,12 +854,12 @@ void test_pointer_configuration_owns_one_state_and_retires_with_its_context() {
     UI::BrowserTab peer; peer.open = true; peer.docking_pos = "main";
     auto other = replacement; other.context_id = 303;
     require(UI::apply_viewport_configuration(other, peer).error_code.empty(), "second surface takes its own pointer ownership");
-    UI::refresh_viewport_pointer(tab);
+    UI::refresh_viewport_state(tab);
     require(!tab.hide_system_cursor.load() && peer.hide_system_cursor.load() &&
         hub.viewport_ui_state(request.camera_handle).pointer.owner_context == 303, "old surface cleanup preserves the new surface cursor");
     auto retired = std::make_shared<UI::CameraWindowAuthority>(); retired->active = false;
     peer.viewport_pointer_authority = retired;
-    UI::refresh_viewport_pointer(peer);
+    UI::refresh_viewport_state(peer);
     require(!peer.hide_system_cursor.load() && hub.viewport_ui_state(request.camera_handle).pointer.cursor_shape == Corona::ViewportUiCursorShape::Hidden,
         "archive retirement restores the system cursor and removes stale pointer state");
     auto flat = request; flat.viewport->mode = "flat2d";
@@ -626,16 +970,26 @@ int main() {
         UI::register_builtin_native_api_handlers();
         UI::load_native_editor_scene_for_test(snapshot());
         test_native_scene_values_and_non_web_adapters();
+        test_owned_actor_index_projection();
+        test_owned_actor_property_projection();
+        test_owned_camera_projection();
+        test_owned_scene_tree_projection();
         test_one_native_transform_authority();
         test_one_native_property_authority();
         test_one_native_environment_authority();
         test_one_scoped_native_focus_application();
+        test_camera_settings_cannot_change_window_lifecycle();
+        test_window_owner_publishes_camera_open_state();
         test_scoped_screenshot_rejects_invalid_identity_without_mutation();
         test_camera_properties_share_pose_view_and_native_authority();
         test_viewport_configuration_shares_identity_and_applies_atomically();
         test_pointer_configuration_owns_one_state_and_retires_with_its_context();
+        test_camera_release_discards_queued_viewport_updates();
+        test_deferred_viewports_use_the_original_camera_authority();
+        test_cached_web_viewport_binding_retires_with_its_camera();
         test_owned_pick_requests_and_coordinate_mapping();
         test_pick_results_resolve_authoritative_actor_and_scope();
+        test_typed_camera_creation_has_no_window_side_effect();
         UI::WindowRequest request{UI::WindowMethod::CreateCameraView, 1};
         request.archive_session = "camera-test-archive";
         request.scene_id = "scene.ini";
@@ -670,6 +1024,19 @@ int main() {
         UI::reset_native_editor_scene_for_test();
         require(!request.camera_authority->active, "scene shutdown must retire queued camera work");
         require(UI::prepare_camera_window_request(request).error_code == "PROJECT_CONTEXT_CHANGED", "absent scene must be rejected");
+        UI::SceneRequest empty_read{UI::SceneMethod::ReadActorIndex};
+        empty_read.read_scene = "scene.ini"; empty_read.archive_session = "camera-test-archive";
+        require(UI::execute_scene_operation(empty_read).error_code == "PROJECT_CONTEXT_CHANGED",
+                "an actor index cannot create an absent editor scene");
+        empty_read.method = UI::SceneMethod::ReadActorProperties; empty_read.read_actor = "transform-probe";
+        require(UI::execute_scene_operation(empty_read).error_code == "PROJECT_CONTEXT_CHANGED",
+                "Actor property reads cannot create an absent editor scene");
+        empty_read.method = UI::SceneMethod::ReadCameras;
+        require(UI::execute_scene_operation(empty_read).error_code == "PROJECT_CONTEXT_CHANGED",
+                "camera reads cannot create an absent editor scene");
+        empty_read.method = UI::SceneMethod::ReadTree;
+        require(UI::execute_scene_operation(empty_read).error_code == "PROJECT_CONTEXT_CHANGED",
+                "tree reads cannot create an absent editor scene");
         require(UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.archive_session.empty(),
                 "an empty scene read cannot lazily create an editor scene");
         kernel.shutdown();

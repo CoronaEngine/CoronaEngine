@@ -71,8 +71,21 @@ bool v8_to_json(CefRefPtr<CefV8Value> value, nlohmann::json& output) {
 CefRefPtr<CefV8Value> json_to_v8(const nlohmann::json& value) {
     if (value.is_null()) return CefV8Value::CreateNull();
     if (value.is_boolean()) return CefV8Value::CreateBool(value.get<bool>());
-    if (value.is_number_integer()) return CefV8Value::CreateInt(value.get<int>());
-    if (value.is_number_unsigned()) return CefV8Value::CreateUInt(value.get<unsigned int>());
+    // nlohmann considers unsigned values integers too. Preserve the full JS
+    // Number range instead of narrowing addresses/revisions to 32 bits first.
+    // Opaque identities in direct domain bindings continue to use strings.
+    if (value.is_number_unsigned()) {
+        const auto number = value.get<std::uint64_t>();
+        if (number <= std::numeric_limits<unsigned int>::max())
+            return CefV8Value::CreateUInt(static_cast<unsigned int>(number));
+        return CefV8Value::CreateDouble(static_cast<double>(number));
+    }
+    if (value.is_number_integer()) {
+        const auto number = value.get<std::int64_t>();
+        if (number >= std::numeric_limits<int>::min() && number <= std::numeric_limits<int>::max())
+            return CefV8Value::CreateInt(static_cast<int>(number));
+        return CefV8Value::CreateDouble(static_cast<double>(number));
+    }
     if (value.is_number_float()) return CefV8Value::CreateDouble(value.get<double>());
     if (value.is_string()) return CefV8Value::CreateString(value.get<std::string>());
     if (value.is_array()) {
@@ -362,13 +375,29 @@ CefRefPtr<CefV8Value> viewport_configuration_value(const ViewportConfigurationSn
     return result;
 }
 
+bool read_camera_create(const CefV8ValueList& arguments, SceneRequest& request) {
+    if (arguments.size() != 2 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty()) return false;
+    const auto options = arguments[1];
+    if (!object_keys(options, {"archive_session", "name"})) return false;
+    const auto session = options->GetValue("archive_session");
+    if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
+    request.archive_session = session->GetStringValue().ToString();
+    request.camera_create.scene = arguments[0]->GetStringValue().ToString();
+    if (options->HasValue("name")) {
+        const auto name = options->GetValue("name");
+        if (!name || !name->IsString()) return false;
+        request.camera_create.name = name->GetStringValue().ToString();
+    }
+    return true;
+}
+
 bool read_camera_properties(const CefV8ValueList& arguments, SceneRequest& request) {
     if (arguments.size() != 3) return false;
     for (int index = 0; index < 2; ++index)
         if (!arguments[index]->IsString() || arguments[index]->GetStringValue().empty()) return false;
     const auto object = arguments[2];
     if (!object_keys(object, {"archive_session", "position", "forward", "world_up", "fov", "projection_x_sign",
-        "near_plane", "far_plane", "width", "height", "view_open", "view_x", "view_y", "view_width", "view_height", "move_speed"})) return false;
+        "near_plane", "far_plane", "width", "height", "view_x", "view_y", "view_width", "view_height", "move_speed"})) return false;
     const auto session = object->GetValue("archive_session");
     if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
     request.archive_session = session->GetStringValue().ToString();
@@ -390,10 +419,6 @@ bool read_camera_properties(const CefV8ValueList& arguments, SceneRequest& reque
         if constexpr (std::is_integral_v<Value>) { if (std::trunc(value) != value) return false; }
         output = static_cast<Value>(value); return true;
     };
-    if (object->HasValue("view_open")) {
-        if (!object->GetValue("view_open")->IsBool()) return false;
-        patch.view_open = object->GetValue("view_open")->GetBoolValue();
-    }
     return vector("position", patch.position) && vector("forward", patch.forward) && vector("world_up", patch.world_up) &&
         number("fov", patch.fov) && number("projection_x_sign", patch.projection_x_sign) &&
         number("near_plane", patch.near_plane) && number("far_plane", patch.far_plane) &&
@@ -427,6 +452,61 @@ CefRefPtr<CefV8Value> camera_properties_value(const CameraPropertiesSnapshot& sn
     number("view_width", snapshot.view_width); number("view_height", snapshot.view_height);
     camera->SetValue("view_open", CefV8Value::CreateBool(snapshot.view_open), V8_PROPERTY_ATTRIBUTE_NONE);
     result->SetValue("camera", camera, V8_PROPERTY_ATTRIBUTE_NONE);
+    return result;
+}
+
+CefRefPtr<CefV8Value> cameras_value(const CameraListSnapshot& snapshot) {
+    auto result = CefV8Value::CreateObject(nullptr, nullptr);
+    const auto set = [](auto target, const char* key, auto value) { target->SetValue(key, value, V8_PROPERTY_ATTRIBUTE_NONE); };
+    set(result, "archive_session", CefV8Value::CreateString(snapshot.archive_session));
+    set(result, "scene", CefV8Value::CreateString(snapshot.scene));
+    set(result, "active_camera_id", CefV8Value::CreateString(snapshot.active_camera_id));
+    auto cameras = CefV8Value::CreateArray(static_cast<int>(snapshot.cameras.size()));
+    for (size_t index = 0; index < snapshot.cameras.size(); ++index) {
+        const auto& snapshot_camera = snapshot.cameras[index];
+        auto camera = camera_properties_value(snapshot_camera.properties)->GetValue("camera");
+        set(camera, "output_mode", CefV8Value::CreateString(snapshot_camera.output_mode));
+        set(camera, "render_backend", CefV8Value::CreateString(snapshot_camera.render_backend));
+        set(camera, "vision_render_mode", CefV8Value::CreateString(snapshot_camera.vision_render_mode));
+        set(camera, "vision_denoiser", CefV8Value::CreateString(snapshot_camera.vision_denoiser));
+        set(camera, "vision_accumulation", CefV8Value::CreateBool(snapshot_camera.vision_accumulation));
+        set(camera, "vision_denoise", CefV8Value::CreateBool(snapshot_camera.vision_denoise));
+        set(camera, "vision_stable_planes", CefV8Value::CreateBool(snapshot_camera.vision_stable_planes));
+        set(camera, "deletable", CefV8Value::CreateBool(snapshot_camera.deletable));
+        cameras->SetValue(static_cast<int>(index), camera);
+    }
+    set(result, "cameras", cameras);
+    return result;
+}
+
+CefRefPtr<CefV8Value> tree_value(const SceneTreeSnapshot& snapshot) {
+    auto result = cameras_value(snapshot.cameras);
+    const auto set = [](auto target, const char* key, auto value) { target->SetValue(key, value, V8_PROPERTY_ATTRIBUTE_NONE); };
+    set(result, "tree_revision", CefV8Value::CreateDouble(static_cast<double>(snapshot.tree_revision)));
+    auto actors = CefV8Value::CreateArray(static_cast<int>(snapshot.actors.size()));
+    for (size_t index = 0; index < snapshot.actors.size(); ++index) {
+        const auto& row = snapshot.actors[index];
+        auto actor = CefV8Value::CreateObject(nullptr, nullptr);
+        const auto text = [&](const char* key, const std::string& value) { set(actor, key, CefV8Value::CreateString(value)); };
+        text("name", row.name); text("actor_guid", row.actor_guid); text("path", row.route);
+        text("type", row.actor_type); text("opaque_handle", std::to_string(row.handle));
+        text("audio_resource_id", row.audio_resource_id); text("load_status", row.load_status);
+        text("gpu_build_state", row.gpu_build_state);
+        set(actor, "visible", CefV8Value::CreateBool(row.visible));
+        set(actor, "model_node_count", CefV8Value::CreateDouble(static_cast<double>(row.model_node_count)));
+        set(actor, "model_node_root_count", CefV8Value::CreateDouble(static_cast<double>(row.model_node_root_count)));
+        auto error = CefV8Value::CreateNull();
+        if (row.has_load_error) {
+            error = CefV8Value::CreateObject(nullptr, nullptr);
+            set(error, "code", CefV8Value::CreateString(row.load_error_code));
+            set(error, "message", CefV8Value::CreateString(row.load_error_message));
+            set(error, "resource_path", CefV8Value::CreateString(row.load_error_resource_path));
+            set(error, "path", CefV8Value::CreateString(row.load_error_path));
+        }
+        set(actor, "load_error", error);
+        actors->SetValue(static_cast<int>(index), actor);
+    }
+    set(result, "actors", actors);
     return result;
 }
 
@@ -717,6 +797,71 @@ bool read_transform(const CefV8ValueList& arguments, SceneRequest& request) {
     return vector("position", request.transform.position) && vector("rotation", request.transform.rotation) &&
         vector("scale", request.transform.scale) &&
         (request.transform.position || request.transform.rotation || request.transform.scale);
+}
+
+bool read_actor_index(const CefV8ValueList& arguments, SceneRequest& request) {
+    if (arguments.size() != 2 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty() ||
+        !object_keys(arguments[1], {"archive_session"})) return false;
+    const auto session = arguments[1]->GetValue("archive_session");
+    if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
+    request.read_scene = arguments[0]->GetStringValue().ToString();
+    request.archive_session = session->GetStringValue().ToString();
+    return true;
+}
+
+bool read_actor_properties(const CefV8ValueList& arguments, SceneRequest& request) {
+    if (arguments.size() != 3 || !arguments[1]->IsString() || arguments[1]->GetStringValue().empty()) return false;
+    if (!read_actor_index({arguments[0], arguments[2]}, request)) return false;
+    request.read_actor = arguments[1]->GetStringValue().ToString();
+    return true;
+}
+
+CefRefPtr<CefV8Value> actor_read_value(const ActorReadSnapshot& snapshot) {
+    auto result = properties_value(snapshot.properties)->GetValue("actor");
+    const auto set = [&](const char* key, auto value) { result->SetValue(key, value, V8_PROPERTY_ATTRIBUTE_NONE); };
+    set("archive_session", CefV8Value::CreateString(snapshot.archive_session));
+    set("scene", CefV8Value::CreateString(snapshot.properties.scene));
+    set("handle", CefV8Value::CreateString(std::to_string(snapshot.handle)));
+    set("actor_type", CefV8Value::CreateString(snapshot.actor_type));
+    set("model", CefV8Value::CreateString(snapshot.model));
+    set("body_type", CefV8Value::CreateString(snapshot.body_type));
+    set("load_status", CefV8Value::CreateString(snapshot.load_status));
+    auto error = CefV8Value::CreateNull();
+    if (snapshot.load_status != "loaded") {
+        error = CefV8Value::CreateObject(nullptr, nullptr);
+        error->SetValue("code", CefV8Value::CreateString(snapshot.load_error_code), V8_PROPERTY_ATTRIBUTE_NONE);
+        error->SetValue("message", CefV8Value::CreateString(snapshot.load_error_message), V8_PROPERTY_ATTRIBUTE_NONE);
+        error->SetValue("resource_path", CefV8Value::CreateString(snapshot.model), V8_PROPERTY_ATTRIBUTE_NONE);
+        error->SetValue("path", CefV8Value::CreateString(snapshot.resolved_asset_path), V8_PROPERTY_ATTRIBUTE_NONE);
+    }
+    set("load_error", error);
+    auto geometry = CefV8Value::CreateObject(nullptr, nullptr);
+    const auto vector = [&](const char* key, const auto& values) {
+        auto array = CefV8Value::CreateArray(3);
+        for (int axis = 0; axis < 3; ++axis) array->SetValue(axis, CefV8Value::CreateDouble(values[axis]));
+        geometry->SetValue(key, array, V8_PROPERTY_ATTRIBUTE_NONE);
+    };
+    vector("position", snapshot.position); vector("rotation", snapshot.rotation); vector("scale", snapshot.scale);
+    set("geometry", geometry);
+    return result;
+}
+
+CefRefPtr<CefV8Value> actor_index_value(const ActorIndexSnapshot& snapshot) {
+    auto result = CefV8Value::CreateObject(nullptr, nullptr);
+    result->SetValue("archive_session", CefV8Value::CreateString(snapshot.archive_session), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("scene", CefV8Value::CreateString(snapshot.scene), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("tree_revision", CefV8Value::CreateDouble(static_cast<double>(snapshot.tree_revision)), V8_PROPERTY_ATTRIBUTE_NONE);
+    auto actors = CefV8Value::CreateArray(static_cast<int>(snapshot.actors.size()));
+    for (std::size_t index = 0; index < snapshot.actors.size(); ++index) {
+        const auto& actor = snapshot.actors[index];
+        auto value = CefV8Value::CreateObject(nullptr, nullptr);
+        value->SetValue("actor_guid", CefV8Value::CreateString(actor.actor_guid), V8_PROPERTY_ATTRIBUTE_NONE);
+        value->SetValue("name", CefV8Value::CreateString(actor.name), V8_PROPERTY_ATTRIBUTE_NONE);
+        value->SetValue("type", CefV8Value::CreateString(actor.type), V8_PROPERTY_ATTRIBUTE_NONE);
+        actors->SetValue(static_cast<int>(index), value);
+    }
+    result->SetValue("actors", actors, V8_PROPERTY_ATTRIBUTE_NONE);
+    return result;
 }
 
 bool read_transforms(const CefV8ValueList& arguments, SceneRequest& request) {
@@ -1161,6 +1306,10 @@ public:
         }
         SceneRequest request{method};
         if ((method == SceneMethod::ReadActive && !arguments.empty()) ||
+            (method == SceneMethod::ReadActorIndex && !read_actor_index(arguments, request)) ||
+            (method == SceneMethod::ReadCameras && !read_actor_index(arguments, request)) ||
+            (method == SceneMethod::ReadTree && !read_actor_index(arguments, request)) ||
+            (method == SceneMethod::ReadActorProperties && !read_actor_properties(arguments, request)) ||
             (method == SceneMethod::ReadTransforms && !read_transforms(arguments, request)) ||
             (method == SceneMethod::SelectActor && !read_selection(arguments, request.selection)) ||
             (method == SceneMethod::SetActorTransform && !read_transform(arguments, request)) ||
@@ -1168,6 +1317,7 @@ public:
             (method == SceneMethod::FocusActor && !read_focus(arguments, request)) ||
             (method == SceneMethod::CaptureScreenshot && !read_screenshot(arguments, request)) ||
             (method == SceneMethod::SetCameraProperties && !read_camera_properties(arguments, request)) ||
+            (method == SceneMethod::CreateCamera && !read_camera_create(arguments, request)) ||
             ((method == SceneMethod::GetEnvironment || method == SceneMethod::SetEnvironment) && !read_environment(arguments, request))) {
             reject(context_, promise, "INVALID_ARGUMENT", "Invalid native scene operation arguments");
             return promise;
@@ -1459,6 +1609,14 @@ private:
         else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActive) {
             scene_archive_session_ = reply.active.archive_session;
             pending.promise->ResolvePromise(scene_value(reply.active));
+        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActorIndex) {
+            pending.promise->ResolvePromise(actor_index_value(reply.actor_index));
+        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadCameras) {
+            pending.promise->ResolvePromise(cameras_value(reply.camera_list));
+        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadTree) {
+            pending.promise->ResolvePromise(tree_value(reply.tree));
+        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActorProperties) {
+            pending.promise->ResolvePromise(actor_read_value(reply.actor_read));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadTransforms) {
             pending.promise->ResolvePromise(transforms_value(reply.transforms, reply.active.archive_session));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SetActorTransform) {
@@ -1469,7 +1627,8 @@ private:
             pending.promise->ResolvePromise(focus_value(reply.focus));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::CaptureScreenshot) {
             pending.promise->ResolvePromise(screenshot_value(reply.screenshot));
-        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SetCameraProperties) {
+        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SetCameraProperties ||
+                   std::get<SceneMethod>(pending.method) == SceneMethod::CreateCamera) {
             pending.promise->ResolvePromise(camera_properties_value(reply.camera));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::GetEnvironment ||
                    std::get<SceneMethod>(pending.method) == SceneMethod::SetEnvironment) {
@@ -1631,6 +1790,14 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     auto scene = CefV8Value::CreateObject(nullptr, nullptr);
     scene->SetValue("readActive", CefV8Value::CreateFunction("readActive",
         new NativeHandler(endpoint, SceneMethod::ReadActive)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    scene->SetValue("readActorIndex", CefV8Value::CreateFunction("readActorIndex",
+        new NativeHandler(endpoint, SceneMethod::ReadActorIndex)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    scene->SetValue("readCameras", CefV8Value::CreateFunction("readCameras",
+        new NativeHandler(endpoint, SceneMethod::ReadCameras)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    scene->SetValue("readTree", CefV8Value::CreateFunction("readTree",
+        new NativeHandler(endpoint, SceneMethod::ReadTree)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    scene->SetValue("readActorProperties", CefV8Value::CreateFunction("readActorProperties",
+        new NativeHandler(endpoint, SceneMethod::ReadActorProperties)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("readTransforms", CefV8Value::CreateFunction("readTransforms",
         new NativeHandler(endpoint, SceneMethod::ReadTransforms)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("selectActor", CefV8Value::CreateFunction("selectActor",
@@ -1645,6 +1812,8 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
         new NativeHandler(endpoint, SceneMethod::FocusActor)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("setCameraProperties", CefV8Value::CreateFunction("setCameraProperties",
         new NativeHandler(endpoint, SceneMethod::SetCameraProperties)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    scene->SetValue("createCamera", CefV8Value::CreateFunction("createCamera",
+        new NativeHandler(endpoint, SceneMethod::CreateCamera)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("captureScreenshot", CefV8Value::CreateFunction("captureScreenshot",
         new NativeHandler(endpoint, SceneMethod::CaptureScreenshot)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("setEnvironment", CefV8Value::CreateFunction("setEnvironment",

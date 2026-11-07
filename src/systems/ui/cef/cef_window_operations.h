@@ -67,6 +67,7 @@ struct WindowRequest {
     std::string archive_session;
     std::uintptr_t camera_handle = 0; // Resolved by the native scene owner, never supplied by Web.
     std::shared_ptr<CameraWindowAuthority> camera_authority;
+    std::shared_ptr<CameraWindowState> camera_state;
     int width = 0, height = 0;
     std::optional<ViewportConfiguration> viewport;
     std::uint64_t context_id = 0; // Native endpoint identity; never supplied by Web.
@@ -87,7 +88,7 @@ struct WindowReply {
 WindowReply execute_window_operation(const WindowRequest& request);
 WindowReply apply_viewport_configuration(const WindowRequest& request, BrowserTab& source);
 void release_viewport_pointer(BrowserTab& source, std::uint64_t context_id);
-void refresh_viewport_pointer(BrowserTab& source);
+void refresh_viewport_state(BrowserTab& source);
 void release_viewport_pointer_context(int browser_id, std::uint64_t context_id);
 
 // Invoked asynchronously on the native editor scene owner (CEF UI) thread.

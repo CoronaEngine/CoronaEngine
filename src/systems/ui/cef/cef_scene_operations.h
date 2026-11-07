@@ -1,5 +1,7 @@
 #pragma once
 
+#include "scene_tree_actor_row.h"
+
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -47,6 +49,15 @@ struct ActorTransformSnapshot {
     std::array<float, 3> scale{};
 };
 
+struct ActorIndexEntry {
+    std::string actor_guid, name, type;
+};
+struct ActorIndexSnapshot {
+    std::string archive_session, scene;
+    std::uint64_t tree_revision = 0;
+    std::vector<ActorIndexEntry> actors;
+};
+
 struct ActorMechanicsPatch {
     std::optional<float> mass, restitution, damping;
     std::optional<std::string> body_type;
@@ -82,6 +93,16 @@ struct ActorPropertiesSnapshot {
     std::optional<ActorMechanicsSnapshot> mechanics;
     ActorCameraLockSnapshot camera_lock;
     std::optional<std::vector<std::string>> requested_animation_sources;
+};
+
+// Property-panel projection, deliberately excluding bounds, materials, model
+// nodes and animation state. Reuses the same property values as write replies.
+struct ActorReadSnapshot {
+    ActorPropertiesSnapshot properties;
+    std::string archive_session, actor_type, model, body_type, load_status;
+    std::string load_error_code, load_error_message, resolved_asset_path;
+    std::uint64_t handle = 0;
+    std::array<float, 3> position{}, rotation{}, scale{1, 1, 1};
 };
 
 struct EnvironmentSunPatch {
@@ -152,7 +173,27 @@ struct CameraPropertiesSnapshot : CameraPoseSnapshot {
     bool view_open = false;
 };
 
-enum class SceneMethod { ReadActive, ReadTransforms, SelectActor, SetActorTransform, SetActorProperties, GetEnvironment, SetEnvironment, FocusActor, CaptureScreenshot, SetCameraProperties };
+struct CameraCreateRequest {
+    std::string scene;
+    std::optional<std::string> name;
+};
+
+struct CameraReadSnapshot {
+    CameraPropertiesSnapshot properties;
+    std::string output_mode, render_backend, vision_render_mode, vision_denoiser;
+    bool vision_accumulation = false, vision_denoise = true, vision_stable_planes = true, deletable = true;
+};
+struct CameraListSnapshot {
+    std::string archive_session, scene, active_camera_id;
+    std::vector<CameraReadSnapshot> cameras;
+};
+struct SceneTreeSnapshot {
+    CameraListSnapshot cameras;
+    std::uint64_t tree_revision = 0;
+    std::vector<Corona::Ui::Cef::SceneTreeActorRow> actors;
+};
+
+enum class SceneMethod { ReadActive, ReadTransforms, SelectActor, SetActorTransform, SetActorProperties, GetEnvironment, SetEnvironment, FocusActor, CaptureScreenshot, SetCameraProperties, CreateCamera, ReadActorIndex, ReadActorProperties, ReadCameras, ReadTree };
 struct SceneRequest {
     SceneMethod method;
     ActorSelection selection;
@@ -164,6 +205,9 @@ struct SceneRequest {
     ActorFocusRequest focus;
     ScreenshotRequest screenshot;
     CameraPropertiesPatch camera_properties;
+    CameraCreateRequest camera_create;
+    std::string read_scene;
+    std::string read_actor;
 };
 struct SceneReply {
     ActiveSceneSnapshot active;
@@ -177,6 +221,10 @@ struct SceneReply {
     ActorFocusSnapshot focus;
     ScreenshotSnapshot screenshot;
     CameraPropertiesSnapshot camera;
+    ActorIndexSnapshot actor_index;
+    ActorReadSnapshot actor_read;
+    CameraListSnapshot camera_list;
+    SceneTreeSnapshot tree;
 };
 
 // Execute on the native editor scene owner (CEF UI) thread. Non-Web adapters
