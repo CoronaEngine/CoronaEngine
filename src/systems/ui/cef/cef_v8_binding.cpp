@@ -7,6 +7,7 @@
 #include "cef_project_files_operations.h"
 #include "cef_project_settings_operations.h"
 #include "cef_files_operations.h"
+#include "cef_project_launcher_operations.h"
 #include "cef_viewport_pick.h"
 #include "cef_viewport_gizmo.h"
 #include "cef_editor_native_api_handlers.h"
@@ -117,6 +118,23 @@ enum class GizmoMethod { SetTarget, Pointer };
 
 bool object_keys(CefRefPtr<CefV8Value> object, std::initializer_list<const char*> allowed);
 
+bool read_project_launcher(ProjectLauncherRequest& request, const CefV8ValueList& arguments) {
+    const bool world = request.method == ProjectLauncherMethod::CreateWorld;
+    if (!world && request.method != ProjectLauncherMethod::CreateMultiplayer) return arguments.empty();
+    if (arguments.size() != 1 || !object_keys(arguments[0], world
+        ? std::initializer_list<const char*>{"prompt"} : std::initializer_list<const char*>{"role"})) return false;
+    const auto value = arguments[0];
+    const char* key = world ? "prompt" : "role";
+    if (value->HasValue(key)) {
+        const auto item = value->GetValue(key);
+        if (!item || !item->IsString()) return false;
+        auto& text = world ? request.prompt : request.role;
+        text = item->GetStringValue().ToString();
+        if (text.find('\0') != std::string::npos) return false;
+    }
+    return world || request.role == "host" || request.role == "guest";
+}
+
 bool read_files(FilesMethod method, const CefV8ValueList& arguments, FilesRequest& request) {
     const bool named = method == FilesMethod::CreateFolder || method == FilesMethod::CreateActorTemplate || method == FilesMethod::Rename;
     if (arguments.size() != 1 || !object_keys(arguments[0], named
@@ -152,6 +170,38 @@ CefRefPtr<CefV8Value> file_tree_value(const FileTreeEntry& entry) {
         value->SetValue("children", children, V8_PROPERTY_ATTRIBUTE_NONE);
     }
     return value;
+}
+
+CefRefPtr<CefV8Value> project_launcher_value(const ProjectLauncherReply& reply) {
+    if (reply.method == ProjectLauncherMethod::SelectFile) {
+        auto value = CefV8Value::CreateObject(nullptr, nullptr);
+        if (!reply.selected.path.empty()) {
+            value->SetValue("name", CefV8Value::CreateString(reply.selected.name), V8_PROPERTY_ATTRIBUTE_NONE);
+            value->SetValue("path", CefV8Value::CreateString(reply.selected.path), V8_PROPERTY_ATTRIBUTE_NONE);
+        }
+        return value;
+    }
+    if (reply.method == ProjectLauncherMethod::GetVersion) return CefV8Value::CreateString(reply.version);
+    if (reply.method == ProjectLauncherMethod::CreateWorld || reply.method == ProjectLauncherMethod::CreateMultiplayer) {
+        auto value = json_to_v8({{"name", reply.created.name}, {"path", reply.created.path}});
+        if (reply.method == ProjectLauncherMethod::CreateMultiplayer)
+            value->SetValue("role", CefV8Value::CreateString(reply.created.role), V8_PROPERTY_ATTRIBUTE_NONE);
+        return value;
+    }
+    if (reply.method == ProjectLauncherMethod::GetRecent) {
+        auto value = CefV8Value::CreateArray(static_cast<int>(reply.recent.size()));
+        for (int index = 0; index < static_cast<int>(reply.recent.size()); ++index) {
+            const auto& project = reply.recent[index];
+            value->SetValue(index, json_to_v8({{"name", project.name}, {"path", project.path},
+                {"last_edited", project.last_edited}, {"if_exists", project.exists}}));
+        }
+        return value;
+    }
+    const auto& load = reply.load;
+    return json_to_v8({{"active", load.active}, {"loading", load.loading},
+        {"archive_service_ready", load.archive_service_ready}, {"archive_session", load.archive_session},
+        {"path", load.path}, {"scene", load.scene}, {"total", load.total}, {"ready", load.ready},
+        {"failed", load.failed}, {"pending", load.pending}, {"progress", load.progress}});
 }
 
 CefRefPtr<CefV8Value> files_value(const FilesReply& reply) {
@@ -2005,6 +2055,34 @@ public:
         return promise;
     }
 
+    CefRefPtr<CefV8Value> invoke(ProjectLauncherMethod method, const CefV8ValueList& arguments) {
+        CEF_REQUIRE_RENDERER_THREAD();
+        auto promise = CefV8Value::CreatePromise();
+        if (!owns_current_context()) {
+            if (active() && context_ && context_->IsValid()) reject(context_, promise, "PERMISSION_DENIED", "Project launcher binding belongs to another context");
+            else promise->RejectPromise("CONTEXT_CHANGED");
+            return promise;
+        }
+        ProjectLauncherRequest request{method};
+        if (!read_project_launcher(request, arguments)) {
+            reject(context_, promise, "INVALID_ARGUMENT", "Expected named project launcher arguments"); return promise;
+        }
+        const auto id = ++sequence_;
+        pending_.emplace(id, Pending{method, promise});
+        const bool posted = CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
+            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id, ProjectLauncherRequest request) {
+                const auto endpoint = weak.lock();
+                if (!endpoint || !endpoint->active()) return;
+                ProjectLauncherReply reply;
+                try { reply = execute_project_launcher_operation(request); }
+                catch (const std::exception& error) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = error.what(); }
+                catch (...) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = "Project launcher read failed"; }
+                endpoint->complete(id, std::move(reply));
+            }, weak_from_this(), id, std::move(request))));
+        if (!posted) { pending_.erase(id); reject(context_, promise, "NATIVE_UNAVAILABLE", "Project launcher owner unavailable"); }
+        return promise;
+    }
+
     CefRefPtr<CefV8Value> invoke(FilesMethod method, const CefV8ValueList& arguments) {
         CEF_REQUIRE_RENDERER_THREAD();
         auto promise = CefV8Value::CreatePromise();
@@ -2506,6 +2584,18 @@ private:
         context_->Exit();
     }
 
+    void resolve(std::uint64_t id, const ProjectLauncherReply& reply) {
+        CEF_REQUIRE_RENDERER_THREAD();
+        const auto entry = pending_.find(id);
+        if (entry == pending_.end()) return;
+        const auto promise = entry->second.promise;
+        pending_.erase(entry);
+        if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
+        if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
+        else promise->ResolvePromise(project_launcher_value(reply));
+        context_->Exit();
+    }
+
     void resolve(std::uint64_t id, const FilesReply& reply) {
         CEF_REQUIRE_RENDERER_THREAD();
         const auto entry = pending_.find(id);
@@ -2739,7 +2829,7 @@ private:
     const std::uint64_t context_id_ = ++context_sequence_;
     std::uint64_t sequence_ = 0;
     std::string scene_archive_session_;
-    struct Pending { std::variant<WindowMethod, SceneMethod, ViewportMethod, ScriptInputMethod, GizmoMethod, ScriptsMethod, ProjectFilesMethod, ProjectSettingsMethod, FilesMethod, EditorApiMethod> method; CefRefPtr<CefV8Value> promise; };
+    struct Pending { std::variant<WindowMethod, SceneMethod, ViewportMethod, ScriptInputMethod, GizmoMethod, ScriptsMethod, ProjectFilesMethod, ProjectSettingsMethod, ProjectLauncherMethod, FilesMethod, EditorApiMethod> method; CefRefPtr<CefV8Value> promise; };
     std::unordered_map<std::uint64_t, Pending> pending_;
     std::map<std::uint64_t, Subscriber> subscribers_;
 };
@@ -2821,6 +2911,15 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
         endpoints.push_back(endpoint);
     }
     auto root = CefV8Value::CreateObject(nullptr, nullptr);
+    auto project = CefV8Value::CreateObject(nullptr, nullptr);
+    project->SetValue("openProjectFile", CefV8Value::CreateFunction("openProjectFile", new NativeHandler(endpoint, ProjectLauncherMethod::SelectFile)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    project->SetValue("createWorldProject", CefV8Value::CreateFunction("createWorldProject", new NativeHandler(endpoint, ProjectLauncherMethod::CreateWorld)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    project->SetValue("createMultiplayerProject", CefV8Value::CreateFunction("createMultiplayerProject", new NativeHandler(endpoint, ProjectLauncherMethod::CreateMultiplayer)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    project->SetValue("getAppVersion", CefV8Value::CreateFunction("getAppVersion", new NativeHandler(endpoint, ProjectLauncherMethod::GetVersion)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    project->SetValue("getRecentProjects", CefV8Value::CreateFunction("getRecentProjects", new NativeHandler(endpoint, ProjectLauncherMethod::GetRecent)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    project->SetValue("getProjectLoadStatus", CefV8Value::CreateFunction("getProjectLoadStatus", new NativeHandler(endpoint, ProjectLauncherMethod::GetLoadStatus)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    root->SetValue("project", project, V8_PROPERTY_ATTRIBUTE_READONLY);
+
     auto files = CefV8Value::CreateObject(nullptr, nullptr);
     files->SetValue("getFileTree", CefV8Value::CreateFunction("getFileTree", new NativeHandler(endpoint, FilesMethod::GetTree)), V8_PROPERTY_ATTRIBUTE_READONLY);
     files->SetValue("createFolder", CefV8Value::CreateFunction("createFolder", new NativeHandler(endpoint, FilesMethod::CreateFolder)), V8_PROPERTY_ATTRIBUTE_READONLY);

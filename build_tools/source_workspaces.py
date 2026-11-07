@@ -52,7 +52,7 @@ EDITOR = SourceWorkspace(
     directory=Path("CoronaEditor"),
     url="https://github.com/CoronaEngine/CoronaEditor.git",
     ref="main",
-    commit="eee504cc2bc4f1e6d56f34f0a8f2078a95542ca5",
+    commit="4c5671400aff0bb9e2d983a0a47b1410ea693203",
 )
 
 WORKSPACES = (HORIZON, EDITOR)

@@ -1,4 +1,6 @@
 """Exercise every registered packaged Vue panel in the existing native Dock."""
+import ctypes
+from ctypes import wintypes
 import json
 from pathlib import Path
 import re
@@ -8,7 +10,55 @@ from vision_frontend_probe import Frontend
 from web_environment_smoke import wait
 
 
-def run(port, root):
+def minimize_restore(engine_pid, main, child, targets, service):
+    """Minimize only this launch's real HWNDs, then verify both CEF documents survive."""
+    user = ctypes.WinDLL('user32', use_last_error=True)
+    callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user.EnumWindows.argtypes = [callback, wintypes.LPARAM]
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user.IsWindowVisible.argtypes = [wintypes.HWND]
+    user.IsIconic.argtypes = [wintypes.HWND]
+    user.ShowWindowAsync.argtypes = [wintypes.HWND, ctypes.c_int]
+    windows = []
+
+    @callback
+    def visit(hwnd, _):
+        pid = wintypes.DWORD()
+        user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == engine_pid and user.IsWindowVisible(hwnd):
+            windows.append(hwnd)
+        return True
+
+    assert user.EnumWindows(visit, 0)
+    assert len(windows) >= 2, f'Expected main and detached panel HWNDs: {windows}'
+    before_targets = sorted(target['id'] for target in targets())
+    before = []
+    for client in (main, child):
+        before.append(client.evaluate("(async()=>({token:window.__minimizeProbe=crypto.randomUUID(),"
+                                      "tab:await corona.window.getCurrent(),scene:await corona.scene.readActive()}))()"))
+    try:
+        for hwnd in windows:
+            assert user.ShowWindowAsync(hwnd, 6), f'Minimize HWND failed: {hwnd}'
+        wait(lambda: [bool(user.IsIconic(hwnd)) for hwnd in windows], all, 'native windows minimized')
+    finally:
+        for hwnd in windows:
+            user.ShowWindowAsync(hwnd, 9)
+        wait(lambda: [bool(user.IsIconic(hwnd)) for hwnd in windows],
+             lambda states: not any(states), 'native windows restored')
+    assert sorted(target['id'] for target in targets()) == before_targets, 'Minimize recreated a CEF document'
+    for client, previous in zip((main, child), before):
+        after = client.evaluate("(async()=>({token:window.__minimizeProbe,tab:await corona.window.getCurrent(),"
+                                "scene:await corona.scene.readActive()}))()")
+        assert after['token'] == previous['token'], (previous, after)
+        assert after['tab']['tabId'] == previous['tab']['tabId'], (previous, after)
+        assert after['scene']['archive_session'] == previous['scene']['archive_session'], (previous, after)
+    policy = child.evaluate(f'{service}.then(s=>s.readEditorUiPolicy())')
+    assert policy and policy.get('enabled'), policy
+    return dict(native_windows=len(windows), documents_preserved=True, archive_preserved=True,
+                peer_owner_request_after_restore=True)
+
+
+def run(port, root, engine_pid):
     repository = Path(__file__).resolve().parents[2]
     manifest = repository / 'CoronaEditor/editor/Frontend/src/config/pluginManifest.js'
     # This registry is declarative. Match every entry rather than silently
@@ -128,13 +178,15 @@ def run(port, root):
             wait(lambda: child.evaluate('corona.window.getCurrent()'),
                  lambda value: value['dockState'] == 'detached', f'{panel_id} detached')
             assert child.evaluate(f'!!document.querySelector({json.dumps(selectors[panel_id])})')
+            restored = minimize_restore(engine_pid, main, child, targets, service) if panel_id == 'FileManager' else None
             exceptions = [event['params'] for event in child.events if event.get('method') == 'Runtime.exceptionThrown']
             assert not exceptions, (panel_id, exceptions)
             main.evaluate(f'{store}.closePanel({json.dumps(panel_id)})')
             wait(lambda: any(value['id'] == target['id'] for value in targets()),
                  lambda value: not value, f'{panel_id} document closed')
             results.append(dict(panel=panel_id, route=route, tab_id=opened['tab_id'], mounted=True,
-                                reused=True, docked=True, detached=True, closed=True, settings_save_reset=settings_saved, file_crud=file_crud))
+                                reused=True, docked=True, detached=True, closed=True, settings_save_reset=settings_saved,
+                                file_crud=file_crud, minimize_restore=restored))
             opened = None
             child.socket.close()
             child = None

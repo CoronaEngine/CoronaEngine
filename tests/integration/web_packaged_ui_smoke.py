@@ -105,7 +105,8 @@ def main():
                     continue
                 stage = f'packaged Vue {name}'
                 print(stage, flush=True)
-                evidence['results'][name] = suite.run(port, world)
+                evidence['results'][name] = (suite.run(port, world, child.pid) if name == 'panels'
+                                             else suite.run(port, world))
             evidence['passed'] = True
     except Exception:
         evidence.update(failed_stage=stage, error=traceback.format_exc())

@@ -26,6 +26,7 @@
 #include "cef_project_files_operations.h"
 #include "cef_project_settings_operations.h"
 #include "cef_files_operations.h"
+#include "cef_project_launcher_operations.h"
 #include "cef_viewport_pick.h"
 #include "cef_editor_native_api_handlers.h"
 #include "editor_dispatch.h"
@@ -6718,6 +6719,74 @@ void register_file_manager_api_handlers(NativeApiRegistry& registry) {
     });
 }
 
+NativeResult create_launcher_project(const std::string& prompt, const std::string& role) {
+    const bool multiplayer = !role.empty();
+    const std::string display_base = !multiplayer ? "创造世界" : role == "host" ? "联机房主" : "联机加入";
+    const std::string dir_base = !multiplayer ? "creative_world" : role == "host" ? "multiplayer_host" : "multiplayer_guest";
+    const auto base_dir = runtime_data_dir();
+    std::filesystem::create_directories(base_dir);
+    int index = 1;
+    std::filesystem::path target;
+    do {
+        target = base_dir / (dir_base + "_" + std::to_string(index++));
+    } while (std::filesystem::exists(target));
+    const auto display_name = display_base + "_" + std::to_string(index - 1);
+    nlohmann::json payload{{"path", path_to_utf8(target)}, {"name", display_name}};
+    if (multiplayer) payload["multiplayer"] = {{"role", role}};
+    else payload["world"] = {{"type", "creative"}, {"prompt", prompt}};
+    auto created = project_archive_call("create_project", payload);
+    if (!created.success || !created.data.contains("path")) return native_failure("Project creation failed: " + created.error, 2);
+    update_editor_settings_section("General", {{"default_path", path_to_utf8(base_dir)}});
+    nlohmann::json result{{"name", display_name}, {"path", path_to_utf8(target)}};
+    if (multiplayer) result["role"] = role;
+    return native_success(std::move(result));
+}
+
+ProjectLauncherReply execute_project_launcher_operation(const ProjectLauncherRequest& request) {
+    ProjectLauncherReply reply;
+    reply.method = request.method;
+    if (request.method == ProjectLauncherMethod::SelectFile) {
+        if (const auto selected = open_project_file_native())
+            reply.selected = {path_to_utf8(selected->stem()), path_to_utf8(*selected)};
+        return reply;
+    }
+    if (request.method == ProjectLauncherMethod::CreateWorld || request.method == ProjectLauncherMethod::CreateMultiplayer) {
+        const auto result = create_launcher_project(request.prompt,
+            request.method == ProjectLauncherMethod::CreateWorld ? "" : request.role);
+        if (!result.success) {
+            reply.error_code = "PROJECT_CREATION_FAILED"; reply.error_message = result.error;
+        } else {
+            reply.created = {result.data.value("name", std::string{}), result.data.value("path", std::string{}),
+                result.data.value("role", std::string{})};
+        }
+        return reply;
+    }
+    if (request.method == ProjectLauncherMethod::GetVersion) {
+        reply.version = settings_value("General", "version", "1.2.0");
+    } else if (request.method == ProjectLauncherMethod::GetRecent) {
+        for (const auto& value : recent_projects_native()) {
+            reply.recent.push_back({value.value("name", std::string{}), value.value("path", std::string{}),
+                value.value("last_edited", std::string{}), value.value("if_exists", false)});
+        }
+    } else {
+        const auto value = project_resource_load_status();
+        auto& load = reply.load;
+        load.active = value.value("active", false);
+        load.loading = value.value("loading", false);
+        load.archive_service_ready = value.value("archive_service_ready", false);
+        load.path = value.value("path", std::string{});
+        load.scene = value.value("scene", std::string{});
+        const auto* scene = native_editor_state().scene.get();
+        load.archive_session = scene ? scene->archive_session : "";
+        load.total = value.value("total", std::uint64_t{});
+        load.ready = value.value("ready", std::uint64_t{});
+        load.failed = value.value("failed", std::uint64_t{});
+        load.pending = value.value("pending", std::uint64_t{});
+        load.progress = value.value("progress", 0.0);
+    }
+    return reply;
+}
+
 void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
         {"browse_folder", [](const NativeRequest& request, const NativeContext&) {
@@ -6758,42 +6827,12 @@ void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
             return native_success(path_to_utf8(target));
         }},
         {"create_world_project", [](const NativeRequest& request, const NativeContext&) {
-            const auto data = arg_object(request.args, 0);
-            const auto prompt = data.value("prompt", std::string{});
-            const std::string display_base = "创造世界";
-            const std::string dir_base = "creative_world";
-            const auto base_dir = runtime_data_dir();
-            std::filesystem::create_directories(base_dir);
-            int index = 1;
-            std::filesystem::path target;
-            do {
-                target = base_dir / (dir_base + "_" + std::to_string(index++));
-            } while (std::filesystem::exists(target));
-            const auto display_name = display_base + "_" + std::to_string(index - 1);
-            auto created = project_archive_call("create_project", {{"path", path_to_utf8(target)}, {"name", display_name}, {"world", {{"type", "creative"}, {"prompt", prompt}}}});
-            if (!created.success || !created.data.contains("path")) return native_failure("Project creation failed: " + created.error, 2);
-            update_editor_settings_section("General", {{"default_path", path_to_utf8(base_dir)}});
-            return native_success({{"name", display_name}, {"path", path_to_utf8(target)}});
+            return create_launcher_project(arg_object(request.args, 0).value("prompt", std::string{}), "");
         }},
         {"create_multiplayer_project", [](const NativeRequest& request, const NativeContext&) {
             const auto data = arg_object(request.args, 0);
-            const std::string role = data.value("role", std::string{"guest"}) == "host" ? "host" : "guest";
-            const std::string display_base = role == "host" ? "联机房主" : "联机加入";
-            const std::string dir_base = role == "host" ? "multiplayer_host" : "multiplayer_guest";
-            const auto base_dir = runtime_data_dir();
-            std::filesystem::create_directories(base_dir);
-            int index = 1;
-            std::filesystem::path target;
-            do {
-                target = base_dir / (dir_base + "_" + std::to_string(index++));
-            } while (std::filesystem::exists(target));
-            const auto display_name = display_base + "_" + std::to_string(index - 1);
-            auto created = project_archive_call("create_project", {{"path", path_to_utf8(target)}, {"name", display_name}, {"multiplayer", {{"role", role}}}});
-            if (!created.success || !created.data.contains("path")) return native_failure("Project creation failed: " + created.error, 2);
-            update_editor_settings_section("General", {{"default_path", path_to_utf8(base_dir)}});
-            return native_success({{"name", display_name}, {"path", path_to_utf8(target)}, {"role", role}});
+            return create_launcher_project("", data.value("role", std::string{"guest"}) == "host" ? "host" : "guest");
         }},
-
 
         {"open_project", [](const NativeRequest& request, const NativeContext&) {
             const auto path = normalize_route(arg_string(request.args, 0));

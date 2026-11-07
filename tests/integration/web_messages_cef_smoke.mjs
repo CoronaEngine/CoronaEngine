@@ -115,6 +115,9 @@ try {
   for (const method of ['getFileTree', 'createFolder', 'createActorTemplate', 'renameItem', 'deleteItem', 'openFile']) {
     assert.equal(await main.evaluate(`typeof corona.files?.${method}`), 'function', `files.${method} requires a direct V8 binding`);
   }
+  for (const method of ['getAppVersion', 'getRecentProjects', 'getProjectLoadStatus']) {
+    assert.equal(await main.evaluate(`typeof corona.project?.${method}`), 'function', `project.${method} requires a direct V8 binding`);
+  }
   for (const method of ['readProjectDocument', 'commitProjectDocument', 'getActiveProjectInfo', 'saveActiveProjectInfo']) {
     assert.equal(await main.evaluate(`typeof corona.projectSettings?.${method}`), 'function', `projectSettings.${method} requires a direct V8 binding`);
   }
@@ -470,6 +473,24 @@ try {
     assert.ok(camera?.archive_session);
     assert.equal(await main.evaluate("corona.editor.invoke('MainView.on_init',[]).then(()=>false,()=>true)"), true);
     const sceneRead = await main.evaluate('corona.scene.readActive()');
+    const loadStatus = await main.evaluate('corona.project.getProjectLoadStatus()');
+    assert.equal(loadStatus.archive_session, sceneRead.archive_session);
+    assert.equal(loadStatus.active, true);
+    assert.equal(loadStatus.scene, sceneRead.scene);
+    assert.equal(loadStatus.total, loadStatus.ready + loadStatus.failed + loadStatus.pending);
+    assert.equal('data' in loadStatus, false);
+    assert.equal(typeof await main.evaluate('corona.project.getAppVersion()'), 'string');
+    const recent = await main.evaluate('corona.project.getRecentProjects()');
+    assert.ok(Array.isArray(recent) && recent.some(project => project.path.replaceAll('\\', '/').toLowerCase() === cameraWorld.replaceAll('\\', '/').toLowerCase()));
+    for (const method of ['getAppVersion', 'getRecentProjects', 'getProjectLoadStatus']) {
+      assert.equal(await main.evaluate(`corona.project.${method}({}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
+    }
+    for (const method of ['browse_folder', 'get_default_project_path', 'create_project',
+      'validate_portable_scene', 'import_portable_asset', 'cleanup_portable_scene_assets',
+      'get_app_version', 'get_recent_projects', 'get_project_load_status']) {
+      assert.match(await fixtureApi(`ProjectLauncher.${method}`, []).then(() => 'unexpected retired route', error => error.message), /not allowed/);
+    }
+    evidence[0].projectLauncherReads = 'named V8 version/history/load snapshots with JSON disabled; archive identity, strict arity and nine retired CEF routes';
     assert.equal(await main.evaluate('typeof corona.scene.focusActor'), 'function');
     assert.equal(await main.evaluate('typeof corona.scene.setActorTransform'), 'function');
     assert.equal(await main.evaluate('typeof window.coronaBridge?.actorTransform'), 'undefined');

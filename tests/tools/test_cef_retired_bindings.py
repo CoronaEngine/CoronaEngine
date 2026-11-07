@@ -2,6 +2,51 @@
 from pathlib import Path
 
 
+def test_project_creation_has_one_native_owner_and_named_web_bindings():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    for method in ['create_world_project', 'create_multiplayer_project']:
+        line = next(line for line in manifest.splitlines() if f'ProjectLauncher, {method},' in line)
+        assert 'WRAPPED_CALLERS(ProjectLauncher,' in line
+        assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
+        assert ', "", "project.' in line
+    owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8')
+    assert 'NativeResult create_launcher_project(' in owner
+    assert owner.count('target = base_dir / (dir_base + "_"') == 1
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
+    for name in ['createWorldProject', 'createMultiplayerProject']:
+        assert f'project->SetValue("{name}"' in binding
+
+
+def test_project_launcher_reads_use_named_v8_and_keep_non_web_manifest():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    for method in ['get_app_version', 'get_recent_projects', 'get_project_load_status']:
+        line = next(line for line in manifest.splitlines() if f'ProjectLauncher, {method},' in line)
+        assert 'WRAPPED_CALLERS(ProjectLauncher,' in line
+        assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
+        assert ', "", "project.' in line
+    header = (root / 'src/systems/ui/cef/cef_project_launcher_operations.h').read_text(encoding='utf-8')
+    assert 'nlohmann' not in header and 'CefV8' not in header
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
+    for name in ['getAppVersion', 'getRecentProjects', 'getProjectLoadStatus']:
+        assert f'project->SetValue("{name}"' in binding
+    assert 'execute_project_launcher_operation(request)' in binding
+
+
+def test_unused_project_launch_methods_keep_non_web_contracts_only():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    for method in ['browse_folder', 'get_default_project_path', 'create_project',
+                   'validate_portable_scene', 'import_portable_asset', 'cleanup_portable_scene_assets']:
+        line = next(line for line in manifest.splitlines() if f'ProjectLauncher, {method},' in line)
+        assert 'WRAPPED_CALLERS(ProjectLauncher,' in line
+        assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
+        assert ', "", "project.' in line
+    owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
+    assert 'registry.register_module("ProjectLauncher",' in owner
+
+
 def test_unused_resource_search_is_not_exposed_to_web_but_keeps_python_contracts():
     root = Path(__file__).resolve().parents[2]
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
@@ -488,3 +533,18 @@ def test_main_init_is_python_only_and_has_no_web_facade():
     assert declaration.endswith('caller_mask(EditorApiCaller::PythonScript)),')
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'onInit:' not in facade
+
+
+def test_project_picker_has_named_binding_and_no_generic_timeout_exception():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    line = next(line for line in manifest.splitlines() if 'ProjectLauncher, open_project_file,' in line)
+    assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
+    assert ', "", "project.open_project_file"' in line
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
+    assert 'project->SetValue("openProjectFile"' in binding
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8')
+    assert 'INTERACTIVE_FILE_PICKER_APIS' not in facade
+    assert "call_manifest_editor_api('project.openProjectFile'" not in facade
+    view = (root / 'CoronaEditor/editor/Frontend/src/views/layout/RecentGames.vue').read_text(encoding='utf-8')
+    assert 'result?.data?.path' not in view
