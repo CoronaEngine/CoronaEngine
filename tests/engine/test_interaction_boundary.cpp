@@ -477,6 +477,32 @@ void test_mechanics_structural_commands() {
     hub.mechanics_storage().deallocate(handle);
 }
 
+void test_camera_release_queue_is_fifo() {
+    auto& hub = SharedDataHub::instance();
+    (void)hub.drain_camera_releases();  // 清掉其它用例可能残留的释放命令
+
+    const auto first = hub.camera_storage().allocate();
+    const auto second = hub.camera_storage().allocate();
+    CHECK(first != 0 && second != 0);
+
+    // 释放时要顺手清掉该相机的遥测
+    hub.publish_camera_frame_timing(first, 1.5, 0.5, Corona::CameraVisionRenderMode::PathTracing);
+    CHECK(hub.camera_frame_timing(first).has_value());
+
+    hub.enqueue_camera_release({.camera_handle = first, .actor_pick_handle = 0});
+    hub.enqueue_camera_release({.camera_handle = second, .actor_pick_handle = 0});
+
+    const auto releases = hub.drain_camera_releases();
+    CHECK(releases.size() == 2);        // Fifo：不合并
+    CHECK(releases[0].camera_handle == first);
+    CHECK(releases[1].camera_handle == second);
+    CHECK(!hub.camera_frame_timing(first).has_value());
+    CHECK(hub.drain_camera_releases().empty());  // 取空后不重复投递
+
+    hub.camera_storage().deallocate(first);
+    hub.camera_storage().deallocate(second);
+}
+
 }  // namespace
 
 int main() {
@@ -490,6 +516,7 @@ int main() {
     test_acoustics_command_and_snapshot();
     test_environment_boundary_stage();
     test_mechanics_structural_commands();
+    test_camera_release_queue_is_fifo();
 
     if (g_failures == 0) {
         std::printf("OK: %d checks passed\n", g_checks);

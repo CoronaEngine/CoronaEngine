@@ -637,6 +637,13 @@ struct CameraReleaseCommand {
     std::uintptr_t actor_pick_handle{};
 };
 
+/// 相机释放命令的合并键（Fifo 队列只用它做 peek / erase）
+struct CameraReleaseKey {
+    static std::uintptr_t get(const CameraReleaseCommand& command) noexcept {
+        return command.camera_handle;
+    }
+};
+
 enum class ViewportUiMode : std::uint8_t {
     Flat2D,
     Stereo3D,
@@ -1013,8 +1020,10 @@ class SharedDataHub {
     std::unordered_map<std::uintptr_t, RequestedCameraBool>
         requested_camera_vision_stable_planes_;
     std::uint64_t camera_state_update_sequence_{0};
-    std::mutex camera_release_mutex_;
-    std::vector<CameraReleaseCommand> pending_camera_releases_;
+    // 相机释放：Fifo（不可合并 —— 创建/销毁顺序有意义），P5 起统一走 CommandBuffer
+    Kernel::CommandBuffer<CameraReleaseCommand, CameraReleaseKey,
+                          Kernel::CoalescePolicy::Fifo>
+        camera_releases_;
     mutable std::mutex viewport_ui_mutex_;
     std::unordered_map<std::uintptr_t, ViewportUiState> viewport_ui_states_;
     std::vector<ViewportUiPointerCommand> pending_viewport_ui_pointer_commands_;

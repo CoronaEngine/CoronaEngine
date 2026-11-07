@@ -824,17 +824,13 @@ void SharedDataHub::enqueue_camera_release(CameraReleaseCommand command) {
     }
 
     clear_camera_state_updates(command.camera_handle);
-    std::lock_guard<std::mutex> lock(camera_release_mutex_);
-    pending_camera_releases_.push_back(command);
+    // Fifo：同一相机多次释放不会被合并，顺序保持不变。
+    camera_releases_.push(command);
 }
 
 std::vector<CameraReleaseCommand> SharedDataHub::drain_camera_releases() {
-    std::vector<CameraReleaseCommand> releases;
-    {
-        std::lock_guard<std::mutex> lock(camera_release_mutex_);
-        releases.swap(pending_camera_releases_);
-    }
-    {
+    auto releases = camera_releases_.drain();
+    if (!releases.empty()) {
         std::lock_guard<std::mutex> lock(camera_timing_mutex_);
         for (const auto& release : releases) camera_timings_.erase(release.camera_handle);
     }
