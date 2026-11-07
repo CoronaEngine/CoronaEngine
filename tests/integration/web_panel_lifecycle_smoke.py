@@ -62,6 +62,56 @@ def run(port, root):
             assert opened['tab_id'] > 0, identity
             peer_scene = child.evaluate('corona.scene.readActive()')
             assert peer_scene['archive_session'] == archive and peer_scene['scene'] == 'scene.ini', peer_scene
+            file_crud = False
+            if panel_id == 'FileManager':
+                wait(lambda: child.evaluate("document.querySelectorAll('.tree-node').length"), bool, 'file tree ready')
+                def context(name=None):
+                    child.evaluate("(()=>{const name=" + json.dumps(name) + ";const row=name===null?document.querySelector('.custom-scrollbar'):"
+                                   "[...document.querySelectorAll('.tree-node > .group')].find(r=>r.querySelector('.truncate')?.textContent===name);"
+                                   "if(!row)throw Error('file row missing '+name);row.dispatchEvent(new MouseEvent('contextmenu',"
+                                   "{bubbles:true,cancelable:true,clientX:30,clientY:50}));})()")
+                    wait(lambda: child.evaluate("!!document.querySelector('[data-file-context-menu]')"), bool, 'file context menu')
+                def action(index):
+                    child.evaluate(f"document.querySelector('[data-file-context-menu]').children[{index}].click()")
+                def confirm_name(name):
+                    wait(lambda: child.evaluate("!!document.querySelector('[data-file-dialog] input')"), bool, 'file dialog')
+                    child.evaluate("(()=>{const input=document.querySelector('[data-file-dialog] input');input.value=" + json.dumps(name)
+                                   + ";input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelectorAll('[data-file-dialog] button')[1].click();})()")
+                    wait(lambda: child.evaluate("!!document.querySelector('[data-file-dialog]')"), lambda value: not value, 'file dialog committed')
+                def has_name(name):
+                    return child.evaluate("[...document.querySelectorAll('.tree-node .truncate')].some(n=>n.textContent===" + json.dumps(name) + ")")
+                context(); action(0); confirm_name('UI files')
+                wait(lambda: has_name('UI files'), bool, 'Vue created folder')
+                context('UI files'); action(1); confirm_name('UI Actor')
+                wait(lambda: has_name('UI Actor.actor'), bool, 'Vue created Actor template')
+                context('UI Actor.actor'); action(2); confirm_name('Renamed.actor')
+                wait(lambda: has_name('Renamed.actor'), bool, 'Vue renamed Actor template')
+                context('Renamed.actor'); action(0)
+                wait(lambda: child.evaluate("!document.querySelector('[data-file-context-menu]')"), bool, 'Vue opened Actor template')
+                child.evaluate('window.confirm=()=>true')
+                context('Renamed.actor'); action(3)
+                wait(lambda: has_name('Renamed.actor'), lambda value: not value, 'Vue deleted Actor template')
+                context('UI files'); action(4)
+                wait(lambda: has_name('UI files'), lambda value: not value, 'Vue deleted folder')
+                file_crud = True
+            settings_saved = False
+            if panel_id == 'ProjectSettings':
+                original = child.evaluate('corona.projectSettings.getActiveProjectInfo()')
+                name = original['name'] + ' UI save'
+                child.evaluate("(()=>{const input=document.querySelector('input');input.value=" + json.dumps(name)
+                               + ";input.dispatchEvent(new Event('input',{bubbles:true}));"
+                                 "document.querySelectorAll('button')[1].click();})()")
+                wait(lambda: child.evaluate('corona.projectSettings.getActiveProjectInfo()'),
+                     lambda value: value['name'] == name, 'settings UI save')
+                wait(lambda: child.evaluate("!document.querySelectorAll('button')[1].disabled"), bool, 'settings save settled')
+                child.evaluate("(()=>{const input=document.querySelector('input');input.value='unsaved';"
+                               "input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('button').click();})()")
+                wait(lambda: child.evaluate("document.querySelector('input')?.value"),
+                     lambda value: value == name, 'settings UI reset')
+                child.evaluate('corona.projectSettings.saveActiveProjectInfo(' + json.dumps({
+                    'archive_session': original['archive_session'], 'project_path': original['project_path'],
+                    'name': original['name'], 'core_version': original['core_version']}) + ')')
+                settings_saved = True
             main.evaluate(f'{store}.openPanel({json.dumps(panel_id)})')
             # Wait for Vue's watcher/microtask flush before checking identity.
             main.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))")
@@ -84,7 +134,7 @@ def run(port, root):
             wait(lambda: any(value['id'] == target['id'] for value in targets()),
                  lambda value: not value, f'{panel_id} document closed')
             results.append(dict(panel=panel_id, route=route, tab_id=opened['tab_id'], mounted=True,
-                                reused=True, docked=True, detached=True, closed=True))
+                                reused=True, docked=True, detached=True, closed=True, settings_save_reset=settings_saved, file_crud=file_crud))
             opened = None
             child.socket.close()
             child = None

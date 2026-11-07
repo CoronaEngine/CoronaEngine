@@ -27,6 +27,12 @@ def run(port, root):
         main.evaluate("localStorage.setItem('corona.nativeViewportCursor.enabled','1');localStorage.setItem('corona.activeProjectPath',"
                       + json.dumps(str(root)) + ");location.hash='/'")
         wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-pick-surface]')"), bool, 'MainPage mount')
+        # The DOM surface precedes asynchronous camera/render setup. Exercise
+        # input only once the mounted hook has installed the viewport lifecycle.
+        wait(lambda: main.call('Runtime.evaluate', {
+            'expression': "Boolean(getEventListeners(document).keydown?.some(e=>e.listener.toString().includes('new-tab-name')) && getEventListeners(window).blur?.length)",
+            'includeCommandLineAPI': True, 'returnByValue': True,
+        })['result'].get('value'), bool, 'MainPage input lifecycle ready')
         scope = main.evaluate('corona.scene.readActive()')['archive_session']
 
         def cameras():

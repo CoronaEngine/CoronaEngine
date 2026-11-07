@@ -22,6 +22,10 @@
 #include "cef_editor_native_api_test_support.h"
 #include "cef_window_operations.h"
 #include "cef_scene_operations.h"
+#include "cef_scripts_operations.h"
+#include "cef_project_files_operations.h"
+#include "cef_project_settings_operations.h"
+#include "cef_files_operations.h"
 #include "cef_viewport_pick.h"
 #include "cef_editor_native_api_handlers.h"
 #include "editor_dispatch.h"
@@ -5192,6 +5196,115 @@ std::vector<IkChainSnapshot> typed_ik_chains(const std::vector<Corona::Resource:
 
 } // namespace
 
+static NativeResult start_native_script_file(nlohmann::json payload, bool by_path) {
+    const auto* scene = native_editor_state().scene.get();
+    if (!scene || !matches_archive_session(*scene, payload)) {
+        return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+    }
+    if (by_path && !payload.contains("project_path")) payload["project_path"] = path_to_utf8(scene->project_root);
+    if (by_path && !payload.contains("target_type")) {
+        payload["target_type"] = payload.value("actor_name", std::string{}).empty() ? "project" : "actor";
+    }
+    const auto expected = path_from_utf8(payload.value("project_path", std::string{}));
+    if (scene->read_only || expected.empty() ||
+        absolute_normalized_path(expected) != absolute_normalized_path(scene->project_root)) {
+        return native_failure("Script project changed or is read-only", 409);
+    }
+    const auto path = path_from_utf8(payload.value("path", std::string{}));
+    if (path.empty() || path.has_root_path() || path.extension() != ".py") {
+        return native_failure("Script path must be a project-relative .py file", 400);
+    }
+    const auto root = absolute_normalized_path(scene->project_root);
+    // The Python file host resolves the path, checks containment and verifies
+    // the saved bytes against the revision before compiling them.
+    payload["project_path"] = path_to_utf8(root);
+    return invoke_python_script_service({"FileScripts", by_path ? "run_path" : "run_file", nlohmann::json::array({payload})});
+}
+
+ProjectFilesReply execute_project_files_operation(const ProjectFilesRequest& request) {
+    nlohmann::json payload{{"archive_session", request.archive_session}, {"project_path", request.project_path},
+        {"identity", request.identity}};
+    const bool save = request.method == ProjectFilesMethod::Save;
+    if (save) { payload["code"] = request.code; payload["document"] = request.document; }
+    const auto result = invoke_python_script_service({"ProjectFiles", save ? "save" : "load", nlohmann::json::array({std::move(payload)})});
+    ProjectFilesReply reply;
+    if (!result.success) {
+        reply.error_code = result.error_code == 504 ? "EDITOR_API_TIMEOUT" : "NATIVE_FAILURE";
+        reply.error_message = result.error;
+        return reply;
+    }
+    const auto& data = result.data;
+    reply.status = data.at("status").get<std::string>();
+    reply.code = data.value("code", std::string{});
+    reply.message = data.value("message", std::string{});
+    reply.revision = data.value("revision", std::string{});
+    reply.code_path = data.value("code_path", std::string{});
+    reply.document_path = data.value("document_path", std::string{});
+    if (data.contains("document")) reply.document = data["document"];
+    return reply;
+}
+
+ScriptsReply execute_scripts_operation(const ScriptsRequest& request) {
+    NativeResult result;
+    if (request.method == ScriptsMethod::RunFile) {
+        result = start_native_script_file({
+            {"requestId", request.request_id}, {"archive_session", request.archive_session},
+            {"project_path", request.project_path}, {"path", request.path}, {"revision", request.revision},
+            {"target_type", request.target_type}, {"scene_name", request.scene_name}, {"actor_name", request.actor_name}}, false);
+    } else if (request.method == ScriptsMethod::GetStatus) {
+        result = invoke_python_script_service({"FileScripts", "get_script_status", nlohmann::json::array()});
+    } else if (request.method == ScriptsMethod::GetRun) {
+        result = invoke_python_script_service({"FileScripts", "get_file_run", {{{"requestId", request.request_id}}}});
+    } else {
+        result = invoke_python_script_service({"FileScripts", "stop_file", {{{"runId", request.run_id},
+            {"requestId", request.request_id}, {"restore_state", request.restore_state}}}});
+    }
+    ScriptsReply reply;
+    if (!result.success) {
+        reply.error_code = result.error_code == 504 ? "EDITOR_API_TIMEOUT" :
+            result.error_code == 409 ? "PROJECT_CONTEXT_CHANGED" : "NATIVE_FAILURE";
+        reply.error_message = result.error;
+        return reply;
+    }
+    const auto& data = result.data;
+    if (!data.is_object()) throw std::runtime_error("Expected a script runtime snapshot");
+    auto& snapshot = reply.snapshot;
+    if (data.contains("status") && !data["status"].is_null()) snapshot.status = data["status"].get<std::string>();
+    if (data.contains("outcome") && !data["outcome"].is_null()) snapshot.outcome = data["outcome"].get<std::string>();
+    if (data.contains("error") && !data["error"].is_null()) snapshot.error = data["error"].get<std::string>();
+    if (data.contains("code") && !data["code"].is_null()) snapshot.code = data["code"].get<std::string>();
+    if (data.contains("message") && !data["message"].is_null()) snapshot.message = data["message"].get<std::string>();
+    if (data.contains("filepath") && !data["filepath"].is_null()) snapshot.filepath = data["filepath"].get<std::string>();
+    if (data.contains("runId") && !data["runId"].is_null()) snapshot.runId = data["runId"].get<std::string>();
+    if (data.contains("requestId") && !data["requestId"].is_null()) snapshot.requestId = data["requestId"].get<std::string>();
+    if (data.contains("contextId") && !data["contextId"].is_null()) snapshot.contextId = data["contextId"].get<std::string>();
+    if (data.contains("sceneName") && !data["sceneName"].is_null()) snapshot.sceneName = data["sceneName"].get<std::string>();
+    if (data.contains("actorName") && !data["actorName"].is_null()) snapshot.actorName = data["actorName"].get<std::string>();
+    if (data.contains("targetType") && !data["targetType"].is_null()) snapshot.targetType = data["targetType"].get<std::string>();
+    if (data.contains("requestedScene") && !data["requestedScene"].is_null()) snapshot.requestedScene = data["requestedScene"].get<std::string>();
+    if (data.contains("requestedActor") && !data["requestedActor"].is_null()) snapshot.requestedActor = data["requestedActor"].get<std::string>();
+    if (data.contains("resolvedSceneName") && !data["resolvedSceneName"].is_null()) snapshot.resolvedSceneName = data["resolvedSceneName"].get<std::string>();
+    if (data.contains("resolvedActorName") && !data["resolvedActorName"].is_null()) snapshot.resolvedActorName = data["resolvedActorName"].get<std::string>();
+    if (data.contains("bindingMode") && !data["bindingMode"].is_null()) snapshot.bindingMode = data["bindingMode"].get<std::string>();
+    if (data.contains("nativeScene") && !data["nativeScene"].is_null()) snapshot.nativeScene = data["nativeScene"].get<std::string>();
+    if (data.contains("restoreStatus") && !data["restoreStatus"].is_null()) snapshot.restoreStatus = data["restoreStatus"].get<std::string>();
+    if (data.contains("restoreError") && !data["restoreError"].is_null()) snapshot.restoreError = data["restoreError"].get<std::string>();
+    if (data.contains("currentNodeId") && !data["currentNodeId"].is_null()) snapshot.currentNodeId = data["currentNodeId"].get<std::string>();
+    if (data.contains("inputLocked") && !data["inputLocked"].is_null()) snapshot.inputLocked = data["inputLocked"].get<bool>();
+    if (data.contains("snapshotCaptured") && !data["snapshotCaptured"].is_null()) snapshot.snapshotCaptured = data["snapshotCaptured"].get<bool>();
+    if (data.contains("threadAlive") && !data["threadAlive"].is_null()) snapshot.threadAlive = data["threadAlive"].get<bool>();
+    if (data.contains("restored") && !data["restored"].is_null()) snapshot.restored = data["restored"].get<bool>();
+    if (data.contains("startedAt") && !data["startedAt"].is_null()) snapshot.startedAt = data["startedAt"].get<double>();
+    if (data.contains("finishedAt") && !data["finishedAt"].is_null()) snapshot.finishedAt = data["finishedAt"].get<double>();
+    if (data.contains("actorCandidates") && !data["actorCandidates"].is_null()) snapshot.actorCandidates = data["actorCandidates"].get<std::vector<std::string>>();
+    if (data.contains("pendingThreads") && !data["pendingThreads"].is_null()) snapshot.pendingThreads = data["pendingThreads"].get<std::vector<std::string>>();
+    if (data.contains("marker") && data["marker"].is_object())
+        snapshot.marker = ScriptMarker{data["marker"].value("id", std::string{}), data["marker"].value("name", std::string{})};
+    if (data.contains("waiting") && data["waiting"].is_object())
+        snapshot.waiting = ScriptMarker{data["waiting"].value("id", std::string{}), data["waiting"].value("name", std::string{})};
+    return reply;
+}
+
 SceneReply execute_scene_operation(const SceneRequest& request) {
     if (request.method == SceneMethod::ReadVisionAvailability) {
         SceneReply reply;
@@ -6502,19 +6615,88 @@ std::optional<std::filesystem::path> resolve_file_manager_path(
     return normalized_candidate;
 }
 
+namespace {
+NativeResult project_file_request(const std::string& operation, nlohmann::json args) {
+    const auto* scene = native_editor_state().scene.get();
+    if (!scene || scene->read_only) return native_failure("No writable project", 409);
+    if (!args.empty() && args.back().is_object()) {
+        if (!matches_archive_session(*scene, args.back())) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+        args.erase(args.size() - 1);
+    } else if (operation != "get_file_tree" && operation != "get_files") {
+        return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+    }
+    return project_archive_call("file_manager", {{"archive_session", scene->archive_session},
+        {"project_path", path_to_utf8(scene->project_root)}, {"op", operation}, {"args", args}});
+}
+
+NativeResult open_project_file(const std::filesystem::path& root, const std::string& path, const std::string& type) {
+    const auto target = resolve_file_manager_path(root, path);
+    if (!target || !std::filesystem::is_regular_file(*target)) return native_failure("File does not exist", 404);
+    // Opening a scene is the same native reload operation for both adapters.
+    if (type == "scene") reload_native_editor_scene("", route_for_project_storage(root, path_to_utf8(*target)));
+    return native_success(true);
+}
+
+FileTreeEntry file_tree_entry(const nlohmann::json& data, unsigned depth = 0) {
+    if (depth >= 128) throw std::runtime_error("Project file tree is too deep");
+    FileTreeEntry entry;
+    entry.name = data.at("name").get<std::string>();
+    entry.path = data.at("path").get<std::string>();
+    entry.directory = data.at("isDirectory").get<bool>();
+    entry.level = data.at("level").get<int>();
+    entry.expanded = data.value("expanded", false);
+    if (data.contains("size")) entry.size = data["size"].get<std::uint64_t>();
+    if (data.contains("children")) for (const auto& child : data["children"]) entry.children.push_back(file_tree_entry(child, depth + 1));
+    return entry;
+}
+}
+
+FilesReply execute_files_operation(const FilesRequest& request) {
+    FilesReply reply;
+    const auto* scene = native_editor_state().scene.get();
+    if (!scene || scene->archive_session != request.archive_session ||
+        absolute_normalized_path(path_from_utf8(request.project_path)) != scene->project_root) {
+        reply.error_code = "PROJECT_CONTEXT_CHANGED"; reply.error_message = "Project file request belongs to a retired archive"; return reply;
+    }
+    if (scene->read_only) { reply.error_code = "READ_ONLY_PROJECT"; reply.error_message = "Project is read-only"; return reply; }
+    reply.archive_session = request.archive_session;
+    reply.project_path = path_to_utf8(scene->project_root);
+    NativeResult result;
+    if (request.method == FilesMethod::Open) {
+        const auto route = std::filesystem::weakly_canonical(scene->project_root / path_from_utf8(request.path));
+        if (!is_path_within(scene->project_root, route)) {
+            reply.error_code = "INVALID_PROJECT_PATH"; reply.error_message = "Path outside current project"; return reply;
+        }
+        result = open_project_file(scene->project_root, request.path, request.file_type);
+    } else {
+        const char* operation = request.method == FilesMethod::GetTree ? "get_file_tree" :
+            request.method == FilesMethod::CreateFolder ? "create_folder" :
+            request.method == FilesMethod::CreateActorTemplate ? "create_file" :
+            request.method == FilesMethod::Rename ? "rename_item" : "delete_item";
+        auto args = nlohmann::json::array({request.path});
+        if (request.method == FilesMethod::CreateFolder || request.method == FilesMethod::CreateActorTemplate || request.method == FilesMethod::Rename)
+            args.push_back(request.name);
+        if (request.method == FilesMethod::CreateActorTemplate) args.push_back("actor");
+        args.push_back({{"archive_session", request.archive_session}});
+        result = project_file_request(operation, std::move(args));
+    }
+    if (!result.success) {
+        reply.error_code = result.error_code == 409 ? "PROJECT_CONTEXT_CHANGED" : result.error_code == 404 ? "FILE_NOT_FOUND" :
+            result.error_code == 504 ? "EDITOR_API_TIMEOUT" : "FILE_OPERATION_FAILED";
+        reply.error_message = result.error; return reply;
+    }
+    reply.ok = true;
+    if (request.method == FilesMethod::GetTree) reply.tree = file_tree_entry(result.data);
+    else if (request.method == FilesMethod::CreateActorTemplate) {
+        reply.path = result.data.at("path").get<std::string>();
+        reply.name = result.data.at("name").get<std::string>();
+    }
+    return reply;
+}
+
 void register_file_manager_api_handlers(NativeApiRegistry& registry) {
     static const auto files = [](const NativeRequest& request, const NativeContext&) {
-        const auto* scene = native_editor_state().scene.get();
-        if (!scene || scene->read_only) return native_failure("No writable project", 409);
-        auto args = request.args;
-        if (!args.empty() && args.back().is_object()) {
-            if (!matches_archive_session(*scene, args.back())) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-            args.erase(args.size() - 1);
-        } else if (request.function != "get_file_tree" && request.function != "get_files") {
-            return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-        }
-        return project_archive_call("file_manager", {{"archive_session", scene->archive_session},
-            {"project_path", path_to_utf8(scene->project_root)}, {"op", request.function}, {"args", args}});
+        return project_file_request(request.function, request.args);
     };
     static const NativeMethodTable methods = {
         {"get_project_info", [](const NativeRequest&, const NativeContext&) {
@@ -6528,16 +6710,7 @@ void register_file_manager_api_handlers(NativeApiRegistry& registry) {
         {"open_file", [](const NativeRequest& request, const NativeContext&) {
             const auto project_root = resolve_file_manager_project_path();
             if (!project_root) return native_failure("No active project", 404);
-            const auto target = resolve_file_manager_path(*project_root, arg_string(request.args, 0));
-            if (!target || !std::filesystem::is_regular_file(*target)) {
-                return native_failure("File does not exist", 404);
-            }
-            const auto file_type = arg_string(request.args, 1);
-            if (file_type == "scene") {
-                const auto route = route_for_project_storage(*project_root, path_to_utf8(*target));
-                reload_native_editor_scene("", route);
-            }
-            return native_success(true);
+            return open_project_file(*project_root, arg_string(request.args, 0), arg_string(request.args, 1));
         }},
     };
     registry.register_module("FileManager", [](const NativeRequest& request, const NativeContext& context) {
@@ -6948,8 +7121,7 @@ void register_main_view_api_handlers(NativeApiRegistry& registry) {
 
 
 namespace {
-NativeResult project_document_request(const NativeRequest& request, bool commit) {
-    const auto payload = arg_object(request.args, 0);
+NativeResult project_document_request(const nlohmann::json& payload, bool commit) {
     const auto* scene = native_editor_state().scene.get();
     if (!scene || !matches_archive_session(*scene, payload) ||
         absolute_normalized_path(path_from_utf8(payload.value("project_path", std::string{}))) != scene->project_root) {
@@ -6958,31 +7130,84 @@ NativeResult project_document_request(const NativeRequest& request, bool commit)
     if (scene->read_only) return native_success({{"success", false}, {"error", "READ_ONLY_PROJECT"}});
     return project_archive_call(commit ? "commit_document" : "read_document", payload);
 }
+
+NativeResult save_project_info(const nlohmann::json& settings) {
+    auto* scene = native_editor_state().scene.get();
+    if (!scene || !matches_archive_session(*scene, settings)) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+    if (scene->read_only) return native_failure("READ_ONLY_PROJECT", 403);
+    auto result = project_archive_call("update_metadata", {{"path", path_to_utf8(scene->project_root)}, {"settings", settings}});
+    if (!result.success || !result.data.contains("name")) return native_failure("Project settings were not saved: " + result.error, 2);
+    scene->name = result.data.at("name");
+    scene->core_version = result.data.at("core_version");
+    result.data["archive_session"] = scene->archive_session;
+    return result;
+}
+}
+
+ProjectSettingsReply execute_project_settings_operation(const ProjectSettingsRequest& request) {
+    NativeResult result;
+    ProjectSettingsReply reply;
+    const bool metadata = request.method == ProjectSettingsMethod::GetInfo || request.method == ProjectSettingsMethod::SaveInfo;
+    if (request.method == ProjectSettingsMethod::GetInfo) result = native_success(active_project_info_json());
+    else if (request.method == ProjectSettingsMethod::SaveInfo) {
+        const auto* scene = native_editor_state().scene.get();
+        if (!scene || absolute_normalized_path(path_from_utf8(request.project_path)) != scene->project_root)
+            result = native_failure("PROJECT_CONTEXT_CHANGED", 409);
+        else result = save_project_info({{"archive_session", request.archive_session},
+            {"name", request.name}, {"core_version", request.core_version}});
+    } else {
+        nlohmann::json payload{{"archive_session", request.archive_session}, {"project_path", request.project_path},
+            {"document", request.document}, {"revision_only", true}};
+        const bool commit = request.method == ProjectSettingsMethod::CommitDocument;
+        if (commit) { payload["revision"] = request.revision; payload["content"] = request.content; }
+        result = project_document_request(payload, commit);
+    }
+    if (!result.success) {
+        reply.error_code = result.error_code == 409 ? "PROJECT_CONTEXT_CHANGED" :
+            result.error_code == 403 ? "READ_ONLY_PROJECT" : result.error_code == 504 ? "EDITOR_API_TIMEOUT" : "NATIVE_FAILURE";
+        reply.error_message = result.error;
+        return reply;
+    }
+    const auto& data = result.data;
+    if (metadata) {
+        ProjectInfoSnapshot info;
+        info.name = data.value("name", std::string{});
+        info.mode = data.value("mode", std::string{});
+        info.prompt = data.value("prompt", std::string{});
+        info.core_version = data.value("core_version", std::string{});
+        info.create_time = data.value("create_time", std::string{});
+        info.last_opened = data.value("last_opened", std::string{});
+        info.project_path = data.at("project_path").get<std::string>();
+        info.archive_session = data.at("archive_session").get<std::string>();
+        info.read_only = data.value("read_only", false);
+        info.source_path = data.value("source_path", std::string{});
+        reply.info = std::move(info);
+    } else {
+        reply.success = data.at("success").get<bool>();
+        reply.document_error = data.value("error", std::string{});
+        reply.revision = data.value("revision", std::string{});
+        reply.corrupt = data.value("corrupt", false);
+        if (data.contains("content")) reply.content = data["content"];
+    }
+    return reply;
 }
 
 void register_project_settings_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
 
         {"read_project_document", [](const NativeRequest& request, const NativeContext&) {
-            return project_document_request(request, false);
+            return project_document_request(arg_object(request.args, 0), false);
         }},
         {"commit_project_document", [](const NativeRequest& request, const NativeContext&) {
-            return project_document_request(request, true);
+            return project_document_request(arg_object(request.args, 0), true);
         }},
 
         {"get_active_project_info", [](const NativeRequest&, const NativeContext&) {
             return native_success(active_project_info_json());
         }},
         {"save_active_project_info", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = native_editor_state().scene.get();
-            const auto settings = arg_object(request.args, 0);
-            if (!scene || !matches_archive_session(*scene, settings)) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-            if (scene->read_only) return native_failure("READ_ONLY_PROJECT", 403);
-            auto result = project_archive_call("update_metadata", {{"path", path_to_utf8(scene->project_root)}, {"settings", settings}});
-            if (!result.success || !result.data.contains("name")) return native_failure("Project settings were not saved: " + result.error, 2);
-            scene->name = result.data.at("name");
-            scene->core_version = result.data.at("core_version");
-            return native_success({{"message", "保存成功"}});
+            auto result = save_project_info(arg_object(request.args, 0));
+            return result.success ? native_success({{"message", "保存成功"}}) : result;
         }},
     };
 
@@ -8256,30 +8481,7 @@ void register_editor_api_handlers(NativeApiRegistry& registry) {
 
 void register_python_script_api_handlers(NativeApiRegistry& registry) {
     static const auto start_file = [](const NativeRequest& request, const NativeContext&) {
-        auto payload = arg_object(request.args, 0);
-        const auto* scene = native_editor_state().scene.get();
-        if (!scene || !matches_archive_session(*scene, payload)) {
-            return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-        }
-        const bool by_path = request.function == "run_path";
-        if (by_path && !payload.contains("project_path")) payload["project_path"] = path_to_utf8(scene->project_root);
-        if (by_path && !payload.contains("target_type")) {
-            payload["target_type"] = payload.value("actor_name", std::string{}).empty() ? "project" : "actor";
-        }
-        const auto expected = path_from_utf8(payload.value("project_path", std::string{}));
-        if (scene->read_only || expected.empty() ||
-            absolute_normalized_path(expected) != absolute_normalized_path(scene->project_root)) {
-            return native_failure("Script project changed or is read-only", 409);
-        }
-        const auto path = path_from_utf8(payload.value("path", std::string{}));
-        if (path.empty() || path.has_root_path() || path.extension() != ".py") {
-            return native_failure("Script path must be a project-relative .py file", 400);
-        }
-        const auto root = absolute_normalized_path(scene->project_root);
-        // The Python file host resolves the path, checks containment and verifies
-        // the saved bytes against the revision before compiling them.
-        payload["project_path"] = path_to_utf8(root);
-        return invoke_python_script_service({"FileScripts", request.function, nlohmann::json::array({payload})});
+        return start_native_script_file(arg_object(request.args, 0), request.function == "run_path");
     };
     static const NativeMethodTable script_files = {
         {"run_file", start_file},
@@ -8311,10 +8513,6 @@ void register_python_script_api_handlers(NativeApiRegistry& registry) {
         {"prepare_index", script_method},
         {"rebuild_index", script_method},
     };
-    static const NativeMethodTable project_file_methods = {
-        {"load", script_method},
-        {"save", script_method},
-    };
 
     auto register_script_module = [&](const char* module, const NativeMethodTable& methods) {
         const auto* method_table = &methods;
@@ -8326,7 +8524,6 @@ void register_python_script_api_handlers(NativeApiRegistry& registry) {
 
     register_script_module("CoronaEditor", corona_editor_methods);
     register_script_module("ResourceSearch", resource_search_methods);
-    register_script_module("ProjectFiles", project_file_methods);
     register_script_module("Scripts", script_files);
 }
 

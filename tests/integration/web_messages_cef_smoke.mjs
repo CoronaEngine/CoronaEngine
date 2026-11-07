@@ -107,8 +107,23 @@ try {
     return true;
   })()`);
   assert.match(await main.evaluate("window.__fixtureApi({api:'SceneTools.read_archive_scene',args:[{}]}).catch(error=>error.message)"), /not allowed/);
+  for (const method of ['fuzzy_search', 'get_stats', 'image_search', 'list_types', 'mark_index_dirty', 'prepare_index', 'rebuild_index']) {
+    assert.match(await main.evaluate(`window.__fixtureApi({api:'ResourceSearch.${method}',args:[]}).catch(error=>error.message)`), /not allowed/);
+  }
   const scope = `smoke-${Date.now()}`;
   stage = 'direct native scene reads without a scene';
+  for (const method of ['getFileTree', 'createFolder', 'createActorTemplate', 'renameItem', 'deleteItem', 'openFile']) {
+    assert.equal(await main.evaluate(`typeof corona.files?.${method}`), 'function', `files.${method} requires a direct V8 binding`);
+  }
+  for (const method of ['readProjectDocument', 'commitProjectDocument', 'getActiveProjectInfo', 'saveActiveProjectInfo']) {
+    assert.equal(await main.evaluate(`typeof corona.projectSettings?.${method}`), 'function', `projectSettings.${method} requires a direct V8 binding`);
+  }
+  for (const method of ['save', 'load']) {
+    assert.equal(await main.evaluate(`typeof corona.projectFiles?.${method}`), 'function', `projectFiles.${method} requires a direct V8 binding`);
+  }
+  for (const method of ['runFile', 'getRun', 'stop', 'getStatus']) {
+    assert.equal(await main.evaluate(`typeof corona.scripts?.${method}`), 'function', `scripts.${method} requires a direct V8 binding`);
+  }
   assert.equal(await main.evaluate('typeof corona.scene?.readActive'), 'function');
   assert.equal(await main.evaluate('typeof corona.scene?.readCameras'), 'function');
   assert.equal(await main.evaluate('typeof corona.scene?.selectActor'), 'function');
@@ -459,6 +474,55 @@ try {
     assert.equal(await main.evaluate('typeof corona.scene.setActorTransform'), 'function');
     assert.equal(await main.evaluate('typeof window.coronaBridge?.actorTransform'), 'undefined');
     assert.equal(sceneRead.archive_session, camera.archive_session);
+    stage = 'native project documents with structured identity and JSON disabled';
+    console.log(`CEF smoke: ${stage}`);
+    const fileScope = { archive_session: sceneRead.archive_session, project_path: cameraWorld,
+      identity: ['node_graph', 'actor', 'scene.ini', '角色:"A"'] };
+    const legacyFolder = path.join(cameraWorld, 'Scripts', 'files', createHash('sha256').update(JSON.stringify(fileScope.identity)).digest('hex'));
+    await mkdir(legacyFolder, { recursive: true });
+    const oldCode = '# old revision\n';
+    const oldRevision = createHash('sha256').update(oldCode).digest('hex');
+    const legacyDocument = { target: { id: 'existing-target' }, workspace: { nodes: [{ id: 'existing-node' }] } };
+    await writeFile(path.join(legacyFolder, `${oldRevision}.py`), oldCode);
+    await writeFile(path.join(legacyFolder, 'document.json'), JSON.stringify({ document: legacyDocument, revision: oldRevision,
+      code_path: path.relative(cameraWorld, path.join(legacyFolder, `${oldRevision}.py`)).replaceAll('\\', '/'),
+      document_path: path.relative(cameraWorld, path.join(legacyFolder, 'document.json')).replaceAll('\\', '/') }));
+    const fileCall = (method, request) => main.evaluate(`(async()=>{
+      const stringify=JSON.stringify,parse=JSON.parse;
+      JSON.stringify=JSON.parse=()=>{throw Error('JSON transport forbidden');};
+      try{return await corona.projectFiles.${method}(${JSON.stringify(request)});}
+      finally{JSON.stringify=stringify;JSON.parse=parse;}})()`);
+    const oldDocument = await fileCall('load', fileScope);
+    assert.equal(oldDocument.status, 'loaded');
+    assert.deepEqual(oldDocument.document, legacyDocument, 'existing key encoding must remain readable');
+    const fileDocument = { target: { id: 'existing-target' }, workspace: {
+      nodes: [{ id: '节点', extra: [null, false, 2 ** 40 + .5, '文本\0tail'] }], empty: {}, list: [] } };
+    const fileCode = '# 新代码\nprint("世界")\n';
+    const savedDocument = await fileCall('save', { ...fileScope, code: fileCode, document: fileDocument });
+    assert.equal(savedDocument.status, 'saved');
+    assert.deepEqual(savedDocument.document, fileDocument);
+    assert.equal(savedDocument.document_path, oldDocument.document_path);
+    assert.equal(savedDocument.revision, createHash('sha256').update(fileCode).digest('hex'));
+    assert.equal(await readFile(path.join(cameraWorld, savedDocument.code_path), 'utf8'), fileCode);
+    assert.deepEqual(await fileCall('load', fileScope), { ...savedDocument, status: 'loaded' });
+    assert.equal((await fileCall('load', { ...fileScope, identity: ['node_graph', 'project', '', ''] })).status, 'missing');
+    for (const changed of [{ archive_session: 'retired' }, { project_path: path.dirname(cameraWorld) }]) {
+      assert.equal((await fileCall('save', { ...fileScope, ...changed, code: 'must not publish', document: {} })).code, 'PROJECT_CONTEXT_CHANGED');
+    }
+    assert.deepEqual((await fileCall('load', fileScope)).document, fileDocument);
+    for (const method of ['save', 'load']) {
+      assert.match(await fixtureApi(`ProjectFiles.${method}`, [{}]).then(() => 'unexpected retired route', error => error.message), /not defined/);
+    }
+    for (const invalid of [{ ...fileScope, key: 'encoded DTO' }, { ...fileScope, identity: [] },
+      { ...fileScope, identity: ['node_graph', 'actor', '', ''] }, { ...fileScope, identity: ['node_graph', 'project', 'wrong', ''] }]) {
+      assert.equal(await main.evaluate(`corona.projectFiles.load(${JSON.stringify(invalid)}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
+    }
+    for (const expression of ['(()=>{const value={};value.self=value;return value;})()',
+      '{value:()=>true}', '{value:Infinity}', '"encoded document"',
+      '(()=>{let value={};for(let i=0;i<140;i++)value={child:value};return value;})()']) {
+      assert.equal(await main.evaluate(`corona.projectFiles.save({...${JSON.stringify(fileScope)},code:'',document:${expression}}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
+    }
+    evidence[0].projectFiles = 'named V8 save/load with JSON disabled; structured identity preserves legacy folders, opaque workspace values and exact script revision; stale archive/path, malformed values and retired generic routes rejected';
     assert.equal(listed.data.active_camera_id, 'main-camera');
     for (const value of listed.data.cameras) {
       assert.equal(value.archive_session, sceneRead.archive_session);
@@ -523,12 +587,98 @@ try {
     // JSON here is a test-owned file format. The CEF application still has its
     // JSON functions disabled and receives the document content as native values.
     await writeFile(path.join(cameraWorld, 'integer-boundaries.json'), JSON.stringify(integerValues));
-    const numericDocument = await fixtureApi('ProjectSettings.read_project_document', [{
-      project_path: cameraWorld, archive_session: camera.archive_session, document: 'integer-boundaries.json',
-    }]);
-    assert.equal(numericDocument.data?.success, true, JSON.stringify(numericDocument));
-    assert.deepEqual(numericDocument.data.content, integerValues);
-    evidence[0].legacyIntegerRange = 'signed/unsigned 32-bit boundaries and positive/negative safe 53-bit integers retain values; direct opaque identities remain strings';
+    const documentScope = { project_path: cameraWorld, archive_session: camera.archive_session, document: 'integer-boundaries.json' };
+    const settingsCall = (method, request) => main.evaluate(`corona.projectSettings.${method}(${request === undefined ? '' : JSON.stringify(request)})`);
+    const numericDocument = await settingsCall('readProjectDocument', documentScope);
+    assert.equal(numericDocument.success, true);
+    assert.deepEqual(numericDocument.content, integerValues);
+    assert.equal('data' in numericDocument || 'version' in numericDocument, false);
+    assert.equal(numericDocument.revision, createHash('sha256').update(await readFile(path.join(cameraWorld, documentScope.document))).digest('hex'));
+    const newContent = { values: integerValues, nested: [null, {}, [], '中文\0'] };
+    const committed = await settingsCall('commitProjectDocument', { ...documentScope, revision: numericDocument.revision, content: newContent });
+    assert.equal(committed.success, true);
+    assert.equal('version' in committed, false);
+    assert.equal(committed.revision, createHash('sha256').update(await readFile(path.join(cameraWorld, documentScope.document))).digest('hex'));
+    assert.deepEqual((await settingsCall('readProjectDocument', documentScope)).content, newContent);
+    assert.equal((await settingsCall('commitProjectDocument', { ...documentScope, revision: numericDocument.revision, content: {} })).error, 'DOCUMENT_CONFLICT');
+    for (const badScope of [{ archive_session: 'retired' }, { project_path: cameraWorld + '-other' }]) {
+      assert.equal((await settingsCall('readProjectDocument', { ...documentScope, ...badScope })).error, 'PROJECT_CONTEXT_CHANGED');
+    }
+    for (const document of ['../escape.json', 'assets.manifest.json', 'Scripts/files/forbidden.json']) {
+      assert.equal((await settingsCall('readProjectDocument', { ...documentScope, document })).error, 'INVALID_PROJECT_DOCUMENT');
+    }
+    for (const invalid of [{ ...documentScope, version: '{}' }, { ...documentScope, revision_only: false }, {}, []]) {
+      assert.equal(await main.evaluate(`corona.projectSettings.readProjectDocument(${JSON.stringify(invalid)}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    }
+    for (const content of ['Infinity', '(()=>{const c={};c.self=c;return c})()', '(()=>{let c={};for(let i=0;i<130;i++)c={child:c};return c})()']) {
+      assert.equal(await main.evaluate(`corona.projectSettings.commitProjectDocument({...${JSON.stringify(documentScope)},revision:${JSON.stringify(committed.revision)},content:${content}}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    }
+    const metadata = await settingsCall('getActiveProjectInfo');
+    assert.equal(metadata.archive_session, camera.archive_session);
+    assert.equal('data' in metadata, false);
+    const updateInfo = { archive_session: metadata.archive_session, project_path: metadata.project_path, name: '设置测试', core_version: 'test-v8' };
+    const updated = await settingsCall('saveActiveProjectInfo', updateInfo);
+    assert.equal(updated.name, updateInfo.name);
+    assert.equal(updated.core_version, updateInfo.core_version);
+    assert.equal((await settingsCall('getActiveProjectInfo')).name, updateInfo.name);
+    for (const badScope of [{ archive_session: 'retired' }, { project_path: cameraWorld + '-other' }]) {
+      assert.equal(await main.evaluate(`corona.projectSettings.saveActiveProjectInfo(${JSON.stringify({ ...updateInfo, ...badScope })}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
+    }
+    assert.equal(await main.evaluate(`corona.projectSettings.saveActiveProjectInfo(${JSON.stringify({ ...updateInfo, mode: 'story' })}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    await settingsCall('saveActiveProjectInfo', { ...updateInfo, name: metadata.name, core_version: metadata.core_version });
+    for (const method of ['read_project_document', 'commit_project_document', 'get_active_project_info', 'save_active_project_info']) {
+      assert.match(await fixtureApi(`ProjectSettings.${method}`, method === 'get_active_project_info' ? [] : [{}]).then(() => 'unexpected retired route', error => error.message), /not allowed/);
+    }
+    evidence[0].projectSettings = 'named V8 metadata and document operations with JSON disabled; digest CAS, structured numeric/unicode values, strict arguments, stale scope, path fences and retired CEF routes';
+    stage = 'typed project file CRUD with captured archive and JSON disabled';
+    console.log(`CEF smoke: ${stage}`);
+    const filesScope = { project_path: metadata.project_path, archive_session: metadata.archive_session };
+    const filesCall = (method, request) => main.evaluate(`corona.files.${method}(${JSON.stringify({ ...filesScope, ...request })})`);
+    const rootTree = await filesCall('getFileTree', { path: '' });
+    assert.equal(rootTree.archive_session, filesScope.archive_session);
+    assert.equal(rootTree.isDirectory, true);
+    assert.equal(rootTree.path, '');
+    assert.equal('data' in rootTree, false);
+    assert.ok(rootTree.children.some(entry => entry.name === 'scene.ini' && !entry.isDirectory && entry.size > 0));
+    assert.equal((await filesCall('createFolder', { path: '', name: '文件测试' })).ok, true);
+    const template = await filesCall('createActorTemplate', { path: '文件测试', name: '单位' });
+    assert.equal(template.ok, true);
+    assert.equal(template.file_type, 'actor');
+    assert.equal(template.path, '文件测试/单位.actor');
+    assert.match(await readFile(path.join(cameraWorld, template.path), 'utf8'), /\[base\]/);
+    assert.equal((await filesCall('createActorTemplate', { path: '文件测试', name: '单位' })).path, '文件测试/单位_1.actor');
+    assert.equal((await filesCall('getFileTree', { path: '文件测试' })).children.length, 2);
+    assert.equal((await filesCall('renameItem', { path: template.path, name: '改名.actor' })).ok, true);
+    assert.equal((await filesCall('openFile', { path: '文件测试/改名.actor', file_type: 'actor' })).ok, true);
+    const sceneBytes = await readFile(path.join(cameraWorld, 'scene.ini'));
+    for (const [method, request] of [
+      ['renameItem', { path: 'scene.ini', name: 'moved.ini' }],
+      ['deleteItem', { path: 'scene.ini' }], ['deleteItem', { path: '.' }],
+      ['renameItem', { path: '文件测试/改名.actor', name: '单位_1.actor' }],
+      ['createFolder', { path: '../escape', name: 'no' }],
+      ['createActorTemplate', { path: '文件测试', name: '../escape' }],
+    ]) {
+      await assert.rejects(filesCall(method, request), /Cannot change|Target already exists|outside current project|Invalid file name/);
+    }
+    assert.deepEqual(await readFile(path.join(cameraWorld, 'scene.ini')), sceneBytes);
+    for (const [method, extra] of [
+      ['getFileTree', {}], ['createFolder', { name: 'no' }], ['createActorTemplate', { name: 'no' }],
+      ['renameItem', { name: 'no' }], ['deleteItem', {}], ['openFile', { file_type: 'actor' }],
+    ]) {
+      for (const badScope of [{ archive_session: 'retired' }, { project_path: cameraWorld + '-other' }]) {
+        assert.equal(await main.evaluate(`corona.files.${method}(${JSON.stringify({ ...filesScope, path: template.path, ...extra, ...badScope })}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
+      }
+      assert.equal(await main.evaluate(`corona.files.${method}(${JSON.stringify({ ...filesScope, path: template.path, ...extra, extra: true })}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    }
+    assert.equal(await main.evaluate(`corona.files.openFile(${JSON.stringify({ ...filesScope, path: '../escape.actor', file_type: 'actor' })}).catch(e=>e.code)`), 'INVALID_PROJECT_PATH');
+    assert.equal(await main.evaluate(`corona.files.openFile(${JSON.stringify({ ...filesScope, path: '文件测试/missing.actor', file_type: 'actor' })}).catch(e=>e.code)`), 'FILE_NOT_FOUND');
+    assert.equal((await filesCall('deleteItem', { path: '文件测试/改名.actor' })).ok, true);
+    assert.equal((await filesCall('deleteItem', { path: '文件测试' })).ok, true);
+    assert.equal((await filesCall('getFileTree', { path: '' })).children.some(entry => entry.name === '文件测试'), false);
+    for (const method of ['get_project_info', 'get_files', 'get_file_tree', 'create_file', 'create_folder', 'rename_item', 'delete_item', 'open_file']) {
+      assert.match(await fixtureApi(`FileManager.${method}`, []).then(() => 'unexpected retired route', error => error.message), /not allowed/);
+    }
+    evidence[0].files = 'named V8 typed tree and CRUD with JSON disabled; Actor template collision, rename/open/delete, root/scene/path fences, stale archive/path and retired CEF routes';
     stage = 'one typed native environment read and patch with JSON disabled';
     console.log(`CEF smoke: ${stage}`);
     const environmentScope = { archive_session: camera.archive_session };
@@ -1131,12 +1281,40 @@ try {
     await rm(tracePath, { force: true });
     const script = `import json\nfrom pathlib import Path\nfrom script_runtime import file_api\ndef run():\n    ctx = file_api.current_run()\n    ctx.keep_alive = lambda: True\n    def input_event(kind, *args):\n        with Path(${JSON.stringify(tracePath)}).open('a', encoding='utf-8') as stream:\n            stream.write(json.dumps([kind, args]) + '\\n')\n    ctx.on_input = input_event\n    file_api.mark('input-ready')\n`;
     await writeFile(path.join(cameraWorld, 'input_probe.py'), script);
-    const started = (await fixtureApi('Scripts.run_file', [{ archive_session: camera.archive_session, project_path: cameraWorld,
+    const scriptRequest = { archive_session: camera.archive_session, project_path: cameraWorld,
       path: 'input_probe.py', revision: createHash('sha256').update(script).digest('hex'), requestId: `input-${Date.now()}`,
-      target_type: 'actor', scene_name: 'scene.ini', actor_name: actor.name }])).data;
+      target_type: 'actor', scene_name: 'scene.ini', actor_name: actor.name };
+    const scriptCall = (method, args = []) => cameraClient.evaluate(`corona.scripts.${method}(...${JSON.stringify(args)})`);
+    const started = await scriptCall('runFile', [scriptRequest]);
     assert.ok(started.runId, JSON.stringify(started));
+    assert.equal((await scriptCall('runFile', [scriptRequest])).runId, started.runId, 'duplicate start must recover the same run');
+    assert.equal((await scriptCall('getRun', [scriptRequest.requestId])).runId, started.runId);
+    assert.equal((await scriptCall('runFile', [{ ...scriptRequest, actor_name: 'different-identity' }])).code, 'REQUEST_CONFLICT');
+    for (const method of ['run_file', 'get_run', 'stop', 'get_status']) {
+      const args = method === 'get_status' ? [] : [{}];
+      assert.match(await fixtureApi(`Scripts.${method}`, args).then(() => 'unexpected old script route', error => error.message), /not allowed/);
+    }
+    const cancelled = { ...scriptRequest, requestId: `cancelled-${Date.now()}` };
+    assert.equal((await scriptCall('getRun', [cancelled.requestId])).status, 'unknown');
+    assert.equal((await scriptCall('stop', ['', true, cancelled.requestId])).status, 'stopped');
+    assert.equal((await scriptCall('runFile', [cancelled])).status, 'cancelled', 'a late start cannot revive a closed panel');
+    assert.equal((await scriptCall('stop', ['foreign-run', false])).code, 'STALE_RUN');
+    assert.equal((await scriptCall('getRun', [scriptRequest.requestId])).runId, started.runId);
+    for (const bad of [{ ...scriptRequest, requestId: '' }, { ...scriptRequest, revision: 'invalid' },
+      { ...scriptRequest, unexpected: true }]) {
+      assert.equal(await cameraClient.evaluate(`corona.scripts.runFile(${JSON.stringify(bad)}).catch(error => error.code)`), 'INVALID_ARGUMENT');
+    }
+    assert.equal(await cameraClient.evaluate(`corona.scripts.runFile(${JSON.stringify({ ...scriptRequest, archive_session: 'foreign' })}).catch(error => error.code)`), 'PROJECT_CONTEXT_CHANGED');
+
     try {
-      await waitFor(async () => (await fixtureApi('Scripts.get_status', [])).data.marker?.id === 'input-ready');
+      await waitFor(async () => (await scriptCall('getStatus')).marker?.id === 'input-ready');
+      assert.equal((await filesCall('getFileTree', { path: '' })).isDirectory, true);
+      for (const [method, request] of [
+        ['createFolder', { path: '', name: 'blocked-folder' }],
+        ['createActorTemplate', { path: '', name: 'blocked-template' }],
+        ['renameItem', { path: 'integer-boundaries.json', name: 'blocked.json' }],
+        ['deleteItem', { path: 'integer-boundaries.json' }],
+      ]) await assert.rejects(filesCall(method, request), /Stop and restore the file run/);
       assert.deepEqual(await dispatchInput(main, keyInput), { status: 'queued' });
       assert.deepEqual(await dispatchInput(cameraClient, { ...cameraScope, type: 'keyUp', code: 'KeyJ', key: 'd' }), { status: 'queued' });
       assert.deepEqual(await dispatchInput(main, mouseInput), { status: 'queued' });
@@ -1149,7 +1327,7 @@ try {
         ['mouse', ['click', 'LeftButton', 90, 80, 5, 6, 320, 240, actor.name]],
         ['mouse', ['move', 'LeftButton', 90, 80, 5, 6, 320, 240, '']]]);
     } finally {
-      await fixtureApi('Scripts.stop', [{ runId: started.runId, restore_state: false }]);
+      await scriptCall('stop', [started.runId, false]);
     }
     evidence[0].scriptInput = 'one scoped typed V8 dispatch, JSON disabled, real Python file consumes keyboard display key and complete mouse context exactly once; invalid/retired/foreign scope and legacy routes denied';
     stage = 'native screenshot with JSON disabled and exact archive/camera identity';

@@ -249,12 +249,15 @@ def run():
         new_name = "Two windows"
         moved = [initial[0] + 2, *initial[1:]]
         assert panels[1].evaluate(f"corona.scene.setActorTransform({json.dumps(state['scene'])},{json.dumps(guid)},{json.dumps({**scope, 'position': moved})})")["status"] == "success"
-        api(panels[0], "ProjectSettings.save_active_project_info", {**scope, "name": new_name})
+        metadata = panels[0].evaluate('corona.projectSettings.getActiveProjectInfo()')
+        panels[0].evaluate('corona.projectSettings.saveActiveProjectInfo(' + json.dumps({
+            **scope, 'project_path': metadata['project_path'], 'name': new_name,
+            'core_version': metadata['core_version']}) + ')')
         assert api(panels[1], "MainView.scene_save", state["scene"], scope)["ok"]
         assert api(main, "ProjectLauncher.open_project", str(root))["ok"]
         fresh = main.evaluate("corona.scene.readActive()")
         assert fresh["archive_session"] != scope["archive_session"]
-        assert api(main, "ProjectSettings.get_active_project_info")["name"] == new_name
+        assert main.evaluate('corona.projectSettings.getActiveProjectInfo()')["name"] == new_name
         assert read_actor(guid, fresh["archive_session"])["geometry"]["position"] == moved
         return {**report, "restored": restored, "sceneIniUnchangedDuringRun": True, "sameInterpreter": True,
                 "separateRunValue": isolated[1], "twoWindowSave": {"name": new_name, "position": moved}}

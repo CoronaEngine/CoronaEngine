@@ -2,6 +2,69 @@
 from pathlib import Path
 
 
+def test_unused_resource_search_is_not_exposed_to_web_but_keeps_python_contracts():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    for method in ['fuzzy_search', 'get_stats', 'image_search', 'list_types',
+                   'mark_index_dirty', 'prepare_index', 'rebuild_index']:
+        line = next(line for line in manifest.splitlines() if f'ResourceSearch, {method},' in line)
+        assert 'WRAPPED_CALLERS(ResourceSearch,' in line
+        assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
+        assert ', "", "resource_search.' in line
+    owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
+    assert 'register_script_module("ResourceSearch", resource_search_methods)' in owner
+
+
+def test_file_browser_retirement_preserves_non_web_permissions():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    for method in ['get_project_info', 'get_files', 'get_file_tree', 'create_file',
+                   'create_folder', 'rename_item', 'delete_item', 'open_file']:
+        line = next(line for line in manifest.splitlines() if f'FileManager, {method},' in line)
+        assert 'WRAPPED_CALLERS(FileManager,' in line
+        assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
+        assert ', "", "files.' in line
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert "call_manifest_editor_api('files." not in facade
+    assert 'callProjectFileMutation' not in facade
+    assert 'getProjectInfo:' not in facade and 'getFiles:' not in facade
+
+
+def test_project_files_have_one_named_web_contract_and_no_generic_manifest_owner():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    assert 'WRAPPED_CALLERS(ProjectFiles,' not in manifest
+    owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
+    assert 'project_file_methods' not in owner
+    assert 'register_script_module("ProjectFiles"' not in owner
+    operation = owner.split('ProjectFilesReply execute_project_files_operation(', 1)[1].split(
+        'ScriptsReply execute_scripts_operation(', 1)[0]
+    assert 'invoke_python_script_service(' in operation
+    assert '"identity", request.identity' in operation
+    assert '.dump(' not in operation and 'json::parse' not in operation
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert "call_manifest_editor_api('projectFiles." not in facade
+    target = (root / 'CoronaEditor/editor/Frontend/src/blockly/targetArchive.js').read_text(encoding='utf-8-sig')
+    assert 'JSON.' not in target and 'response?.data' not in target
+
+
+def test_scripts_retire_cef_only_and_use_owned_native_contracts():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    for name in ['run_path', 'run_file', 'get_run', 'stop', 'get_status']:
+        line = next(line for line in manifest.splitlines() if f'Scripts, {name},' in line)
+        assert ', "", "", ' in line
+        assert line.endswith('caller_mask(EditorApiCaller::Native)),')
+    header = (root / 'src/systems/ui/cef/cef_scripts_operations.h').read_text(encoding='utf-8-sig')
+    for forbidden in ['nlohmann', 'CefV8', 'payload_json']:
+        assert forbidden not in header
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert "call_manifest_editor_api('scripts." not in facade
+    native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
+    assert native.count('Script path must be a project-relative .py file') == 1
+    assert native.count('start_native_script_file(') == 3
+
+
 def test_native_python_service_transport_uses_owned_values_without_json_text():
     root = Path(__file__).resolve().parents[2]
     owner = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
