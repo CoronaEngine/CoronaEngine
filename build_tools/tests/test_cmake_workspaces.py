@@ -52,10 +52,11 @@ def workspace_build(tmp_path):
     (source / "prepare.py").write_text(
         "from pathlib import Path\nimport runpy\nimport sys\n"
         f"sys.path.insert(0, {str(REPO_ROOT)!r})\n"
-        "from build_tools.git_workspace import ensure_workspace\n"
+        "from build_tools import dev\n"
         "root = Path(__file__).parent\n"
-        "for workspace in runpy.run_path(str(root / 'source_workspaces.py'))['WORKSPACES']:\n"
-        "    ensure_workspace(root, workspace)\n",
+        "dev.REPO_ROOT = root\n"
+        "dev.WORKSPACES = runpy.run_path(str(root / 'source_workspaces.py'))['WORKSPACES']\n"
+        "dev.ensure_workspaces()\n",
         encoding="utf-8",
     )
     module = (REPO_ROOT / "build_tools/cmake/corona_dev_bootstrap.cmake").as_posix()
@@ -108,7 +109,10 @@ def workspace_build(tmp_path):
         assert product.stat().st_mtime_ns == before
         assert (build / "configures.log").read_text() == configurations
 
-    run("-S", source, "-B", build, "-G", "Ninja Multi-Config", f"-DCMAKE_MAKE_PROGRAM={ninja}")
+    output = run("-S", source, "-B", build, "-G", "Ninja Multi-Config", f"-DCMAKE_MAKE_PROGRAM={ninja}")
+    for name in ("Horizon", "CoronaEditor"):
+        assert f"{name} Python pin {old} differs from the latest remote 'main' {new}" in output
+        assert git(source / name, "status", "--porcelain") == ""
     compile()
     assert (build / "built.txt").read_text() == f"{old} {old}"
     return source, build, old, new, origin, pin, compile, assert_noop
@@ -174,7 +178,8 @@ def test_build_tracks_pins_refs_and_deleted_checkouts(workspace_build):
     assert git(horizon, "rev-parse", "HEAD") == old
     assert (horizon / "value.txt").read_text() == "local edit\n"
     assert (build / "built.txt").stat().st_mtime_ns == product_time
-    (horizon / "value.txt").write_text("old\n", encoding="utf-8")
+    # Restore Git's working-tree line endings, including on Windows.
+    git(horizon, "checkout", "--", "value.txt")
     compile()
     assert (build / "built.txt").read_text() == f"{new} {new}"
     assert_noop()

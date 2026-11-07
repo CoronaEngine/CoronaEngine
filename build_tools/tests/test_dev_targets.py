@@ -21,15 +21,13 @@ class SourceWorkspaceWorkflowTests(unittest.TestCase):
     def test_install_prepares_both_sources_before_conan(self):
         calls = mock.Mock()
         with mock.patch.object(dev, "ensure_workspace", calls.ensure), \
-                mock.patch.object(dev, "ensure_horizon_runtime_patch", calls.runtime_patch), \
                 mock.patch.object(dev, "conan_install", calls.conan):
             dev.install("RelWithDebInfo", "examples")
         self.assertEqual(calls.mock_calls[:2], [
             mock.call.ensure(dev.REPO_ROOT, HORIZON),
             mock.call.ensure(dev.REPO_ROOT, EDITOR),
         ])
-        self.assertEqual(calls.mock_calls[2], mock.call.runtime_patch(dev.REPO_ROOT))
-        self.assertEqual(calls.mock_calls[3][0], "conan")
+        self.assertEqual([call[0] for call in calls.mock_calls], ["ensure", "ensure", "conan"])
 
     def test_sync_commands_select_only_the_requested_source(self):
         for command, workspace in (("editor-sync", EDITOR), ("horizon-sync", HORIZON)):

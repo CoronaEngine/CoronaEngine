@@ -1,5 +1,3 @@
-# Empty unified-diff context lines intentionally contain a single space.
-build_tools/patches/horizon/*.patch text eol=lf whitespace=-blank-at-eol
 # Preserve imported license/config bytes and their recorded provenance hashes.
 vision/src/render_core/denoiser/ReBLUR/scheduler/** -text whitespace=cr-at-eol
 vision/src/render_core/denoiser/ReBLUR/scheduler/LICENSE-NRD.txt whitespace=-blank-at-eol
