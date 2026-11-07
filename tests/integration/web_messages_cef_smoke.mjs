@@ -33,6 +33,7 @@ let launchError;
 child.on('error', error => { launchError = error; });
 const clients = [];
 let stage = 'starting engine';
+let result;
 const waitFor = async (fn, timeout = 90_000) => {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
@@ -115,7 +116,7 @@ try {
   for (const method of ['getFileTree', 'createFolder', 'createActorTemplate', 'renameItem', 'deleteItem', 'openFile']) {
     assert.equal(await main.evaluate(`typeof corona.files?.${method}`), 'function', `files.${method} requires a direct V8 binding`);
   }
-  for (const method of ['getAppVersion', 'getRecentProjects', 'getProjectLoadStatus']) {
+  for (const method of ['getAppVersion', 'getRecentProjects', 'getProjectLoadStatus', 'openProject', 'openProjectFile', 'createWorldProject', 'createMultiplayerProject']) {
     assert.equal(await main.evaluate(`typeof corona.project?.${method}`), 'function', `project.${method} requires a direct V8 binding`);
   }
   for (const method of ['readProjectDocument', 'commitProjectDocument', 'getActiveProjectInfo', 'saveActiveProjectInfo']) {
@@ -466,8 +467,16 @@ try {
     assert.match(await main.evaluate("corona.editor.on('SceneTools.meshMoveResult', () => {})")
       .then(() => 'unexpected subscription', error => error.message), /event is unavailable/);
     evidence[0].orphanMeshMovement = 'legacy bridge absent in every window; retired mesh and Gizmo events absent and subscriptions refused';
-    const opened = await fixtureApi('ProjectLauncher.open_project', [cameraWorld]);
-    assert.equal(opened.data?.ok, true, JSON.stringify(opened));
+    const opened = await main.evaluate(`corona.project.openProject(${JSON.stringify(cameraWorld)})`);
+    assert.equal(opened.ok, true, JSON.stringify(opened));
+    assert.equal(Object.hasOwn(opened, 'data'), false);
+    for (const args of [[], [7], [cameraWorld, { load_policy: 'story' }],
+      [cameraWorld, { mode: 'story' }], [cameraWorld, {}, true]]) {
+      assert.equal(await main.evaluate(`corona.project.openProject(...${JSON.stringify(args)}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    }
+    assert.deepEqual(await main.evaluate("corona.project.openProject('')"), { ok: false, path: '', status: 'cancelled' });
+    assert.match(await fixtureApi('ProjectLauncher.open_project', [cameraWorld])
+      .then(() => 'unexpected retired route', error => error.message), /not allowed/);
     const listed = await listCameras();
     const camera = listed.data.cameras.find(item => item.camera_id === 'smoke-camera');
     assert.ok(camera?.archive_session);
@@ -740,7 +749,7 @@ try {
     await main.evaluate(`corona.scene.setEnvironment('scene.ini',${JSON.stringify({ ...environmentScope,
       sun: originalEnvironment.sun, grid: originalEnvironment.grid, physics: originalEnvironment.physics })})`);
     evidence[0].environment = 'two direct V8 environment methods replace six Web routes: scoped live reads, mixed/partial patches, strict validation before any mutation, no JSON and no authored-lighting transport';
-    assert.equal(sceneRead.scene, opened.data.scene.path);
+    assert.equal(sceneRead.scene, opened.scene.path);
     assert.equal(typeof sceneRead.tree_revision, 'string');
     assert.deepEqual(sceneRead.selection, {});
     assert.equal(typeof camera.opaque_handle, 'string');
@@ -1054,7 +1063,7 @@ try {
       assert.match(await main.evaluate(`window.__fixtureApi(${JSON.stringify({api,args:api.endsWith('select_actor')?['scene.ini','scene','']:[]})}).catch(error=>error.message)`), /not allowed/);
     }
     evidence[0].sceneReadAndSelection = 'direct V8 with JSON disabled: empty/active state, uint64 identity, uint32 node index, validation/no mutation, old CEF query denied';
-    const options = { archiveSession: camera.archive_session, sceneId: opened.data.scene.path,
+    const options = { archiveSession: camera.archive_session, sceneId: opened.scene.path,
       cameraId: camera.camera_id, width: 320, height: 240, x: 160, y: 160,
       routePath: '/CameraView?uiWindow=real-camera&scene=scene.ini&camera=smoke-camera' };
     const toolPanel = await main.evaluate(`corona.window.createPanel({panelId:'SceneTools',nativeDocked:true,
@@ -1085,7 +1094,7 @@ try {
     const bounds = { x: 10, y: 20, width: 320, height: 240, renderWidth: 320, renderHeight: 240 };
     const configuredViewport = await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d', calibration, bounds }));
     assert.equal(configuredViewport.archive_session, camera.archive_session);
-    assert.equal(configuredViewport.scene, opened.data.scene.path);
+    assert.equal(configuredViewport.scene, opened.scene.path);
     assert.equal(configuredViewport.camera_id, 'smoke-camera');
     assert.equal(configuredViewport.mode, 'stereo3d');
     assert.deepEqual(configuredViewport.bounds, bounds);
@@ -1437,8 +1446,8 @@ try {
     assert.equal(recreated.existing, false);
     assert.deepEqual(await main.evaluate('corona.window.suspendCameraViews("scene.ini")'), { closed: 1 });
     assert.equal((await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d', pointer: pointerState }))).systemCursorHidden, true);
-    const reloaded = await fixtureApi('ProjectLauncher.open_project', [cameraWorld]);
-    assert.equal(reloaded.data?.ok, true);
+    const reloaded = await main.evaluate(`corona.project.openProject(${JSON.stringify(cameraWorld)})`);
+    assert.equal(reloaded.ok, true);
     assert.equal(await main.evaluate(`corona.window.createCameraView(${JSON.stringify(options)}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.equal(await main.evaluate(`corona.scene.selectActor('scene.ini','scene','').catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.equal(await main.evaluate(`corona.scene.setActorTransform('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(patch)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
@@ -1485,17 +1494,33 @@ try {
     evidence.push({ document: 'real-camera', roundtrip: 'bidirectional structured-clone typed arrays with JSON disabled', nativeCameraLifecycle: 'passed with JSON disabled: create/existing, identity, permissions, geometry, close, recreate, suspend, archive replacement',
       fixtureScene: cameraWorld });
   }
-  const result = { date: new Date().toISOString(), passed: true, documents: evidence, nativeBindings: testNativeBindings,
-    fixture: 'file-origin HTML in production BrowserManager windows; test-owned scene loaded through unmigrated scene adapter; no user world',
+  result = { date: new Date().toISOString(), passed: true, documents: evidence, nativeBindings: testNativeBindings,
+    fixture: 'file-origin HTML in production BrowserManager windows; test-owned scene loaded through named project V8 binding; no user world',
     limitations: ['Packaged Vue collaboration and CameraView UI remain untested', 'Minimized-window and separate-engine isolation remain untested'] };
-  await writeFile(path.join(output, 'result.json'), JSON.stringify(result, null, 2));
-  console.log(JSON.stringify(result, null, 2));
 } finally {
   for (const client of clients) client.close();
   if (child.pid && child.exitCode === null) {
+    const exited = new Promise(resolve => child.once('close', resolve));
     await new Promise(resolve => {
       const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
       killer.once('exit', resolve); killer.once('error', resolve);
     });
+    if (child.exitCode === null && child.signalCode === null) {
+      let cleanupTimer;
+      try {
+        await Promise.race([exited, new Promise((_, reject) => {
+          cleanupTimer = setTimeout(() => reject(new Error(
+            `Test-owned engine ${child.pid} did not exit after cleanup`)), 30_000);
+        })]);
+      } finally {
+        clearTimeout(cleanupTimer);
+      }
+    }
   }
 }
+
+// Publish success only after confirming the test-owned engine has exited.
+// taskkill accepting termination does not mean the child has already exited.
+result.cleanup_ok = true;
+await writeFile(path.join(output, 'result.json'), JSON.stringify(result, null, 2));
+console.log(JSON.stringify(result, null, 2));
