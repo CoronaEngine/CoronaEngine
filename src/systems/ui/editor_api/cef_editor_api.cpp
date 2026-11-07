@@ -40,6 +40,14 @@ constexpr std::uint32_t animation_callers() {
     return all_callers() | caller_mask(EditorApiCaller::ScriptRuntime);
 }
 
+constexpr std::uint32_t non_cef_animation_callers() {
+    return caller_mask(EditorApiCaller::PythonScript) | caller_mask(EditorApiCaller::ScriptRuntime);
+}
+
+constexpr std::uint32_t non_cef_script_runtime_callers() {
+    return caller_mask(EditorApiCaller::ScriptRuntime);
+}
+
 constexpr EditorApiReturnSpec returns(EditorApiValueType type) {
     return EditorApiReturnSpec{type};
 }
@@ -432,14 +440,6 @@ constexpr std::array<EditorApiParamSpec, 3> kSceneToolsSetCameraBoolParams = {{
     param("enabled", EditorApiValueType::Boolean),
 }};
 
-constexpr std::array<EditorApiParamSpec, 5> kSceneToolsPickActorParams = {{
-    param("scene_name", EditorApiValueType::String),
-    param("x", EditorApiValueType::Number),
-    param("y", EditorApiValueType::Number),
-    param("viewport_width", EditorApiValueType::Number),
-    param("viewport_height", EditorApiValueType::Number),
-}};
-
 constexpr std::array<EditorApiParamSpec, 4> kModelNodeStateParams = {{
     param("scene_name", EditorApiValueType::String),
     param("actor_name", EditorApiValueType::String),
@@ -452,6 +452,14 @@ constexpr std::array<EditorApiParamSpec, 5> kModelNodePageParams = {{
     param("parent_index", EditorApiValueType::Integer, true),
     param("offset", EditorApiValueType::Integer, true),
     param("limit", EditorApiValueType::Integer, true),
+}};
+
+constexpr std::array<EditorApiParamSpec, 5> kSceneToolsPickActorParams = {{
+    param("scene_name", EditorApiValueType::String),
+    param("x", EditorApiValueType::Number),
+    param("y", EditorApiValueType::Number),
+    param("viewport_width", EditorApiValueType::Number),
+    param("viewport_height", EditorApiValueType::Number),
 }};
 
 constexpr std::array<EditorApiParamSpec, 2> kSceneToolsPlayAudioParams = {{
@@ -529,7 +537,7 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED(LANChat, stop_room, kNoParams, "lanChat.stopRoom", "lan_chat.stop_room", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(MainView, import_resource_file, kMainViewImportResourceFileParams, "main.importResourceFile", "main.import_resource_file", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(MainView, on_init, kPathOptionalParam, "main.onInit", "main.on_init", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(MainView, scene_save, kSceneSaveParams, "main.sceneSave", "main.scene_save", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(MainView, scene_save, kSceneSaveParams, "main.sceneSave", "main.scene_save", EditorApiValueType::Object, non_cef_animation_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, broadcast_actor_create, kNetworkBroadcastActorCreateParams, "network.broadcastActorCreate", "network.broadcast_actor_create", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, broadcast_actor_delete, kNetworkBroadcastActorDeleteParams, "network.broadcastActorDelete", "network.broadcast_actor_delete", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(Network, broadcast_actor_scene_snapshot, kNetworkBroadcastSceneSnapshotParams, "network.broadcastSceneSnapshot", "network.broadcast_scene_snapshot", EditorApiValueType::Object),
@@ -588,17 +596,17 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, close_camera_view, kSceneCameraParams, "", "scene_tools.close_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, create_actor, kSceneToolsCreateActorParams, "sceneTools.createActor", "scene_tools.create_actor", EditorApiValueType::Object, animation_callers()),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, create_camera_view, kSceneToolsCreateCameraViewParams, "", "scene_tools.create_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, delete_camera, kSceneCameraParams, "sceneTools.deleteCamera", "scene_tools.delete_camera", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, delete_camera, kSceneCameraParams, "", "scene_tools.delete_camera", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, floor_grid, kSceneToolsFloorGridParams, "", "scene_tools.floor_grid", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, focus_actor, kSceneToolsFocusActorParams, "", "scene_tools.focus_actor", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_output_mode, kSceneToolsCameraOptionalParams, "sceneTools.getOutputMode", "scene_tools.get_output_mode", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_output_mode, kSceneToolsCameraOptionalParams, "", "scene_tools.get_output_mode", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_physics_params, kSceneNameParam, "", "scene_tools.get_physics_params", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_render_backend, kSceneToolsCameraOptionalParams, "sceneTools.getRenderBackend", "scene_tools.get_render_backend", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_render_mode, kSceneToolsCameraOptionalParams, "sceneTools.getVisionRenderMode", "scene_tools.get_vision_render_mode", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_denoise, kSceneToolsCameraOptionalParams, "sceneTools.getVisionDenoise", "scene_tools.get_vision_denoise", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_accumulation, kSceneToolsCameraOptionalParams, "sceneTools.getVisionAccumulation", "scene_tools.get_vision_accumulation", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_vision_stable_planes, kSceneToolsCameraOptionalParams, "sceneTools.getVisionStablePlanes", "scene_tools.get_vision_stable_planes", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, is_vision_available, kNoParams, "sceneTools.isVisionAvailable", "scene_tools.is_vision_available", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_render_backend, kSceneToolsCameraOptionalParams, "", "scene_tools.get_render_backend", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_vision_render_mode, kSceneToolsCameraOptionalParams, "", "scene_tools.get_vision_render_mode", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_vision_denoise, kSceneToolsCameraOptionalParams, "", "scene_tools.get_vision_denoise", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_vision_accumulation, kSceneToolsCameraOptionalParams, "", "scene_tools.get_vision_accumulation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_vision_stable_planes, kSceneToolsCameraOptionalParams, "", "scene_tools.get_vision_stable_planes", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, is_vision_available, kNoParams, "", "scene_tools.is_vision_available", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_active_scene, kNoParams, "", "scene.read_active_scene", EditorApiValueType::Object, (animation_callers() & ~caller_mask(EditorApiCaller::Cef)) | caller_mask(EditorApiCaller::Native)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_actor, kObjectPayloadParam, "", "scene.read_actor", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_transforms, kObjectPayloadParam, "", "scene.read_transforms", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
@@ -610,49 +618,47 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_state, kSceneActorStateParams, "", "scene_tools.set_actor_state", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript) | caller_mask(EditorApiCaller::ScriptRuntime)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_physics, kSceneActorPhysicsParams, "", "scene_tools.set_actor_physics", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_camera_lock, kSceneActorCameraLockParams, "", "scene_tools.set_actor_camera_lock", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, save_actor, kSaveActorParams, "sceneTools.saveActor", "scene_tools.save_actor", EditorApiValueType::Object, cef_and_script_runtime_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, select_model_file, kSceneToolsSelectModelFileParams, "sceneTools.selectModelFile", "scene_tools.select_model_file", EditorApiValueType::String, cef_and_script_runtime_callers()),
-    EDITOR_API_METHOD1_WRAPPED(SceneTools, list_actor_tree, "scene.listActorTree", "scene.list_actor_tree", "scene_name", EditorApiValueType::String, EditorApiValueType::Array),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, save_actor, kSaveActorParams, "sceneTools.saveActor", "scene_tools.save_actor", EditorApiValueType::Object, non_cef_script_runtime_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, list_actor_tree, kReadTreeParams, "scene.listActorTree", "scene.list_actor_tree", EditorApiValueType::Array, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, list_camera_views, kSceneNameParam, "", "scene_tools.list_camera_views", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, list_scene_tree, kReadTreeParams, "", "scene_tools.list_scene_tree", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript) | caller_mask(EditorApiCaller::ScriptRuntime)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, open_actor, kSceneActorParams, "sceneTools.openActor", "scene_tools.open_actor", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, open_camera_view, kSceneCameraParams, "", "scene_tools.open_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, pick_actor_at_pixel, kSceneToolsPickActorParams, "", "scene_tools.pick_actor", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, play_audio, kSceneToolsPlayAudioParams, "sceneTools.playAudio", "scene_tools.play_audio", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, reload_scene, kSceneToolsReloadSceneParams, "sceneTools.reloadScene", "scene_tools.reload_scene", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, rebind_actor_resource, kSceneToolsRebindActorResourceParams, "sceneTools.rebindActorResource", "scene_tools.rebind_actor_resource", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, remove_actor, kSceneActorParams, "sceneTools.removeActor", "scene_tools.remove_actor", EditorApiValueType::Object, cef_and_script_runtime_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, rename_actor, kSceneToolsRenameActorParams, "sceneTools.renameActor", "scene_tools.rename_actor", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, rename_camera_view, kSceneToolsRenameCameraViewParams, "sceneTools.renameCameraView", "scene_tools.rename_camera_view", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, reload_scene, kSceneToolsReloadSceneParams, "", "scene_tools.reload_scene", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, rebind_actor_resource, kSceneToolsRebindActorResourceParams, "", "scene_tools.rebind_actor_resource", EditorApiValueType::Object, cef_and_script_runtime_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, remove_actor, kSceneActorParams, "", "scene_tools.remove_actor", EditorApiValueType::Object, cef_and_script_runtime_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, rename_actor, kSceneToolsRenameActorParams, "", "scene_tools.rename_actor", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, rename_camera_view, kSceneToolsRenameCameraViewParams, "", "scene_tools.rename_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, save_screenshot, kSceneToolsSaveScreenshotParams, "", "scene_tools.save_screenshot", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, select_actor, kSceneToolsSelectActorParams, "", "scene.select_actor", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, select_screenshot_path, kSceneToolsCameraOptionalParams, "", "scene_tools.select_screenshot_path", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_output_mode, kSceneToolsSetOutputModeParams, "sceneTools.setOutputMode", "scene_tools.set_output_mode", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_output_mode, kSceneToolsSetOutputModeParams, "", "scene_tools.set_output_mode", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_physics_params, kSceneToolsSetPhysicsParams, "", "scene_tools.set_physics_params", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_render_backend, kSceneToolsSetRenderBackendParams, "sceneTools.setRenderBackend", "scene_tools.set_render_backend", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_render_mode, kSceneToolsSetVisionRenderModeParams, "sceneTools.setVisionRenderMode", "scene_tools.set_vision_render_mode", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_denoise, kSceneToolsSetCameraBoolParams, "sceneTools.setVisionDenoise", "scene_tools.set_vision_denoise", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_denoiser, kSceneToolsSetVisionDenoiserParams, "sceneTools.setVisionDenoiser", "scene_tools.set_vision_denoiser", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_reblur_settings, kSceneToolsSetReblurSettingsParams, "sceneTools.setReblurSettings", "scene_tools.set_reblur_settings", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_pt_settings, kSceneToolsSetReblurSettingsParams, "sceneTools.setPtSettings", "scene_tools.set_pt_settings", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_restir_settings, kSceneToolsSetReblurSettingsParams, "sceneTools.setRestirSettings", "scene_tools.set_restir_settings", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_relax_settings, kSceneToolsSetReblurSettingsParams, "sceneTools.setRelaxSettings", "scene_tools.set_relax_settings", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_pt_settings, kSceneCameraParams, "sceneTools.getPtSettings", "scene_tools.get_pt_settings", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_restir_settings, kSceneCameraParams, "sceneTools.getRestirSettings", "scene_tools.get_restir_settings", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_reblur_settings, kSceneCameraParams, "sceneTools.getReblurSettings", "scene_tools.get_reblur_settings", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_relax_settings, kSceneCameraParams, "sceneTools.getRelaxSettings", "scene_tools.get_relax_settings", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_accumulation, kSceneToolsSetCameraBoolParams, "sceneTools.setVisionAccumulation", "scene_tools.set_vision_accumulation", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_vision_stable_planes, kSceneToolsSetCameraBoolParams, "sceneTools.setVisionStablePlanes", "scene_tools.set_vision_stable_planes", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_render_backend, kSceneToolsSetRenderBackendParams, "", "scene_tools.set_render_backend", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_render_mode, kSceneToolsSetVisionRenderModeParams, "", "scene_tools.set_vision_render_mode", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_denoise, kSceneToolsSetCameraBoolParams, "", "scene_tools.set_vision_denoise", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_denoiser, kSceneToolsSetVisionDenoiserParams, "", "scene_tools.set_vision_denoiser", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_reblur_settings, kSceneToolsSetReblurSettingsParams, "", "scene_tools.set_reblur_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_pt_settings, kSceneToolsSetReblurSettingsParams, "", "scene_tools.set_pt_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_restir_settings, kSceneToolsSetReblurSettingsParams, "", "scene_tools.set_restir_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_relax_settings, kSceneToolsSetReblurSettingsParams, "", "scene_tools.set_relax_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_pt_settings, kSceneCameraParams, "", "scene_tools.get_pt_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_restir_settings, kSceneCameraParams, "", "scene_tools.get_restir_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_reblur_settings, kSceneCameraParams, "", "scene_tools.get_reblur_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_relax_settings, kSceneCameraParams, "", "scene_tools.get_relax_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_accumulation, kSceneToolsSetCameraBoolParams, "", "scene_tools.set_vision_accumulation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_stable_planes, kSceneToolsSetCameraBoolParams, "", "scene_tools.set_vision_stable_planes", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, stop_audio, kResourceIdParam, "sceneTools.stopAudio", "scene_tools.stop_audio", EditorApiValueType::Object),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, sun_direction, kSceneToolsSunDirectionParams, "", "scene_tools.sun_direction", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_actor_skeleton_leaves, kSceneActorParams, "sceneTools.getActorSkeletonLeaves", "scene_tools.get_actor_skeleton_leaves", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_animation, kSceneToolsSetAnimationParams, "sceneTools.setActorAnimation", "scene_tools.set_actor_animation", EditorApiValueType::Object, animation_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, pause_actor_animation, kSceneActorParams, "sceneTools.pauseActorAnimation", "scene_tools.pause_actor_animation", EditorApiValueType::Object, animation_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, resume_actor_animation, kSceneActorParams, "sceneTools.resumeActorAnimation", "scene_tools.resume_actor_animation", EditorApiValueType::Object, animation_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_model_nodes, kModelNodePageParams, "sceneTools.getModelNodes", "scene_tools.get_model_nodes", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_model_node_state, kModelNodeStateParams, "sceneTools.setModelNodeState", "scene_tools.set_model_node_state", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, get_actor_ik_chains, kSceneActorParams, "sceneTools.getActorIkChains", "scene_tools.get_actor_ik_chains", EditorApiValueType::Object),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(SceneTools, set_actor_ik_chains, kSceneToolsSetIkChainsParams, "sceneTools.setActorIkChains", "scene_tools.set_actor_ik_chains", EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_actor_skeleton_leaves, kSceneActorParams, "sceneTools.getActorSkeletonLeaves", "scene_tools.get_actor_skeleton_leaves", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_animation, kSceneToolsSetAnimationParams, "", "scene_tools.set_actor_animation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, pause_actor_animation, kSceneActorParams, "", "scene_tools.pause_actor_animation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, resume_actor_animation, kSceneActorParams, "", "scene_tools.resume_actor_animation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_model_nodes, kModelNodePageParams, "sceneTools.getModelNodes", "scene_tools.get_model_nodes", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_model_node_state, kModelNodeStateParams, "sceneTools.setModelNodeState", "scene_tools.set_model_node_state", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_actor_ik_chains, kSceneActorParams, "sceneTools.getActorIkChains", "scene_tools.get_actor_ik_chains", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_ik_chains, kSceneToolsSetIkChainsParams, "sceneTools.setActorIkChains", "scene_tools.set_actor_ik_chains", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, update_camera_view, kSceneToolsUpdateCameraViewParams, "", "scene_tools.update_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, capture_viewport, kViewportCaptureParams, "", "viewport.capture", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_camera_pose, kViewportSetCameraPoseParams, "", "viewport.set_camera_pose", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),

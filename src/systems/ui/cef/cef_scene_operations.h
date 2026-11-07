@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 namespace Corona::Systems::UI {
 
@@ -95,6 +96,28 @@ struct ActorPropertiesSnapshot {
     std::optional<std::vector<std::string>> requested_animation_sources;
 };
 
+struct ActorRenameRequest {
+    std::string scene, actor, name;
+};
+struct ActorRenameSnapshot {
+    std::string archive_session, scene, actor_guid, old_name, new_name;
+};
+struct ActorDeleteRequest {
+    std::string scene, actor;
+};
+struct ActorDeleteSnapshot {
+    std::string archive_session, scene, actor_guid, old_name;
+    std::uint64_t tree_revision{0};
+    bool selection_cleared{false};
+};
+
+struct ResourceDiagnosticSnapshot {
+    std::string code, message, path;
+    bool recoverable = false;
+};
+struct ActorResourceRebindRequest {
+    std::string scene, actor_guid, path;
+};
 // Property-panel projection, deliberately excluding bounds, materials, model
 // nodes and animation state. Reuses the same property values as write replies.
 struct ActorReadSnapshot {
@@ -103,6 +126,17 @@ struct ActorReadSnapshot {
     std::string load_error_code, load_error_message, resolved_asset_path;
     std::uint64_t handle = 0;
     std::array<float, 3> position{}, rotation{}, scale{1, 1, 1};
+};
+struct ActorResourceRebindSnapshot {
+    std::string archive_session, scene, actor_guid, status;
+    bool ok = false;
+    std::vector<ResourceDiagnosticSnapshot> diagnostics;
+    ActorReadSnapshot actor;
+};
+
+struct SceneSaveSnapshot {
+    std::string status, archive_session, scene, filepath, message;
+    std::size_t unresolved_actor_count = 0;
 };
 
 struct EnvironmentSunPatch {
@@ -177,6 +211,15 @@ struct CameraCreateRequest {
     std::string scene;
     std::optional<std::string> name;
 };
+struct CameraRenameRequest {
+    std::string scene, camera_id, name;
+};
+struct CameraDeleteRequest {
+    std::string scene, camera_id;
+};
+struct DeletedCameraSnapshot {
+    std::string archive_session, scene, camera_id;
+};
 
 struct CameraReadSnapshot {
     CameraPropertiesSnapshot properties;
@@ -187,44 +230,169 @@ struct CameraListSnapshot {
     std::string archive_session, scene, active_camera_id;
     std::vector<CameraReadSnapshot> cameras;
 };
+struct CameraRenderSettingsPatch {
+    std::string scene, camera_id;
+    std::optional<std::string> family;
+    nlohmann::json settings;
+    std::optional<std::string> render_backend, output_mode, vision_render_mode, vision_denoiser;
+    std::optional<bool> vision_accumulation, vision_denoise, vision_stable_planes;
+    bool empty() const {
+        if (family) return !settings.is_object() || settings.empty();
+        return !render_backend && !output_mode && !vision_render_mode && !vision_denoiser &&
+            !vision_accumulation && !vision_denoise && !vision_stable_planes;
+    }
+};
+struct CameraRenderSettingsSnapshot {
+    std::string archive_session, scene, camera_id, render_backend, output_mode, vision_render_mode, vision_denoiser;
+    std::string family;
+    nlohmann::json settings;
+    bool vision_accumulation = false, vision_denoise = true, vision_stable_planes = true;
+    bool pending = false;
+};
 struct SceneTreeSnapshot {
     CameraListSnapshot cameras;
     std::uint64_t tree_revision = 0;
     std::vector<Corona::Ui::Cef::SceneTreeActorRow> actors;
 };
 
-enum class SceneMethod { ReadActive, ReadTransforms, SelectActor, SetActorTransform, SetActorProperties, GetEnvironment, SetEnvironment, FocusActor, CaptureScreenshot, SetCameraProperties, CreateCamera, ReadActorIndex, ReadActorProperties, ReadCameras, ReadTree };
+struct ActorContextRow {
+    std::string actor_guid, name, type, semantic_role;
+    std::array<float, 3> position{}, rotation{}, scale{1, 1, 1}, size{};
+    bool has_size = false, physics_enabled = false;
+};
+struct ActorContextSnapshot {
+    std::string archive_session, scene;
+    std::uint64_t tree_revision = 0;
+    std::vector<ActorContextRow> actors;
+};
+
+struct SkeletonNodeSnapshot {
+    std::string name;
+    int index = -1;
+    int parent = -1;
+    bool leaf = false;
+};
+struct ActorSkeletonSnapshot {
+    std::string archive_session, scene, actor;
+    bool is_skinned = false;
+    int node_count = 0, bone_count = 0;
+    std::vector<std::string> leaves;
+    std::vector<SkeletonNodeSnapshot> nodes;
+};
+struct IkRuntimeSnapshot {
+    bool has_target = false, grounded = false, releasing = false;
+    float weight = 0;
+    std::array<float, 3> target{}, normal{0, 1, 0};
+};
+struct IkChainSnapshot {
+    std::string id, bone_name, mode;
+    int chain_length = 3, max_iterations = 10;
+    float weight = 1, tolerance = 1e-3f, damping = .88f;
+    bool enabled = true;
+    float contact_weight_rise = 8, contact_weight_decay = .8f;
+    float contact_normal_offset = 0, probe_max_drop = .5f;
+    float foot_height = 0, plant_threshold = .08f;
+    std::array<float, 3> target{};
+    std::optional<IkRuntimeSnapshot> runtime;
+};
+struct ActorIkSnapshot {
+    std::string archive_session, scene, actor;
+    bool ready = false, is_skinned = false;
+    std::uint64_t revision = 0;
+    std::vector<IkChainSnapshot> chains;
+};
+struct ActorIkPatch {
+    std::string scene, actor;
+    std::vector<IkChainSnapshot> chains;
+    std::optional<std::uint64_t> expected_revision;
+};
+
+struct ModelNodeSnapshot {
+    std::uint32_t node_index{};
+    std::int32_t parent_index{-1};
+    std::string name, node_path;
+    std::array<float, 3> position{}, rotation{}, scale{1, 1, 1};
+    bool visible{true}, effective_visible{true}, editable{true};
+    std::size_t child_count{0};
+};
+struct ModelNodePageSnapshot {
+    std::string archive_session, scene, actor_guid, actor;
+    int actor_version{1};
+    std::int64_t parent_index{-1};
+    std::size_t total{0}, next_offset{0};
+    bool has_more{false};
+    std::string status;
+    std::vector<ModelNodeSnapshot> nodes;
+};
+struct ModelNodePatch {
+    std::string scene, actor_guid;
+    std::uint32_t node_index{};
+    std::optional<std::array<float, 3>> position, rotation, scale;
+    std::optional<bool> visible;
+    std::optional<int> expected_actor_version;
+};
+struct ModelNodePageRequest {
+    std::string scene, actor_guid;
+    std::int64_t parent_index{-1};
+    std::size_t offset{0}, limit{100};
+};
+
+enum class SceneMethod { ReadActive, ReadVisionAvailability, ReadTransforms, SelectActor, SelectModelFile, SetActorTransform, SetActorProperties, RenameActor, DeleteActor, RebindActorResource, Save, GetEnvironment, SetEnvironment, FocusActor, CaptureScreenshot, SetCameraProperties, ReadCameraRenderSettings, SetCameraRenderSettings, CreateCamera, RenameCamera, DeleteCamera, ReadActorIndex, ReadActorProperties, ReadCameras, ReadTree, ReadActorContext, ReadActorSkeleton, ReadActorIkChains, SetActorIkChains, ReadModelNodes, SetModelNodeState };
 struct SceneRequest {
     SceneMethod method;
     ActorSelection selection;
     std::optional<std::string> archive_session;
+    std::string file_type;
     std::vector<std::string> actor_guids;
     ActorTransformPatch transform;
     ActorPropertiesPatch properties;
+    ActorRenameRequest actor_rename;
+    ActorDeleteRequest actor_delete;
+    ActorResourceRebindRequest actor_resource_rebind;
+    bool save_actors_only = false;
     EnvironmentPatch environment;
     ActorFocusRequest focus;
     ScreenshotRequest screenshot;
     CameraPropertiesPatch camera_properties;
+    CameraRenderSettingsPatch camera_render_settings;
     CameraCreateRequest camera_create;
+    CameraRenameRequest camera_rename;
+    CameraDeleteRequest camera_delete;
+    ActorIkPatch ik;
+    ModelNodePatch model_node;
+    ModelNodePageRequest model_node_page;
     std::string read_scene;
     std::string read_actor;
 };
 struct SceneReply {
     ActiveSceneSnapshot active;
+    bool vision_available = false;
     ActorSelection selection;
     std::string error_code;
     std::string error_message;
     ActorTransformSnapshot transform;
     std::vector<ActorTransformSnapshot> transforms;
     ActorPropertiesSnapshot properties;
+    ActorRenameSnapshot actor_rename;
+    ActorDeleteSnapshot actor_delete;
+    ActorResourceRebindSnapshot actor_resource_rebind;
+    SceneSaveSnapshot save;
+    std::string selected_file;
     EnvironmentSnapshot environment;
     ActorFocusSnapshot focus;
     ScreenshotSnapshot screenshot;
     CameraPropertiesSnapshot camera;
+    DeletedCameraSnapshot deleted_camera;
+    CameraRenderSettingsSnapshot camera_render_settings;
     ActorIndexSnapshot actor_index;
     ActorReadSnapshot actor_read;
     CameraListSnapshot camera_list;
     SceneTreeSnapshot tree;
+    ActorSkeletonSnapshot actor_skeleton;
+    ActorIkSnapshot actor_ik;
+    ActorContextSnapshot actor_context;
+    ModelNodePageSnapshot model_nodes;
+    ModelNodePageSnapshot model_node;
 };
 
 // Execute on the native editor scene owner (CEF UI) thread. Non-Web adapters

@@ -2816,6 +2816,22 @@ std::optional<std::array<float, 3>> transform_float3_value(const nlohmann::json&
     return std::nullopt;
 }
 
+ActorDeleteSnapshot erase_native_editor_actor(
+    NativeEditorScene& scene, std::vector<NativeEditorActor>::iterator actor) {
+    ActorDeleteSnapshot snapshot;
+    snapshot.archive_session = scene.archive_session;
+    snapshot.scene = scene.route;
+    snapshot.old_name = actor->name;
+    snapshot.actor_guid = actor->actor_guid;
+    snapshot.selection_cleared = scene.selection && scene.selection->actor_guid == actor->actor_guid;
+    if (scene.engine_scene && actor->engine_actor)
+        scene.engine_scene->remove_actor(actor->engine_actor.get());
+    if (snapshot.selection_cleared) scene.selection.reset();
+    scene.actors.erase(actor);
+    snapshot.tree_revision = ++scene.tree_revision;
+    return snapshot;
+}
+
 NativeResult remove_native_editor_actor(const std::string& scene_route_arg,
                                         const std::string& actor_name) {
     if (trim_ascii(actor_name).empty()) {
@@ -2836,22 +2852,13 @@ NativeResult remove_native_editor_actor(const std::string& scene_route_arg,
         return native_failure("Actor not found: " + actor_name, 2);
     }
 
-    const auto removed_name = it->name;
-    const auto removed_guid = it->actor_guid;
-    if (scene->engine_scene && it->engine_actor) {
-        scene->engine_scene->remove_actor(it->engine_actor.get());
-    }
-    if (scene->selection && scene->selection->actor_guid == it->actor_guid)
-        scene->selection.reset();
-    scene->actors.erase(it);
-
-    ++scene->tree_revision;
+    const auto deleted = erase_native_editor_actor(*scene, it);
 
     return native_success({
         {"status", "success"},
-        {"scene", scene->route},
-        {"actor", removed_name},
-        {"actor_guid", removed_guid},
+        {"scene", deleted.scene},
+        {"actor", deleted.old_name},
+        {"actor_guid", deleted.actor_guid},
     });
 }
 
@@ -4760,6 +4767,7 @@ bool camera_list_snapshot(const NativeEditorScene& scene, CameraListSnapshot& re
 Corona::Ui::Cef::SceneTreeActorRow scene_tree_actor_row(const NativeEditorActor& actor) {
     Corona::Ui::Cef::SceneTreeActorRow row;
     row.name = actor.name; row.actor_guid = actor.actor_guid; row.route = actor.route;
+    row.actor_version = actor.actor_version;
     row.actor_type = actor.actor_type;
     row.handle = actor.engine_actor ? actor.engine_actor->get_handle() : 0;
     row.visible = actor.optics ? actor.optics->get_visible() : true;
@@ -4778,6 +4786,67 @@ Corona::Ui::Cef::SceneTreeActorRow scene_tree_actor_row(const NativeEditorActor&
         row.model_node_count = counts.total; row.model_node_root_count = counts.roots;
     }
     return row;
+}
+
+ModelNodeSnapshot model_node_snapshot(const Corona::API::ModelNodeState& node, std::size_t child_count, bool actor_visible) {
+    ModelNodeSnapshot result;
+    result.node_index = node.node_index; result.parent_index = node.parent_index; result.name = node.name; result.node_path = node.node_path;
+    result.position = node.position; result.rotation = node.rotation; result.scale = node.scale; result.visible = node.visible;
+    result.effective_visible = node.effective_visible && actor_visible; result.editable = node.editable; result.child_count = child_count;
+    return result;
+}
+
+SceneReply apply_native_model_node(const SceneRequest& request) {
+    SceneReply reply;
+    auto fail = [&](const char* code, const std::string& message) { reply.error_code = code; reply.error_message = message; return reply; };
+    auto* scene = native_editor_state().scene.get();
+    if (!scene || !request.archive_session || scene->archive_session != *request.archive_session ||
+        !native_scene_request_matches(*scene, request.method == SceneMethod::ReadModelNodes ? request.model_node_page.scene : request.model_node.scene))
+        return fail("PROJECT_CONTEXT_CHANGED", "Model node operation belongs to an inactive archive");
+    if (request.method == SceneMethod::SetModelNodeState && scene->read_only)
+        return fail("READ_ONLY", "Cannot edit model nodes in a read-only scene");
+    const auto& identity = request.method == SceneMethod::ReadModelNodes ? request.model_node_page.actor_guid : request.model_node.actor_guid;
+    auto* actor = find_native_actor_by_guid(*scene, identity);
+    if (!actor || !actor->geometry) return fail("ACTOR_NOT_FOUND", "Model actor is unavailable");
+    if (request.method == SceneMethod::ReadModelNodes) {
+        const auto& page_request = request.model_node_page;
+        const auto nodes = actor->geometry->get_model_nodes();
+        const auto page = Corona::Ui::Cef::model_node_page(nodes, page_request.parent_index, page_request.offset, page_request.limit);
+        std::unordered_map<std::uint32_t, std::size_t> child_counts;
+        for (const auto& node : nodes) ++child_counts[node.parent_index];
+        auto& result = reply.model_nodes; result.archive_session = scene->archive_session; result.scene = scene->route; result.actor_guid = actor->actor_guid; result.actor = actor->name;
+        result.actor_version = actor->actor_version; result.parent_index = page_request.parent_index; result.total = page.total; result.next_offset = page.next_offset; result.has_more = page.has_more;
+        result.status = page.items.empty() ? actor->geometry->get_gpu_build_state() : "ready";
+        const bool actor_visible = actor->optics ? actor->optics->get_visible() : actor->persisted_visible;
+        for (const auto* node : page.items) result.nodes.push_back(model_node_snapshot(*node, child_counts[node->node_index], actor_visible));
+        return reply;
+    }
+    const auto& patch = request.model_node;
+    if (!patch.expected_actor_version || *patch.expected_actor_version != actor->actor_version)
+        return fail("ACTOR_VERSION_CONFLICT", "Model node edit is based on an older Actor version");
+    const auto nodes = actor->geometry->get_model_nodes();
+    const auto found = std::find_if(nodes.begin(), nodes.end(), [&](const auto& node) { return node.node_index == patch.node_index; });
+    if (found == nodes.end()) return fail("NODE_NOT_FOUND", "Model node is unavailable or not loaded");
+    auto state = *found;
+    if (patch.position) state.position = *patch.position;
+    if (patch.rotation) state.rotation = *patch.rotation;
+    if (patch.scale) state.scale = *patch.scale;
+    if (patch.visible) state.visible = *patch.visible;
+    if (!actor->geometry->set_model_node_state(patch.node_index, state)) return fail("NODE_EDIT_REJECTED", "Model node edit was rejected");
+    nlohmann::json node_keys = nlohmann::json::array();
+    for (const auto& node : nodes) node_keys.push_back({{"node_index", node.node_index}, {"node_path", node.node_path}});
+    auto [active, unmatched] = ModelNodeConfig::partition(actor->persisted_model_node_overrides, actor->model_node_resource, actor->model_node_current_resource, node_keys);
+    for (auto& group : unmatched) actor->model_node_unmatched.push_back(std::move(group));
+    nlohmann::json patch_json = nlohmann::json::object();
+    if (patch.position) patch_json["position"] = *patch.position;
+    if (patch.rotation) patch_json["rotation"] = *patch.rotation;
+    if (patch.scale) patch_json["scale"] = *patch.scale;
+    if (patch.visible) patch_json["visible"] = *patch.visible;
+    actor->persisted_model_node_overrides = ModelNodeConfig::merge(active, patch.node_index, state.node_path, patch_json); actor->model_node_resource = actor->model_node_current_resource; ++actor->actor_version;
+    const auto updated = actor->geometry->get_model_nodes(); const auto it = std::find_if(updated.begin(), updated.end(), [&](const auto& node) { return node.node_index == patch.node_index; });
+    const auto child_count = static_cast<std::size_t>(std::count_if(updated.begin(), updated.end(), [&](const auto& node) { return node.parent_index == static_cast<std::int32_t>(patch.node_index); }));
+    auto& result = reply.model_node; result.archive_session = scene->archive_session; result.scene = scene->route; result.actor_guid = actor->actor_guid; result.actor = actor->name; result.actor_version = actor->actor_version; result.parent_index = it->parent_index; result.status = "ready"; result.nodes.push_back(model_node_snapshot(*it, child_count, actor->optics ? actor->optics->get_visible() : actor->persisted_visible));
+    return reply;
 }
 
 SceneReply apply_native_camera_properties(const SceneRequest& request, bool editor_input = true) {
@@ -4844,6 +4913,106 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
     return reply;
 }
 
+SceneReply apply_native_camera_render_settings(const SceneRequest& request) {
+    SceneReply reply;
+    const auto fail = [&](const char* code, const char* message) {
+        reply.error_code = code; reply.error_message = message; return reply;
+    };
+    const auto& patch = request.camera_render_settings;
+    if (patch.scene.empty() || !request.archive_session ||
+        request.archive_session->empty() ||
+        (request.method != SceneMethod::ReadCameraRenderSettings && patch.empty()) ||
+        (request.method == SceneMethod::ReadCameraRenderSettings && !patch.family))
+        return fail("INVALID_ARGUMENT", "Camera render settings require archive, scene, camera and a non-empty patch");
+    if (patch.family && *patch.family != "pt" && *patch.family != "restir" && *patch.family != "reblur" && *patch.family != "relax")
+        return fail("INVALID_ARGUMENT", "Unsupported Vision settings family");
+    if (patch.render_backend && *patch.render_backend != "native" && *patch.render_backend != "vision")
+        return fail("INVALID_ARGUMENT", "Unsupported render backend");
+    static const std::array output_modes{"final_color", "base_color", "normal", "position", "object_id",
+        "visibility_buffer", "ssao", "ssao_raw", "shadow_mask_raw", "shadow_mask"};
+    if (patch.output_mode && std::find(output_modes.begin(), output_modes.end(), *patch.output_mode) == output_modes.end())
+        return fail("INVALID_ARGUMENT", "Unsupported camera output mode");
+    static const std::array vision_modes{"path_tracing", "restir", "progressive_path_tracing", "svgf", "ssat"};
+    if (patch.vision_render_mode && std::find(vision_modes.begin(), vision_modes.end(), *patch.vision_render_mode) == vision_modes.end())
+        return fail("INVALID_ARGUMENT", "Unsupported Vision render mode");
+    if (patch.vision_denoiser && *patch.vision_denoiser != "scene" && *patch.vision_denoiser != "svgf" &&
+        *patch.vision_denoiser != "reblur" && *patch.vision_denoiser != "relax")
+        return fail("INVALID_ARGUMENT", "Unsupported Vision denoiser");
+    auto* scene = native_editor_state().scene.get();
+    if (!scene || scene->archive_session != *request.archive_session || !native_scene_request_matches(*scene, patch.scene))
+        return fail("PROJECT_CONTEXT_CHANGED", "Camera render settings belong to an inactive archive");
+    if (scene->cameras.empty())
+        return fail("CAMERA_NOT_FOUND", "Camera identity is unavailable");
+    const auto camera_index = patch.camera_id.empty()
+        ? std::min(scene->active_camera_index, scene->cameras.size() - 1)
+        : static_cast<std::size_t>(std::distance(scene->cameras.begin(), std::find_if(
+            scene->cameras.begin(), scene->cameras.end(), [&](const auto& camera) {
+                return camera.camera_id == patch.camera_id;
+            })));
+    if (camera_index >= scene->cameras.size() || !scene->cameras[camera_index].engine_camera)
+        return fail("CAMERA_NOT_FOUND", "Camera identity is unavailable");
+    const auto found = scene->cameras.begin() + static_cast<std::ptrdiff_t>(camera_index);
+    auto& engine = *found->engine_camera;
+    if (patch.family) {
+        const auto parse = [](const std::string& text) {
+            auto value = nlohmann::json::parse(text, nullptr, false);
+            return value.is_object() ? value : nlohmann::json::object();
+        };
+        auto requested = nlohmann::json::object();
+        auto effective = nlohmann::json::object();
+        if (*patch.family == "pt") {
+            effective = parse(engine.get_effective_vision_pt_settings());
+            requested = parse(engine.get_requested_vision_pt_settings());
+        } else if (*patch.family == "restir") {
+            effective = parse(engine.get_effective_vision_restir_settings());
+            requested = parse(engine.get_requested_vision_restir_settings());
+        } else if (*patch.family == "reblur") {
+            effective = parse(engine.get_effective_vision_reblur_settings());
+            requested = parse(engine.get_requested_vision_reblur_settings());
+        } else {
+            effective = parse(engine.get_effective_vision_relax_settings());
+            requested = parse(engine.get_requested_vision_relax_settings());
+        }
+        if (request.method == SceneMethod::ReadCameraRenderSettings) {
+            effective.update(requested);
+            auto& result = reply.camera_render_settings;
+            result.archive_session = scene->archive_session; result.scene = scene->route;
+            result.camera_id = found->camera_id; result.family = *patch.family; result.settings = std::move(effective);
+            result.pending = false;
+            return reply;
+        }
+        if (!patch.settings.is_object() || patch.settings.empty()) return fail("INVALID_ARGUMENT", "Vision settings must be a non-empty object");
+        const auto serialized = patch.settings.dump();
+        if (*patch.family == "pt") engine.set_vision_pt_settings(serialized);
+        else if (*patch.family == "restir") engine.set_vision_restir_settings(serialized);
+        else if (*patch.family == "reblur") engine.set_vision_reblur_settings(serialized);
+        else engine.set_vision_relax_settings(serialized);
+        auto& result = reply.camera_render_settings;
+        result.archive_session = scene->archive_session; result.scene = scene->route;
+        result.camera_id = found->camera_id; result.family = *patch.family; result.settings = patch.settings;
+        result.pending = true;
+        return reply;
+    }
+    if (patch.output_mode) engine.set_output_mode(*patch.output_mode);
+    if (patch.vision_render_mode) engine.set_vision_render_mode(*patch.vision_render_mode);
+    if (patch.vision_denoiser) engine.set_vision_denoiser(*patch.vision_denoiser);
+    if (patch.vision_accumulation) engine.set_vision_accumulation(*patch.vision_accumulation);
+    if (patch.vision_denoise) engine.set_vision_denoise(*patch.vision_denoise);
+    if (patch.vision_stable_planes) engine.set_vision_stable_planes(*patch.vision_stable_planes);
+    if (patch.render_backend) engine.set_render_backend(*patch.render_backend);
+    auto& result = reply.camera_render_settings;
+    result.archive_session = scene->archive_session; result.scene = scene->route; result.camera_id = found->camera_id;
+    result.render_backend = patch.render_backend.value_or(engine.get_render_backend());
+    result.output_mode = patch.output_mode.value_or(engine.get_output_mode());
+    result.vision_render_mode = patch.vision_render_mode.value_or(engine.get_vision_render_mode());
+    result.vision_denoiser = patch.vision_denoiser.value_or(engine.get_requested_vision_denoiser());
+    result.vision_accumulation = patch.vision_accumulation.value_or(engine.get_requested_vision_accumulation());
+    result.vision_denoise = patch.vision_denoise.value_or(engine.get_requested_vision_denoise());
+    result.vision_stable_planes = patch.vision_stable_planes.value_or(engine.get_requested_vision_stable_planes());
+    result.pending = true;
+    return reply;
+}
+
 // JSON is restricted to the existing non-Web caller boundary, never the V8 path.
 NativeResult apply_non_web_camera_properties(const NativeRequest& request, bool pose) {
     auto* scene = scene_for_request_route(request);
@@ -4883,7 +5052,62 @@ NativeResult apply_non_web_camera_properties(const NativeRequest& request, bool 
     return native_success({{"status", "success"}, {"scene", scene->route}, {"camera", camera_to_json(*camera)}});
 }
 
+namespace {
+
+nlohmann::json typed_ik_chain_json(const IkChainSnapshot& chain) {
+    return {{"id", chain.id}, {"bone_name", chain.bone_name}, {"mode", chain.mode},
+            {"chain_length", chain.chain_length}, {"max_iterations", chain.max_iterations},
+            {"weight", chain.weight}, {"tolerance", chain.tolerance}, {"damping", chain.damping},
+            {"enabled", chain.enabled}, {"contact_weight_rise", chain.contact_weight_rise},
+            {"contact_weight_decay", chain.contact_weight_decay}, {"contact_normal_offset", chain.contact_normal_offset},
+            {"probe_max_drop", chain.probe_max_drop}, {"foot_height", chain.foot_height},
+            {"plant_threshold", chain.plant_threshold}, {"target", chain.target}};
+}
+
+std::vector<IkChainSnapshot> typed_ik_chains(const std::vector<Corona::Resource::IkChain>& chains,
+                                             const Corona::Resource::SkeletonData* skeleton,
+                                             bool include_runtime) {
+    std::vector<IkChainSnapshot> result;
+    const auto encoded = IkChainConfig::serialize(chains, skeleton, include_runtime);
+    result.reserve(encoded.size());
+    for (const auto& value : encoded) {
+        IkChainSnapshot chain;
+        chain.id = value.value("id", std::string{}); chain.bone_name = value.value("bone_name", std::string{});
+        chain.mode = value.value("mode", std::string{"foot_plant"});
+        chain.chain_length = value.value("chain_length", 3); chain.max_iterations = value.value("max_iterations", 10);
+        chain.weight = value.value("weight", 1.0f); chain.tolerance = value.value("tolerance", 1e-3f);
+        chain.damping = value.value("damping", .88f); chain.enabled = value.value("enabled", true);
+        chain.contact_weight_rise = value.value("contact_weight_rise", 8.0f);
+        chain.contact_weight_decay = value.value("contact_weight_decay", .8f);
+        chain.contact_normal_offset = value.value("contact_normal_offset", 0.0f);
+        chain.probe_max_drop = value.value("probe_max_drop", .5f); chain.foot_height = value.value("foot_height", 0.0f);
+        chain.plant_threshold = value.value("plant_threshold", .08f);
+        if (value.contains("target") && value["target"].is_array() && value["target"].size() == 3)
+            for (int i = 0; i < 3; ++i) chain.target[i] = value["target"][i].get<float>();
+        if (include_runtime && value.contains("runtime")) {
+            const auto& runtime = value["runtime"];
+            IkRuntimeSnapshot state;
+            state.has_target = runtime.value("has_target", false); state.weight = runtime.value("weight", 0.0f);
+            state.grounded = runtime.value("grounded", false); state.releasing = runtime.value("releasing", false);
+            if (runtime.contains("target") && runtime["target"].is_array() && runtime["target"].size() == 3)
+                for (int i = 0; i < 3; ++i) state.target[i] = runtime["target"][i].get<float>();
+            if (runtime.contains("normal") && runtime["normal"].is_array() && runtime["normal"].size() == 3)
+                for (int i = 0; i < 3; ++i) state.normal[i] = runtime["normal"][i].get<float>();
+            chain.runtime = state;
+        }
+        result.push_back(std::move(chain));
+    }
+    return result;
+}
+
+} // namespace
+
 SceneReply execute_scene_operation(const SceneRequest& request) {
+    if (request.method == SceneMethod::ReadVisionAvailability) {
+        SceneReply reply;
+        reply.vision_available = Corona::API::is_vision_available();
+        return reply;
+    }
     if (request.method == SceneMethod::CreateCamera) {
         SceneReply reply;
         if (request.camera_create.scene.empty() || !request.archive_session || request.archive_session->empty()) {
@@ -4907,13 +5131,288 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         reply.camera = camera_properties_snapshot(*scene, camera);
         return reply;
     }
+    if (request.method == SceneMethod::RenameCamera || request.method == SceneMethod::DeleteCamera) {
+        SceneReply reply;
+        const bool rename = request.method == SceneMethod::RenameCamera;
+        const auto& scene_name = rename ? request.camera_rename.scene : request.camera_delete.scene;
+        const auto& camera_id = rename ? request.camera_rename.camera_id : request.camera_delete.camera_id;
+        if (scene_name.empty() || camera_id.empty() || !request.archive_session || request.archive_session->empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Camera mutation requires the observed archive, scene and camera identity";
+            return reply;
+        }
+        auto* scene = native_editor_state().scene.get();
+        if (!scene || scene->archive_session != *request.archive_session ||
+            !native_scene_request_matches(*scene, scene_name)) {
+            reply.error_code = "PROJECT_CONTEXT_CHANGED";
+            reply.error_message = "Camera mutation belongs to an inactive archive";
+            return reply;
+        }
+        if (scene->read_only) {
+            reply.error_code = "READ_ONLY";
+            reply.error_message = "Cannot modify cameras in a read-only scene";
+            return reply;
+        }
+        const auto camera_it = std::find_if(scene->cameras.begin(), scene->cameras.end(),
+            [&](const NativeEditorCamera& camera) { return camera.camera_id == camera_id; });
+        if (camera_it == scene->cameras.end() || !camera_it->engine_camera) {
+            reply.error_code = "CAMERA_NOT_FOUND";
+            reply.error_message = "Camera not found: " + camera_id;
+            return reply;
+        }
+        if (rename) {
+            const auto new_name = trim_ascii(request.camera_rename.name);
+            if (new_name.empty()) {
+                reply.error_code = "INVALID_ARGUMENT";
+                reply.error_message = "Camera name cannot be empty";
+                return reply;
+            }
+            const bool duplicate = std::any_of(scene->cameras.begin(), scene->cameras.end(),
+                [&](const NativeEditorCamera& other) {
+                    return &other != &*camera_it && other.name == new_name;
+                });
+            if (duplicate) {
+                reply.error_code = "DUPLICATE_CAMERA_NAME";
+                reply.error_message = "Camera name already exists: " + new_name;
+                return reply;
+            }
+            camera_it->name = new_name;
+            ++scene->tree_revision;
+            reply.camera = camera_properties_snapshot(*scene, *camera_it);
+            return reply;
+        }
+        if (scene->cameras.size() <= 1) {
+            reply.error_code = "LAST_CAMERA";
+            reply.error_message = "A scene must keep at least one camera";
+            return reply;
+        }
+        if (!camera_it->deletable) {
+            reply.error_code = "CAMERA_NOT_DELETABLE";
+            reply.error_message = "The main camera cannot be deleted";
+            return reply;
+        }
+        camera_it->camera_window_lifetime.retire();
+        camera_it->engine_camera->set_surface(0);
+        if (scene->engine_scene) scene->engine_scene->remove_camera(camera_it->engine_camera.get());
+        const auto removed_index = static_cast<std::size_t>(std::distance(scene->cameras.begin(), camera_it));
+        ++scene->tree_revision;
+        scene->cameras.erase(camera_it);
+        if (scene->active_camera_index >= scene->cameras.size()) {
+            scene->active_camera_index = scene->cameras.empty() ? 0 : scene->cameras.size() - 1;
+        } else if (removed_index < scene->active_camera_index) {
+            --scene->active_camera_index;
+        }
+        reply.deleted_camera = {*request.archive_session, scene->route, camera_id};
+        return reply;
+    }
     if (request.method == SceneMethod::SetCameraProperties) return apply_native_camera_properties(request);
+    if (request.method == SceneMethod::ReadCameraRenderSettings || request.method == SceneMethod::SetCameraRenderSettings)
+        return apply_native_camera_render_settings(request);
     if (request.method == SceneMethod::CaptureScreenshot) return capture_native_screenshot(request);
     if (request.method == SceneMethod::FocusActor) return apply_native_actor_focus(request);
     if (request.method == SceneMethod::GetEnvironment || request.method == SceneMethod::SetEnvironment)
         return apply_native_environment(request);
     if (request.method == SceneMethod::SetActorTransform) return apply_native_actor_transform(request);
     if (request.method == SceneMethod::SetActorProperties) return apply_native_actor_properties(request);
+    if (request.method == SceneMethod::RenameActor) {
+        SceneReply reply;
+        const auto& patch = request.actor_rename;
+        if (patch.scene.empty() || patch.actor.empty() || patch.name.empty() ||
+            !request.archive_session || request.archive_session->empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Actor rename requires the observed archive, scene, actor and name";
+            return reply;
+        }
+        auto* scene = native_editor_state().scene.get();
+        if (!scene || scene->archive_session != *request.archive_session ||
+            !native_scene_request_matches(*scene, patch.scene)) {
+            reply.error_code = "PROJECT_CONTEXT_CHANGED";
+            reply.error_message = "Actor rename belongs to an inactive archive";
+            return reply;
+        }
+        if (scene->read_only) {
+            reply.error_code = "READ_ONLY";
+            reply.error_message = "Cannot rename an actor in a read-only scene";
+            return reply;
+        }
+        auto* actor = find_native_actor(*scene, patch.actor);
+        if (!actor) {
+            reply.error_code = "ACTOR_NOT_FOUND";
+            reply.error_message = "Actor not found: " + patch.actor;
+            return reply;
+        }
+        const auto new_name = trim_ascii(patch.name);
+        if (new_name.empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Actor name cannot be empty";
+            return reply;
+        }
+        if (std::any_of(scene->actors.begin(), scene->actors.end(), [&](const NativeEditorActor& other) {
+                return &other != actor && other.name == new_name;
+            })) {
+            reply.error_code = "DUPLICATE_ACTOR_NAME";
+            reply.error_message = "Actor name already exists: " + new_name;
+            return reply;
+        }
+        reply.actor_rename = {*request.archive_session, scene->route, actor->actor_guid, actor->name, new_name};
+        actor->name = new_name;
+        ++scene->tree_revision;
+        return reply;
+    }
+    if (request.method == SceneMethod::DeleteActor) {
+        SceneReply reply;
+        const auto& patch = request.actor_delete;
+        if (patch.scene.empty() || patch.actor.empty() || !request.archive_session || request.archive_session->empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Actor deletion requires the observed archive, scene and actor";
+            return reply;
+        }
+        auto* scene = native_editor_state().scene.get();
+        if (!scene || scene->archive_session != *request.archive_session ||
+            !native_scene_request_matches(*scene, patch.scene)) {
+            reply.error_code = "PROJECT_CONTEXT_CHANGED";
+            reply.error_message = "Actor deletion belongs to an inactive archive";
+            return reply;
+        }
+        if (scene->read_only) {
+            reply.error_code = "READ_ONLY";
+            reply.error_message = "Cannot delete an actor in a read-only scene";
+            return reply;
+        }
+        auto actor = std::find_if(scene->actors.begin(), scene->actors.end(), [&](const NativeEditorActor& value) {
+            return value.actor_guid == patch.actor;
+        });
+        if (actor == scene->actors.end()) {
+            reply.error_code = "ACTOR_NOT_FOUND";
+            reply.error_message = "Actor not found: " + patch.actor;
+            return reply;
+        }
+        reply.actor_delete = erase_native_editor_actor(*scene, actor);
+        return reply;
+    }
+    if (request.method == SceneMethod::RebindActorResource) {
+        SceneReply reply;
+        const auto& patch = request.actor_resource_rebind;
+        if (patch.scene.empty() || patch.actor_guid.empty() || patch.path.empty() ||
+            !request.archive_session || request.archive_session->empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Actor resource rebinding requires the observed archive, scene, actor and path";
+            return reply;
+        }
+        auto* scene = native_editor_state().scene.get();
+        if (!scene || scene->archive_session != *request.archive_session ||
+            !native_scene_request_matches(*scene, patch.scene)) {
+            reply.error_code = "PROJECT_CONTEXT_CHANGED";
+            reply.error_message = "Actor resource rebinding belongs to an inactive archive";
+            return reply;
+        }
+        auto& value = reply.actor_resource_rebind;
+        value.archive_session = *request.archive_session;
+        value.scene = scene->route;
+        value.actor_guid = patch.actor_guid;
+        const auto diagnostic = [&](std::string code, std::string message, const std::filesystem::path& path) {
+            value.status = "resource_error";
+            value.diagnostics.push_back({std::move(code), std::move(message), path_to_utf8(path), true});
+            return reply;
+        };
+        auto source_path = path_from_utf8(patch.path);
+        if (source_path.is_relative()) source_path = scene->project_root / source_path;
+        if (!std::filesystem::is_regular_file(source_path))
+            return diagnostic("RESOURCE_NOT_FOUND", "Replacement resource does not exist", source_path);
+        auto* actor = find_native_actor_by_guid(*scene, patch.actor_guid);
+        if (!actor) {
+            reply.error_code = "ACTOR_NOT_FOUND";
+            reply.error_message = "Actor GUID not found: " + patch.actor_guid;
+            return reply;
+        }
+        if (!snapshot_actor_resource_supported(*actor, source_path))
+            return diagnostic("UNSUPPORTED_RESOURCE_TYPE", "Replacement resource type is unsupported", source_path);
+        if (scene->read_only) {
+            reply.error_code = "READ_ONLY";
+            reply.error_message = "External scenes are read-only";
+            return reply;
+        }
+        auto resolved_path = std::filesystem::weakly_canonical(source_path);
+        std::string route;
+        std::error_code ec;
+        const auto relative = std::filesystem::relative(resolved_path, scene->project_root, ec);
+        if (ec || relative.empty() || relative.generic_string().rfind("..", 0) == 0) {
+            SceneAssetStore store(scene->project_root);
+            auto imported = store.import_model(resolved_path);
+            if (!imported.ok())
+                return diagnostic("RESOURCE_IMPORT_FAILED", "Replacement resource could not be imported", resolved_path);
+            route = imported.main_route;
+            resolved_path = resolve_project_path(scene->project_root, route);
+        } else {
+            route = path_to_utf8(relative);
+        }
+        const auto actor_index = static_cast<std::size_t>(actor - scene->actors.data());
+        const auto preserved_position = actor->geometry ? actor->geometry->get_position() : actor->position;
+        const auto preserved_rotation = actor->geometry ? actor->geometry->get_rotation() : actor->rotation;
+        const auto preserved_scale = actor->geometry ? actor->geometry->get_scale() : actor->scale;
+        const auto preserved_body_type = actor->mechanics ? actor->mechanics->get_body_type() : actor->persisted_body_type;
+        auto replacement_data = actor->persisted_snapshot;
+        replacement_data["actor_guid"] = patch.actor_guid;
+        replacement_data["name"] = actor->name;
+        replacement_data["route"] = route;
+        replacement_data["asset_path"] = path_to_utf8(resolved_path);
+        replacement_data["transform"] = {
+            {"position", preserved_position},
+            {"rotation", preserved_rotation},
+            {"scale", preserved_scale},
+        };
+        try {
+            auto replacement = native_actor_from_snapshot(replacement_data);
+            auto& loaded = add_native_actor_to_scene(*scene, std::move(replacement), resolved_path);
+            loaded.position = preserved_position;
+            loaded.rotation = preserved_rotation;
+            loaded.scale = preserved_scale;
+            if (loaded.geometry) {
+                loaded.geometry->set_position(preserved_position);
+                loaded.geometry->set_rotation(preserved_rotation);
+                loaded.geometry->set_scale(preserved_scale);
+            }
+            loaded.load_status = ActorLoadStatus::Loaded;
+            loaded.load_error_code.clear();
+            loaded.load_error_message.clear();
+            if (loaded.optics) loaded.optics->set_visible(loaded.persisted_visible);
+            if (loaded.mechanics && loaded.actor_type != "ui_image") loaded.mechanics->set_body_type(preserved_body_type);
+            if (scene->actors[actor_index].engine_actor)
+                scene->engine_scene->remove_actor(scene->actors[actor_index].engine_actor.get());
+            scene->actors.erase(scene->actors.begin() + static_cast<std::ptrdiff_t>(actor_index));
+            for (auto it = scene->load_diagnostics.begin(); it != scene->load_diagnostics.end();) {
+                const bool resolved_main_resource =
+                    it->value("actor_guid", std::string{}) == patch.actor_guid &&
+                    it->value("code", std::string{}) != "ATTACHMENT_RESOURCE_NOT_FOUND";
+                if (resolved_main_resource) it = scene->load_diagnostics.erase(it);
+                else ++it;
+            }
+            auto* rebound = find_native_actor_by_guid(*scene, patch.actor_guid);
+            if (!rebound) {
+                reply.error_code = "NATIVE_FAILURE";
+                reply.error_message = "Rebound actor could not be resolved";
+                return reply;
+            }
+            ++scene->tree_revision;
+            value.ok = true;
+            value.status = "loaded";
+            SceneRequest read{SceneMethod::ReadActorProperties};
+            read.archive_session = request.archive_session;
+            read.read_scene = scene->route;
+            read.read_actor = rebound->name;
+            const auto actor_reply = execute_scene_operation(read);
+            if (!actor_reply.error_code.empty()) {
+                reply.error_code = actor_reply.error_code;
+                reply.error_message = actor_reply.error_message;
+                return reply;
+            }
+            value.actor = actor_reply.actor_read;
+        } catch (const std::exception& error) {
+            return diagnostic("MODEL_DECODE_FAILED", error.what(), resolved_path);
+        }
+        return reply;
+    }
+    if (request.method == SceneMethod::ReadModelNodes || request.method == SceneMethod::SetModelNodeState) return apply_native_model_node(request);
     SceneReply reply;
     auto& state = native_editor_state();
     if (request.method == SceneMethod::ReadActive) {
@@ -4921,6 +5420,65 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         if (const auto* scene = state.scene.get()) {
             reply.active = {scene->archive_session, scene->route, scene->name,
                 state.project_path, scene->read_only, scene->tree_revision, scene->selection};
+        }
+        return reply;
+    }
+    if (request.method == SceneMethod::Save) {
+        if (!request.archive_session || request.archive_session->empty() || request.read_scene.empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Scene save requires the observed archive and scene";
+            return reply;
+        }
+        auto* scene = state.scene.get();
+        if (!scene || *request.archive_session != scene->archive_session ||
+            !native_scene_request_matches(*scene, request.read_scene)) {
+            reply.error_code = "PROJECT_CONTEXT_CHANGED";
+            reply.error_message = "Scene save belongs to an inactive scene";
+            return reply;
+        }
+        auto& saved = reply.save;
+        saved.archive_session = scene->archive_session;
+        saved.scene = scene->route;
+        if (scene->read_only) {
+            saved.status = "read_only";
+            saved.message = "External geometry scenes cannot be saved";
+            return reply;
+        }
+        const auto result = save_editor_scene(*scene, request.save_actors_only);
+        if (!result.success || !result.data.value("ok", false)) {
+            reply.error_code = result.success ? "SAVE_FAILED" : "SAVE_FAILED";
+            reply.error_message = result.error.empty()
+                ? result.data.value("message", std::string{"Scene save failed"})
+                : result.error;
+            return reply;
+        }
+        saved.status = "saved";
+        saved.filepath = result.data.value("filepath", std::string{});
+        saved.unresolved_actor_count = result.data.value("unresolved_actor_count", std::size_t{0});
+        return reply;
+    }
+    if (request.method == SceneMethod::SelectModelFile) {
+        if (!request.archive_session || request.archive_session->empty() || request.read_scene.empty() || request.file_type.empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Model file selection requires scene scope and file type";
+            return reply;
+        }
+        auto* scene = state.scene.get();
+        if (!scene || *request.archive_session != scene->archive_session ||
+            !native_scene_request_matches(*scene, request.read_scene)) {
+            reply.error_code = "PROJECT_CONTEXT_CHANGED";
+            reply.error_message = "Model file selection belongs to an inactive scene";
+            return reply;
+        }
+        if (!resource_dialog_filters(request.file_type)) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Unsupported resource type: " + request.file_type;
+            return reply;
+        }
+        const auto selected = select_resource_file_native(scene->project_root, request.file_type);
+        if (selected) {
+            reply.selected_file = route_for_project_storage(
+                scene->project_root, path_to_utf8(absolute_normalized_path(*selected)));
         }
         return reply;
     }
@@ -4945,6 +5503,46 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             const auto extension = actor_file_extension(actor.route);
             reply.actor_index.actors.push_back({actor.actor_guid, actor.name,
                 extension.empty() ? actor.actor_type : extension});
+        }
+        return reply;
+    }
+    if (request.method == SceneMethod::ReadActorContext) {
+        if (!request.archive_session || request.archive_session->empty() || trim_ascii(request.read_scene).empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "Actor context requires the observed archive and scene";
+            return reply;
+        }
+        const auto* scene = state.scene.get();
+        if (!scene || *request.archive_session != scene->archive_session ||
+            !native_scene_request_matches(*scene, request.read_scene)) {
+            reply.error_code = "PROJECT_CONTEXT_CHANGED";
+            reply.error_message = "Actor context belongs to an inactive scene";
+            return reply;
+        }
+        auto& result = reply.actor_context;
+        result.archive_session = scene->archive_session;
+        result.scene = scene->route;
+        result.tree_revision = scene->tree_revision;
+        result.actors.reserve(scene->actors.size());
+        for (const auto& actor : scene->actors) {
+            ActorContextRow row;
+            row.actor_guid = actor.actor_guid;
+            row.name = actor.name;
+            const auto extension = actor_file_extension(actor.route);
+            row.type = extension.empty() ? actor.actor_type : extension;
+            row.semantic_role = actor.semantic_role.empty() ? actor.entity_type : actor.semantic_role;
+            row.position = actor.geometry ? actor.geometry->get_position() : actor.position;
+            row.rotation = actor.geometry ? actor.geometry->get_rotation() : actor.rotation;
+            row.scale = actor.geometry ? actor.geometry->get_scale() : actor.scale;
+            const auto world_aabb = native_actor_world_aabb(actor);
+            if (world_aabb) {
+                row.size = {(*world_aabb)[3] - (*world_aabb)[0], (*world_aabb)[4] - (*world_aabb)[1],
+                    (*world_aabb)[5] - (*world_aabb)[2]};
+                row.has_size = true;
+            }
+            const auto body_type = actor.mechanics ? body_type_name(*actor.mechanics) : actor.persisted_body_type;
+            row.physics_enabled = body_type != "phantom";
+            result.actors.push_back(std::move(row));
         }
         return reply;
     }
@@ -5013,6 +5611,89 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         value.position = actor->geometry ? actor->geometry->get_position() : actor->position;
         value.rotation = actor->geometry ? actor->geometry->get_rotation() : actor->rotation;
         value.scale = actor->geometry ? actor->geometry->get_scale() : actor->scale;
+        return reply;
+    }
+    if (request.method == SceneMethod::ReadActorSkeleton ||
+        request.method == SceneMethod::ReadActorIkChains ||
+        request.method == SceneMethod::SetActorIkChains) {
+        if (!request.archive_session || request.archive_session->empty() ||
+            trim_ascii(request.ik.scene.empty() ? request.read_scene : request.ik.scene).empty() ||
+            trim_ascii(request.ik.actor.empty() ? request.read_actor : request.ik.actor).empty()) {
+            reply.error_code = "INVALID_ARGUMENT";
+            reply.error_message = "IK operations require the observed archive, scene and Actor";
+            return reply;
+        }
+        const std::string& scene_name = request.ik.scene.empty() ? request.read_scene : request.ik.scene;
+        const std::string& actor_name = request.ik.actor.empty() ? request.read_actor : request.ik.actor;
+        auto* scene = state.scene.get();
+        if (!scene || *request.archive_session != scene->archive_session ||
+            !native_scene_request_matches(*scene, scene_name)) {
+            reply.error_code = "PROJECT_CONTEXT_CHANGED";
+            reply.error_message = "IK operation belongs to an inactive scene";
+            return reply;
+        }
+        auto* actor = find_native_actor(*scene, actor_name);
+        if (!actor || !actor->geometry) {
+            reply.error_code = "ACTOR_NOT_FOUND";
+            reply.error_message = "Actor has no geometry: " + actor_name;
+            return reply;
+        }
+        const auto model_id = actor->geometry->get_model_id();
+        if (model_id == 0) {
+            reply.error_code = "ACTOR_NOT_READY";
+            reply.error_message = "IK model import is not ready: " + actor_name;
+            return reply;
+        }
+        auto resource = read_resource_for_ui<Corona::Resource::Scene>(model_id);
+        if (!resource.valid()) {
+            reply.error_code = "ACTOR_NOT_READY";
+            reply.error_message = "IK model resource is unavailable";
+            return reply;
+        }
+        const auto* skeleton = resource->data.skeleton ? &*resource->data.skeleton : nullptr;
+        if (request.method == SceneMethod::ReadActorSkeleton) {
+            auto& value = reply.actor_skeleton;
+            value.archive_session = scene->archive_session; value.scene = scene->route; value.actor = actor->name;
+            value.is_skinned = skeleton != nullptr;
+            if (skeleton) {
+                value.node_count = static_cast<int>(skeleton->nodes.size());
+                value.bone_count = skeleton->bone_count;
+                value.nodes.reserve(skeleton->nodes.size());
+                for (std::size_t index = 0; index < skeleton->nodes.size(); ++index) {
+                    const auto& node = skeleton->nodes[index];
+                    value.nodes.push_back({node.name, static_cast<int>(index), node.parent, node.children.empty()});
+                    if (node.children.empty()) value.leaves.push_back(node.name);
+                }
+            }
+            return reply;
+        }
+        if (request.method == SceneMethod::ReadActorIkChains) {
+            auto geometry = Corona::SharedDataHub::instance().geometry_storage().try_acquire_read(actor->geometry->get_handle());
+            if (!geometry) { reply.error_code = "ACTOR_NOT_READY"; reply.error_message = "IK geometry storage is unavailable"; return reply; }
+            auto& value = reply.actor_ik;
+            value.archive_session = scene->archive_session; value.scene = scene->route; value.actor = actor->name;
+            value.ready = true; value.is_skinned = skeleton != nullptr; value.revision = geometry->ik_chains_revision;
+            value.chains = typed_ik_chains(geometry->ik_chains, skeleton, true);
+            return reply;
+        }
+        if (!skeleton) { reply.error_code = "ACTOR_NOT_READY"; reply.error_message = "Actor model has no skeleton"; return reply; }
+        nlohmann::json encoded = nlohmann::json::array();
+        for (const auto& chain : request.ik.chains) encoded.push_back(typed_ik_chain_json(chain));
+        std::vector<Corona::Resource::IkChain> chains;
+        try { chains = IkChainConfig::parse(encoded, skeleton); }
+        catch (const std::exception& error) { reply.error_code = "INVALID_ARGUMENT"; reply.error_message = error.what(); return reply; }
+        auto writable = Corona::SharedDataHub::instance().geometry_storage().try_acquire_write(actor->geometry->get_handle());
+        if (!writable) { reply.error_code = "ACTOR_NOT_READY"; reply.error_message = "IK geometry storage is unavailable"; return reply; }
+        if (request.ik.expected_revision && *request.ik.expected_revision != writable->ik_chains_revision) {
+            reply.error_code = "CONFLICT"; reply.error_message = "IK configuration changed; reload before applying"; return reply;
+        }
+        IkChainConfig::preserve_runtime(chains, writable->ik_chains);
+        auto saved_config = IkChainConfig::serialize(chains, skeleton);
+        writable->ik_chains = std::move(chains); ++writable->ik_chains_revision;
+        actor->persisted_ik_chains = std::move(saved_config);
+        actor->actor_version = std::max(actor->actor_version + 1, 1); ++scene->tree_revision;
+        reply.actor_ik = {scene->archive_session, scene->route, actor->name, true, true,
+                          writable->ik_chains_revision, typed_ik_chains(writable->ik_chains, skeleton, true)};
         return reply;
     }
     if (request.method == SceneMethod::ReadTransforms) {
@@ -6294,19 +6975,6 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 {"actor", actor_name},
             });
         }},
-        {"select_model_file", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = scene_for_request_route(request);
-            const auto file_type = arg_string(request.args, 2, "model");
-            if (!resource_dialog_filters(file_type)) {
-                throw std::runtime_error("Unsupported resource type: " + file_type);
-            }
-            const auto selected = select_resource_file_native(scene->project_root, file_type);
-            if (!selected) {
-                return native_success(std::string{});
-            }
-            return native_success(route_for_project_storage(
-                scene->project_root, path_to_utf8(absolute_normalized_path(*selected))));
-        }},
         {"set_actor_state", [](const NativeRequest& request, const NativeContext& context) {
             return set_native_actor_properties(request, context, ActorPropertyAdapter::State);
         }},
@@ -6557,106 +7225,30 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
         }},
         {"rebind_actor_resource", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = scene_for_request_route(request);
-            if (!matches_archive_session(*scene, arg_object(request.args, 3)))
-                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-            const auto actor_guid = arg_string(request.args, 1);
-            auto source_path = path_from_utf8(arg_string(request.args, 2));
-            if (source_path.is_relative()) source_path = scene->project_root / source_path;
-            if (!std::filesystem::is_regular_file(source_path)) {
-                return native_success({
-                    {"ok", false}, {"status", "resource_error"},
-                    {"diagnostics", nlohmann::json::array({{
-                        {"code", "RESOURCE_NOT_FOUND"}, {"recoverable", true},
-                        {"actor_guid", actor_guid}, {"path", path_to_utf8(source_path)},
-                        {"message", "Replacement resource does not exist"},
-                    }})},
-                });
+            const auto scope = arg_object(request.args, 3);
+            if (!matches_archive_session(*scene, scope)) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            SceneRequest typed{SceneMethod::RebindActorResource};
+            typed.archive_session = scope.value("archive_session", std::string{});
+            typed.actor_resource_rebind = {scene->route, arg_string(request.args, 1), arg_string(request.args, 2)};
+            const auto reply = execute_scene_operation(typed);
+            if (!reply.error_code.empty()) {
+                const int status = reply.error_code == "PROJECT_CONTEXT_CHANGED" ? 409
+                    : reply.error_code == "ACTOR_NOT_FOUND" ? 404
+                    : reply.error_code == "READ_ONLY" ? 2 : 400;
+                return native_failure(reply.error_message, status);
             }
-            auto* actor = find_native_actor_by_guid(*scene, actor_guid);
-            if (!actor) return native_failure("Actor GUID not found: " + actor_guid, 404);
-            if (!snapshot_actor_resource_supported(*actor, source_path)) {
-                return native_success({
-                    {"ok", false}, {"status", "resource_error"},
-                    {"diagnostics", nlohmann::json::array({{
-                        {"code", "UNSUPPORTED_RESOURCE_TYPE"}, {"recoverable", true},
-                        {"actor_guid", actor_guid}, {"path", path_to_utf8(source_path)},
-                        {"message", "Replacement resource type is unsupported"},
-                    }})},
-                });
+            const auto& result = reply.actor_resource_rebind;
+            if (!result.ok) {
+                auto diagnostics = nlohmann::json::array();
+                for (const auto& diagnostic : result.diagnostics) {
+                    diagnostics.push_back({{"code", diagnostic.code}, {"recoverable", diagnostic.recoverable},
+                        {"actor_guid", result.actor_guid}, {"path", diagnostic.path}, {"message", diagnostic.message}});
+                }
+                return native_success({{"ok", false}, {"status", result.status}, {"diagnostics", std::move(diagnostics)}});
             }
-
-            std::string route;
-            auto resolved_path = std::filesystem::weakly_canonical(source_path);
-            if (scene->read_only) return native_failure("External scenes are read-only", 2);
-            {
-                std::error_code ec;
-                auto relative = std::filesystem::relative(resolved_path, scene->project_root, ec);
-                if (ec || relative.empty() || relative.generic_string().rfind("..", 0) == 0) {
-                    SceneAssetStore store(scene->project_root);
-                    auto imported = store.import_model(resolved_path);
-                    if (!imported.ok()) {
-                        return native_success({
-                            {"ok", false}, {"status", "resource_error"},
-                            {"diagnostics", nlohmann::json::array({{
-                                {"code", "RESOURCE_IMPORT_FAILED"}, {"recoverable", true},
-                                {"actor_guid", actor_guid}, {"path", path_to_utf8(resolved_path)},
-                                {"message", "Replacement resource could not be imported"},
-                            }})},
-                        });
-                    }
-                    route = imported.main_route;
-                    resolved_path = resolve_project_path(scene->project_root, route);
-                } else {
-                    route = path_to_utf8(relative);
-                }
-            }
-
-            const auto actor_index = static_cast<std::size_t>(actor - scene->actors.data());
-            auto replacement_data = actor->persisted_snapshot;
-            replacement_data["route"] = route;
-            replacement_data["asset_path"] = path_to_utf8(resolved_path);
-            replacement_data["transform"] = {
-                {"position", actor->geometry ? actor->geometry->get_position() : actor->position},
-                {"rotation", actor->geometry ? actor->geometry->get_rotation() : actor->rotation},
-                {"scale", actor->geometry ? actor->geometry->get_scale() : actor->scale},
-            };
-            try {
-                auto replacement = native_actor_from_snapshot(replacement_data);
-                auto& loaded = add_native_actor_to_scene(*scene, std::move(replacement), resolved_path);
-                loaded.load_status = ActorLoadStatus::Loaded;
-                loaded.load_error_code.clear();
-                loaded.load_error_message.clear();
-                if (loaded.optics) loaded.optics->set_visible(loaded.persisted_visible);
-                if (loaded.mechanics && loaded.actor_type != "ui_image") {
-                    loaded.mechanics->set_body_type(loaded.persisted_body_type);
-                }
-                if (scene->actors[actor_index].engine_actor) {
-                    scene->engine_scene->remove_actor(scene->actors[actor_index].engine_actor.get());
-                }
-                scene->actors.erase(scene->actors.begin() + static_cast<std::ptrdiff_t>(actor_index));
-                nlohmann::json retained_diagnostics = nlohmann::json::array();
-                for (const auto& diagnostic : scene->load_diagnostics) {
-                    const bool resolved_main_resource =
-                        diagnostic.value("actor_guid", std::string{}) == actor_guid &&
-                        diagnostic.value("code", std::string{}) != "ATTACHMENT_RESOURCE_NOT_FOUND";
-                    if (!resolved_main_resource) retained_diagnostics.push_back(diagnostic);
-                }
-                scene->load_diagnostics = std::move(retained_diagnostics);
-                auto* rebound = find_native_actor_by_guid(*scene, actor_guid);
-                return native_success({
-                    {"ok", true}, {"status", "loaded"},
-                    {"actor", rebound ? actor_to_json(*scene, *rebound) : nlohmann::json::object()},
-                });
-            } catch (const std::exception& error) {
-                return native_success({
-                    {"ok", false}, {"status", "resource_error"},
-                    {"diagnostics", nlohmann::json::array({{
-                        {"code", "MODEL_DECODE_FAILED"}, {"recoverable", true},
-                        {"actor_guid", actor_guid}, {"path", path_to_utf8(resolved_path)},
-                        {"message", error.what()},
-                    }})},
-                });
-            }
+            auto* rebound = find_native_actor_by_guid(*scene, result.actor_guid);
+            return native_success({{"ok", true}, {"status", result.status},
+                {"actor", rebound ? actor_to_json(*scene, *rebound) : nlohmann::json::object()}});
         }},
         {"sun_direction", [](const NativeRequest& request, const NativeContext&) {
             SceneRequest write{SceneMethod::SetEnvironment};
@@ -7180,16 +7772,6 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             auto result = native_environment_result(read);
             if (!result.success) return result;
             return native_success(result.data.at("physics"));
-        }},
-        {"open_actor", [](const NativeRequest& request, const NativeContext& context) {
-            auto* scene = ensure_native_editor_scene();
-            const auto actor_name = arg_string(request.args, 1);
-            auto* actor = find_native_actor(*scene, actor_name);
-            if (!actor) {
-                return native_failure("Actor not found: " + actor_name, 2);
-            }
-            ++scene->tree_revision;
-            return native_success({{"status", "success"}, {"actor", actor_to_json(*scene, *actor)}});
         }},
         {"select_actor", [](const NativeRequest& request, const NativeContext&) {
             const auto scene_name = arg_string(request.args, 0);

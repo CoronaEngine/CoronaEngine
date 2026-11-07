@@ -23,6 +23,7 @@ namespace Corona::Ui::Cef {
     item["gpu_build_state"] = row.gpu_build_state;
     item["model_node_count"] = row.model_node_count;
     item["model_node_root_count"] = row.model_node_root_count;
+    item["actor_version"] = row.actor_version;
     item["load_error"] = row.has_load_error
                              ? nlohmann::json({{"code", row.load_error_code},
                                                {"message", row.load_error_message},

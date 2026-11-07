@@ -25,6 +25,7 @@ struct SceneTreeActorRow {
     bool has_load_error{false};
     std::size_t model_node_count{0};
     std::size_t model_node_root_count{0};
+    int actor_version{1};
 };
 
 }  // namespace Corona::Ui::Cef

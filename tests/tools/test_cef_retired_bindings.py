@@ -19,7 +19,7 @@ def test_tree_read_retires_manifest_and_shares_owned_rows():
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
     declaration = next(line for line in manifest.splitlines() if 'SceneTools, list_scene_tree,' in line)
     assert 'WRAPPED_CALLERS' in declaration and '"", "scene_tools.list_scene_tree"' in declaration
-    assert 'caller_mask(EditorApiCaller::Cef)' not in declaration
+    assert 'caller_mask(EditorApiCaller::PythonScript)' in declaration
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'listSceneTree:' not in facade
     assert 'window.corona.scene.readTree(sceneName, scope)' in facade
@@ -38,6 +38,47 @@ def test_archive_read_is_not_exposed_to_web_without_a_production_consumer():
     assert 'readArchive:' not in facade
     native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
     assert '{"read_archive_scene", [](const NativeRequest& request, const NativeContext&) {' in native
+
+
+def test_unused_animation_and_reload_routes_are_not_exposed_to_web():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    for name in ['set_actor_animation', 'pause_actor_animation', 'resume_actor_animation', 'reload_scene']:
+        declaration = next(line for line in manifest.splitlines() if f'SceneTools, {name},' in line)
+        assert 'WRAPPED_CALLERS' in declaration
+        assert 'animation_callers() & ~caller_mask(EditorApiCaller::Cef)' in declaration
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    for name in ['setActorAnimation:', 'pauseActorAnimation:', 'resumeActorAnimation:', 'reloadScene:']:
+        assert name not in facade
+
+
+def test_unused_render_read_routes_are_not_exposed_to_web():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    for name in ['get_output_mode', 'get_vision_render_mode', 'get_vision_denoise',
+                 'get_vision_accumulation', 'get_vision_stable_planes']:
+        declaration = next(line for line in manifest.splitlines() if f'SceneTools, {name},' in line)
+        assert 'WRAPPED_CALLERS' in declaration
+        assert 'animation_callers() & ~caller_mask(EditorApiCaller::Cef)' in declaration
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    for name in ['getOutputMode:', 'getVisionRenderMode:', 'getVisionDenoise:',
+                 'getVisionAccumulation:', 'getVisionStablePlanes:']:
+        assert name not in facade
+
+
+def test_vision_availability_uses_typed_scene_binding():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    declaration = next(line for line in manifest.splitlines()
+                       if 'SceneTools, is_vision_available,' in line)
+    assert 'WRAPPED_CALLERS' in declaration
+    assert 'caller_mask(EditorApiCaller::PythonScript)' in declaration
+    assert '"sceneTools.isVisionAvailable"' not in declaration
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert 'isVisionAvailable:' not in facade.split('sceneTools:', 1)[1].split('\n  },', 1)[0]
+    assert 'isVisionAvailable: () => window.corona.scene.isVisionAvailable()' in facade
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
+    assert 'SceneMethod::ReadVisionAvailability' in binding
 
 
 def test_actor_property_read_retires_duplicate_web_routes():
@@ -61,11 +102,136 @@ def test_camera_window_toggles_are_not_cef_manifest_routes():
         assert '"", "scene_tools.' in declaration
 
 
+def test_camera_rename_and_delete_use_scoped_scene_v8_only_for_web():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    for name in ['delete_camera', 'rename_camera_view']:
+        declaration = next(line for line in manifest.splitlines() if f'SceneTools, {name},' in line)
+        assert 'WRAPPED_CALLERS' in declaration
+        assert 'caller_mask(EditorApiCaller::PythonScript)' in declaration
+        assert 'caller_mask(EditorApiCaller::Cef)' not in declaration
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
+    for name in ['renameCamera', 'deleteCamera']:
+        assert f'CreateFunction("{name}"' in binding
+    assert 'SceneMethod::RenameCamera' in binding
+    assert 'SceneMethod::DeleteCamera' in binding
+
+
 def test_camera_v8_properties_cannot_write_window_lifecycle():
     root = Path(__file__).resolve().parents[2]
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
     parser = binding.split('bool read_camera_properties(')[1].split('return vector(')[0]
     assert '"view_open"' not in parser
+
+
+def test_actor_rename_uses_scoped_scene_v8_only_for_web():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    declaration = next(line for line in manifest.splitlines() if 'SceneTools, rename_actor,' in line)
+    assert 'WRAPPED_CALLERS' in declaration
+    assert 'animation_callers() & ~caller_mask(EditorApiCaller::Cef)' in declaration
+    assert '"", "scene_tools.rename_actor"' in declaration
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert 'call_manifest_editor_api(\'sceneTools.renameActor\'' not in facade
+    assert 'renameActor: (sceneName, actor, name, scope) =>' in facade
+    assert 'window.corona.scene.renameActor(sceneName, actor, name, scope)' in facade
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
+    assert 'new NativeHandler(endpoint, SceneMethod::RenameActor)' in binding
+    assert 'actor_rename_value(reply.actor_rename)' in binding
+
+
+def test_actor_delete_uses_scoped_scene_v8_and_retires_manifest_for_web():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    declaration = next(line for line in manifest.splitlines() if 'SceneTools, remove_actor,' in line)
+    assert 'WRAPPED_CALLERS' in declaration
+    assert 'caller_mask(EditorApiCaller::Cef)' in declaration
+    assert '"", "scene_tools.remove_actor"' in declaration
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert 'removeActor:' not in facade
+    assert 'window.corona.scene.deleteActor(sceneName, actor, scope)' in facade
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
+    assert 'new NativeHandler(endpoint, SceneMethod::DeleteActor)' in binding
+    assert 'actor_delete_value(reply.actor_delete)' in binding
+    native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
+    deletion = native.split('if (request.method == SceneMethod::DeleteActor) {', 1)[1].split(
+        'if (request.method == SceneMethod::ReadModelNodes', 1)[0]
+    assert 'scene->read_only' in deletion
+    assert 'value.actor_guid == patch.actor' in deletion
+    assert 'erase_native_editor_actor(*scene, actor)' in deletion
+    assert 'selection_cleared' in native
+
+
+def test_actor_resource_rebinding_uses_scoped_scene_v8_and_retires_web_manifest():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    declaration = next(line for line in manifest.splitlines()
+                       if 'SceneTools, rebind_actor_resource,' in line)
+    assert 'WRAPPED_CALLERS' in declaration
+    assert '"", "scene_tools.rebind_actor_resource"' in declaration
+    assert '~caller_mask(EditorApiCaller::Cef)' in declaration
+
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert 'rebindActorResource:' not in facade.split('sceneTools:', 1)[1].split('\n  },', 1)[0]
+    assert 'window.corona.scene.rebindActorResource(sceneName, actorGuid, path, scope)' in facade
+
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
+    assert 'SceneMethod::RebindActorResource' in binding
+    assert 'actor_resource_rebind_value(reply.actor_resource_rebind)' in binding
+
+    native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
+    operation = native.split('if (request.method == SceneMethod::RebindActorResource) {', 1)[1].split(
+        'if (request.method == SceneMethod::FocusActor)', 1)[0]
+    assert 'scene->read_only' in operation
+    assert 'patch.actor_guid' in operation and 'patch.path' in operation
+    assert 'replacement_data["actor_guid"] = patch.actor_guid' in operation
+    assert 'replacement_data["name"] = actor->name' in operation
+    assert 'replacement_data["transform"] = {' in operation
+    assert 'loaded.geometry->set_position(preserved_position)' in operation
+    assert 'loaded.mechanics->set_body_type(preserved_body_type)' in operation
+    assert 'SceneMethod::ReadActorProperties' in operation
+
+
+def test_scene_save_has_one_scoped_v8_entry_and_retires_duplicate_web_facades():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    for name in ['save_actor', 'scene_save']:
+        declaration = next(line for line in manifest.splitlines() if f', {name},' in line)
+        assert 'WRAPPED' in declaration
+        assert 'caller_mask(EditorApiCaller::Cef)' not in declaration
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert 'save: (sceneName, scope) => window.corona.scene.save(sceneName, scope)' in facade
+    assert 'saveActor:' not in facade
+    assert 'sceneSave:' not in facade
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
+    assert 'SceneMethod::Save' in binding
+    assert 'CreateFunction("save"' in binding
+
+
+def test_open_actor_duplicate_web_facade_is_retired():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    assert 'sceneTools.openActor' not in manifest
+    native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
+    assert '"open_actor"' not in native
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert 'openActor:' not in facade
+    scene_bar = (root / 'CoronaEditor/editor/Frontend/src/views/sidebar/SceneBar.vue').read_text(encoding='utf-8-sig')
+    assert 'editorApi.sceneTools.openActor' not in scene_bar
+    assert 'ControlObject' not in scene_bar
+
+
+def test_model_file_selection_uses_scoped_v8_and_retires_manifest_route():
+    root = Path(__file__).resolve().parents[2]
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    assert 'sceneTools.selectModelFile' not in manifest
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
+    assert 'SceneMethod::SelectModelFile' in binding
+    assert 'CreateFunction("selectModelFile"' in binding
+    facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert "window.corona.scene.selectModelFile(sceneName" in facade
+    assert 'selectModelFile:' not in facade.split('sceneTools:', 1)[1]
+    assert "'SceneTools.select_model_file'" not in facade
 
 
 def test_script_input_retires_all_legacy_web_routes_and_duplicate_native_type():
