@@ -74,13 +74,42 @@ class FakeSystem : public Corona::Kernel::ISystem {
     std::vector<std::string>* journal_{nullptr};
 };
 
-Corona::Kernel::SystemsThreadNode node_of(FakeSystem& system) {
+Corona::Kernel::SystemsThreadNode node_of(Corona::Kernel::ISystem& system) {
     Corona::Kernel::SystemsThreadNode node;
     node.system = &system;
     node.period_ticks = 1;
     node.phase = 0;
     return node;
 }
+
+/// 线程模式用的最小系统：只数 update 次数（原子量，供跨线程断言）
+class CountingSystem : public Corona::Kernel::ISystem {
+   public:
+    explicit CountingSystem(std::atomic<int>& updates) : updates_(updates) {}
+
+    std::string_view get_name() const override { return "Counting"; }
+    int get_priority() const override { return 0; }
+    bool initialize(Corona::Kernel::ISystemContext*) override { return true; }
+    void shutdown() override {}
+    void update() override { updates_.fetch_add(1, std::memory_order_relaxed); }
+
+    int get_target_fps() const override { return 200; }
+    Corona::Kernel::SystemState get_state() const override {
+        return Corona::Kernel::SystemState::running;
+    }
+    void start() override {}
+    void pause() override {}
+    void resume() override {}
+    void stop() override {}
+    float get_actual_fps() const override { return 0.0f; }
+    float get_average_frame_time() const override { return 0.0f; }
+    float get_max_frame_time() const override { return 0.0f; }
+    std::uint64_t get_total_frames() const override { return 0; }
+    void reset_stats() override {}
+
+   private:
+    std::atomic<int>& updates_;
+};
 
 void test_hook_runs_before_all_nodes() {
     std::vector<std::string> journal;
@@ -158,6 +187,28 @@ void test_boundary_time_is_counted() {
     CHECK(report.total_ms >= thread.last_boundary_ms());
 }
 
+void test_hook_runs_in_thread_mode() {
+    std::atomic<int> node_updates{0};
+    std::atomic<int> hook_calls{0};
+
+    CountingSystem system{node_updates};
+    Corona::Kernel::SystemsThread thread{{.nodes = {node_of(system)}, .tick_rate = 200}};
+    CHECK(thread.prepare());
+    thread.set_tick_boundary_hook([&hook_calls]() { hook_calls.fetch_add(1); });
+
+    CHECK(thread.start());
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    thread.stop();
+
+    const int nodes = node_updates.load();
+    const int hooks = hook_calls.load();
+    CHECK(hooks > 0);
+    // 每个 tick 恰好一次边界钩子 + 一次节点：任一多跑或漏跑都会不相等
+    CHECK(hooks == nodes);
+    CHECK(thread.last_boundary_ms() >= 0.0);
+    CHECK(!thread.is_running());
+}
+
 void test_no_hook_keeps_behavior() {
     std::vector<std::string> journal;
     FakeSystem system{"A", &journal};
@@ -180,6 +231,7 @@ int main() {
     test_hook_exception_aborts_tick_only();
     test_boundary_time_is_counted();
     test_no_hook_keeps_behavior();
+    test_hook_runs_in_thread_mode();
 
     if (g_failures == 0) {
         std::printf("OK: %d checks passed\n", g_checks);
