@@ -92,6 +92,7 @@ try {
   console.log('CEF smoke: waiting for main document');
   const mainTarget = await waitFor(async () => (await targets()).find(target => target.type === 'page' && target.url.includes('index.html')));
   const main = await connect(mainTarget);
+  const fixtureApi = (api, args) => main.evaluate(`window.__fixtureApi(${JSON.stringify({ api, args })})`);
   await waitFor(() => main.evaluate('typeof window.corona?.window?.getCurrent === "function"'));
   assert.equal(await main.evaluate('typeof corona.viewport?.pick'), 'function');
   assert.equal(await main.evaluate('typeof corona.input?.dispatch'), 'function');
@@ -238,63 +239,6 @@ try {
   assert.equal(await docs[1].client.evaluate('window.__graphCalls'), savedCalls, 'success removes the retired graph closure');
   evidence[0].graphSaveCoordination = 'real CEF documents with JSON disabled: requestAll typed arrays, delayed known participant discovery, archive isolation, failed unmount retained, explicit retry and removal';
   if (testNativeBindings) {
-    const fixtureApi = (api, args) => main.evaluate(`window.__fixtureApi(${JSON.stringify({ api, args })})`);
-    stage = 'named native network session and discovery operations';
-    for (const method of ['startSession', 'stopSession', 'getSessionInfo', 'getDiscoveredPeers',
-      'clearDiscoveredPeers', 'searchLan', 'connectToPeer', 'setProjectRoot']) {
-      assert.equal(await main.evaluate(`typeof corona.network?.${method}`), 'function', method);
-    }
-    for (const [method, args] of [
-      ['startSession', []], ['startSession', ['Name', -1]],
-      ['startSession', ['Name', 9007199254740992]], ['startSession', ['Name', 0, 65536]],
-      ['startSession', ['Name', 0, 1.5]], ['startSession', ['Name', 0, 0, 'other']],
-      ['startSession', ['Name', 0, 0, 'host', true]],
-      ['connectToPeer', ['', 27960, 'Peer']], ['connectToPeer', ['127.0.0.1', 0, 'Peer']],
-      ['connectToPeer', ['127.0.0.1', 27960]], ['setProjectRoot', [1]],
-      ['setProjectRoot', ['invalid\0root']], ['stopSession', [true]],
-      ['getSessionInfo', [{}]], ['getDiscoveredPeers', [true]],
-      ['clearDiscoveredPeers', [1]], ['searchLan', ['other']],
-    ]) {
-      assert.equal(await main.evaluate(`corona.network.${method}(...${JSON.stringify(args)}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
-    }
-    assert.deepEqual(await main.evaluate('corona.network.stopSession()'), { ok: true });
-    assert.equal((await main.evaluate('corona.network.getSessionInfo()')).active, false);
-    assert.equal((await main.evaluate('corona.network.connectToPeer("127.0.0.1",27960,"Smoke")')).ok, false);
-    assert.deepEqual(await main.evaluate('corona.network.clearDiscoveredPeers()'), { ok: true });
-    assert.deepEqual(await main.evaluate('corona.network.getDiscoveredPeers()'), { ok: true, peers: [] });
-    const discovery = await main.evaluate('corona.network.searchLan()');
-    assert.equal(discovery.ok, true);
-    assert.equal(typeof discovery.peers, 'number');
-    assert.equal((await main.evaluate('corona.network.getSessionInfo()')).active, false);
-    assert.deepEqual(await main.evaluate('corona.network.stopSession()'), { ok: true });
-    for (const role of ['host', 'client']) {
-      const session = await main.evaluate(`corona.network.startSession('Typed 网络 smoke',0,0,${JSON.stringify(role)})`);
-      assert.equal(session.ok, true);
-      assert.equal(session.active, true);
-      assert.equal(session.role, role);
-      assert.equal(typeof session.local_ip, 'string');
-      assert.equal(typeof session.listen_port, 'number');
-      assert.ok(Array.isArray(session.discovered_peers));
-      assert.equal(Object.hasOwn(session, 'data'), false);
-      assert.equal(typeof session.seeded_actor_count, 'number');
-      const unchanged = await main.evaluate(`corona.network.startSession('Again',0,0,${JSON.stringify(role)})`);
-      assert.equal(unchanged.listen_port, session.listen_port);
-      assert.equal(unchanged.seeded_actor_count, 0);
-      assert.deepEqual(await main.evaluate('corona.network.setProjectRoot("")'), { ok: true });
-      assert.deepEqual(await main.evaluate('corona.network.stopSession()'), { ok: true });
-      assert.deepEqual(await main.evaluate('corona.network.stopSession()'), { ok: true });
-    }
-    for (const method of ['start_session', 'stop_session', 'get_session_info', 'get_discovered_peers',
-      'clear_discovered_peers', 'search_lan', 'connect_to_peer', 'set_project_root',
-      'broadcast_actor_create', 'broadcast_actor_delete', 'broadcast_actor_state_update',
-      'broadcast_actor_transform', 'broadcast_intent', 'broadcast_actor_scene_snapshot',
-      'check_preview_collision', 'claim_actor_ownership', 'get_lock_owner', 'get_peer_count',
-      'lock_object', 'unlock_object', 'poll_pending_actor_create', 'poll_pending_actor_delete',
-      'poll_pending_actor_state_update', 'poll_pending_actor_transform', 'poll_pending_scene_snapshot',
-      'poll_pending_scene_snapshot_request', 'register_actor_identity', 'request_actor_scene_snapshot', 'set_sync_paused']) {
-      assert.match(await fixtureApi(`Network.${method}`, []).then(() => 'unexpected retired route', error => error.message), /not allowed|not defined/);
-    }
-    evidence[0].network = 'named V8 direct replies with JSON disabled; strict arguments, inactive connect, discovery, host/client start, active reuse and idempotent stop; legacy CEF routes denied';
     stage = 'native window task burst';
     // Several documents share this queue with input. A frame must drain its
     // existing batch rather than serializing every request behind another frame.
@@ -533,19 +477,113 @@ try {
     assert.deepEqual(await main.evaluate("corona.project.openProject('')"), { ok: false, path: '', status: 'cancelled' });
     assert.match(await fixtureApi('ProjectLauncher.open_project', [cameraWorld])
       .then(() => 'unexpected retired route', error => error.message), /not allowed/);
-    stage = 'LANChat message and roster event compatibility';
+    // Session startup seeds the committed scene, as in the production JoinGame flow.
+    stage = 'named native network session and discovery operations';
+    for (const method of ['startSession', 'stopSession', 'getSessionInfo', 'getDiscoveredPeers',
+      'clearDiscoveredPeers', 'searchLan', 'connectToPeer', 'setProjectRoot']) {
+      assert.equal(await main.evaluate(`typeof corona.network?.${method}`), 'function', method);
+    }
+    for (const [method, args] of [
+      ['startSession', []], ['startSession', ['Name', -1]],
+      ['startSession', ['Name', 9007199254740992]], ['startSession', ['Name', 0, 65536]],
+      ['startSession', ['Name', 0, 1.5]], ['startSession', ['Name', 0, 0, 'other']],
+      ['startSession', ['Name', 0, 0, 'host', true]],
+      ['connectToPeer', ['', 27960, 'Peer']], ['connectToPeer', ['127.0.0.1', 0, 'Peer']],
+      ['connectToPeer', ['127.0.0.1', 27960]], ['setProjectRoot', [1]],
+      ['setProjectRoot', ['invalid\0root']], ['stopSession', [true]],
+      ['getSessionInfo', [{}]], ['getDiscoveredPeers', [true]],
+      ['clearDiscoveredPeers', [1]], ['searchLan', ['other']],
+    ]) {
+      assert.equal(await main.evaluate(`corona.network.${method}(...${JSON.stringify(args)}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    }
+    assert.deepEqual(await main.evaluate('corona.network.stopSession()'), { ok: true });
+    assert.equal((await main.evaluate('corona.network.getSessionInfo()')).active, false);
+    assert.equal((await main.evaluate('corona.network.connectToPeer("127.0.0.1",27960,"Smoke")')).ok, false);
+    assert.deepEqual(await main.evaluate('corona.network.clearDiscoveredPeers()'), { ok: true });
+    assert.deepEqual(await main.evaluate('corona.network.getDiscoveredPeers()'), { ok: true, peers: [] });
+    const discovery = await main.evaluate('corona.network.searchLan()');
+    assert.equal(discovery.ok, true);
+    assert.equal(typeof discovery.peers, 'number');
+    assert.equal((await main.evaluate('corona.network.getSessionInfo()')).active, false);
+    assert.deepEqual(await main.evaluate('corona.network.stopSession()'), { ok: true });
+    for (const role of ['host', 'client']) {
+      const session = await main.evaluate(`corona.network.startSession('Typed 网络 smoke',0,0,${JSON.stringify(role)})`);
+      assert.equal(session.ok, true);
+      assert.equal(session.active, true);
+      assert.equal(session.role, role);
+      assert.equal(typeof session.local_ip, 'string');
+      assert.equal(typeof session.listen_port, 'number');
+      assert.ok(Array.isArray(session.discovered_peers));
+      assert.equal(Object.hasOwn(session, 'data'), false);
+      assert.equal(typeof session.seeded_actor_count, 'number');
+      const unchanged = await main.evaluate(`corona.network.startSession('Again',0,0,${JSON.stringify(role)})`);
+      assert.equal(unchanged.listen_port, session.listen_port);
+      assert.equal(unchanged.seeded_actor_count, 0);
+      assert.deepEqual(await main.evaluate('corona.network.setProjectRoot("")'), { ok: true });
+      assert.deepEqual(await main.evaluate('corona.network.stopSession()'), { ok: true });
+      assert.deepEqual(await main.evaluate('corona.network.stopSession()'), { ok: true });
+    }
+    for (const method of ['start_session', 'stop_session', 'get_session_info', 'get_discovered_peers',
+      'clear_discovered_peers', 'search_lan', 'connect_to_peer', 'set_project_root',
+      'broadcast_actor_create', 'broadcast_actor_delete', 'broadcast_actor_state_update',
+      'broadcast_actor_transform', 'broadcast_intent', 'broadcast_actor_scene_snapshot',
+      'check_preview_collision', 'claim_actor_ownership', 'get_lock_owner', 'get_peer_count',
+      'lock_object', 'unlock_object', 'poll_pending_actor_create', 'poll_pending_actor_delete',
+      'poll_pending_actor_state_update', 'poll_pending_actor_transform', 'poll_pending_scene_snapshot',
+      'poll_pending_scene_snapshot_request', 'register_actor_identity', 'request_actor_scene_snapshot', 'set_sync_paused']) {
+      assert.match(await fixtureApi(`Network.${method}`, []).then(() => 'unexpected retired route', error => error.message), /not allowed|not defined/);
+    }
+    evidence[0].network = 'named V8 direct replies with JSON disabled; strict arguments, inactive connect, discovery, host/client start, active reuse and idempotent stop; legacy CEF routes denied';
+    stage = 'named LANChat methods, strict validation and structured history';
+    const chatCall = (method, ...args) => main.evaluate(`corona.lanChat.${method}(...${JSON.stringify(args)})`);
+    const chatMethods = ['startRoom', 'startLocalRoom', 'stopRoom', 'stopLocalRoom', 'joinRoom',
+      'leaveRoom', 'sendMessage', 'listHistoryRooms', 'loadHistoryRoom', 'getLocalIp', 'addAgent', 'removeAgent'];
+    for (const method of chatMethods) {
+      assert.equal(await main.evaluate(`typeof corona.lanChat?.${method}`), 'function', method);
+    }
+    for (const [method, args] of [
+      ['startRoom', []], ['startRoom', [null]], ['startRoom', [{ port: -1 }]],
+      ['startRoom', [{ port: 65536 }]], ['startRoom', [{ restore_history: 1 }]],
+      ['startRoom', [{ room: 'bad\0room' }]], ['startRoom', [{ password: 'ignored' }]],
+      ['startLocalRoom', [{ port: 0 }]], ['startLocalRoom', [{ mode: 'single' }]],
+      ['joinRoom', [{}]], ['joinRoom', [{ ip: '127.0.0.1', port: 0 }]],
+      ['sendMessage', []], ['sendMessage', [1]], ['sendMessage', ['text', { metadata_json: '{}' }]],
+      ['sendMessage', ['text', { metadata: [] }]], ['sendMessage', ['text', { metadata: null }]],
+      ['addAgent', [{ name: 1 }]], ['addAgent', [{ extra: true }]],
+      ['removeAgent', [{}]], ['loadHistoryRoom', [1]], ['loadHistoryRoom', ['bad\0room']],
+      ...['stopRoom', 'stopLocalRoom', 'leaveRoom', 'listHistoryRooms', 'getLocalIp'].map(method => [method, [true]]),
+    ]) {
+      assert.equal(await main.evaluate(`corona.lanChat.${method}(...${JSON.stringify(args)}).catch(e=>e.code)`), 'INVALID_ARGUMENT', method);
+    }
+    for (const method of ['start_room', 'start_local_room', 'stop_room', 'stop_local_room', 'join_room',
+      'leave_room', 'send_message', 'list_history_rooms', 'load_history_room', 'get_local_ip', 'add_agent', 'remove_agent']) {
+      assert.match(await fixtureApi(`LANChat.${method}`, []).then(() => 'unexpected retired route', error => error.message), /not allowed/);
+    }
+    const localIp = await chatCall('getLocalIp');
+    assert.equal(localIp.ok, true);
+    assert.equal(typeof localIp.ip, 'string');
+    assert.equal(typeof localIp.port, 'number');
+    assert.deepEqual(await chatCall('loadHistoryRoom', ''), { ok: false, room: '', history: [], agents: [], error: 'ROOM_REQUIRED' });
+    stage = 'LANChat message and roster events with named methods';
     await main.evaluate(`corona.network.setProjectRoot(${JSON.stringify(cameraWorld)})`);
     const chatToken = await main.evaluate(`(() => {
       window.__chatEvents = [];
       return corona.editor.on('LANChat.event', event => window.__chatEvents.push(event));
     })()`);
     try {
-      assert.equal((await fixtureApi('LANChat.start_local_room', [{ room: 'cef-owned-events', nickname: 'Host' }])).data.ok, true);
+      const room = await chatCall('startLocalRoom', { room: 'cef-owned-events', nickname: 'Host' });
+      assert.equal(room.ok, true);
+      assert.equal(room.mode, 'single');
+      assert.equal(Object.hasOwn(room, 'data'), false);
       const chatText = 'quoted "text"\n中文';
-      assert.equal((await fixtureApi('LANChat.send_message', [{ text: chatText, correlation_id: 'cef-correlation' }])).data.ok, true);
-      const agent = (await fixtureApi('LANChat.add_agent', [{ name: 'Agent 中文', persona: 'smoke' }])).data;
+      const metadata = { note: chatText, steps: [1, { flag: true }] };
+      const sent = await chatCall('sendMessage', chatText, { correlation_id: 'cef-correlation', metadata });
+      assert.equal(sent.ok, true);
+      assert.equal(typeof sent.message_id, 'string');
+      assert.ok(sent.seq > 0);
+      const agent = await chatCall('addAgent', { name: 'Agent 中文', persona: 'smoke' });
       assert.equal(agent.ok, true);
-      assert.equal((await fixtureApi('LANChat.remove_agent', [{ agent_id: agent.agent_id }])).data.ok, true);
+      assert.deepEqual(await chatCall('removeAgent', agent.agent_id), { ok: true });
       await waitFor(async () => (await main.evaluate('window.__chatEvents.length')) === 3);
       const events = await main.evaluate('window.__chatEvents');
       assert.ok(events.every(event => event.channel === 'lanchat'));
@@ -556,11 +594,29 @@ try {
       assert.equal(events[1].agents[0].name, 'Agent 中文');
       assert.equal(events[1].agents[0].agent_id, agent.agent_id);
       assert.deepEqual(events[2].agents, []);
+      const rooms = await chatCall('listHistoryRooms');
+      assert.equal(rooms.ok, true);
+      const savedRoom = rooms.rooms.find(row => row.display_room_id === 'cef-owned-events');
+      assert.ok(savedRoom?.room_id);
+      const history = await chatCall('loadHistoryRoom', savedRoom.room_id);
+      assert.equal(history.ok, true);
+      const message = history.history.find(row => row.message_id === sent.message_id);
+      assert.ok(message);
+      assert.equal(message.text, chatText);
+      assert.deepEqual(message.metadata, metadata);
+      assert.equal(Object.hasOwn(message, 'metadata_json'), false);
+      assert.equal(Object.hasOwn(history, 'data'), false);
+      await chatCall('stopLocalRoom');
+      const restored = await chatCall('startLocalRoom', { room: 'cef-restored-events', nickname: 'Host',
+        restore_history: true, history_room: savedRoom.room_id });
+      assert.equal(restored.ok, true);
+      assert.equal(restored.restored_history, true);
+      assert.ok(restored.history.some(row => row.message_id === sent.message_id));
     } finally {
-      await fixtureApi('LANChat.stop_local_room', []);
+      await chatCall('stopLocalRoom');
       assert.equal(await main.evaluate(`corona.editor.off(${chatToken})`), true);
     }
-    evidence[0].lanChatEvents = 'local message and roster event compatibility with JSON disabled; exact text/identity, stable prior roster snapshot, unsubscribe; named LANChat migration still pending';
+    evidence[0].lanChatEvents = 'local message and roster event compatibility with JSON disabled; exact text/identity, stable prior roster snapshot, unsubscribe; named methods and direct metadata history; named subscription still pending';
     const listed = await listCameras();
     const camera = listed.data.cameras.find(item => item.camera_id === 'smoke-camera');
     assert.ok(camera?.archive_session);
