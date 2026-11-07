@@ -12,6 +12,7 @@
 
 #include <corona/shared_data_hub.h>
 #include <corona/systems/mechanics/mechanics_commands.h>
+#include <corona/systems/mechanics/mechanics_structural_commands.h>
 #include <corona/systems/optics/optics_commands.h>
 #include <corona/systems/acoustics/acoustics_commands.h>
 #include <corona/systems/optics/environment_commands.h>
@@ -418,6 +419,64 @@ void test_environment_boundary_stage() {
     hub.environment_storage().deallocate(handle);
 }
 
+void test_mechanics_structural_commands() {
+    auto& hub = SharedDataHub::instance();
+    auto& structural = Corona::MechanicsStructuralChannel::instance();
+    structural.commands().clear();
+
+    const auto handle = hub.mechanics_storage().allocate();
+    int hits = 0;
+
+    Corona::MechanicsCallbackBinding binding{};
+    binding.mechanics_handle = handle;
+    binding.kind = Corona::MechanicsCallbackBinding::Kind::OnMove;
+    binding.on_move = [&hits]() { ++hits; };
+    structural.commands().push(std::move(binding));
+
+    // 应用之前槽位里没有回调
+    if (auto device = hub.mechanics_storage().try_acquire_read(handle)) {
+        CHECK(!device->on_move_callback);
+    } else {
+        CHECK(false);
+    }
+
+    CHECK(Corona::apply_pending_mechanics_structural_commands());
+    CHECK(!Corona::apply_pending_mechanics_structural_commands());  // 幂等：没有命令
+
+    if (auto device = hub.mechanics_storage().try_acquire_read(handle)) {
+        CHECK(static_cast<bool>(device->on_move_callback));
+        if (device->on_move_callback) {
+            device->on_move_callback();
+        }
+    } else {
+        CHECK(false);
+    }
+    CHECK(hits == 1);
+
+    // Fifo：两条按序全量应用，后者覆盖前者（顺序不能被打乱）
+    Corona::MechanicsCallbackBinding first{};
+    first.mechanics_handle = handle;
+    first.kind = Corona::MechanicsCallbackBinding::Kind::OnMove;
+    first.on_move = [&hits]() { hits += 10; };
+    structural.commands().push(std::move(first));
+    Corona::MechanicsCallbackBinding second{};
+    second.mechanics_handle = handle;
+    second.kind = Corona::MechanicsCallbackBinding::Kind::OnMove;
+    second.on_move = [&hits]() { hits += 100; };
+    structural.commands().push(std::move(second));
+
+    CHECK(Corona::apply_pending_mechanics_structural_commands());
+    if (auto device = hub.mechanics_storage().try_acquire_read(handle)) {
+        if (device->on_move_callback) {
+            device->on_move_callback();
+        }
+    }
+    CHECK(hits == 101);  // 1 + 100
+
+    structural.commands().clear();
+    hub.mechanics_storage().deallocate(handle);
+}
+
 }  // namespace
 
 int main() {
@@ -430,6 +489,7 @@ int main() {
     test_optics_command_and_snapshot();
     test_acoustics_command_and_snapshot();
     test_environment_boundary_stage();
+    test_mechanics_structural_commands();
 
     if (g_failures == 0) {
         std::printf("OK: %d checks passed\n", g_checks);

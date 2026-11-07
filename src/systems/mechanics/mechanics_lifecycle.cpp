@@ -2,6 +2,7 @@
 #include <corona/diagnostics/thread_phase.h>
 #include <corona/systems/geometry/geometry_system.h>
 #include <corona/systems/mechanics/mechanics_commands.h>
+#include <corona/systems/mechanics/mechanics_structural_commands.h>
 #include <corona/systems/mechanics/mechanics_system.h>
 
 #include <algorithm>
@@ -285,6 +286,9 @@ void MechanicsSystem::update() {
     }
     // tick 边界：先把外部提交的力学参数落到槽位，再跑本帧的蒙皮与物理。
     apply_pending_mechanics_updates();
+    // 结构命令（回调注册）在 DAG 模式下已由边界阶段应用；这里兜底降级路径，
+    // helper 幂等，没有命令时直接返回。
+    Corona::apply_pending_mechanics_structural_commands();
     // Stage marker: this loop holds Scene read handles for the whole skinning pass
     // (frame_scenes) and blocks on scene/geometry slot locks, so a stall here also
     // stalls every writer that wants the same Scene entry.

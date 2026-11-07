@@ -9,6 +9,7 @@
 #include <corona/resource/types/scene.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/mechanics/mechanics_commands.h>
+#include <corona/systems/mechanics/mechanics_structural_commands.h>
 #include <corona/systems/optics/optics_commands.h>
 #include <corona/systems/optics/environment_commands.h>
 #include <corona/systems/acoustics/acoustics_commands.h>
@@ -1815,17 +1816,22 @@ void Corona::API::Mechanics::set_collision_callback(
         return;
     }
 
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().acquire_write(handle_)) {
-        // Store a callback that accepts std::array<float,3> to match nanobind-convertible types.
-        accessor->collision_callback = [callback](std::uintptr_t other, bool began, const std::array<float, 3>& normal_arr, const std::array<float, 3>& point_arr) {
-            if (callback) {
-                callback(other, began, normal_arr, point_arr);
-            }
-        };
-    } else {
-        CFW_LOG_ERROR("[Mechanics::set_collision_callback] Failed to acquire write access to mechanics storage");
-    }
+    // 结构命令（P4）：std::function 不能随值命令传递，走 Fifo 结构通道，
+    // 由 tick 边界阶段在 Mechanics 开始遍历之前应用。
+    Corona::MechanicsCallbackBinding binding{};
+    binding.mechanics_handle = handle_;
+    binding.kind = Corona::MechanicsCallbackBinding::Kind::Collision;
+    // Store a callback that accepts std::array<float,3> to match nanobind-convertible types.
+    binding.collision = [callback](std::uintptr_t other, bool began,
+                                   const std::array<float, 3>& normal_arr,
+                                   const std::array<float, 3>& point_arr) {
+        if (callback) {
+            callback(other, began, normal_arr, point_arr);
+        }
+    };
+    Corona::MechanicsStructuralChannel::instance().commands().push(std::move(binding));
 }
+
 
 void Corona::API::Mechanics::set_on_move_callback(
     std::function<void()> callback) {
@@ -1834,13 +1840,13 @@ void Corona::API::Mechanics::set_on_move_callback(
         return;
     }
 
-    if (auto accessor = SharedDataHub::instance().mechanics_storage().acquire_write(handle_)) {
-        accessor->on_move_callback = std::move(callback);
-        CFW_LOG_DEBUG("[Mechanics::set_on_move_callback] Callback set for handle {}", handle_);
-    } else {
-        CFW_LOG_ERROR("[Mechanics::set_on_move_callback] Failed to acquire write access");
-    }
+    Corona::MechanicsCallbackBinding binding{};
+    binding.mechanics_handle = handle_;
+    binding.kind = Corona::MechanicsCallbackBinding::Kind::OnMove;
+    binding.on_move = std::move(callback);
+    Corona::MechanicsStructuralChannel::instance().commands().push(std::move(binding));
 }
+
 
 // ########################
 //       Acoustics

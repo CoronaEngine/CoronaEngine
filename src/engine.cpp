@@ -2,6 +2,7 @@
 
 #include <corona/events/engine_events.h>
 #include <corona/systems/optics/environment_commands.h>
+#include <corona/systems/mechanics/mechanics_structural_commands.h>
 #include <corona/kernel/event/i_event_stream.h>
 #include <horizon/core/logging.h>
 #include <corona/resource/resource_manager.h>
@@ -83,6 +84,9 @@ static void configure_systems_dag(Kernel::ISystemManager* sys_mgr) {
     // Environment 跨 Optics（光照）与 Mechanics（重力/固定步长）两个消费者，
     // 且 Mechanics 在 DAG 里排在 Optics 之前 —— 只有在边界应用才能同 tick 生效。
     sys_mgr->set_tick_boundary_hook([]() {
+        // 结构命令先应用：它们决定"本 tick 存在什么、能调到什么"。
+        Corona::apply_pending_mechanics_structural_commands();
+        // 全局环境参数：Optics 与 Mechanics 必须在同一 tick 看到同一个值。
         Corona::apply_pending_environment_updates();
     });
 
