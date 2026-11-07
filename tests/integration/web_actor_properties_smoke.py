@@ -43,12 +43,10 @@ def run(port, root):
         panel.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
           const api=Object.values(m).find(v=>typeof v?.scene?.readActorProperties==='function');
           if(!api)throw Error('Actor property facade missing');
-          window.__propertyReads=[];window.__legacyActorReads=[];
+          window.__propertyReads=[];
           const read=api.scene.readActorProperties;
           api.scene.readActorProperties=(...args)=>read(...args).then(result=>{window.__propertyReads.push({args,result});return result;});
-          const invoke=corona.editor.invoke;
-          corona.editor.invoke=(name,args)=>{if(name==='SceneTools.read_actor'){
-            window.__legacyActorReads.push(name);throw Error('Retired Actor reader');}return invoke(name,args);};
+          if(typeof corona.editor!=='undefined')throw Error('Generic native dispatch remains');
           return true;})()""")
         main.evaluate(f'corona.scene.selectActor({json.dumps(scene)},"actor","Probe")')
         wait(lambda: panel.evaluate("document.querySelector('.object-heading h2')?.textContent"),
@@ -76,7 +74,7 @@ def run(port, root):
             assert result['archive_session'] == archive and result['scene'] == scene, result
             assert result['actor_guid'] == initial['actor_guid'] and isinstance(result['handle'], str), result
             assert 'world_aabb' not in result and 'material' not in result, result
-        assert panel.evaluate('window.__legacyActorReads') == []
+        assert panel.evaluate('typeof corona.editor') == 'undefined'
         return {'archiveSession': archive, 'scopedPropertyReads': len(calls), 'legacyReads': 0,
                 'bodyTypes': ['kinematic', 'dynamic'], 'reloadedMass': 3.5, 'opaqueHandle': True}
     finally:

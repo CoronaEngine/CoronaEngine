@@ -501,10 +501,10 @@ constexpr std::array<EditorApiParamSpec, 2> kSceneToolsActorPlayAudioParams = {{
 // manifest grows, instead of identifying the actual entry that drifted.
 constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(CoronaEditor, close_process, kNoParams, "", "app.close_process", EditorApiValueType::Null, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA(EditorApi, list_events, kNoParams, EditorApiValueType::Object),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(EditorApi, list_events, kNoParams, "", "", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     // ScriptRuntime discovers its allowed methods through this same manifest.
     // Individual calls still enforce each method's caller mask.
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(EditorApi, list_methods, kNoParams, "", "", EditorApiValueType::Object, animation_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(EditorApi, list_methods, kNoParams, "", "", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, create_file, kFileManagerCreateFileParams, "", "files.create_file", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, create_folder, kFileManagerCreateFolderParams, "", "files.create_folder", EditorApiValueType::Boolean, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, delete_item, kFileManagerDeleteParams, "", "files.delete_item", EditorApiValueType::Boolean, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
@@ -669,6 +669,13 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, get_status, kNoParams, "", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Native)),
 });
 
+static_assert([] {
+    for (const auto& method : kEditorApiMethods) {
+        if (method.allowed_callers & caller_mask(EditorApiCaller::Cef)) return false;
+    }
+    return true;
+}(), "Generic API methods must not be exposed to Web callers");
+
 #undef EDITOR_API_METHOD_SCHEMA
 #undef EDITOR_API_METHOD_SCHEMA_WRAPPED
 #undef EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS
@@ -692,8 +699,7 @@ constexpr auto kEditorApiEvents = std::to_array<EditorApiEventSpec>({
 static_assert([] {
     for (const auto& event : kEditorApiEvents) {
         if (!event.event_name || !event.event_name[0] || !event.allowed_callers ||
-            ((event.allowed_callers & caller_mask(EditorApiCaller::Cef)) &&
-                (!event.js_wrapper || !event.js_wrapper[0])) ||
+            (event.allowed_callers & caller_mask(EditorApiCaller::Cef)) ||
             !event.python_wrapper || !event.python_wrapper[0]) return false;
     }
     return true;
@@ -708,33 +714,10 @@ struct CallbackRecord {
     std::string event_name;
     nlohmann::json callback_spec = nlohmann::json::object();
     NativeContext context;
-    bool python_script = false;
     PyObject* python_callable = nullptr;
-    CefRefPtr<CefV8Context> v8_context;
-    CefRefPtr<CefV8Value> v8_callback;
-    std::optional<int> v8_browser_id;
 };
 
 std::unordered_map<std::uint64_t, CallbackRecord> g_callbacks;
-
-CefRefPtr<CefV8Value> event_value(const nlohmann::json& value) {
-    if (value.is_null()) return CefV8Value::CreateNull();
-    if (value.is_boolean()) return CefV8Value::CreateBool(value.get<bool>());
-    if (value.is_number_integer()) return CefV8Value::CreateDouble(value.get<double>());
-    if (value.is_number_unsigned()) return CefV8Value::CreateDouble(value.get<double>());
-    if (value.is_number_float()) return CefV8Value::CreateDouble(value.get<double>());
-    if (value.is_string()) return CefV8Value::CreateString(value.get<std::string>());
-    if (value.is_array()) {
-        auto array = CefV8Value::CreateArray(static_cast<int>(value.size()));
-        for (int index = 0; index < static_cast<int>(value.size()); ++index)
-            array->SetValue(index, event_value(value[index]));
-        return array;
-    }
-    auto object = CefV8Value::CreateObject(nullptr, nullptr);
-    for (auto it = value.begin(); it != value.end(); ++it)
-        object->SetValue(it.key(), event_value(it.value()), V8_PROPERTY_ATTRIBUTE_NONE);
-    return object;
-}
 
 bool caller_allowed(const EditorApiMethodSpec& spec, EditorApiCaller caller) {
     return (spec.allowed_callers & caller_mask(caller)) != 0u;
@@ -972,13 +955,6 @@ NativeResult invoke_native_api_method(const EditorApiMethodSpec& spec,
     return run_native_api_method(spec, args, context, route);
 }
 
-std::optional<int> browser_identifier(const NativeContext& context) {
-    if (!context.browser) {
-        return std::nullopt;
-    }
-    return context.browser->GetIdentifier();
-}
-
 Script::Python::PythonRuntimeResponse execute_editor_python_callback(
     const Script::Python::PythonRuntimeRequest& request) {
     using Script::Python::PythonRuntimeResponse;
@@ -1057,53 +1033,18 @@ bool enqueue_editor_python_callback(std::uint64_t callback_token,
     return coordinator->submit(std::move(request)).accepted;
 }
 
-void emit_v8_callback(CallbackRecord record, nlohmann::json payload) {
-    if (!record.v8_context->IsValid() || !record.v8_context->Enter()) return;
-    CefV8ValueList arguments;
-    arguments.push_back(event_value(payload));
-    arguments.push_back(CefV8Value::CreateString(record.event_name));
-    record.v8_callback->ExecuteFunction(nullptr, arguments);
-    record.v8_context->Exit();
-}
-
-std::size_t emit_callbacks(std::string_view event_name,
-                           const nlohmann::json& payload,
-                           bool python_script) {
-    if (python_script) {
-        std::vector<std::uint64_t> callback_tokens;
-        {
-            std::lock_guard<std::mutex> lock(g_callback_mutex);
-            for (const auto& [_, record] : g_callbacks) {
-                if (record.python_script && record.event_name == event_name && record.python_callable) {
-                    callback_tokens.push_back(record.token);
-                }
-            }
-        }
-
-        std::size_t emitted = 0;
-        for (const auto callback_token : callback_tokens) {
-            if (enqueue_editor_python_callback(callback_token, event_name, payload)) ++emitted;
-        }
-        return emitted;
-    }
-
-    std::vector<CallbackRecord> records;
+std::size_t emit_callbacks(std::string_view event_name, const nlohmann::json& payload) {
+    std::vector<std::uint64_t> callback_tokens;
     {
         std::lock_guard<std::mutex> lock(g_callback_mutex);
         for (const auto& [_, record] : g_callbacks) {
-            if (!record.python_script && record.event_name == event_name) {
-                records.push_back(record);
-            }
+            if (record.event_name == event_name && record.python_callable)
+                callback_tokens.push_back(record.token);
         }
     }
-
     std::size_t emitted = 0;
-    for (const auto& record : records) {
-        if (record.v8_context && record.v8_callback) {
-            record.v8_context->GetTaskRunner()->PostTask(
-                CefCreateClosureTask(base::BindOnce(&emit_v8_callback, record, payload)));
-            ++emitted;
-        }
+    for (const auto token : callback_tokens) {
+        if (enqueue_editor_python_callback(token, event_name, payload)) ++emitted;
     }
     return emitted;
 }
@@ -1178,12 +1119,6 @@ nlohmann::json invoke_file_script_api(const std::string& api, const nlohmann::js
             {"data", result.data}, {"error", result.error}};
 }
 
-NativeResult CefEditorApiEndpoint::invoke(const std::string& api_name,
-                                          const nlohmann::json& args,
-                                          const NativeContext& context) {
-    return EditorApiRegistry::instance().invoke({api_name, args, EditorApiCaller::Cef}, context);
-}
-
 NativeResult PythonScriptApiClientEndpoint::invoke(const std::string& api_name,
                                                    const nlohmann::json& args,
                                                    const NativeContext& context) {
@@ -1220,29 +1155,6 @@ EditorApiCallbackRegistry& EditorApiCallbackRegistry::instance() {
     return registry;
 }
 
-std::uint64_t EditorApiCallbackRegistry::register_cef_v8_callback(
-    const std::string& event_name,
-    CefRefPtr<CefV8Context> context,
-    CefRefPtr<CefV8Value> callback) {
-    const auto event_spec = find_editor_api_event(event_name);
-    if (!event_spec || !event_caller_allowed(*event_spec, EditorApiCaller::Cef) ||
-        !context || !context->IsValid() || !callback || !callback->IsFunction()) {
-        return 0;
-    }
-    const auto token = g_next_callback_token.fetch_add(1);
-    CallbackRecord record;
-    record.token = token;
-    record.event_name = event_name;
-    record.v8_context = context;
-    record.v8_callback = callback;
-    if (const auto browser = context->GetBrowser()) {
-        record.v8_browser_id = browser->GetIdentifier();
-    }
-    std::lock_guard<std::mutex> lock(g_callback_mutex);
-    g_callbacks[token] = std::move(record);
-    return token;
-}
-
 std::uint64_t EditorApiCallbackRegistry::register_python_script_callback(
     const std::string& event_name,
     const nlohmann::json& callback_spec,
@@ -1257,7 +1169,6 @@ std::uint64_t EditorApiCallbackRegistry::register_python_script_callback(
     record.event_name = event_name;
     record.callback_spec = callback_spec;
     record.context = context;
-    record.python_script = true;
     std::lock_guard<std::mutex> lock(g_callback_mutex);
     g_callbacks[token] = std::move(record);
     return token;
@@ -1280,7 +1191,6 @@ std::uint64_t EditorApiCallbackRegistry::register_python_script_callback_callabl
     record.token = token;
     record.event_name = event_name;
     record.callback_spec = {{"transport", "python-script"}};
-    record.python_script = true;
     record.python_callable = callback;
     std::lock_guard<std::mutex> lock(g_callback_mutex);
     g_callbacks[token] = std::move(record);
@@ -1294,7 +1204,7 @@ bool EditorApiCallbackRegistry::unregister(std::uint64_t callback_token) {
         if (it == g_callbacks.end()) {
             return false;
         }
-        if (it->second.python_script && it->second.python_callable) {
+        if (it->second.python_callable) {
             return enqueue_editor_python_callback(callback_token,
                                                   it->second.event_name,
                                                   nlohmann::json::object(),
@@ -1305,26 +1215,12 @@ bool EditorApiCallbackRegistry::unregister(std::uint64_t callback_token) {
     return true;
 }
 
-void EditorApiCallbackRegistry::clear_cef_callbacks_for_browser(int browser_id) {
-    std::lock_guard<std::mutex> lock(g_callback_mutex);
-    for (auto it = g_callbacks.begin(); it != g_callbacks.end();) {
-        const auto record_browser_id = it->second.python_script
-            ? browser_identifier(it->second.context)
-            : it->second.v8_browser_id;
-        if (!it->second.python_script && record_browser_id && *record_browser_id == browser_id) {
-            it = g_callbacks.erase(it);
-        } else {
-            ++it;
-        }
-    }
-}
-
 void EditorApiCallbackRegistry::clear_python_script_callbacks() {
     std::vector<std::pair<std::uint64_t, std::string>> callbacks;
     {
         std::lock_guard<std::mutex> lock(g_callback_mutex);
         for (const auto& [token, record] : g_callbacks) {
-            if (record.python_script && record.python_callable) {
+            if (record.python_callable) {
                 callbacks.emplace_back(token, record.event_name);
             }
         }
@@ -1343,16 +1239,6 @@ void EditorApiCallbackRegistry::clear_python_script_callbacks() {
     }
 }
 
-std::size_t EditorApiCallbackRegistry::emit_editor_api_event(std::string_view event_name,
-                                                             const nlohmann::json& payload) {
-    const auto event_spec = find_editor_api_event(event_name);
-    if (!event_spec || !event_caller_allowed(*event_spec, EditorApiCaller::Cef) ||
-        !validate_editor_api_event_payload(*event_spec, payload)) {
-        return 0;
-    }
-    return emit_callbacks(event_name, payload, false);
-}
-
 std::size_t EditorApiCallbackRegistry::emit_python_script_event(std::string_view event_name,
                                                                 const nlohmann::json& payload) {
     const auto event_spec = find_editor_api_event(event_name);
@@ -1360,7 +1246,7 @@ std::size_t EditorApiCallbackRegistry::emit_python_script_event(std::string_view
         !validate_editor_api_event_payload(*event_spec, payload)) {
         return 0;
     }
-    return emit_callbacks(event_name, payload, true);
+    return emit_callbacks(event_name, payload);
 }
 
 std::optional<EditorApiEventSpec> find_editor_api_event(std::string_view event_name) {
@@ -1373,7 +1259,10 @@ std::optional<EditorApiEventSpec> find_editor_api_event(std::string_view event_n
 }
 
 std::size_t emit_editor_api_event(std::string_view event_name, const nlohmann::json& payload) {
-    return EditorApiCallbackRegistry::instance().emit_editor_api_event(event_name, payload);
+    // Independent Python callers retain the existing zero-delivery result.
+    // Web subscriptions are exclusively owned by named V8 bindings.
+    (void)event_name; (void)payload;
+    return 0;
 }
 
 std::size_t emit_python_script_event(std::string_view event_name, const nlohmann::json& payload) {

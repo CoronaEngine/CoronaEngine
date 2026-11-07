@@ -13,7 +13,6 @@
 #include "cef_viewport_pick.h"
 #include "cef_viewport_gizmo.h"
 #include "cef_editor_native_api_handlers.h"
-#include "../editor_api/cef_editor_api.h"
 #include "cef_script_input.h"
 #include "horizon/core/logging.h"
 
@@ -44,8 +43,6 @@ namespace Corona::Systems::UI {
 ViewportGizmoReply execute_viewport_gizmo_target(const ViewportGizmoTargetRequest& request);
 ViewportGizmoReply execute_viewport_gizmo_pointer(const ViewportGizmoPointerRequest& request);
 namespace {
-
-enum class EditorApiMethod { Invoke, On, Off };
 
 bool v8_to_json(CefRefPtr<CefV8Value> value, nlohmann::json& output, unsigned depth = 0) {
     if (depth >= 128) return false;
@@ -106,14 +103,6 @@ CefRefPtr<CefV8Value> json_to_v8(const nlohmann::json& value) {
     for (auto it = value.begin(); it != value.end(); ++it)
         result->SetValue(it.key(), json_to_v8(it.value()), V8_PROPERTY_ATTRIBUTE_NONE);
     return result;
-}
-
-bool read_editor_api_call(const CefV8ValueList& arguments, std::string& api_name,
-                          nlohmann::json& args) {
-    if (arguments.size() != 2 || !arguments[0]->IsString() || !arguments[1]->IsArray()) return false;
-    api_name = arguments[0]->GetStringValue().ToString();
-    if (api_name.empty()) return false;
-    return v8_to_json(arguments[1], args) && args.is_array();
 }
 
 enum class GizmoMethod { SetTarget, Pointer };
@@ -2821,73 +2810,6 @@ public:
         return promise;
     }
 
-    CefRefPtr<CefV8Value> invoke(EditorApiMethod method, const CefV8ValueList& arguments) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        auto promise = CefV8Value::CreatePromise();
-        if (!owns_current_context()) {
-            promise->RejectPromise("CONTEXT_CHANGED");
-            return promise;
-        }
-        if (method == EditorApiMethod::On || method == EditorApiMethod::Off) {
-            if (method == EditorApiMethod::On) {
-                if (arguments.size() != 2 || !arguments[0]->IsString() || !arguments[1]->IsFunction()) {
-                    reject(context_, promise, "INVALID_ARGUMENT", "Expected an event name and callback");
-                    return promise;
-                }
-                const auto token = EditorApiCallbackRegistry::instance().register_cef_v8_callback(
-                    arguments[0]->GetStringValue().ToString(), context_, arguments[1]);
-                if (!token) reject(context_, promise, "INVALID_ARGUMENT", "Editor API event is unavailable");
-                else promise->ResolvePromise(CefV8Value::CreateDouble(static_cast<double>(token)));
-            } else {
-                if (arguments.size() != 1 || !(arguments[0]->IsUInt() || arguments[0]->IsInt() || arguments[0]->IsDouble())) {
-                    reject(context_, promise, "INVALID_ARGUMENT", "Expected a callback token");
-                    return promise;
-                }
-                const auto token = arguments[0]->GetDoubleValue();
-                if (!std::isfinite(token) || token < 0 || std::trunc(token) != token ||
-                    token > static_cast<double>(std::numeric_limits<std::uint64_t>::max())) {
-                    reject(context_, promise, "INVALID_ARGUMENT", "Expected a callback token");
-                    return promise;
-                }
-                const auto removed = EditorApiCallbackRegistry::instance().unregister(
-                    static_cast<std::uint64_t>(token));
-                promise->ResolvePromise(CefV8Value::CreateBool(removed));
-            }
-            return promise;
-        }
-        std::string api_name;
-        nlohmann::json args;
-        if (!read_editor_api_call(arguments, api_name, args)) {
-            reject(context_, promise, "INVALID_ARGUMENT", "Expected an API name and argument array");
-            return promise;
-        }
-        const auto id = ++sequence_;
-        pending_.emplace(id, Pending{EditorApiMethod::Invoke, promise});
-        const auto weak = weak_from_this();
-        const bool posted = CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
-            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id,
-               std::string api_name, nlohmann::json args, NativeContext context) {
-                const auto endpoint = weak.lock();
-                if (!endpoint || !endpoint->active()) return;
-                NativeResult result;
-                try {
-                    register_builtin_native_api_handlers();
-                    result = EditorApiRegistry::instance().invoke(
-                        {std::move(api_name), std::move(args), EditorApiCaller::Cef}, context);
-                } catch (const std::exception& error) {
-                    result = native_failure(error.what(), 500, "editor-api");
-                } catch (...) {
-                    result = native_failure("Native editor API invocation failed", 500, "editor-api");
-                }
-                endpoint->complete(id, std::move(result));
-            }, weak, id, std::move(api_name), std::move(args),
-            NativeContext{context_->GetBrowser(), context_->GetFrame(), 0, false})));
-        if (!posted) {
-            pending_.erase(id);
-            reject(context_, promise, "NATIVE_UNAVAILABLE", "Native editor API is unavailable");
-        }
-        return promise;
-    }
 
 private:
     void queue_operation(std::uint64_t id, WindowRequest request) {
@@ -3175,23 +3097,6 @@ private:
         context_->Exit();
     }
 
-    void resolve(std::uint64_t id, const NativeResult& reply) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        const auto entry = pending_.find(id);
-        if (entry == pending_.end()) return;
-        const auto promise = entry->second.promise;
-        pending_.erase(entry);
-        if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
-        if (!reply.success) reject(context_, promise, std::to_string(reply.error_code), reply.error);
-        else {
-            auto response = CefV8Value::CreateObject(nullptr, nullptr);
-            response->SetValue("status", CefV8Value::CreateString("success"), V8_PROPERTY_ATTRIBUTE_NONE);
-            response->SetValue("data", json_to_v8(reply.data), V8_PROPERTY_ATTRIBUTE_NONE);
-            promise->ResolvePromise(response);
-        }
-        context_->Exit();
-    }
-
     void resolve(std::uint64_t id, const WindowReply& reply) {
         CEF_REQUIRE_RENDERER_THREAD();
         const auto entry = pending_.find(id);
@@ -3238,7 +3143,7 @@ private:
     const std::uint64_t context_id_ = ++context_sequence_;
     std::uint64_t sequence_ = 0;
     std::string scene_archive_session_;
-    struct Pending { std::variant<WindowMethod, SceneMethod, ViewportMethod, ScriptInputMethod, GizmoMethod, ScriptsMethod, ProjectFilesMethod, ProjectSettingsMethod, ProjectLauncherMethod, NetworkMethod, LanChatMethod, FilesMethod, EditorApiMethod> method; CefRefPtr<CefV8Value> promise; };
+    struct Pending { std::variant<WindowMethod, SceneMethod, ViewportMethod, ScriptInputMethod, GizmoMethod, ScriptsMethod, ProjectFilesMethod, ProjectSettingsMethod, ProjectLauncherMethod, NetworkMethod, LanChatMethod, FilesMethod> method; CefRefPtr<CefV8Value> promise; };
     std::unordered_map<std::uint64_t, Pending> pending_;
     std::map<std::uint64_t, Subscriber> subscribers_;
 };
@@ -3510,14 +3415,6 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     app->SetValue("closeProcess", CefV8Value::CreateFunction("closeProcess",
         new NativeHandler(endpoint, WindowMethod::CloseProcess)), V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("app", app, V8_PROPERTY_ATTRIBUTE_READONLY);
-    auto editor = CefV8Value::CreateObject(nullptr, nullptr);
-    editor->SetValue("invoke", CefV8Value::CreateFunction("invoke",
-        new NativeHandler(endpoint, EditorApiMethod::Invoke)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    editor->SetValue("on", CefV8Value::CreateFunction("on",
-        new NativeHandler(endpoint, EditorApiMethod::On)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    editor->SetValue("off", CefV8Value::CreateFunction("off",
-        new NativeHandler(endpoint, EditorApiMethod::Off)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("editor", editor, V8_PROPERTY_ATTRIBUTE_READONLY);
     viewport->SetValue("pick", CefV8Value::CreateFunction("pick",
         new NativeHandler(endpoint, ViewportMethod::Pick)), V8_PROPERTY_ATTRIBUTE_READONLY);
     viewport->SetValue("configure", CefV8Value::CreateFunction("configure",

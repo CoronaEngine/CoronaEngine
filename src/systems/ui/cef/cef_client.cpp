@@ -392,8 +392,6 @@ void OffscreenCefClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     CEF_REQUIRE_UI_THREAD();
     if (browser) {
         viewport_pick_requests().cancel_browser(browser->GetIdentifier());
-        EditorApiCallbackRegistry::instance().clear_cef_callbacks_for_browser(
-            browser->GetIdentifier());
     }
     {
         std::lock_guard lock(browser_mutex_);

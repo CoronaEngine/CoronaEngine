@@ -35,10 +35,7 @@ def run(port, root):
 
     service = """(async()=>{const module=await import(document.querySelector('script[type=module]').src);
       return Object.values(module).find(value=>typeof value?.openNativePanel==='function');})()"""
-    monitor = """(()=>{window.__oldEnvironmentRequests=[];const invoke=corona.editor.invoke;
-      corona.editor.invoke=(api,args)=>{if(/^SceneTools\\.(?:get_environment|set_environment|sun_direction|floor_grid|get_physics_params|set_physics_params)$/.test(api)){
-        window.__oldEnvironmentRequests.push(api);throw Error('Retired environment transport');}
-        return invoke(api,args);};return true;})()"""
+    monitor = """(()=>{if(typeof corona.editor!=='undefined')throw Error('Generic native dispatch remains');return true;})()"""
     def open_panel(panel_id, route, selector):
         result = main.evaluate(f"{service}.then(service=>service.openNativePanel({{detached:true,panelId:{json.dumps(panel_id)},routePath:{json.dumps(route)},width:600,height:800}}))")
         assert result.get('tab_id'), result
@@ -83,7 +80,7 @@ def run(port, root):
         assert saved['filepath'], saved
         # Reopening retires detached documents; inspect their monitors while alive.
         for client in clients:
-            assert client.evaluate('window.__oldEnvironmentRequests') == []
+            assert client.evaluate('typeof corona.editor') == 'undefined'
         old_scope = session
         reopened = main.evaluate('corona.project.openProject(' + json.dumps(str(root)) + ')')
         assert reopened['ok'] and 'data' not in reopened, reopened
@@ -99,7 +96,7 @@ def run(port, root):
             'archive_session': old_scope, 'grid': {'enabled': original['grid']['enabled']},
         }) + ").catch(error=>error.code)")
         assert rejected == 'PROJECT_CONTEXT_CHANGED', rejected
-        assert main.evaluate('window.__oldEnvironmentRequests') == []
+        assert main.evaluate('typeof corona.editor') == 'undefined'
         return {'documents': len(clients), 'uiWrites': ['sun.enabled', 'sun.direction', 'grid.enabled', 'physics.floor_y'],
                 'samePhysicsGravity': True, 'saveReopenFloorY': environment()['physics']['floor_y'],
                 'oldScopeRejected': rejected, 'retiredEnvironmentRequests': 0}

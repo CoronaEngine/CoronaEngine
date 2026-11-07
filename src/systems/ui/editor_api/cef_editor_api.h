@@ -3,7 +3,6 @@
 #include "cef_editor_native_api_registry.h"
 
 #include <include/cef_frame.h>
-#include <include/cef_v8.h>
 
 #include <Python.h>
 
@@ -69,6 +68,7 @@ struct EditorApiEventSpec {
 struct EditorApiRequest {
     std::string api_name;
     nlohmann::json args = nlohmann::json::array();
+    // The retired Web caller bit keeps an omitted caller fail-closed.
     EditorApiCaller caller = EditorApiCaller::Cef;
 };
 
@@ -89,19 +89,13 @@ class EditorApiCallbackRegistry {
 public:
     static EditorApiCallbackRegistry& instance();
 
-    std::uint64_t register_cef_v8_callback(const std::string& event_name,
-                                           CefRefPtr<CefV8Context> context,
-                                           CefRefPtr<CefV8Value> callback);
     std::uint64_t register_python_script_callback(const std::string& event_name,
                                                   const nlohmann::json& callback_spec,
                                                   const NativeContext& context);
     std::uint64_t register_python_script_callback_callable(const std::string& event_name,
                                                            PyObject* callback);
     bool unregister(std::uint64_t callback_token);
-    void clear_cef_callbacks_for_browser(int browser_id);
     void clear_python_script_callbacks();
-    std::size_t emit_editor_api_event(std::string_view event_name,
-                                      const nlohmann::json& payload);
     std::size_t emit_python_script_event(std::string_view event_name,
                                          const nlohmann::json& payload);
 
@@ -116,14 +110,6 @@ public:
     virtual NativeResult invoke(const std::string& api_name,
                                 const nlohmann::json& args,
                                 const NativeContext& context) = 0;
-};
-
-class CefEditorApiEndpoint final : public EditorApiEndpointBase {
-public:
-    NativeResult invoke(const std::string& api_name,
-                        const nlohmann::json& args,
-                        const NativeContext& context) override;
-
 };
 
 class PythonScriptApiClientEndpoint final : public EditorApiEndpointBase {

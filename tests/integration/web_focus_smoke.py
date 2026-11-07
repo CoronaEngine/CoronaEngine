@@ -49,12 +49,7 @@ def run(port, root):
                                    and 'standalone=1' in target['url']), None), bool, 'SceneTools document')
         panel = Frontend(port, target_id=target['id'])
         wait(lambda: panel.evaluate("!!document.querySelector('[data-actor-name=Probe]')"), bool, 'SceneBar Actor row')
-        monitor = """(async()=>{window.__oldFocusRequests=[];const invoke=corona.editor.invoke;
-          corona.editor.invoke=(api,args)=>{if(['SceneTools.focus_actor','ResourceSearch.focus_actor',
-            'SceneTools.set_camera_pose','SceneTools.update_camera_view',
-            'SceneTools.open_camera_view','SceneTools.close_camera_view','SceneTools.create_camera_view',
-            'SceneTools.get_scene_snapshot','SceneTools.list_scene_tree','SceneTools.list_camera_views'].includes(api)){
-            window.__oldFocusRequests.push(api);throw Error('Retired focus route');}return invoke(api,args);};
+        monitor = """(async()=>{if(typeof corona.editor!=='undefined')throw Error('Generic native dispatch remains');
           const m=await import(document.querySelector('script[type=module]').src);
           const api=Object.values(m).find(v=>typeof v?.scene?.setCameraProperties==='function');
           if(!api)throw Error('Shared camera properties facade missing');
@@ -96,8 +91,8 @@ def run(port, root):
         assert abs(moved['position'][1] - focused['position'][1]) < 1e-5, (focused, moved)
         assert 0 < moved['position'][2] - focused['position'][2] <= 2, (focused, moved)
         assert len(main.evaluate('window.__cameraMoveCalls')) == 1
-        assert main.evaluate('window.__oldFocusRequests') == []
-        assert panel.evaluate('window.__oldFocusRequests') == []
+        assert main.evaluate('typeof corona.editor') == 'undefined'
+        assert panel.evaluate('typeof corona.editor') == 'undefined'
         assert main.evaluate('typeof globalThis.coronaBridge?.computeActorFocusPose') == 'undefined'
         assert panel.evaluate('typeof globalThis.coronaBridge?.computeActorFocusPose') == 'undefined'
         secondary = next(camera for camera in cameras() if camera['camera_id'] == 'focus-camera')
@@ -170,7 +165,7 @@ def run(port, root):
         assert 0 < moved_secondary['position'][2] - focused_secondary['position'][2] < 2, (focused_secondary, moved_secondary)
         assert main.evaluate('window.__cameraMoveCalls') == []
         for client in [main, panel, camera_view]:
-            assert client.evaluate('window.__oldFocusRequests') == []
+            assert client.evaluate('typeof corona.editor') == 'undefined'
         # Click the actual CameraView controls, then inspect the result of the
         # production facade rather than adding hooks to read-only V8 bindings.
         camera_view.evaluate("[...document.querySelectorAll('.ui-mode-switch button')].find(b=>b.textContent.trim()==='3D UI').click();true")

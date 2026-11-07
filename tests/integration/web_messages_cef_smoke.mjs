@@ -92,7 +92,7 @@ try {
   console.log('CEF smoke: waiting for main document');
   const mainTarget = await waitFor(async () => (await targets()).find(target => target.type === 'page' && target.url.includes('index.html')));
   const main = await connect(mainTarget);
-  const fixtureApi = (api, args) => main.evaluate(`window.__fixtureApi(${JSON.stringify({ api, args })})`);
+
   await waitFor(() => main.evaluate('typeof window.corona?.window?.getCurrent === "function"'));
   assert.equal(await main.evaluate('typeof corona.viewport?.pick'), 'function');
   assert.equal(await main.evaluate('typeof corona.input?.dispatch'), 'function');
@@ -105,15 +105,8 @@ try {
   await writeFile(fixture, '<!doctype html><meta charset="utf-8"><title>CEF Web messages smoke</title>');
   await main.call('Page.navigate', { url: pathToFileURL(fixture).href });
   await waitFor(() => main.evaluate('document.title === "CEF Web messages smoke" && typeof window.corona?.window?.getCurrent === "function"'));
-  // Manifest-backed fixture calls use the same typed V8 endpoint as the application.
-  await main.evaluate(`(() => {
-    window.__fixtureApi = ({api, args}) => corona.editor.invoke(api, args);
-    return true;
-  })()`);
-  assert.match(await main.evaluate("window.__fixtureApi({api:'SceneTools.read_archive_scene',args:[{}]}).catch(error=>error.message)"), /not allowed/);
-  for (const method of ['fuzzy_search', 'get_stats', 'image_search', 'list_types', 'mark_index_dirty', 'prepare_index', 'rebuild_index']) {
-    assert.match(await main.evaluate(`window.__fixtureApi({api:'ResourceSearch.${method}',args:[]}).catch(error=>error.message)`), /not allowed/);
-  }
+  assert.equal(await main.evaluate('typeof corona.editor'), 'undefined', 'generic native dispatch is retired');
+
   const scope = `smoke-${Date.now()}`;
   stage = 'direct native scene reads without a scene';
   for (const method of ['getFileTree', 'createFolder', 'createActorTemplate', 'renameItem', 'deleteItem', 'openFile']) {
@@ -155,7 +148,7 @@ try {
   assert.equal(await main.evaluate("corona.scene.readCameras('scene.ini',{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
   assert.deepEqual(await main.evaluate('corona.scene.readActive()'), { archive_session: '' });
   assert.equal(typeof (await main.evaluate('corona.scene.isVisionAvailable()')).available, 'boolean');
-  assert.match(await main.evaluate("corona.editor.invoke('SceneTools.is_vision_available', []).catch(error=>error.message)"), /not allowed/);
+
   for (const method of ['readActive', 'selectActor']) {
     assert.equal(await main.evaluate(`corona.scene.${method}(null).catch(error=>error.code)`), 'INVALID_ARGUMENT');
   }
@@ -460,14 +453,7 @@ try {
       const state=await corona.scene.readActive();
       return corona.scene.readCameras(state.scene,{archive_session:state.archive_session});})()`) });
     stage = 'orphan mesh movement event removed from the native contract';
-    const eventNames = (await fixtureApi('EditorApi.list_events', [])).data.events.map(spec => spec.event);
-    assert.equal(eventNames.includes('SceneTools.meshMoveResult'), false);
-    assert.equal(eventNames.includes('SceneTools.actorPickResult'), false);
-    assert.equal(eventNames.includes('SceneTools.viewportGizmoPointerResult'), false);
-    assert.match(await main.evaluate("corona.editor.on('SceneTools.viewportGizmoPointerResult', () => {})")
-      .then(() => 'unexpected subscription', error => error.message), /event is unavailable/);
-    assert.match(await main.evaluate("corona.editor.on('SceneTools.meshMoveResult', () => {})")
-      .then(() => 'unexpected subscription', error => error.message), /event is unavailable/);
+
     evidence[0].orphanMeshMovement = 'legacy bridge absent in every window; retired mesh and Gizmo events absent and subscriptions refused';
     const opened = await main.evaluate(`corona.project.openProject(${JSON.stringify(cameraWorld)})`);
     assert.equal(opened.ok, true, JSON.stringify(opened));
@@ -477,8 +463,7 @@ try {
       assert.equal(await main.evaluate(`corona.project.openProject(...${JSON.stringify(args)}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
     assert.deepEqual(await main.evaluate("corona.project.openProject('')"), { ok: false, path: '', status: 'cancelled' });
-    assert.match(await fixtureApi('ProjectLauncher.open_project', [cameraWorld])
-      .then(() => 'unexpected retired route', error => error.message), /not allowed/);
+
     // Session startup seeds the committed scene, as in the production JoinGame flow.
     stage = 'named native network session and discovery operations';
     for (const method of ['startSession', 'stopSession', 'getSessionInfo', 'getDiscoveredPeers',
@@ -525,16 +510,7 @@ try {
       assert.deepEqual(await main.evaluate('corona.network.stopSession()'), { ok: true });
       assert.deepEqual(await main.evaluate('corona.network.stopSession()'), { ok: true });
     }
-    for (const method of ['start_session', 'stop_session', 'get_session_info', 'get_discovered_peers',
-      'clear_discovered_peers', 'search_lan', 'connect_to_peer', 'set_project_root',
-      'broadcast_actor_create', 'broadcast_actor_delete', 'broadcast_actor_state_update',
-      'broadcast_actor_transform', 'broadcast_intent', 'broadcast_actor_scene_snapshot',
-      'check_preview_collision', 'claim_actor_ownership', 'get_lock_owner', 'get_peer_count',
-      'lock_object', 'unlock_object', 'poll_pending_actor_create', 'poll_pending_actor_delete',
-      'poll_pending_actor_state_update', 'poll_pending_actor_transform', 'poll_pending_scene_snapshot',
-      'poll_pending_scene_snapshot_request', 'register_actor_identity', 'request_actor_scene_snapshot', 'set_sync_paused']) {
-      assert.match(await fixtureApi(`Network.${method}`, []).then(() => 'unexpected retired route', error => error.message), /not allowed|not defined/);
-    }
+
     evidence[0].network = 'named V8 direct replies with JSON disabled; strict arguments, inactive connect, discovery, host/client start, active reuse and idempotent stop; legacy CEF routes denied';
     stage = 'named LANChat methods, strict validation and structured history';
     const chatCall = (method, ...args) => main.evaluate(`corona.lanChat.${method}(...${JSON.stringify(args)})`);
@@ -557,10 +533,7 @@ try {
     ]) {
       assert.equal(await main.evaluate(`corona.lanChat.${method}(...${JSON.stringify(args)}).catch(e=>e.code)`), 'INVALID_ARGUMENT', method);
     }
-    for (const method of ['start_room', 'start_local_room', 'stop_room', 'stop_local_room', 'join_room',
-      'leave_room', 'send_message', 'list_history_rooms', 'load_history_room', 'get_local_ip', 'add_agent', 'remove_agent']) {
-      assert.match(await fixtureApi(`LANChat.${method}`, []).then(() => 'unexpected retired route', error => error.message), /not allowed/);
-    }
+
     const localIp = await chatCall('getLocalIp');
     assert.equal(localIp.ok, true);
     assert.equal(typeof localIp.ip, 'string');
@@ -571,7 +544,7 @@ try {
     for (const args of ['', 'null', '{}', '"callback"', '()=>{}, true']) {
       assert.match(await main.evaluate(`(()=>{try{corona.lanChat.onEvent(${args});return 'unexpected';}catch(e){return String(e);}})()`), /INVALID_ARGUMENT/);
     }
-    assert.equal(await main.evaluate("corona.editor.on('LANChat.event',()=>{}).catch(e=>e.code)"), 'INVALID_ARGUMENT');
+
     await main.evaluate(`corona.network.setProjectRoot(${JSON.stringify(cameraWorld)})`);
     await main.evaluate(`(() => {
       window.__chatFromFrame = [];
@@ -664,7 +637,7 @@ try {
     const listed = await listCameras();
     const camera = listed.data.cameras.find(item => item.camera_id === 'smoke-camera');
     assert.ok(camera?.archive_session);
-    assert.equal(await main.evaluate("corona.editor.invoke('MainView.on_init',[]).then(()=>false,()=>true)"), true);
+
     const sceneRead = await main.evaluate('corona.scene.readActive()');
     const loadStatus = await main.evaluate('corona.project.getProjectLoadStatus()');
     assert.equal(loadStatus.archive_session, sceneRead.archive_session);
@@ -678,11 +651,7 @@ try {
     for (const method of ['getAppVersion', 'getRecentProjects', 'getProjectLoadStatus']) {
       assert.equal(await main.evaluate(`corona.project.${method}({}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
     }
-    for (const method of ['browse_folder', 'get_default_project_path', 'create_project',
-      'validate_portable_scene', 'import_portable_asset', 'cleanup_portable_scene_assets',
-      'get_app_version', 'get_recent_projects', 'get_project_load_status']) {
-      assert.match(await fixtureApi(`ProjectLauncher.${method}`, []).then(() => 'unexpected retired route', error => error.message), /not allowed/);
-    }
+
     evidence[0].projectLauncherReads = 'named V8 version/history/load snapshots with JSON disabled; archive identity, strict arity and nine retired CEF routes';
     assert.equal(await main.evaluate('typeof corona.scene.focusActor'), 'function');
     assert.equal(await main.evaluate('typeof corona.scene.setActorTransform'), 'function');
@@ -724,9 +693,7 @@ try {
       assert.equal((await fileCall('save', { ...fileScope, ...changed, code: 'must not publish', document: {} })).code, 'PROJECT_CONTEXT_CHANGED');
     }
     assert.deepEqual((await fileCall('load', fileScope)).document, fileDocument);
-    for (const method of ['save', 'load']) {
-      assert.match(await fixtureApi(`ProjectFiles.${method}`, [{}]).then(() => 'unexpected retired route', error => error.message), /not defined/);
-    }
+
     for (const invalid of [{ ...fileScope, key: 'encoded DTO' }, { ...fileScope, identity: [] },
       { ...fileScope, identity: ['node_graph', 'actor', '', ''] }, { ...fileScope, identity: ['node_graph', 'project', 'wrong', ''] }]) {
       assert.equal(await main.evaluate(`corona.projectFiles.load(${JSON.stringify(invalid)}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
@@ -760,9 +727,9 @@ try {
       assert.equal(await main.evaluate(`corona.scene.importResourceFile(...${JSON.stringify(args)}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     for (const [scene, session] of [['other.ini', sceneRead.archive_session], ['scene.ini', 'retired']])
       assert.equal(await main.evaluate(`corona.scene.importResourceFile(${JSON.stringify(scene)},${JSON.stringify({ archive_session: session, file_type: 'model' })}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
-    assert.equal(await main.evaluate("corona.editor.invoke('MainView.import_resource_file',[]).then(()=>false,()=>true)"), true);
+
     evidence[0].resourceImportValidation = 'JSON disabled: typed import rejects malformed arguments and inactive scope before prompting; unsupported type result retains scope; old Web route denied';
-    stage = 'typed audio validation and retired manifest routes';
+    stage = 'typed audio validation';
     for (const name of ['playResource', 'stopResource', 'playActor', 'stopActor'])
       assert.equal(await main.evaluate(`typeof corona.audio.${name}`), 'function');
     for (const id of [0, 1, 1.5, null, '', '0', '-1', '18446744073709551616', '12suffix']) {
@@ -774,8 +741,8 @@ try {
         assert.equal(await main.evaluate(`corona.audio.${name}(${JSON.stringify(scene)},'missing-actor',${JSON.stringify({ archive_session: session, ...(name === 'playActor' ? { loop: false } : {}) })}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
     }
     for (const method of ['play_audio', 'stop_audio', 'actor_play_audio', 'actor_stop_audio'])
-      assert.equal(await main.evaluate(`corona.editor.invoke('SceneTools.${method}',[]).then(()=>false,()=>true)`), true);
-    evidence[0].audioValidation = 'typed audio methods exist; invalid resource IDs and inactive scene/archive rejected; old manifest routes refused';
+
+    evidence[0].audioValidation = 'typed audio methods exist; invalid resource IDs and inactive scene/archive rejected; generic native dispatch absent';
     assert.equal(await main.evaluate('typeof corona.scene.readTree'), 'function');
     const readTree = () => main.evaluate(`corona.scene.readTree('scene.ini',${JSON.stringify(cameraReadScope)})`);
     const initialTree = await readTree();
@@ -840,9 +807,7 @@ try {
     }
     assert.equal(await main.evaluate(`corona.projectSettings.saveActiveProjectInfo(${JSON.stringify({ ...updateInfo, mode: 'story' })}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     await settingsCall('saveActiveProjectInfo', { ...updateInfo, name: metadata.name, core_version: metadata.core_version });
-    for (const method of ['read_project_document', 'commit_project_document', 'get_active_project_info', 'save_active_project_info']) {
-      assert.match(await fixtureApi(`ProjectSettings.${method}`, method === 'get_active_project_info' ? [] : [{}]).then(() => 'unexpected retired route', error => error.message), /not allowed/);
-    }
+
     evidence[0].projectSettings = 'named V8 metadata and document operations with JSON disabled; digest CAS, structured numeric/unicode values, strict arguments, stale scope, path fences and retired CEF routes';
     stage = 'typed project file CRUD with captured archive and JSON disabled';
     console.log(`CEF smoke: ${stage}`);
@@ -889,9 +854,7 @@ try {
     assert.equal((await filesCall('deleteItem', { path: '文件测试/改名.actor' })).ok, true);
     assert.equal((await filesCall('deleteItem', { path: '文件测试' })).ok, true);
     assert.equal((await filesCall('getFileTree', { path: '' })).children.some(entry => entry.name === '文件测试'), false);
-    for (const method of ['get_project_info', 'get_files', 'get_file_tree', 'create_file', 'create_folder', 'rename_item', 'delete_item', 'open_file']) {
-      assert.match(await fixtureApi(`FileManager.${method}`, []).then(() => 'unexpected retired route', error => error.message), /not allowed/);
-    }
+
     evidence[0].files = 'named V8 typed tree and CRUD with JSON disabled; Actor template collision, rename/open/delete, root/scene/path fences, stale archive/path and retired CEF routes';
     stage = 'one typed native environment read and patch with JSON disabled';
     console.log(`CEF smoke: ${stage}`);
@@ -968,7 +931,7 @@ try {
     assert.equal(actor.archive_session, camera.archive_session);
     assert.equal(typeof actor.handle, 'string');
     assert.equal(typeof actor.actor_guid, 'string');
-    assert.match(await main.evaluate("corona.editor.invoke('SceneTools.create_actor',[]).catch(error=>error.message)"), /not allowed/);
+
     const beforeInvalidCreation = await readTree();
     for (const [scene, options, expected] of [
       ['scene.ini', {}, 'INVALID_ARGUMENT'],
@@ -1004,10 +967,10 @@ try {
     ]) {
       assert.equal(await main.evaluate(`corona.scene.renameActor(${JSON.stringify(scene)},${JSON.stringify(id)},${JSON.stringify(name)},${JSON.stringify(scope)}).catch(error=>error.code)`), code);
     }
-    assert.match(await main.evaluate(`window.__fixtureApi(${JSON.stringify({api:'SceneTools.rename_actor',args:['scene.ini',actor.name,'Legacy rename']})}).catch(error=>error.message)`), /not allowed/);
+
     const renameAfterRejected = await main.evaluate(`corona.scene.readActorIndex('scene.ini',${JSON.stringify(renameScope)})`);
     assert.equal(renameAfterRejected.actors.find(value => value.actor_guid === actor.actor_guid).name, actor.name);
-    evidence[0].actorRename = 'scoped typed V8, JSON disabled, exact archive/scene/GUID, tree revision update, invalid/stale requests atomic, legacy manifest rejected';
+    evidence[0].actorRename = 'scoped typed V8, JSON disabled, exact archive/scene/GUID, tree revision update, invalid/stale requests atomic, generic native dispatch absent';
     stage = 'rebinding Actor resource through scoped typed V8';
     console.log(`CEF smoke: ${stage}`);
     const rebindScope = { archive_session: camera.archive_session };
@@ -1041,8 +1004,8 @@ try {
       assert.equal(await main.evaluate(`corona.scene.rebindActorResource(${JSON.stringify(scene)},${JSON.stringify(guid)},${JSON.stringify(pathValue)},${JSON.stringify(scope)}).catch(error=>error.code)`), code);
     }
     assert.equal(await main.evaluate(`corona.scene.rebindActorResource('scene.ini',${JSON.stringify(actor.actor_guid)},'',${JSON.stringify(rebindScope)}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
-    assert.match(await main.evaluate(`window.__fixtureApi(${JSON.stringify({api:'SceneTools.rebind_actor_resource',args:['scene.ini',actor.actor_guid,'replacement.ply',rebindScope]})}).catch(error=>error.message)`), /not allowed/);
-    evidence[0].actorResourceRebind = 'scoped typed V8 with JSON disabled; resource replacement updates one tree revision and preserves GUID/name, missing resource returns diagnostics, stale/foreign identity and malformed path reject, legacy manifest denied';
+
+    evidence[0].actorResourceRebind = 'scoped typed V8 with JSON disabled; resource replacement updates one tree revision and preserves GUID/name, missing resource returns diagnostics, stale/foreign identity and malformed path reject, generic native dispatch absent';
     stage = 'owned actor index projection without JSON or full scene geometry';
     console.log(`CEF smoke: ${stage}`);
     const indexScope = { archive_session: camera.archive_session };
@@ -1135,7 +1098,7 @@ try {
       assert.equal(await main.evaluate(`corona.scene.focusActor(...${JSON.stringify(invalid)}).catch(error=>error.code)`), code);
     }
     assert.deepEqual((await listCameras()).data.cameras, camerasAfterFocus);
-    assert.match(await main.evaluate(`window.__fixtureApi(${JSON.stringify({api:'ResourceSearch.focus_actor',args:[]})}).catch(error=>error.message)`), /not defined/);
+
     evidence[0].actorFocus = 'one scoped typed native camera application with JSON disabled; exact IDs, validation/no mutation, other camera unchanged, orphan Fast and result event removed';
     const patch = { archive_session: camera.archive_session, position: [0, 2, -3], rotation: [0, 0, 0], scale: [2, 1, 3] };
     stage = 'applying native transform patch';
@@ -1235,17 +1198,7 @@ try {
     assert.deepEqual(propertyPartial.actor.camera_lock, { ...properties.camera_lock, enabled: false });
     assert.deepEqual(propertyPartial.actor.requested_animation_sources, []);
     evidence[0].actorProperties = 'one typed V8 patch with JSON disabled: state/physics/camera-lock, partial preservation, animation source acceptance, invalid mixed patches atomic and all old CEF routes denied';
-    for (const api of ['SceneTools.read_active_scene', 'SceneTools.read_actor', 'SceneTools.read_archive_scene', 'SceneTools.list_scene_tree', 'SceneTools.list_camera_views', 'SceneTools.get_scene_snapshot', 'SceneTools.select_actor', 'SceneTools.set_actor_transform',
-      'SceneTools.set_actor_state', 'SceneTools.set_actor_physics', 'SceneTools.set_actor_camera_lock',
-      'SceneTools.get_actor_skeleton_leaves', 'SceneTools.get_actor_ik_chains', 'SceneTools.set_actor_ik_chains',
-      'SceneTools.list_actor_tree',
-      'SceneTools.get_environment', 'SceneTools.set_environment', 'SceneTools.sun_direction',
-      'SceneTools.floor_grid', 'SceneTools.get_physics_params', 'SceneTools.set_physics_params', 'SceneTools.focus_actor',
-      'SceneTools.save_screenshot', 'SceneTools.select_screenshot_path', 'SceneTools.capture_viewport',
-      'SceneTools.set_camera_pose', 'SceneTools.update_camera_view', 'SceneTools.open_camera_view',
-      'SceneTools.close_camera_view', 'SceneTools.create_camera_view']) {
-      assert.match(await main.evaluate(`window.__fixtureApi(${JSON.stringify({api,args:api.endsWith('select_actor')?['scene.ini','scene','']:[]})}).catch(error=>error.message)`), /not allowed/);
-    }
+
     evidence[0].sceneReadAndSelection = 'direct V8 with JSON disabled: empty/active state, uint64 identity, uint32 node index, validation/no mutation, old CEF query denied';
     const options = { archiveSession: camera.archive_session, sceneId: opened.scene.path,
       cameraId: camera.camera_id, width: 320, height: 240, x: 160, y: 160,
@@ -1458,10 +1411,7 @@ try {
     await waitFor(() => cameraClient.evaluate('!window.__oldPickContext && typeof corona?.viewport?.pick === "function"'));
     await cameraClient.evaluate(`JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); }; true`);
     assert.equal((await pick(cameraClient)).actor_guid, actor.actor_guid);
-    assert.match(await fixtureApi('SceneTools.pick_actor_at_pixel', ['scene.ini',0,0,320,240])
-      .then(() => 'unexpected legacy pick', error => error.message), /not allowed/);
-    assert.match(await main.evaluate("corona.editor.on('SceneTools.actorPickResult', () => {})")
-      .then(() => 'unexpected subscription', error => error.message), /event is unavailable/);
+
     evidence[0].viewportPick = 'direct V8 with JSON disabled, actual GPU Actor/node hit, opaque handle, simultaneous main/CameraView isolation, actual reload with pending readback, miss/validation/surface permissions and retired query/event denied';
     stage = 'one scoped V8 script input queue with real Python consumption';
     console.log(`CEF smoke: ${stage}`);
@@ -1488,9 +1438,7 @@ try {
     ]) {
       assert.equal(await client.evaluate(`corona.input.dispatch(${JSON.stringify(scene)},${JSON.stringify(cameraId)},${JSON.stringify(event)}).catch(error=>error.code)`), code);
     }
-    for (const method of ['key_event', 'key_release', 'mouse_event']) {
-      assert.match(await fixtureApi(`Scripts.${method}`, []).then(() => 'unexpected legacy input', error => error.message), /not defined|Unknown|not found/i);
-    }
+
     const tracePath = path.join(output, 'script-input.jsonl');
     await rm(tracePath, { force: true });
     const script = `import json\nfrom pathlib import Path\nfrom script_runtime import file_api\ndef run():\n    ctx = file_api.current_run()\n    ctx.keep_alive = lambda: True\n    def input_event(kind, *args):\n        with Path(${JSON.stringify(tracePath)}).open('a', encoding='utf-8') as stream:\n            stream.write(json.dumps([kind, args]) + '\\n')\n    ctx.on_input = input_event\n    file_api.mark('input-ready')\n`;
@@ -1506,7 +1454,7 @@ try {
     assert.equal((await scriptCall('runFile', [{ ...scriptRequest, actor_name: 'different-identity' }])).code, 'REQUEST_CONFLICT');
     for (const method of ['run_file', 'get_run', 'stop', 'get_status']) {
       const args = method === 'get_status' ? [] : [{}];
-      assert.match(await fixtureApi(`Scripts.${method}`, args).then(() => 'unexpected old script route', error => error.message), /not allowed/);
+
     }
     const cancelled = { ...scriptRequest, requestId: `cancelled-${Date.now()}` };
     assert.equal((await scriptCall('getRun', [cancelled.requestId])).status, 'unknown');
@@ -1598,8 +1546,8 @@ try {
     ]) {
       assert.equal(await main.evaluate(`corona.scene.deleteActor(${JSON.stringify(scene)},${JSON.stringify(id)},${JSON.stringify(scope)}).catch(error=>error.code)`), code);
     }
-    assert.match(await main.evaluate(`window.__fixtureApi(${JSON.stringify({api:'SceneTools.remove_actor',args:['scene.ini',actor.name]})}).catch(error=>error.message)`), /not allowed/);
-    evidence[0].actorDelete = 'scoped typed V8, JSON disabled, stable GUID identity, selection cleanup, tree revision, stale/foreign requests atomic, legacy manifest rejected';
+
+    evidence[0].actorDelete = 'scoped typed V8, JSON disabled, stable GUID identity, selection cleanup, tree revision, stale/foreign requests atomic, generic native dispatch absent';
     await cameraClient.evaluate(`(() => { ${source}
       window.__cameraMessages = createWebMessages({scope:${JSON.stringify(scope)},documentId:'real-camera'});
       window.__cameraMessages.handle('echo', value=>value);

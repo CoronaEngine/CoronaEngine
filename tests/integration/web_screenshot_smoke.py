@@ -122,10 +122,7 @@ def run(port, root, engine_pid):
         target = wait(lambda: next((target for target in targets() if '#/SceneBar?' in target['url']), None), bool, 'SceneBar document')
         panel = Frontend(port, target_id=target['id'])
         wait(lambda: panel.evaluate("!!document.querySelector('[data-actor-name=Probe]')"), bool, 'SceneBar ready')
-        monitor = """(()=>{window.__retiredScreenshotRequests=[];const invoke=corona.editor.invoke;
-          corona.editor.invoke=(api,args)=>{if(['SceneTools.save_screenshot','SceneTools.select_screenshot_path','SceneTools.capture_viewport'].includes(api)){
-            window.__retiredScreenshotRequests.push(api);throw Error('Retired screenshot request');}
-            return invoke(api,args);};return true;})()"""
+        monitor = """(()=>{if(typeof corona.editor!=='undefined')throw Error('Generic native dispatch remains');return true;})()"""
         panel.evaluate(monitor)
         initial = cameras()
         output = root.parent / 'scene-ui-screenshot.png'
@@ -156,8 +153,8 @@ def run(port, root, engine_pid):
         assert secondary_png[:8] == b'\x89PNG\r\n\x1a\n'
         assert struct.unpack('>II', secondary_png[16:24]) == (secondary['width'], secondary['height'])
         assert camera_view.evaluate("document.querySelector('.error')?.textContent || ''") == ''
-        assert panel.evaluate('window.__retiredScreenshotRequests') == []
-        assert camera_view.evaluate('window.__retiredScreenshotRequests') == []
+        assert panel.evaluate('typeof corona.editor') == 'undefined'
+        assert camera_view.evaluate('typeof corona.editor') == 'undefined'
         after = cameras()
         for before in initial:
             current = next(camera for camera in after if camera['camera_id'] == before['camera_id'])

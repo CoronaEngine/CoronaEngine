@@ -23,6 +23,25 @@
 namespace UI = Corona::Systems::UI;
 using Json = nlohmann::json;
 
+// Exercise permission rejection without restoring a production Web endpoint.
+struct RetiredWebCaller {
+    UI::NativeResult invoke(const std::string& api, const Json& args, const UI::NativeContext& context) const {
+        return UI::EditorApiRegistry::instance().invoke({api, args, UI::EditorApiCaller::Cef}, context);
+    }
+};
+
+void test_no_generic_web_contracts() {
+    constexpr auto cef = static_cast<std::uint32_t>(UI::EditorApiCaller::Cef);
+    for (const auto& spec : UI::EditorApiRegistry::instance().list_methods()) {
+        if ((spec.allowed_callers & cef) || RetiredWebCaller{}.invoke(spec.api_name, Json::array(), {}).success)
+            throw std::runtime_error(std::string("Retired Web method remains callable: ") + spec.api_name);
+    }
+    for (const auto& spec : UI::EditorApiRegistry::instance().list_events()) {
+        if (spec.allowed_callers & cef)
+            throw std::runtime_error(std::string("Retired Web event remains subscribable: ") + spec.event_name);
+    }
+}
+
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
 }
@@ -257,7 +276,7 @@ void test_native_scene_values_and_non_web_adapters() {
     require(UI::execute_scene_operation(selection).error_code == "PROJECT_CONTEXT_CHANGED", "old selection scope must fail");
     selection.archive_session = active.archive_session; selection.selection.scene = "other.ini";
     require(UI::execute_scene_operation(selection).error_code == "PROJECT_CONTEXT_CHANGED", "wrong scene must fail");
-    UI::CefEditorApiEndpoint cef;
+    RetiredWebCaller cef;
     for (const auto* method : {"SceneTools.read_active_scene", "SceneTools.select_actor"}) {
         const auto* spec = UI::EditorApiRegistry::instance().find(method);
         require(spec && std::string(spec->js_wrapper).empty(), "migrated Web methods cannot retain a manifest wrapper");
@@ -332,7 +351,7 @@ void test_owned_actor_property_projection() {
     const auto after = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
     require(after.tree_revision == before.tree_revision && after.selection.has_value() == before.selection.has_value(),
         "property reads cannot change tree revision or selection");
-    UI::CefEditorApiEndpoint cef;
+    RetiredWebCaller cef;
     const auto* spec = UI::EditorApiRegistry::instance().find("SceneTools.read_actor");
     require(spec && std::string(spec->js_wrapper).empty() && !cef.invoke("SceneTools.read_actor", Json::array(), {}).success,
         "the migrated Web actor reader must not retain a manifest path");
@@ -370,7 +389,7 @@ void test_owned_camera_projection() {
     }
     require(UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.tree_revision == before.tree_revision,
         "camera reads cannot mutate the tree");
-    UI::CefEditorApiEndpoint cef;
+    RetiredWebCaller cef;
     for (const auto* method : {"SceneTools.list_camera_views", "SceneTools.get_scene_snapshot"}) {
         const auto* spec = UI::EditorApiRegistry::instance().find(method);
         require(spec && std::string(spec->js_wrapper).empty() && !cef.invoke(method, Json::array(), {}).success,
@@ -410,7 +429,7 @@ void test_owned_scene_tree_projection() {
     const auto after = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
     require(after.tree_revision == before.tree_revision && after.selection.has_value() == before.selection.has_value(),
         "tree reads cannot mutate revision or selection");
-    UI::CefEditorApiEndpoint cef;
+    RetiredWebCaller cef;
     const auto* spec = UI::EditorApiRegistry::instance().find("SceneTools.list_scene_tree");
     require(spec && std::string(spec->js_wrapper).empty() &&
         !cef.invoke("SceneTools.list_scene_tree", Json::array({before.scene}), {}).success,
@@ -443,7 +462,7 @@ void test_one_native_transform_authority() {
     const auto* spec = UI::EditorApiRegistry::instance().find("SceneTools.set_actor_transform");
     require(spec && std::string(spec->js_wrapper).empty(), "old transform Web wrapper must be removed");
     const Json args = {"scene.ini","transform-probe",{{"archive_session","camera-test-archive"},{"rotation",{7,8,9}}}};
-    require(!UI::CefEditorApiEndpoint{}.invoke("SceneTools.set_actor_transform",args,{}).success,
+    require(!RetiredWebCaller{}.invoke("SceneTools.set_actor_transform",args,{}).success,
             "the old CEF transform route must be unavailable");
     const auto script = UI::EditorApiRegistry::instance().invoke({"SceneTools.set_actor_transform",args,
         UI::EditorApiCaller::ScriptRuntime},{});
@@ -512,7 +531,7 @@ void test_one_native_property_authority() {
         "partial patches preserve omitted groups and offsets while accepting explicit false");
     for (const auto* method : {"SceneTools.set_actor_state", "SceneTools.set_actor_physics", "SceneTools.set_actor_camera_lock"}) {
         const auto* spec = UI::EditorApiRegistry::instance().find(method);
-        require(spec && std::string(spec->js_wrapper).empty() && !UI::CefEditorApiEndpoint{}.invoke(method, Json::array(), {}).success,
+        require(spec && std::string(spec->js_wrapper).empty() && !RetiredWebCaller{}.invoke(method, Json::array(), {}).success,
             "all three redundant Web property routes and wrappers must be retired");
     }
     const auto invoke = [](const char* method, Json value, UI::EditorApiCaller caller) {
@@ -584,7 +603,7 @@ void test_one_native_environment_authority() {
     for (const auto* method : {"get_environment", "set_environment", "sun_direction", "floor_grid", "get_physics_params", "set_physics_params"}) {
         const auto name = std::string("SceneTools.") + method;
         const auto* spec = UI::EditorApiRegistry::instance().find(name);
-        require(spec && std::string(spec->js_wrapper).empty() && !UI::CefEditorApiEndpoint{}.invoke(name, Json::array(), {}).success,
+        require(spec && std::string(spec->js_wrapper).empty() && !RetiredWebCaller{}.invoke(name, Json::array(), {}).success,
             "all six redundant environment Web routes must be retired");
     }
     const auto invoke = [](const char* method, Json args, UI::EditorApiCaller caller) {
@@ -645,7 +664,7 @@ void test_one_scoped_native_focus_application() {
     auto& registry = UI::EditorApiRegistry::instance();
     const auto* spec = registry.find("SceneTools.focus_actor");
     require(spec && std::string(spec->js_wrapper).empty(), "focus has no old Web wrapper");
-    require(!UI::CefEditorApiEndpoint{}.invoke("SceneTools.focus_actor", {"scene.ini", "Transform probe", "primary"}, {}).success,
+    require(!RetiredWebCaller{}.invoke("SceneTools.focus_actor", {"scene.ini", "Transform probe", "primary"}, {}).success,
         "CEF cannot use the old focus route");
     require(registry.find("ResourceSearch.focus_actor") == nullptr, "orphan ResourceSearch focus contract must be deleted");
     const auto python = registry.invoke({"SceneTools.focus_actor", {"scene.ini", "Transform probe", "Primary camera"},
@@ -689,7 +708,7 @@ void test_camera_settings_cannot_change_window_lifecycle() {
     for (const auto* name : {"SceneTools.open_camera_view", "SceneTools.close_camera_view"}) {
         require(registry.find(name) && std::string(registry.find(name)->js_wrapper).empty(),
             "old camera lifecycle methods must have no Web wrapper");
-        require(!UI::CefEditorApiEndpoint{}.invoke(name, {"scene.ini", "primary"}, {}).success,
+        require(!RetiredWebCaller{}.invoke(name, {"scene.ini", "primary"}, {}).success,
             "old CEF state-only camera lifecycle routes must reject");
         require(registry.invoke({name, {"scene.ini", "Primary camera"}, UI::EditorApiCaller::PythonScript}, {}).success,
             "retiring Web lifecycle routes must preserve the existing Python contract");
@@ -758,7 +777,7 @@ void test_typed_camera_creation_has_no_window_side_effect() {
     require(later.error_code.empty(), "second temporary camera creates a vector erase-move fixture");
     auto moved = survivor; moved.camera_id = later.camera.camera_id;
     require(UI::prepare_camera_window_request(moved).error_code.empty(), "later camera authority resolves before erase-move");
-    require(!UI::CefEditorApiEndpoint{}.invoke("SceneTools.create_camera_view", {"scene.ini", "legacy"}, {}).success,
+    require(!RetiredWebCaller{}.invoke("SceneTools.create_camera_view", {"scene.ini", "legacy"}, {}).success,
         "old create-camera Web route must reject");
     const auto removed = UI::NativeApiRegistry::instance().dispatch({"SceneTools", "delete_camera", {"scene.ini", created.camera.camera_id}}, {});
     require(removed && removed->success, "test-owned camera must be removed after creation verification");
@@ -793,7 +812,7 @@ void test_scoped_screenshot_rejects_invalid_identity_without_mutation() {
     for (const auto* name : {"SceneTools.save_screenshot", "SceneTools.select_screenshot_path", "SceneTools.capture_viewport"}) {
         const auto* spec = registry.find(name);
         require(spec && std::string(spec->js_wrapper).empty(), "screenshot must not expose old Web wrappers");
-        require(!UI::CefEditorApiEndpoint{}.invoke(name, Json::array(), {}).success, "CEF old screenshot routes must reject");
+        require(!RetiredWebCaller{}.invoke(name, Json::array(), {}).success, "CEF old screenshot routes must reject");
         require(!registry.invoke({name, Json::array(), UI::EditorApiCaller::ScriptRuntime}, {}).success,
             "screenshot migration must not widen ScriptRuntime permissions");
     }
@@ -857,7 +876,7 @@ void test_camera_properties_share_pose_view_and_native_authority() {
     require(python.success && python.data["camera"]["width"] == 400, "Python view adapter shares camera properties");
     for (const auto* name : {"SceneTools.set_camera_pose", "SceneTools.update_camera_view"}) {
         require(std::string(registry.find(name)->js_wrapper).empty(), "old camera Web wrappers must be removed");
-        require(!UI::CefEditorApiEndpoint{}.invoke(name, {"scene.ini", "primary", Json::object()}, {}).success,
+        require(!RetiredWebCaller{}.invoke(name, {"scene.ini", "primary", Json::object()}, {}).success,
             "old camera CEF routes must reject rather than forward to V8");
     }
     require(UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.tree_revision == active.tree_revision,
@@ -1014,7 +1033,7 @@ void test_pick_results_resolve_authoritative_actor_and_scope() {
     require(UI::finish_viewport_pick(request, hit).error_code == "PICK_TIMEOUT", "timeout must reject the Promise");
     request.camera.archive_session = "old";
     require(UI::finish_viewport_pick(request, hit).error_code == "PROJECT_CONTEXT_CHANGED", "late result cannot enter a new archive");
-    UI::CefEditorApiEndpoint cef;
+    RetiredWebCaller cef;
     require(!cef.invoke("SceneTools.pick_actor_at_pixel", {"scene.ini",0,0,100,100}, {}).success,
         "old synchronous pick must not remain a second Web route");
     require(!UI::find_editor_api_event("SceneTools.actorPickResult"), "retired pick event must not remain subscribable");
@@ -1048,13 +1067,14 @@ void test_script_input_queue_has_one_owner_and_drops_retired_scopes() {
     const auto sdl = UI::drain_input_events();
     require(sdl.size() == 2 && sdl[0].type == 0 && sdl[1].type == 1 && sdl[0].arg0 == "KeyD" && sdl[1].arg0 == "KeyD",
         "real SDL keyboard processing must enqueue exactly one down and one up without a Web owner");
-    UI::CefEditorApiEndpoint endpoint;
+    RetiredWebCaller endpoint;
     for (const auto* method : {"Scripts.key_event", "Scripts.key_release", "Scripts.mouse_event"})
         require(!endpoint.invoke(method, Json::array(), {}).success, "retired manifest input must be unavailable");
 }
 
 int main() {
     try {
+        test_no_generic_web_contracts();
         test_identity_lifetime();
         test_script_input_queue_has_one_owner_and_drops_retired_scopes();
         auto& kernel = Corona::Kernel::KernelContext::instance();

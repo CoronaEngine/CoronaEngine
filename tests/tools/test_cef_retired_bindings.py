@@ -700,3 +700,19 @@ def test_application_exit_is_named_and_keeps_non_web_contract():
     assert 'app->SetValue("closeProcess"' in binding
     owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8')
     assert 'request_application_exit()' in owner
+
+
+def test_generic_cef_dispatch_and_callback_registry_are_retired():
+    root = Path(__file__).resolve().parents[2]
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
+    for retired in ['EditorApiMethod', 'read_editor_api_call', 'NativeResult', 'root->SetValue("editor"']:
+        assert retired not in binding, retired
+    for file in ['cef_editor_api.h', 'cef_editor_api.cpp']:
+        source = (root / 'src/systems/ui/editor_api' / file).read_text(encoding='utf-8')
+        for retired in ['CefEditorApiEndpoint', 'register_cef_v8_callback', 'clear_cef_callbacks_for_browser',
+                        'v8_context', 'v8_callback', 'emit_v8_callback']:
+            assert retired not in source, (file, retired)
+    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8')
+    for method in ['list_methods', 'list_events']:
+        line = next(line for line in manifest.splitlines() if f'(EditorApi, {method},' in line)
+        assert '~caller_mask(EditorApiCaller::Cef)' in line, line
