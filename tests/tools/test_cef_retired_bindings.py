@@ -2,6 +2,18 @@
 from pathlib import Path
 
 
+def test_lanchat_native_callbacks_do_not_serialize_and_parse_event_dtos():
+    root = Path(__file__).resolve().parents[2]
+    network = (root / 'src/systems/network/network_system.cpp').read_text(encoding='utf-8')
+    owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8')
+    assert 'std::function<void(const Network::LanChatEvent&)>' in network
+    for old in ['message_event_json', 'history_snapshot_event_json', 'member_update_event_json',
+                'lanchat_error_event_json', 'agents_json', 'json_escape']:
+        assert old not in network
+    assert 'emit_lanchat_event_json' not in owner
+    assert 'void emit_lanchat_event(const Corona::Network::LanChatEvent& event)' in owner
+
+
 def test_network_has_named_owned_contract_and_no_legacy_web_routes():
     root = Path(__file__).resolve().parents[2]
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')

@@ -4446,22 +4446,6 @@ nlohmann::json network_session_json(const NetworkSessionSnapshot& session) {
 }
 
 
-void emit_lanchat_event_json(const std::string& event_json) {
-    if (event_json.empty()) {
-        return;
-    }
-    nlohmann::json event_payload = nlohmann::json::object();
-    try {
-        event_payload = nlohmann::json::parse(event_json);
-        if (!event_payload.is_object()) {
-            event_payload = {{"payload", event_payload}};
-        }
-    } catch (...) {
-        event_payload = {{"raw", event_json}};
-    }
-    emit_editor_api_event("LANChat.event", event_payload);
-}
-
 nlohmann::json build_lanchat_members(
     const std::vector<Corona::Network::LanChatMember>& members) {
     nlohmann::json result = nlohmann::json::array();
@@ -4538,6 +4522,37 @@ nlohmann::json build_lanchat_agents(
         });
     }
     return result;
+}
+
+void emit_lanchat_event(const Corona::Network::LanChatEvent& event) {
+    nlohmann::json payload;
+    using Kind = Corona::Network::LanChatEvent::Kind;
+    switch (event.kind) {
+    case Kind::Message:
+        payload = build_lanchat_history({event.message}).front();
+        payload["event"] = "message";
+        break;
+    case Kind::Members:
+        payload = {{"event", "member_update"}, {"peer_id", event.peer_id},
+            {"members", build_lanchat_members(event.members)},
+            {"member_details", build_lanchat_member_details(event.members)}};
+        break;
+    case Kind::History:
+        payload = {{"event", "history_snapshot"}, {"history", build_lanchat_history(event.history)}};
+        break;
+    case Kind::Agents:
+        payload = {{"event", "agent_roster"}, {"agents", build_lanchat_agents(event.agents)}};
+        break;
+    case Kind::Closed:
+        payload = {{"event", "room_closed"}, {"room_id", event.room_id}};
+        break;
+    case Kind::Error:
+        payload = {{"event", "error"}, {"code", event.code}};
+        if (!event.error_message.empty()) payload["message"] = event.error_message;
+        break;
+    }
+    payload["channel"] = "lanchat";
+    emit_editor_api_event("LANChat.event", payload);
 }
 
 nlohmann::json build_lanchat_message(
@@ -9118,7 +9133,7 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            sys->set_lanchat_event_callback(emit_lanchat_event_json);
+            sys->set_lanchat_event_callback(emit_lanchat_event);
             const auto payload_arg = arg_object(request.args, 0);
             const std::string room = payload_arg.value("room", "");
             const uint16_t port = payload_arg.value("port", 27960);
@@ -9151,7 +9166,7 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            sys->set_lanchat_event_callback(emit_lanchat_event_json);
+            sys->set_lanchat_event_callback(emit_lanchat_event);
             const auto payload_arg = arg_object(request.args, 0);
             const std::string room = payload_arg.value("room", "");
             const std::string nickname = payload_arg.value("nickname", "房主");
@@ -9241,7 +9256,7 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            sys->set_lanchat_event_callback(emit_lanchat_event_json);
+            sys->set_lanchat_event_callback(emit_lanchat_event);
             const auto payload_arg = arg_object(request.args, 0);
             const std::string ip = payload_arg.value("ip", "");
             const uint16_t port = payload_arg.value("port", 27960);

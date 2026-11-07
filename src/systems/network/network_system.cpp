@@ -19,7 +19,6 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
-#include <iomanip>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <mutex>
@@ -40,7 +39,7 @@ struct NetworkSystem::Impl {
     Network::SyncEngine sync_engine;
     Network::NetworkIdentityRegistry identity_registry{SharedDataHub::instance()};
     Network::LanChatState lanchat;
-    std::function<void(const std::string&)> lanchat_event_callback;
+    std::function<void(const Network::LanChatEvent&)> lanchat_event_callback;
     std::deque<NetworkSystem::LanChatRoomEvent> pending_lanchat_room_events;
     std::deque<NetworkSystem::LanChatSyncEvent> pending_lanchat_sync_events;
     std::string lanchat_nickname;
@@ -220,150 +219,37 @@ std::string make_lanchat_history_session_id(const std::string& room_id) {
     return out.str();
 }
 
-std::string json_escape(const std::string& input) {
-    std::ostringstream out;
-    for (char ch : input) {
-        switch (ch) {
-        case '\\': out << "\\\\"; break;
-        case '"': out << "\\\""; break;
-        case '\b': out << "\\b"; break;
-        case '\f': out << "\\f"; break;
-        case '\n': out << "\\n"; break;
-        case '\r': out << "\\r"; break;
-        case '\t': out << "\\t"; break;
-        default:
-            if (static_cast<unsigned char>(ch) < 0x20) {
-                out << "\\u" << std::hex << std::setw(4) << std::setfill('0')
-                    << static_cast<int>(static_cast<unsigned char>(ch));
-            } else {
-                out << ch;
-            }
-            break;
-        }
-    }
-    return out.str();
+Network::LanChatEvent member_update_event(const std::vector<Network::LanChatMember>& members,
+                                           const std::string& local_peer_id) {
+    Network::LanChatEvent event{Network::LanChatEvent::Kind::Members};
+    event.peer_id = local_peer_id;
+    event.members = members;
+    return event;
 }
 
-std::string json_string(const std::string& value) {
-    return "\"" + json_escape(value) + "\"";
+Network::LanChatEvent message_event(const Network::LanChatMessage& message) {
+    Network::LanChatEvent event{Network::LanChatEvent::Kind::Message};
+    event.message = message;
+    return event;
 }
 
-std::string member_names_json(const std::vector<Network::LanChatMember>& members) {
-    std::ostringstream out;
-    out << "[";
-    for (size_t i = 0; i < members.size(); ++i) {
-        if (i > 0) out << ",";
-        out << json_string(members[i].nickname);
-    }
-    out << "]";
-    return out.str();
+Network::LanChatEvent history_snapshot_event(const std::vector<Network::LanChatMessage>& history) {
+    Network::LanChatEvent event{Network::LanChatEvent::Kind::History};
+    event.history = history;
+    return event;
 }
 
-std::string member_details_json(const std::vector<Network::LanChatMember>& members) {
-    std::ostringstream out;
-    out << "[";
-    for (size_t i = 0; i < members.size(); ++i) {
-        const auto& member = members[i];
-        if (i > 0) out << ",";
-        out << "{\"member_id\":" << json_string(member.member_id)
-            << ",\"nickname\":" << json_string(member.nickname)
-            << ",\"status\":" << json_string(member.status)
-            << "}";
-    }
-    out << "]";
-    return out.str();
+Network::LanChatEvent agent_roster_event(const std::vector<Network::LanChatAgent>& agents) {
+    Network::LanChatEvent event{Network::LanChatEvent::Kind::Agents};
+    event.agents = agents;
+    return event;
 }
 
-std::string member_update_event_json(const std::vector<Network::LanChatMember>& members,
-                                     const std::string& local_peer_id) {
-    std::ostringstream out;
-    out << "{\"channel\":\"lanchat\",\"event\":\"member_update\""
-        << ",\"peer_id\":" << json_string(local_peer_id)
-        << ",\"members\":" << member_names_json(members)
-        << ",\"member_details\":" << member_details_json(members)
-        << "}";
-    return out.str();
-}
-
-std::string history_json(const std::vector<Network::LanChatMessage>& history) {
-    std::ostringstream out;
-    out << "[";
-    for (size_t i = 0; i < history.size(); ++i) {
-        const auto& message = history[i];
-        if (i > 0) out << ",";
-        out << "{\"message_id\":" << json_string(message.message_id)
-            << ",\"sender_id\":" << json_string(message.sender_id)
-            << ",\"room_id\":" << json_string(message.room_id)
-            << ",\"seq\":" << message.seq
-            << ",\"from\":" << json_string(message.sender_name)
-            << ",\"text\":" << json_string(message.text)
-            << ",\"ts\":" << (message.timestamp_ms / 1000)
-            << ",\"sender_type\":" << json_string(message.sender_type)
-            << ",\"message_kind\":" << json_string(message.message_kind)
-            << ",\"target_agent_id\":" << json_string(message.target_agent_id)
-            << ",\"source_user_id\":" << json_string(message.source_user_id)
-            << ",\"correlation_id\":" << json_string(message.correlation_id)
-            << ",\"metadata_json\":" << json_string(message.metadata_json)
-            << "}";
-    }
-    out << "]";
-    return out.str();
-}
-
-std::string agents_json(const std::vector<Network::LanChatAgent>& agents) {
-    std::ostringstream out;
-    out << "[";
-    for (size_t i = 0; i < agents.size(); ++i) {
-        const auto& agent = agents[i];
-        if (i > 0) out << ",";
-        out << "{\"agent_id\":" << json_string(agent.agent_id)
-            << ",\"name\":" << json_string(agent.name)
-            << ",\"persona\":" << json_string(agent.persona)
-            << ",\"owner\":" << json_string(agent.owner_id)
-            << "}";
-    }
-    out << "]";
-    return out.str();
-}
-
-std::string message_event_json(const Network::LanChatMessage& message) {
-    std::ostringstream out;
-    out << "{\"channel\":\"lanchat\",\"event\":\"message\""
-        << ",\"message_id\":" << json_string(message.message_id)
-        << ",\"sender_id\":" << json_string(message.sender_id)
-        << ",\"room_id\":" << json_string(message.room_id)
-        << ",\"seq\":" << message.seq
-        << ",\"from\":" << json_string(message.sender_name)
-        << ",\"text\":" << json_string(message.text)
-        << ",\"ts\":" << (message.timestamp_ms / 1000)
-        << ",\"sender_type\":" << json_string(message.sender_type)
-        << ",\"message_kind\":" << json_string(message.message_kind)
-        << ",\"target_agent_id\":" << json_string(message.target_agent_id)
-        << ",\"source_user_id\":" << json_string(message.source_user_id)
-        << ",\"correlation_id\":" << json_string(message.correlation_id)
-        << ",\"metadata_json\":" << json_string(message.metadata_json)
-        << "}";
-    return out.str();
-}
-
-std::string history_snapshot_event_json(const std::vector<Network::LanChatMessage>& history) {
-    std::ostringstream out;
-    out << "{\"channel\":\"lanchat\",\"event\":\"history_snapshot\""
-        << ",\"history\":" << history_json(history)
-        << "}";
-    return out.str();
-}
-
-std::string lanchat_error_event_json(const std::string& code,
-                                     const std::string& message = {}) {
-    std::ostringstream out;
-    out << "{\"channel\":\"lanchat\",\"event\":\"error\""
-        << ",\"code\":" << json_string(code);
-    if (!message.empty()) {
-        out << ",\"message\":" << json_string(message);
-    }
-    out << "}";
-    return out.str();
+Network::LanChatEvent lanchat_error_event(const std::string& code, const std::string& message = {}) {
+    Network::LanChatEvent event{Network::LanChatEvent::Kind::Error};
+    event.code = code;
+    event.error_message = message;
+    return event;
 }
 
 std::filesystem::path lanchat_history_root_from_project(const std::string& project_root) {
@@ -668,7 +554,7 @@ void NetworkSystem::update() {
                         impl_->lanchat.room_id(), code);
         clear_lanchat_room_state();
         if (impl_->lanchat_event_callback) {
-            impl_->lanchat_event_callback(lanchat_error_event_json(code));
+            impl_->lanchat_event_callback(lanchat_error_event(code));
         }
     }
 
@@ -984,11 +870,10 @@ void NetworkSystem::notify_lanchat_room_closed() {
     if (impl_->pending_lanchat_room_events.size() > 32) {
         impl_->pending_lanchat_room_events.pop_front();
     }
-    const std::string event_json =
-        "{\"channel\":\"lanchat\",\"event\":\"room_closed\",\"room_id\":" +
-        json_string(room_id) + "}";
     if (impl_->lanchat_event_callback) {
-        impl_->lanchat_event_callback(event_json);
+        Network::LanChatEvent event{Network::LanChatEvent::Kind::Closed};
+        event.room_id = room_id;
+        impl_->lanchat_event_callback(event);
     }
 }
 
@@ -1095,7 +980,7 @@ bool NetworkSystem::connect_to_peer(const std::string& ip, uint16_t port,
     return true;
 }
 
-void NetworkSystem::set_lanchat_event_callback(std::function<void(const std::string&)> callback) {
+void NetworkSystem::set_lanchat_event_callback(std::function<void(const Network::LanChatEvent&)> callback) {
     impl_->lanchat_event_callback = std::move(callback);
 }
 
@@ -1254,7 +1139,7 @@ Network::LanChatMessageResult NetworkSystem::lanchat_send_message_ex(
         impl_->peer_manager.broadcast(Network::kChannelReliable, packet.data(), packet.size(), true);
     }
     if (impl_->lanchat_event_callback) {
-        impl_->lanchat_event_callback(message_event_json(result.message));
+        impl_->lanchat_event_callback(message_event(result.message));
     }
     impl_->lanchat.enqueue_agent_triggers_for_message(result.message, sender_id);
     return result;
@@ -1325,7 +1210,7 @@ Network::LanChatMessageResult NetworkSystem::lanchat_send_agent_reply_ex(
         impl_->peer_manager.broadcast(Network::kChannelReliable, packet.data(), packet.size(), true);
     }
     if (impl_->lanchat_event_callback) {
-        impl_->lanchat_event_callback(message_event_json(result.message));
+        impl_->lanchat_event_callback(message_event(result.message));
     }
     return result;
 }
@@ -1382,7 +1267,7 @@ Network::LanChatMessageResult NetworkSystem::lanchat_send_system_message_to_user
         correlation_id,
         metadata_json);
     if (result.accepted && impl_->lanchat_event_callback) {
-        impl_->lanchat_event_callback(message_event_json(result.message));
+        impl_->lanchat_event_callback(message_event(result.message));
     }
     if (result.accepted) {
         persist_lanchat_message(result.message);
@@ -1418,8 +1303,7 @@ Network::LanChatResult NetworkSystem::lanchat_register_agent(const std::string& 
     }
     if (result.ok && impl_->lanchat_event_callback) {
         impl_->lanchat_event_callback(
-            "{\"channel\":\"lanchat\",\"event\":\"agent_roster\",\"agents\":" +
-            agents_json(impl_->lanchat.agents()) + "}");
+            agent_roster_event(impl_->lanchat.agents()));
     }
     return result;
 }
@@ -1443,8 +1327,7 @@ Network::LanChatResult NetworkSystem::lanchat_remove_agent(const std::string& ag
     }
     if (result.ok && impl_->lanchat_event_callback) {
         impl_->lanchat_event_callback(
-            "{\"channel\":\"lanchat\",\"event\":\"agent_roster\",\"agents\":" +
-            agents_json(impl_->lanchat.agents()) + "}");
+            agent_roster_event(impl_->lanchat.agents()));
     }
     return result;
 }
@@ -2033,7 +1916,7 @@ void NetworkSystem::on_peer_disconnected(const Network::PeerManager::PeerInfo& i
                 Network::kChannelReliable, packet.data(), packet.size(), true);
             if (impl_->lanchat_event_callback) {
                 impl_->lanchat_event_callback(
-                    member_update_event_json(impl_->lanchat.members(), local_peer_id()));
+                    member_update_event(impl_->lanchat.members(), local_peer_id()));
             }
         }
     }
@@ -2554,7 +2437,7 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
         impl_->lanchat_member_by_peer[sender_peer_id] = member_id;
         if (impl_->lanchat_event_callback) {
             impl_->lanchat_event_callback(
-                member_update_event_json(impl_->lanchat.members(), local_peer_id()));
+                member_update_event(impl_->lanchat.members(), local_peer_id()));
         }
         if (impl_->session_role == SessionRole::Host) {
             auto members_packet = Network::build_chat_member_update(
@@ -2605,7 +2488,7 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
         impl_->lanchat_join_member_snapshot_received = false;
         impl_->lanchat_join_history_snapshot_received = false;
         if (impl_->lanchat_event_callback) {
-            impl_->lanchat_event_callback(lanchat_error_event_json(code, reason));
+            impl_->lanchat_event_callback(lanchat_error_event(code, reason));
         }
     } else if (mt == MessageType::CHAT_LEAVE) {
         Network::BufferReader r(data + 1, len - 1);
@@ -2637,7 +2520,7 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
         }
         if (impl_->lanchat_event_callback) {
             impl_->lanchat_event_callback(
-                member_update_event_json(impl_->lanchat.members(), local_peer_id()));
+                member_update_event(impl_->lanchat.members(), local_peer_id()));
         }
         if (impl_->session_role == SessionRole::Host) {
             auto packet = Network::build_chat_member_update(
@@ -2687,7 +2570,7 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
         }
         if (impl_->lanchat_event_callback) {
             impl_->lanchat_event_callback(
-                member_update_event_json(impl_->lanchat.members(), local_peer_id()));
+                member_update_event(impl_->lanchat.members(), local_peer_id()));
         }
     } else if (mt == MessageType::CHAT_HISTORY_SNAPSHOT ||
                mt == MessageType::CHAT_HISTORY_SNAPSHOT_V2) {
@@ -2718,7 +2601,7 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
         }
         if (impl_->lanchat_event_callback) {
             impl_->lanchat_event_callback(
-                history_snapshot_event_json(impl_->lanchat.history()));
+                history_snapshot_event(impl_->lanchat.history()));
         }
     } else if (mt == MessageType::CHAT_MESSAGE || mt == MessageType::CHAT_AGENT_REPLY ||
                mt == MessageType::CHAT_MESSAGE_V2 || mt == MessageType::CHAT_AGENT_REPLY_V2) {
@@ -2745,7 +2628,7 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
             result = impl_->lanchat.apply_remote_message(message);
         }
         if (result.accepted && impl_->lanchat_event_callback) {
-            impl_->lanchat_event_callback(message_event_json(result.message));
+            impl_->lanchat_event_callback(message_event(result.message));
         }
         if (result.accepted && impl_->session_role == SessionRole::Host) {
             persist_lanchat_message(result.message);
@@ -2789,8 +2672,7 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
         auto result = impl_->lanchat.register_agent(agent_id, name, persona, owner);
         if (result.ok && impl_->lanchat_event_callback) {
             impl_->lanchat_event_callback(
-                "{\"channel\":\"lanchat\",\"event\":\"agent_roster\",\"agents\":" +
-                agents_json(impl_->lanchat.agents()) + "}");
+                agent_roster_event(impl_->lanchat.agents()));
         }
         if (result.ok && impl_->session_role == SessionRole::Host) {
             impl_->peer_manager.broadcast(Network::kChannelReliable, data, len, true);
@@ -2809,8 +2691,7 @@ void NetworkSystem::on_custom_message(const std::string& sender_peer_id,
         auto result = impl_->lanchat.remove_agent(agent_id);
         if (result.ok && impl_->lanchat_event_callback) {
             impl_->lanchat_event_callback(
-                "{\"channel\":\"lanchat\",\"event\":\"agent_roster\",\"agents\":" +
-                agents_json(impl_->lanchat.agents()) + "}");
+                agent_roster_event(impl_->lanchat.agents()));
         }
         if (result.ok && impl_->session_role == SessionRole::Host) {
             impl_->peer_manager.broadcast(Network::kChannelReliable, data, len, true);

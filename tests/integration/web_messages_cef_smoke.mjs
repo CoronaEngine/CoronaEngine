@@ -533,6 +533,34 @@ try {
     assert.deepEqual(await main.evaluate("corona.project.openProject('')"), { ok: false, path: '', status: 'cancelled' });
     assert.match(await fixtureApi('ProjectLauncher.open_project', [cameraWorld])
       .then(() => 'unexpected retired route', error => error.message), /not allowed/);
+    stage = 'LANChat message and roster event compatibility';
+    await main.evaluate(`corona.network.setProjectRoot(${JSON.stringify(cameraWorld)})`);
+    const chatToken = await main.evaluate(`(() => {
+      window.__chatEvents = [];
+      return corona.editor.on('LANChat.event', event => window.__chatEvents.push(event));
+    })()`);
+    try {
+      assert.equal((await fixtureApi('LANChat.start_local_room', [{ room: 'cef-owned-events', nickname: 'Host' }])).data.ok, true);
+      const chatText = 'quoted "text"\n中文';
+      assert.equal((await fixtureApi('LANChat.send_message', [{ text: chatText, correlation_id: 'cef-correlation' }])).data.ok, true);
+      const agent = (await fixtureApi('LANChat.add_agent', [{ name: 'Agent 中文', persona: 'smoke' }])).data;
+      assert.equal(agent.ok, true);
+      assert.equal((await fixtureApi('LANChat.remove_agent', [{ agent_id: agent.agent_id }])).data.ok, true);
+      await waitFor(async () => (await main.evaluate('window.__chatEvents.length')) === 3);
+      const events = await main.evaluate('window.__chatEvents');
+      assert.ok(events.every(event => event.channel === 'lanchat'));
+      assert.deepEqual(events.map(event => event.event), ['message', 'agent_roster', 'agent_roster']);
+      assert.equal(events[0].text, chatText);
+      assert.equal(events[0].correlation_id, 'cef-correlation');
+      assert.equal(events[0].from, 'Host');
+      assert.equal(events[1].agents[0].name, 'Agent 中文');
+      assert.equal(events[1].agents[0].agent_id, agent.agent_id);
+      assert.deepEqual(events[2].agents, []);
+    } finally {
+      await fixtureApi('LANChat.stop_local_room', []);
+      assert.equal(await main.evaluate(`corona.editor.off(${chatToken})`), true);
+    }
+    evidence[0].lanChatEvents = 'local message and roster event compatibility with JSON disabled; exact text/identity, stable prior roster snapshot, unsubscribe; named LANChat migration still pending';
     const listed = await listCameras();
     const camera = listed.data.cameras.find(item => item.camera_id === 'smoke-camera');
     assert.ok(camera?.archive_session);

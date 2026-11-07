@@ -54,6 +54,18 @@ struct LanChatAgent {
     std::string owner_id;
 };
 
+// Each notification owns its snapshot; consumers may queue it after the room
+// changes or NetworkSystem retires. Wire and history formats are independent.
+struct LanChatEvent {
+    enum class Kind { Message, Members, History, Agents, Closed, Error };
+    Kind kind;
+    LanChatMessage message;
+    std::vector<LanChatMember> members;
+    std::vector<LanChatMessage> history;
+    std::vector<LanChatAgent> agents;
+    std::string peer_id, room_id, code, error_message;
+};
+
 struct LanChatAgentTrigger {
     std::string trigger_id;
     std::string message_id;
