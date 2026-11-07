@@ -109,6 +109,26 @@ public:
     [[nodiscard]] bool is_running() const;
 
     /**
+     * @brief tick 边界阶段：在**所有节点之前**执行一次
+     *
+     * 它不是一个系统：没有数据依赖、不受 period_ticks 门控、必须先于所有节点。
+     * 用来落地"结构变更"与"全局参数"这类**必须在遍历之前生效**的命令
+     * （actor 创建/销毁、材质换绑、回调注册、Environment 标量）。
+     *
+     * 约定：
+     * - 必须在 start() 之前设置（tick 线程只读该成员）
+     * - 抛异常不会杀线程：本 tick 中止（等同掉帧），下一 tick 继续
+     * - 耗时会累加进 FrameTickReport::total_ms
+     */
+    using TickBoundaryHook = std::function<void()>;
+    void set_tick_boundary_hook(TickBoundaryHook hook);
+
+    /// 最近一次边界阶段耗时（毫秒）
+    [[nodiscard]] double last_boundary_ms() const {
+        return last_boundary_ms_.load(std::memory_order_relaxed);
+    }
+
+    /**
      * @brief 手动跑一个 tick（测试/降级路径）
      *
      * 会推进帧号并记录统计，与线程循环里的行为一致。
@@ -176,6 +196,8 @@ private:
     std::vector<ISystem*> systems_;
     std::atomic<std::uint32_t> tick_rate_;
     bool prepared_{false};
+    TickBoundaryHook boundary_hook_;                  ///< 装配期设置，tick 线程只读
+    std::atomic<double> last_boundary_ms_{0.0};
 
     std::jthread thread_;
     mutable std::mutex state_mutex_;

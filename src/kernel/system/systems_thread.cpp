@@ -182,13 +182,49 @@ FrameTickReport SystemsThread::run_once(double delta_seconds) {
     return report;
 }
 
+void SystemsThread::set_tick_boundary_hook(TickBoundaryHook hook) {
+    boundary_hook_ = std::move(hook);
+}
+
 FrameTickReport SystemsThread::tick_locked(double delta_seconds) {
     const double dt = std::clamp(delta_seconds, 0.0, kMaxDeltaSeconds);
     const std::uint64_t tick = ticks_.load(std::memory_order_relaxed);
     FrameTickReport report;
+
+    // ---- tick 边界阶段 ----
+    // 结构变更与全局参数必须在任何节点开始遍历之前落地，否则节点看到的
+    // 视图会在本 tick 内变化。异常策略与节点一致：中止本 tick，不死线程。
+    double boundary_ms = 0.0;
+    if (boundary_hook_) {
+        const auto started = std::chrono::steady_clock::now();
+        try {
+            boundary_hook_();
+        } catch (const std::exception& e) {
+            last_boundary_ms_.store(0.0, std::memory_order_relaxed);
+            report.completed = false;
+            report.error = std::string("tick boundary: ") + e.what();
+            CFW_LOG_ERROR("[SystemsThread/Boundary] tick={} 边界阶段异常：{} —— 本 tick 中止，"
+                          "所有节点都不执行",
+                          tick, e.what());
+            return report;
+        } catch (...) {
+            last_boundary_ms_.store(0.0, std::memory_order_relaxed);
+            report.completed = false;
+            report.error = "tick boundary: unknown exception";
+            CFW_LOG_ERROR("[SystemsThread/Boundary] tick={} 边界阶段抛出未知异常 —— 本 tick 中止",
+                          tick);
+            return report;
+        }
+        boundary_ms = std::chrono::duration<double, std::milli>(
+                          std::chrono::steady_clock::now() - started)
+                          .count();
+        last_boundary_ms_.store(boundary_ms, std::memory_order_relaxed);
+    }
+
     if (prepared_) {
         report = graph_.run_tick(FrameTick{tick, dt});
     }
+    report.total_ms += boundary_ms;
     return report;
 }
 

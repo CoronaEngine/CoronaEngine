@@ -59,3 +59,11 @@ add_executable(corona_snapshot_channel_tests
 target_link_libraries(corona_snapshot_channel_tests PRIVATE CoronaEngineKernel)
 add_test(NAME SnapshotChannelTests
          COMMAND corona_snapshot_channel_tests)
+
+# tick 边界阶段（P4）：结构变更与全局参数必须在所有节点之前落地
+add_executable(corona_tick_boundary_tests
+    test_tick_boundary.cpp
+)
+target_link_libraries(corona_tick_boundary_tests PRIVATE CoronaEngineKernel)
+add_test(NAME TickBoundaryTests
+         COMMAND corona_tick_boundary_tests)
