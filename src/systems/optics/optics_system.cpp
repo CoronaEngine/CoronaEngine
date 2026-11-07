@@ -5460,7 +5460,7 @@ void OpticsSystem::complete_actor_pick(const ActorPickRequest& request,
         pick->node_index = resolved.node_index;
         pick->result_x = request.x;
         pick->result_y = request.y;
-        pick->result_request_id = request.request_id;
+        // result_request_id 是遗留镜像：全仓只写不读（grep 仅剩这一处写入），已删除。
         pick->result_ready = true;
     }
     hub.enqueue_actor_pick_completion({request.camera_handle, request.scene_id, request.request_id,
