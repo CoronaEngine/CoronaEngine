@@ -705,24 +705,6 @@ struct ViewportUiState {
     ViewportUiPointerState pointer{};
 };
 
-struct ViewportUiPointerCommand {
-    std::uintptr_t camera_handle{};
-    std::string event_type;
-    float x{0.0f};
-    float y{0.0f};
-    std::uint32_t buttons{0};
-    std::uint32_t modifiers{0};
-    ViewportUiCursorShape cursor_shape{ViewportUiCursorShape::Arrow};
-    std::uint64_t sequence{};
-};
-
-/// 视口指针命令的键（Fifo 队列只用它做 peek / erase）
-struct ViewportUiPointerKey {
-    static std::uintptr_t get(const ViewportUiPointerCommand& command) noexcept {
-        return command.camera_handle;
-    }
-};
-
 struct ViewportGizmoTarget {
     std::uintptr_t camera_handle{};
     std::string scene_id;
@@ -971,11 +953,9 @@ class SharedDataHub {
     void set_viewport_ui_calibration(std::uintptr_t camera_handle,
                                      const ViewportUiCalibration& calibration);
     [[nodiscard]] ViewportUiState viewport_ui_state(std::uintptr_t camera_handle) const;
-    void enqueue_viewport_ui_pointer(ViewportUiPointerCommand command);
     /// 远端 CEF 重构引入：直接写/清 session store 里的指针状态
     void set_viewport_ui_pointer(std::uintptr_t camera_handle, ViewportUiPointerState pointer);
     void clear_viewport_ui_pointer(std::uintptr_t camera_handle, std::uint64_t owner_context);
-    std::vector<ViewportUiPointerCommand> drain_viewport_ui_pointer_commands();
     void set_viewport_gizmo_target(ViewportGizmoTarget target);
     void clear_viewport_gizmo_target(std::uintptr_t camera_handle);
     [[nodiscard]] ViewportGizmoState viewport_gizmo_state(
@@ -1072,12 +1052,6 @@ class SharedDataHub {
         camera_releases_;
     mutable std::mutex viewport_ui_mutex_;
     std::unordered_map<std::uintptr_t, ViewportUiState> viewport_ui_states_;
-    // 指针命令：Fifo（不可合并，顺序即事件顺序）。sequence 仍由生产侧写入 ——
-    // 消费端（Optics）拿它丢弃相对 cursor state 过期的命令，语义保持不变。
-    Kernel::CommandBuffer<ViewportUiPointerCommand, ViewportUiPointerKey,
-                          Kernel::CoalescePolicy::Fifo>
-        viewport_ui_pointer_commands_;
-    std::atomic<std::uint64_t> viewport_ui_pointer_sequence_{0};
     mutable std::mutex viewport_gizmo_mutex_;
     std::unordered_map<std::uintptr_t, ViewportGizmoState> viewport_gizmo_states_;
     std::uint64_t viewport_gizmo_sequence_{0};

@@ -524,15 +524,25 @@ def test_live_and_non_web_offscreen_capture_share_the_native_save_operation():
     assert source.count('save_native_camera_screenshot(*camera,') == 3
 
 
-def test_retired_camera_move_transport_and_exclusive_queue_are_removed():
+def test_camera_pose_uses_shared_native_commands_without_a_second_web_transport():
     root = Path(__file__).resolve().parents[2]
     for name in ['src/systems/ui/cef/cef_renderer_bridge.cpp', 'src/systems/ui/cef/cef_viewport_gizmo.cpp',
                  'src/shared_data_hub.cpp', 'include/corona/shared_data_hub.h', 'src/systems/optics/optics_system.cpp']:
         source = (root / name).read_text(encoding='utf-8-sig')
         for retired in ['CameraMoveFast', '"cameraMove"', 'handle_camera_move_fast', 'parse_vec3_list',
-                        'CameraMoveCommand', 'enqueue_camera_move', 'drain_camera_moves', 'pending_camera_moves_',
-                        'camera_move_mutex_', 'camera_move_sequence_', 'apply_pending_camera_moves']:
+                        'pending_camera_moves_', 'camera_move_mutex_', 'camera_move_sequence_']:
             assert retired not in source, (name, retired)
+    # The DAG integration routes API::Camera::set and script following through
+    # the same native CommandBuffer. It is not a revived CEF fast binding.
+    hub = (root / 'include/corona/shared_data_hub.h').read_text(encoding='utf-8')
+    assert 'Kernel::CommandBuffer<CameraMoveCommand, CameraMoveKey,' in hub
+    api = (root / 'src/engine/engine_runtime_api.cpp').read_text(encoding='utf-8')
+    setter = api.split('void Corona::API::Camera::set(')[1].split('Corona::API::Camera::get_position')[0]
+    assert 'enqueue_camera_move(command)' in setter
+    assert 'try_acquire_write' not in setter
+    cef = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8')
+    patch = cef.split('if (patch.position || patch.forward || patch.world_up || patch.fov)')[1].split('\n', 3)
+    assert 'engine.set(' in '\n'.join(patch)
 
 
 def test_viewport_configuration_retires_the_three_fast_routes():
