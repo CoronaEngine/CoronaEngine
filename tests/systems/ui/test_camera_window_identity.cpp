@@ -1203,9 +1203,40 @@ void test_optics_queue_merges_independent_fields() {
     material.geometry_handle = 18;
     commands.push(material);
     const auto rebound = commands.drain();
-    require(rebound.size() == 1 && rebound[0].geometry_handle == 18 &&
-                !Corona::has_optics_field(rebound[0].fields, Corona::OpticsField::Roughness),
-            "commands for different geometry owners must not merge their fields");
+    require(rebound.size() == 1 && rebound[0].metallic == 0.95f &&
+                rebound[0].roughness == 0.25f && !rebound[0].visible &&
+                Corona::has_optics_field(rebound[0].fields, Corona::OpticsField::Roughness),
+            "independent scalar fields must survive a change of geometry guard");
+
+    const auto previous_overrides = std::make_shared<const Corona::Materials::Overrides>();
+    const auto previous_principled = std::make_shared<const Corona::Materials::Principled>();
+    const auto next_principled = std::make_shared<const Corona::Materials::Principled>();
+    Corona::OpticsUpdateCommand previous{};
+    previous.optics_handle = 1; previous.geometry_handle = 17;
+    previous.fields = Corona::OpticsField::MaterialOverrides | Corona::OpticsField::Principled;
+    previous.material_overrides = previous_overrides; previous.principled = previous_principled;
+    Corona::OpticsUpdateCommand next{};
+    next.optics_handle = 1; next.geometry_handle = 18;
+    next.fields = Corona::OpticsField::Principled; next.principled = next_principled;
+    commands.push(roughness); commands.push(previous); commands.push(next);
+    const auto owned = commands.drain();
+    require(owned.size() == 1 && owned[0].geometry_handle == 18 &&
+                owned[0].principled == next_principled && !owned[0].material_overrides &&
+                !Corona::has_optics_field(owned[0].fields, Corona::OpticsField::MaterialOverrides) &&
+                Corona::has_optics_field(owned[0].fields, Corona::OpticsField::Roughness),
+            "new material ownership must discard old payloads while preserving independent scalars");
+    Corona::OpticsDevice device;
+    device.geometry_handle = 17; device.principled = previous_principled;
+    Corona::apply_optics_update(device, owned[0]);
+    require(device.principled == previous_principled && device.roughness == 0.25f,
+            "a mismatched material guard must reject payloads without dropping independent scalars");
+    device.geometry_handle = 18;
+    Corona::apply_optics_update(device, owned[0]);
+    require(device.principled == next_principled, "matching geometry must receive its material payload");
+    next.principled.reset(); commands.push(next);
+    const auto cleared = commands.drain();
+    Corona::apply_optics_update(device, cleared.front());
+    require(!device.principled, "a flagged null payload must explicitly clear the current material");
 }
 
 void test_render_settings_queue_owns_values() {
