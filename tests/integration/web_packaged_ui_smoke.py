@@ -31,6 +31,16 @@ import web_join_lifetime_smoke
 import web_launcher_lifetime_smoke
 
 
+def open_initial_test_world(client, world):
+    # Both responses precede scene replacement: native dispatch may not yet be
+    # registered, or the registered Python archive service may still be loading.
+    # A successful open and every genuine failure are terminal, never replayed.
+    return web_environment_smoke.wait(
+        lambda: client.evaluate('corona.project.openProject(' + json.dumps(str(world)) + ')'),
+        lambda result: result.get('status') not in ('service_initializing', 'initializing'),
+        'initial archive service readiness')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('runtime', type=Path)
@@ -104,7 +114,7 @@ def main():
                         assert client.evaluate(f'typeof corona.project?.{method}') == 'function', method
             assert client.evaluate('typeof corona.project?.openProject') == 'function', 'openProject'
             stage = 'open disposable creative world'
-            opened = client.evaluate('corona.project.openProject(' + json.dumps(str(world)) + ')')
+            opened = open_initial_test_world(client, world)
             assert opened.get('ok') and 'data' not in opened, opened
             session = client.evaluate('corona.scene.readActive()')['archive_session']
             created = client.evaluate('corona.scene.createActor("scene.ini",' + json.dumps(str(model)) + ','
