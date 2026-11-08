@@ -140,7 +140,7 @@ HANDLER
 }
 int main(int argc,char** argv) {
     if (argc > 2) {
-        SceneRequest request{SceneMethod::SetCameraProperties};
+        SceneRequest request{SceneMethod::UpdateCamera};
         request.archive_session=scene.archive_session;
         request.camera_properties.scene=scene.route;
         request.camera_properties.camera_id=camera.camera_id;

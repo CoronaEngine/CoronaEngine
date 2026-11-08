@@ -31,13 +31,13 @@ def run(port, root):
         initial = main.evaluate('corona.scene.readActive()')
         main.evaluate("""(async()=>{
           const m=await import(document.querySelector('script[type=module]').src);
-          const api=Object.values(m).find(v=>typeof v?.scene?.readActorIndex==='function');
+          const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
           const launcher=Object.values(m).find(v=>typeof v?.openProject==='function'&&!v.createWorldProject);
           if(!launcher)throw Error('Production project launcher export missing');
           const probe=window.__worldLifetime={launcher,pendingRead:[],pendingOpen:[],commands:[],holdRead:true,holdOpen:true};
-          const original={read:api.scene.readCameras,open:api.project.openProject,
-            properties:api.scene.setCameraProperties,render:api.scene.setCameraRenderSettings,viewport:api.viewport.configure};
-          api.scene.readCameras=(...args)=>{
+          const original={read:api.scene.readScene,open:api.project.openProject,
+            properties:api.scene.updateCamera,render:api.scene.setCameraRenderSettings,viewport:api.viewport.configure};
+          api.scene.readScene=(...args)=>{
             const hold=probe.holdRead&&document.querySelector('[data-viewport-pick-surface]');
             if(hold)probe.holdRead=false;
             const result=original.read(...args);
@@ -48,14 +48,14 @@ def run(port, root):
             const result=original.open(...args);
             return hold?Promise.resolve(result).then(value=>new Promise(resolve=>probe.pendingOpen.push(()=>resolve(value)))):result;
           };
-          for(const [kind,object,key] of [['properties',api.scene,'setCameraProperties'],
+          for(const [kind,object,key] of [['properties',api.scene,'updateCamera'],
             ['render',api.scene,'setCameraRenderSettings'],['viewport',api.viewport,'configure']]){
             object[key]=(...args)=>{probe.commands.push({kind,args});return original[kind](...args);};
           }
           probe.release=key=>{for(const resume of probe[key].splice(0))resume();};
           probe.restore=()=>{probe.release('pendingRead');probe.release('pendingOpen');
-            api.scene.readCameras=original.read;api.project.openProject=original.open;
-            api.scene.setCameraProperties=original.properties;api.scene.setCameraRenderSettings=original.render;
+            api.scene.readScene=original.read;api.project.openProject=original.open;
+            api.scene.updateCamera=original.properties;api.scene.setCameraRenderSettings=original.render;
             api.viewport.configure=original.viewport;};
           return true;
         })()""")

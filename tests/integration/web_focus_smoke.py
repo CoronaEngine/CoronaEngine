@@ -38,7 +38,7 @@ def run(port, root, engine_pid):
         scope = main.evaluate('corona.scene.readActive()')['archive_session']
 
         def cameras():
-            return main.evaluate('corona.scene.readCameras("scene.ini",' + json.dumps({'archive_session': scope}) + ')')['cameras']
+            return main.evaluate('corona.scene.readScene({scene:"scene.ini",cameras:true,...' + json.dumps({'archive_session': scope}) + '})')['cameras']
 
         initial = cameras()[0]
         service = """(async()=>{const m=await import(document.querySelector('script[type=module]').src);
@@ -53,16 +53,14 @@ def run(port, root, engine_pid):
         wait(lambda: panel.evaluate("!!document.querySelector('[data-actor-name=Probe]')"), bool, 'SceneBar Actor row')
         monitor = """(async()=>{if(typeof corona.editor!=='undefined')throw Error('Generic native dispatch remains');
           const m=await import(document.querySelector('script[type=module]').src);
-          const api=Object.values(m).find(v=>typeof v?.scene?.setCameraProperties==='function');
+          const api=Object.values(m).find(v=>typeof v?.scene?.updateCamera==='function');
           if(!api)throw Error('Shared camera properties facade missing');
           if(typeof api.scene.getSnapshot!=='undefined'||typeof api.sceneTools?.listCameraViews!=='undefined'||typeof api.sceneTools?.listSceneTree!=='undefined')
             throw Error('Retired scene read facade exists');
-          window.__cameraReads=[];const readCameras=api.scene.readCameras;
-          api.scene.readCameras=(...args)=>readCameras(...args).then(result=>{
-            window.__cameraReads.push({args,result});return result;});
-          window.__treeReads=[];const readTree=api.scene.readTree;
-          api.scene.readTree=(...args)=>readTree(...args).then(result=>{
-            window.__treeReads.push({args,result});return result;});
+          window.__cameraReads=[];window.__treeReads=[];const readScene=api.scene.readScene;
+          api.scene.readScene=(request)=>readScene(request).then(result=>{
+            if(request.cameras)window.__cameraReads.push({args:[request],result});
+            if(request.actors==='tree')window.__treeReads.push({args:[request],result});return result;});
           if(typeof globalThis.coronaBridge?.cameraMove!=='undefined')throw Error('Retired camera Fast route exists');
           for(const method of ['setCameraViewport','setViewportUiMode','setViewportUiCalibration','viewportUiPointer','setViewportSystemCursorHidden']){
             if(typeof globalThis.coronaBridge?.[method]!=='undefined')throw Error('Retired viewport Fast route exists: '+method);}
@@ -75,8 +73,8 @@ def run(port, root, engine_pid):
           window.__scriptInputs=[];const dispatch=api.input.dispatch;
           api.input.dispatch=(...args)=>dispatch(...args).then(result=>{
             window.__scriptInputs.push({args,result});return result;});
-          window.__cameraMoveResults=[];window.__cameraMoveCalls=[];const move=api.scene.setCameraProperties;
-          api.scene.setCameraProperties=(...args)=>{window.__cameraMoveCalls.push(args);return move(...args).then(result=>{window.__cameraMoveResults.push({result});return result;},error=>{window.__cameraMoveResults.push({error:String(error),code:error.code});throw error;});};return true;})()"""
+          window.__cameraMoveResults=[];window.__cameraMoveCalls=[];const move=api.scene.updateCamera;
+          api.scene.updateCamera=(...args)=>{window.__cameraMoveCalls.push(args);return move(...args).then(result=>{window.__cameraMoveResults.push({result});return result;},error=>{window.__cameraMoveResults.push({error:String(error),code:error.code});throw error;});};return true;})()"""
         main.evaluate(monitor)
         panel.evaluate(monitor)
         time.sleep(.4)
@@ -102,7 +100,7 @@ def run(port, root, engine_pid):
                        + json.dumps(secondary['name']) + ");if(!row)throw Error('Camera row missing');"
                        "row.parentElement.dispatchEvent(new MouseEvent('mouseenter'));})()")
         hover_reads = wait(lambda: panel.evaluate('window.__cameraReads'), bool, 'SceneBar scoped camera hover read')
-        assert hover_reads[0]['args'] == ['scene.ini', {'archive_session': scope}], hover_reads
+        assert hover_reads[0]['args'] == [{'scene': 'scene.ini', 'archive_session': scope, 'cameras': True}], hover_reads
         assert hover_reads[0]['result']['archive_session'] == scope, hover_reads
         assert hover_reads[0]['result']['scene'] == 'scene.ini', hover_reads
         # The production camera row owns the only window-open operation. Do not
@@ -125,7 +123,7 @@ def run(port, root, engine_pid):
         })['result'].get('value'), bool, 'CameraView input lifecycle ready')
         assert next(camera for camera in cameras() if camera['camera_id'] == 'focus-camera')['view_open'] is True
         tree_reads = wait(lambda: panel.evaluate('window.__treeReads'), bool, 'SceneBar scoped tree refresh after camera open')
-        assert tree_reads[-1]['args'] == ['scene.ini', {'archive_session': scope}], tree_reads
+        assert tree_reads[-1]['args'] == [{'scene': 'scene.ini', 'archive_session': scope, 'actors': 'tree', 'cameras': True}], tree_reads
         assert tree_reads[-1]['result']['archive_session'] == scope, tree_reads
         assert tree_reads[-1]['result']['scene'] == 'scene.ini', tree_reads
         assert any(actor['name'] == 'Probe' and isinstance(actor['opaque_handle'], str)
@@ -202,7 +200,7 @@ def run(port, root, engine_pid):
              lambda calls: calls[-1]['result']['mode'] == 'flat2d', 'CameraView returns to 2D')
         # Exercise actual production click handlers, including Promise delivery into
         # selection, after the movement and pointer regressions above have finished.
-        tree = main.evaluate('corona.scene.readTree("scene.ini",' + json.dumps({'archive_session': scope}) + ')')
+        tree = main.evaluate('corona.scene.readScene({scene:"scene.ini",actors:"tree",cameras:true,...' + json.dumps({'archive_session': scope}) + '})')
         probe_actor = next(actor for actor in tree['actors'] if actor['name'] == 'Probe')
         main.evaluate("corona.scene.setActorTransform('scene.ini'," + json.dumps(probe_actor['actor_guid'])
                       + "," + json.dumps({'archive_session': scope, 'position': [0, 0, 0],
@@ -211,7 +209,7 @@ def run(port, root, engine_pid):
             (main, initial['camera_id'], '[data-viewport-pick-surface]', 'main'),
             (camera_view, 'focus-camera', '.input-layer', 'cameraView'),
         ]:
-            document.evaluate("corona.scene.setCameraProperties('scene.ini'," + json.dumps(camera_id)
+            document.evaluate("corona.scene.updateCamera('scene.ini'," + json.dumps(camera_id)
                               + "," + json.dumps({'archive_session': scope, 'position': [-.25, -.25, 3],
                                                   'forward': [0, 0, -1], 'world_up': [0, 1, 0], 'fov': 60}) + ")")
             # CameraView renders behind the title bar as well; its input layer

@@ -28,7 +28,7 @@ def open_graph(main, port, targets, description):
 def verify_close_during_save(main, panel, tab_id, target_id, service, targets, scope):
     """Delay/fail a facade save while real Vue edits and native Dock closure run."""
     panel.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.readActorIndex==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
       const original=api.projectFiles.save;
       const probe=window.__closeSave={requests:[],pending:[]};
       api.projectFiles.save=request=>new Promise((resolve,reject)=>{
@@ -141,12 +141,12 @@ def run(port, root):
         wait(lambda: panel.evaluate("!!document.querySelector('select[aria-label=运行目标] option[value=Probe]')"),
              bool, 'node graph Actor options')
         panel.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-          const api=Object.values(m).find(v=>typeof v?.scene?.readActorIndex==='function');
+          const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
           if(!api)throw Error('Shared actor index facade missing');
           window.__actorIndexes=[];window.__oldSnapshots=[];
           api.scene.getSnapshot=()=>{window.__oldSnapshots.push('snapshot');throw Error('Full scene snapshot forbidden for target validation');};
-          const read=api.scene.readActorIndex;
-          api.scene.readActorIndex=(...args)=>read(...args).then(result=>{window.__actorIndexes.push({args,result});return result;});
+          const read=api.scene.readScene;
+          api.scene.readScene=(...args)=>read(...args).then(result=>{if(args[0]?.actors==='index')window.__actorIndexes.push({args,result});return result;});
           window.__projectFiles=[];
           for(const name of ['save','load']){const original=api.projectFiles[name];
             api.projectFiles[name]=request=>original(request).then(result=>{
@@ -161,7 +161,7 @@ def run(port, root):
         calls = panel.evaluate('window.__actorIndexes')
         assert len(calls) == 2, calls
         for call in calls:
-            assert call['args'] == ['scene.ini', {'archive_session': session}], call
+            assert call['args'] == [{'scene': 'scene.ini', 'archive_session': session, 'actors': 'index'}], call
             assert call['result']['archive_session'] == session, call
             assert any(actor['name'] == 'Probe' for actor in call['result']['actors']), call
             assert 'cameras' not in call['result'], call

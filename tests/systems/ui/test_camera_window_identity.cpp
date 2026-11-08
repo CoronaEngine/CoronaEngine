@@ -387,7 +387,8 @@ void test_native_scene_values_and_non_web_adapters() {
 
 void test_owned_actor_index_projection() {
     const auto before = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
-    UI::SceneRequest read{UI::SceneMethod::ReadActorIndex};
+    UI::SceneRequest read{UI::SceneMethod::ReadScene};
+    read.scene_read = {UI::ActorProjection::Index, false};
     read.read_scene = before.scene;
     read.archive_session = before.archive_session;
     const auto reply = UI::execute_scene_operation(read);
@@ -448,7 +449,8 @@ void test_owned_actor_property_projection() {
 
 void test_owned_camera_projection() {
     const auto before = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
-    UI::SceneRequest read{UI::SceneMethod::ReadCameras};
+    UI::SceneRequest read{UI::SceneMethod::ReadScene};
+    read.scene_read = {UI::ActorProjection::None, true};
     read.read_scene = before.scene; read.archive_session = before.archive_session;
     const auto reply = UI::execute_scene_operation(read);
     require(reply.error_code.empty() && reply.camera_list.archive_session == before.archive_session &&
@@ -488,11 +490,12 @@ void test_owned_camera_projection() {
 
 void test_owned_scene_tree_projection() {
     const auto before = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
-    UI::SceneRequest read{UI::SceneMethod::ReadTree};
+    UI::SceneRequest read{UI::SceneMethod::ReadScene};
+    read.scene_read = {UI::ActorProjection::Tree, true};
     read.read_scene = before.scene; read.archive_session = before.archive_session;
     const auto reply = UI::execute_scene_operation(read);
-    require(reply.error_code.empty() && reply.tree.cameras.archive_session == before.archive_session &&
-        reply.tree.cameras.scene == before.scene && reply.tree.tree_revision == before.tree_revision,
+    require(reply.error_code.empty() && reply.camera_list.archive_session == before.archive_session &&
+        reply.camera_list.scene == before.scene && reply.active.tree_revision == before.tree_revision,
         "tree reads carry the observed archive, scene and revision");
     const auto legacy = UI::NativeApiRegistry::instance().dispatch({"SceneTools", "list_scene_tree", {before.scene}}, {});
     require(legacy && legacy->success && legacy->data["actors"].size() == reply.tree.actors.size(),
@@ -501,11 +504,11 @@ void test_owned_scene_tree_projection() {
         require(Corona::Ui::Cef::scene_tree_actor_to_json(reply.tree.actors[index]) == legacy->data["actors"][index],
             "tree projections share all Actor row values with the non-Web adapter");
     }
-    read.method = UI::SceneMethod::ReadCameras;
+    read.scene_read = {UI::ActorProjection::None, true};
     const auto cameras = UI::execute_scene_operation(read).camera_list;
-    require(cameras.active_camera_id == reply.tree.cameras.active_camera_id &&
-        cameras.cameras.size() == reply.tree.cameras.cameras.size(), "tree reuses the scoped camera projection");
-    read.method = UI::SceneMethod::ReadTree;
+    require(cameras.active_camera_id == reply.camera_list.active_camera_id &&
+        cameras.cameras.size() == reply.camera_list.cameras.size(), "tree reuses the scoped camera projection");
+    read.scene_read = {UI::ActorProjection::Tree, true};
     for (int kind = 0; kind < 4; ++kind) {
         auto invalid = read;
         if (kind == 0) invalid.archive_session.reset();
@@ -562,7 +565,7 @@ void test_one_native_transform_authority() {
 }
 
 void test_one_native_property_authority() {
-    UI::SceneRequest write{UI::SceneMethod::SetActorProperties};
+    UI::SceneRequest write{UI::SceneMethod::UpdateActor};
     write.archive_session = "camera-test-archive";
     auto& patch = write.properties;
     patch.scene = "scene.ini"; patch.actor = "transform-probe";
@@ -608,7 +611,7 @@ void test_one_native_property_authority() {
         read->data["mechanics"]["mass"] == 7 &&
         UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.tree_revision == before.tree_revision + 1,
         "invalid mixed property patches must not change values or either revision");
-    UI::SceneRequest partial{UI::SceneMethod::SetActorProperties};
+    UI::SceneRequest partial{UI::SceneMethod::UpdateActor};
     partial.archive_session = write.archive_session;
     partial.properties.scene = patch.scene; partial.properties.actor = patch.actor;
     partial.properties.visible = false;
@@ -770,7 +773,7 @@ void test_camera_settings_cannot_change_window_lifecycle() {
     auto& hub = Corona::SharedDataHub::instance();
     hub.drain_camera_state_updates();
     const auto active = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
-    UI::SceneRequest request{UI::SceneMethod::SetCameraProperties};
+    UI::SceneRequest request{UI::SceneMethod::UpdateCamera};
     request.archive_session = active.archive_session;
     request.camera_properties.scene = "scene.ini";
     request.camera_properties.camera_id = "primary";
@@ -913,7 +916,7 @@ void test_camera_properties_share_pose_view_and_native_authority() {
         UI::EditorApiCaller::PythonScript}, {}).data["cameras"]; };
     const auto before = read();
     const auto active = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
-    UI::SceneRequest request{UI::SceneMethod::SetCameraProperties};
+    UI::SceneRequest request{UI::SceneMethod::UpdateCamera};
     request.archive_session = active.archive_session;
     auto& patch = request.camera_properties;
     patch.scene = "scene.ini"; patch.camera_id = "primary";
@@ -945,7 +948,7 @@ void test_camera_properties_share_pose_view_and_native_authority() {
     }
     Corona::API::set_editor_camera_input_enabled(false);
     const auto locked = UI::execute_scene_operation(request);
-    UI::SceneRequest settings{UI::SceneMethod::SetCameraProperties};
+    UI::SceneRequest settings{UI::SceneMethod::UpdateCamera};
     settings.archive_session = active.archive_session;
     settings.camera_properties.scene = "scene.ini"; settings.camera_properties.camera_id = "primary";
     settings.camera_properties.move_speed = 0.75f;
@@ -1267,6 +1270,76 @@ void test_render_settings_queue_owns_values() {
     }
 }
 
+void test_consolidated_queries_and_atomic_names() {
+    UI::load_native_editor_scene_for_test(snapshot());
+    const auto before = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
+    UI::SceneRequest query{UI::SceneMethod::ReadScene};
+    query.archive_session = before.archive_session;
+    query.read_scene = before.scene;
+    query.scene_read = {UI::ActorProjection::Index, true};
+    const auto combined = UI::execute_scene_operation(query);
+    require(combined.error_code.empty() && combined.actor_index.actors.size() == 1 &&
+            combined.camera_list.cameras.size() == 2 && combined.active.tree_revision == before.tree_revision,
+            "one scoped scene query must return the requested actor index and cameras");
+    query.scene_read = {UI::ActorProjection::None, true};
+    const auto cameras_only = UI::execute_scene_operation(query);
+    require(cameras_only.error_code.empty() && cameras_only.actor_index.actors.empty() &&
+            cameras_only.actor_context.actors.empty() && cameras_only.tree.actors.empty(),
+            "camera-only queries must not build an Actor projection");
+    query.scene_read = {UI::ActorProjection::Context, false};
+    const auto context = UI::execute_scene_operation(query);
+    require(context.error_code.empty() && context.actor_context.actors.size() == 1 &&
+            context.camera_list.cameras.empty(), "context queries must not load camera state");
+    query.scene_read = {};
+    require(UI::execute_scene_operation(query).error_code == "INVALID_ARGUMENT", "empty projection is invalid");
+
+    UI::SceneRequest actor{UI::SceneMethod::UpdateActor};
+    actor.archive_session = before.archive_session;
+    actor.properties.scene = before.scene;
+    actor.properties.actor = "transform-probe";
+    actor.properties.name = "Renamed atomically";
+    actor.properties.follow_camera = true;
+    actor.properties.mechanics.emplace().mass = std::numeric_limits<float>::infinity();
+    require(UI::execute_scene_operation(actor).error_code == "INVALID_ARGUMENT", "invalid properties reject a mixed name update");
+    UI::SceneRequest read{UI::SceneMethod::ReadActorProperties};
+    read.archive_session = before.archive_session;
+    read.read_scene = before.scene;
+    read.read_actor = actor.properties.actor;
+    const auto unchanged = UI::execute_scene_operation(read).actor_read.properties;
+    require(unchanged.actor == "Transform probe" && !unchanged.follow_camera &&
+            UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.tree_revision == before.tree_revision,
+            "a rejected mixed patch must preserve name, properties and tree revision");
+    actor.properties.mechanics.reset();
+    const auto updated = UI::execute_scene_operation(actor);
+    require(updated.error_code.empty() && updated.properties.actor == "Renamed atomically" &&
+            updated.properties.actor_guid == "transform-probe" && updated.properties.follow_camera &&
+            updated.properties.actor_version == unchanged.actor_version + 1 &&
+            UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.tree_revision == before.tree_revision + 1,
+            "one combined name/property write must preserve GUID and advance revisions once");
+
+    UI::SceneRequest camera{UI::SceneMethod::UpdateCamera};
+    camera.archive_session = before.archive_session;
+    camera.camera_properties.scene = before.scene;
+    camera.camera_properties.camera_id = "primary";
+    camera.camera_properties.name = "Renamed primary";
+    camera.camera_properties.fov = 200;
+    require(UI::execute_scene_operation(camera).error_code == "INVALID_ARGUMENT", "invalid camera pose rejects a mixed name update");
+    query.scene_read = {UI::ActorProjection::None, true};
+    const auto original_camera = UI::execute_scene_operation(query).camera_list.cameras.front().properties;
+    require(original_camera.name == combined.camera_list.cameras.front().properties.name,
+            "invalid camera patches must not rename the camera");
+    camera.camera_properties.fov = 60;
+    const auto renamed = UI::execute_scene_operation(camera);
+    require(renamed.error_code.empty() && renamed.camera.name == "Renamed primary" && renamed.camera.fov == 60,
+            "camera name and base properties share a single update");
+    camera.camera_properties.name = combined.camera_list.cameras.back().properties.name;
+    camera.camera_properties.fov = 80;
+    require(UI::execute_scene_operation(camera).error_code == "DUPLICATE_CAMERA_NAME", "camera names remain unique");
+    require(UI::execute_scene_operation(query).camera_list.cameras.front().properties.fov == 60,
+            "a conflicting camera name must not partially apply the pose");
+    UI::load_native_editor_scene_for_test(snapshot());
+}
+
 int main() {
     try {
         test_no_generic_web_contracts();
@@ -1301,6 +1374,7 @@ int main() {
         test_owned_pick_requests_and_coordinate_mapping();
         test_pick_results_resolve_authoritative_actor_and_scope();
         test_typed_camera_creation_has_no_window_side_effect();
+        test_consolidated_queries_and_atomic_names();
         UI::WindowRequest request{UI::WindowMethod::CreateCameraView, 1};
         request.archive_session = "camera-test-archive";
         request.scene_id = "scene.ini";
@@ -1335,17 +1409,18 @@ int main() {
         UI::reset_native_editor_scene_for_test();
         require(!request.camera_authority->active, "scene shutdown must retire queued camera work");
         require(UI::prepare_camera_window_request(request).error_code == "PROJECT_CONTEXT_CHANGED", "absent scene must be rejected");
-        UI::SceneRequest empty_read{UI::SceneMethod::ReadActorIndex};
+        UI::SceneRequest empty_read{UI::SceneMethod::ReadScene};
+    empty_read.scene_read = {UI::ActorProjection::Index, false};
         empty_read.read_scene = "scene.ini"; empty_read.archive_session = "camera-test-archive";
         require(UI::execute_scene_operation(empty_read).error_code == "PROJECT_CONTEXT_CHANGED",
                 "an actor index cannot create an absent editor scene");
         empty_read.method = UI::SceneMethod::ReadActorProperties; empty_read.read_actor = "transform-probe";
         require(UI::execute_scene_operation(empty_read).error_code == "PROJECT_CONTEXT_CHANGED",
                 "Actor property reads cannot create an absent editor scene");
-        empty_read.method = UI::SceneMethod::ReadCameras;
+        empty_read.method = UI::SceneMethod::ReadScene; empty_read.scene_read = {UI::ActorProjection::None, true};
         require(UI::execute_scene_operation(empty_read).error_code == "PROJECT_CONTEXT_CHANGED",
                 "camera reads cannot create an absent editor scene");
-        empty_read.method = UI::SceneMethod::ReadTree;
+        empty_read.scene_read = {UI::ActorProjection::Tree, true};
         require(UI::execute_scene_operation(empty_read).error_code == "PROJECT_CONTEXT_CHANGED",
                 "tree reads cannot create an absent editor scene");
         require(UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.archive_session.empty(),

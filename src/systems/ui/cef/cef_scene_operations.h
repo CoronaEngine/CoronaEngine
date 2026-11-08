@@ -71,6 +71,7 @@ struct ActorCameraLockPatch {
 };
 struct ActorPropertiesPatch {
     std::string scene, actor;
+    std::optional<std::string> name;
     std::optional<bool> visible, follow_camera;
     std::optional<ActorMechanicsPatch> mechanics;
     std::optional<ActorCameraLockPatch> camera_lock;
@@ -102,12 +103,6 @@ struct ActorCreateRequest {
     std::optional<std::uint64_t> audio_resource_id;
 };
 
-struct ActorRenameRequest {
-    std::string scene, actor, name;
-};
-struct ActorRenameSnapshot {
-    std::string archive_session, scene, actor_guid, old_name, new_name;
-};
 struct ActorDeleteRequest {
     std::string scene, actor;
 };
@@ -216,13 +211,14 @@ struct ScreenshotSnapshot {
 
 struct CameraPropertiesPatch {
     std::string scene, camera_id;
+    std::optional<std::string> name;
     std::optional<std::array<float, 3>> position, forward, world_up;
     std::optional<float> fov, projection_x_sign, near_plane, far_plane, move_speed;
     std::optional<int> width, height, view_x, view_y, view_width, view_height;
     std::optional<bool> view_open;
     bool has_pose() const { return position || forward || world_up || fov || projection_x_sign || near_plane || far_plane; }
     bool has_view() const { return view_open || view_x || view_y || view_width || view_height || move_speed; }
-    bool empty() const { return !has_pose() && !has_view() && !width && !height; }
+    bool empty() const { return !name && !has_pose() && !has_view() && !width && !height; }
 };
 struct CameraPropertiesSnapshot : CameraPoseSnapshot {
     std::string archive_session, scene;
@@ -234,9 +230,6 @@ struct CameraPropertiesSnapshot : CameraPoseSnapshot {
 struct CameraCreateRequest {
     std::string scene;
     std::optional<std::string> name;
-};
-struct CameraRenameRequest {
-    std::string scene, camera_id, name;
 };
 struct CameraDeleteRequest {
     std::string scene, camera_id;
@@ -361,7 +354,13 @@ struct ModelNodePageRequest {
     std::size_t offset{0}, limit{100};
 };
 
-enum class SceneMethod { CreateActor, ReadActive, ReadVisionAvailability, ReadTransforms, SelectActor, SelectModelFile, ImportResourceFile, PlayAudioResource, StopAudioResource, PlayActorAudio, StopActorAudio, SetActorTransform, SetActorProperties, RenameActor, DeleteActor, RebindActorResource, Save, GetEnvironment, SetEnvironment, FocusActor, CaptureScreenshot, SetCameraProperties, ReadCameraRenderSettings, SetCameraRenderSettings, CreateCamera, RenameCamera, DeleteCamera, ReadActorIndex, ReadActorProperties, ReadCameras, ReadTree, ReadActorContext, ReadActorSkeleton, ReadActorIkChains, SetActorIkChains, ReadModelNodes, SetModelNodeState };
+enum class SceneMethod { ReadScene, CreateActor, ReadActive, ReadVisionAvailability, ReadTransforms, SelectActor, SelectModelFile, ImportResourceFile, PlayAudioResource, StopAudioResource, PlayActorAudio, StopActorAudio, SetActorTransform, UpdateActor, DeleteActor, RebindActorResource, Save, GetEnvironment, SetEnvironment, FocusActor, CaptureScreenshot, UpdateCamera, ReadCameraRenderSettings, SetCameraRenderSettings, CreateCamera, DeleteCamera, ReadActorProperties, ReadActorRig, SetActorIkChains, ReadModelNodes, SetModelNodeState };
+enum class ActorProjection { None, Index, Tree, Context };
+struct SceneReadProjection {
+    ActorProjection actors = ActorProjection::None;
+    bool cameras = false;
+};
+
 struct SceneRequest {
     SceneMethod method;
     ActorSelection selection;
@@ -371,7 +370,6 @@ struct SceneRequest {
     ActorTransformPatch transform;
     ActorPropertiesPatch properties;
     ActorCreateRequest actor_create;
-    ActorRenameRequest actor_rename;
     ActorDeleteRequest actor_delete;
     ActorResourceRebindRequest actor_resource_rebind;
     AudioRequest audio;
@@ -382,15 +380,16 @@ struct SceneRequest {
     CameraPropertiesPatch camera_properties;
     CameraRenderSettingsPatch camera_render_settings;
     CameraCreateRequest camera_create;
-    CameraRenameRequest camera_rename;
     CameraDeleteRequest camera_delete;
     ActorIkPatch ik;
     ModelNodePatch model_node;
     ModelNodePageRequest model_node_page;
     std::string read_scene;
     std::string read_actor;
+    SceneReadProjection scene_read;
 };
 struct SceneReply {
+    SceneReadProjection scene_read;
     ActiveSceneSnapshot active;
     bool vision_available = false;
     ActorSelection selection;
@@ -399,7 +398,6 @@ struct SceneReply {
     ActorTransformSnapshot transform;
     std::vector<ActorTransformSnapshot> transforms;
     ActorPropertiesSnapshot properties;
-    ActorRenameSnapshot actor_rename;
     ActorDeleteSnapshot actor_delete;
     ActorResourceRebindSnapshot actor_resource_rebind;
     SceneSaveSnapshot save;

@@ -3077,7 +3077,7 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
     const auto finite = [](const auto& value) {
         return !value || std::all_of(value->begin(), value->end(), [](float x) { return std::isfinite(x); });
     };
-    if (trim_ascii(patch.actor).empty() || (!patch.visible && !patch.follow_camera && !patch.mechanics &&
+    if (trim_ascii(patch.actor).empty() || (!patch.name && !patch.visible && !patch.follow_camera && !patch.mechanics &&
         !patch.camera_lock && !patch.animation_sources)) return fail("INVALID_ARGUMENT", "Actor property patch is empty");
     if (patch.mechanics) {
         const auto& values = *patch.mechanics;
@@ -3097,6 +3097,15 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
     } else scene = resolve_native_editor_scene_request(scene, normalize_route(patch.scene));
     auto* actor = find_native_actor(*scene, patch.actor);
     if (!actor) return fail("ACTOR_NOT_FOUND", "Actor not found: " + patch.actor);
+    std::optional<std::string> new_name;
+    if (patch.name) {
+        if (scene->read_only) return fail("READ_ONLY", "Cannot rename an actor in a read-only scene");
+        new_name = trim_ascii(*patch.name);
+        if (new_name->empty()) return fail("INVALID_ARGUMENT", "Actor name cannot be empty");
+        if (std::any_of(scene->actors.begin(), scene->actors.end(), [&](const NativeEditorActor& other) {
+                return &other != actor && other.name == *new_name;
+            })) return fail("DUPLICATE_ACTOR_NAME", "Actor name already exists: " + *new_name);
+    }
     // Validate every component and derived value before importing assets or
     // mutating any property. A mixed invalid patch must never partly apply.
     if (patch.visible && !actor->optics) return fail("COMPONENT_NOT_FOUND", "Actor has no optics component");
@@ -3148,6 +3157,7 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
             camera->engine_camera->get_handle(), position_offset[0], position_offset[1], position_offset[2]);
         else controller.clear_target();
     }
+    if (new_name) actor->name = *new_name;
     actor->actor_version = std::max(actor->actor_version + 1, 1);
     ++scene->tree_revision;
     reply.properties = actor_properties_snapshot(*scene, *actor);
@@ -3161,7 +3171,7 @@ enum class ActorPropertyAdapter { State, Mechanics, CameraLock };
 NativeResult set_native_actor_properties(const NativeRequest& request, const NativeContext& context, ActorPropertyAdapter kind) {
     try {
         const auto values = arg_object(request.args, 2);
-        SceneRequest write{SceneMethod::SetActorProperties};
+        SceneRequest write{SceneMethod::UpdateActor};
         auto& patch = write.properties;
         patch.scene = arg_string(request.args, 0); patch.actor = arg_string(request.args, 1);
         patch.transient_assets = context.script_runtime;
@@ -4798,7 +4808,7 @@ SceneReply apply_native_model_node(const SceneRequest& request) {
 
 SceneReply apply_native_camera_properties(const SceneRequest& request, bool editor_input = true) {
     SceneReply reply;
-    const auto fail = [&](const char* code, const char* message) {
+    const auto fail = [&](const char* code, const std::string& message) {
         reply.error_code = code; reply.error_message = message; return reply;
     };
     const auto& patch = request.camera_properties;
@@ -4816,6 +4826,15 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
         return fail("CAMERA_NOT_FOUND", "Camera identity is unavailable");
     auto& camera = *found;
     auto& engine = *camera.engine_camera;
+    std::optional<std::string> new_name;
+    if (patch.name) {
+        if (scene->read_only) return fail("READ_ONLY", "Cannot rename a camera in a read-only scene");
+        new_name = trim_ascii(*patch.name);
+        if (new_name->empty()) return fail("INVALID_ARGUMENT", "Camera name cannot be empty");
+        if (std::any_of(scene->cameras.begin(), scene->cameras.end(), [&](const NativeEditorCamera& other) {
+                return &other != &camera && other.name == *new_name;
+            })) return fail("DUPLICATE_CAMERA_NAME", "Camera name already exists: " + *new_name);
+    }
     const auto finite = [](const auto& value) { return !value || std::isfinite(*value); };
     const auto vector_valid = [](const auto& value) {
         return !value || std::all_of(value->begin(), value->end(), [](float number) { return std::isfinite(number); });
@@ -4834,7 +4853,11 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
         return fail("INVALID_ARGUMENT", "Invalid camera properties");
     if (editor_input && patch.has_pose() && !Corona::API::is_editor_camera_input_enabled())
         return fail("EDITOR_INPUT_LOCKED", "Runtime owns camera input");
-    // Validate the entire patch before changing any pose or window property.
+    // Every field is validated before applying a name, pose or window property.
+    if (new_name && camera.name != *new_name) {
+        camera.name = *new_name;
+        ++scene->tree_revision;
+    }
     if (patch.position || patch.forward || patch.world_up || patch.fov)
         engine.set(patch.position.value_or(engine.get_position()), patch.forward.value_or(engine.get_forward()),
             patch.world_up.value_or(engine.get_world_up()), patch.fov.value_or(engine.get_fov()));
@@ -4953,7 +4976,7 @@ NativeResult apply_non_web_camera_properties(const NativeRequest& request, bool 
     const auto camera_name = arg_string(request.args, 1);
     auto* camera = find_native_camera(*scene, camera_name);
     if (!camera || !camera->engine_camera) return camera_not_found_result(camera_name);
-    SceneRequest write{SceneMethod::SetCameraProperties};
+    SceneRequest write{SceneMethod::UpdateCamera};
     write.archive_session = scene->archive_session;
     auto& patch = write.camera_properties;
     patch.scene = scene->route; patch.camera_id = camera->camera_id;
@@ -5220,11 +5243,10 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         reply.camera = camera_properties_snapshot(*scene, camera);
         return reply;
     }
-    if (request.method == SceneMethod::RenameCamera || request.method == SceneMethod::DeleteCamera) {
+    if (request.method == SceneMethod::DeleteCamera) {
         SceneReply reply;
-        const bool rename = request.method == SceneMethod::RenameCamera;
-        const auto& scene_name = rename ? request.camera_rename.scene : request.camera_delete.scene;
-        const auto& camera_id = rename ? request.camera_rename.camera_id : request.camera_delete.camera_id;
+        const auto& scene_name = request.camera_delete.scene;
+        const auto& camera_id = request.camera_delete.camera_id;
         if (scene_name.empty() || camera_id.empty() || !request.archive_session || request.archive_session->empty()) {
             reply.error_code = "INVALID_ARGUMENT";
             reply.error_message = "Camera mutation requires the observed archive, scene and camera identity";
@@ -5249,27 +5271,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             reply.error_message = "Camera not found: " + camera_id;
             return reply;
         }
-        if (rename) {
-            const auto new_name = trim_ascii(request.camera_rename.name);
-            if (new_name.empty()) {
-                reply.error_code = "INVALID_ARGUMENT";
-                reply.error_message = "Camera name cannot be empty";
-                return reply;
-            }
-            const bool duplicate = std::any_of(scene->cameras.begin(), scene->cameras.end(),
-                [&](const NativeEditorCamera& other) {
-                    return &other != &*camera_it && other.name == new_name;
-                });
-            if (duplicate) {
-                reply.error_code = "DUPLICATE_CAMERA_NAME";
-                reply.error_message = "Camera name already exists: " + new_name;
-                return reply;
-            }
-            camera_it->name = new_name;
-            ++scene->tree_revision;
-            reply.camera = camera_properties_snapshot(*scene, *camera_it);
-            return reply;
-        }
+
         if (scene->cameras.size() <= 1) {
             reply.error_code = "LAST_CAMERA";
             reply.error_message = "A scene must keep at least one camera";
@@ -5294,7 +5296,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         reply.deleted_camera = {*request.archive_session, scene->route, camera_id};
         return reply;
     }
-    if (request.method == SceneMethod::SetCameraProperties) return apply_native_camera_properties(request);
+    if (request.method == SceneMethod::UpdateCamera) return apply_native_camera_properties(request);
     if (request.method == SceneMethod::ReadCameraRenderSettings || request.method == SceneMethod::SetCameraRenderSettings)
         return apply_native_camera_render_settings(request);
     if (request.method == SceneMethod::CaptureScreenshot) return capture_native_screenshot(request);
@@ -5317,7 +5319,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         }
         return reply;
     }
-    if (request.method == SceneMethod::SetActorProperties) {
+    if (request.method == SceneMethod::UpdateActor) {
         auto reply = apply_native_actor_properties(request);
         auto* scene = native_editor_state().scene.get();
         if (scene && reply.error_code.empty()) {
@@ -5326,52 +5328,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         }
         return reply;
     }
-    if (request.method == SceneMethod::RenameActor) {
-        SceneReply reply;
-        const auto& patch = request.actor_rename;
-        if (patch.scene.empty() || patch.actor.empty() || patch.name.empty() ||
-            !request.archive_session || request.archive_session->empty()) {
-            reply.error_code = "INVALID_ARGUMENT";
-            reply.error_message = "Actor rename requires the observed archive, scene, actor and name";
-            return reply;
-        }
-        auto* scene = native_editor_state().scene.get();
-        if (!scene || scene->archive_session != *request.archive_session ||
-            !native_scene_request_matches(*scene, patch.scene)) {
-            reply.error_code = "PROJECT_CONTEXT_CHANGED";
-            reply.error_message = "Actor rename belongs to an inactive archive";
-            return reply;
-        }
-        if (scene->read_only) {
-            reply.error_code = "READ_ONLY";
-            reply.error_message = "Cannot rename an actor in a read-only scene";
-            return reply;
-        }
-        auto* actor = find_native_actor(*scene, patch.actor);
-        if (!actor) {
-            reply.error_code = "ACTOR_NOT_FOUND";
-            reply.error_message = "Actor not found: " + patch.actor;
-            return reply;
-        }
-        const auto new_name = trim_ascii(patch.name);
-        if (new_name.empty()) {
-            reply.error_code = "INVALID_ARGUMENT";
-            reply.error_message = "Actor name cannot be empty";
-            return reply;
-        }
-        if (std::any_of(scene->actors.begin(), scene->actors.end(), [&](const NativeEditorActor& other) {
-                return &other != actor && other.name == new_name;
-            })) {
-            reply.error_code = "DUPLICATE_ACTOR_NAME";
-            reply.error_message = "Actor name already exists: " + new_name;
-            return reply;
-        }
-        reply.actor_rename = {*request.archive_session, scene->route, actor->actor_guid, actor->name, new_name};
-        actor->name = new_name;
-        ++scene->tree_revision;
-        broadcast_network_editor_actor_state(*scene, *actor);
-        return reply;
-    }
+
     if (request.method == SceneMethod::DeleteActor) {
         SceneReply reply;
         const auto& patch = request.actor_delete;
@@ -5643,95 +5600,65 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         reply.audio.playing = request.method == SceneMethod::PlayActorAudio;
         return reply;
     }
-    if (request.method == SceneMethod::ReadActorIndex) {
-        if (!request.archive_session || request.archive_session->empty() || request.read_scene.empty()) {
+    if (request.method == SceneMethod::ReadScene) {
+        if (!request.archive_session || request.archive_session->empty() || trim_ascii(request.read_scene).empty() ||
+            (request.scene_read.actors == ActorProjection::None && !request.scene_read.cameras)) {
             reply.error_code = "INVALID_ARGUMENT";
-            reply.error_message = "Actor index requires the observed archive and scene";
+            reply.error_message = "Scene query requires archive, scene and a projection";
             return reply;
         }
         const auto* scene = state.scene.get();
         if (!scene || *request.archive_session != scene->archive_session ||
             !native_scene_request_matches(*scene, request.read_scene)) {
             reply.error_code = "PROJECT_CONTEXT_CHANGED";
-            reply.error_message = "Actor index belongs to an inactive scene";
+            reply.error_message = "Scene query belongs to an inactive scene";
             return reply;
         }
-        reply.actor_index = {scene->archive_session, scene->route, scene->tree_revision, {}};
-        reply.actor_index.actors.reserve(scene->actors.size());
-        // Identity and names only: no geometry locks, render settings or storage
-        // adapter, and a read must never materialize a default editor scene.
-        for (const auto& actor : scene->actors) {
-            const auto extension = actor_file_extension(actor.route);
-            reply.actor_index.actors.push_back({actor.actor_guid, actor.name,
-                extension.empty() ? actor.actor_type : extension});
-        }
-        return reply;
-    }
-    if (request.method == SceneMethod::ReadActorContext) {
-        if (!request.archive_session || request.archive_session->empty() || trim_ascii(request.read_scene).empty()) {
-            reply.error_code = "INVALID_ARGUMENT";
-            reply.error_message = "Actor context requires the observed archive and scene";
-            return reply;
-        }
-        const auto* scene = state.scene.get();
-        if (!scene || *request.archive_session != scene->archive_session ||
-            !native_scene_request_matches(*scene, request.read_scene)) {
-            reply.error_code = "PROJECT_CONTEXT_CHANGED";
-            reply.error_message = "Actor context belongs to an inactive scene";
-            return reply;
-        }
-        auto& result = reply.actor_context;
-        result.archive_session = scene->archive_session;
-        result.scene = scene->route;
-        result.tree_revision = scene->tree_revision;
-        result.actors.reserve(scene->actors.size());
-        for (const auto& actor : scene->actors) {
-            ActorContextRow row;
-            row.actor_guid = actor.actor_guid;
-            row.name = actor.name;
-            const auto extension = actor_file_extension(actor.route);
-            row.type = extension.empty() ? actor.actor_type : extension;
-            row.semantic_role = actor.semantic_role.empty() ? actor.entity_type : actor.semantic_role;
-            row.position = actor.geometry ? actor.geometry->get_position() : actor.position;
-            row.rotation = actor.geometry ? actor.geometry->get_rotation() : actor.rotation;
-            row.scale = actor.geometry ? actor.geometry->get_scale() : actor.scale;
-            const auto world_aabb = native_actor_world_aabb(actor);
-            if (world_aabb) {
-                row.size = {(*world_aabb)[3] - (*world_aabb)[0], (*world_aabb)[4] - (*world_aabb)[1],
-                    (*world_aabb)[5] - (*world_aabb)[2]};
-                row.has_size = true;
-            }
-            const auto body_type = actor.mechanics ? body_type_name(*actor.mechanics) : actor.persisted_body_type;
-            row.physics_enabled = body_type != "phantom";
-            result.actors.push_back(std::move(row));
-        }
-        return reply;
-    }
-    if (request.method == SceneMethod::ReadCameras || request.method == SceneMethod::ReadTree) {
-        if (!request.archive_session || request.archive_session->empty() || trim_ascii(request.read_scene).empty()) {
-            reply.error_code = "INVALID_ARGUMENT";
-            reply.error_message = "Scene reads require the observed archive and scene";
-            return reply;
-        }
-        const auto* scene = state.scene.get();
-        if (!scene || *request.archive_session != scene->archive_session ||
-            !native_scene_request_matches(*scene, request.read_scene)) {
-            reply.error_code = "PROJECT_CONTEXT_CHANGED";
-            reply.error_message = "Read belongs to an inactive scene";
-            return reply;
-        }
-        auto& result = request.method == SceneMethod::ReadTree ? reply.tree.cameras : reply.camera_list;
-        if (!camera_list_snapshot(*scene, result)) {
+        reply.active = {scene->archive_session, scene->route, scene->name,
+            state.project_path, scene->read_only, scene->tree_revision, scene->selection};
+        reply.scene_read = request.scene_read;
+        if (request.scene_read.cameras && !camera_list_snapshot(*scene, reply.camera_list)) {
             reply.error_code = "CAMERA_NOT_FOUND";
             reply.error_message = "Camera runtime is unavailable";
             return reply;
         }
-        if (request.method == SceneMethod::ReadTree) {
-            reply.tree.tree_revision = scene->tree_revision;
+        if (request.scene_read.actors == ActorProjection::Index) {
+            reply.actor_index = {scene->archive_session, scene->route, scene->tree_revision, {}};
+            reply.actor_index.actors.reserve(scene->actors.size());
+            // Identity only. Never acquire geometry or compute bounds for this projection.
+            for (const auto& actor : scene->actors) {
+                const auto extension = actor_file_extension(actor.route);
+                reply.actor_index.actors.push_back({actor.actor_guid, actor.name,
+                    extension.empty() ? actor.actor_type : extension});
+            }
+        } else if (request.scene_read.actors == ActorProjection::Tree) {
             reply.tree.actors.reserve(scene->actors.size());
             for (const auto& actor : scene->actors) reply.tree.actors.push_back(scene_tree_actor_row(actor));
+        } else if (request.scene_read.actors == ActorProjection::Context) {
+            auto& result = reply.actor_context;
+            result.archive_session = scene->archive_session;
+            result.scene = scene->route;
+            result.tree_revision = scene->tree_revision;
+            result.actors.reserve(scene->actors.size());
+            for (const auto& actor : scene->actors) {
+                ActorContextRow row;
+                row.actor_guid = actor.actor_guid;
+                row.name = actor.name;
+                const auto extension = actor_file_extension(actor.route);
+                row.type = extension.empty() ? actor.actor_type : extension;
+                row.semantic_role = actor.semantic_role.empty() ? actor.entity_type : actor.semantic_role;
+                row.position = actor.geometry ? actor.geometry->get_position() : actor.position;
+                row.rotation = actor.geometry ? actor.geometry->get_rotation() : actor.rotation;
+                row.scale = actor.geometry ? actor.geometry->get_scale() : actor.scale;
+                if (const auto bounds = native_actor_world_aabb(actor)) {
+                    row.size = {(*bounds)[3] - (*bounds)[0], (*bounds)[4] - (*bounds)[1], (*bounds)[5] - (*bounds)[2]};
+                    row.has_size = true;
+                }
+                const auto body_type = actor.mechanics ? body_type_name(*actor.mechanics) : actor.persisted_body_type;
+                row.physics_enabled = body_type != "phantom";
+                result.actors.push_back(std::move(row));
+            }
         }
-        // No actor geometry or serialized advanced rendering settings are read.
         return reply;
     }
     if (request.method == SceneMethod::ReadActorProperties) {
@@ -5774,8 +5701,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         value.scale = actor->geometry ? actor->geometry->get_scale() : actor->scale;
         return reply;
     }
-    if (request.method == SceneMethod::ReadActorSkeleton ||
-        request.method == SceneMethod::ReadActorIkChains ||
+    if (request.method == SceneMethod::ReadActorRig ||
         request.method == SceneMethod::SetActorIkChains) {
         if (!request.archive_session || request.archive_session->empty() ||
             trim_ascii(request.ik.scene.empty() ? request.read_scene : request.ik.scene).empty() ||
@@ -5812,7 +5738,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             return reply;
         }
         const auto* skeleton = resource->data.skeleton ? &*resource->data.skeleton : nullptr;
-        if (request.method == SceneMethod::ReadActorSkeleton) {
+        if (request.method == SceneMethod::ReadActorRig) {
             auto& value = reply.actor_skeleton;
             value.archive_session = scene->archive_session; value.scene = scene->route; value.actor = actor->name;
             value.is_skinned = skeleton != nullptr;
@@ -5826,15 +5752,13 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
                     if (node.children.empty()) value.leaves.push_back(node.name);
                 }
             }
-            return reply;
-        }
-        if (request.method == SceneMethod::ReadActorIkChains) {
+
             auto geometry = Corona::SharedDataHub::instance().geometry_storage().try_acquire_read(actor->geometry->get_handle());
             if (!geometry) { reply.error_code = "ACTOR_NOT_READY"; reply.error_message = "IK geometry storage is unavailable"; return reply; }
-            auto& value = reply.actor_ik;
-            value.archive_session = scene->archive_session; value.scene = scene->route; value.actor = actor->name;
-            value.ready = true; value.is_skinned = skeleton != nullptr; value.revision = geometry->ik_chains_revision;
-            value.chains = typed_ik_chains(geometry->ik_chains, skeleton, true);
+            auto& ik = reply.actor_ik;
+            ik.archive_session = scene->archive_session; ik.scene = scene->route; ik.actor = actor->name;
+            ik.ready = true; ik.is_skinned = skeleton != nullptr; ik.revision = geometry->ik_chains_revision;
+            ik.chains = typed_ik_chains(geometry->ik_chains, skeleton, true);
             return reply;
         }
         if (!skeleton) { reply.error_code = "ACTOR_NOT_READY"; reply.error_message = "Actor model has no skeleton"; return reply; }

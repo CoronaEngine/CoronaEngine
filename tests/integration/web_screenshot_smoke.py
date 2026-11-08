@@ -107,7 +107,7 @@ def run(port, root, engine_pid):
     main = Frontend(port, target_id=targets()[0]['id'])
     def cameras():
         return main.evaluate("(async()=>{const s=await corona.scene.readActive();return "
-                             "(await corona.scene.readCameras(s.scene,{archive_session:s.archive_session})).cameras;})()")
+                             "(await corona.scene.readScene({scene:s.scene,archive_session:s.archive_session,cameras:true})).cameras;})()")
     panel = camera_view = None
     tab_id = None
     try:

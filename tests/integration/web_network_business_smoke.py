@@ -30,8 +30,7 @@ def run(launches):
 
     def replicated(actor):
         scope = guest['main'].evaluate('corona.scene.readActive()')['archive_session']
-        return wait(lambda: guest['main'].evaluate('corona.scene.readActorIndex("scene.ini",'
-            + json.dumps({'archive_session': scope}) + ')'),
+        return wait(lambda: guest['main'].evaluate('corona.scene.readScene({scene:"scene.ini",actors:"index",...' + json.dumps({'archive_session': scope}) + '})'),
             lambda result: any(item['actor_guid'] == actor['actor_guid'] for item in result['actors']),
             'snapshot restores Actors created before connection', seconds=40)
 
@@ -93,20 +92,17 @@ def verify_object_sync(host, guest):
         + json.dumps({'archive_session': scopes[0], 'actor_type': 'model', 'actor_name': name}) + ')')
     assert created['name'] == name and created['archive_session'] == scopes[0], created
     print('Native object created on host: ' + created['actor_guid'], flush=True)
-    index = wait(lambda: guest['main'].evaluate('corona.scene.readActorIndex("scene.ini",'
-                 + json.dumps({'archive_session': scopes[1]}) + ')'),
+    index = wait(lambda: guest['main'].evaluate('corona.scene.readScene({scene:"scene.ini",actors:"index",...' + json.dumps({'archive_session': scopes[1]}) + '})'),
                  lambda result: any(actor['actor_guid'] == created['actor_guid'] for actor in result['actors']),
                  'host-created Actor reaches guest with the same stable GUID', seconds=15)
     removed = host['main'].evaluate('corona.scene.createActor("scene.ini",' + json.dumps(str(source)) + ','
         + json.dumps({'archive_session': scopes[0], 'actor_type': 'model', 'actor_name': name + '-delete'}) + ')')
-    wait(lambda: guest['main'].evaluate('corona.scene.readActorIndex("scene.ini",'
-         + json.dumps({'archive_session': scopes[1]}) + ')'),
+    wait(lambda: guest['main'].evaluate('corona.scene.readScene({scene:"scene.ini",actors:"index",...' + json.dumps({'archive_session': scopes[1]}) + '})'),
          lambda result: any(actor['actor_guid'] == removed['actor_guid'] for actor in result['actors']),
          'deletion target first materializes on the guest', seconds=15)
     host['main'].evaluate('corona.scene.deleteActor("scene.ini",' + json.dumps(removed['actor_guid']) + ','
         + json.dumps({'archive_session': scopes[0]}) + ')')
-    deleted_index = wait(lambda: guest['main'].evaluate('corona.scene.readActorIndex("scene.ini",'
-                         + json.dumps({'archive_session': scopes[1]}) + ')'),
+    deleted_index = wait(lambda: guest['main'].evaluate('corona.scene.readScene({scene:"scene.ini",actors:"index",...' + json.dumps({'archive_session': scopes[1]}) + '})'),
                          lambda result: not any(actor['actor_guid'] == removed['actor_guid'] for actor in result['actors']),
                          'host-deleted Actor disappears from the guest', seconds=15)
     transforms = []
@@ -137,7 +133,7 @@ def verify_object_state_sync(host, guest, guid, scopes, original_name):
         (host, guest, scopes[0], scopes[1], False, '-host-renamed'),
         (guest, host, scopes[1], scopes[0], True, '-guest-renamed'),
     ]:
-        changed = writer['main'].evaluate('corona.scene.setActorProperties("scene.ini",' + json.dumps(guid) + ','
+        changed = writer['main'].evaluate('corona.scene.updateActor("scene.ini",' + json.dumps(guid) + ','
             + json.dumps({'archive_session': writer_scope, 'visible': visible}) + ')')
         assert changed['actor']['visible'] is visible, changed
         try:
@@ -146,12 +142,11 @@ def verify_object_state_sync(host, guest, guid, scopes, original_name):
                 lambda result: result['visible'] is visible, 'Actor visibility replicates to the other participant', seconds=15))
         except AssertionError as error:
             failures.append(str(error))
-        renamed = writer['main'].evaluate('corona.scene.renameActor("scene.ini",' + json.dumps(guid) + ','
-            + json.dumps(original_name + suffix) + ',' + json.dumps({'archive_session': writer_scope}) + ')')
-        assert renamed['new_name'] == original_name + suffix, renamed
+        renamed = writer['main'].evaluate('corona.scene.updateActor("scene.ini",' + json.dumps(guid) + ','
+            + json.dumps({'archive_session': writer_scope, 'name': original_name + suffix}) + ')')
+        assert renamed['actor']['name'] == original_name + suffix, renamed
         try:
-            evidence['renames'].append(wait(lambda: reader['main'].evaluate('corona.scene.readActorIndex("scene.ini",'
-                + json.dumps({'archive_session': reader_scope}) + ')'),
+            evidence['renames'].append(wait(lambda: reader['main'].evaluate('corona.scene.readScene({scene:"scene.ini",actors:"index",...' + json.dumps({'archive_session': reader_scope}) + '})'),
                 lambda result: any(actor['actor_guid'] == guid and actor['name'] == original_name + suffix
                                    for actor in result['actors']), 'Actor rename replicates to the other participant', seconds=15))
         except AssertionError as error:

@@ -9,11 +9,11 @@ def run_camera(panel):
     identity = panel.evaluate('corona.window.getCurrent()')
     panel.evaluate("""(async()=>{
       const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.readActorIndex==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
       const app=Object.values(m).find(v=>typeof v?.openNativePanel==='function');
-      const original={set:api.scene.setCameraProperties,resize:app.resizeThisCameraView};
+      const original={set:api.scene.updateCamera,resize:app.resizeThisCameraView};
       const probe=window.__cameraLifetime={resizes:[],pending:[],delivered:0,route:location.hash};
-      api.scene.setCameraProperties=(...args)=>{
+      api.scene.updateCamera=(...args)=>{
         const result=original.set(...args);
         return document.querySelector('.camera-overlay')&&'move_speed' in args[2]
           ?Promise.resolve(result).then(value=>new Promise(resolve=>probe.pending.push(()=>{probe.delivered++;resolve(value);})))
@@ -21,7 +21,7 @@ def run_camera(panel):
       };
       app.resizeThisCameraView=(...args)=>{probe.resizes.push(args);return original.resize(...args);};
       probe.restore=()=>{for(const deliver of probe.pending.splice(0))deliver();
-        api.scene.setCameraProperties=original.set;app.resizeThisCameraView=original.resize;};
+        api.scene.updateCamera=original.set;app.resizeThisCameraView=original.resize;};
       return true;
     })()""")
     try:
@@ -54,9 +54,9 @@ def run_camera(panel):
 def run_camera_initialization(panel):
     panel.evaluate("""(async()=>{
       const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.readActorIndex==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
       const app=Object.values(m).find(v=>typeof v?.openNativePanel==='function');
-      const original={drag:app.setCurrentTabDragRegions,read:api.scene.readCameras,
+      const original={drag:app.setCurrentTabDragRegions,read:api.scene.readScene,
         observe:api.scene.observe,off:api.off};
       const probe=window.__cameraInit={route:location.hash,phase:null};
       const camera=()=>!!document.querySelector('.camera-overlay');
@@ -66,7 +66,7 @@ def run_camera_initialization(panel):
           ?Promise.resolve(result).then(value=>new Promise(resolve=>p.pending.push(()=>resolve(value)))):result;
       };
       app.setCurrentTabDragRegions=(...args)=>hold('drag',original.drag(...args));
-      api.scene.readCameras=(...args)=>{if(probe.phase&&camera())probe.phase.reads++;
+      api.scene.readScene=(...args)=>{if(probe.phase&&camera())probe.phase.reads++;
         return hold('read',original.read(...args));};
       api.scene.observe=(...args)=>{
         if(!probe.phase||!camera())return original.observe(...args);
@@ -79,7 +79,7 @@ def run_camera_initialization(panel):
       probe.snapshot=()=>{const p=probe.phase;return {kind:p.kind,pending:p.pending.length,reads:p.reads,
         registrations:p.registrations,releases:p.releases,token:p.token};};
       probe.restore=()=>{probe.release();probe.phase=null;app.setCurrentTabDragRegions=original.drag;
-        api.scene.readCameras=original.read;api.scene.observe=original.observe;api.off=original.off;};
+        api.scene.readScene=original.read;api.scene.observe=original.observe;api.off=original.off;};
       return true;
     })()""")
     results = []
@@ -124,9 +124,9 @@ def run_node_graph(panel):
     panel.evaluate("window.__lifetimeQuery=location.hash.split('?')[1]||'';location.hash='/SceneBar?'+window.__lifetimeQuery;true")
     wait(lambda: panel.evaluate("!!document.querySelector('.scene-tools-panel')"), bool, 'lifecycle baseline route')
     panel.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.readActorIndex==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
       const original={read:api.scene.readActive,observe:api.scene.observe,off:api.off,
-        load:api.projectFiles.load,tree:api.scene.readActorTree,resize:window.ResizeObserver};
+        load:api.projectFiles.load,tree:api.scene.readScene,resize:window.ResizeObserver};
       const probe=window.__viewLifetime={phase:null};
       api.scene.readActive=(...args)=>{const phase=probe.phase;
         const hold=phase&&document.querySelector('.node-graph-workspace');
@@ -142,7 +142,7 @@ def run_node_graph(panel):
       api.off=token=>{for(const entry of probe.phase?.subscriptions||[])if(entry.token===token)entry.releases++;
         return original.off(token);};
       api.projectFiles.load=(...args)=>{if(probe.phase)probe.phase.loads++;return original.load(...args);};
-      api.scene.readActorTree=(...args)=>{if(probe.phase)probe.phase.actorReads++;return original.tree(...args);};
+      api.scene.readScene=(...args)=>{if(probe.phase&&args[0]?.actors==='context')probe.phase.actorReads++;return original.tree(...args);};
       window.ResizeObserver=class extends original.resize{
         constructor(callback){super(callback);this.phase=probe.phase&&document.querySelector('.node-graph-workspace')?probe.phase:null;
           if(this.phase)this.phase.observers++;}
@@ -158,7 +158,7 @@ def run_node_graph(panel):
         subscriptions:p.subscriptions.map(({kind,token,releases})=>({kind,token,releases}))};};
       probe.restore=()=>{if(probe.phase)probe.release();probe.phase=null;api.scene.readActive=original.read;
         api.scene.observe=original.observe;api.off=original.off;api.projectFiles.load=original.load;
-        api.scene.readActorTree=original.tree;window.ResizeObserver=original.resize;};
+        api.scene.readScene=original.tree;window.ResizeObserver=original.resize;};
       return true;})()""")
     results = []
     try:

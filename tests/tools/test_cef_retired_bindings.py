@@ -201,7 +201,7 @@ def test_camera_reads_retire_full_scene_and_camera_list_web_routes():
         assert '~caller_mask(EditorApiCaller::Cef)' in declaration or 'caller_mask(EditorApiCaller::PythonScript)' in declaration
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'getSnapshot:' not in facade and 'listCameraViews:' not in facade
-    assert 'window.corona.scene.readCameras(sceneName, scope)' in facade
+    assert 'window.corona.scene.readScene(request)' in facade
 
 
 def test_tree_read_retires_manifest_and_shares_owned_rows():
@@ -212,7 +212,7 @@ def test_tree_read_retires_manifest_and_shares_owned_rows():
     assert 'caller_mask(EditorApiCaller::PythonScript)' in declaration
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'listSceneTree:' not in facade
-    assert 'window.corona.scene.readTree(sceneName, scope)' in facade
+    assert 'window.corona.scene.readScene(request)' in facade
     native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
     assert 'scene_tree_actor_to_json(scene_tree_actor_row(actor))' in native
     assert 'reply.tree.actors.push_back(scene_tree_actor_row(actor))' in native
@@ -301,9 +301,9 @@ def test_camera_rename_and_delete_use_scoped_scene_v8_only_for_web():
         assert 'caller_mask(EditorApiCaller::PythonScript)' in declaration
         assert 'caller_mask(EditorApiCaller::Cef)' not in declaration
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
-    for name in ['renameCamera', 'deleteCamera']:
+    for name in ['updateCamera', 'deleteCamera']:
         assert f'CreateFunction("{name}"' in binding
-    assert 'SceneMethod::RenameCamera' in binding
+    assert 'SceneMethod::UpdateCamera' in binding
     assert 'SceneMethod::DeleteCamera' in binding
 
 
@@ -323,11 +323,11 @@ def test_actor_rename_uses_scoped_scene_v8_only_for_web():
     assert '"", "scene_tools.rename_actor"' in declaration
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'call_manifest_editor_api(\'sceneTools.renameActor\'' not in facade
-    assert 'renameActor: (sceneName, actor, name, scope) =>' in facade
-    assert 'window.corona.scene.renameActor(sceneName, actor, name, scope)' in facade
+    assert 'updateActor: (sceneName, actorName, patch) =>' in facade
+    assert 'window.corona.scene.updateActor(sceneName, actorName, patch)' in facade
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
-    assert 'new NativeHandler(endpoint, SceneMethod::RenameActor)' in binding
-    assert 'actor_rename_value(reply.actor_rename)' in binding
+    assert 'new NativeHandler(endpoint, SceneMethod::UpdateActor)' in binding
+    assert 'properties_value(reply.properties)' in binding
 
 
 def test_actor_delete_uses_scoped_scene_v8_and_retires_manifest_for_web():

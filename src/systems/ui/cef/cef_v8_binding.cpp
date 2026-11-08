@@ -712,17 +712,6 @@ CefRefPtr<CefV8Value> deleted_camera_value(const DeletedCameraSnapshot& snapshot
     return result;
 }
 
-CefRefPtr<CefV8Value> actor_rename_value(const ActorRenameSnapshot& snapshot) {
-    auto result = CefV8Value::CreateObject(nullptr, nullptr);
-    result->SetValue("status", CefV8Value::CreateString("success"), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("archive_session", CefV8Value::CreateString(snapshot.archive_session), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("scene", CefV8Value::CreateString(snapshot.scene), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("actor_guid", CefV8Value::CreateString(snapshot.actor_guid), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("old_name", CefV8Value::CreateString(snapshot.old_name), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("new_name", CefV8Value::CreateString(snapshot.new_name), V8_PROPERTY_ATTRIBUTE_NONE);
-    return result;
-}
-
 CefRefPtr<CefV8Value> actor_delete_value(const ActorDeleteSnapshot& snapshot) {
     auto result = CefV8Value::CreateObject(nullptr, nullptr);
     result->SetValue("status", CefV8Value::CreateString("success"), V8_PROPERTY_ATTRIBUTE_NONE);
@@ -835,21 +824,6 @@ bool read_camera_create(const CefV8ValueList& arguments, SceneRequest& request) 
     return true;
 }
 
-bool read_camera_rename(const CefV8ValueList& arguments, SceneRequest& request) {
-    if (arguments.size() != 4 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty() ||
-        !arguments[1]->IsString() || arguments[1]->GetStringValue().empty() ||
-        !arguments[2]->IsString() || arguments[2]->GetStringValue().empty()) return false;
-    const auto scope = arguments[3];
-    if (!object_keys(scope, {"archive_session"})) return false;
-    const auto session = scope->GetValue("archive_session");
-    if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
-    request.archive_session = session->GetStringValue().ToString();
-    request.camera_rename.scene = arguments[0]->GetStringValue().ToString();
-    request.camera_rename.camera_id = arguments[1]->GetStringValue().ToString();
-    request.camera_rename.name = arguments[2]->GetStringValue().ToString();
-    return true;
-}
-
 bool read_actor_create(const CefV8ValueList& arguments, SceneRequest& request) {
     if (arguments.size() != 3 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty() ||
         !arguments[1]->IsString() || arguments[1]->GetStringValue().empty() ||
@@ -882,21 +856,6 @@ bool read_actor_create(const CefV8ValueList& arguments, SceneRequest& request) {
         patch.audio_resource_id = id;
     }
     return patch.actor_type != "audio" || patch.audio_resource_id.has_value();
-}
-
-bool read_actor_rename(const CefV8ValueList& arguments, SceneRequest& request) {
-    if (arguments.size() != 4 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty() ||
-        !arguments[1]->IsString() || arguments[1]->GetStringValue().empty() ||
-        !arguments[2]->IsString() || arguments[2]->GetStringValue().empty()) return false;
-    const auto scope = arguments[3];
-    if (!object_keys(scope, {"archive_session"})) return false;
-    const auto session = scope->GetValue("archive_session");
-    if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
-    request.archive_session = session->GetStringValue().ToString();
-    request.actor_rename.scene = arguments[0]->GetStringValue().ToString();
-    request.actor_rename.actor = arguments[1]->GetStringValue().ToString();
-    request.actor_rename.name = arguments[2]->GetStringValue().ToString();
-    return true;
 }
 
 bool read_actor_delete(const CefV8ValueList& arguments, SceneRequest& request) {
@@ -944,13 +903,18 @@ bool read_camera_properties(const CefV8ValueList& arguments, SceneRequest& reque
     for (int index = 0; index < 2; ++index)
         if (!arguments[index]->IsString() || arguments[index]->GetStringValue().empty()) return false;
     const auto object = arguments[2];
-    if (!object_keys(object, {"archive_session", "position", "forward", "world_up", "fov", "projection_x_sign",
+    if (!object_keys(object, {"archive_session", "name", "position", "forward", "world_up", "fov", "projection_x_sign",
         "near_plane", "far_plane", "width", "height", "view_x", "view_y", "view_width", "view_height", "move_speed"})) return false;
     const auto session = object->GetValue("archive_session");
     if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
     request.archive_session = session->GetStringValue().ToString();
     auto& patch = request.camera_properties;
     patch.scene = arguments[0]->GetStringValue().ToString(); patch.camera_id = arguments[1]->GetStringValue().ToString();
+    if (object->HasValue("name")) {
+        const auto name = object->GetValue("name");
+        if (!name || !name->IsString()) return false;
+        patch.name = name->GetStringValue().ToString();
+    }
     const auto vector = [&](const char* key, auto& output) {
         if (!object->HasValue(key)) return true;
         std::array<float, 3> value;
@@ -1102,10 +1066,8 @@ CefRefPtr<CefV8Value> camera_render_settings_value(const CameraRenderSettingsSna
     return result;
 }
 
-CefRefPtr<CefV8Value> tree_value(const SceneTreeSnapshot& snapshot) {
-    auto result = cameras_value(snapshot.cameras);
+CefRefPtr<CefV8Value> tree_actors_value(const SceneTreeSnapshot& snapshot) {
     const auto set = [](auto target, const char* key, auto value) { target->SetValue(key, value, V8_PROPERTY_ATTRIBUTE_NONE); };
-    set(result, "tree_revision", CefV8Value::CreateDouble(static_cast<double>(snapshot.tree_revision)));
     auto actors = CefV8Value::CreateArray(static_cast<int>(snapshot.actors.size()));
     for (size_t index = 0; index < snapshot.actors.size(); ++index) {
         const auto& row = snapshot.actors[index];
@@ -1130,8 +1092,7 @@ CefRefPtr<CefV8Value> tree_value(const SceneTreeSnapshot& snapshot) {
         set(actor, "load_error", error);
         actors->SetValue(static_cast<int>(index), actor);
     }
-    set(result, "actors", actors);
-    return result;
+    return actors;
 }
 
 CefRefPtr<CefV8Value> actor_context_value(const ActorContextSnapshot& snapshot) {
@@ -1222,10 +1183,15 @@ bool read_properties(const CefV8ValueList& arguments, SceneRequest& request) {
     patch.actor = arguments[1]->GetStringValue().ToString();
     if (patch.scene.empty() || patch.actor.empty()) return false;
     const auto object = arguments[2];
-    if (!object_keys(object, {"archive_session", "visible", "follow_camera", "mechanics", "camera_lock", "animation_sources"})) return false;
+    if (!object_keys(object, {"archive_session", "name", "visible", "follow_camera", "mechanics", "camera_lock", "animation_sources"})) return false;
     const auto session = object->GetValue("archive_session");
     if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
     request.archive_session = session->GetStringValue().ToString();
+    if (object->HasValue("name")) {
+        const auto name = object->GetValue("name");
+        if (!name || !name->IsString()) return false;
+        patch.name = name->GetStringValue().ToString();
+    }
     const auto boolean = [&](const char* key, std::optional<bool>& result) {
         if (!object->HasValue(key)) return true;
         const auto value = object->GetValue(key);
@@ -1296,7 +1262,7 @@ bool read_properties(const CefV8ValueList& arguments, SceneRequest& request) {
         }
         patch.animation_sources = std::move(sources);
     }
-    return patch.visible || patch.follow_camera || patch.mechanics || patch.camera_lock || patch.animation_sources;
+    return patch.name || patch.visible || patch.follow_camera || patch.mechanics || patch.camera_lock || patch.animation_sources;
 }
 
 CefRefPtr<CefV8Value> properties_value(const ActorPropertiesSnapshot& snapshot) {
@@ -1458,7 +1424,32 @@ bool read_transform(const CefV8ValueList& arguments, SceneRequest& request) {
         (request.transform.position || request.transform.rotation || request.transform.scale);
 }
 
-bool read_actor_index(const CefV8ValueList& arguments, SceneRequest& request) {
+bool read_scene_query(const CefV8ValueList& arguments, SceneRequest& request) {
+    if (arguments.size() != 1 || !object_keys(arguments[0], {"archive_session", "scene", "actors", "cameras"})) return false;
+    const auto query = arguments[0];
+    const auto scene = query->GetValue("scene"), session = query->GetValue("archive_session");
+    if (!scene || !scene->IsString() || scene->GetStringValue().empty() ||
+        !session || !session->IsString() || session->GetStringValue().empty()) return false;
+    request.read_scene = scene->GetStringValue().ToString();
+    request.archive_session = session->GetStringValue().ToString();
+    if (query->HasValue("actors")) {
+        const auto value = query->GetValue("actors");
+        if (!value || !value->IsString()) return false;
+        const auto name = value->GetStringValue().ToString();
+        if (name == "index") request.scene_read.actors = ActorProjection::Index;
+        else if (name == "tree") request.scene_read.actors = ActorProjection::Tree;
+        else if (name == "context") request.scene_read.actors = ActorProjection::Context;
+        else if (name != "none") return false;
+    }
+    if (query->HasValue("cameras")) {
+        const auto value = query->GetValue("cameras");
+        if (!value || !value->IsBool()) return false;
+        request.scene_read.cameras = value->GetBoolValue();
+    }
+    return request.scene_read.actors != ActorProjection::None || request.scene_read.cameras;
+}
+
+bool read_scene_scope(const CefV8ValueList& arguments, SceneRequest& request) {
     if (arguments.size() != 2 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty() ||
         !object_keys(arguments[1], {"archive_session"})) return false;
     const auto session = arguments[1]->GetValue("archive_session");
@@ -1554,12 +1545,6 @@ CefRefPtr<CefV8Value> resource_import_value(const ResourceImportSnapshot& snapsh
     return result;
 }
 
-bool read_actor_context(const CefV8ValueList& arguments, SceneRequest& request) {
-    if (!read_actor_index(arguments, request)) return false;
-    request.method = SceneMethod::ReadActorContext;
-    return true;
-}
-
 bool read_model_nodes(const CefV8ValueList& arguments, SceneRequest& request) {
     if (arguments.size() != 2 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty() ||
         !object_keys(arguments[1], {"archive_session", "actor_guid", "parent_index", "offset", "limit"})) return false;
@@ -1613,7 +1598,7 @@ bool read_model_node_state(const CefV8ValueList& arguments, SceneRequest& reques
 
 bool read_actor_properties(const CefV8ValueList& arguments, SceneRequest& request) {
     if (arguments.size() != 3 || !arguments[1]->IsString() || arguments[1]->GetStringValue().empty()) return false;
-    if (!read_actor_index({arguments[0], arguments[2]}, request)) return false;
+    if (!read_scene_scope({arguments[0], arguments[2]}, request)) return false;
     request.read_actor = arguments[1]->GetStringValue().ToString();
     return true;
 }
@@ -1779,6 +1764,34 @@ CefRefPtr<CefV8Value> actor_index_value(const ActorIndexSnapshot& snapshot) {
         actors->SetValue(static_cast<int>(index), value);
     }
     result->SetValue("actors", actors, V8_PROPERTY_ATTRIBUTE_NONE);
+    return result;
+}
+
+CefRefPtr<CefV8Value> scene_query_value(const SceneReply& reply) {
+    auto result = CefV8Value::CreateObject(nullptr, nullptr);
+    result->SetValue("archive_session", CefV8Value::CreateString(reply.active.archive_session), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("scene", CefV8Value::CreateString(reply.active.scene), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("tree_revision", CefV8Value::CreateDouble(static_cast<double>(reply.active.tree_revision)), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (reply.scene_read.cameras) {
+        const auto cameras = cameras_value(reply.camera_list);
+        result->SetValue("cameras", cameras->GetValue("cameras"), V8_PROPERTY_ATTRIBUTE_NONE);
+        result->SetValue("active_camera_id", cameras->GetValue("active_camera_id"), V8_PROPERTY_ATTRIBUTE_NONE);
+    }
+    CefRefPtr<CefV8Value> actors;
+    if (reply.scene_read.actors == ActorProjection::Index) actors = actor_index_value(reply.actor_index)->GetValue("actors");
+    else if (reply.scene_read.actors == ActorProjection::Tree) actors = tree_actors_value(reply.tree);
+    else if (reply.scene_read.actors == ActorProjection::Context) actors = actor_context_value(reply.actor_context)->GetValue("actors");
+    if (actors) result->SetValue("actors", actors, V8_PROPERTY_ATTRIBUTE_NONE);
+    return result;
+}
+
+CefRefPtr<CefV8Value> actor_rig_value(const SceneReply& reply) {
+    auto result = CefV8Value::CreateObject(nullptr, nullptr);
+    result->SetValue("archive_session", CefV8Value::CreateString(reply.actor_skeleton.archive_session), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("scene", CefV8Value::CreateString(reply.actor_skeleton.scene), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("actor", CefV8Value::CreateString(reply.actor_skeleton.actor), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("skeleton", skeleton_value(reply.actor_skeleton), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("ik", ik_value(reply.actor_ik), V8_PROPERTY_ATTRIBUTE_NONE);
     return result;
 }
 
@@ -2470,37 +2483,31 @@ public:
         }
         SceneRequest request{method};
         if (((method == SceneMethod::ReadActive || method == SceneMethod::ReadVisionAvailability) && !arguments.empty()) ||
-            (method == SceneMethod::ReadActorIndex && !read_actor_index(arguments, request)) ||
             ((method == SceneMethod::SelectModelFile || method == SceneMethod::ImportResourceFile) && !read_select_model_file(arguments, request)) ||
             (method == SceneMethod::PlayAudioResource && !read_audio_resource(arguments, request, true)) ||
             (method == SceneMethod::StopAudioResource && !read_audio_resource(arguments, request, false)) ||
             (method == SceneMethod::PlayActorAudio && !read_actor_audio(arguments, request, true)) ||
             (method == SceneMethod::StopActorAudio && !read_actor_audio(arguments, request, false)) ||
-            (method == SceneMethod::ReadCameras && !read_actor_index(arguments, request)) ||
-            (method == SceneMethod::ReadTree && !read_actor_index(arguments, request)) ||
-            (method == SceneMethod::ReadActorContext && !read_actor_context(arguments, request)) ||
+            (method == SceneMethod::ReadScene && !read_scene_query(arguments, request)) ||
             (method == SceneMethod::ReadModelNodes && !read_model_nodes(arguments, request)) ||
             (method == SceneMethod::SetModelNodeState && !read_model_node_state(arguments, request)) ||
             (method == SceneMethod::ReadActorProperties && !read_actor_properties(arguments, request)) ||
-            (method == SceneMethod::ReadActorSkeleton && !read_ik_read(arguments, request, method)) ||
-            (method == SceneMethod::ReadActorIkChains && !read_ik_read(arguments, request, method)) ||
+            (method == SceneMethod::ReadActorRig && !read_ik_read(arguments, request, method)) ||
             (method == SceneMethod::SetActorIkChains && !read_ik_write(arguments, request)) ||
             (method == SceneMethod::ReadTransforms && !read_transforms(arguments, request)) ||
             (method == SceneMethod::SelectActor && !read_selection(arguments, request.selection)) ||
             (method == SceneMethod::SetActorTransform && !read_transform(arguments, request)) ||
-            (method == SceneMethod::SetActorProperties && !read_properties(arguments, request)) ||
+            (method == SceneMethod::UpdateActor && !read_properties(arguments, request)) ||
             (method == SceneMethod::CreateActor && !read_actor_create(arguments, request)) ||
-            (method == SceneMethod::RenameActor && !read_actor_rename(arguments, request)) ||
             (method == SceneMethod::DeleteActor && !read_actor_delete(arguments, request)) ||
             (method == SceneMethod::RebindActorResource && !read_actor_resource_rebind(arguments, request)) ||
             (method == SceneMethod::Save && !read_scene_save(arguments, request)) ||
             (method == SceneMethod::FocusActor && !read_focus(arguments, request)) ||
             (method == SceneMethod::CaptureScreenshot && !read_screenshot(arguments, request)) ||
-            (method == SceneMethod::SetCameraProperties && !read_camera_properties(arguments, request)) ||
+            (method == SceneMethod::UpdateCamera && !read_camera_properties(arguments, request)) ||
             (method == SceneMethod::ReadCameraRenderSettings && !read_camera_render_settings(arguments, request, true)) ||
             (method == SceneMethod::SetCameraRenderSettings && !read_camera_render_settings(arguments, request)) ||
             (method == SceneMethod::CreateCamera && !read_camera_create(arguments, request)) ||
-            (method == SceneMethod::RenameCamera && !read_camera_rename(arguments, request)) ||
             (method == SceneMethod::DeleteCamera && !read_camera_delete(arguments, request)) ||
             ((method == SceneMethod::GetEnvironment || method == SceneMethod::SetEnvironment) && !read_environment(arguments, request))) {
             reject(context_, promise, "INVALID_ARGUMENT", "Invalid native scene operation arguments");
@@ -2811,14 +2818,8 @@ private:
                    std::get<SceneMethod>(pending.method) == SceneMethod::PlayActorAudio ||
                    std::get<SceneMethod>(pending.method) == SceneMethod::StopActorAudio) {
             pending.promise->ResolvePromise(audio_value(reply.audio));
-        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActorIndex) {
-            pending.promise->ResolvePromise(actor_index_value(reply.actor_index));
-        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadCameras) {
-            pending.promise->ResolvePromise(cameras_value(reply.camera_list));
-        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadTree) {
-            pending.promise->ResolvePromise(tree_value(reply.tree));
-        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActorContext) {
-            pending.promise->ResolvePromise(actor_context_value(reply.actor_context));
+        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadScene) {
+            pending.promise->ResolvePromise(scene_query_value(reply));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadModelNodes) {
             pending.promise->ResolvePromise(model_node_page_value(reply.model_nodes));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SetModelNodeState) {
@@ -2826,19 +2827,16 @@ private:
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActorProperties ||
                    std::get<SceneMethod>(pending.method) == SceneMethod::CreateActor) {
             pending.promise->ResolvePromise(actor_read_value(reply.actor_read));
-        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActorSkeleton) {
-            pending.promise->ResolvePromise(skeleton_value(reply.actor_skeleton));
-        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActorIkChains ||
-                   std::get<SceneMethod>(pending.method) == SceneMethod::SetActorIkChains) {
+        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActorRig) {
+            pending.promise->ResolvePromise(actor_rig_value(reply));
+        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SetActorIkChains) {
             pending.promise->ResolvePromise(ik_value(reply.actor_ik));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadTransforms) {
             pending.promise->ResolvePromise(transforms_value(reply.transforms, reply.active.archive_session));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SetActorTransform) {
             pending.promise->ResolvePromise(transform_value(reply.transform));
-        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SetActorProperties) {
+        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::UpdateActor) {
             pending.promise->ResolvePromise(properties_value(reply.properties));
-        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::RenameActor) {
-            pending.promise->ResolvePromise(actor_rename_value(reply.actor_rename));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::DeleteActor) {
             pending.promise->ResolvePromise(actor_delete_value(reply.actor_delete));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::RebindActorResource) {
@@ -2849,10 +2847,8 @@ private:
             pending.promise->ResolvePromise(focus_value(reply.focus));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::CaptureScreenshot) {
             pending.promise->ResolvePromise(screenshot_value(reply.screenshot));
-        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SetCameraProperties ||
+        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::UpdateCamera ||
                    std::get<SceneMethod>(pending.method) == SceneMethod::CreateCamera) {
-            pending.promise->ResolvePromise(camera_properties_value(reply.camera));
-        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::RenameCamera) {
             pending.promise->ResolvePromise(camera_properties_value(reply.camera));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::DeleteCamera) {
             pending.promise->ResolvePromise(deleted_camera_value(reply.deleted_camera));
@@ -3049,22 +3045,16 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     scripts->SetValue("getStatus", CefV8Value::CreateFunction("getStatus", new NativeHandler(endpoint, ScriptsMethod::GetStatus)), V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("scripts", scripts, V8_PROPERTY_ATTRIBUTE_READONLY);
     auto scene = CefV8Value::CreateObject(nullptr, nullptr);
+    scene->SetValue("readScene", CefV8Value::CreateFunction("readScene",
+        new NativeHandler(endpoint, SceneMethod::ReadScene)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("readActive", CefV8Value::CreateFunction("readActive",
         new NativeHandler(endpoint, SceneMethod::ReadActive)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("isVisionAvailable", CefV8Value::CreateFunction("isVisionAvailable",
         new NativeHandler(endpoint, SceneMethod::ReadVisionAvailability)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("readActorIndex", CefV8Value::CreateFunction("readActorIndex",
-        new NativeHandler(endpoint, SceneMethod::ReadActorIndex)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("selectModelFile", CefV8Value::CreateFunction("selectModelFile",
         new NativeHandler(endpoint, SceneMethod::SelectModelFile)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("importResourceFile", CefV8Value::CreateFunction("importResourceFile",
         new NativeHandler(endpoint, SceneMethod::ImportResourceFile)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("readCameras", CefV8Value::CreateFunction("readCameras",
-        new NativeHandler(endpoint, SceneMethod::ReadCameras)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("readTree", CefV8Value::CreateFunction("readTree",
-        new NativeHandler(endpoint, SceneMethod::ReadTree)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("readActorTree", CefV8Value::CreateFunction("readActorTree",
-        new NativeHandler(endpoint, SceneMethod::ReadActorContext)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("readModelNodes", CefV8Value::CreateFunction("readModelNodes",
         new NativeHandler(endpoint, SceneMethod::ReadModelNodes)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("setModelNodeState", CefV8Value::CreateFunction("setModelNodeState",
@@ -3073,10 +3063,8 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
         new NativeHandler(endpoint, SceneMethod::CreateActor)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("readActorProperties", CefV8Value::CreateFunction("readActorProperties",
         new NativeHandler(endpoint, SceneMethod::ReadActorProperties)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("readActorSkeleton", CefV8Value::CreateFunction("readActorSkeleton",
-        new NativeHandler(endpoint, SceneMethod::ReadActorSkeleton)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("readActorIkChains", CefV8Value::CreateFunction("readActorIkChains",
-        new NativeHandler(endpoint, SceneMethod::ReadActorIkChains)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    scene->SetValue("readActorRig", CefV8Value::CreateFunction("readActorRig",
+        new NativeHandler(endpoint, SceneMethod::ReadActorRig)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("setActorIkChains", CefV8Value::CreateFunction("setActorIkChains",
         new NativeHandler(endpoint, SceneMethod::SetActorIkChains)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("readTransforms", CefV8Value::CreateFunction("readTransforms",
@@ -3085,10 +3073,8 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
         new NativeHandler(endpoint, SceneMethod::SelectActor)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("setActorTransform", CefV8Value::CreateFunction("setActorTransform",
         new NativeHandler(endpoint, SceneMethod::SetActorTransform)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("setActorProperties", CefV8Value::CreateFunction("setActorProperties",
-        new NativeHandler(endpoint, SceneMethod::SetActorProperties)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("renameActor", CefV8Value::CreateFunction("renameActor",
-        new NativeHandler(endpoint, SceneMethod::RenameActor)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    scene->SetValue("updateActor", CefV8Value::CreateFunction("updateActor",
+        new NativeHandler(endpoint, SceneMethod::UpdateActor)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("deleteActor", CefV8Value::CreateFunction("deleteActor",
         new NativeHandler(endpoint, SceneMethod::DeleteActor)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("rebindActorResource", CefV8Value::CreateFunction("rebindActorResource",
@@ -3099,16 +3085,14 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
         new NativeHandler(endpoint, SceneMethod::GetEnvironment)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("focusActor", CefV8Value::CreateFunction("focusActor",
         new NativeHandler(endpoint, SceneMethod::FocusActor)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("setCameraProperties", CefV8Value::CreateFunction("setCameraProperties",
-        new NativeHandler(endpoint, SceneMethod::SetCameraProperties)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    scene->SetValue("updateCamera", CefV8Value::CreateFunction("updateCamera",
+        new NativeHandler(endpoint, SceneMethod::UpdateCamera)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("setCameraRenderSettings", CefV8Value::CreateFunction("setCameraRenderSettings",
         new NativeHandler(endpoint, SceneMethod::SetCameraRenderSettings)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("readCameraRenderSettings", CefV8Value::CreateFunction("readCameraRenderSettings",
         new NativeHandler(endpoint, SceneMethod::ReadCameraRenderSettings)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("createCamera", CefV8Value::CreateFunction("createCamera",
         new NativeHandler(endpoint, SceneMethod::CreateCamera)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("renameCamera", CefV8Value::CreateFunction("renameCamera",
-        new NativeHandler(endpoint, SceneMethod::RenameCamera)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("deleteCamera", CefV8Value::CreateFunction("deleteCamera",
         new NativeHandler(endpoint, SceneMethod::DeleteCamera)), V8_PROPERTY_ATTRIBUTE_READONLY);
     scene->SetValue("captureScreenshot", CefV8Value::CreateFunction("captureScreenshot",

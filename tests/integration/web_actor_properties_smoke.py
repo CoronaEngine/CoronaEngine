@@ -12,12 +12,12 @@ from web_environment_smoke import wait
 
 def alias_retirement(panel, main, scene, archive, guid):
     panel.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.renameActor==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.updateActor==='function');
       if(!api)throw Error('Actor rename facade missing');
-      const p=window.__aliasLifetime={api,rename:api.scene.renameActor,route:location.hash,reads:0,ready:false};
-      api.scene.renameActor=(...args)=>p.rename(...args).then(result=>new Promise(resolve=>{
+      const p=window.__aliasLifetime={api,rename:api.scene.updateActor,route:location.hash,reads:0,ready:false};
+      api.scene.updateActor=(...args)=>p.rename(...args).then(result=>new Promise(resolve=>{
         p.release=()=>resolve(new Proxy(result,{get(target,key,receiver){
-          if(key==='new_name')p.reads++;return Reflect.get(target,key,receiver);}}));p.ready=true;}));
+          if(key==='actor')p.reads++;return Reflect.get(target,key,receiver);}}));p.ready=true;}));
       const input=document.querySelector('#actor-alias');input.value='Retired alias probe';
       input.dispatchEvent(new Event('input',{bubbles:true}));
       input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));return true;})()""")
@@ -31,9 +31,9 @@ def alias_retirement(panel, main, scene, archive, guid):
         reads = panel.evaluate('window.__aliasLifetime.reads')
         assert reads == 0, f'Retired Object consumed {reads} rename reply fields'
     finally:
-        panel.evaluate("(()=>{const p=window.__aliasLifetime;p.api.scene.renameActor=p.rename;p.release?.();})()")
-        main.evaluate('corona.scene.renameActor(' + json.dumps(scene) + ',' + json.dumps(guid)
-                      + ',"Probe",' + json.dumps({'archive_session': archive}) + ')')
+        panel.evaluate("(()=>{const p=window.__aliasLifetime;p.api.scene.updateActor=p.rename;p.release?.();})()")
+        main.evaluate('corona.scene.updateActor(' + json.dumps(scene) + ',' + json.dumps(guid)
+                      + ',' + json.dumps({'archive_session': archive, 'name': 'Probe'}) + ')')
         main.evaluate('corona.scene.selectActor(' + json.dumps(scene) + ',"actor","Probe")')
         panel.evaluate('location.hash=window.__aliasLifetime.route')
     wait(lambda: panel.evaluate("document.querySelector('.object-heading h2')?.textContent"),
@@ -47,15 +47,15 @@ def property_retirement(panel, main, scene, archive, guid):
     assert len(chunks) == 1, chunks
     panel.evaluate('window.__physicsContextUrl=' + json.dumps(chunks[0].resolve().as_uri()))
     panel.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.setActorProperties==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.updateActor==='function');
       const services=await import(window.__physicsContextUrl);
       const context=Object.values(services).find(v=>typeof v?.recordEvent==='function'&&typeof v?.notifySceneSaved==='function');
       if(!api||!context)throw Error('Actor property/context services missing');
-      const p=window.__physicsLifetime={api,context,write:api.scene.setActorProperties,record:context.recordEvent,
+      const p=window.__physicsLifetime={api,context,write:api.scene.updateActor,record:context.recordEvent,
         route:location.hash,events:[],ready:false,retired:false};
       context.recordEvent=(event,...args)=>{if(p.retired&&event.type==='physics_changed')p.events.push(event);
         return p.record(event,...args);};
-      api.scene.setActorProperties=(...args)=>p.write(...args).then(result=>new Promise(resolve=>{
+      api.scene.updateActor=(...args)=>p.write(...args).then(result=>new Promise(resolve=>{
         p.release=()=>resolve(result);p.ready=true;}));
       [...document.querySelectorAll('#actor-body-type button')].find(b=>b.textContent.trim()==='静态').click();return true;})()""")
     try:
@@ -68,7 +68,7 @@ def property_retirement(panel, main, scene, archive, guid):
         events = panel.evaluate('window.__physicsLifetime.events')
         assert not events, f'Retired Object published physics events: {events}'
     finally:
-        panel.evaluate("(()=>{const p=window.__physicsLifetime;p.api.scene.setActorProperties=p.write;"
+        panel.evaluate("(()=>{const p=window.__physicsLifetime;p.api.scene.updateActor=p.write;"
                        "p.context.recordEvent=p.record;p.release?.();location.hash=p.route;})()")
     wait(lambda: panel.evaluate("document.querySelector('.object-heading h2')?.textContent"),
          lambda name: name == 'Probe', 'Object normal remount after physics patch')
@@ -76,7 +76,7 @@ def property_retirement(panel, main, scene, archive, guid):
     request = json.dumps([scene, guid, {'archive_session': archive}])
     wait(lambda: main.evaluate(f'corona.scene.readActorProperties(...{request})'),
          lambda actor: actor['mechanics']['body_type'] == 'kinematic', 'live physics patch after remount')
-    main.evaluate('corona.scene.setActorProperties(' + json.dumps(scene) + ',' + json.dumps(guid) + ','
+    main.evaluate('corona.scene.updateActor(' + json.dumps(scene) + ',' + json.dumps(guid) + ','
                   + json.dumps({'archive_session': archive, 'mechanics': {'body_type': 'dynamic'}}) + ')')
     return dict(retired_physics_events=events, normal_remount=True, live_body_type_edit=True)
 

@@ -96,14 +96,14 @@ def main_selection_retirement(main, open_panel, root, session):
     try:
         tools = open_panel('SceneTools', '/SceneBar', '[data-guidance=scene-import-model]')
         main.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-          const api=Object.values(m).find(v=>typeof v?.scene?.readActorIndex==='function');
+          const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
           const dock=document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('dock');
           if(!api?.gizmo?.setTarget||!dock)throw Error('selection boundaries missing');
           await dock.closePanel('Object');
-          const p=window.__selectionLifetime={api,dock,read:api.scene.readActorIndex,target:api.gizmo.setTarget,
+          const p=window.__selectionLifetime={api,dock,read:api.scene.readScene,target:api.gizmo.setTarget,
             open:dock.openPanel,route:location.hash,ready:false,requests:0,releases:[],retired:false,effects:[]};
           p.release=()=>{for(const release of p.releases.splice(0))release();};
-          api.scene.readActorIndex=(...args)=>{p.requests++;
+          api.scene.readScene=(...args)=>{if(args[0]?.actors!=='index')return p.read(...args);p.requests++;
             return p.read(...args).then(result=>new Promise(resolve=>{
               if(p.retired){resolve(result);return;}
               p.releases.push(()=>resolve(result));p.ready=true;}));};
@@ -129,7 +129,7 @@ def main_selection_retirement(main, open_panel, root, session):
             effects = main.evaluate('window.__selectionLifetime.effects')
             assert not effects, f'Retired main selection continued native/Dock effects: {effects}'
         finally:
-            main.evaluate("""(async()=>{const p=window.__selectionLifetime;p.retired=true;p.api.scene.readActorIndex=p.read;
+            main.evaluate("""(async()=>{const p=window.__selectionLifetime;p.retired=true;p.api.scene.readScene=p.read;
               p.api.gizmo.setTarget=p.target;p.dock.openPanel=p.open;p.release?.();
               await document.querySelector('#app').__vue_app__.config.globalProperties.$router.push(p.route.slice(1)||'/');
               return true;})()""")

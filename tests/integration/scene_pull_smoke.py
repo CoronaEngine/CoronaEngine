@@ -110,11 +110,11 @@ def run(port, root, control):
     guid, initial = actor["actor_guid"], actor["geometry"]["position"]
     saved_ini = (root / "scene.ini").read_bytes()
     changed = [initial[0] + 5, *initial[1:]]
-    tree = v8(main, "corona.scene.readTree", state["scene"], scope)
+    tree = v8(main, "corona.scene.readScene", {**scope, "scene": state["scene"], "actors": "tree", "cameras": True})
     def stable_tree():
         nonlocal tree
         previous = tree["tree_revision"]
-        tree = v8(main, "corona.scene.readTree", state["scene"], scope)
+        tree = v8(main, "corona.scene.readScene", {**scope, "scene": state["scene"], "actors": "tree", "cameras": True})
         return tree["tree_revision"] == previous
     # Loading may advance the revision; sampling uses the settled native identity.
     wait(stable_tree, bool, "settled tree revision")
@@ -254,7 +254,7 @@ def run():
         restore_properties = {**scope, 'visible': original_properties['visible'],
             'follow_camera': original_properties['follow_camera'], 'mechanics': original_properties['mechanics'],
             'camera_lock': {key: original_properties['camera_lock'][key] for key in ['enabled', 'position_offset', 'rotation_offset']}}
-        main.evaluate(f"corona.scene.setActorProperties({json.dumps(state['scene'])},{json.dumps(guid)},{json.dumps(restore_properties)})")
+        main.evaluate(f"corona.scene.updateActor({json.dumps(state['scene'])},{json.dumps(guid)},{json.dumps(restore_properties)})")
         restore_transform = {**scope, **{key: original_properties['geometry'][key] for key in ['position', 'rotation', 'scale']}}
         main.evaluate(f"corona.scene.setActorTransform({json.dumps(state['scene'])},{json.dumps(guid)},{json.dumps(restore_transform)})")
 

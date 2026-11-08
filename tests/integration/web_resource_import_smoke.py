@@ -110,7 +110,7 @@ def run(port, root, engine_pid, repo):
         toolbar = "document.querySelector('[data-guidance=scene-import-model]')"
         wait(lambda: web.evaluate(f'!!{toolbar}'), bool, 'SceneBar mounted')
         def actors():
-            return v8('corona.scene.readActorIndex', scene, scope)['actors']
+            return v8('corona.scene.readScene', {**scope, 'scene': scene, 'actors': 'index'})['actors']
         def imported_actor(label, source, actor_type):
             before = {a['actor_guid'] for a in actors()}
             web.evaluate(f"{toolbar}.querySelector('button').click()")
@@ -133,18 +133,19 @@ def run(port, root, engine_pid, repo):
         wolf = source / 'WolfSource/fbx/Wolf.fbx'
         model = imported_actor('模型', wolf, 'model')
         def skeleton():
-            value = web.evaluate('corona.scene.readActorSkeleton(...' + json.dumps([scene, model['actor_guid'], scope]) + ').catch(error=>({error:error.code}))')
+            value = web.evaluate('corona.scene.readActorRig(...' + json.dumps([scene, model['actor_guid'], scope]) + ').catch(error=>({error:error.code}))')
+            value = value.get('skeleton', {})
             return value if value.get('is_skinned') and value.get('bone_count', 0) > 0 else None
         skel = wait(skeleton, bool, 'imported skeleton')
         leaf = next(node for node in skel['nodes'] if node['leaf'] and node['parent'] >= 0)
-        before_ik = v8('corona.scene.readActorIkChains', scene, model['actor_guid'], scope)
+        before_ik = v8('corona.scene.readActorRig', scene, model['actor_guid'], scope)['ik']
         chain = {'id': 'acceptance-foot', 'bone_name': leaf['name'], 'mode': 'foot_plant',
                  'chain_length': 2, 'weight': 0.5, 'enabled': False}
         changed = v8('corona.scene.setActorIkChains', scene, model['actor_guid'], [chain], before_ik['revision'], scope)
         assert changed['revision'] > before_ik['revision'] and changed['chains'][0]['id'] == chain['id'], changed
         conflict = web.evaluate('corona.scene.setActorIkChains(...' + json.dumps([scene, model['actor_guid'], [], before_ik['revision'], scope]) + ').catch(error=>error.code)')
         assert conflict == 'CONFLICT', conflict
-        assert v8('corona.scene.readActorIkChains', scene, model['actor_guid'], scope)['revision'] == changed['revision']
+        assert v8('corona.scene.readActorRig', scene, model['actor_guid'], scope)['ik']['revision'] == changed['revision']
         restored = v8('corona.scene.setActorIkChains', scene, model['actor_guid'], before_ik['chains'], changed['revision'], scope)
         assert len(restored['chains']) == len(before_ik['chains']), restored
         image = source / 'AcceptanceImage.png'
@@ -158,7 +159,7 @@ def run(port, root, engine_pid, repo):
             stream.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
             stream.writeframes(b''.join(struct.pack('<h', int(3000 * math.sin(2 * math.pi * 997 * n / 48000))) for n in range(48000)))
         audio = imported_actor('音频', tone, 'audio')
-        wait(lambda: next((actor for actor in v8('corona.scene.readTree', scene, scope)['actors']
+        wait(lambda: next((actor for actor in v8('corona.scene.readScene', {**scope, 'scene': scene, 'actors': 'tree', 'cameras': True})['actors']
                            if actor['actor_guid'] == audio['actor_guid']), {}),
              lambda value: bool(value.get('audio_resource_id')) and value.get('load_status') == 'loaded', 'audio resource loaded')
         # Capture only the output-device loopback in memory, never a microphone;

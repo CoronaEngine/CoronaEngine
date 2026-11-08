@@ -118,8 +118,8 @@ def dispatch_script_key(web, event_type, code='KeyD', key='d', *, port):
     from vision_frontend_probe import Frontend
 
     scope = web.evaluate('corona.scene.readActive()')
-    cameras = web.evaluate(f'corona.scene.readCameras({json.dumps(scope["scene"])},'
-                           f'{json.dumps({"archive_session": scope["archive_session"]})})')
+    cameras = web.evaluate('corona.scene.readScene(' + json.dumps({
+        'scene': scope['scene'], 'archive_session': scope['archive_session'], 'cameras': True}) + ')')
     camera_id = cameras['cameras'][0]['camera_id']
     event = {'archive_session': scope['archive_session'], 'type': event_type, 'code': code, 'key': key}
     if event_type == 'keyDown':

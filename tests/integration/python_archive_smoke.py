@@ -84,7 +84,7 @@ def verify(port, project, peer):
     start = v8("corona.scripts.runFile", {**scope, "path": script.relative_to(project).as_posix(), "target_type": "project",
                  "scene_name": "scene.ini", "requestId": "archive-restore", "revision": hashlib.sha256(script.read_bytes()).hexdigest()})
     wait_for(lambda: v8("corona.scripts.getStatus"), lambda r: r.get("marker", {}).get("id") == "removed", "runtime removal")
-    assert all(a["actor_guid"] != actor["actor_guid"] for a in v8("corona.scene.readActorIndex", "scene.ini", {"archive_session": session})["actors"])
+    assert all(a["actor_guid"] != actor["actor_guid"] for a in v8("corona.scene.readScene", {"scene": "scene.ini", "archive_session": session, "actors": "index"})["actors"])
     assert fingerprint() == before
     stop = v8("corona.scripts.stop", start["runId"])
     assert stop["restored"] and not stop["snapshotCaptured"], stop
