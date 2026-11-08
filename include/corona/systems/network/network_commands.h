@@ -3,16 +3,18 @@
 /// NetworkSystem 的跨线程交互边界。
 ///
 /// CEF（编辑器线程）此前直接调用 `NetworkSystem` 的方法约 40 次。按语义拆开：
-///   - **读**  → `NetworkStateChannel`（快照，每 tick 发布）
-///   - **写**  → `NetworkCommandChannel`（Fifo，NetworkSystem::update 开头 drain）
-///   - **请求/应答** → 仍留在同步 API（返回值要进 JSON 回包），见迁移文档 §2.1
+///   - **读**  → `NetworkStateChannel`（快照，由 `NetworkSystem::update` 发布）
+///   - **写**  → `NetworkCommandChannel`（Fifo，`NetworkSystem::update` 开头 drain）
+///   - **请求/应答** → 命令 + `NetworkReplyQueue`（有界同步等待）
 ///
-/// 数据面 `peek_pending_actor_create` 一族不在这里：它本身就是 NetworkSystem
-/// 内部 mutex 保护的"生产者 → 消费者"队列，不是直写共享状态。
+/// 数据面 `peek_pending_actor_*` / `ack_pending_actor_*` 一族不在这里：它本身就是
+/// NetworkSystem 内部 mutex 保护的"生产者 → 消费者"队列，不是直写共享状态。
+///
+/// 注：LANChat 已在远端 `c22e74de refactor(network)!: remove LANChat` 中移除，
+/// 本文件不再承载任何 lanchat 命令。
 
 #include <corona/kernel/command/command_buffer.h>
 #include <corona/kernel/command/snapshot_channel.h>
-#include <corona/systems/network/lanchat_state.h>
 
 #include <algorithm>
 #include <array>
@@ -21,7 +23,6 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
-#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -46,35 +47,10 @@ struct NetworkStateSnapshot {
     std::string role;               ///< none / host / client
     std::size_t peer_count{0};
     std::string host_address;
-    std::string local_peer_id;      ///< 本机在网络里的稳定 ID（LanChat 回包用）
+    std::string local_peer_id;      ///< 本机在网络里的稳定 ID
     std::uint16_t host_port{0};
     std::uint16_t listen_port{0};
     std::vector<NetworkPeerRow> peers;
-};
-
-/// LanChat 面板/历史查询的结果投影。
-///
-/// 刻意**不做每 tick 发布**：history 可能有上千条消息，每帧深拷贝不可接受。
-/// 改为"按需拉取"——CEF 投一条查询命令，网络线程填好后发布，调用方等回执后再读。
-/// 单生产者单消费者 + 回执先行，所以覆盖式发布是安全的。
-struct LanChatQuerySnapshot {
-    std::vector<LanChatMember> members;
-    std::vector<LanChatMessage> history;
-    std::vector<LanChatAgent> agents;
-    std::vector<LanChatHistoryRoomSummary> history_rooms;
-};
-
-class LanChatQueryChannel {
-   public:
-    static LanChatQueryChannel& instance() {
-        static LanChatQueryChannel channel;
-        return channel;
-    }
-
-    [[nodiscard]] Kernel::SnapshotChannel<LanChatQuerySnapshot>& snapshots() { return snapshots_; }
-
-   private:
-    Kernel::SnapshotChannel<LanChatQuerySnapshot> snapshots_;
 };
 
 class NetworkStateChannel {
@@ -90,7 +66,6 @@ class NetworkStateChannel {
     Kernel::SnapshotChannel<NetworkStateSnapshot> snapshots_;
 };
 
-/// 只写控制命令：全部对应 `NetworkSystem` 中返回 void 的方法。
 enum class NetworkCommandKind : std::uint8_t {
     StopSession,                    ///< —（void，收尾动作，顺序必须排在其它命令之后）
     SetSyncPaused,                  ///< flag
@@ -102,63 +77,35 @@ enum class NetworkCommandKind : std::uint8_t {
     BroadcastActorCreate,           ///< guid + scene + name(model_path) + json + transform + params(deps) + blob(ActorCreatePacked)
     RequestActorSceneSnapshot,      ///< scene
     BroadcastActorSceneSnapshot,    ///< scene + json
-    LanChatBroadcastIntent,         ///< user_id + name(tooltip) + position + json(status) + now_ms
     // ---- 需要回执的分支（request_id != 0 时应用点会 push 一条 NetworkCommandResult）----
     RegisterActorIdentity,          ///< guid + handle + flag(locally_owned)
     ClaimActorOwnership,            ///< guid
-    LanChatStartRoom,               ///< scene(room_id) + name(nickname) + port
-    LanChatStartLocalRoom,          ///< scene(room_id) + name(nickname)
-    LanChatJoinRoom,                ///< guid(ip) + port + scene(room_id) + name(nickname)
-    LanChatRestoreHistoryRoom,      ///< scene(room_id)
-    // ---- 无回执 ----
-    LanChatStopLocalRoom,           ///< —
-    LanChatLeaveRoom,               ///< —
-    SetLanChatEventCallback,        ///< callback
-    // ---- 结果型：params 按注释顺序承载实参 ----
-    StartSession,                   ///< params[0]=project_root（可空）
-    StartDiscovery,                 ///< —
-    LanChatSendMessage,             ///< text, kind, target_agent, source_user, correlation, metadata
-    LanChatSendAgentReply,          ///< agent_id, agent_name, text, sender_type, kind, target, source_user, correlation, metadata
-    LanChatSendSystemToHost,        ///< sender_id, sender_name, text, kind, correlation, metadata
-    LanChatSendSystemToUser,        ///< target_user, sender_id, sender_name, text, kind, correlation, metadata
-    LanChatRegisterAgent,           ///< agent_id, name, persona, owner_id
-    LanChatRemoveAgent,             ///< agent_id
-    LanChatLockObject,              ///< object_id, user_id, operation, now_ms(十进制串)
-    LanChatUnlockObject,            ///< object_id, user_id
-    // ---- 面板/历史查询：结果发布到 LanChatQueryChannel ----
-    RefreshLanChatPanel,            ///< —
-    LoadLanChatRoomHistory,         ///< params[0]=room_id params[1]=max_messages
-    ConnectToPeer,                  ///< params[0]=ip params[1]=name, port 走 command.port
-    LanChatLockedBy,                ///< params[0]=object_id params[1]=now_ms
-    LanChatCheckPreviewCollision,   ///< params[0]=user_id params[1]=delta params[2]=now_ms, position 走 command.position
+    StartSession,                   ///< params: instance_name, project_id, port, role
+    StartDiscovery,                 ///< params: instance_name, project_id
+    ConnectToPeer,                  ///< params: ip, name; port 走 command.port
 };
 
 struct NetworkCommand {
     NetworkCommandKind kind{NetworkCommandKind::SetSyncPaused};
     bool flag{false};
 
-    std::string guid;            ///< actor_guid / object_id
+    std::string guid;            ///< actor_guid
     std::string scene;           ///< scene_name
-    std::string name;            ///< actor_name / tooltip / project_root
-    std::string json;            ///< actor_json / snapshot_json / status
-    std::string user_id;
+    std::string name;            ///< actor_name / project_root / instance_name / model_path
+    std::string json;            ///< actor_json / snapshot_json
     std::string source_user_id;
     std::string correlation_id;
 
     std::array<float, 9> transform{};
-    std::array<float, 3> position{};
     std::uint64_t now_ms{0};
     std::uint64_t handle{0};        ///< register_actor_identity 的 actor_handle
-    std::uint16_t port{0};          ///< lanchat_start_room / lanchat_join_room
+    std::uint16_t port{0};          ///< start_session / connect_to_peer
 
     /// 0 = 不需要回执（fire-and-forget）。非 0 时应用点会回一条
     /// `NetworkCommandResult{request_id, ok}`。
     std::uint64_t request_id{0};
 
-    std::function<void(const LanChatEvent&)> lanchat_event_callback;
-
-    /// 结果型命令的形参（语义见 NetworkCommandKind 上的注释）。用变长列表
-    /// 是为了不改动那些 6~9 个字符串形参的既有签名。
+    /// 结果型命令的形参（语义见 NetworkCommandKind 上的注释）。
     std::vector<std::string> params;
 
     /// 二进制负载（`broadcast_actor_create` 的 `ActorCreatePacked`）。
@@ -197,10 +144,7 @@ struct NetworkCommandResult {
     std::uint64_t request_id{0};
     bool ok{false};
     std::string error;  ///< 失败原因（可空）
-    /// 消息类命令（send_*）额外带回被接受的消息本体。
-    bool has_message{false};
-    LanChatMessage message;
-    /// 标量字符串结果（lanchat_locked_by / check_preview_collision）。
+    /// 标量字符串结果（目前未被使用，保留给后续只返回一个字符串的查询）。
     std::string text;
 };
 

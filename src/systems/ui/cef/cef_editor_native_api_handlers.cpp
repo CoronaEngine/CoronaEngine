@@ -4424,87 +4424,16 @@ std::string detect_wlan_ipv4() {
 #endif
 }
 
-/// 本机 peer id 也走快照，避免 LanChat 回包直接调 NetworkSystem。
-std::string network_snapshot_peer_id() {
-    const auto snapshot = Corona::Network::NetworkStateChannel::instance().snapshots().read();
-    return snapshot ? snapshot->local_peer_id : std::string{};
-}
-/// 结果型网络调用统一走"命令 + 有界等回执"，并还原成调用方原本期望的结果类型，
-/// 这样各处 reply.* 的赋值逻辑保持不动。
-Corona::Network::LanChatResult submit_lanchat_simple(
-    Corona::Network::NetworkCommandKind kind, std::vector<std::string> params) {
-    Corona::Network::NetworkCommand command{};
-    command.kind = kind;
-    command.params = std::move(params);
-    const auto reply = Corona::Network::submit_and_wait(std::move(command));
-    Corona::Network::LanChatResult result;
-    if (!reply) {
-        result.error = "NETWORK_TIMEOUT";
-        return result;
-    }
-    result.ok = reply->ok;
-    result.error = reply->error;
-    return result;
-}
 
-Corona::Network::LanChatMessageResult submit_lanchat_message(
-    Corona::Network::NetworkCommandKind kind, std::vector<std::string> params) {
-    Corona::Network::NetworkCommand command{};
-    command.kind = kind;
-    command.params = std::move(params);
-    const auto reply = Corona::Network::submit_and_wait(std::move(command));
-    Corona::Network::LanChatMessageResult result;
-    if (!reply) {
-        result.error = "NETWORK_TIMEOUT";
-        return result;
-    }
-    result.accepted = reply->ok;
-    result.error = reply->error;
-    if (reply->has_message) result.message = reply->message;
-    return result;
-}
 
-std::uint16_t network_snapshot_session_port() {
-    const auto snapshot = Corona::Network::NetworkStateChannel::instance().snapshots().read();
-    return snapshot ? snapshot->listen_port : 0;
-}
-
-std::uint16_t network_snapshot_host_port() {
-    const auto snapshot = Corona::Network::NetworkStateChannel::instance().snapshots().read();
-    return snapshot ? snapshot->host_port : 0;
-}
 
 bool network_snapshot_session_active() {
     const auto snapshot = Corona::Network::NetworkStateChannel::instance().snapshots().read();
     return snapshot && snapshot->active;
 }
 
-/// LanChat 面板/历史数据按需拉取：投一条查询命令 → 等回执 → 读结果通道。
-/// 刻意不每 tick 发布：history 可能有上千条消息。
-Corona::Network::LanChatQuerySnapshot fetch_lanchat_panel() {
-    Corona::Network::NetworkCommand command{};
-    command.kind = Corona::Network::NetworkCommandKind::RefreshLanChatPanel;
-    Corona::Network::submit_and_wait(std::move(command));
-    const auto snapshot = Corona::Network::LanChatQueryChannel::instance().snapshots().read();
-    return snapshot ? *snapshot : Corona::Network::LanChatQuerySnapshot{};
-}
 
-Corona::Network::LanChatQuerySnapshot fetch_lanchat_room_history(const std::string& room) {
-    Corona::Network::NetworkCommand command{};
-    command.kind = Corona::Network::NetworkCommandKind::LoadLanChatRoomHistory;
-    command.params = {room, "0"};
-    Corona::Network::submit_and_wait(std::move(command));
-    const auto snapshot = Corona::Network::LanChatQueryChannel::instance().snapshots().read();
-    return snapshot ? *snapshot : Corona::Network::LanChatQuerySnapshot{};
-}
 
-std::string lanchat_lock_owner(const std::string& object_id, std::uint64_t now_ms) {
-    Corona::Network::NetworkCommand command{};
-    command.kind = Corona::Network::NetworkCommandKind::LanChatLockedBy;
-    command.params = {object_id, std::to_string(now_ms)};
-    const auto reply = Corona::Network::submit_and_wait(std::move(command));
-    return reply ? reply->text : std::string{};
-}
 
 bool network_connect_to_peer(const std::string& ip, std::uint16_t port, const std::string& name) {
     Corona::Network::NetworkCommand command{};
@@ -4515,16 +4444,6 @@ bool network_connect_to_peer(const std::string& ip, std::uint16_t port, const st
     return reply && reply->ok;
 }
 
-std::string lanchat_preview_conflict(const std::string& user_id,
-                                                  const std::array<float, 3>& position,
-                                                  float delta, std::uint64_t now_ms) {
-    Corona::Network::NetworkCommand command{};
-    command.kind = Corona::Network::NetworkCommandKind::LanChatCheckPreviewCollision;
-    command.position = position;
-    command.params = {user_id, std::to_string(delta), std::to_string(now_ms)};
-    const auto reply = Corona::Network::submit_and_wait(std::move(command));
-    return reply ? reply->text : std::string{};
-}
 
 std::vector<NetworkPeerSnapshot> read_network_peers() {
     // 读快照：CEF 线程不再直接调用 NetworkSystem。
@@ -4692,6 +4611,7 @@ void broadcast_network_editor_actor_state(const NativeEditorScene& scene, const 
 }
 
 std::size_t seed_network_editor_state(
+    Corona::Systems::NetworkSystem& network_system,
     Corona::Systems::NetworkSystem::SessionRole role) {
     if (role != Corona::Systems::NetworkSystem::SessionRole::Host) return 0;
 
@@ -8549,7 +8469,7 @@ NetworkReply execute_network_operation(const NetworkRequest& request) {
             reply.ok = result && result->ok;
         }
         reply.session = read_network_session();
-        reply.seeded_actor_count = reply.ok && !was_active ? seed_network_editor_state(role) : 0;
+        reply.seeded_actor_count = reply.ok && !was_active ? seed_network_editor_state(*sys, role) : 0;
         break;
     }
     case NetworkMethod::StopSession: {

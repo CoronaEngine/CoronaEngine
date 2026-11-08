@@ -351,19 +351,6 @@ void drain_network_commands(NetworkSystem& sys) {
             Corona::Network::NetworkReplyQueue::instance().push(
                 {command.request_id, ok, std::move(error)});
         };
-        // 消息类命令：把被接受的消息一并带回。
-        const auto reply_message = [&command](const Corona::Network::LanChatMessageResult& result) {
-            if (command.request_id == 0) {
-                return;
-            }
-            Corona::Network::NetworkCommandResult payload;
-            payload.request_id = command.request_id;
-            payload.ok = result.accepted;
-            payload.error = result.error;
-            payload.has_message = true;
-            payload.message = result.message;
-            Corona::Network::NetworkReplyQueue::instance().push(std::move(payload));
-        };
         // 形参取值：缺省为空串（等价于原签名的默认实参）。
         const auto arg = [&command](std::size_t index) -> std::string {
             return index < command.params.size() ? command.params[index] : std::string{};
@@ -415,39 +402,11 @@ void drain_network_commands(NetworkSystem& sys) {
             case Corona::Network::NetworkCommandKind::BroadcastActorSceneSnapshot:
                 sys.broadcast_actor_scene_snapshot(command.scene, command.json);
                 break;
-            case Corona::Network::NetworkCommandKind::LanChatBroadcastIntent:
-                sys.lanchat_broadcast_intent(command.user_id, command.name,
-                                             command.position, command.json,
-                                             command.now_ms);
-                break;
             case Corona::Network::NetworkCommandKind::RegisterActorIdentity:
                 reply(sys.register_actor_identity(command.guid, command.handle, command.flag));
                 break;
             case Corona::Network::NetworkCommandKind::ClaimActorOwnership:
                 reply(sys.claim_actor_ownership(command.guid));
-                break;
-            case Corona::Network::NetworkCommandKind::LanChatStartRoom:
-                reply(sys.lanchat_start_room(command.scene, command.name, command.port));
-                break;
-            case Corona::Network::NetworkCommandKind::LanChatStartLocalRoom:
-                reply(sys.lanchat_start_local_room(command.scene, command.name));
-                break;
-            case Corona::Network::NetworkCommandKind::LanChatJoinRoom:
-                reply(sys.lanchat_join_room(command.guid, command.port,
-                                            command.scene, command.name));
-                break;
-            case Corona::Network::NetworkCommandKind::LanChatRestoreHistoryRoom:
-                reply(sys.lanchat_restore_history_room(command.scene));
-                break;
-            case Corona::Network::NetworkCommandKind::LanChatStopLocalRoom:
-                sys.lanchat_stop_local_room();
-                break;
-            case Corona::Network::NetworkCommandKind::LanChatLeaveRoom:
-                sys.lanchat_leave_room();
-                break;
-            case Corona::Network::NetworkCommandKind::SetLanChatEventCallback:
-                // 回调在 NetworkSystem 线程上被调用，与直接注册的语义一致。
-                sys.set_lanchat_event_callback(command.lanchat_event_callback);
                 break;
             case Corona::Network::NetworkCommandKind::StartSession: {
                 // params[0]=instance_name params[1]=project_id params[2]=port params[3]=role
@@ -461,80 +420,9 @@ void drain_network_commands(NetworkSystem& sys) {
             case Corona::Network::NetworkCommandKind::StartDiscovery:
                 reply(sys.start_discovery(arg(0), arg_u64(1)));
                 break;
-            case Corona::Network::NetworkCommandKind::LanChatSendMessage:
-                reply_message(sys.lanchat_send_message_ex(arg(0), arg(1), arg(2), arg(3), arg(4), arg(5)));
-                break;
-            case Corona::Network::NetworkCommandKind::LanChatSendAgentReply:
-                reply_message(sys.lanchat_send_agent_reply_ex(arg(0), arg(1), arg(2), arg(3),
-                                                              arg(4), arg(5), arg(6), arg(7), arg(8)));
-                break;
-            case Corona::Network::NetworkCommandKind::LanChatSendSystemToHost:
-                reply_message(sys.lanchat_send_system_message_to_host_ex(
-                    arg(0), arg(1), arg(2), arg(3), arg(4), arg(5)));
-                break;
-            case Corona::Network::NetworkCommandKind::LanChatSendSystemToUser:
-                reply_message(sys.lanchat_send_system_message_to_user_ex(
-                    arg(0), arg(1), arg(2), arg(3), arg(4), arg(5), arg(6)));
-                break;
-            case Corona::Network::NetworkCommandKind::LanChatRegisterAgent:
-                reply(sys.lanchat_register_agent(arg(0), arg(1), arg(2), arg(3)).ok);
-                break;
-            case Corona::Network::NetworkCommandKind::LanChatRemoveAgent:
-                reply(sys.lanchat_remove_agent(arg(0)).ok);
-                break;
-            case Corona::Network::NetworkCommandKind::LanChatLockObject:
-                reply(sys.lanchat_lock_object(arg(0), arg(1), arg(2), arg_u64(3)).ok);
-                break;
-            case Corona::Network::NetworkCommandKind::LanChatUnlockObject:
-                reply(sys.lanchat_unlock_object(arg(0), arg(1)).ok);
-                break;
-            case Corona::Network::NetworkCommandKind::RefreshLanChatPanel: {
-                Corona::Network::LanChatQuerySnapshot snapshot;
-                snapshot.members = sys.lanchat_members();
-                snapshot.history = sys.lanchat_history();
-                snapshot.agents = sys.lanchat_agents();
-                snapshot.history_rooms = sys.lanchat_history_rooms();
-                Corona::Network::LanChatQueryChannel::instance().snapshots().publish(std::move(snapshot));
-                reply(true);
-                break;
-            }
-            case Corona::Network::NetworkCommandKind::LoadLanChatRoomHistory: {
-                const auto max_messages = static_cast<std::size_t>(arg_u64(1));
-                Corona::Network::LanChatQuerySnapshot snapshot;
-                snapshot.history = sys.lanchat_load_history_room(
-                    arg(0), max_messages == 0 ? 5000 : max_messages);
-                snapshot.agents = sys.lanchat_load_history_agents(arg(0));
-                Corona::Network::LanChatQueryChannel::instance().snapshots().publish(std::move(snapshot));
-                reply(true);
-                break;
-            }
             case Corona::Network::NetworkCommandKind::ConnectToPeer:
                 reply(sys.connect_to_peer(arg(0), command.port, arg(1)));
                 break;
-            case Corona::Network::NetworkCommandKind::LanChatLockedBy: {
-                const auto owner = sys.lanchat_locked_by(arg(0), arg_u64(1));
-                if (command.request_id != 0) {
-                    Corona::Network::NetworkCommandResult payload;
-                    payload.request_id = command.request_id;
-                    payload.ok = true;
-                    payload.text = owner;
-                    Corona::Network::NetworkReplyQueue::instance().push(std::move(payload));
-                }
-                break;
-            }
-            case Corona::Network::NetworkCommandKind::LanChatCheckPreviewCollision: {
-                const auto conflict = sys.lanchat_check_preview_collision(
-                    arg(0), command.position,
-                    static_cast<float>(std::strtod(arg(1).c_str(), nullptr)), arg_u64(2));
-                if (command.request_id != 0) {
-                    Corona::Network::NetworkCommandResult payload;
-                    payload.request_id = command.request_id;
-                    payload.ok = true;
-                    payload.text = conflict;
-                    Corona::Network::NetworkReplyQueue::instance().push(std::move(payload));
-                }
-                break;
-            }
         }    }
 }
 
