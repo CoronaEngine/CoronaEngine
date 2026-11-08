@@ -32,6 +32,69 @@ target_include_directories(corona_scene_environment_service_tests
 target_link_libraries(corona_scene_environment_service_tests PRIVATE nlohmann_json::nlohmann_json)
 add_test(NAME SceneEnvironmentServiceTests COMMAND corona_scene_environment_service_tests)
 
+# updateActor 校验（WNC-013）：空 patch/机制/相机锁/重命名规则，无 CEF 依赖。
+add_executable(corona_actor_properties_service_tests
+    test_actor_properties_service.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/ui/editor_api/actor_properties_service.cpp
+)
+target_include_directories(corona_actor_properties_service_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_actor_properties_service_tests PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME ActorPropertiesServiceTests COMMAND corona_actor_properties_service_tests)
+
+# Camera 渲染设置校验（WNC-013）：纯 DTO 白名单/优先级，无 CEF 依赖。
+# 注意：apply_native_camera_properties 的校验暂不迁移——tests/systems/ui/test_camera_view_update.py
+# 直接抽取该函数源码编译（需 g++），迁移须与 harness 更新一起做。
+# 目标名保持短小：worktree 的 obj 路径接近 MAX_PATH。
+add_executable(corona_camera_settings_tests
+    test_camera_render_settings_service.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/ui/editor_api/camera_render_settings_service.cpp
+)
+target_include_directories(corona_camera_settings_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_camera_settings_tests PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME CameraSettingsServiceTests COMMAND corona_camera_settings_tests)
+
+# Camera 属性更新校验（WNC-013）：身份/重命名/数值范围/编辑器输入锁，无 CEF 依赖。
+add_executable(corona_camera_props_tests
+    test_camera_properties_service.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/ui/editor_api/camera_properties_service.cpp
+)
+target_include_directories(corona_camera_props_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_camera_props_tests PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME CameraPropertiesServiceTests COMMAND corona_camera_props_tests)
+
+# scene 投影规则（WNC-013）：身份投影/显示类型/semantic_role/phantom 物理，无 CEF 依赖。
+add_executable(corona_scene_projection_tests
+    test_scene_projection_service.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/ui/editor_api/scene_projection_service.cpp
+)
+target_include_directories(corona_scene_projection_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_scene_projection_tests PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME SceneProjectionTests COMMAND corona_scene_projection_tests)
+
+# 资源导入决策（WNC-013）：类型白名单/身份校验/媒体元数据映射，无 CEF 依赖。
+add_executable(corona_resource_import_tests
+    test_resource_import_service.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/ui/editor_api/resource_import_service.cpp
+)
+target_include_directories(corona_resource_import_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_resource_import_tests PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME ResourceImportTests COMMAND corona_resource_import_tests)
+
+# 脚本/项目文件桥规则（WNC-014）：脚本路径/项目身份/目标类型/错误映射，无 CEF 依赖。
+add_executable(corona_project_script_tests
+    test_project_script_service.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/ui/editor_api/project_script_service.cpp
+)
+target_include_directories(corona_project_script_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_project_script_tests PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME ProjectScriptServiceTests COMMAND corona_project_script_tests)
+
 add_executable(corona_actor_selection_routing_tests
     test_actor_selection_routing.cpp
 )

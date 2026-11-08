@@ -27,6 +27,12 @@ set(UI_SYSTEM_SOURCES
     editor_api/cef_editor_api.cpp
     editor_api/scene_model_node_service.cpp
     editor_api/scene_environment_service.cpp
+    editor_api/actor_properties_service.cpp
+    editor_api/camera_properties_service.cpp
+    editor_api/camera_render_settings_service.cpp
+    editor_api/scene_projection_service.cpp
+    editor_api/resource_import_service.cpp
+    editor_api/project_script_service.cpp
     cef/cef_editor_native_api_registry.cpp
     cef/cef_editor_native_api_handlers.cpp
     cef/scene_folder.cpp
@@ -65,6 +71,12 @@ set(UI_SYSTEM_SOURCES
     editor_api/cef_editor_api.h
     editor_api/scene_model_node_service.h
     editor_api/scene_environment_service.h
+    editor_api/actor_properties_service.h
+    editor_api/camera_properties_service.h
+    editor_api/camera_render_settings_service.h
+    editor_api/scene_projection_service.h
+    editor_api/resource_import_service.h
+    editor_api/project_script_service.h
     cef/scene_folder.h
     cef/cef_renderer_bridge.h
     sdl/sdl_utils.h

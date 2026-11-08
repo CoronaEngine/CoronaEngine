@@ -25,6 +25,12 @@
 #include "cef_scene_operations.h"
 #include "scene_model_node_service.h"
 #include "scene_environment_service.h"
+#include "actor_properties_service.h"
+#include "camera_properties_service.h"
+#include "camera_render_settings_service.h"
+#include "scene_projection_service.h"
+#include "resource_import_service.h"
+#include "project_script_service.h"
 #include "cef_scripts_operations.h"
 #include "cef_project_files_operations.h"
 #include "cef_project_settings_operations.h"
@@ -505,31 +511,23 @@ nlohmann::json model_node_to_json(const Corona::API::ModelNodeState& node) {
             {"editable", node.editable}};
 }
 
-nlohmann::json native_model_nodes(const NativeEditorActor& actor) {
-    nlohmann::json nodes = nlohmann::json::array();
-    if (!actor.geometry) return nodes;
-    const bool actor_visible = actor.optics ? actor.optics->get_visible() : actor.persisted_visible;
-    for (const auto& node : actor.geometry->get_model_nodes()) {
-        auto item = model_node_to_json(node);
-        item["effective_visible"] = node.effective_visible && actor_visible;
-        nodes.push_back(std::move(item));
-    }
-    return nodes;
-}
 nlohmann::json native_model_node_page(const NativeEditorActor& actor, std::int64_t parent_index,
                                       std::size_t offset, std::size_t limit) {
     nlohmann::json items = nlohmann::json::array();
     if (!actor.geometry) return {{"nodes", items}, {"total", 0}, {"next_offset", 0}, {"has_more", false}};
     const auto nodes = actor.geometry->get_model_nodes();
-    std::unordered_map<std::uint32_t, std::size_t> child_counts;
-    for (const auto& node : nodes) ++child_counts[node.parent_index];
-    const auto page = Corona::Ui::Cef::model_node_page(nodes, parent_index, offset, limit);
     const bool actor_visible = actor.optics ? actor.optics->get_visible() : actor.persisted_visible;
-    for (const auto* node : page.items) {
-        auto item = model_node_to_json(*node);
-        item["effective_visible"] = node->effective_visible && actor_visible;
-        item["child_count"] = child_counts[node->node_index];
-        items.push_back(std::move(item));
+    ModelNodePageRequest request;
+    request.parent_index = parent_index;
+    request.offset = offset;
+    request.limit = limit;
+    const auto page = SceneModelNodeService::project_page(nodes, request, actor_visible);
+    for (const auto& snapshot : page.nodes) {
+        items.push_back({{"node_index", snapshot.node_index}, {"parent_index", snapshot.parent_index},
+            {"name", snapshot.name}, {"node_path", snapshot.node_path},
+            {"position", snapshot.position}, {"rotation", snapshot.rotation}, {"scale", snapshot.scale},
+            {"visible", snapshot.visible}, {"effective_visible", snapshot.effective_visible},
+            {"editable", snapshot.editable}, {"child_count", snapshot.child_count}});
     }
     return {{"nodes", std::move(items)}, {"total", page.total},
             {"next_offset", page.next_offset}, {"has_more", page.has_more}};
@@ -3063,21 +3061,8 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
         reply.error_code = code; reply.error_message = message; return reply;
     };
     const auto& patch = request.properties;
-    const auto finite = [](const auto& value) {
-        return !value || std::all_of(value->begin(), value->end(), [](float x) { return std::isfinite(x); });
-    };
-    if (trim_ascii(patch.actor).empty() || (!patch.name && !patch.visible && !patch.follow_camera && !patch.mechanics &&
-        !patch.camera_lock && !patch.animation_sources)) return fail("INVALID_ARGUMENT", "Actor property patch is empty");
-    if (patch.mechanics) {
-        const auto& values = *patch.mechanics;
-        const auto scalar = [](const auto& value) { return !value || std::isfinite(*value); };
-        if (values.empty() || !scalar(values.mass) || !scalar(values.restitution) || !scalar(values.damping) ||
-            (values.body_type && *values.body_type != "dynamic" && *values.body_type != "kinematic" &&
-             *values.body_type != "static" && *values.body_type != "phantom"))
-            return fail("INVALID_ARGUMENT", "Invalid Actor mechanics patch");
-    }
-    if (patch.camera_lock && (!finite(patch.camera_lock->position_offset) || !finite(patch.camera_lock->rotation_offset)))
-        return fail("INVALID_ARGUMENT", "Camera offsets must be finite");
+    if (const auto invalid = ActorPropertiesService::validate_patch(patch))
+        return fail(invalid.code.c_str(), invalid.message);
     auto* scene = request.archive_session ? native_editor_state().scene.get() : ensure_native_editor_scene();
     if (request.archive_session) {
         if (!scene || request.archive_session->empty() || *request.archive_session != scene->archive_session ||
@@ -3088,12 +3073,14 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
     if (!actor) return fail("ACTOR_NOT_FOUND", "Actor not found: " + patch.actor);
     std::optional<std::string> new_name;
     if (patch.name) {
-        if (scene->read_only) return fail("READ_ONLY", "Cannot rename an actor in a read-only scene");
-        new_name = trim_ascii(*patch.name);
-        if (new_name->empty()) return fail("INVALID_ARGUMENT", "Actor name cannot be empty");
-        if (std::any_of(scene->actors.begin(), scene->actors.end(), [&](const NativeEditorActor& other) {
-                return &other != actor && other.name == *new_name;
-            })) return fail("DUPLICATE_ACTOR_NAME", "Actor name already exists: " + *new_name);
+        std::vector<std::string> other_names;
+        other_names.reserve(scene->actors.size());
+        for (const auto& other : scene->actors) {
+            if (&other != actor) other_names.push_back(other.name);
+        }
+        if (const auto invalid = ActorPropertiesService::validate_rename(*patch.name, scene->read_only, other_names))
+            return fail(invalid.code.c_str(), invalid.message);
+        new_name = ActorPropertiesService::normalized_name(*patch.name);
     }
     // Validate every component and derived value before importing assets or
     // mutating any property. A mixed invalid patch must never partly apply.
@@ -3983,9 +3970,9 @@ SceneReply import_native_resource(const SceneRequest& request,
     const ResourceFilePicker& picker = select_resource_file_native,
     const MediaFileImporter& importer = Corona::API::import_media) {
     SceneReply reply;
-    if (!request.archive_session || request.archive_session->empty() || request.read_scene.empty() || request.file_type.empty()) {
-        reply.error_code = "INVALID_ARGUMENT";
-        reply.error_message = "Resource import requires scene scope and file type";
+    if (const auto invalid = ResourceImportService::validate_request(request.archive_session, request.read_scene, request.file_type)) {
+        reply.error_code = invalid.code;
+        reply.error_message = invalid.message;
         return reply;
     }
     auto* scene = native_editor_state().scene.get();
@@ -3999,7 +3986,7 @@ SceneReply import_native_resource(const SceneRequest& request,
     imported.archive_session = scene->archive_session;
     imported.scene = scene->route;
     imported.file_type = request.file_type;
-    if (!resource_dialog_filters(request.file_type)) {
+    if (!ResourceImportService::supports_file_type(request.file_type)) {
         imported.status = "error";
         imported.code = "unsupported_file_type";
         imported.message = "Unsupported resource type: " + request.file_type;
@@ -4028,28 +4015,22 @@ SceneReply import_native_resource(const SceneRequest& request,
     const auto absolute_path = absolute_normalized_path(*selected);
     imported.path = route_for_project_storage(project_root, path_to_utf8(absolute_path));
     imported.actor_type = request.file_type;
-    if (request.file_type != "multimedia") {
+    if (!ResourceImportService::requires_media_import(request.file_type)) {
         imported.status = "success";
         return reply;
     }
     const auto info = importer(path_to_utf8(absolute_path));
-    if (info.resource_id == 0 || info.media_type.empty()) {
-        imported.status = "error";
-        imported.code = "media_unrecognized";
-        imported.message = "无法识别的音视频文件: " + imported.path;
-        return reply;
-    }
-    imported.status = "success";
-    imported.media_name = path_to_utf8(absolute_path.stem());
-    imported.media_type = info.media_type;
-    imported.resource_id = std::to_string(info.resource_id);
-    imported.duration = info.duration_seconds;
-    imported.codec = info.codec;
-    imported.width = info.width;
-    imported.height = info.height;
-    imported.fps = info.fps;
-    imported.sample_rate = info.sample_rate;
-    imported.channels = info.channels;
+    ResourceImportService::MediaImportResult mapped;
+    mapped.resource_id = info.resource_id;
+    mapped.media_type = info.media_type;
+    mapped.duration_seconds = info.duration_seconds;
+    mapped.codec = info.codec;
+    mapped.width = info.width;
+    mapped.height = info.height;
+    mapped.fps = info.fps;
+    mapped.sample_rate = info.sample_rate;
+    mapped.channels = info.channels;
+    ResourceImportService::apply_media_import(imported, mapped, path_to_utf8(absolute_path.stem()));
     return reply;
 }
 
@@ -4785,10 +4766,11 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
         reply.error_code = code; reply.error_message = message; return reply;
     };
     const auto& patch = request.camera_properties;
-    if (editor_input && patch.view_open)
-        return fail("INVALID_ARGUMENT", "Camera window lifecycle belongs to window operations");
-    if (patch.scene.empty() || patch.camera_id.empty() || !request.archive_session || request.archive_session->empty() || patch.empty())
-        return fail("INVALID_ARGUMENT", "Camera patch requires archive, scene, camera identity and properties");
+    if (const auto invalid = CameraPropertiesService::validate_view_lifecycle(patch, editor_input))
+        return fail(invalid.code.c_str(), invalid.message);
+    if (const auto invalid = CameraPropertiesService::validate_identity(
+            patch, request.archive_session.has_value() && !request.archive_session->empty()))
+        return fail(invalid.code.c_str(), invalid.message);
     auto* scene = native_editor_state().scene.get();
     if (!scene || scene->archive_session != *request.archive_session || !native_scene_request_matches(*scene, patch.scene))
         return fail("PROJECT_CONTEXT_CHANGED", "Camera patch does not identify the active archive");
@@ -4801,31 +4783,24 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
     auto& engine = *camera.engine_camera;
     std::optional<std::string> new_name;
     if (patch.name) {
-        if (scene->read_only) return fail("READ_ONLY", "Cannot rename a camera in a read-only scene");
-        new_name = trim_ascii(*patch.name);
-        if (new_name->empty()) return fail("INVALID_ARGUMENT", "Camera name cannot be empty");
-        if (std::any_of(scene->cameras.begin(), scene->cameras.end(), [&](const NativeEditorCamera& other) {
-                return &other != &camera && other.name == *new_name;
-            })) return fail("DUPLICATE_CAMERA_NAME", "Camera name already exists: " + *new_name);
+        std::vector<std::string> other_names;
+        other_names.reserve(scene->cameras.size());
+        for (const auto& other : scene->cameras) {
+            if (&other != &camera) other_names.push_back(other.name);
+        }
+        if (const auto invalid = CameraPropertiesService::validate_rename(*patch.name, scene->read_only, other_names))
+            return fail(invalid.code.c_str(), invalid.message);
+        new_name = CameraPropertiesService::normalized_name(*patch.name);
     }
-    const auto finite = [](const auto& value) { return !value || std::isfinite(*value); };
-    const auto vector_valid = [](const auto& value) {
-        return !value || std::all_of(value->begin(), value->end(), [](float number) { return std::isfinite(number); });
-    };
-    const auto positive = [](const auto& value) { return !value || *value > 0; };
     const auto projection = engine.get_projection();
+    if (const auto invalid = CameraPropertiesService::validate_numeric(patch, projection))
+        return fail(invalid.code.c_str(), invalid.message);
+    if (const auto invalid = CameraPropertiesService::validate_editor_input(
+            patch, editor_input, Corona::API::is_editor_camera_input_enabled()))
+        return fail(invalid.code.c_str(), invalid.message);
     const auto sign = patch.projection_x_sign.value_or(projection[0]);
     const auto near_plane = patch.near_plane.value_or(projection[1]);
     const auto far_plane = patch.far_plane.value_or(projection[2]);
-    if (!vector_valid(patch.position) || !vector_valid(patch.forward) || !vector_valid(patch.world_up) ||
-        !finite(patch.fov) || (patch.fov && (*patch.fov <= 0 || *patch.fov >= 180)) ||
-        !finite(patch.move_speed) || (patch.move_speed && *patch.move_speed < 0.01f) ||
-        !positive(patch.width) || !positive(patch.height) || !positive(patch.view_width) || !positive(patch.view_height) ||
-        !std::isfinite(sign) || std::abs(sign) != 1 || !std::isfinite(near_plane) || !std::isfinite(far_plane) ||
-        near_plane <= 0 || far_plane <= near_plane)
-        return fail("INVALID_ARGUMENT", "Invalid camera properties");
-    if (editor_input && patch.has_pose() && !Corona::API::is_editor_camera_input_enabled())
-        return fail("EDITOR_INPUT_LOCKED", "Runtime owns camera input");
     // Every field is validated before applying a name, pose or window property.
     if (new_name && camera.name != *new_name) {
         camera.name = *new_name;
@@ -4867,25 +4842,9 @@ SceneReply apply_native_camera_render_settings(const SceneRequest& request) {
         reply.error_code = code; reply.error_message = message; return reply;
     };
     const auto& patch = request.camera_render_settings;
-    if (patch.scene.empty() || !request.archive_session ||
-        request.archive_session->empty() ||
-        (request.method != SceneMethod::ReadCameraRenderSettings && patch.empty()) ||
-        (request.method == SceneMethod::ReadCameraRenderSettings && !patch.family))
-        return fail("INVALID_ARGUMENT", "Camera render settings require archive, scene, camera and a non-empty patch");
-    if (patch.family && *patch.family != "pt" && *patch.family != "restir" && *patch.family != "reblur" && *patch.family != "relax")
-        return fail("INVALID_ARGUMENT", "Unsupported Vision settings family");
-    if (patch.render_backend && *patch.render_backend != "native" && *patch.render_backend != "vision")
-        return fail("INVALID_ARGUMENT", "Unsupported render backend");
-    static const std::array output_modes{"final_color", "base_color", "normal", "position", "object_id",
-        "visibility_buffer", "ssao", "ssao_raw", "shadow_mask_raw", "shadow_mask"};
-    if (patch.output_mode && std::find(output_modes.begin(), output_modes.end(), *patch.output_mode) == output_modes.end())
-        return fail("INVALID_ARGUMENT", "Unsupported camera output mode");
-    static const std::array vision_modes{"path_tracing", "restir", "progressive_path_tracing", "svgf", "ssat"};
-    if (patch.vision_render_mode && std::find(vision_modes.begin(), vision_modes.end(), *patch.vision_render_mode) == vision_modes.end())
-        return fail("INVALID_ARGUMENT", "Unsupported Vision render mode");
-    if (patch.vision_denoiser && *patch.vision_denoiser != "scene" && *patch.vision_denoiser != "svgf" &&
-        *patch.vision_denoiser != "reblur" && *patch.vision_denoiser != "relax")
-        return fail("INVALID_ARGUMENT", "Unsupported Vision denoiser");
+    if (const auto invalid = CameraRenderSettingsService::validate_patch(
+            patch, request.method, request.archive_session.has_value() && !request.archive_session->empty()))
+        return fail(invalid.code.c_str(), invalid.message.c_str());
     auto* scene = native_editor_state().scene.get();
     if (!scene || scene->archive_session != *request.archive_session || !native_scene_request_matches(*scene, patch.scene))
         return fail("PROJECT_CONTEXT_CHANGED", "Camera render settings belong to an inactive archive");
@@ -5039,16 +4998,17 @@ static NativeResult start_native_script_file(nlohmann::json payload, bool by_pat
     }
     if (by_path && !payload.contains("project_path")) payload["project_path"] = path_to_utf8(scene->project_root);
     if (by_path && !payload.contains("target_type")) {
-        payload["target_type"] = payload.value("actor_name", std::string{}).empty() ? "project" : "actor";
+        payload["target_type"] = ProjectScriptService::default_target_type(payload.value("actor_name", std::string{}));
     }
     const auto expected = path_from_utf8(payload.value("project_path", std::string{}));
-    if (scene->read_only || expected.empty() ||
-        absolute_normalized_path(expected) != absolute_normalized_path(scene->project_root)) {
-        return native_failure("Script project changed or is read-only", 409);
+    if (const auto invalid = ProjectScriptService::validate_script_project(
+            scene->read_only, !expected.empty(),
+            !expected.empty() && absolute_normalized_path(expected) == absolute_normalized_path(scene->project_root))) {
+        return native_failure(invalid.message, 409);
     }
     const auto path = path_from_utf8(payload.value("path", std::string{}));
-    if (path.empty() || path.has_root_path() || path.extension() != ".py") {
-        return native_failure("Script path must be a project-relative .py file", 400);
+    if (const auto invalid = ProjectScriptService::validate_script_path(path)) {
+        return native_failure(invalid.message, 400);
     }
     const auto root = absolute_normalized_path(scene->project_root);
     // The Python file host resolves the path, checks containment and verifies
@@ -5065,7 +5025,7 @@ ProjectFilesReply execute_project_files_operation(const ProjectFilesRequest& req
     const auto result = invoke_python_script_service({"ProjectFiles", save ? "save" : "load", nlohmann::json::array({std::move(payload)})});
     ProjectFilesReply reply;
     if (!result.success) {
-        reply.error_code = result.error_code == 504 ? "EDITOR_API_TIMEOUT" : "NATIVE_FAILURE";
+        reply.error_code = ProjectScriptService::project_files_error_code(result.error_code);
         reply.error_message = result.error;
         return reply;
     }
@@ -5097,8 +5057,7 @@ ScriptsReply execute_scripts_operation(const ScriptsRequest& request) {
     }
     ScriptsReply reply;
     if (!result.success) {
-        reply.error_code = result.error_code == 504 ? "EDITOR_API_TIMEOUT" :
-            result.error_code == 409 ? "PROJECT_CONTEXT_CHANGED" : "NATIVE_FAILURE";
+        reply.error_code = ProjectScriptService::bridge_error_code(result.error_code);
         reply.error_message = result.error;
         return reply;
     }
@@ -5597,13 +5556,13 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         }
         if (request.scene_read.actors == ActorProjection::Index) {
             reply.actor_index = {scene->archive_session, scene->route, scene->tree_revision, {}};
-            reply.actor_index.actors.reserve(scene->actors.size());
+            std::vector<SceneProjectionService::ActorIdentity> identities;
+            identities.reserve(scene->actors.size());
             // Identity only. Never acquire geometry or compute bounds for this projection.
             for (const auto& actor : scene->actors) {
-                const auto extension = actor_file_extension(actor.route);
-                reply.actor_index.actors.push_back({actor.actor_guid, actor.name,
-                    extension.empty() ? actor.actor_type : extension});
+                identities.push_back({actor.actor_guid, actor.name, actor_file_extension(actor.route), actor.actor_type});
             }
+            reply.actor_index.actors = SceneProjectionService::project_index(identities);
         } else if (request.scene_read.actors == ActorProjection::Tree) {
             reply.tree.actors.reserve(scene->actors.size());
             for (const auto& actor : scene->actors) reply.tree.actors.push_back(scene_tree_actor_row(actor));
@@ -5617,9 +5576,9 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
                 ActorContextRow row;
                 row.actor_guid = actor.actor_guid;
                 row.name = actor.name;
-                const auto extension = actor_file_extension(actor.route);
-                row.type = extension.empty() ? actor.actor_type : extension;
-                row.semantic_role = actor.semantic_role.empty() ? actor.entity_type : actor.semantic_role;
+                row.type = SceneProjectionService::display_type(
+                    {actor.actor_guid, actor.name, actor_file_extension(actor.route), actor.actor_type});
+                row.semantic_role = SceneProjectionService::semantic_role(actor.semantic_role, actor.entity_type);
                 row.position = actor.geometry ? actor.geometry->get_position() : actor.position;
                 row.rotation = actor.geometry ? actor.geometry->get_rotation() : actor.rotation;
                 row.scale = actor.geometry ? actor.geometry->get_scale() : actor.scale;
@@ -5628,7 +5587,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
                     row.has_size = true;
                 }
                 const auto body_type = actor.mechanics ? body_type_name(*actor.mechanics) : actor.persisted_body_type;
-                row.physics_enabled = body_type != "phantom";
+                row.physics_enabled = SceneProjectionService::physics_enabled(body_type);
                 result.actors.push_back(std::move(row));
             }
         }
@@ -6974,18 +6933,29 @@ void register_main_view_api_handlers(NativeApiRegistry& registry) {
 namespace {
 NativeResult project_document_request(const nlohmann::json& payload, bool commit) {
     const auto* scene = native_editor_state().scene.get();
-    if (!scene || !matches_archive_session(*scene, payload) ||
-        absolute_normalized_path(path_from_utf8(payload.value("project_path", std::string{}))) != scene->project_root) {
-        return native_success({{"success", false}, {"error", "PROJECT_CONTEXT_CHANGED"}});
+    if (!scene) return native_success({{"success", false}, {"error", "PROJECT_CONTEXT_CHANGED"}});
+    const auto project_matches =
+        absolute_normalized_path(path_from_utf8(payload.value("project_path", std::string{}))) == scene->project_root;
+    if (const auto invalid = ProjectScriptService::validate_document_identity(
+            scene->archive_session, payload.value("archive_session", std::string{}), project_matches)) {
+        return native_success({{"success", false}, {"error", invalid.code}});
     }
-    if (scene->read_only) return native_success({{"success", false}, {"error", "READ_ONLY_PROJECT"}});
+    if (const auto invalid = ProjectScriptService::require_writable_project(scene->read_only)) {
+        return native_success({{"success", false}, {"error", invalid.code}});
+    }
     return project_archive_call(commit ? "commit_document" : "read_document", payload);
 }
 
 NativeResult save_project_info(const nlohmann::json& settings) {
     auto* scene = native_editor_state().scene.get();
-    if (!scene || !matches_archive_session(*scene, settings)) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-    if (scene->read_only) return native_failure("READ_ONLY_PROJECT", 403);
+    if (!scene) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+    if (const auto invalid = ProjectScriptService::validate_document_identity(
+            scene->archive_session, settings.value("archive_session", std::string{}), true)) {
+        return native_failure(invalid.message, 409);
+    }
+    if (const auto invalid = ProjectScriptService::require_writable_project(scene->read_only)) {
+        return native_failure(invalid.message, 403);
+    }
     auto result = project_archive_call("update_metadata", {{"path", path_to_utf8(scene->project_root)}, {"settings", settings}});
     if (!result.success || !result.data.contains("name")) return native_failure("Project settings were not saved: " + result.error, 2);
     scene->name = result.data.at("name");
@@ -7014,8 +6984,7 @@ ProjectSettingsReply execute_project_settings_operation(const ProjectSettingsReq
         result = project_document_request(payload, commit);
     }
     if (!result.success) {
-        reply.error_code = result.error_code == 409 ? "PROJECT_CONTEXT_CHANGED" :
-            result.error_code == 403 ? "READ_ONLY_PROJECT" : result.error_code == 504 ? "EDITOR_API_TIMEOUT" : "NATIVE_FAILURE";
+        reply.error_code = ProjectScriptService::project_settings_error_code(result.error_code);
         reply.error_message = result.error;
         return reply;
     }
@@ -7405,11 +7374,9 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 if (!actor->geometry->set_model_node_state(index, state)) {
                     return native_failure("Node edit rejected: animated or non-decomposable transform, or model not ready", 409);
                 }
-                nlohmann::json node_keys = nlohmann::json::array();
-                for (const auto& node : nodes) node_keys.push_back({
-                    {"node_index", node.node_index}, {"node_path", node.node_path}});
                 auto [active, unmatched] = ModelNodeConfig::partition(actor->persisted_model_node_overrides,
-                    actor->model_node_resource, actor->model_node_current_resource, node_keys);
+                    actor->model_node_resource, actor->model_node_current_resource,
+                    SceneModelNodeService::node_keys(nodes));
                 for (auto& group : unmatched) actor->model_node_unmatched.push_back(std::move(group));
                 actor->persisted_model_node_overrides = ModelNodeConfig::merge(active, index, state.node_path, patch);
                 actor->model_node_resource = actor->model_node_current_resource;
