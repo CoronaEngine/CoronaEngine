@@ -371,7 +371,7 @@ public:
                     "SP coverage history storage ABI changed; restart the engine before loading the new shaders.");
     }
     void restore(RuntimeObject *old_obj) noexcept override {
-        const auto *previous = hotfix::detail::restore_source(*this, old_obj);
+        const auto *previous = hotfix::hotfix_detail::restore_source(*this, old_obj);
         if (!previous) return;
         previous->require_stable_plane_storage_abi();
         Node::restore(old_obj);

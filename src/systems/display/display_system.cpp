@@ -1064,9 +1064,8 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
             (resources.skipped_frames == 1 || resources.skipped_frames % 32 == 0))
             CFW_LOG_INFO("Display: reused unchanged composite, skipped={} extent={}x{}",
                          resources.skipped_frames, output_width, output_height);
-        // The pinned Horizon has no public swapchain generation. Present the
-        // cached image again so an unobservable same-size recreation gets its
-        // contents, while avoiding a redundant full-screen composite dispatch.
+        // Present the cached image again so a same-size swapchain recreation
+        // receives its contents without another full-screen composite dispatch.
         return present_cached_output();
     }
 
