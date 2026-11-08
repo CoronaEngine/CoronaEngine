@@ -71,6 +71,7 @@ private:
     Buffer<RadType4> temp_buffer_;
 
 public:
+    void set_ssat(SSAT *ssat) noexcept { ssat_ = ssat; }
     explicit SpatialAngularFilter(SSAT *ssat)
         : ssat_(ssat) {}
 

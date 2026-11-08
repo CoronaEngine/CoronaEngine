@@ -107,7 +107,7 @@ void IntegratorDesc::init(const ParameterSet &ps) noexcept {
     denoiser_desc.init(denoiser_param);
 }
 
-namespace detail {
+namespace node_desc_detail {
 
 [[nodiscard]] pair<float3, float3> get_sigma(const string &name) {
     for (auto elm : SubsurfaceParameterTable) {
@@ -119,7 +119,7 @@ namespace detail {
     return {elm.sigma_s, elm.sigma_a};
 }
 
-}// namespace detail
+}// namespace node_desc_detail
 
 void SlotDesc::init(const ParameterSet &ps) noexcept {
     DataWrap data = ps.data();
@@ -159,7 +159,7 @@ void MediumDesc::init(const ParameterSet &ps) noexcept {
     set_parameter(ps["param"]);
     string medium_name = parameter_["medium_name"].as_string();
     if (!medium_name.empty()) {
-        auto [ss, sa] = detail::get_sigma(medium_name);
+        auto [ss, sa] = node_desc_detail::get_sigma(medium_name);
         sigma_s.init(DataWrap({ss.x, ss.y, ss.z}));
         sigma_a.init(DataWrap({sa.x, sa.y, sa.z}));
     } else {

@@ -121,7 +121,7 @@ void AliasTable::build(vector<float> weights) noexcept {
     table_.set_host(std::move(table));
 }
 
-namespace detail {
+namespace alias_detail {
 
 [[nodiscard]] Uint offset(const Uint &buffer_offset, Float u, const Pipeline *rp,
                           const Uint &entry_id, const Uint &size, Float *u_remapped) noexcept {
@@ -138,7 +138,7 @@ namespace detail {
     return idx;
 }
 
-}// namespace detail
+}// namespace alias_detail
 
 Float AliasTable::combine(const Uint &index, const Float &u) const noexcept {
     Float ret = (index + u) / cast<float>(size());

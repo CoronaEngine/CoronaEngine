@@ -460,4 +460,3 @@ VS_MAKE_CLASS_CREATOR_HOTFIX_FUNC(vision, SeparateColor, separate_color)
 VS_MAKE_CLASS_CREATOR_HOTFIX_FUNC(vision, SeparateXYZ, separate_xyz)
 VS_MAKE_CLASS_CREATOR_HOTFIX_FUNC(vision, Gamma, gamma)
 VS_MAKE_CLASS_CREATOR_HOTFIX_FUNC(vision, Clamp, clamp)
-VS_REGISTER_CURRENT_FILE

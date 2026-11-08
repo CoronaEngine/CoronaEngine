@@ -8,6 +8,20 @@ add_test(NAME EngineStartupConfigTests
     COMMAND corona_engine_startup_config_tests ${CMAKE_CURRENT_BINARY_DIR}/startup-config-fixture)
 # Inspect the actual target graph while it is available during configuration.
 include("${CMAKE_CURRENT_SOURCE_DIR}/test_vision_required.cmake")
+add_test(NAME PortableHotfixRuntimeTests
+    COMMAND ${CMAKE_COMMAND}
+        "-DREPO_ROOT=${PROJECT_SOURCE_DIR}"
+        "-DTEST_DIRECTORY=${PROJECT_BINARY_DIR}/portable-hotfix-ctest/$<CONFIG>"
+        "-DBUILD_ENVIRONMENT=${PROJECT_BINARY_DIR}/generators/dev_build_environment.cmake"
+        "-DTOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+        "-DGENERATOR=${CMAKE_GENERATOR}"
+        "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+        "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}"
+        "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+        "-DCONFIGURATION=$<CONFIG>"
+        "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/test_portable_hotfix.cmake)
+set_tests_properties(PortableHotfixRuntimeTests PROPERTIES RUN_SERIAL TRUE TIMEOUT 300)
 add_test(NAME EngineStartupConfigDeploymentTests
     COMMAND ${CMAKE_COMMAND}
         "-DREPO_ROOT=${PROJECT_SOURCE_DIR}"
@@ -119,6 +133,10 @@ target_link_libraries(corona_vision_engine_scene_tests PRIVATE
 add_test(NAME VisionEngineSceneTests COMMAND corona_vision_engine_scene_tests)
 add_test(NAME VisionCameraSettingsTests COMMAND corona_vision_engine_scene_tests --cpu-only)
 add_test(NAME VisionSharedDisplayTests COMMAND corona_vision_engine_scene_tests --shared-display)
+add_test(NAME VisionHotfixRendererTests COMMAND corona_vision_engine_scene_tests --hotfix)
+set_tests_properties(VisionHotfixRendererTests PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+    RUN_SERIAL TRUE TIMEOUT 300)
 set_tests_properties(VisionCameraSettingsTests VisionSharedDisplayTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
     RUN_SERIAL TRUE TIMEOUT 300)
@@ -256,7 +274,13 @@ if(COMMAND helicon_install_runtime_deps)
 endif()
 add_test(NAME UiMultiSurfaceSmoke
          COMMAND corona_ui_multisurface_smoke)
+add_test(NAME UiSurfaceFormatPolicyTests
+         COMMAND corona_ui_multisurface_smoke --surface-format-policy)
+set_tests_properties(UiSurfaceFormatPolicyTests PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:corona_ui_multisurface_smoke>"
+    RUN_SERIAL TRUE TIMEOUT 30)
 set_tests_properties(UiMultiSurfaceSmoke PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:corona_ui_multisurface_smoke>"
     RUN_SERIAL TRUE
     SKIP_RETURN_CODE 77
     TIMEOUT 180

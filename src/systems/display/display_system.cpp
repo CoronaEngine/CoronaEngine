@@ -1,5 +1,6 @@
 #include "../common/render_resource_bindings.h"
 #include "aspect_fit.h"
+#include "presentation_surface.h"
 #include <corona/events/display_system_events.h>
 #include <corona/events/engine_events.h>
 #include <horizon/core/logging.h>
@@ -22,13 +23,6 @@
 #include <thread>
 #include <utility>
 
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#endif
-
 namespace {
 struct PixelExtent {
     uint32_t width = 0;
@@ -39,33 +33,6 @@ struct PixelExtent {
     }
 };
 
-
-[[nodiscard]] PixelExtent max_extent(PixelExtent lhs, PixelExtent rhs) {
-    return {std::max(lhs.width, rhs.width), std::max(lhs.height, rhs.height)};
-}
-
-[[nodiscard]] PixelExtent surface_client_extent(void* surface) {
-#ifdef _WIN32
-    if (surface == nullptr) {
-        return {};
-    }
-
-    RECT rect{};
-    if (!GetClientRect(reinterpret_cast<HWND>(surface), &rect)) {
-        return {};
-    }
-
-    const auto width = rect.right - rect.left;
-    const auto height = rect.bottom - rect.top;
-    if (width <= 0 || height <= 0) {
-        return {};
-    }
-    return {static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
-#else
-    (void)surface;
-    return {};
-#endif
-}
 
 [[nodiscard]] bool is_vulkan_device_lost_message(std::string_view message) {
     return message.find("VK_ERROR_DEVICE_LOST") != std::string_view::npos ||
@@ -568,7 +535,7 @@ void DisplaySystem::update() {
                 auto displayer_it = displayers_.find(surface_id);
                 if (displayer_it == displayers_.end()) {
                     displayer_it =
-                        displayers_.try_emplace(surface_id, surface).first;
+                        displayers_.try_emplace(surface_id, DisplayDetail::horizon_native_window(surface)).first;
                 }
                 if (!displayer_it->second) {
                     displayers_.erase(displayer_it);
@@ -797,8 +764,10 @@ void DisplaySystem::update() {
                     // Only composition reads these images. Publish its device
                     // dependency before producers can reuse them, then stop
                     // holding their CPU locks across swapchain/gate waits.
-                    if (use_optics_layer && optics_frame) optics_frame->consumed_receipt = consumed;
-                    if (use_ui_layer && ui_frame) ui_frame->consumed_receipt = consumed;
+                    if (consumed.serial != 0) {
+                        if (use_optics_layer && optics_frame) optics_frame->consumed_receipt = consumed;
+                        if (use_ui_layer && ui_frame) ui_frame->consumed_receipt = consumed;
+                    }
                     optics_access.reset();
                     ui_access.reset();
                     optics_frame = nullptr;
@@ -1033,10 +1002,8 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     const PixelExtent optics_extent{state.optics.width, state.optics.height};
     const PixelExtent ui_extent{state.ui.width, state.ui.height};
 
-    PixelExtent output_extent = surface_client_extent(surface);
-    if (!output_extent) {
-        output_extent = max_extent(optics_extent, ui_extent);
-    }
+    const auto presentation_surface = DisplayDetail::query_presentation_surface(surface);
+    const PixelExtent output_extent{presentation_surface.extent.width, presentation_surface.extent.height};
     if (!output_extent) {
         return Detail::PresentOutcome::Skipped;
     }
@@ -1050,18 +1017,16 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
         return Detail::PresentOutcome::Failed;
     }
 
-    const auto presentation = displayer.presentation_info();
-    const auto presentation_format = presentation.format;
-    const bool swapchain_srgb = presentation_format == Horizon::Format::SRGBA8_UNORM ||
-                                presentation_format == Horizon::Format::SBGRA8_UNORM ||
-                                presentation_format == Horizon::Format::SBGRX8_UNORM;
+    const auto presentation_format = presentation_surface.format.format;
+    const bool swapchain_srgb = DisplayDetail::presentation_surface_encodes_srgb(presentation_format);
     const uint32_t encode_output_srgb = swapchain_srgb ? 0u : 1u;
+    const auto displayer_id = displayer.displayer_ref().id;
     const bool presentation_changed =
         resources.last_signature[23] != static_cast<std::uint64_t>(presentation_format) ||
-        resources.last_signature[24] != presentation.generation;
+        resources.last_signature[24] != displayer_id;
     if (!resources.content_valid || presentation_changed) {
-        CFW_LOG_INFO("Display color transfer surface={} format={} generation={} swapchain_srgb={} shader_srgb_encode={}",
-                     surface, static_cast<unsigned>(presentation_format), presentation.generation,
+        CFW_LOG_INFO("Display color transfer surface={} vk_format={} displayer={} swapchain_srgb={} shader_srgb_encode={}",
+                     surface, static_cast<unsigned>(presentation_format), displayer_id,
                      swapchain_srgb, encode_output_srgb);
     }
 
@@ -1082,14 +1047,27 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
         state.ui.first_present_boundary,
         static_cast<std::uint64_t>(optics_receipt != nullptr),
         static_cast<std::uint64_t>(ui_receipt != nullptr),
-        static_cast<std::uint64_t>(presentation_format), presentation.generation};
+        static_cast<std::uint64_t>(presentation_format), displayer_id};
+
+    const auto present_cached_output = [&] {
+        // There is no new producer read. Keep its previous consumption fence
+        // and release CPU image locks before presentation can block.
+        release_inputs({});
+        resources.executor.wait(resources.last_receipt);
+        resources.last_receipt = resources.executor.stream()
+            << Horizon::present(displayer, resources.output) << Horizon::commit();
+        return Detail::PresentOutcome::Presented;
+    };
     if (resources.content_valid && resources.last_signature == signature) {
         ++resources.skipped_frames;
         if (std::getenv("CORONA_DISPLAY_PROFILE") &&
             (resources.skipped_frames == 1 || resources.skipped_frames % 32 == 0))
             CFW_LOG_INFO("Display: reused unchanged composite, skipped={} extent={}x{}",
                          resources.skipped_frames, output_width, output_height);
-        return Detail::PresentOutcome::Skipped;
+        // The pinned Horizon has no public swapchain generation. Present the
+        // cached image again so an unobservable same-size recreation gets its
+        // contents, while avoiding a redundant full-screen composite dispatch.
+        return present_cached_output();
     }
 
     // UI and Optics publish on independent threads. While the scene advances,
@@ -1099,10 +1077,11 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     // bounded grace interval, and every new scene receipt bypasses this gate.
     if (resources.content_valid && !presentation_changed &&
         resources.last_signature[6] == output_width && resources.last_signature[7] == output_height &&
+        resources.last_signature[20] == state.ui.first_present_boundary &&
         resources.scene_cadence.defer_ui(
             {state.optics.image_handle, receipt_serial(optics_receipt)},
             std::chrono::steady_clock::now())) {
-        return Detail::PresentOutcome::Skipped;
+        return present_cached_output();
     }
 
     auto& composite_pipeline = *composite_pipeline_;

@@ -41,6 +41,7 @@ private:
     Shader<void(ModulatorParam)> demodulate_;
 
 public:
+    void set_svgf(SVGF *svgf) noexcept { svgf_ = svgf; }
     explicit Modulator(SVGF *svgf)
         : svgf_(svgf) {}
     VS_HOTFIX_MAKE_RESTORE(RuntimeObject, svgf_, modulate_, demodulate_)

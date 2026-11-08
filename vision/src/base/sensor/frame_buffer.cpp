@@ -9,6 +9,21 @@
 namespace vision {
 using namespace ocarina;
 
+void GBufferCallback::restore_callback(const GBufferCallback &previous,
+                                      const SP<GBufferCallback> &replacement) noexcept {
+    if (previous.callback_owner_) {
+        previous.callback_owner_->replace_callback(&previous, replacement);
+    }
+}
+
+FrameBuffer::~FrameBuffer() {
+    for (auto &entry : gbuffer_callbacks_) {
+        if (auto callback = entry.lock(); callback && callback->callback_owner_ == this) {
+            callback->callback_owner_ = nullptr;
+        }
+    }
+}
+
 void ScreenBuffer::update_resolution(ocarina::uint2 res, Device &device) noexcept {
     super().reset_all(device, res.x * res.y, name_);
     register_self();
@@ -98,7 +113,12 @@ Float4 FrameBuffer::apply_exposure(const Float &exposure, const Float4 &input) c
 }
 
 void FrameBuffer::register_callback(const SP<vision::GBufferCallback> &cb) noexcept {
+    if (!cb) return;
+    for (const auto &entry : gbuffer_callbacks_) {
+        if (entry.lock() == cb) return;
+    }
     gbuffer_callbacks_.push_back(cb);
+    cb->callback_owner_ = this;
 }
 
 void FrameBuffer::deregister_callback(const SP<vision::GBufferCallback> &cb) noexcept {
@@ -107,6 +127,19 @@ void FrameBuffer::deregister_callback(const SP<vision::GBufferCallback> &cb) noe
     });
     if (iter != gbuffer_callbacks_.cend()) {
         gbuffer_callbacks_.erase(iter);
+        if (cb->callback_owner_ == this) cb->callback_owner_ = nullptr;
+    }
+}
+
+void FrameBuffer::replace_callback(const GBufferCallback *previous,
+                                   const SP<GBufferCallback> &replacement) noexcept {
+    for (auto &entry : gbuffer_callbacks_) {
+        if (auto callback = entry.lock(); callback.get() == previous) {
+            callback->callback_owner_ = nullptr;
+            entry = replacement;
+            replacement->callback_owner_ = this;
+            return;
+        }
     }
 }
 

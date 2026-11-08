@@ -8,12 +8,18 @@
 #include "base/sensor/photosensory.h"
 #include "base/color/spectrum.h"
 #include "window/window.h"
+#include "hotfix_runtime/engine_hotfix.h"
 #include <memory>
 
 namespace vision {
 using namespace ocarina;
 
 namespace {
+
+vector<Pipeline *> &live_pipelines() {
+    static vector<Pipeline *> pipelines;
+    return pipelines;
+}
 
 [[nodiscard]] bool output_requires_gamma(const OutputDesc &desc) noexcept {
     return !(desc.fn.ends_with("exr") || desc.fn.ends_with("hdr"));
@@ -29,7 +35,64 @@ Pipeline::Pipeline(const vision::PipelineDesc &desc)
     : Node(desc),
       device_(&Global::instance().device()),
       stream_(device().create_stream()),
-      bindless_array_(device().create_bindless_array()) {}
+      bindless_array_(device().create_bindless_array()) {
+    live_pipelines().push_back(this);
+}
+
+Pipeline::~Pipeline() {
+    std::erase(live_pipelines(), this);
+}
+
+void Pipeline::synchronize_hotfix_streams() noexcept {
+    // Replacements can release resources owned by any cached renderer.
+    for (auto *pipeline : live_pipelines()) {
+        pipeline->stream() << synchronize() << commit();
+    }
+}
+
+void Pipeline::refresh_hotfix() noexcept {
+    const auto revision = Corona::Hotfix::revision();
+    if (revision == hotfix_revision_) return;
+    auto *previous_renderer = active_renderer_;
+    auto *previous_sensor = scene_view_.sensor_override_;
+    activate_global_context();
+    stream() << synchronize() << commit();
+    Global::SceneGpuContextScope scene_gpu_context{
+        scene_view_.geometry().bindless_array(), device()};
+    // Re-encode changed layouts before compiling their scene-specialized users.
+    // Preserve output textures, spectrum slots and denoiser registrations.
+    scene_view_.prepare_materials();
+    scene_view_.medium_registry().prepare(scene_view_.geometry().bindless_array(), device());
+    const auto prepare_view = [&] {
+        scene_view_.sensor()->filter()->prepare();
+        renderer().spectrum()->set_scene_has_dispersive_materials(
+            scene_view_.material_registry().has_dispersive());
+        renderer().prepare_lights(scene_view_);
+    };
+    activate_view_context(0u);
+    prepare_view();
+    for (const auto &[view_id, context] : view_contexts_) {
+        activate_view_context(view_id);
+        prepare_view();
+    }
+    for (auto *object : encoded_objects) {
+        object->prepare_data();
+        object->upload_immediately();
+    }
+    upload_scene_bindless_array();
+    upload_bindless_array();
+    activate_view_context(0u);
+    compile();
+    invalidate();
+    for (const auto &[view_id, context] : view_contexts_) {
+        activate_view_context(view_id);
+        compile();
+        invalidate();
+    }
+    active_renderer_ = previous_renderer;
+    scene_view_.sensor_override_ = previous_sensor;
+    hotfix_revision_ = revision;
+}
 
 void Pipeline::initialize_(const vision::NodeDesc &node_desc) noexcept {
     const Desc &desc = static_cast<const Desc &>(node_desc);
@@ -240,6 +303,10 @@ void Pipeline::update_runtime_object(const vision::IObjectConstructor *construct
     auto &fb = renderer_.frame_buffer_sp();
     std::tuple tp = {addressof(fb)};
     HotfixSystem::replace_objects(constructor, tp);
+    for (const auto &[view_id, context] : view_contexts_) {
+        HotfixSystem::replace_objects(constructor,
+            std::tuple{addressof(context->renderer.frame_buffer_sp()), addressof(context->sensor.impl())});
+    }
 }
 
 void Pipeline::invalidate() noexcept {
@@ -372,6 +439,11 @@ void Pipeline::deregister_texture2d(handle_ty index) noexcept {
 
 void Pipeline::before_render() noexcept {
     activate_global_context();
+    if (Corona::Hotfix::initialize()) {
+        if (HotfixSystem::instance().is_working()) synchronize_hotfix_streams();
+        Corona::Hotfix::pump();
+        refresh_hotfix();
+    }
     sync_output_denoise();
     stream_ << Env::debugger().upload();
 }

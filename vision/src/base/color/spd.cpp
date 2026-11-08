@@ -9,7 +9,7 @@ namespace vision {
 
 using namespace ocarina;
 
-namespace detail {
+namespace spectrum_detail {
 
 [[nodiscard]] float densely_sampled_spectrum_integral(uint t, const float *spec) noexcept {
     float sum = 0.0;
@@ -39,7 +39,7 @@ template<typename T, size_t N>
     return ret;
 }
 
-}// namespace detail
+}// namespace spectrum_detail
 
 SPD::SPD(Pipeline *rp)
     : rp_(rp), func_(rp->bindless_array()) {}
@@ -94,23 +94,23 @@ DynamicArray<float> SPD::eval(const SampledWavelengths &swl) const noexcept {
 }
 
 SPD SPD::create_cie_x(Pipeline *rp) noexcept {
-    return {detail::downsample_densely_sampled_spectrum(spd_lut_interval, cie::X.data()), rp};
+    return {spectrum_detail::downsample_densely_sampled_spectrum(spd_lut_interval, cie::X.data()), rp};
 }
 
 SPD SPD::create_cie_y(Pipeline *rp) noexcept {
-    return {detail::downsample_densely_sampled_spectrum(spd_lut_interval, cie::Y.data()), rp};
+    return {spectrum_detail::downsample_densely_sampled_spectrum(spd_lut_interval, cie::Y.data()), rp};
 }
 
 SPD SPD::create_cie_z(Pipeline *rp) noexcept {
-    return {detail::downsample_densely_sampled_spectrum(spd_lut_interval, cie::Z.data()), rp};
+    return {spectrum_detail::downsample_densely_sampled_spectrum(spd_lut_interval, cie::Z.data()), rp};
 }
 
 SPD SPD::create_cie_d65(Pipeline *rp) noexcept {
-    return {detail::downsample_densely_sampled_spectrum(spd_lut_interval, cie::D65.data()), rp};
+    return {spectrum_detail::downsample_densely_sampled_spectrum(spd_lut_interval, cie::D65.data()), rp};
 }
 
 float SPD::cie_y_integral() noexcept {
-    static float integral = detail::densely_sampled_spectrum_integral(spd_lut_interval, cie::Y.data());
+    static float integral = spectrum_detail::densely_sampled_spectrum_integral(spd_lut_interval, cie::Y.data());
     return integral;
 }
 

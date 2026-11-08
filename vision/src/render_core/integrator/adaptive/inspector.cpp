@@ -52,4 +52,3 @@ void ConvergenceInspector::render_sub_UI(Widgets *widgets) noexcept {
 }// namespace vision
 
 VS_REGISTER_HOTFIX(vision, ConvergenceInspector)
-VS_REGISTER_CURRENT_PATH(1, "vision-integrator-adaptive.dll")

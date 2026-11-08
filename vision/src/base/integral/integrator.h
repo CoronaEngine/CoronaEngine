@@ -73,7 +73,11 @@ public:
     Integrator() = default;
     explicit Integrator(const IntegratorDesc &desc)
         : Node(desc) {}
-    VS_HOTFIX_MAKE_RESTORE(Node, frame_index_, render_time_, cur_render_time_, cur_stage_profile_, denoise_timing_, shader_, datas_)
+    void restore(RuntimeObject *old_obj) noexcept override {
+        Node::restore(old_obj);
+        VS_HOTFIX_MOVE_ATTRS(frame_index_, render_time_, cur_render_time_, cur_stage_profile_, denoise_timing_, shader_, datas_)
+        if (old_obj_) restore_owner(*old_obj_);
+    }
     virtual void compile() noexcept = 0;
     virtual Float3 Li(RayState rs, Float scatter_pdf, const HitContext &hc, const RenderEnv &render_env) const noexcept {
         return Li(rs, scatter_pdf, spectrum()->one(), hc, render_env);

@@ -8,6 +8,7 @@
 #include <corona/events/display_system_events.h>
 #include <corona/shared_data_hub.h>
 #include "../../src/systems/common/render_resource_bindings.h"
+#include "../../src/systems/display/presentation_surface.h"
 
 #include <cstdlib>
 #include <array>
@@ -17,12 +18,49 @@
 #include <iostream>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace {
 
 constexpr int kSkip = 77;
+
+bool verify_surface_format_policy() {
+    using namespace Corona::Systems::DisplayDetail;
+    const std::array formats{
+        VkSurfaceFormatKHR{VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
+        VkSurfaceFormatKHR{VK_FORMAT_R8G8B8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR},
+        VkSurfaceFormatKHR{VK_FORMAT_B8G8R8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
+    if (choose_presentation_surface_format(formats).format != VK_FORMAT_B8G8R8A8_SRGB ||
+        !presentation_surface_encodes_srgb(VK_FORMAT_R8G8B8A8_SRGB)) {
+        std::cerr << "Surface format policy: prefer SRGB independent of enumeration order\n";
+        return false;
+    }
+    const std::array unorm{
+        VkSurfaceFormatKHR{VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
+    if (choose_presentation_surface_format(unorm).format != VK_FORMAT_R8G8B8A8_UNORM ||
+        presentation_surface_encodes_srgb(unorm.front().format)) {
+        std::cerr << "Surface format policy: preserve UNORM-only surfaces and shader encoding\n";
+        return false;
+    }
+    const std::array unconstrained{
+        VkSurfaceFormatKHR{VK_FORMAT_UNDEFINED, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
+    const std::array fallback{
+        VkSurfaceFormatKHR{VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT}};
+    if (choose_presentation_surface_format(unconstrained).format != VK_FORMAT_B8G8R8A8_SRGB ||
+        choose_presentation_surface_format(fallback).format != fallback.front().format) {
+        std::cerr << "Surface format policy: preserve unconstrained and first-format fallbacks\n";
+        return false;
+    }
+    try {
+        (void)choose_presentation_surface_format({});
+    } catch (const std::runtime_error&) {
+        return true;
+    }
+    std::cerr << "Surface format policy: an empty format list must fail\n";
+    return false;
+}
 
 bool verify_quad_pixels(Corona::Systems::DisplaySystem& display, const std::string& test_case) try {
     namespace Horizon = Corona::Horizon;
@@ -224,49 +262,50 @@ bool verify_quad_pixels(Corona::Systems::DisplaySystem& display, const std::stri
         const auto composite_receipt = upload_executor.stream()
                                        << pipeline.dispatch_extent(width, height) << Horizon::commit();
         upload_executor.wait(composite_receipt);
-        Horizon::HardwareDisplayer displayer(surface);
+        Horizon::HardwareDisplayer displayer(DisplayDetail::horizon_native_window(surface));
         const auto present_output = [&] {
             const auto receipt = upload_executor.stream()
                                  << Horizon::present(displayer, output) << Horizon::commit();
             upload_executor.wait_idle(receipt);
         };
         if (shader_srgb) {
-            // Warm up FrameHash and fill its capture budget before changing
-            // the native extent; every dump then describes the same output.
-            for (int frame = 0; frame < 5; ++frame) present_output();
-            const auto initial = displayer.presentation_info();
+            // Exercise real native resize/restore inside FrameHash's capture
+            // budget. The last captured source is the restored-size image;
+            // pixel assertions below verify it without a fabricated generation.
+            present_output();
             SDL_SetWindowSize(window.get(), width + 16, height + 16);
             SDL_PumpEvents();
-            auto resized = initial;
-            // Acquire/present reports OUT_OF_DATE or SUBOPTIMAL; the next
-            // query then refreshes the swapchain. A query alone need not
-            // detect native-window resize on every driver.
-            for (int frame = 0; frame < 8 && resized.generation <= initial.generation; ++frame) {
-                present_output();
-                SDL_PumpEvents();
-                resized = displayer.presentation_info();
+            const auto resized = DisplayDetail::query_presentation_surface(surface);
+            if (resized.extent.width != width + 16 || resized.extent.height != height + 16) {
+                std::cerr << "UI pixel regression: native window did not resize\n";
+                return false;
             }
+            present_output();
             SDL_SetWindowSize(window.get(), width, height);
             SDL_PumpEvents();
-            auto restored = resized;
-            for (int frame = 0; frame < 8 && restored.generation <= resized.generation; ++frame) {
-                present_output();
-                SDL_PumpEvents();
-                restored = displayer.presentation_info();
-            }
-            if (initial.format == Horizon::Format::UNKNOWN || initial.generation == 0 ||
-                resized.generation <= initial.generation || restored.generation <= resized.generation ||
-                restored.format != initial.format) {
-                std::cerr << "UI pixel regression: presentation generation did not advance across resize/restore: "
-                          << initial.generation << "," << resized.generation << "," << restored.generation << '\n';
+            const auto restored = DisplayDetail::query_presentation_surface(surface);
+            if (restored.extent.width != width || restored.extent.height != height ||
+                restored.format.format != resized.format.format) {
+                std::cerr << "UI pixel regression: native window did not restore its extent/format\n";
                 return false;
             }
         }
         for (int frame = 0; frame < 5; ++frame) present_output();
     } else {
         for (int frame = 0; frame < 5; ++frame) {
+            if (scene_only && frame == 2) SDL_SetWindowSize(window.get(), width + 16, height + 16);
+            if (scene_only && frame == 3) SDL_SetWindowSize(window.get(), width, height);
             SDL_PumpEvents();
-            if (!ui_only && frame > 0) {
+            if (scene_only && (frame == 2 || frame == 3)) {
+                const auto native = DisplayDetail::query_presentation_surface(surface);
+                const uint32_t expected_width = frame == 2 ? width + 16 : width;
+                const uint32_t expected_height = frame == 2 ? height + 16 : height;
+                if (native.extent.width != expected_width || native.extent.height != expected_height) {
+                    std::cerr << "UI pixel regression: Display native extent did not resize/restore\n";
+                    return false;
+                }
+            }
+            if (!ui_only && !scene_only && frame > 0) {
                 // Publish real producer submissions for this constant diagnostic.
                 // Reusing one receipt would correctly hit Display's frame cache.
                 if (auto image_device = image_storage.acquire_write(scene_handle)) {
@@ -284,6 +323,9 @@ bool verify_quad_pixels(Corona::Systems::DisplaySystem& display, const std::stri
                 scene_frame.frame_index = frame + 1;
                 Corona::Kernel::KernelContext::instance().event_bus()->publish(scene_frame);
             }
+            // scene-only deliberately retains its original producer receipt:
+            // frame 1 exercises cached re-presentation; resize/restore must
+            // still produce a correct final pixel capture without a new scene.
             if (!scene_only) {
                 backend.new_frame(surface);
                 backend.render_quads(surface, quads, width, height);
@@ -295,17 +337,8 @@ bool verify_quad_pixels(Corona::Systems::DisplaySystem& display, const std::stri
     surface_cleanup.reset();
     if (cleanup_failed) return false;
     if (!direct_shader) {
-        // Query the same native window after retiring Display's owner. This
-        // keeps the assertions valid on both SRGB and UNORM-only platforms.
-        Horizon::HardwareDisplayer probe(surface);
-        const auto presentation = probe.presentation_info();
-        if (presentation.format == Horizon::Format::UNKNOWN) {
-            std::cerr << "UI pixel regression: unknown presentation format\n";
-            return false;
-        }
-        encode_output_srgb = presentation.format != Horizon::Format::SRGBA8_UNORM &&
-                             presentation.format != Horizon::Format::SBGRA8_UNORM &&
-                             presentation.format != Horizon::Format::SBGRX8_UNORM;
+        const auto presentation = DisplayDetail::query_presentation_surface(surface);
+        encode_output_srgb = !DisplayDetail::presentation_surface_encodes_srgb(presentation.format.format);
     }
     std::array<Pixel, width * height> pixels;
     std::ifstream capture(capture_path, std::ios::binary);
@@ -568,6 +601,8 @@ int run_smoke(const std::string& pixel_case = "combined", bool lifecycle = true)
 }  // namespace
 
 int main(int argc, char** argv) {
+    if (!verify_surface_format_policy()) return 1;
+    if (argc == 2 && std::string(argv[1]) == "--surface-format-policy") return 0;
     if (argc == 3 && std::string(argv[1]) == "--display-pixels") return run_smoke(argv[2], false);
     if (const char* enabled = std::getenv("CORONA_RUN_GPU_SMOKE"); enabled && std::string(enabled) == "1") {
         // FrameHash has a per-process capture budget. Each child executes the

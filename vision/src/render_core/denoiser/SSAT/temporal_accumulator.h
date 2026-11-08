@@ -76,6 +76,7 @@ private:
     RegistrableManaged<RadType4> history_buffer_; // Accumulated history
     
 public:
+    void set_ssat(SSAT *ssat) noexcept { ssat_ = ssat; }
     explicit TemporalAccumulator(SSAT *ssat)
         : ssat_(ssat),
           ssat_data_(pipeline()->bindless_array()),

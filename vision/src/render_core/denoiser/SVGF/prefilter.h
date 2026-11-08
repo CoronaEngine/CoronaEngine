@@ -44,6 +44,7 @@ private:
     Shader<void(PrefilterParam)> prefilter_shader_, cached_prefilter_shader_;
 
 public:
+    void set_svgf(SVGF *svgf) noexcept { svgf_ = svgf; }
     explicit Prefilter(SVGF *svgf)
         : svgf_(svgf) {}
 

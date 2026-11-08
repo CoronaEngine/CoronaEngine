@@ -530,7 +530,7 @@ bool Material::has_changed() noexcept {
            });
 }
 
-namespace detail {
+namespace material_detail {
 
 [[nodiscard]] Float3 clamp_ns(Float3 ns, Float3 ng, const Float3 &w) {
     Float3 w_refl = reflect(w, ns);
@@ -538,7 +538,7 @@ namespace detail {
                                 normalize(w_refl - ng * dot(w_refl, ng)));
     return normalize(w_refl_clip + w);
 }
-}// namespace detail
+}// namespace material_detail
 
 void Material::initialize_slots(const vision::Material::Desc &desc) noexcept {
     ensure_graph_ready();
@@ -576,7 +576,7 @@ PartialDerivative<Float3> Material::compute_shading_frame(const Interaction &it,
     if (normal_) {
         Float3 normal = normal_.evaluate(it, swl)->as_vec3();
         Float3 world_normal = ret.to_world(normal);
-        world_normal = detail::clamp_ns(world_normal, it.ng, it.wo);
+        world_normal = material_detail::clamp_ns(world_normal, it.ng, it.wo);
         ret.update(world_normal);
     }
     Env::instance().execute_if<Int>("bounces", [&](const Int &bounces) {

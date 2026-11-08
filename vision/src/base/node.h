@@ -12,6 +12,7 @@
 #include "rhi/context.h"
 #include "using.h"
 #include "hotfix/hotfix.h"
+#include "hotfix/module_interface.h"
 
 namespace ocarina {
 class Device;
@@ -249,13 +250,11 @@ public:
 
 #define VS_MAKE_CLASS_CREATOR_HOTFIX(NS, Class) \
     VS_REGISTER_HOTFIX(NS, Class)               \
-    VS_MAKE_CLASS_CREATOR(NS::Class)            \
-    VS_REGISTER_CURRENT_FILE
+    VS_MAKE_CLASS_CREATOR(NS::Class)
 
 #define VS_MAKE_CLASS_CREATOR_HOTFIX_DIRECTORY(NS, Class, level) \
     VS_REGISTER_HOTFIX(NS, Class)                                \
-    VS_MAKE_CLASS_CREATOR(NS::Class)                             \
-    VS_REGISTER_DIRECTORY(level)
+    VS_MAKE_CLASS_CREATOR(NS::Class)
 
 #define VS_MAKE_CLASS_CREATOR_HOTFIX_FUNC(NS, Class, FuncName) \
     VS_REGISTER_HOTFIX(NS, Class)                              \

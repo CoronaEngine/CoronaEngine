@@ -118,7 +118,17 @@ OC_PARAM_STRUCT(vision, GBufferParam, frame_index, camera_jitter, visibility_buf
 
 namespace vision {
 
+class FrameBuffer;
+
 class GBufferCallback {
+private:
+    FrameBuffer *callback_owner_{};
+    friend class FrameBuffer;
+
+protected:
+    void restore_callback(const GBufferCallback &previous,
+                          const SP<GBufferCallback> &replacement) noexcept;
+
 public:
     virtual void compute_GBuffer(const RayState &rs, const Interaction &it) noexcept = 0;
 };
@@ -353,6 +363,7 @@ public:
         stable_planes_.set_name("FrameBuffer::stable_planes [motion-half-coverage-history-v3]");
     }
     explicit FrameBuffer(const FrameBufferDesc &desc);
+    ~FrameBuffer() override;
     // Buffer<T> stores handles/counts/descriptors, not inline T records; this
     // guard reads the unchanged host name before moving typed GPU allocations.
     void require_stable_plane_storage_abi() const noexcept {
@@ -360,18 +371,25 @@ public:
                     "SP coverage history storage ABI changed; restart the engine before loading the new shaders.");
     }
     void restore(RuntimeObject *old_obj) noexcept override {
-        const auto *previous = dynamic_cast<FrameBuffer *>(old_obj);
+        const auto *previous = hotfix::detail::restore_source(*this, old_obj);
+        if (!previous) return;
         previous->require_stable_plane_storage_abi();
         Node::restore(old_obj);
-        VS_HOTFIX_MOVE_ATTRS(cur_view_, surfaces_, surface_exts_, surface_ext_history_, hit_bsdfs_,
+        VS_HOTFIX_MOVE_ATTRS(cur_view_, resolution_, screen_window_, accumulation_, exposure_, datas_,
+                           gbuffer_callbacks_, surfaces_, surface_exts_, surface_ext_history_, hit_bsdfs_,
                            stable_planes_, stable_plane_history_, stable_plane_buffers_enabled_, stable_plane_history_retained_, compact_coverage_history_, stable_raw_outputs_retained_, coverage_history_, stable_direct_, stable_indirect_, stable_radiance_, stable_dominant_,
                            motion_vectors_, hit_buffer_, screen_buffers_,
                            denoiser_diffuse_, denoiser_specular_, denoiser_bypass_, denoiser_di_specular_, denoiser_gi_specular_, denoiser_di_bypass_,
-                           view_texture_, visualizer_, window_buffer_, rt_buffer_,
+                           view_texture_, visualizer_, window_buffer_, rt_buffer_, direct_lighting_, indirect_lighting_,
+                           accumulation_buffer_, rays_, visibility_buffer_,
                            tone_mapper_,
                            /// shaders
-                           compute_geom_, compute_hit_, save_surface_exts_history_,
+                           compute_geom_, compute_hit_, save_surface_exts_history_, tone_mapping_, gamma_correct_,
                            accumulate_)
+        restore_owner(*previous);
+        for (auto &entry : gbuffer_callbacks_) {
+            if (auto callback = entry.lock()) callback->callback_owner_ = this;
+        }
     }
     OC_ENCODABLE_FUNC(EncodedObject, accumulation_, tone_mapper_, exposure_)
     VS_MAKE_GUI_STATUS_FUNC(Node, tone_mapper_)
@@ -390,6 +408,7 @@ public:
     [[nodiscard]] const Texture2D &view_texture() const noexcept { return view_texture_; }
     void register_callback(const SP<GBufferCallback> &cb) noexcept;
     void deregister_callback(const SP<GBufferCallback> &cb) noexcept;
+    void replace_callback(const GBufferCallback *previous, const SP<GBufferCallback> &replacement) noexcept;
     void update_runtime_object(const IObjectConstructor *constructor) noexcept override;
     bool render_UI(Widgets *widgets) noexcept override;
     void render_sub_UI(Widgets *widgets) noexcept override;

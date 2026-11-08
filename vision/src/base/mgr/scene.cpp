@@ -156,8 +156,9 @@ void Scene::prepare() noexcept {
 }
 
 void Scene::update_runtime_object(const vision::IObjectConstructor *constructor) noexcept {
-    std::tuple tp = {addressof(sensor().impl())};
-    HotfixSystem::replace_objects(constructor, tp);
+    for (auto &sensor : sensors_) {
+        HotfixSystem::replace_objects(constructor, std::tuple{addressof(sensor.impl())});
+    }
 }
 
 void Scene::tidy_up() noexcept {

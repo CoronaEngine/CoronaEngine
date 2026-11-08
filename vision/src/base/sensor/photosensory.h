@@ -38,7 +38,11 @@ public:
     explicit Photosensory(const SensorDesc &desc);
     void update_runtime_object(const vision::IObjectConstructor *constructor) noexcept override;
     OC_ENCODABLE_FUNC(EncodedObject, filter_)
-    VS_HOTFIX_MAKE_RESTORE(Node, filter_, medium_id_, datas_)
+    void restore(RuntimeObject *old_obj) noexcept override {
+        Node::restore(old_obj);
+        VS_HOTFIX_MOVE_ATTRS(filter_, medium_id_, datas_)
+        if (old_obj_) restore_owner(*old_obj_);
+    }
     VS_MAKE_GUI_STATUS_FUNC(Node, filter_)
     bool render_UI(Widgets *widgets) noexcept override;
     void render_sub_UI(Widgets *widgets) noexcept override;

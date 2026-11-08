@@ -42,7 +42,7 @@ def workspace_build(tmp_path):
             "from dataclasses import replace\n"
             "from build_tools.source_workspaces import HORIZON, EDITOR\n"
             "WORKSPACES = (\n"
-            f"    replace(HORIZON, url={origin.as_posix()!r}, commit={horizon!r}),\n"
+            f"    replace(HORIZON, url={origin.as_posix()!r}, ref='main', commit={horizon!r}),\n"
             f"    replace(EDITOR, url={origin.as_posix()!r}, commit={editor!r}),\n"
             ")\n",
             encoding="utf-8",

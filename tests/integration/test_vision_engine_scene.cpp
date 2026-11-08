@@ -5,6 +5,7 @@
 #include "base/mgr/switch_profile.h"
 #include "base/scattering/material.h"
 #include "base/sensor/sensor.h"
+#include "hotfix/module_interface.h"
 #include "vision/vision_camera_adapter.h"
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
@@ -18,6 +19,7 @@
 #include <sstream>
 #include <chrono>
 #include <limits>
+#include <array>
 
 void check_camera_dolly_reprojection(vision::Pipeline& pipeline);
 void check_svgf_restir_motion_history(vision::Pipeline& pipeline);
@@ -1197,7 +1199,97 @@ struct VisionEngineSceneTest {
         std::cout << "PASS: Vulkan shared display, reuse, resize, failure latch and recreation\n";
     }
 
-    static void run(bool shared_display_only = false) {
+    static void check_hotfix_renderers(vision::Pipeline& pipeline) {
+        struct Context {
+            uint64_t id;
+            vision::uint2 resolution;
+            vision::DataWrap settings;
+            vision::FrameBuffer* framebuffer{};
+            vision::Sensor* sensor{};
+            const vision::Integrator* integrator{};
+            const vision::LightSampler* light_sampler{};
+        };
+        std::array<Context, 3> contexts{{
+            {0u, ocarina::make_uint2(16u, 16u)},
+            {401u, ocarina::make_uint2(12u, 10u)},
+            {402u, ocarina::make_uint2(8u, 14u)}}};
+        pipeline.set_output_denoise(false);
+        for (std::size_t i = 0; i < contexts.size(); ++i) {
+            auto& context = contexts[i];
+            if (context.id != 0u) {
+                expect(pipeline.create_view_context(context.id, context.resolution),
+                       "hotfix fixture must create both camera views");
+            }
+            expect(pipeline.activate_view_context(context.id), "hotfix view must activate");
+            CameraDevice camera;
+            camera.width = context.resolution.x; camera.height = context.resolution.y;
+            camera.position = {0, 0, -3}; camera.forward = {0, 0, 1}; camera.world_up = {0, 1, 0};
+            Vision::sync_vision_camera(pipeline, camera);
+            auto* framebuffer = pipeline.frame_buffer();
+            framebuffer->set_enable_accumulation(true);
+            framebuffer->auto_manage_accumulation_buffer(true);
+            const float rr_threshold = 0.25f + 0.125f * static_cast<float>(i);
+            pipeline.renderer().integrator()->set_settings(vision::DataWrap{{"rr_threshold", rr_threshold}});
+            expect(pipeline.renderer().integrator()->settings()["rr_threshold"] == rr_threshold,
+                   "hotfix fixture must assign distinct view settings");
+            pipeline.invalidate();
+            render(pipeline, "hotfix-before-replacement");
+            context.settings = pipeline.renderer().integrator()->settings();
+            context.framebuffer = framebuffer;
+            context.sensor = pipeline.scene().sensor().get();
+            context.integrator = pipeline.renderer().integrator().get();
+            context.light_sampler = pipeline.renderer().light_sampler().get();
+        }
+
+        auto& registry = vision::ModuleInterface::instance();
+        const auto* integrator_factory = registry.find_constructor(
+            pipeline.renderer().integrator()->class_name());
+        const auto* light_sampler_factory = registry.find_constructor(
+            pipeline.renderer().light_sampler()->class_name());
+        expect(integrator_factory && light_sampler_factory,
+               "loaded PT and light sampler must expose their actual hotfix factories");
+        // Use the same observer replacement path as a successful patch/history
+        // change. The CPU fixture separately exercises actual patch builds.
+        vision::HotfixSystem::instance().update_objects({integrator_factory, light_sampler_factory});
+        pipeline.before_render();
+        expect(pipeline.frame_buffer() == contexts.back().framebuffer &&
+                   pipeline.scene().sensor().get() == contexts.back().sensor,
+               "hotfix preparation must retain the active nonbase renderer and sensor");
+
+        for (const auto& context : contexts) {
+            expect(pipeline.activate_view_context(context.id), "hotfix must retain every view");
+            expect(pipeline.renderer().integrator().get() != context.integrator &&
+                       pipeline.renderer().light_sampler().get() != context.light_sampler,
+                   "real factories must replace the integrator and light sampler in every renderer");
+            expect(pipeline.frame_buffer() == context.framebuffer &&
+                       pipeline.scene().sensor().get() == context.sensor &&
+                       ocarina::all(pipeline.resolution() == context.resolution) &&
+                       pipeline.renderer().integrator()->settings() == context.settings &&
+                       pipeline.frame_buffer()->enable_accumulation() && !pipeline.output_desc().denoise,
+                   "hotfix must preserve each view's framebuffer, camera, resolution and settings");
+            expect(pipeline.frame_index() == 0u,
+                   "hotfix preparation must invalidate all accumulated view histories");
+            std::vector<vision::float4> history(pipeline.pixel_num());
+            pipeline.stream() << pipeline.frame_buffer()->accumulation_buffer().device_buffer().download(history.data())
+                              << ocarina::synchronize() << ocarina::commit();
+            for (const auto& pixel : history) {
+                expect(pixel.x == 0.f && pixel.y == 0.f && pixel.z == 0.f && pixel.w == 0.f,
+                       "hotfix must clear accumulated GPU pixels before rendering again");
+            }
+            pipeline.before_render();
+            expect(pipeline.frame_buffer() == context.framebuffer &&
+                       pipeline.scene().sensor().get() == context.sensor,
+                   "render callback must keep the selected view active");
+            // Dispatches the replacement integrator's real GPU kernels and
+            // checks finite, lit pixels rather than only restored host state.
+            render(pipeline, "hotfix-after-replacement");
+        }
+        pipeline.activate_view_context(0u);
+        pipeline.remove_view_context(401u);
+        pipeline.remove_view_context(402u);
+        std::cout << "PASS: hotfix rebuilds base and camera GPU kernels while retaining view state\n";
+    }
+    static void run(bool shared_display_only = false, bool hotfix_only = false) {
         namespace fs = std::filesystem;
         const auto base = fs::current_path() / "engine-scene-test-assets";
         fs::create_directories(base);
@@ -1234,8 +1326,11 @@ struct VisionEngineSceneTest {
             CameraDevice camera;
             camera.width = 16; camera.height = 16; camera.position = {0,0,-3}; camera.forward = {0,0,1}; camera.world_up = {0,1,0};
             Vision::sync_vision_camera(*pt, camera);
+            if (hotfix_only) pt->set_output_denoise(false);
             render(*pt, "Corona-PT");
-            if (shared_display_only) {
+            if (hotfix_only) {
+                check_hotfix_renderers(*pt);
+            } else if (shared_display_only) {
                 check_shared_display(*pt);
             } else {
                 check_pt_settings(system, *pt);
@@ -1271,7 +1366,7 @@ struct VisionEngineSceneTest {
         hub.geometry_storage().deallocate(geometry);
         hub.model_transform_storage().deallocate(transform);
         hub.model_resource_storage().deallocate(model);
-        if (!shared_display_only) {
+        if (!shared_display_only && !hotfix_only) {
             // Exercise the embedded base fallback after removing the fixture's
             // geometry/environment, so its deterministic output is black.
             vision::Global::instance().set_device(&device);
@@ -1295,6 +1390,10 @@ int main(int argc, char** argv) {
         }
     } runtime_cleanup;
     try {
+        if (argc == 2 && std::string(argv[1]) == "--hotfix") {
+            Corona::Systems::VisionEngineSceneTest::run(false, true);
+            return 0;
+        }
         Corona::Systems::VisionEngineSceneTest::check_mode_api();
         Corona::Systems::VisionEngineSceneTest::check_accumulation_api();
         Corona::Systems::VisionEngineSceneTest::check_stable_planes_api();

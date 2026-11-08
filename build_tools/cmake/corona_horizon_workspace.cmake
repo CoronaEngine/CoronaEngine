@@ -13,7 +13,6 @@ function(corona_add_horizon_workspace)
     set(HORIZON_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(HORIZON_BUILD_OCARINA_TESTS OFF CACHE BOOL "" FORCE)
     set(HORIZON_BUILD_OCARINA ON CACHE BOOL "" FORCE)
-    set(HORIZON_BUILD_VISION_HOTFIX ON CACHE BOOL "" FORCE)
 
     add_subdirectory(
         "${_corona_horizon_source}"
@@ -23,5 +22,8 @@ function(corona_add_horizon_workspace)
     get_target_property(_corona_horizon_links Horizon INTERFACE_LINK_LIBRARIES)
     list(TRANSFORM _corona_horizon_links REPLACE "^horizon-core$" "$<LINK_ONLY:horizon-core>")
     set_property(TARGET Horizon PROPERTY INTERFACE_LINK_LIBRARIES "${_corona_horizon_links}")
+
+    include(corona_hotfix)
+    corona_configure_hotfix_runtime("${_corona_horizon_source}")
 
 endfunction()

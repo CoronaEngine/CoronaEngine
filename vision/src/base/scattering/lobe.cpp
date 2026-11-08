@@ -196,11 +196,11 @@ Float MicrofacetLobe::to_ratio_x() const noexcept {
     return sqrt(a);
 }
 
-namespace detail {
+namespace lobe_detail {
 [[nodiscard]] Float to_ratio_z(const Float &ior) {
     return ocarina::sqrt(ocarina::abs((ior - 1.0f) / (ior + 1.0f)));
 }
-}// namespace detail
+}// namespace lobe_detail
 
 const SampledWavelengths *MicrofacetLobe::swl() const {
     return &bxdf_->swl();

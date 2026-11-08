@@ -152,9 +152,17 @@ public:
         params_.apply_env_overrides();
     }
     
-    VS_HOTFIX_MAKE_RESTORE(Denoiser, adaptive_sampler_, spatial_angular_filter_,
+    void restore(RuntimeObject *old_obj) noexcept override {
+        Denoiser::restore(old_obj);
+        VS_HOTFIX_MOVE_ATTRS(adaptive_sampler_, spatial_angular_filter_,
                            temporal_accumulator_, params_, total_subpixels_,
                            subpixel_resolution_, last_sampling_mask_frame_)
+        if (!old_obj_) return;
+        if (adaptive_sampler_) adaptive_sampler_->set_ssat(this);
+        if (spatial_angular_filter_) spatial_angular_filter_->set_ssat(this);
+        if (temporal_accumulator_) temporal_accumulator_->set_ssat(this);
+        restore_callback(*old_obj_, shared_from_this());
+    }
     VS_MAKE_PLUGIN_NAME_FUNC
     
     // ========================================================================

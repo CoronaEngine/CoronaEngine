@@ -166,13 +166,19 @@ void hotfix_window(Widgets *widgets) noexcept {
 
     widgets->set_enabled(hotfix.has_previous(), [&] {
         widgets->button_click("previous", [&] {
-            hotfix.previous_version();
+            hotfix.enqueue_function([] {
+                Pipeline::synchronize_hotfix_streams();
+                HotfixSystem::instance().previous_version();
+            });
         });
     });
 
     widgets->set_enabled(hotfix.has_next(), [&] {
         widgets->button_click("next", [&] {
-            hotfix.next_version();
+            hotfix.enqueue_function([] {
+                Pipeline::synchronize_hotfix_streams();
+                HotfixSystem::instance().next_version();
+            });
         });
     });
 }

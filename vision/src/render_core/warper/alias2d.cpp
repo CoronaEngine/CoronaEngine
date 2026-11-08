@@ -112,7 +112,7 @@ public:
         // sample u
         Uint buffer_offset = resolution().x * iv;
         Float u_remapped;
-        Uint iu = detail::offset(buffer_offset, u.x, pipeline(),
+        Uint iu = alias_detail::offset(buffer_offset, u.x, pipeline(),
                                  conditional_v_tables_.index_var(), resolution().x, &u_remapped);
 
         Float fu = (iu + u_remapped) / resolution().x;

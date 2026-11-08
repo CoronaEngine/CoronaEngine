@@ -67,6 +67,7 @@
 #include "base/import/parameter_set.h"
 #include "base/import/project_desc.h"
 #include "base/mgr/global.h"
+#include "hotfix_runtime/engine_hotfix.h"
 #include "base/mgr/pipeline.h"
 #include "base/mgr/switch_profile.h"
 #include "base/mgr/scene.h"
@@ -2520,6 +2521,9 @@ void OpticsSystem::shutdown_vision_backend() {
         // Material LUTs are process-global and outlive their scene bindless arrays.
         // Release their texture owners while the compute device is still valid.
         vision::MaterialLut::destroy_instance();
+        // All pipeline and scene observers are gone. Retire hotfix versions
+        // while their deferred GPU resources can still use the compute device.
+        Corona::Hotfix::shutdown();
         vision_device_.reset();
         global.set_device(nullptr);
         CFW_LOG_INFO("OpticsSystem: Vision compute device destroyed");

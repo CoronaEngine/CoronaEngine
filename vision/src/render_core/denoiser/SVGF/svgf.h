@@ -154,7 +154,9 @@ public:
     void initialize_(const vision::NodeDesc &node_desc) noexcept override;
     void compute_GBuffer(const vision::RayState &rs, const vision::Interaction &it) noexcept override;
 
-    VS_HOTFIX_MAKE_RESTORE(Denoiser, svgf_data, svgf_data2,
+    void restore(RuntimeObject *old_obj) noexcept override {
+        Denoiser::restore(old_obj);
+        VS_HOTFIX_MOVE_ATTRS(svgf_data, svgf_data2,
                            poisson_, modulator_, variance_estimator_, prefilter_, params_,
                            resolve_direct_, resolve_indirect_, resolve_direct2_, resolve_indirect2_,
                            resolve_shader_, publish_resolve_shader_, prepare_layer_shader_, active_tiles_, coverage_guide_shader_, legacy_resolve_shader_, previous_coverage_guide_shader_,
@@ -162,6 +164,13 @@ public:
                            coverage_position_, coverage_normal_, coverage_depth_, coverage_meta_,
                            edge_flags_, edge_guide_shader_, edge_classify_shader_, spatial_edge_classify_shader_, tiled_edge_classify_shader_, edge_frame_, edge_mask_,
                            layer_data_, layer_data2_, layer_state_)
+        if (!old_obj_) return;
+        if (poisson_) poisson_->set_svgf(this);
+        if (modulator_) modulator_->set_svgf(this);
+        if (variance_estimator_) variance_estimator_->set_svgf(this);
+        if (prefilter_) prefilter_->set_svgf(this);
+        restore_callback(*old_obj_, shared_from_this());
+    }
     VS_MAKE_PLUGIN_NAME_FUNC
 
 #define VS_MAKE_MEMBER_GETTER(member, modifier)                                             \

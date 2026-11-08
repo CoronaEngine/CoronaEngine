@@ -17,4 +17,9 @@ project(CoronaEngine
     LANGUAGES C CXX
 )
 
+if(APPLE)
+    # Engine presentation adapters and Horizon both compile Objective-C++.
+    enable_language(OBJCXX)
+endif()
+
 include(corona_project)

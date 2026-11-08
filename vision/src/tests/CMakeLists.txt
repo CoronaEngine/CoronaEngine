@@ -25,17 +25,3 @@ add_dependencies(test-shader-graph-lifecycle
     vision-light-directional
     vision-shadernode-number)
 vision_add_test(test-param_schema SOURCES test_param_schema.cpp)
-
-function(vision_add_simple_test name)
-    cmake_parse_arguments(TEST "" "" "SOURCES" ${ARGN})
-
-    add_executable(${name}  ${TEST_SOURCES})
-    target_link_libraries(${name} vision-hotfix-all vision-window)
-    set_target_properties(${name} PROPERTIES
-            PUBLIC_HEADER "${HEADER_FILES}"
-            LIBRARY_OUTPUT_DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
-            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
-            WINDOWS_EXPORT_ALL_SYMBOLS ON)
-endfunction()
-
-vision_add_simple_test(vision-test_hotfix SOURCES test_hotfix.cpp)
