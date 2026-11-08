@@ -140,7 +140,7 @@ target_link_libraries(corona_vision_restir_estimator_tests PRIVATE
 add_test(NAME VisionReSTIREstimatorTests COMMAND corona_vision_restir_estimator_tests)
 add_test(NAME VisionReSTIRWinnerTargetTests COMMAND corona_vision_restir_estimator_tests)
 set_tests_properties(VisionReSTIRWinnerTargetTests PROPERTIES
-    WORKING_DIRECTORY "$<TARGET_FILE_DIR:corona_engine>"
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
     ENVIRONMENT "VISION_TEST_GI_WINNER_TARGET_ONLY=1"
     RUN_SERIAL TRUE TIMEOUT 180)
 add_test(NAME VisionPrincipledStablePlanes
