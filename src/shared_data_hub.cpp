@@ -438,6 +438,7 @@ void SharedDataHub::publish_transform_snapshot_from_storage() {
         row.position = transform.position;
         row.euler_rotation = transform.euler_rotation;
         row.scale = transform.scale;
+        row.affine_basis = transform.affine_basis;
         snapshot.rows.push_back(row);
     }
     transform_snapshot_.publish(std::move(snapshot));
@@ -484,6 +485,18 @@ std::optional<TransformSnapshotRow> SharedDataHub::transform_view(
         }
         if (has_transform_field(pending->fields, TransformField::Scale)) {
             view->scale = pending->scale;
+        }
+        if (has_transform_field(pending->fields, TransformField::Matrix)) {
+            // 与 set_matrix() 的应用语义一致：矩阵已含平移，TRS 被归一化。
+            for (int c = 0; c < 4; ++c) {
+                for (int r = 0; r < 4; ++r) {
+                    view->affine_basis[c][r] = pending->matrix[c * 4 + r];
+                }
+            }
+            view->affine_basis[3] = ktm::fvec4{0.0f, 0.0f, 0.0f, 1.0f};
+            view->position = pending->position;
+            view->euler_rotation = ktm::fvec3{0.0f, 0.0f, 0.0f};
+            view->scale = ktm::fvec3{1.0f, 1.0f, 1.0f};
         }
     }
     return view;

@@ -883,6 +883,19 @@ void apply_pending_transform_updates() {
             if (Corona::has_transform_field(update.fields, Corona::TransformField::Scale)) {
                 transform->scale = update.scale;
             }
+            if (Corona::has_transform_field(update.fields, Corona::TransformField::Matrix)) {
+                // 列主序仿射矩阵：与 API::Geometry::set_matrix 的写入口径一致，
+                // TRS 归一化为单位（矩阵本身已经含平移/旋转/缩放/剪切）。
+                for (int c = 0; c < 4; ++c) {
+                    for (int r = 0; r < 4; ++r) {
+                        transform->affine_basis[c][r] = update.matrix[c * 4 + r];
+                    }
+                }
+                transform->affine_basis[3] = ktm::fvec4{0.0f, 0.0f, 0.0f, 1.0f};
+                transform->position = update.position;
+                transform->euler_rotation = ktm::fvec3{0.0f, 0.0f, 0.0f};
+                transform->scale = ktm::fvec3{1.0f, 1.0f, 1.0f};
+            }
         }
     }
 }
@@ -3263,6 +3276,9 @@ void OpticsSystem::apply_camera_and_transform_updates() {
     apply_pending_transform_updates();
     apply_pending_camera_releases();
     SharedDataHub::instance().publish_camera_snapshot_from_storage();
+    // 变换快照：外部读者（get_position/get_matrix/面板/gizmo）只读这一份投影，
+    // 不再对 slot 加锁。必须在 transform 命令应用之后重建，才是"本 tick 的最终值"。
+    SharedDataHub::instance().publish_transform_snapshot_from_storage();
     acknowledge_camera_state_updates(state_updates);
 }
 

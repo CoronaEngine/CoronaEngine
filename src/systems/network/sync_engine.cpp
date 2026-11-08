@@ -1,6 +1,8 @@
 #include <corona/systems/network/sync_engine.h>
 
 #include <corona/shared_data_hub.h>
+#include <corona/systems/optics/environment_commands.h>
+#include <corona/systems/optics/optics_commands.h>
 #include <horizon/core/logging.h>
 
 #include <chrono>
@@ -118,6 +120,17 @@ void deserialize_geo(GeometryDevice& g, const uint8_t* value, uint16_t value_len
 }
 
 // ---- OpticsDevice helpers ----
+/// 远程 optics 包承载整份材质快照，因此这条命令覆盖全部标量位。
+constexpr auto kRemoteOpticsFields =
+    Corona::OpticsField::Visible | Corona::OpticsField::EnableLighting |
+    Corona::OpticsField::Metallic | Corona::OpticsField::Roughness |
+    Corona::OpticsField::Subsurface | Corona::OpticsField::Specular |
+    Corona::OpticsField::SpecularTint | Corona::OpticsField::Anisotropic |
+    Corona::OpticsField::Sheen | Corona::OpticsField::SheenTint |
+    Corona::OpticsField::Clearcoat | Corona::OpticsField::ClearcoatGloss |
+    Corona::OpticsField::Ambient | Corona::OpticsField::Diffuse |
+    Corona::OpticsField::SpecularColor | Corona::OpticsField::Shininess;
+
 struct OpticsPacked {
     bool visible;
     bool bEnableLighting;
@@ -485,21 +498,35 @@ bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation
     impl_->rebuild_entity_maps();
     auto& hub = impl_->hub;
     bool applied = false;
+    // 远程 xform：解码成值命令，由 Optics 在 tick 内应用。
+    // 网络线程不再持 slot 写锁——此前这里是跨线程直写 ModelTransform。
     auto apply_to_transform = [&]() {
         if (!impl_->entity_for_guid) return;
         auto seq = impl_->entity_for_guid(StorageID::ST_MODEL_TRANSFORM, operation.actor_guid);
         if (!seq) return;
         auto it = impl_->mt_seq_to_id.find(*seq);
         if (it == impl_->mt_seq_to_id.end()) return;
-        auto handle = hub.model_transform_storage().try_acquire_write(it->second);
-        if (handle.valid()) {
-            deserialize_mt(*handle, operation.value.data(),
-                           static_cast<uint16_t>(operation.value.size()));
-            impl_->set_snapshot(impl_->make_key(StorageID::ST_MODEL_TRANSFORM,
-                                                 *seq, "xform"),
-                                hash_mt(*handle, *seq));
+        if (operation.value.size() != 36) {
+            // 畸形载荷：旧实现是 deserialize 静默 no-op 但仍标 applied，保持一致。
             applied = true;
+            return;
         }
+        Corona::ModelTransform decoded{};
+        deserialize_mt(decoded, operation.value.data(),
+                       static_cast<uint16_t>(operation.value.size()));
+        Corona::TransformUpdateCommand command{};
+        command.transform_handle = it->second;
+        command.fields = Corona::TransformField::All;
+        command.position = decoded.position;
+        command.euler_rotation = decoded.euler_rotation;
+        command.scale = decoded.scale;
+        hub.enqueue_transform_update(command);
+        // 脏值哈希按"目标值"记账：下一轮 poll 只有真的与目标不一致时才回传，
+        // 因此不会把自己刚收到的远程值再广播一次。
+        impl_->set_snapshot(impl_->make_key(StorageID::ST_MODEL_TRANSFORM,
+                                             *seq, "xform"),
+                            hash_mt(decoded, *seq));
+        applied = true;
     };
     if (operation.field_name == "xform") apply_to_transform();
     if (operation.field_name == "optics" && impl_->entity_for_guid) {
@@ -507,28 +534,62 @@ bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation
         if (seq) {
             auto it = impl_->opt_seq_to_id.find(*seq);
             if (it != impl_->opt_seq_to_id.end()) {
-                auto handle = hub.optics_storage().try_acquire_write(it->second);
-                if (handle.valid()) {
-                    deserialize_opt(*handle, operation.value.data(),
+                if (operation.value.size() != sizeof(OpticsPacked)) {
+                    applied = true;  // 畸形载荷：与旧实现的静默 no-op 行为一致
+                } else {
+                    Corona::OpticsDevice decoded{};
+                    deserialize_opt(decoded, operation.value.data(),
                                     static_cast<uint16_t>(operation.value.size()));
+                    Corona::OpticsUpdateCommand command{};
+                    command.optics_handle = it->second;
+                    // 远程包是整份材质快照，因此 16 个标量位全置。
+                    command.fields = kRemoteOpticsFields;
+                    command.visible = decoded.visible;
+                    command.enable_lighting = decoded.bEnableLighting;
+                    command.metallic = decoded.metallic;
+                    command.roughness = decoded.roughness;
+                    command.subsurface = decoded.subsurface;
+                    command.specular = decoded.specular;
+                    command.specular_tint = decoded.specularTint;
+                    command.anisotropic = decoded.anisotropic;
+                    command.sheen = decoded.sheen;
+                    command.sheen_tint = decoded.sheenTint;
+                    command.clearcoat = decoded.clearcoat;
+                    command.clearcoat_gloss = decoded.clearcoatGloss;
+                    command.ambient = decoded.ambient;
+                    command.diffuse = decoded.diffuse;
+                    command.specular_color = decoded.specular_color;
+                    command.shininess = decoded.shininess;
+                    Corona::OpticsCommandChannel::instance().commands().push(command);
                     impl_->set_snapshot(impl_->make_key(StorageID::ST_OPTICS, *seq, "optics"),
-                                        hash_opt(*handle, *seq));
+                                        hash_opt(decoded, *seq));
                     applied = true;
                 }
             }
         }
     }
     if (operation.actor_guid == "__scene__" && operation.field_name == "environment") {
-        auto& store = hub.environment_storage();
         if (!impl_->env_seq_to_id.empty()) {
             auto seq_it = impl_->env_seq_to_id.begin();
             auto seq = seq_it->first;
-            auto handle = store.try_acquire_write(seq_it->second);
-            if (handle.valid()) {
-                deserialize_env(*handle, operation.value.data(),
+            if (operation.value.size() != 20) {
+                applied = true;  // 畸形载荷：与旧实现的静默 no-op 行为一致
+            } else {
+                Corona::EnvironmentDevice decoded{};
+                deserialize_env(decoded, operation.value.data(),
                                 static_cast<uint16_t>(operation.value.size()));
+                Corona::EnvironmentUpdateCommand command{};
+                command.environment_handle = seq_it->second;
+                command.fields = Corona::EnvironmentField::SunDirection |
+                                 Corona::EnvironmentField::SunIntensity |
+                                 Corona::EnvironmentField::Exposure;
+                // 设备的 sun_position 语义上是"方向"，命令侧叫 sun_direction。
+                command.sun_direction = decoded.sun_position;
+                command.sun_intensity = decoded.sun_intensity;
+                command.exposure = decoded.exposure;
+                Corona::EnvironmentCommandChannel::instance().commands().push(command);
                 impl_->set_snapshot(impl_->make_key(StorageID::ST_ENVIRONMENT, seq, "env"),
-                                    hash_env(*handle, seq));
+                                    hash_env(decoded, seq));
                 applied = true;
             }
         }

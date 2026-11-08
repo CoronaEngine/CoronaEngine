@@ -33,6 +33,13 @@ enum class EnvironmentField : std::uint32_t {
     FloorY = 1u << 5,
     FloorRestitution = 1u << 6,
     FixedDt = 1u << 7,
+    /// 全局曝光。网络同步的 environment 条目带这个字段，命令通道必须能承载它，
+    /// 否则远程曝光只能靠直写槽位（已禁止）。
+    Exposure = 1u << 8,
+    /// 作者给定的整份光照配置（shared_ptr<json> 结构负载）。
+    AuthoredLighting = 1u << 9,
+    /// 太阳颜色。只有 AuthoredLighting 派生时会改它。
+    SunColor = 1u << 10,
 };
 
 constexpr EnvironmentField operator|(EnvironmentField lhs, EnvironmentField rhs) {
@@ -55,11 +62,38 @@ struct EnvironmentUpdateCommand {
     float floor_y{0.0f};
     float floor_restitution{0.6f};
     float fixed_dt{1.0f / 60.0f};
+    float exposure{1.0f};
+    /// 仅 AuthoredLighting 位有效；nullptr 表示解绑。
+    std::shared_ptr<const nlohmann::json> authored_lighting;
+    std::size_t authored_lighting_revision{0};
+    ktm::fvec3 sun_color{1.0f, 0.949f, 0.853f};
 };
 
 struct EnvironmentUpdateKey {
     static std::uintptr_t get(const EnvironmentUpdateCommand& command) noexcept {
         return command.environment_handle;
+    }
+
+    /// 同 key 合并时只覆盖本条命令声明要改的字段。
+    /// 光照面板（UI 线程）与网络同步（Network 线程）会同时向这条队列推部分
+    /// 字段命令；没有 merge，后到的事件会把对方尚未应用的字段一起冲掉。
+    static void merge(EnvironmentUpdateCommand& pending,
+                      const EnvironmentUpdateCommand& next) noexcept {
+        if (has_environment_field(next.fields, EnvironmentField::SunDirection)) pending.sun_direction = next.sun_direction;
+        if (has_environment_field(next.fields, EnvironmentField::SunIntensity)) pending.sun_intensity = next.sun_intensity;
+        if (has_environment_field(next.fields, EnvironmentField::SkyIntensity)) pending.sky_intensity = next.sky_intensity;
+        if (has_environment_field(next.fields, EnvironmentField::FloorGrid)) pending.floor_grid_enabled = next.floor_grid_enabled;
+        if (has_environment_field(next.fields, EnvironmentField::Gravity)) pending.gravity = next.gravity;
+        if (has_environment_field(next.fields, EnvironmentField::FloorY)) pending.floor_y = next.floor_y;
+        if (has_environment_field(next.fields, EnvironmentField::FloorRestitution)) pending.floor_restitution = next.floor_restitution;
+        if (has_environment_field(next.fields, EnvironmentField::FixedDt)) pending.fixed_dt = next.fixed_dt;
+        if (has_environment_field(next.fields, EnvironmentField::Exposure)) pending.exposure = next.exposure;
+        if (has_environment_field(next.fields, EnvironmentField::AuthoredLighting)) {
+            pending.authored_lighting = next.authored_lighting;
+            pending.authored_lighting_revision = next.authored_lighting_revision;
+        }
+        if (has_environment_field(next.fields, EnvironmentField::SunColor)) pending.sun_color = next.sun_color;
+        pending.fields = pending.fields | next.fields;
     }
 };
 
@@ -73,6 +107,10 @@ struct EnvironmentSnapshotRow {
     float floor_y{0.0f};
     float floor_restitution{0.6f};
     float fixed_dt{1.0f / 60.0f};
+    float exposure{1.0f};
+    /// 只投影标量；authored_lighting 的 json 负载不进快照（太重且无外部读者）。
+    std::size_t authored_lighting_revision{0};
+    ktm::fvec3 sun_color{1.0f, 0.949f, 0.853f};
 };
 
 struct EnvironmentSnapshot {
@@ -110,6 +148,9 @@ inline EnvironmentSnapshotRow make_environment_row(std::uintptr_t handle,
     row.floor_y = device.floor_y;
     row.floor_restitution = device.floor_restitution;
     row.fixed_dt = device.fixed_dt;
+    row.exposure = device.exposure;
+    row.authored_lighting_revision = device.authored_lighting_revision;
+    row.sun_color = device.sun_color;
     return row;
 }
 
@@ -168,6 +209,16 @@ inline bool apply_pending_environment_updates() {
             if (has_environment_field(fields, EnvironmentField::FixedDt)) {
                 device->fixed_dt = command.fixed_dt;
             }
+            if (has_environment_field(fields, EnvironmentField::Exposure)) {
+                device->exposure = command.exposure;
+            }
+            if (has_environment_field(fields, EnvironmentField::AuthoredLighting)) {
+                device->authored_lighting = command.authored_lighting;
+                device->authored_lighting_revision = command.authored_lighting_revision;
+            }
+            if (has_environment_field(fields, EnvironmentField::SunColor)) {
+                device->sun_color = command.sun_color;
+            }
         }
     }
 
@@ -215,6 +266,11 @@ inline bool apply_pending_environment_updates() {
         if (has_environment_field(fields, EnvironmentField::FloorY)) view->floor_y = pending->floor_y;
         if (has_environment_field(fields, EnvironmentField::FloorRestitution)) view->floor_restitution = pending->floor_restitution;
         if (has_environment_field(fields, EnvironmentField::FixedDt)) view->fixed_dt = pending->fixed_dt;
+        if (has_environment_field(fields, EnvironmentField::Exposure)) view->exposure = pending->exposure;
+        if (has_environment_field(fields, EnvironmentField::AuthoredLighting)) {
+            view->authored_lighting_revision = pending->authored_lighting_revision;
+        }
+        if (has_environment_field(fields, EnvironmentField::SunColor)) view->sun_color = pending->sun_color;
     }
     return view;
 }

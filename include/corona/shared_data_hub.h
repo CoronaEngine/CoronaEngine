@@ -483,6 +483,9 @@ enum class TransformField : std::uint32_t {
     Position = 1u << 0,
     Rotation = 1u << 1,
     Scale = 1u << 2,
+    /// 整列主序仿射矩阵。写入时连同 position 一起给出，并重置 rotation/scale，
+    /// 与 set_matrix() 的语义保持一致（矩阵已包含 TRS）。
+    Matrix = 1u << 3,
     All = Position | Rotation | Scale,
 };
 
@@ -501,6 +504,11 @@ struct TransformUpdateCommand {
     ktm::fvec3 position{};
     ktm::fvec3 euler_rotation{};
     ktm::fvec3 scale{1.0f, 1.0f, 1.0f};
+    /// 仅 TransformField::Matrix 时有效：列主序仿射矩阵（含平移）。
+    std::array<float, 16> matrix{1.0f, 0.0f, 0.0f, 0.0f,
+                                 0.0f, 1.0f, 0.0f, 0.0f,
+                                 0.0f, 0.0f, 1.0f, 0.0f,
+                                 0.0f, 0.0f, 0.0f, 1.0f};
 };
 
 struct TransformUpdateKey {
@@ -515,6 +523,9 @@ struct TransformSnapshotRow {
     ktm::fvec3 position{};
     ktm::fvec3 euler_rotation{};
     ktm::fvec3 scale{1.0f, 1.0f, 1.0f};
+    /// 作者给定的线性基（set_matrix 写入的那一份）。快照带上它是为了让
+    /// get_matrix() 也能走"快照 + pending"而不再读槽位。
+    ktm::fmat4x4 affine_basis{ktm::fmat4x4::from_eye()};
 };
 
 struct TransformSnapshot {

@@ -1,6 +1,7 @@
 #include "corona/engine.h"
 
 #include <corona/events/engine_events.h>
+#include <corona/systems/geometry/scene_commands.h>
 #include <corona/systems/optics/environment_commands.h>
 #include <corona/systems/mechanics/mechanics_structural_commands.h>
 #include <corona/kernel/event/i_event_stream.h>
@@ -84,6 +85,9 @@ static void configure_systems_dag(Kernel::ISystemManager* sys_mgr) {
     // Environment 跨 Optics（光照）与 Mechanics（重力/固定步长）两个消费者，
     // 且 Mechanics 在 DAG 里排在 Optics 之前 —— 只有在边界应用才能同 tick 生效。
     sys_mgr->set_tick_boundary_hook([]() {
+        // 场景成员先应用：它决定"本 tick 存在哪些 actor / camera"，
+        // 结构命令与全局环境参数都建立在成员集合之上。
+        Corona::apply_pending_scene_commands();
         // 结构命令先应用：它们决定"本 tick 存在什么、能调到什么"。
         Corona::apply_pending_mechanics_structural_commands();
         // 全局环境参数：Optics 与 Mechanics 必须在同一 tick 看到同一个值。

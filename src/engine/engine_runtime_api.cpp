@@ -12,6 +12,8 @@
 #include <corona/systems/mechanics/mechanics_structural_commands.h>
 #include <corona/systems/optics/optics_commands.h>
 #include <corona/systems/optics/environment_commands.h>
+#include <corona/systems/geometry/geometry_commands.h>
+#include <corona/systems/geometry/scene_commands.h>
 #include <corona/systems/display/display_surface_commands.h>
 #include <corona/systems/acoustics/acoustics_commands.h>
 #include <corona/engine/engine_runtime_api.h>
@@ -240,12 +242,9 @@ void Corona::API::Scene::set_environment(Environment* env) {
         return;
     }
 
-    if (auto accessor = SharedDataHub::instance().scene_storage().acquire_write(handle_)) {
-        accessor->environment = environment_handle;
-        environment_ = env;
-    } else {
-        CFW_LOG_ERROR("[Scene::set_environment] Failed to acquire write access to scene storage");
-    }
+    // 成员绑定走命令通道，由 tick 边界统一落地（外部线程不再拿槽锁）。
+    Corona::push_scene_command(handle_, Corona::SceneCommandKind::SetEnvironment, environment_handle);
+    environment_ = env;
 }
 
 Corona::API::Environment* Corona::API::Scene::get_environment() {
@@ -259,15 +258,8 @@ bool Corona::API::Scene::has_environment() const {
 void Corona::API::Scene::remove_environment() {
     if (handle_ == 0) return;
 
-    auto* previous_environment = environment_;
-
-    if (auto accessor = SharedDataHub::instance().scene_storage().acquire_write(handle_)) {
-        accessor->environment = 0;
-        environment_ = nullptr;
-    } else {
-        environment_ = previous_environment;
-        CFW_LOG_ERROR("[Scene::remove_environment] Failed to acquire write access to scene storage, rolled back local environment removal");
-    }
+    Corona::push_scene_command(handle_, Corona::SceneCommandKind::SetEnvironment, 0);
+    environment_ = nullptr;
 }
 
 void Corona::API::Scene::add_actor(Actor* actor) {
@@ -295,13 +287,8 @@ void Corona::API::Scene::add_actor(Actor* actor) {
 
     actors_.push_back(actor);
 
-    if (auto accessor = SharedDataHub::instance().scene_storage().acquire_write(handle_)) {
-        accessor->actor_handles.push_back(actor_handle);
-    } else {
-        actors_.pop_back();
-        actors_index_.erase(actor);
-        CFW_LOG_ERROR("[Scene::add_actor] Failed to acquire write access to scene storage, rolled back local actor insertion");
-    }
+    // 命令入队不会失败，因此不再需要本地回滚。
+    Corona::push_scene_command(handle_, Corona::SceneCommandKind::AddActor, actor_handle);
 }
 
 void Corona::API::Scene::remove_actor(Actor* actor) {
@@ -314,9 +301,6 @@ void Corona::API::Scene::remove_actor(Actor* actor) {
 
     auto actor_it = std::find(actors_.begin(), actors_.end(), actor);
     const bool existed_in_vector = actor_it != actors_.end();
-    const std::size_t actor_pos = existed_in_vector
-                                      ? static_cast<std::size_t>(std::distance(actors_.begin(), actor_it))
-                                      : 0;
     const bool existed_in_index = actors_index_.contains(actor);
 
     if (!existed_in_vector && !existed_in_index) {
@@ -331,35 +315,15 @@ void Corona::API::Scene::remove_actor(Actor* actor) {
         actors_index_.erase(actor);
     }
 
-    if (auto accessor = SharedDataHub::instance().scene_storage().acquire_write(handle_)) {
-        std::erase(accessor->actor_handles, actor->get_handle());
-    } else {
-        if (existed_in_vector) {
-            actors_.insert(std::next(actors_.begin(), static_cast<std::vector<Actor*>::difference_type>(actor_pos)), actor);
-        }
-        if (existed_in_index) {
-            actors_index_.insert(actor);
-        }
-        CFW_LOG_ERROR("[Scene::remove_actor] Failed to acquire write access to scene storage, rolled back local actor removal");
-    }
+    Corona::push_scene_command(handle_, Corona::SceneCommandKind::RemoveActor, actor->get_handle());
 }
 
 void Corona::API::Scene::clear_actors() {
     if (handle_ == 0) return;
 
-    const auto actors_backup = actors_;
-    const auto actors_index_backup = actors_index_;
-
     actors_.clear();
     actors_index_.clear();
-
-    if (auto accessor = SharedDataHub::instance().scene_storage().acquire_write(handle_)) {
-        accessor->actor_handles.clear();
-    } else {
-        actors_ = actors_backup;
-        actors_index_ = actors_index_backup;
-        CFW_LOG_ERROR("[Scene::clear_actors] Failed to acquire write access to scene storage, rolled back local actor clear");
-    }
+    Corona::push_scene_command(handle_, Corona::SceneCommandKind::ClearActors);
 }
 
 std::size_t Corona::API::Scene::actor_count() const {
@@ -396,17 +360,9 @@ void Corona::API::Scene::add_camera(Camera* camera) {
 
     cameras_.push_back(camera);
 
-    if (auto accessor = SharedDataHub::instance().scene_storage().acquire_write(handle_)) {
-        accessor->camera_handles.push_back(camera_handle);
-        if (accessor->active_camera_handle == 0) {
-            accessor->active_camera_handle = camera_handle;
-        }
-    } else {
-        // Roll back local state to keep Scene cache and shared storage consistent.
-        cameras_.pop_back();
-        cameras_index_.erase(camera);
-        CFW_LOG_ERROR("[Scene::add_camera] Failed to acquire write access to scene storage, rolled back local camera insertion");
-    }
+    // "第一台相机自动成为 active" 的判定移到应用点（apply_pending_scene_commands），
+    // 因为入队时还看不到本 tick 之前尚未应用的满员状态。
+    Corona::push_scene_command(handle_, Corona::SceneCommandKind::AddCamera, camera_handle);
 }
 
 void Corona::API::Scene::remove_camera(Camera* camera) {
@@ -419,9 +375,6 @@ void Corona::API::Scene::remove_camera(Camera* camera) {
 
     auto camera_it = std::find(cameras_.begin(), cameras_.end(), camera);
     const bool existed_in_vector = camera_it != cameras_.end();
-    const std::size_t camera_pos = existed_in_vector
-                                       ? static_cast<std::size_t>(std::distance(cameras_.begin(), camera_it))
-                                       : 0;
     const bool existed_in_index = cameras_index_.contains(camera);
 
     if (!existed_in_vector && !existed_in_index) {
@@ -436,41 +389,15 @@ void Corona::API::Scene::remove_camera(Camera* camera) {
         cameras_index_.erase(camera);
     }
 
-    if (auto accessor = SharedDataHub::instance().scene_storage().acquire_write(handle_)) {
-        std::erase(accessor->camera_handles, camera->get_handle());
-        if (accessor->active_camera_handle == camera->get_handle()) {
-            accessor->active_camera_handle = accessor->camera_handles.empty()
-                                                 ? 0
-                                                 : accessor->camera_handles.front();
-        }
-    } else {
-        if (existed_in_vector) {
-            cameras_.insert(std::next(cameras_.begin(), static_cast<std::vector<Camera*>::difference_type>(camera_pos)), camera);
-        }
-        if (existed_in_index) {
-            cameras_index_.insert(camera);
-        }
-        CFW_LOG_ERROR("[Scene::remove_camera] Failed to acquire write access to scene storage, rolled back local camera removal");
-    }
+    Corona::push_scene_command(handle_, Corona::SceneCommandKind::RemoveCamera, camera->get_handle());
 }
 
 void Corona::API::Scene::clear_cameras() {
     if (handle_ == 0) return;
 
-    const auto cameras_backup = cameras_;
-    const auto cameras_index_backup = cameras_index_;
-
     cameras_.clear();
     cameras_index_.clear();
-
-    if (auto accessor = SharedDataHub::instance().scene_storage().acquire_write(handle_)) {
-        accessor->camera_handles.clear();
-        accessor->active_camera_handle = 0;
-    } else {
-        cameras_ = cameras_backup;
-        cameras_index_ = cameras_index_backup;
-        CFW_LOG_ERROR("[Scene::clear_cameras] Failed to acquire write access to scene storage, rolled back local camera clear");
-    }
+    Corona::push_scene_command(handle_, Corona::SceneCommandKind::ClearCameras);
 }
 
 void Corona::API::Scene::set_active_camera(Camera* camera) {
@@ -481,11 +408,7 @@ void Corona::API::Scene::set_active_camera(Camera* camera) {
         return;
     }
 
-    if (auto accessor = SharedDataHub::instance().scene_storage().acquire_write(handle_)) {
-        accessor->active_camera_handle = camera->get_handle();
-    } else {
-        CFW_LOG_ERROR("[Scene::set_active_camera] Failed to acquire write access to scene storage");
-    }
+    Corona::push_scene_command(handle_, Corona::SceneCommandKind::SetActiveCamera, camera->get_handle());
 }
 
 std::uintptr_t Corona::API::Scene::get_active_camera_handle() const {
@@ -527,19 +450,14 @@ void Corona::API::Scene::set_enabled(bool enabled) {
         CFW_LOG_WARNING("[Scene::set_enabled] Invalid scene handle");
         return;
     }
-    if (auto accessor = SharedDataHub::instance().scene_storage().acquire_write(handle_)) {
-        accessor->enabled = enabled;
-    } else {
-        CFW_LOG_ERROR("[Scene::set_enabled] Failed to acquire write access to scene storage");
-    }
+    enabled_ = enabled;  // 读己之写镜像
+    Corona::push_scene_command(handle_, Corona::SceneCommandKind::SetEnabled, 0, enabled);
 }
 
 bool Corona::API::Scene::is_enabled() const {
     if (handle_ == 0) return false;
-    if (auto accessor = SharedDataHub::instance().scene_storage().try_acquire_read(handle_)) {
-        return accessor->enabled;
-    }
-    return false;
+    // 提交值可能是上一 tick 的；本对象刚 push 的命令才是"我看到的"。
+    return enabled_;
 }
 
 void Corona::API::Scene::set_simulation_enabled(bool enabled) {
@@ -547,19 +465,13 @@ void Corona::API::Scene::set_simulation_enabled(bool enabled) {
         CFW_LOG_WARNING("[Scene::set_simulation_enabled] Invalid scene handle");
         return;
     }
-    if (auto accessor = SharedDataHub::instance().scene_storage().acquire_write(handle_)) {
-        accessor->simulation_enabled = enabled;
-    } else {
-        CFW_LOG_ERROR("[Scene::set_simulation_enabled] Failed to acquire write access to scene storage");
-    }
+    simulation_enabled_ = enabled;  // 读己之写镜像
+    Corona::push_scene_command(handle_, Corona::SceneCommandKind::SetSimulationEnabled, 0, enabled);
 }
 
 bool Corona::API::Scene::is_simulation_enabled() const {
     if (handle_ == 0) return false;
-    if (auto accessor = SharedDataHub::instance().scene_storage().try_acquire_read(handle_)) {
-        return accessor->simulation_enabled;
-    }
-    return false;
+    return simulation_enabled_;
 }
 
 // ########################
@@ -626,10 +538,12 @@ float Corona::API::Environment::get_sun_intensity() const {
 
 void Corona::API::Environment::set_authored_lighting(const std::string& description) {
     if (description.empty()) {
-        if (auto write=SharedDataHub::instance().environment_storage().acquire_write(handle_)) {
-            write->authored_lighting.reset();
-            write->authored_lighting_revision=0;
-        }
+        Corona::EnvironmentUpdateCommand command{};
+        command.environment_handle = handle_;
+        command.fields = Corona::EnvironmentField::AuthoredLighting;
+        command.authored_lighting = nullptr;
+        command.authored_lighting_revision = 0;
+        Corona::EnvironmentCommandChannel::instance().commands().push(std::move(command));
         return;
     }
     auto data = std::make_shared<const nlohmann::json>(nlohmann::json::parse(description));
@@ -648,22 +562,31 @@ void Corona::API::Environment::set_authored_lighting(const std::string& descript
         }
         if (!std::isfinite(length2) || length2<1e-12f) throw std::invalid_argument("Invalid light direction");
     }
-    auto& hub = Corona::SharedDataHub::instance();
-    if (auto write = hub.environment_storage().acquire_write(handle_)) {
-        write->authored_lighting = data;
-        write->authored_lighting_revision = std::hash<std::string>{}(description);
-        write->sun_intensity = 0.f;
-        write->sky_intensity = 0.f;
-        const auto& lights = data->at("directionals");
-        if (!lights.empty()) {
-            const auto& light=lights.front();
-            const auto direction=light.at("direction").get<std::array<float,3>>();
-            const auto color=light.at("color").get<std::array<float,3>>();
-            write->sun_position={-direction[0],-direction[1],-direction[2]};
-            write->sun_color={color[0],color[1],color[2]};
-            write->sun_intensity=1.f;
-        }
+
+    // 整份配置 + 派生的太阳参数一起下发：tick 边界统一应用，
+    // 外部线程不再拿环境槽锁。校验已在上方同步完成。
+    Corona::EnvironmentUpdateCommand command{};
+    command.environment_handle = handle_;
+    command.authored_lighting = data;
+    command.authored_lighting_revision = std::hash<std::string>{}(description);
+    command.sun_intensity = 0.0f;
+    command.sky_intensity = 0.0f;
+    auto fields = Corona::EnvironmentField::AuthoredLighting |
+                  Corona::EnvironmentField::SunIntensity |
+                  Corona::EnvironmentField::SkyIntensity;
+    const auto& lights = data->at("directionals");
+    if (!lights.empty()) {
+        const auto& light=lights.front();
+        const auto direction=light.at("direction").get<std::array<float,3>>();
+        const auto color=light.at("color").get<std::array<float,3>>();
+        command.sun_direction = ktm::fvec3{-direction[0], -direction[1], -direction[2]};
+        command.sun_color = ktm::fvec3{color[0], color[1], color[2]};
+        command.sun_intensity = 1.0f;
+        fields = fields | Corona::EnvironmentField::SunDirection |
+                 Corona::EnvironmentField::SunColor;
     }
+    command.fields = fields;
+    Corona::EnvironmentCommandChannel::instance().commands().push(std::move(command));
 }
 
 void Corona::API::Environment::set_sky_intensity(float intensity) {
@@ -997,23 +920,35 @@ void Corona::API::Geometry::set_matrix(const std::array<float, 16>& matrix) {
     if (std::abs(matrix[3]) > 1e-6f || std::abs(matrix[7]) > 1e-6f ||
         std::abs(matrix[11]) > 1e-6f || std::abs(matrix[15] - 1.0f) > 1e-6f)
         throw std::invalid_argument("Geometry requires an affine matrix");
-    if (auto transform = SharedDataHub::instance().model_transform_storage().acquire_write(transform_handle_)) {
-        for (int c = 0; c < 4; ++c)
-            for (int r = 0; r < 4; ++r) transform->affine_basis[c][r] = matrix[c*4+r];
-        transform->affine_basis[3] = ktm::fvec4{0, 0, 0, 1};
-        transform->position = ktm::fvec3{matrix[12], matrix[13], matrix[14]};
-        transform->euler_rotation = ktm::fvec3{0, 0, 0};
-        transform->scale = ktm::fvec3{1, 1, 1};
+
+    // 写方向统一走命令通道：由 Optics 在 tick 内应用，外部线程不再拿槽锁。
+    Corona::TransformUpdateCommand command{};
+    command.transform_handle = transform_handle_;
+    command.fields = Corona::TransformField::Matrix;
+    command.position = ktm::fvec3{matrix[12], matrix[13], matrix[14]};
+    command.euler_rotation = ktm::fvec3{0.0f, 0.0f, 0.0f};
+    command.scale = ktm::fvec3{1.0f, 1.0f, 1.0f};
+    for (int i = 0; i < 16; ++i) {
+        command.matrix[i] = matrix[i];
     }
+    SharedDataHub::instance().enqueue_transform_update(command);
 }
 
 std::array<float, 16> Corona::API::Geometry::get_matrix() const {
     std::array<float, 16> result{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
-    if (auto transform = SharedDataHub::instance().model_transform_storage().acquire_read(transform_handle_)) {
-        const auto matrix = transform->compute_matrix();
-        for (int c = 0; c < 4; ++c)
-            for (int r = 0; r < 4; ++r) result[c*4+r] = matrix[c][r];
+    // 快照 + pending：与 set_matrix() 的"写后立刻读"保持一致，且不拿槽锁。
+    const auto view = SharedDataHub::instance().transform_view(transform_handle_);
+    if (!view.has_value()) {
+        return result;
     }
+    Corona::ModelTransform composed;
+    composed.affine_basis = view->affine_basis;
+    composed.position = view->position;
+    composed.euler_rotation = view->euler_rotation;
+    composed.scale = view->scale;
+    const auto matrix = composed.compute_matrix();
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r) result[c*4+r] = matrix[c][r];
     return result;
 }
 
@@ -1023,13 +958,11 @@ void Corona::API::Geometry::set_position(const std::array<float, 3>& pos) {
         return;
     }
 
-    if (auto accessor = SharedDataHub::instance().model_transform_storage().acquire_write(transform_handle_)) {
-        accessor->position.x = pos[0];
-        accessor->position.y = pos[1];
-        accessor->position.z = pos[2];
-    } else {
-        CFW_LOG_ERROR("[Geometry::set_position] Failed to acquire write access to transform storage");
-    }
+    Corona::TransformUpdateCommand command{};
+    command.transform_handle = transform_handle_;
+    command.fields = Corona::TransformField::Position;
+    command.position = ktm::fvec3{pos[0], pos[1], pos[2]};
+    SharedDataHub::instance().enqueue_transform_update(command);
 }
 
 void Corona::API::Geometry::set_rotation(const std::array<float, 3>& euler) {
@@ -1039,13 +972,11 @@ void Corona::API::Geometry::set_rotation(const std::array<float, 3>& euler) {
     }
 
     // 直接写入容器中的局部旋转参数（欧拉角 ZYX 顺序）
-    if (auto accessor = SharedDataHub::instance().model_transform_storage().acquire_write(transform_handle_)) {
-        accessor->euler_rotation.x = euler[0];  // Pitch
-        accessor->euler_rotation.y = euler[1];  // Yaw
-        accessor->euler_rotation.z = euler[2];  // Roll
-    } else {
-        CFW_LOG_ERROR("[Geometry::set_rotation] Failed to acquire write access to transform storage");
-    }
+    Corona::TransformUpdateCommand command{};
+    command.transform_handle = transform_handle_;
+    command.fields = Corona::TransformField::Rotation;
+    command.euler_rotation = ktm::fvec3{euler[0], euler[1], euler[2]};
+    SharedDataHub::instance().enqueue_transform_update(command);
 }
 
 void Corona::API::Geometry::set_scale(const std::array<float, 3>& scl) {
@@ -1055,13 +986,11 @@ void Corona::API::Geometry::set_scale(const std::array<float, 3>& scl) {
     }
 
     // 直接写入容器中的局部缩放参数
-    if (auto accessor = SharedDataHub::instance().model_transform_storage().acquire_write(transform_handle_)) {
-        accessor->scale.x = scl[0];
-        accessor->scale.y = scl[1];
-        accessor->scale.z = scl[2];
-    } else {
-        CFW_LOG_ERROR("[Geometry::set_scale] Failed to acquire write access to transform storage");
-    }
+    Corona::TransformUpdateCommand command{};
+    command.transform_handle = transform_handle_;
+    command.fields = Corona::TransformField::Scale;
+    command.scale = ktm::fvec3{scl[0], scl[1], scl[2]};
+    SharedDataHub::instance().enqueue_transform_update(command);
 }
 
 void Corona::API::Geometry::set_native_local_correction(const std::array<float, 3>& offset, float scale) {
@@ -1070,14 +999,12 @@ void Corona::API::Geometry::set_native_local_correction(const std::array<float, 
         return;
     }
 
-    if (auto accessor = SharedDataHub::instance().geometry_storage().acquire_write(handle_)) {
-        accessor->native_local_correction_offset.x = offset[0];
-        accessor->native_local_correction_offset.y = offset[1];
-        accessor->native_local_correction_offset.z = offset[2];
-        accessor->native_local_correction_scale = scale;
-    } else {
-        CFW_LOG_ERROR("[Geometry::set_native_local_correction] Failed to acquire write access to geometry storage");
-    }
+    Corona::GeometryCommand command{};
+    command.geometry_handle = handle_;
+    command.fields = Corona::GeometryField::NativeLocalCorrection;
+    command.correction_offset = ktm::fvec3{offset[0], offset[1], offset[2]};
+    command.correction_scale = scale;
+    Corona::GeometryCommandChannel::instance().commands().push(std::move(command));
 }
 
 std::array<float, 3> Corona::API::Geometry::get_position() const {
@@ -1086,14 +1013,13 @@ std::array<float, 3> Corona::API::Geometry::get_position() const {
         return {0.0f, 0.0f, 0.0f};
     }
 
-    // 从容器中读取局部位置参数
+    // 从快照 + pending 读取局部位置参数
     std::array<float, 3> result = {0.0f, 0.0f, 0.0f};
-    if (auto accessor = SharedDataHub::instance().model_transform_storage().acquire_read(transform_handle_)) {
-        result[0] = accessor->position.x;
-        result[1] = accessor->position.y;
-        result[2] = accessor->position.z;
-    } else {
-        CFW_LOG_ERROR("[Geometry::get_position] Failed to acquire read access to transform storage");
+    const auto view = SharedDataHub::instance().transform_view(transform_handle_);
+    if (view.has_value()) {
+        result[0] = view->position.x;
+        result[1] = view->position.y;
+        result[2] = view->position.z;
     }
 
     return result;
@@ -1105,14 +1031,13 @@ std::array<float, 3> Corona::API::Geometry::get_rotation() const {
         return {0.0f, 0.0f, 0.0f};
     }
 
-    // 从容器中读取局部旋转参数（欧拉角 ZYX 顺序）
+    // 从快照 + pending 读取局部旋转参数（欧拉角 ZYX 顺序）
     std::array<float, 3> result = {0.0f, 0.0f, 0.0f};
-    if (auto accessor = SharedDataHub::instance().model_transform_storage().acquire_read(transform_handle_)) {
-        result[0] = accessor->euler_rotation.x;  // Pitch
-        result[1] = accessor->euler_rotation.y;  // Yaw
-        result[2] = accessor->euler_rotation.z;  // Roll
-    } else {
-        CFW_LOG_ERROR("[Geometry::get_rotation] Failed to acquire read access to transform storage");
+    const auto view = SharedDataHub::instance().transform_view(transform_handle_);
+    if (view.has_value()) {
+        result[0] = view->euler_rotation.x;  // Pitch
+        result[1] = view->euler_rotation.y;  // Yaw
+        result[2] = view->euler_rotation.z;  // Roll
     }
 
     return result;
@@ -1124,14 +1049,13 @@ std::array<float, 3> Corona::API::Geometry::get_scale() const {
         return {1.0f, 1.0f, 1.0f};
     }
 
-    // 从容器中读取局部缩放参数
+    // 从快照 + pending 读取局部缩放参数
     std::array<float, 3> result = {1.0f, 1.0f, 1.0f};
-    if (auto accessor = SharedDataHub::instance().model_transform_storage().acquire_read(transform_handle_)) {
-        result[0] = accessor->scale.x;
-        result[1] = accessor->scale.y;
-        result[2] = accessor->scale.z;
-    } else {
-        CFW_LOG_ERROR("[Geometry::get_scale] Failed to acquire read access to transform storage");
+    const auto view = SharedDataHub::instance().transform_view(transform_handle_);
+    if (view.has_value()) {
+        result[0] = view->scale.x;
+        result[1] = view->scale.y;
+        result[2] = view->scale.z;
     }
 
     return result;
@@ -1201,32 +1125,40 @@ Corona::API::GeometryRenderStatus Corona::API::Geometry::get_render_status() con
         return status;
     }
 
-    auto* system_manager = Kernel::KernelContext::instance().system_manager();
-    if (!system_manager) {
-        return status;
-    }
-    auto geometry_system = std::dynamic_pointer_cast<Systems::GeometrySystem>(
-        system_manager->get_system("Geometry"));
-    if (!geometry_system) {
+    // 直接按 slot 读网格状态，不再跨线程调用 GeometrySystem::query_mesh_slots()。
+    // 后者会进入 DAG 系统的 impl_（LOD 缓存），属于"外部线程直接调用对方对象"。
+    // 这里的判据与 GeometrySystem::build_mesh_slots 的 slot.valid 保持一致：
+    // 四条 GPU 缓冲 + 纹理都就绪才算可渲染。
+    auto geometry = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_);
+    if (!geometry) {
         return status;
     }
 
-    const auto slots = geometry_system->query_mesh_slots(handle_);
+    const std::size_t slot_count = geometry->mesh_handles.size();
+    std::size_t renderable = 0;
+    for (const auto& mesh : geometry->mesh_handles) {
+        const bool valid = static_cast<bool>(mesh.vertexBuffer) &&
+                           static_cast<bool>(mesh.indexBuffer) &&
+                           static_cast<bool>(mesh.vertexStorageBuffer) &&
+                           static_cast<bool>(mesh.indexStorageBuffer) &&
+                           static_cast<bool>(mesh.textureBuffer);
+        if (valid) {
+            ++renderable;
+        }
+    }
+
     status.observed = true;
-    status.renderable_mesh_count = static_cast<std::size_t>(std::count_if(
-        slots.begin(), slots.end(), [](const auto& slot) { return slot.valid; }));
-    status.invalid_mesh_count = slots.size() - status.renderable_mesh_count;
+    status.mesh_count = slot_count;
+    status.renderable_mesh_count = renderable;
+    status.invalid_mesh_count = slot_count - renderable;
     status.ready = status.gpu_build_state == "Ready" &&
                    status.mesh_count > 0 &&
-                   slots.size() == status.mesh_count &&
                    status.invalid_mesh_count == 0;
     if (status.ready) {
-        if (auto geometry = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) {
-            if (auto resource = SharedDataHub::instance().model_resource_storage().try_acquire_read(geometry->model_resource_handle)) {
-                status.collision_ready = resource->model_id != 0 &&
-                    geometry->collision_model_id == resource->model_id &&
-                    (!geometry->is_skinned || geometry->skinned_aabb_valid);
-            }
+        if (auto resource = SharedDataHub::instance().model_resource_storage().try_acquire_read(geometry->model_resource_handle)) {
+            status.collision_ready = resource->model_id != 0 &&
+                geometry->collision_model_id == resource->model_id &&
+                (!geometry->is_skinned || geometry->skinned_aabb_valid);
         }
     }
     return status;
@@ -2820,6 +2752,7 @@ Corona::API::ModelNodePickResult Corona::API::Camera::pick_model_node_at_pixel(i
         return {};
     }
 
+    // 读侧：相机句柄 + 上一次结果。读取只拿读锁，不再写槽位。
     std::uintptr_t actor_pick_handle = 0;
     if (auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(handle_)) {
         actor_pick_handle = camera->actor_pick_handle;
@@ -2828,22 +2761,24 @@ Corona::API::ModelNodePickResult Corona::API::Camera::pick_model_node_at_pixel(i
         return {};
     }
 
-    auto pick = SharedDataHub::instance().actor_pick_storage().try_acquire_write(actor_pick_handle);
-    if (!pick) {
-        return {};
-    }
-
     const auto ux = static_cast<std::uint32_t>(x);
     const auto uy = static_cast<std::uint32_t>(y);
-    const ModelNodePickResult completed_actor =
-        (pick->result_ready && pick->result_x == ux && pick->result_y == uy)
-            ? ModelNodePickResult{pick->actor_handle, pick->node_index}
-            : ModelNodePickResult{};
+    ModelNodePickResult completed_actor;
+    if (auto pick = SharedDataHub::instance().actor_pick_storage().try_acquire_read(actor_pick_handle)) {
+        if (pick->result_ready && pick->result_x == ux && pick->result_y == uy) {
+            completed_actor = ModelNodePickResult{pick->actor_handle, pick->node_index};
+        }
+    }
 
-    pick->x = ux;
-    pick->y = uy;
-    pick->pending = true;
-    pick->result_ready = false;
+    // 写侧：入队请求，由 Optics 在自己的 tick 里消费并把结果写回 ActorPickDevice。
+    // 原先这里直接写 pending/x/y，是外部线程对 DAG 拥有槽位的直写。
+    static std::atomic<std::uint64_t> pick_sequence{0};
+    Corona::ActorPickRequestCommand request{};
+    request.camera_handle = handle_;
+    request.request_id = "model_node:" + std::to_string(pick_sequence.fetch_add(1) + 1);
+    request.x = ux;
+    request.y = uy;
+    SharedDataHub::instance().enqueue_actor_pick_request(std::move(request));
 
     return completed_actor;
 }
@@ -2860,11 +2795,21 @@ bool is_editor_camera_input_enabled() {
 void set_default_surface(void* surface) {
     g_default_surface.store(surface, std::memory_order_relaxed);
 
-    // 句柄到达时，补写到已存在的相机，避免“先有 camera 后有 surface”的空窗。
-    for (auto& camera : SharedDataHub::instance().camera_storage()) {
+    // 句柄到达时，补写到已存在的相机，避免"先有 camera 后有 surface"的空窗。
+    // 这里只**读** follows_default_surface，写一律走相机命令通道——
+    // 原来的 `camera.surface = surface` 是未加锁的跨线程写。
+    std::vector<std::uintptr_t> targets;
+    for (const auto& camera : SharedDataHub::instance().camera_storage()) {
         if (camera.follows_default_surface) {
-            camera.surface = surface;
+            targets.push_back(reinterpret_cast<std::uintptr_t>(static_cast<const void*>(&camera)));
         }
+    }
+    for (const auto handle : targets) {
+        CameraStateUpdateCommand command{};
+        command.camera_handle = handle;
+        command.fields = CameraStateUpdateField::Surface;
+        command.surface = surface;
+        SharedDataHub::instance().enqueue_camera_state_update(command);
     }
 }
 
@@ -3287,26 +3232,20 @@ std::vector<Corona::API::ModelNodeOverride> Corona::API::Geometry::get_model_nod
     return {};
 }
 bool Corona::API::Geometry::set_model_node_state(uint32_t index, const ModelNodeState& state) {
-    auto g = SharedDataHub::instance().geometry_storage().try_acquire_write(handle_);
-    if (!g || index >= g->model_nodes.size()) return false;
-    const auto previous = g->model_nodes[index].state;
-    if (!ModelNodes::set(g->model_nodes, index, state)) return false;
-    if (!ModelNodes::update_instances(*g)) {
-        ModelNodes::set(g->model_nodes, index, previous);
-        ModelNodes::update_instances(*g);
-        return false;
+    // 同步校验只保留"用户级拒绝"条件（几何不存在 / 索引越界）。
+    // 真正的节点改写走命令通道，由 Geometry 在自己的 update 里应用——
+    // 该字段是混合所有权：Geometry 建网格时也会写 model_nodes。
+    {
+        auto g = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_);
+        if (!g || index >= g->model_nodes.size()) return false;
     }
-    const auto& n = g->model_nodes[index];
-    ModelNodeOverride o;
-    o.node_index = index;
-    o.node_path = n.state.node_path;
-    if (n.state.position != n.base.position) o.position = n.state.position;
-    if (n.state.rotation != n.base.rotation) o.rotation = n.state.rotation;
-    if (n.state.scale != n.base.scale) o.scale = n.state.scale;
-    if (!n.state.visible) o.visible = false;
-    auto& v = g->model_node_overrides;
-    v.erase(std::remove_if(v.begin(), v.end(), [index](const auto& o) { return o.node_index == index; }), v.end());
-    if (o.position || o.rotation || o.scale || o.visible) v.push_back(std::move(o));
+
+    Corona::GeometryCommand command{};
+    command.geometry_handle = handle_;
+    command.fields = Corona::GeometryField::ModelNodeState;
+    command.node_index = index;
+    command.node_state = state;
+    Corona::GeometryCommandChannel::instance().commands().push(std::move(command));
     return true;
 }
 bool Corona::API::Geometry::set_model_node_overrides(const std::vector<ModelNodeOverride>& overrides) {
@@ -3315,32 +3254,20 @@ bool Corona::API::Geometry::set_model_node_overrides(const std::vector<ModelNode
             if (*v)
                 for (float f : **v)
                     if (!std::isfinite(f)) return false;
-    auto g = SharedDataHub::instance().geometry_storage().try_acquire_write(handle_);
-    if (!g) return false;
-    // Import and remote restoration can carry a stale index/path.  Treat the
-    // whole list as one update: callers retain their previous persisted data
-    // when this returns false, so the renderer must retain it too.
-    const auto previous_nodes = g->model_nodes;
-    const auto previous_overrides = g->model_node_overrides;
-    const auto previous_instances = g->mesh_instances;
-    const auto previous_bounds = g->model_node_bounds;
-    const auto previous_revision = g->model_node_revision;
-    g->model_node_overrides = overrides;
-    for (auto& n : g->model_nodes) {
-        n.state.position = n.base.position;
-        n.state.rotation = n.base.rotation;
-        n.state.scale = n.base.scale;
-        n.state.visible = true;
-        n.dirty = true;
+
+    // 同步校验只看几何是否还在；索引/path 的整体校验与应用一起挪到拥有者线程，
+    // 失败时在应用点整体回滚（等价于原先的解构回滚语义）。
+    {
+        auto g = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_);
+        if (!g) return false;
     }
-    for (uint32_t i = 0; i < g->model_nodes.size(); ++i) ModelNodes::update(g->model_nodes, i);
-    if (g->model_nodes.empty() || ModelNodes::apply_overrides(*g)) return true;
-    g->model_nodes = previous_nodes;
-    g->model_node_overrides = previous_overrides;
-    g->mesh_instances = previous_instances;
-    g->model_node_bounds = previous_bounds;
-    g->model_node_revision = previous_revision;
-    return false;
+
+    Corona::GeometryCommand command{};
+    command.geometry_handle = handle_;
+    command.fields = Corona::GeometryField::ModelNodeOverrides;
+    command.model_node_overrides = overrides;
+    Corona::GeometryCommandChannel::instance().commands().push(std::move(command));
+    return true;
 }
 
 std::optional<std::array<float, 6>> Corona::API::Geometry::get_model_node_aabb(uint32_t index) const {

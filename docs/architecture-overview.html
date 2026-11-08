@@ -1,0 +1,2487 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoronaEngine 架构分析 · 模块 / 通信 / 流程 / 字段契约</title>
+<style>
+:root{
+  --bg:#0b0f14; --bg-2:#0f151c; --panel:#131b24; --panel-2:#182230;
+  --border:#22303f; --border-2:#2d3f52;
+  --text:#d9e2ec; --text-2:#93a4b8; --text-3:#64758a;
+  --accent:#2dd4bf; --accent-2:#14b8a6;
+  --blue:#60a5fa; --violet:#a78bfa; --amber:#fbbf24; --rose:#fb7185;
+  --green:#4ade80; --orange:#fb923c; --cyan:#22d3ee;
+  --code-bg:#0a1119; --mark:#2dd4bf33;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.25);
+  --mono:"JetBrains Mono","Cascadia Code","SF Mono",Consolas,"Liberation Mono",monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC","Noto Sans SC","Hiragino Sans GB",sans-serif;
+}
+html[data-theme="light"]{
+  --bg:#f7f9fb; --bg-2:#eef3f7; --panel:#ffffff; --panel-2:#f4f8fb;
+  --border:#dbe4ec; --border-2:#c7d4e0;
+  --text:#16222e; --text-2:#4d6175; --text-3:#7b8ea1;
+  --accent:#0f9b8e; --accent-2:#0d8074;
+  --blue:#2563eb; --violet:#7c3aed; --amber:#b45309; --rose:#e11d48;
+  --green:#15803d; --orange:#c2410c; --cyan:#0e7490;
+  --code-bg:#f0f5f9; --mark:#0f9b8e2e;
+  --shadow:0 1px 2px rgba(16,34,52,.06),0 8px 24px rgba(16,34,52,.08);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--bg);color:var(--text);
+  font-family:var(--sans);font-size:15px;line-height:1.72;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--mark)}
+
+/* ---------- top bar ---------- */
+.topbar{
+  position:sticky;top:0;z-index:60;display:flex;align-items:center;gap:14px;
+  height:56px;padding:0 20px;background:color-mix(in srgb,var(--bg) 82%,transparent);
+  backdrop-filter:blur(14px);border-bottom:1px solid var(--border);
+}
+.topbar .logo{
+  font-family:var(--mono);font-weight:700;font-size:14px;letter-spacing:.06em;
+  color:var(--accent);white-space:nowrap;
+}
+.topbar .logo span{color:var(--text-3);font-weight:400}
+.topbar .ver{
+  font-family:var(--mono);font-size:11px;color:var(--text-3);
+  border:1px solid var(--border);border-radius:999px;padding:2px 9px;white-space:nowrap;
+}
+.topbar .spacer{flex:1}
+.search{
+  position:relative;display:flex;align-items:center;
+}
+.search input{
+  width:230px;height:32px;padding:0 10px 0 30px;border-radius:8px;
+  border:1px solid var(--border);background:var(--panel);color:var(--text);
+  font-family:var(--sans);font-size:13px;outline:none;transition:.15s;
+}
+.search input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--mark);width:280px}
+.search::before{
+  content:"";position:absolute;left:10px;width:12px;height:12px;
+  border:1.6px solid var(--text-3);border-radius:50%;
+  box-shadow:6px 6px 0 -4px var(--text-3);pointer-events:none;
+}
+.search::after{
+  content:"";position:absolute;left:17px;top:18px;width:5px;height:1.6px;
+  background:var(--text-3);transform:rotate(45deg);pointer-events:none;
+}
+.btn{
+  height:32px;padding:0 12px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--border);background:var(--panel);color:var(--text-2);
+  font-family:var(--sans);font-size:12.5px;transition:.15s;white-space:nowrap;
+}
+.btn:hover{border-color:var(--border-2);color:var(--text)}
+
+/* ---------- layout ---------- */
+.shell{display:flex;align-items:flex-start}
+.sidebar{
+  position:sticky;top:56px;width:268px;flex:0 0 268px;height:calc(100vh - 56px);
+  overflow-y:auto;padding:22px 14px 60px 20px;border-right:1px solid var(--border);
+  font-size:13px;
+}
+.sidebar::-webkit-scrollbar{width:8px}
+.sidebar::-webkit-scrollbar-thumb{background:var(--border);border-radius:4px}
+.nav-group{margin-bottom:20px}
+.nav-group>.t{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--text-3);margin-bottom:7px;
+}
+.sidebar a{
+  display:block;padding:4px 10px;margin-left:-6px;border-radius:6px;
+  color:var(--text-2);text-decoration:none;line-height:1.5;transition:.12s;
+  border-left:2px solid transparent;
+}
+.sidebar a:hover{color:var(--text);background:var(--panel)}
+.sidebar a.active{color:var(--accent);border-left-color:var(--accent);background:var(--panel)}
+.sidebar a .num{font-family:var(--mono);font-size:11px;color:var(--text-3);margin-right:7px}
+.sidebar a.active .num{color:var(--accent)}
+
+main{flex:1;min-width:0;padding:38px 46px 120px;max-width:1180px}
+
+/* ---------- typography ---------- */
+h1{
+  font-size:31px;line-height:1.3;margin:0 0 10px;font-weight:650;letter-spacing:-.01em;
+}
+h2{
+  font-size:22px;margin:64px 0 8px;padding-top:10px;font-weight:640;letter-spacing:-.005em;
+  scroll-margin-top:80px;
+}
+h2 .h-num{
+  font-family:var(--mono);font-size:13px;color:var(--accent);
+  display:inline-block;margin-right:10px;vertical-align:2px;
+}
+h3{font-size:16.5px;margin:36px 0 6px;font-weight:620;scroll-margin-top:80px}
+h4{font-size:14px;margin:26px 0 4px;font-weight:620;color:var(--text)}
+h4 .tag{
+  font-family:var(--mono);font-size:10.5px;font-weight:500;color:var(--text-3);
+  border:1px solid var(--border);border-radius:5px;padding:1px 6px;margin-left:8px;vertical-align:2px;
+}
+p{margin:9px 0;color:var(--text-2)}
+p.lead{font-size:15.5px;color:var(--text-2);line-height:1.8}
+strong{color:var(--text);font-weight:620}
+a.ref{color:var(--accent);text-decoration:none;border-bottom:1px dotted var(--accent)}
+a.ref:hover{border-bottom-style:solid}
+hr{border:0;border-top:1px solid var(--border);margin:44px 0}
+code{
+  font-family:var(--mono);font-size:.855em;background:var(--code-bg);
+  border:1px solid var(--border);border-radius:5px;padding:1.5px 5px;color:var(--text);
+  white-space:nowrap;
+}
+pre{
+  background:var(--code-bg);border:1px solid var(--border);border-radius:10px;
+  padding:14px 16px;overflow:auto;margin:14px 0;box-shadow:var(--shadow);
+}
+pre code{background:none;border:0;padding:0;font-size:12.5px;line-height:1.65;white-space:pre}
+ul,ol{margin:8px 0;padding-left:22px;color:var(--text-2)}
+li{margin:4px 0}
+li::marker{color:var(--text-3)}
+
+/* ---------- meta / badges ---------- */
+.meta{
+  display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 4px;
+}
+.chip{
+  font-family:var(--mono);font-size:11.5px;padding:3px 9px;border-radius:999px;
+  border:1px solid var(--border);background:var(--panel);color:var(--text-2);
+}
+.chip b{color:var(--text);font-weight:600}
+.badge{
+  display:inline-block;font-family:var(--mono);font-size:10.5px;font-weight:600;
+  padding:1px 7px;border-radius:5px;letter-spacing:.02em;vertical-align:1px;
+  border:1px solid transparent;white-space:nowrap;
+}
+.b-cmd{background:#2dd4bf1f;color:var(--accent);border-color:#2dd4bf40}
+.b-snap{background:#a78bfa1f;color:var(--violet);border-color:#a78bfa40}
+.b-ev{background:#60a5fa1f;color:var(--blue);border-color:#60a5fa40}
+.b-slot{background:#fbbf241f;color:var(--amber);border-color:#fbbf2440}
+.b-gpu{background:#fb71851f;color:var(--rose);border-color:#fb718540}
+.b-ext{background:#22d3ee1f;color:var(--cyan);border-color:#22d3ee40}
+
+/* ---------- callouts ---------- */
+.note{
+  border-left:3px solid var(--accent);background:var(--panel);
+  border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0;
+}
+.note .nt{font-weight:650;font-size:13px;margin-bottom:3px;color:var(--accent)}
+.note p{margin:3px 0;font-size:13.6px}
+.note.warn{border-left-color:var(--amber)}
+.note.warn .nt{color:var(--amber)}
+.note.danger{border-left-color:var(--rose)}
+.note.danger .nt{color:var(--rose)}
+.note.info{border-left-color:var(--blue)}
+.note.info .nt{color:var(--blue)}
+
+/* ---------- tables ---------- */
+.tbl-wrap{
+  margin:16px 0 8px;border:1px solid var(--border);border-radius:10px;
+  overflow:auto;background:var(--panel);box-shadow:var(--shadow);
+  max-height:none;
+}
+table{border-collapse:collapse;width:100%;font-size:12.8px;line-height:1.6}
+thead th{
+  position:sticky;top:0;z-index:2;text-align:left;font-weight:600;font-size:11.5px;
+  letter-spacing:.04em;text-transform:uppercase;color:var(--text-3);
+  background:var(--panel-2);padding:9px 12px;border-bottom:1px solid var(--border);
+  white-space:nowrap;
+}
+tbody td{
+  padding:7px 12px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent);
+  vertical-align:top;color:var(--text-2);
+}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:color-mix(in srgb,var(--accent) 5%,transparent)}
+td code,p code,li code{font-size:11.6px}
+td.f{font-family:var(--mono);font-size:11.8px;color:var(--text);white-space:nowrap}
+td.t{font-family:var(--mono);font-size:11.4px;color:var(--violet);white-space:nowrap}
+td.s{font-size:12.4px;color:var(--text-2)}
+td.c{font-family:var(--mono);font-size:11.2px;color:var(--text-3);white-space:nowrap}
+tr.group td{
+  background:var(--panel-2);color:var(--text);font-weight:600;font-size:12px;
+  letter-spacing:.02em;padding:8px 12px;
+}
+tr.group:hover td{background:var(--panel-2)}
+tr.hidden{display:none}
+
+/* ---------- diagram card ---------- */
+figure{
+  margin:24px 0;padding:0;border:1px solid var(--border);border-radius:12px;
+  background:var(--panel);box-shadow:var(--shadow);overflow:hidden;
+}
+figure .cap{
+  display:flex;align-items:baseline;gap:10px;padding:11px 18px;
+  border-bottom:1px solid var(--border);background:var(--panel-2);
+}
+figure .cap .n{font-family:var(--mono);font-size:11px;color:var(--accent);font-weight:600}
+figure .cap .t{font-size:13px;font-weight:600;color:var(--text)}
+figure .cap .d{font-size:12px;color:var(--text-3);margin-left:auto}
+figure .body{padding:8px 10px 4px;overflow-x:auto}
+figure .foot{
+  padding:8px 18px 12px;font-size:12.3px;color:var(--text-3);
+  border-top:1px dashed var(--border);
+}
+svg{display:block;max-width:100%;height:auto}
+.dg text{font-family:var(--sans)}
+.dg .mono{font-family:var(--mono)}
+
+/* diagram primitives */
+.nd rect.body{fill:var(--panel-2);stroke:var(--border-2);stroke-width:1.3}
+.nd.k-kernel rect.body{fill:#a78bfa14;stroke:#a78bfa66}
+.nd.k-sys rect.body{fill:#2dd4bf14;stroke:#2dd4bf66}
+.nd.k-ext rect.body{fill:#22d3ee14;stroke:#22d3ee66}
+.nd.k-gpu rect.body{fill:#fb718514;stroke:#fb718566}
+.nd.k-store rect.body{fill:#fbbf2414;stroke:#fbbf2466}
+.nd.k-data rect.body{fill:#60a5fa14;stroke:#60a5fa66}
+.nd text.tt{fill:var(--text);font-size:13px;font-weight:620}
+.nd text.st{fill:var(--text-3);font-size:10.5px;font-family:var(--mono)}
+.eg{fill:none;stroke:var(--border-2);stroke-width:1.5}
+.eg.cmd{stroke:var(--accent)}
+.eg.snap{stroke:var(--violet);stroke-dasharray:7 4}
+.eg.ev{stroke:var(--blue);stroke-dasharray:2 4}
+.eg.slot{stroke:var(--amber)}
+.eg.gpu{stroke:var(--rose);stroke-dasharray:1 4}
+.eg.ext{stroke:var(--cyan);stroke-dasharray:9 3 2 3}
+.lb{fill:var(--text-3);font-size:10.5px;font-family:var(--mono)}
+.lb.cmd{fill:var(--accent)}
+.lb.snap{fill:var(--violet)}
+.lb.ev{fill:var(--blue)}
+.grp rect{fill:color-mix(in srgb,var(--text) 3%,transparent);stroke:var(--border);stroke-width:1;stroke-dasharray:5 5}
+.grp text{fill:var(--text-3);font-size:11px;font-family:var(--mono);letter-spacing:.05em}
+
+/* ---------- misc ---------- */
+.kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:20px 0}
+.kpi .card{
+  background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:13px 15px;
+}
+.kpi .card .v{font-family:var(--mono);font-size:22px;font-weight:650;color:var(--accent);line-height:1.2}
+.kpi .card .l{font-size:12px;color:var(--text-3);margin-top:3px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:1100px){.two{grid-template-columns:1fr}}
+@media(max-width:900px){
+  .sidebar{display:none}
+  main{padding:26px 20px 90px}
+  .search input{width:150px}
+  .search input:focus{width:180px}
+}
+@media print{
+  .topbar,.sidebar{display:none}
+  main{max-width:none;padding:0}
+  figure,.tbl-wrap{break-inside:avoid;box-shadow:none}
+  body{background:#fff;color:#000}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">CORONA<span>::</span>ENGINE</div>
+  <div class="ver">arch/2026-11-07</div>
+  <div class="spacer"></div>
+  <div class="search"><input id="q" type="search" placeholder="过滤字段 / 结构体 / 通道…" autocomplete="off"></div>
+  <button class="btn" id="themeBtn">◐ 主题</button>
+</div>
+
+<div class="shell">
+  <nav class="sidebar" id="nav">
+    <div class="nav-group">
+      <div class="t">总览</div>
+      <a href="#s0"><span class="num">00</span>阅读约定与证据口径</a>
+      <a href="#s1"><span class="num">01</span>分层模块图</a>
+      <a href="#s2"><span class="num">02</span>模块清单与执行拓扑</a>
+    </div>
+    <div class="nav-group">
+      <div class="t">通信</div>
+      <a href="#s3"><span class="num">03</span>七种通信语义</a>
+      <a href="#s4"><span class="num">04</span>选型矩阵与通道账号</a>
+      <a href="#s5"><span class="num">05</span>共享槽位与句柄模型</a>
+    </div>
+    <div class="nav-group">
+      <div class="t">流程</div>
+      <a href="#s6"><span class="num">06</span>启动与关闭时序</a>
+      <a href="#s7"><span class="num">07</span>单 tick 执行流程</a>
+      <a href="#s8"><span class="num">08</span>渲染帧与呈现链路</a>
+      <a href="#s9"><span class="num">09</span>Actor 生命周期</a>
+      <a href="#s10"><span class="num">10</span>编辑器与协同链路</a>
+    </div>
+    <div class="nav-group">
+      <div class="t">字段契约</div>
+      <a href="#s11"><span class="num">11</span>内核原语字段</a>
+      <a href="#s12"><span class="num">12</span>命令字段</a>
+      <a href="#s13"><span class="num">13</span>快照字段</a>
+      <a href="#s14"><span class="num">14</span>事件字段</a>
+      <a href="#s15"><span class="num">15</span>共享设备字段</a>
+      <a href="#s16"><span class="num">16</span>网络协议字段</a>
+      <a href="#s17"><span class="num">17</span>编辑器 API 字段</a>
+    </div>
+    <div class="nav-group">
+      <div class="t">结论</div>
+      <a href="#s18"><span class="num">18</span>已知裂缝与风险</a>
+      <a href="#s19"><span class="num">19</span>证据索引</a>
+    </div>
+  </nav>
+
+  <main id="main">
+<h1>CoronaEngine 架构分析</h1>
+<p class="lead">
+  本文回答四个问题：<strong>当前有哪些模块</strong>、<strong>模块之间靠什么通信</strong>、
+<strong>一帧到底怎么走完</strong>、以及<strong>每条通信载荷里的每个字段是什么意思</strong>。
+所有结论都回到源码核对过，关键处给出 <code>文件:行号</code> 证据。
+</p>
+
+<div class="meta">
+  <span class="chip">分支 <b>feat/systems-thread-dag</b></span>
+  <span class="chip">commit <b>f1d4ef0a</b></span>
+  <span class="chip">采样日期 <b>2026-11-07</b></span>
+  <span class="chip">工作区 <b>Horizon d8c14016</b></span>
+  <span class="chip">规模 <b>8 系统 / 13 槽位 / 13 命令队列 / 6 快照通道</b></span>
+</div>
+
+<h2 id="s0"><span class="h-num">00</span>阅读约定与证据口径</h2>
+
+<p>这份文档按"先看形状、再看语义、最后看字段"的顺序组织。第 01–05 节是结构与通信，
+第 06–10 节是流程，第 11–17 节是逐字段契约，第 18–19 节是风险与索引。</p>
+
+<h3>术语固定</h3>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:180px">术语</th><th>本文含义</th></tr></thead>
+<tbody>
+<tr><td class="f">DAG 线程</td><td class="s"><code>Kernel::SystemsThread</code>。一条真实 OS 线程，按 <code>FrameGraph</code> 拓扑序依次同步调用 5 个系统的 <code>update()</code>。它是 <b>Mechanics / Geometry / Acoustics / Optics / Display</b> 的唯一调用者。（<code>src/kernel/system/system_manager.cpp:106-132</code>）</td></tr>
+<tr><td class="f">外部线程</td><td class="s">除 DAG 线程以外的一切：主线程（<code>Engine::run</code> + <code>UiSystem</code>）、CEF 的 IO/UI 线程、Python 脚本线程、Network 线程、Geometry 的异步 import worker、ActorPick 回读 worker。</td></tr>
+<tr><td class="f">槽位 / 句柄</td><td class="s"><code>Storage&lt;T,128,2&gt;</code> 的一个元素。句柄 = 该元素在池里的<b>内存地址</b> <code>reinterpret_cast&lt;uintptr_t&gt;</code>，不是索引。（<code>Horizon/include/horizon/core/storage.h:139</code>）</td></tr>
+<tr><td class="f">拥有者（owner）</td><td class="s">某个槽位字段"唯一允许写"的系统。单写者纪律由 <code>ThreadAffinity</code> 在运行期断言。（<code>i_thread_affinity.h:59</code>）</td></tr>
+<tr><td class="f">提交值 / 待提交值</td><td class="s">提交值 = 已进入槽位、并由快照发布的最终值；待提交值 = 还在 <code>CommandBuffer</code> 里、下一 tick 才被应用的值。<code>get_*</code> 读前者，<code>get_requested_*</code>/<code>*_view()</code> 读"前者 + 后者叠加"。</td></tr>
+<tr><td class="f">tick</td><td class="s">DAG 线程的一次 <code>FrameGraph::run_tick()</code>。默认 120 Hz（<code>CORONA_SYSTEMS_DAG_TICK</code> 可改 30–480），既不是主循环的 60 FPS，也不是渲染帧率。</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="note info">
+<div class="nt">口径说明：为什么"通信方式"要分七种而不是三种</div>
+<p>仓库里同时存在 <b>命令 / 快照 / 事件 / 共享槽位 / GPU 回执 / 进程内 C 边界 / 网络包</b> 七类载荷。
+它们不是风格差异，而是<b>语义差异</b>：能不能合并、能不能丢、有没有回执、谁拥有写权。
+把它们混成"事件"或"回调"正是历史上 244 行 <code>DisplayCallbackGate</code> 的来源。判据见第 04 节。</p>
+</div>
+
+<h2 id="s1"><span class="h-num">01</span>分层模块图</h2>
+
+<p>仓库根是一个 CMake 工程，但实际由三个 Git 工作区拼成：本仓（引擎核心）、
+<code>Horizon/</code>（渲染后端）、<code>CoronaEditor/</code>（编辑器）。后两者由
+<code>build_tools/source_workspaces.py</code> 固定 commit 并自动同步，构建时直接使用锁定源码。</p>
+
+<figure>
+  <div class="cap"><span class="n">FIG 01</span><span class="t">分层模块视图</span><span class="d">7 层 · 自下而上依赖</span></div>
+  <div class="body"><div id="fig1" class="dg"></div></div>
+  <div class="foot">同一层内为并列模块；箭头表示"上层调用下层提供的接口"。<code>SharedDataHub</code> 是唯一允许被上下两层同时引用的数据结构，
+  其余跨层通信都必须经过它或内核原语。</div>
+</figure>
+
+<h3>三个仓库的边界</h3>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:160px">工作区</th><th style="width:160px">产物</th><th>职责</th><th style="width:130px">不会做的事</th></tr></thead>
+<tbody>
+<tr><td class="f">CoronaEngine<br><span style="color:var(--text-3)">（本仓）</span></td><td class="s">corona_engine.exe<br>静态库</td><td class="s">内核（事件/调度）、8 个系统、<code>SharedDataHub</code>、EngineRuntimeApi、CEF 宿主、Python 宿主、网络协同</td><td class="s">不做着色器 AST 生成，不直接调 Vulkan</td></tr>
+<tr><td class="f">Horizon</td><td class="s">horizon 库</td><td class="s">Ocarina C++ EDSL → AST → Slang → SPIR-V → Vulkan <b>Compute</b> 执行；<code>HardwareWrapper</code> 封装 Image/Buffer/Displayer/SubmitReceipt；<code>Storage</code> 对象池也由它提供</td><td class="s">不知道 Actor / Camera / Scene 的存在</td></tr>
+<tr><td class="f">CoronaEditor</td><td class="s">前端 dist + Python 包</td><td class="s">Vue3 编辑器界面、Blockly 积木、AI 面板、项目存档的 Python 侧解析/校验/保存</td><td class="s">不持有场景事实；写操作必须走 C++ manifest</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="note">
+<div class="nt">关键事实：引擎是"单线程 DAG + 少量外部线程"</div>
+<p>八个系统里只有五个进入 DAG。UI 在主线程（SDL/CEF 要求），Script 与 Network 各自一条传统线程，
+这也是为什么"外部 → DAG"的跨线程通道必须存在，而不是可选优化。</p>
+</div>
+
+<h2 id="s2"><span class="h-num">02</span>模块清单与执行拓扑</h2>
+
+<h3>八个系统</h3>
+<div class="tbl-wrap">
+<table>
+<thead>
+<tr>
+  <th style="width:96px">系统</th>
+  <th style="width:64px">优先级</th>
+  <th style="width:150px">执行位置</th>
+  <th style="width:86px">频率</th>
+  <th>拥有的主要状态</th>
+  <th style="width:150px">对外发布</th>
+</tr>
+</thead>
+<tbody>
+<tr><td class="f">Display</td><td class="c">100</td><td class="s">DAG 节点（末位）</td><td class="c">每 tick</td><td class="s">每 surface 的 displayer / swapchain、合成管线、<code>ImageDevice</code> 的消费回执</td><td class="s"><code>OpticsFrameConsumedEvent</code></td></tr>
+<tr><td class="f">Optics</td><td class="c">90</td><td class="s">DAG 节点</td><td class="c">60 Hz<br>(period=2)</td><td class="s"><code>CameraDevice</code> 的应用点、<code>ImageDevice</code> 的产出、光照/材质、Vision 管线运行时</td><td class="s"><code>CameraSnapshot</code><br><code>OpticsFrameReady</code>→命令<br><code>CameraFrameTiming</code></td></tr>
+<tr><td class="f">Geometry</td><td class="c">85</td><td class="s">DAG 节点</td><td class="c">60 Hz</td><td class="s"><code>GeometryDevice</code> / <code>MeshDevice</code> / <code>MeshInstanceDevice</code>、Actor 驻留与 LRU、八叉树</td><td class="s"><code>ActorResidencyChanged</code><br><code>ActorLoad/UnloadFinished</code></td></tr>
+<tr><td class="f">Mechanics</td><td class="c">75</td><td class="s">DAG 节点（首位）</td><td class="c">60 Hz</td><td class="s"><code>MechanicsDevice</code> 参数、GPU 刚体状态、蒙皮顶点、IK</td><td class="s">写 <code>skinned_aabb</code><br><code>collision_model_id</code></td></tr>
+<tr><td class="f">Acoustics</td><td class="c">70</td><td class="s">DAG 节点</td><td class="c">60 Hz</td><td class="s"><code>AcousticsDevice</code>、空间音频播放实例</td><td class="s">—</td></tr>
+<tr><td class="f">Script</td><td class="c">60</td><td class="s"><b>独立线程</b></td><td class="c">60 FPS</td><td class="s">Python 解释器、<code>PythonAPI</code>、脚本输入路由</td><td class="s"><code>ScriptFinishStart</code></td></tr>
+<tr><td class="f">Network</td><td class="c">55</td><td class="s"><b>独立线程</b></td><td class="c">~60 Hz<br>(16 ms 轮询)</td><td class="s"><code>SyncEngine</code> 脏值哈希、LWW 版本、peer 表、LanChat</td><td class="s"><code>PeerConnected/...</code></td></tr>
+<tr><td class="f">UI</td><td class="c">40</td><td class="s"><b>主线程</b></td><td class="c">跟随主循环</td><td class="s">SDL 窗口、CEF 浏览器、Vulkan UI 后端、面板布局</td><td class="s"><code>UIFrameReady</code>→命令</td></tr>
+</tbody>
+</table>
+</div>
+
+<figure>
+  <div class="cap"><span class="n">FIG 02</span><span class="t">线程与执行拓扑</span><span class="d">横向泳道 = 线程；纵向箭头 = 跨线程通道</span></div>
+  <div class="body"><div id="fig2" class="dg"></div></div>
+  <div class="foot">同一个圆角框内为同一次调用栈。注意 <b>Script</b> 与 <b>CEF</b> 是两条不同的外部线程，
+  它们都把写操作压进同一条命令队列，由 DAG 线程统一应用。</div>
+</figure>
+
+<h3>规模计数（实测）</h3>
+<div class="kpi">
+  <div class="card"><div class="v">13</div><div class="l">共享槽位池 Storage&lt;T,128,2&gt;</div></div>
+  <div class="card"><div class="v">13</div><div class="l">命令队列 CommandBuffer</div></div>
+  <div class="card"><div class="v">6</div><div class="l">只读快照通道 SnapshotChannel</div></div>
+  <div class="card"><div class="v">1</div><div class="l">EventStream 真实用户（仅关机事件）</div></div>
+  <div class="card"><div class="v">47</div><div class="l">事件类型（其中 19 个 Demo 占位）</div></div>
+  <div class="card"><div class="v">5</div><div class="l">DAG 节点 / 一条 120 Hz 线程</div></div>
+</div>
+
+<div class="note warn">
+<div class="nt">这组数字本身就是架构结论</div>
+<p>命令队列（13）远多于事件流（1）。这不是历史偶然：把"改变世界状态"的请求塞进事件流，
+会同时失去合并、拒绝与回执三种能力，最终只能在消费端重建一个队列。仓库已经用一次重构
+把 P0–P5 的写路径统一到命令通道（<code>docs/dag-command-vs-event.md</code>）。</p>
+</div>
+<h2 id="s3"><span class="h-num">03</span>七种通信语义</h2>
+
+<p>模块之间没有"统一消息总线"。实际存在七种语义明确、彼此不可替代的通道。
+理解它们是理解整个引擎的前提。</p>
+
+<figure>
+  <div class="cap"><span class="n">FIG 03</span><span class="t">三种语义的判据</span><span class="d">写=命令 · 读=快照 · 通知=事件</span></div>
+  <div class="body"><div id="fig3" class="dg"></div></div>
+  <div class="foot">同一张图里三种流量方向完全不同：命令<b>下行</b>到唯一拥有者，快照<b>上行</b>给任意读者，
+  事件<b>横向</b>广播一个既成事实。混用任意两条都会退化成"用事件模拟请求"或"用命令模拟轮询"。</div>
+</figure>
+
+<h3>C1 · 共享槽位 <span class="badge b-slot">SLOT</span></h3>
+<p><code>SharedDataHub</code> 持有 13 个 <code>Kernel::Utils::Storage&lt;T,128,2&gt;</code>。
+每个槽位一把 <code>std::shared_timed_mutex</code>，读写通过 RAII 句柄
+<code>ReadHandle</code>/<code>WriteHandle</code> 自动加解锁。
+容量硬上限 <b>128×2 = 256</b> 个对象，满了会新开一个 <code>StaticBuffer</code> 分段。</p>
+<ul>
+  <li><strong>语义</strong>：最新状态，就地覆盖，无队列、无历史。</li>
+  <li><strong>谁在用</strong>：DAG 内部（系统之间直接读写对方拥有的字段，例如 Optics 读 <code>GeometryDevice</code>）。</li>
+  <li><strong>风险</strong>：<code>try_acquire_write()</code> 在默认编译配置下<b>不是非阻塞</b>——<code>CFW_ENABLE_LOCK_TIMEOUT</code> 默认 0，
+      实际走的是 <code>lock()</code>（<code>storage.h:29-30</code>）。外部线程直接写槽位会阻塞在 DAG 的临界区上。</li>
+</ul>
+
+<h3>C2 · 命令队列 <span class="badge b-cmd">CMD</span></h3>
+<p><code>Kernel::CommandBuffer&lt;Command, KeyOf, Policy&gt;</code>：有界、线程安全、<b>单消费者</b>。
+生产者任意线程，消费者只有拥有者系统。</p>
+<div class="two">
+<div>
+<h4>两种合并策略</h4>
+<ul>
+  <li><code>LatestWins</code> — 同 key 只保留最新一条。用于<b>连续量</b>：相机位姿、滑条、材质标量。<br>
+      入队即合并，队列满时挤掉最旧的 key（计入 <code>Stats::dropped</code>）。</li>
+  <li><code>Fifo</code> — 按序全量投递，队列满时<b>拒绝</b>新命令（返回 <code>false</code>）。用于<b>离散量</b>：创建/销毁/注册回调。</li>
+</ul>
+</div>
+<div>
+<h4>两个额外能力</h4>
+<ul>
+  <li><code>peek(key)</code> — 读取"尚未被消费的最新命令"，这是"读己之写"的唯一干净实现。</li>
+  <li><code>merge()</code> — 若 <code>KeyOf</code> 提供 <code>merge(pending, next)</code>，同 key 合并时只覆盖<b>命令声明要改的字段</b>，
+      保留其余字段。这是"两个滑条同时拖同一个物体"不丢更新的原因。</li>
+</ul>
+</div>
+</div>
+
+<h3>C3 · 只读快照 <span class="badge b-snap">SNAP</span></h3>
+<p><code>Kernel::SnapshotChannel&lt;Snapshot&gt;</code>：单发布者（拥有者系统，每 tick 一次），
+多读者（任意线程，任意时刻）。读者拿到的是 <code>shared_ptr&lt;const Snapshot&gt;</code>，
+生命周期与 DAG 解耦——DAG 继续发布不会让手上的旧快照失效。</p>
+<ul>
+  <li><strong>为什么不是事件</strong>：面板一次刷新要读上百个 actor，订阅事件会变成"发 100 条并保证都被消费"。</li>
+  <li><strong>为什么不是命令</strong>：命令是写方向；拿它做读会让 <code>get_*</code> 退化成轮询 + 往返。</li>
+  <li><strong>临界区</strong>：只做一次 <code>shared_ptr</code> 拷贝，不持任何存储锁。</li>
+</ul>
+
+<h3>C4 · 同步事件总线 <span class="badge b-ev">EV·SYNC</span></h3>
+<p><code>Kernel::IEventBus</code>：<code>publish()</code> 会<b>在发布线程上立即同步调用</b>所有订阅者。
+这是最容易被误用的一条通道。</p>
+<div class="note danger">
+<div class="nt">它在跨线程时的真实行为</div>
+<p><code>PlayAudioEvent</code> 由 CEF / 脚本线程发布，<code>AcousticsSystem</code>（DAG 线程）订阅——
+于是 <code>AcousticsSystem</code> 的处理函数<b>跑在调用者的线程上</b>，只能先把事件塞进
+<code>pending_plays_</code> 再等自己 tick 消费（<code>acoustics_system.h:79</code>）。
+同理 <code>DisplaySurfaceRemovedEvent</code> 由主线程发布，处理器必须只入队 + 带 <code>promise</code> 返回，
+真正的拆除发生在 Display 的 update()。这就是"同步事件逼出异步队列"的实证。</p>
+</div>
+
+<h3>C5 · 异步事件流 <span class="badge b-ev">EV·ASYNC</span></h3>
+<p><code>Kernel::EventStream&lt;T&gt;</code>：每个订阅者一条独立 <code>deque</code> +
+<code>condition_variable</code> + 背压策略（<code>Block</code>/<code>DropOldest</code>/<code>DropNewest</code>）。</p>
+<p>但全仓库<b>只有一个真实用户</b>：<code>EngineShutdownEvent</code>（<code>src/engine.cpp:197-199</code>），
+且用 <code>max_queue_size = 1, DropOldest</code> 只做"有没有人要求关机"的一次性查询。
+其余三条 <code>get_stream&lt;EngineShutdownEvent&gt;()</code> 都是同一个用途，
+其余 <code>EventStream</code> 都是注释里的示例。<b>它存在但基本闲置。</b></p>
+
+<h3>C6 · GPU 回执 <span class="badge b-gpu">GPU</span></h3>
+<p>不是线程原语，而是 GPU 异步导致的跨帧握手。生产者把图像写进 <code>ImageDevice</code> 时，
+同时写入 <code>submit_receipt</code>；Display 合成完把消费回执写进 <code>consumed_receipt</code>；
+生产者下次覆盖前必须等这个回执。配合 <code>PublishedImage</code>（绑定一次分配的生命周期令牌）
+与 <code>SurfaceFrameCoordinator</code>（帧级读写仲裁）防止"重写到正在被读的图"。</p>
+
+<h3>C7 · 跨界通信 <span class="badge b-ext">EXT</span></h3>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:180px">边界</th><th style="width:150px">载体</th><th>形态与约束</th></tr></thead>
+<tbody>
+<tr><td class="f">C++ ↔ C++</td><td class="s">EngineRuntimeApi</td><td class="s">直接函数调用 + 句柄。<code>Geometry</code>/<code>Mechanics</code>/<code>Optics</code>/<code>Acoustics</code>/<code>Actor</code>/<code>Camera</code>/<code>Scene</code> 类。写操作必须落到命令队列，读走快照或槽位。</td></tr>
+<tr><td class="f">Vue ↔ C++</td><td class="s">CEF V8 binding + JSON manifest</td><td class="s"><code>EditorApiMethodSpec</code> 描述的单一契约表；参数是 JSON，返回是 <code>NativeResult</code>。前端按 <code>js_wrapper</code> 查表校验参数类型，<b>不复制 schema</b>。</td></tr>
+<tr><td class="f">Python ↔ C++</td><td class="s">CPython C API</td><td class="s">同一份 manifest 的另一个 adapter（<code>editor/api/editor_api.py</code>），按 <code>caller=PythonScript</code> 校验权限位。</td></tr>
+<tr><td class="f">进程 ↔ 进程</td><td class="s">ENet（UDP）+ 自定义二进制</td><td class="s">4 条逻辑通道，1 字节 <code>MessageType</code> 前缀，小端定长字段 + 长度前缀字符串。版本号 <code>kProtocolVersion=1</code>。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s4"><span class="h-num">04</span>选型矩阵与通道账号</h2>
+
+<h3>遇到新需求该用哪条通道</h3>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:290px">你的需求</th><th style="width:120px">用</th><th style="width:120px">不要用</th><th>原因</th></tr></thead>
+<tbody>
+<tr><td class="s">外部线程要改 DAG 拥有的状态</td><td><span class="badge b-cmd">命令</span></td><td><span class="badge b-ev">事件</span></td><td class="s">需要合并、排序、拒绝、回执；事件语义里没有"请求"和"失败"</td></tr>
+<tr><td class="s">外部线程要读 DAG 拥有的状态</td><td><span class="badge b-snap">快照</span></td><td><span class="badge b-slot">槽位</span></td><td class="s">直接读槽位会阻塞在 DAG 临界区，或用 <code>_nowait</code> 丢一整帧</td></tr>
+<tr><td class="s">离散的动作（创建/销毁/注册回调）</td><td><span class="badge b-cmd">Fifo 命令</span></td><td><span class="badge b-cmd">LatestWins</span></td><td class="s">顺序有意义，合并会丢操作</td></tr>
+<tr><td class="s">连续量（拖拽、滑条、gizmo）</td><td><span class="badge b-cmd">LatestWins</span></td><td><span class="badge b-cmd">Fifo</span></td><td class="s">120 Hz 下中间态没有价值，队列会堆积</td></tr>
+<tr><td class="s">"这件事发生了"，且订阅者互不相关</td><td><span class="badge b-ev">事件</span></td><td>—</td><td class="s">这是事件唯一站得住的场景</td></tr>
+<tr><td class="s">跨线程通知一个事实</td><td><span class="badge b-cmd">命令</span> 或 <span class="badge b-ev">EventStream</span></td><td><span class="badge b-ev">同步 EventBus</span></td><td class="s">同步总线会把 DAG 代码拉到调用者线程上执行</td></tr>
+<tr><td class="s">等待 GPU 用完再复用资源</td><td><span class="badge b-gpu">回执</span></td><td>任何线程原语</td><td class="s">这是设备异步，不是线程竞争</td></tr>
+<tr><td class="s">需要"写完立刻读到新值"</td><td><span class="badge b-cmd">命令 + peek</span></td><td>直接读槽位</td><td class="s">槽位里还是上一 tick 的值</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>通道账号：13 命令队列</h3>
+<div class="tbl-wrap">
+<table>
+<thead>
+<tr><th style="width:290px">队列</th><th style="width:78px">策略</th><th style="width:96px">容量</th><th style="width:230px">生产者</th><th>消费者 / 应用点</th></tr>
+</thead>
+<tbody>
+<tr class="group"><td colspan="5">Kernel 之外、按领域分头定义（避免改 shared_data_hub.h 触发全仓重编）</td></tr>
+<tr><td class="f">MechanicsCommandChannel</td><td class="c">LatestWins</td><td class="c">默认 256</td><td class="s">CEF / 脚本 / EngineAPI</td><td class="s">MechanicsSystem::update 开头</td></tr>
+<tr><td class="f">MechanicsStructuralChannel</td><td class="c">Fifo</td><td class="c">默认 256</td><td class="s">CEF / 脚本</td><td class="s"><b>tick 边界钩子</b>（所有节点之前）</td></tr>
+<tr><td class="f">OpticsCommandChannel</td><td class="c">LatestWins</td><td class="c">默认 256</td><td class="s">CEF 材质面板</td><td class="s">OpticsSystem::update 开头</td></tr>
+<tr><td class="f">AcousticsCommandChannel</td><td class="c">LatestWins</td><td class="c">默认 256</td><td class="s">CEF / 脚本</td><td class="s">AcousticsSystem::update</td></tr>
+<tr><td class="f">EnvironmentCommandChannel</td><td class="c">LatestWins</td><td class="c">默认 256</td><td class="s">CEF 光照面板 / 脚本</td><td class="s"><b>tick 边界钩子</b>（跨 Optics + Mechanics）</td></tr>
+<tr><td class="f">OpticsFrameCommandChannel</td><td class="c">LatestWins</td><td class="c">默认 256</td><td class="s">Optics（DAG 线程）</td><td class="s">DisplaySystem::update 开头</td></tr>
+<tr><td class="f">UIFrameCommandChannel</td><td class="c">LatestWins</td><td class="c">默认 256</td><td class="s">VulkanBackend（主线程）</td><td class="s">DisplaySystem::update 开头</td></tr>
+<tr><td class="f">DisplaySurfaceCommandChannel</td><td class="c">Fifo</td><td class="c">默认 256</td><td class="s">主线程 / CEF / Vulkan</td><td class="s">DisplaySystem::update 开头</td></tr>
+<tr class="group"><td colspan="5">定义在 SharedDataHub 内（相机 / 变换 / 拾取）</td></tr>
+<tr><td class="f">transform_updates_</td><td class="c">LatestWins</td><td class="c">256</td><td class="s">CEF gizmo / 脚本 / 网络</td><td class="s">Optics（tick 内应用后发布快照）</td></tr>
+<tr><td class="f">camera_moves_</td><td class="c">LatestWins</td><td class="c">256</td><td class="s">CEF 视口 / 脚本跟随</td><td class="s">Optics</td></tr>
+<tr><td class="f">camera_viewport_updates_</td><td class="c">LatestWins</td><td class="c">256</td><td class="s">CEF 视口管理</td><td class="s">Optics</td></tr>
+<tr><td class="f">default_surface_camera_update_</td><td class="c">LatestWins</td><td class="c"><b>1</b></td><td class="s">主线程（窗口尺寸变化）</td><td class="s">Optics</td></tr>
+<tr><td class="f">camera_releases_</td><td class="c">Fifo</td><td class="c">256</td><td class="s">CEF / EngineAPI</td><td class="s">Optics</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>通道账号：6 快照通道</h3>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:250px">快照</th><th style="width:170px">发布者</th><th style="width:96px">行结构</th><th>读者</th></tr></thead>
+<tbody>
+<tr><td class="f">CameraSnapshot</td><td class="s">Optics（每 tick）</td><td class="c">CameraSnapshotRow</td><td class="s"><code>Camera::get_*</code>、CEF 视口面板、脚本</td></tr>
+<tr><td class="f">TransformSnapshot</td><td class="s">Optics</td><td class="c">TransformSnapshotRow</td><td class="s">CEF gizmo / 属性面板</td></tr>
+<tr><td class="f">OpticsSnapshot</td><td class="s">Optics</td><td class="c">OpticsSnapshotRow</td><td class="s">CEF 材质面板</td></tr>
+<tr><td class="f">MechanicsSnapshot</td><td class="s">Mechanics</td><td class="c">MechanicsSnapshotRow</td><td class="s">CEF 物理面板 / 脚本</td></tr>
+<tr><td class="f">AcousticsSnapshot</td><td class="s">Acoustics</td><td class="c">AcousticsSnapshotRow</td><td class="s">CEF 音频面板</td></tr>
+<tr><td class="f">EnvironmentSnapshot</td><td class="s">tick 边界钩子</td><td class="c">EnvironmentSnapshotRow</td><td class="s">CEF 光照面板 / 脚本</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s5"><span class="h-num">05</span>共享槽位与句柄模型</h2>
+
+<figure>
+  <div class="cap"><span class="n">FIG 04</span><span class="t">一个字段的完整往返</span><span class="d">写走命令、读走快照、槽位只由拥有者碰</span></div>
+  <div class="body"><div id="fig4" class="dg"></div></div>
+  <div class="foot">对外部线程而言，<b>槽位本身是不可见的实现细节</b>。它只看得到左侧的 push 接口和右侧的 read 接口。
+  这条约束把"谁在持锁"变成可静态检查的问题。</div>
+</figure>
+
+<h3>Storage 的内部形状</h3>
+<pre><code>Storage&lt;T, 128, 2&gt;                      // 128 个/段，初始 2 段 = 256 槽
+├── StaticBuffer[]  (segments)
+│    ├── std::array&lt;T, 128&gt; buffer       // 值直接内联，句柄 = &amp;buffer[i]
+│    ├── std::array&lt;std::atomic&lt;bool&gt;,128&gt; occupied
+│    ├── std::array&lt;std::shared_timed_mutex,128&gt; mutexes   // 每槽一把，读写锁
+│    ├── std::vector&lt;size_t&gt; free_indices
+│    └── std::mutex alloc_mutex          // 只在分配/回收时持
+└── get_parent_buffer(addr)              // 按地址范围反查所属段</code></pre>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:170px">句柄性质</th><th>当前实现</th><th style="width:190px">后果</th></tr></thead>
+<tbody>
+<tr><td class="f">身份表示</td><td class="s"><code>uintptr_t</code> = 槽位元素的内存地址</td><td class="s">跨进程无意义（网络层必须另用 <code>actor_guid</code> 映射）</td></tr>
+<tr><td class="f">失效检测</td><td class="s">槽位 <code>occupied=false</code> 后地址可被复用（ABA）</td><td class="s">长生命周期任务必须带 epoch（例：<code>GeometryDevice::import_epoch</code>）</td></tr>
+<tr><td class="f">容量</td><td class="s">256 槽/类型（128×2）</td><td class="s">快照必须按有界数组设计；超出即分配失败而非无限增长</td></tr>
+<tr><td class="f">并发</td><td class="s">每槽 <code>shared_timed_mutex</code>（读写锁）</td><td class="s">"<code>try_</code>" 前缀不等于非阻塞（见 C1）</td></tr>
+<tr><td class="f">单写者纪律</td><td class="s"><code>ThreadAffinity::assert_owner_thread()</code> 运行期断言 + 头文件边界（编译期）</td><td class="s">越界写会记 ERROR 日志并累加 <code>violations()</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="note warn">
+<div class="nt">容量 128 是硬上限，而快照是"整份重发"</div>
+<p><code>publish_camera_snapshot_from_storage()</code> 每 tick 遍历整个 storage 重建 <code>vector&lt;Row&gt;</code>。
+在 256 个对象、每行约 40 字节的规模下这是廉价拷贝；但一旦有人把蒙皮顶点或网格塞进快照，
+每 tick 的拷贝成本就会变成新的事故源。<b>快照只投影标量和小结构。</b></p>
+</div>
+<h2 id="s6"><span class="h-num">06</span>启动与关闭时序</h2>
+
+<p>启动的关键决策点是<b>顺序</b>：DAG 不能在 <code>initialize_all()</code> 内部装配
+（那时 SystemManager 持着非递归锁，<code>get_system()</code> 会重入死锁），
+所以装配被放在 <code>initialize_all()</code> 之后、<code>run()</code> 之前。</p>
+
+<figure>
+  <div class="cap"><span class="n">FIG 05</span><span class="t">初始化顺序</span><span class="d">箭头 = 调用 / 返回</span></div>
+  <div class="body"><div id="fig5" class="dg"></div></div>
+  <div class="foot">DAG 装配失败<b>不阻断启动</b>：回退到"一个系统一条线程"的旧模式并打日志。
+  选择依据是"编辑器起不来比跑得慢更糟"（<code>src/engine.cpp:161-166</code>）。</div>
+</figure>
+
+<h3>初始化阶段的六步</h3>
+<ol>
+  <li><code>KernelContext::initialize()</code> — 建立 <code>IEventBus</code>、<code>IEventBusStream</code>（流注册表）、<code>ISystemManager</code>。</li>
+  <li><code>register_systems()</code> — 注册 8 个系统。此时只创建对象，不初始化。</li>
+  <li>注册 5 个资源解析器：Text / Image / Scene / Video / Audio。Scene 解析器显式打开
+      网格简化与自适应 LOD（<code>engine.cpp:145-150</code>）。</li>
+  <li><code>sys_mgr-&gt;initialize_all()</code> — 按 priority 降序调用 <code>initialize()</code>，任一失败即中止。</li>
+  <li><code>configure_systems_dag()</code> — 建图、编译、装 tick 边界钩子。
+      <code>CORONA_SYSTEMS_DAG=0</code> 可整体退回旧模式。</li>
+  <li><code>run()</code> — 先订阅关机事件流（必须在 worker 启动前，否则首个 update 失败会丢），
+      再 <code>start_all()</code>，进入 60 FPS 主循环。</li>
+</ol>
+
+<div class="note">
+<div class="nt">关闭顺序里有一条专门为 GPU 回执让路的设计</div>
+<p><code>Engine::shutdown()</code> 先调 <code>UiSystem::teardown_main_surface_before_stop()</code>，
+再 <code>stop_all()</code>。原因：主 surface 拆除需要 Display（DAG 线程）兑现回执；
+如果先停 DAG，拆除请求没人处理，会等满 10 s 超时 + SDL 关闭再等 5 s，
+退出多耗约 15 秒且 swapchain 不释放（<code>ui_system.h:48-58</code>）。</p>
+</div>
+
+<h2 id="s7"><span class="h-num">07</span>单 tick 执行流程</h2>
+
+<p>DAG 线程是 <code>FrameGraph::run_tick()</code> 的唯一调用者，全部节点<b>内联在该线程上</b>执行。
+不把节点甩到 worker 线程是刻意选择：引擎的系统数据依赖通过 <code>SharedDataHub</code> 的槽锁暴露，
+跨线程执行会让"谁在持锁"重新变得不可预测。先要确定的执行序，不是吞吐。</p>
+
+<figure>
+  <div class="cap"><span class="n">FIG 06</span><span class="t">一个 tick 内的消息流</span><span class="d">120 Hz · 重链路 60 Hz</span></div>
+  <div class="body"><div id="fig6" class="dg"></div></div>
+  <div class="foot">虚线 = 异步（下一 tick 才被看到）；实线 = 同 tick 内可见。注意 <b>Mechanics 在 Optics 之前</b>，
+  所以跨 Optics + Mechanics 的 <code>Environment</code> 参数必须在边界钩子里落地，否则 Mechanics 会晚一帧看到重力变化。</div>
+</figure>
+
+<h3>帧图的三个正交开关</h3>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:150px">字段</th><th style="width:110px">语义</th><th style="width:150px">当前取值</th><th>注意</th></tr></thead>
+<tbody>
+<tr><td class="f">dependencies</td><td class="s">必须先执行</td><td class="c">见下表</td><td class="s">只约束顺序，<b>不</b>保证上游本 tick 有新数据：上游被门控跳过时下游照跑</td></tr>
+<tr><td class="f">period_ticks / phase</td><td class="s">速率门控</td><td class="c">2 / 0（重链路）</td><td class="s">仅当 <code>tick % period == phase % period</code> 才执行，<b>不影响下游</b></td></tr>
+<tr><td class="f">enabled</td><td class="s">子树关闭</td><td class="c">true</td><td class="s">本节点及所有（直接/间接）依赖它的节点本 tick 都不执行，用于整条链路下线</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:130px">节点</th><th style="width:170px">依赖</th><th style="width:110px">period/phase</th><th>本节点做的事</th></tr></thead>
+<tbody>
+<tr><td class="f">Mechanics</td><td class="c">—</td><td class="c">2 / 0</td><td class="s">定步长积分、GPU 粗筛 + 窄相 + 接触解算、蒙皮、IK</td></tr>
+<tr><td class="f">Geometry</td><td class="c">Mechanics</td><td class="c">2 / 0</td><td class="s">异步 import → 建 GPU 网格 → 上传；Actor 驻留 / LRU / 八叉树</td></tr>
+<tr><td class="f">Acoustics</td><td class="c">Mechanics</td><td class="c">2 / 0</td><td class="s">解析空间音频世界坐标、驱动播放实例</td></tr>
+<tr><td class="f">Optics</td><td class="c">Geometry</td><td class="c">2 / 0</td><td class="s">应用相机命令 → 发布相机/变换快照 → 光栅或路径追踪 → 产出 <code>ImageDevice</code></td></tr>
+<tr><td class="f">Display</td><td class="c">Optics</td><td class="c">1 / 0</td><td class="s">应用 surface/帧命令 → 合成 Optics+UI 两层 → present → 发消费回执</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="note info">
+<div class="nt">为什么四个重链路都是 phase = 0</div>
+<p>它们同相位意味着"要么一起跑、要么一起不跑"，这样 60 Hz 的那一 tick 里
+Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会让 Optics 读到上一 tick 的几何，
+正是文档里记录过的"同一帧里 Geometry 读到 Mechanics 上一帧刚体"那类不可复现时序问题。</p>
+</div>
+
+<h2 id="s8"><span class="h-num">08</span>渲染帧与呈现链路</h2>
+
+<figure>
+  <div class="cap"><span class="n">FIG 07</span><span class="t">从渲染到上屏</span><span class="d">三层回执：submit → consumed → 复用</span></div>
+  <div class="body"><div id="fig7" class="dg"></div></div>
+  <div class="foot">Optics 与 Display 跨线程，因此"帧就绪"不能是同步回调，而是
+  <b>LatestWins 命令</b>（同 surface 只保留最后一帧，被覆盖帧的 <code>PublishedImage</code> 令牌随之释放）。
+  这正是 <code>DisplayCallbackGate</code>（244 行）被退役的原因。</div>
+</figure>
+
+<h3>为什么要三层回执</h3>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:180px">回执</th><th style="width:150px">写入者</th><th style="width:150px">等待者</th><th>解决什么问题</th></tr></thead>
+<tbody>
+<tr><td class="f">SubmitReceipt</td><td class="s">生产者（渲染提交队列）</td><td class="s">消费者查询完成</td><td class="s">GPU 命令是否执行完</td></tr>
+<tr><td class="f">consumed_receipt</td><td class="s">Display（合成完）</td><td class="s">生产者（下次覆盖前）</td><td class="s">"这张图还在被读，别重写"</td></tr>
+<tr><td class="f">PublishedImage 令牌</td><td class="s">生产者（发布时拷贝）</td><td class="s">Display（取图像时）</td><td class="s">句柄数值被复用后，旧帧不能误取新槽位</td></tr>
+</tbody>
+</table>
+</div>
+
+<p><code>PublishedImage</code> 的注释把问题说得很清楚：Display 的快照可能比生产者的退休（retirement）活得更久，
+即使数值句柄已经被另一个生产者复用，<b>也不能拿到旧槽位</b>。这与 surface 退休是两件事——
+空闲的 optics 层可以消失，而 surface 和 UI 继续呈现。</p>
+
+<h2 id="s9"><span class="h-num">09</span>Actor 生命周期</h2>
+
+<figure>
+  <div class="cap"><span class="n">FIG 08</span><span class="t">一个 Actor 的驻留状态机</span><span class="d">GeometryDevice::gpu_build_state × 驻留事件</span></div>
+  <div class="body"><div id="fig8" class="dg"></div></div>
+  <div class="foot">状态机有两层：<b>构建态</b>（<code>gpu_build_state</code>，只管 GPU 资源有没有建好）与
+  <b>驻留态</b>（<code>Loaded/Unloaded</code>，由 <code>ActorResidencyChangedEvent</code> 统一广播）。
+  两者不能互相替代——LRU 淘汰只清 <code>mesh_handles</code>，不改 <code>gpu_build_state</code>。</div>
+</figure>
+
+<h3>驻留事件对</h3>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:230px">事件</th><th style="width:130px">方向</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="f">ActorLoadRequested</td><td class="s">外部 → Geometry</td><td class="s">请求按距离预加载</td></tr>
+<tr><td class="f">ActorLoadFinished</td><td class="s">Geometry → 外部</td><td class="s">GPU 资源就绪（旧接口，保留兼容）</td></tr>
+<tr><td class="f">ActorUnloadRequested</td><td class="s">外部 → Geometry</td><td class="s">请求卸载</td></tr>
+<tr><td class="f">ActorUnloadFinished</td><td class="s">Geometry → 外部</td><td class="s">GPU 已释放（旧接口）</td></tr>
+<tr><td class="f">ActorResidencyChanged</td><td class="s">Geometry → Optics/Mechanics/Vision</td><td class="s"><b>推荐统一监听这一个</b>，<code>loaded=true/false</code> 表示能否开始/停止消费</td></tr>
+<tr><td class="f">ActorEvictRequested</td><td class="s">外部 → Geometry</td><td class="s">LRU 淘汰；<code>gpu_only=true</code> 时只释放 GPU，保留 CPU（VRAM 压力专用）</td></tr>
+<tr><td class="f">ActorRestoreRequested</td><td class="s">外部 → Geometry</td><td class="s">从 ActorCache 快照唤醒</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s10"><span class="h-num">10</span>编辑器与协同链路</h2>
+
+<figure>
+  <div class="cap"><span class="n">FIG 09</span><span class="t">一次面板修改的完整往返</span><span class="d">Vue → V8 → manifest → 命令 → 快照 → JSON</span></div>
+  <div class="body"><div id="fig9" class="dg"></div></div>
+  <div class="foot">三条外部路径（Vue / Python / 网络）在命令队列处汇合，
+  因此<b>仲裁只发生在一个地方</b>。这也是把写路径命令化的最大收益：消掉了"谁最后落锁谁赢"。</div>
+</figure>
+
+<h3>编辑器的三层职责边界</h3>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:110px">层</th><th style="width:380px">负责</th><th>不负责</th></tr></thead>
+<tbody>
+<tr><td class="f">Vue</td><td class="s">页面、输入、临时 UI 状态、结果展示、JS manifest adapter</td><td class="s">场景事实、AI 业务、引擎对象</td></tr>
+<tr><td class="f">C++</td><td class="s">场景 / Actor / 资源的当前内存值、渲染、跨层 manifest handler</td><td class="s">在移动 Actor 或停止脚本时写场景存档</td></tr>
+<tr><td class="f">Python</td><td class="s">项目场景存档解析、校验与显式保存；Blockly 生成文件的按路径执行</td><td class="s">Blockly 图编辑与代码生成</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>跨层 adapter <b>不复制 schema</b>：<code>EditorApi.list_methods</code> 返回 C++ 侧的 manifest，
+前端据此校验参数类型并映射 <code>js_wrapper</code> 路径；Python 走同一张表、按
+<code>allowed_callers</code> 位校验权限。新增业务语义的顺序是"先登记 manifest，再补薄 adapter"。</p>
+
+<h3>多机协同：LWW + 脏值轮询</h3>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:170px">环节</th><th style="width:120px">周期</th><th>做法</th></tr></thead>
+<tbody>
+<tr><td class="f">脏值检测</td><td class="c">16 ms</td><td class="s">每实体保留一份哈希快照，与当前值逐项比较（<code>SyncEngine::poll_and_sync</code>）</td></tr>
+<tr><td class="f">编码</td><td class="c">—</td><td class="s"><code>EDITOR_SYNC</code>：kind + actor_guid + field_name + value 字节串 + <code>LwwVersion{counter, writer_peer_id}</code></td></tr>
+<tr><td class="f">传输</td><td class="c">—</td><td class="s">ENet 4 通道：reliable / transform / bulk / realtime。大包走 bulk 且受每 poll 8 包 / 256 KB 预算限制</td></tr>
+<tr><td class="f">合并</td><td class="c">—</td><td class="s">Lamport 计数高者胜，相等时按 <code>writer_peer_id</code> 字典序裁决</td></tr>
+<tr><td class="f">写回</td><td class="c">—</td><td class="s"><b>直接写 SharedDataHub 槽位</b>（<code>sync_engine.cpp:494-526</code>）—— 见第 18 节的风险条目</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="s11"><span class="h-num">11</span>内核原语字段</h2>
+
+<p>这一节是"通信的语法"：所有通道的载荷最终都由这几个模板和结构体描述。
+它们的字段不多，但每一个都直接决定并发语义。</p>
+
+<h4>CommandBuffer · 命令队列 <span class="tag">command_buffer.h</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:150px">字段</th><th style="width:110px">类型</th><th style="width:80px">默认</th><th>语义与并发约束</th></tr></thead>
+<tbody>
+<tr><td class="f">capacity_</td><td class="t">size_t</td><td class="c">256</td><td class="s">有界容量。构造时传 0 会被夹到 1。Fifo 满则 <code>push</code> 返回 false；LatestWins 满则挤掉最旧 key。</td></tr>
+<tr><td class="f">next_sequence_</td><td class="t">uint64</td><td class="c">0</td><td class="s">单调递增序号。<code>drain()</code> 按它排序输出，使出队顺序<b>与生产者线程调度无关</b>——这是可复现性的来源。</td></tr>
+<tr><td class="f">mutex_</td><td class="t">mutex</td><td class="c">—</td><td class="s">一把非递归锁保护全部状态。<code>push/peek/size/erase</code> 任意线程可调；<code>drain</code> 只允许消费线程（靠纪律 + ThreadAffinity）。</td></tr>
+<tr><td class="f">latest_</td><td class="t">map&lt;key,Entry&gt;</td><td class="c">—</td><td class="s">仅 LatestWins：key → 最新一条。<code>merge()</code> 存在时只覆盖命令声明要改的字段。</td></tr>
+<tr><td class="f">fifo_</td><td class="t">deque&lt;Entry&gt;</td><td class="c">—</td><td class="s">仅 Fifo：全量按序投递。</td></tr>
+<tr class="group"><td colspan="4">Stats（一次读取是一致的一组值）</td></tr>
+<tr><td class="f">pushed</td><td class="t">uint64</td><td class="c">0</td><td class="s">成功入队次数（含被合并的）。</td></tr>
+<tr><td class="f">drained</td><td class="t">uint64</td><td class="c">0</td><td class="s">成功出队的命令数。</td></tr>
+<tr><td class="f">coalesced</td><td class="t">uint64</td><td class="c">0</td><td class="s">被同 key 新命令覆盖掉的旧命令数。<b>非零是正常现象</b>，代表合并生效。</td></tr>
+<tr><td class="f">dropped</td><td class="t">uint64</td><td class="c">0</td><td class="s">因容量上限被丢弃/拒绝的命令数。<b>持续增长 = 消费者跟不上</b>。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>SnapshotChannel · 只读快照 <span class="tag">snapshot_channel.h</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:150px">字段</th><th style="width:110px">类型</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="f">current_</td><td class="t">shared_ptr&lt;const S&gt;</td><td class="s">当前快照。发布时整体替换，旧快照由读者手上的引用续命——<b>DAG 继续发布不会让读者手里的旧快照失效</b>。</td></tr>
+<tr><td class="f">revision_</td><td class="t">uint64</td><td class="s">从 1 开始单调递增；<code>read(&amp;rev)</code> 可带出。用于"这份快照是哪一 tick 的"。</td></tr>
+<tr><td class="f">mutex_</td><td class="t">mutex</td><td class="s">临界区只做一次 <code>shared_ptr</code> 拷贝，不持任何存储锁。</td></tr>
+<tr><td class="f">（行结构）</td><td class="t">Snapshot</td><td class="s">约定含 <code>tick</code> + <code>vector&lt;Row&gt;</code>；<code>tick</code> 通常写作 <code>revision()+1</code>，即"将要成为的版本"。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>EventStream · 异步事件流 <span class="tag">i_event_stream.h</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:170px">字段</th><th style="width:110px">类型</th><th style="width:80px">默认</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="f">EventStreamOptions::max_queue_size</td><td class="t">size_t</td><td class="c">256</td><td class="s">每个订阅者独立队列上限；传 0 被夹到 1。</td></tr>
+<tr><td class="f">EventStreamOptions::policy</td><td class="t">BackpressurePolicy</td><td class="c">Block</td><td class="s">队列满时：<code>Block</code> 阻塞发布者 / <code>DropOldest</code> 丢最旧 / <code>DropNewest</code> 丢新事件。</td></tr>
+<tr><td class="f">SubscriberState::id</td><td class="t">size_t</td><td class="c">1..</td><td class="s">订阅者标识，从 1 开始，用于退订。</td></tr>
+<tr><td class="f">SubscriberState::queue</td><td class="t">deque&lt;T&gt;</td><td class="c">—</td><td class="s">该订阅者私有的队列，<b>N 个订阅者 = N 份拷贝</b>。</td></tr>
+<tr><td class="f">SubscriberState::closed</td><td class="t">bool</td><td class="c">false</td><td class="s">关闭后不再接收；等待中的 <code>wait()</code> 被唤醒并返回 <code>nullopt</code>。</td></tr>
+<tr><td class="f">next_id_</td><td class="t">size_t</td><td class="c">1</td><td class="s">订阅者 id 分配器。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>FrameGraph · 帧图 <span class="tag">frame_graph.h</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:170px">结构 / 字段</th><th style="width:130px">类型</th><th>语义</th></tr></thead>
+<tbody>
+<tr class="group"><td colspan="3">FrameTick — 一次 tick 的上下文</td></tr>
+<tr><td class="f">tick</td><td class="t">uint64</td><td class="s">单调帧号，从 0 开始。速率门控的判据就是它。</td></tr>
+<tr><td class="f">delta_seconds</td><td class="t">double</td><td class="s">与上一 tick 的墙钟间隔（秒）。由调度器喂给系统，替代系统各自 <code>steady_clock</code> 自测 dt。</td></tr>
+<tr class="group"><td colspan="3">FrameNodeDesc — 节点描述</td></tr>
+<tr><td class="f">name</td><td class="t">string</td><td class="s">稳定唯一名。日志、dump、依赖引用都用它；空或重名会抛 <code>invalid_argument</code>。</td></tr>
+<tr><td class="f">dependencies</td><td class="t">vector&lt;FrameNodeId&gt;</td><td class="s">"必须先执行"，不表示"必须产出新数据"。</td></tr>
+<tr><td class="f">period_ticks</td><td class="t">uint32</td><td class="s">速率门控周期，1 = 每 tick 都跑。</td></tr>
+<tr><td class="f">phase</td><td class="t">uint32</td><td class="s">门控相位，必须 <code>&lt; period_ticks</code>，否则抛异常。</td></tr>
+<tr><td class="f">enabled</td><td class="t">bool</td><td class="s">false = 子树关闭：本节点及所有依赖它的节点本 tick 都不执行。</td></tr>
+<tr><td class="f">body</td><td class="t">function&lt;Status(const FrameTick&amp;)&gt;</td><td class="s">节点体；为空按 <code>idle</code> 处理。</td></tr>
+<tr class="group"><td colspan="3">FrameNodeStats — 单节点累计统计（只在 tick 线程写）</td></tr>
+<tr><td class="f">invocations</td><td class="t">uint64</td><td class="s">真正执行次数（含 idle）。</td></tr>
+<tr><td class="f">idle_invocations</td><td class="t">uint64</td><td class="s">其中返回 <code>idle</code> 的次数（无事可做，不是错误）。</td></tr>
+<tr><td class="f">gated_out</td><td class="t">uint64</td><td class="s">被速率门控跳过的次数。<b>非零 = 降频生效</b>。</td></tr>
+<tr><td class="f">disabled_out</td><td class="t">uint64</td><td class="s">因自身或上游关闭而跳过的次数。</td></tr>
+<tr><td class="f">failures</td><td class="t">uint64</td><td class="s">抛异常的累计次数。</td></tr>
+<tr><td class="f">consecutive_failures</td><td class="t">uint32</td><td class="s">连续失败次数，成功执行一次即清零。</td></tr>
+<tr><td class="f">last_ms / average_ms / max_ms</td><td class="t">double</td><td class="s">最近 / 算术平均 / 历史最大执行耗时（毫秒）。</td></tr>
+<tr class="group"><td colspan="3">FrameTickReport — 一次 run_tick 的结果</td></tr>
+<tr><td class="f">completed</td><td class="t">bool</td><td class="s">全部节点跑完为 true；抛异常或被看门狗中止为 false。</td></tr>
+<tr><td class="f">failed_node</td><td class="t">FrameNodeId</td><td class="s">抛异常的节点（completed=false 时有效）。</td></tr>
+<tr><td class="f">stopped_on</td><td class="t">FrameNodeId</td><td class="s">中止时停在哪个节点（含被中止钩子要求停止）。</td></tr>
+<tr><td class="f">error</td><td class="t">string</td><td class="s">异常文本。</td></tr>
+<tr><td class="f">executed / idle / gated / disabled</td><td class="t">uint64</td><td class="s">本 tick 各分类的节点数。</td></tr>
+<tr><td class="f">total_ms</td><td class="t">double</td><td class="s">本 tick 所有节点耗时之和（含边界钩子）。</td></tr>
+<tr class="group"><td colspan="3">其他</td></tr>
+<tr><td class="f">FrameNodeStatus</td><td class="t">enum</td><td class="s"><code>ran</code> = 正常执行并产出；<code>idle</code> = 执行了但本帧无事可做（如队列为空），不算错误。</td></tr>
+<tr><td class="f">FrameNodeSnapshot</td><td class="t">struct</td><td class="s"><code>id</code> + <code>name</code>（指向图内节点名，图生命周期内有效）+ <code>stats</code>。</td></tr>
+<tr><td class="f">FrameGraphStats</td><td class="t">struct</td><td class="s"><code>vector&lt;FrameNodeSnapshot&gt;</code>。拷贝式快照，调用方拿到后可慢慢读，不受 tick 线程影响。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>SystemsThread / SystemManager <span class="tag">systems_thread.h · i_system_manager.h</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:190px">字段</th><th style="width:140px">类型</th><th style="width:90px">默认</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="f">SystemsThreadNode::system</td><td class="t">ISystem*</td><td class="c">nullptr</td><td class="s">目标系统，必须已 initialize。</td></tr>
+<tr><td class="f">SystemsThreadNode::after</td><td class="t">vector&lt;string_view&gt;</td><td class="c">{}</td><td class="s">必须先执行的其他<b>系统名</b>。</td></tr>
+<tr><td class="f">SystemsThreadNode::period_ticks / phase</td><td class="t">uint32</td><td class="c">1 / 0</td><td class="s">同 FrameNodeDesc。</td></tr>
+<tr><td class="f">SystemsThreadConfig::tick_rate</td><td class="t">uint32</td><td class="c">120</td><td class="s">本线程 tick 频率（Hz）；<b>0 表示不自动跑，只允许 run_once()</b>。</td></tr>
+<tr><td class="f">tick_overruns</td><td class="t">uint64</td><td class="c">0</td><td class="s">超过一个 tick 周期的次数——这条线能不能跟上 tick 频率的直接证据。</td></tr>
+<tr><td class="f">last_boundary_ms</td><td class="t">double</td><td class="c">0</td><td class="s">最近一次边界阶段耗时（毫秒），也会累加进 <code>FrameTickReport::total_ms</code>。</td></tr>
+<tr><td class="f">SystemState</td><td class="t">enum</td><td class="c">idle</td><td class="s"><code>idle / running / paused / stopping / stopped</code>。</td></tr>
+<tr><td class="f">SystemDagNode</td><td class="t">struct</td><td class="c">—</td><td class="s"><code>system</code>（名）+ <code>after</code> + <code>period_ticks</code> + <code>phase</code>，是 <code>configure_dag()</code> 的输入。</td></tr>
+<tr><td class="f">SystemDagConfig</td><td class="t">struct</td><td class="c">—</td><td class="s"><code>vector&lt;SystemDagNode&gt; nodes</code> + <code>tick_rate</code>。</td></tr>
+<tr><td class="f">SystemStats</td><td class="t">struct</td><td class="c">—</td><td class="s"><code>name / state / target_fps / actual_fps / average_frame_time_ms / max_frame_time_ms / total_frames / total_update_calls</code>。UI 系统在主线程，没有线程循环计时，因此自己如实测 <code>update()</code> 耗时。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>ThreadAffinity · 单写者护栏 <span class="tag">thread_affinity.h</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:150px">字段</th><th style="width:130px">类型</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="f">owner_</td><td class="t">atomic&lt;uint32&gt;</td><td class="s">拥有者线程令牌 = <code>std::hash&lt;thread::id&gt;</code> 的低 32 位（与平台无关，不依赖 windows.h）。0 = 未绑定。</td></tr>
+<tr><td class="f">violations_</td><td class="t">atomic&lt;uint64&gt;</td><td class="s">越界写次数。<code>assert_owner_thread()</code> 失败时 <code>CFW_LOG_ERROR</code> 并累加，返回 false；不抛异常、不中止。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s12"><span class="h-num">12</span>命令字段</h2>
+
+<p>命令是唯一允许"外部线程修改 DAG 状态"的通道。每条命令都遵循同一个模式：
+<b>目标句柄 + 字段位掩码 + 值</b>。位掩码让"只改我关心的那几个字段"成为可能，
+也是 <code>peek()</code> 叠加得到"待提交视图"的基础。</p>
+
+<h4>相机命令组 <span class="tag">shared_data_hub.h</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:190px">字段</th><th style="width:120px">类型</th><th style="width:80px">默认</th><th>语义</th></tr></thead>
+<tbody>
+<tr class="group"><td colspan="4">CameraMoveCommand — 相机位姿（LatestWins，key = camera_handle）</td></tr>
+<tr><td class="f">camera_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">目标相机槽位地址，同时是合并键。</td></tr>
+<tr><td class="f">position</td><td class="t">fvec3</td><td class="c">(0,0,0)</td><td class="s">世界坐标位置。</td></tr>
+<tr><td class="f">forward</td><td class="t">fvec3</td><td class="c">(0,0,0)</td><td class="s">前向向量；应用时会归一化。</td></tr>
+<tr><td class="f">world_up</td><td class="t">fvec3</td><td class="c">(0,0,0)</td><td class="s">世界上方向；用于构造 <code>look_to_lh</code> 基。</td></tr>
+<tr><td class="f">fov</td><td class="t">float</td><td class="c">45.0</td><td class="s">垂直视场角（度）。<b>注意与 CameraDevice 默认 60 不同</b>：命令缺省是 45。</td></tr>
+<tr class="group"><td colspan="4">CameraViewportUpdateCommand — 视口几何与 surface（LatestWins，key = camera_handle）</td></tr>
+<tr><td class="f">camera_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">目标相机 + 合并键。</td></tr>
+<tr><td class="f">surface</td><td class="t">void*</td><td class="c">nullptr</td><td class="s">目标窗口/swapchain 句柄。nullptr 表示离屏。</td></tr>
+<tr><td class="f">view_open</td><td class="t">bool</td><td class="c">false</td><td class="s">该视口在编辑器里是否可见；关闭后可不渲染但仍可截图。</td></tr>
+<tr><td class="f">x / y / width / height</td><td class="t">int</td><td class="c">120/120/960/540</td><td class="s">在 surface 内的屏幕矩形（逻辑像素）。</td></tr>
+<tr><td class="f">render_width / render_height</td><td class="t">int</td><td class="c">960/540</td><td class="s">实际渲染分辨率。与上面分离，支持 DPI 缩放与超采样。</td></tr>
+<tr><td class="f">sequence</td><td class="t">uint64</td><td class="c">0</td><td class="s">命令序号，仅诊断用（远端 CEF 重构引入）。</td></tr>
+<tr><td class="f">authority</td><td class="t">shared_ptr&lt;CameraCommandAuthority&gt;</td><td class="c">nullptr</td><td class="s">相机命令<b>租约</b>。owner 退役时会等待在手命令；<code>apply_camera_viewport_update()</code> 校验 <code>active</code> 后才写入，解决"窗口已销毁但命令还在飞"。</td></tr>
+<tr class="group"><td colspan="4">CameraStateUpdateCommand — 相机标量状态（LatestWins，key = camera_handle）</td></tr>
+<tr><td class="f">camera_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">目标相机 + 合并键。</td></tr>
+<tr><td class="f">fields</td><td class="t">CameraStateUpdateField</td><td class="c">None</td><td class="s">位掩码，决定下面哪些字段生效。<b>这是整条通道的核心</b>，见下方位表。</td></tr>
+<tr><td class="f">surface</td><td class="t">void*</td><td class="c">nullptr</td><td class="s">仅 <code>Surface</code> 位有效。</td></tr>
+<tr><td class="f">width / height</td><td class="t">uint32</td><td class="c">1 / 1</td><td class="s">仅 <code>Size</code> 位有效。</td></tr>
+<tr><td class="f">projection_x_sign / near_plane / far_plane</td><td class="t">float</td><td class="c">1.0 / 0.1 / 100</td><td class="s">仅 <code>Projection</code> 位有效；<code>x_sign</code> 用于保留导入相机的镜像基。</td></tr>
+<tr><td class="f">output_mode</td><td class="t">CameraOutputMode</td><td class="c">FinalColor</td><td class="s">仅 <code>OutputMode</code> 位有效。</td></tr>
+<tr><td class="f">render_backend</td><td class="t">CameraRenderBackend</td><td class="c">Native</td><td class="s">仅 <code>RenderBackend</code> 位有效。</td></tr>
+<tr><td class="f">vision_render_mode</td><td class="t">CameraVisionRenderMode</td><td class="c">PathTracing</td><td class="s">仅 <code>VisionRenderMode</code> 位有效。</td></tr>
+<tr><td class="f">vision_denoise</td><td class="t">bool</td><td class="c">true</td><td class="s">仅 <code>VisionDenoise</code> 位有效。</td></tr>
+<tr><td class="f">vision_denoiser</td><td class="t">CameraVisionDenoiser</td><td class="c">ReBLUR</td><td class="s">仅 <code>VisionDenoiser</code> 位有效。</td></tr>
+<tr><td class="f">vision_reblur_settings / pt / restir / relax</td><td class="t">string (JSON)</td><td class="c">"{}"</td><td class="s">四个降噪/采样器的参数 JSON，分别由 <code>VisionReblurSettings</code> 等位控制。</td></tr>
+<tr><td class="f">vision_accumulation / vision_stable_planes</td><td class="t">bool</td><td class="c">false / true</td><td class="s">仅对应位有效。</td></tr>
+<tr><td class="f">view_open / follows_default_surface</td><td class="t">bool</td><td class="c">false / false</td><td class="s">仅 <code>ViewState</code> / <code>FollowsDefaultSurface</code> 位有效。</td></tr>
+<tr><td class="f">view_x / view_y / view_width / view_height</td><td class="t">int</td><td class="c">120/120/960/540</td><td class="s">仅 <code>ViewSettings</code> 位有效（<b>只影响几何/速度，不改变窗口生命周期</b>）。</td></tr>
+<tr><td class="f">move_speed</td><td class="t">float</td><td class="c">1.0</td><td class="s">编辑器相机飞行速度，同样属于 <code>ViewSettings</code>。</td></tr>
+<tr><td class="f">sequence</td><td class="t">uint64</td><td class="c">0</td><td class="s">用于回执匹配：<code>acknowledge_camera_*</code> 只在序列对得上时才清 pending 镜像。</td></tr>
+<tr class="group"><td colspan="4">CameraReleaseCommand — 销毁相机（Fifo，顺序有意义）</td></tr>
+<tr><td class="f">camera_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">要释放的相机槽位；Fifo 队列只用它做 peek / erase。</td></tr>
+<tr><td class="f">actor_pick_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">与之绑定的拾取槽位，一并释放（拾取结果不再有意义）。</td></tr>
+<tr class="group"><td colspan="4">DefaultSurfaceCameraUpdateCommand — 默认 surface（容量 1 的 LatestWins）</td></tr>
+<tr><td class="f">surface</td><td class="t">void*</td><td class="c">nullptr</td><td class="s">新的默认 surface（通常是 SDL 窗口）。</td></tr>
+<tr><td class="f">width / height</td><td class="t">uint32</td><td class="c">0</td><td class="s">窗口新尺寸，跟随 resize。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>CameraStateUpdateField 位表</h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:110px">位</th><th style="width:250px">枚举</th><th>影响的 CameraDevice 字段</th></tr></thead>
+<tbody>
+<tr><td class="c">1&lt;&lt;0</td><td class="f">Surface</td><td class="s"><code>surface</code></td></tr>
+<tr><td class="c">1&lt;&lt;1</td><td class="f">Size</td><td class="s"><code>width</code>, <code>height</code></td></tr>
+<tr><td class="c">1&lt;&lt;2</td><td class="f">OutputMode</td><td class="s"><code>output_mode</code></td></tr>
+<tr><td class="c">1&lt;&lt;3</td><td class="f">RenderBackend</td><td class="s"><code>render_backend</code></td></tr>
+<tr><td class="c">1&lt;&lt;4</td><td class="f">ViewState</td><td class="s"><code>view_open</code></td></tr>
+<tr><td class="c">1&lt;&lt;5</td><td class="f">VisionRenderMode</td><td class="s"><code>vision_render_mode</code></td></tr>
+<tr><td class="c">1&lt;&lt;8</td><td class="f">VisionDenoise</td><td class="s"><code>vision_denoise</code></td></tr>
+<tr><td class="c">1&lt;&lt;9</td><td class="f">VisionAccumulation</td><td class="s"><code>vision_accumulation</code></td></tr>
+<tr><td class="c">1&lt;&lt;10</td><td class="f">VisionStablePlanes</td><td class="s"><code>vision_stable_planes</code></td></tr>
+<tr><td class="c">1&lt;&lt;11</td><td class="f">VisionDenoiser</td><td class="s"><code>vision_denoiser</code></td></tr>
+<tr><td class="c">1&lt;&lt;12</td><td class="f">VisionReblurSettings</td><td class="s"><code>vision_reblur_settings</code></td></tr>
+<tr><td class="c">1&lt;&lt;13</td><td class="f">VisionRelaxSettings</td><td class="s"><code>vision_relax_settings</code></td></tr>
+<tr><td class="c">1&lt;&lt;14</td><td class="f">VisionPtSettings</td><td class="s"><code>vision_pt_settings</code></td></tr>
+<tr><td class="c">1&lt;&lt;15</td><td class="f">VisionRestirSettings</td><td class="s"><code>vision_restir_settings</code></td></tr>
+<tr><td class="c">1&lt;&lt;16</td><td class="f">Projection</td><td class="s"><code>projection_x_sign</code>, <code>near_plane</code>, <code>far_plane</code></td></tr>
+<tr><td class="c">1&lt;&lt;17</td><td class="f">FollowsDefaultSurface</td><td class="s"><code>follows_default_surface</code></td></tr>
+<tr><td class="c">1&lt;&lt;18</td><td class="f">ViewSettings</td><td class="s"><code>view_x/y/width/height</code>, <code>move_speed</code></td></tr>
+</tbody>
+</table>
+</div>
+<div class="note warn">
+<div class="nt">位 6、7 是空的，且 17 曾被撞车</div>
+<p>源码注释明确记着：<code>ViewSettings</code> 原本也占用 <code>1u&lt;&lt;17</code>，与
+<code>FollowsDefaultSurface</code> 冲突，后来改到 <code>1u&lt;&lt;18</code>。
+新增字段时必须检查空位，否则会出现"改窗口尺寸顺手改了跟随标志"这类静默错误。</p>
+</div>
+
+<h4>变换与拾取命令 <span class="tag">shared_data_hub.h</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:180px">字段</th><th style="width:120px">类型</th><th style="width:80px">默认</th><th>语义</th></tr></thead>
+<tbody>
+<tr class="group"><td colspan="4">TransformUpdateCommand — 外部写位姿（LatestWins，key = transform_handle）</td></tr>
+<tr><td class="f">transform_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s"><code>ModelTransform</code> 槽位地址 + 合并键。</td></tr>
+<tr><td class="f">fields</td><td class="t">TransformField</td><td class="c">None</td><td class="s"><code>Position=1&lt;&lt;0</code> / <code>Rotation=1&lt;&lt;1</code> / <code>Scale=1&lt;&lt;2</code> / <code>All</code>。只改声明的分量。</td></tr>
+<tr><td class="f">position</td><td class="t">fvec3</td><td class="c">(0,0,0)</td><td class="s">世界位置。</td></tr>
+<tr><td class="f">euler_rotation</td><td class="t">fvec3</td><td class="c">(0,0,0)</td><td class="s">欧拉角（度）。</td></tr>
+<tr><td class="f">scale</td><td class="t">fvec3</td><td class="c">(1,1,1)</td><td class="s">缩放。<b>默认 1 而非 0</b>，否则未声明 Scale 位时会把物体压成一点。</td></tr>
+<tr class="group"><td colspan="4">ActorPickRequestCommand — 点击拾取请求（独立队列，可多个在飞）</td></tr>
+<tr><td class="f">camera_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">用哪台相机的视图做射线。</td></tr>
+<tr><td class="f">scene_id</td><td class="t">string</td><td class="c">""</td><td class="s">场景标识，用于回执路由。</td></tr>
+<tr><td class="f">request_id</td><td class="t">string</td><td class="c">""</td><td class="s"><b>请求级唯一 id</b>。故意不放进 <code>ActorPickDevice</code>，这样多次点击不会互相覆盖。</td></tr>
+<tr><td class="f">x / y</td><td class="t">uint32</td><td class="c">0</td><td class="s">屏幕像素坐标。</td></tr>
+<tr class="group"><td colspan="4">ActorPickCompletion — 拾取回执</td></tr>
+<tr><td class="f">camera_handle / scene_id / request_id</td><td class="t">—</td><td class="c">—</td><td class="s">与请求对应。</td></tr>
+<tr><td class="f">status</td><td class="t">string</td><td class="c">""</td><td class="s"><code>success</code> / <code>miss</code> / <code>error</code>。<b>miss 是正常结果</b>，不是错误。</td></tr>
+<tr><td class="f">actor_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">命中的 Actor。</td></tr>
+<tr><td class="f">x / y</td><td class="t">uint32</td><td class="c">0</td><td class="s">命中的像素坐标（可能与请求相同）。</td></tr>
+<tr><td class="f">node_index</td><td class="t">uint32</td><td class="c">UINT32_MAX</td><td class="s">命中的模型子节点索引；<code>UINT32_MAX</code> = 未命中具体节点（整个 Actor 级命中）。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>领域标量命令 <span class="tag">optics / mechanics / acoustics / environment</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:200px">字段</th><th style="width:110px">类型</th><th style="width:80px">默认</th><th>语义</th></tr></thead>
+<tbody>
+<tr class="group"><td colspan="4">OpticsUpdateCommand — 材质与可见性（LatestWins，key = optics_handle）</td></tr>
+<tr><td class="f">optics_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">目标 <code>OpticsDevice</code> + 合并键。</td></tr>
+<tr><td class="f">geometry_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s"><b>守卫</b>：非 0 时只有 optics 设备的 <code>geometry_handle</code> 匹配才应用。编辑器用它确认"这份材质属于当前几何"，防止 Actor 换模型后旧命令打到新模型上。</td></tr>
+<tr><td class="f">material_overrides / principled</td><td class="t">shared_ptr&lt;const ...&gt;</td><td class="c">nullptr</td><td class="s">整份材质配置（shared_ptr 换绑 = 结构变更，但走同一条 LatestWins 通道）。</td></tr>
+<tr><td class="f">fields</td><td class="t">OpticsField</td><td class="c">None</td><td class="s">18 个位，见下方位表。</td></tr>
+<tr><td class="f">visible / enable_lighting</td><td class="t">bool</td><td class="c">true</td><td class="s">可见性 / 是否接收光照（不接收光照仍渲染）。</td></tr>
+<tr><td class="f">metallic</td><td class="t">float</td><td class="c">0.0</td><td class="s">Disney Principled BRDF：金属度。</td></tr>
+<tr><td class="f">roughness</td><td class="t">float</td><td class="c">0.5</td><td class="s">粗糙度。</td></tr>
+<tr><td class="f">subsurface</td><td class="t">float</td><td class="c">0.0</td><td class="s">次表面散射权重。</td></tr>
+<tr><td class="f">specular / specular_tint</td><td class="t">float</td><td class="c">0.5 / 0.0</td><td class="s">镜面强度 / 镜面着色。</td></tr>
+<tr><td class="f">anisotropic</td><td class="t">float</td><td class="c">0.0</td><td class="s">各向异性。</td></tr>
+<tr><td class="f">sheen / sheen_tint</td><td class="t">float</td><td class="c">0.0 / 0.5</td><td class="s">布料光泽（sheen 层）。</td></tr>
+<tr><td class="f">clearcoat / clearcoat_gloss</td><td class="t">float</td><td class="c">0.0 / 1.0</td><td class="s">清漆层强度 / 光泽度。</td></tr>
+<tr><td class="f">ambient / diffuse / specular_color</td><td class="t">fvec3</td><td class="c">0.2 / 0.8 / 1.0</td><td class="s">旧版（非 PBR）参数，保留兼容。</td></tr>
+<tr><td class="f">shininess</td><td class="t">float</td><td class="c">32.0</td><td class="s">旧版高光指数。</td></tr>
+<tr class="group"><td colspan="4">MechanicsUpdateCommand — 物理参数（LatestWins，key = mechanics_handle，<b>带 merge()</b>）</td></tr>
+<tr><td class="f">mechanics_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">目标 + 合并键。</td></tr>
+<tr><td class="f">fields</td><td class="t">MechanicsField</td><td class="c">None</td><td class="s"><code>Mass=1&lt;&lt;0</code> / <code>Restitution=1&lt;&lt;1</code> / <code>Damping=1&lt;&lt;2</code> / <code>BodyType=1&lt;&lt;3</code> / <code>LinearLock=1&lt;&lt;4</code> / <code>AngularLock=1&lt;&lt;5</code> / <code>All</code>。</td></tr>
+<tr><td class="f">mass</td><td class="t">float</td><td class="c">1.0</td><td class="s">质量（kg）。</td></tr>
+<tr><td class="f">restitution</td><td class="t">float</td><td class="c">0.8</td><td class="s">弹性系数。</td></tr>
+<tr><td class="f">damping</td><td class="t">float</td><td class="c">0.99</td><td class="s">每步速度衰减。</td></tr>
+<tr><td class="f">body_type</td><td class="t">BodyType</td><td class="c">Dynamic</td><td class="s">参与物理的方式（4 值枚举，见 15 节）。</td></tr>
+<tr><td class="f">linear_lock_mask / angular_lock_mask</td><td class="t">uint8</td><td class="c">0</td><td class="s">轴锁定位掩码：bit0=X, bit1=Y, bit2=Z。</td></tr>
+<tr class="group"><td colspan="4">MechanicsCallbackBinding — 结构命令（<b>Fifo</b>，不可合并）</td></tr>
+<tr><td class="f">Kind</td><td class="t">enum</td><td class="c">OnMove</td><td class="s"><code>Collision</code> / <code>OnMove</code>。两条回调签名不同，靠 kind 分派。</td></tr>
+<tr><td class="f">mechanics_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">回调绑定的目标设备。</td></tr>
+<tr><td class="f">kind</td><td class="t">Kind</td><td class="c">OnMove</td><td class="s">决定读 <code>collision</code> 还是 <code>on_move</code>。</td></tr>
+<tr><td class="f">collision</td><td class="t">function&lt;void(uintptr_t, bool, array[3], array[3])&gt;</td><td class="c">空</td><td class="s">参数 = 对方 actor 句柄、是否开始接触、法线、碰撞点。</td></tr>
+<tr><td class="f">on_move</td><td class="t">function&lt;void()&gt;</td><td class="c">空</td><td class="s">无参回调。</td></tr>
+<tr class="group"><td colspan="4">AcousticsUpdateCommand — 音频参数（LatestWins，key = acoustics_handle）</td></tr>
+<tr><td class="f">acoustics_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">目标 + 合并键。</td></tr>
+<tr><td class="f">fields</td><td class="t">AcousticsField</td><td class="c">None</td><td class="s"><code>Volume=1&lt;&lt;0</code> / <code>AudioEnabled=1&lt;&lt;1</code> / <code>ResourceId=1&lt;&lt;2</code>。只有三个可写标量。</td></tr>
+<tr><td class="f">volume</td><td class="t">float</td><td class="c">1.0</td><td class="s">音量。</td></tr>
+<tr><td class="f">audio_enabled</td><td class="t">bool</td><td class="c">true</td><td class="s">是否允许发声。</td></tr>
+<tr><td class="f">resource_id</td><td class="t">uint64</td><td class="c">0</td><td class="s">绑定的音频资源；0 = 未绑定。</td></tr>
+<tr class="group"><td colspan="4">EnvironmentUpdateCommand — 全局环境（LatestWins，key = environment_handle）</td></tr>
+<tr><td class="f">environment_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">目标 + 合并键。</td></tr>
+<tr><td class="f">fields</td><td class="t">EnvironmentField</td><td class="c">None</td><td class="s">8 个位，见下。</td></tr>
+<tr><td class="f">sun_direction</td><td class="t">fvec3</td><td class="c">(0,1,0)</td><td class="s"><code>SunDirection</code>。注意命令里叫 direction，写入的是 <code>EnvironmentDevice::sun_position</code>（历史命名）。</td></tr>
+<tr><td class="f">sun_intensity</td><td class="t">float</td><td class="c">10.0</td><td class="s"><code>SunIntensity</code>：太阳直射辐照度。</td></tr>
+<tr><td class="f">sky_intensity</td><td class="t">float</td><td class="c">20.0</td><td class="s"><code>SkyIntensity</code>：大气散射功率。</td></tr>
+<tr><td class="f">floor_grid_enabled</td><td class="t">uint32</td><td class="c">1</td><td class="s"><code>FloorGrid</code>：地面网格显示开关（用 uint32 而非 bool，便于原子/位运算传递）。</td></tr>
+<tr><td class="f">gravity</td><td class="t">fvec3</td><td class="c">(0,-9.8,0)</td><td class="s"><code>Gravity</code>：重力加速度 → <b>Mechanics 消费</b>。</td></tr>
+<tr><td class="f">floor_y</td><td class="t">float</td><td class="c">0.0</td><td class="s"><code>FloorY</code>：地面高度 → Mechanics。</td></tr>
+<tr><td class="f">floor_restitution</td><td class="t">float</td><td class="c">0.6</td><td class="s"><code>FloorRestitution</code>：地面弹性 → Mechanics。</td></tr>
+<tr><td class="f">fixed_dt</td><td class="t">float</td><td class="c">1/60</td><td class="s"><code>FixedDt</code>：物理定步长 → Mechanics。<b>改它会改模拟行为</b>。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>显示与帧命令 <span class="tag">display_surface_commands.h · display_frame_commands.h</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:190px">字段</th><th style="width:130px">类型</th><th>语义</th></tr></thead>
+<tbody>
+<tr class="group"><td colspan="3">DisplaySurfaceCommand — surface 注册/拆除（<b>Fifo</b>）</td></tr>
+<tr><td class="f">kind</td><td class="t">Kind</td><td class="s"><code>Changed</code> / <code>Removed</code>。顺序有意义，不可合并。</td></tr>
+<tr><td class="f">surface</td><td class="t">void*</td><td class="s">目标 surface，同时是队列 key（用于 peek/erase）。</td></tr>
+<tr><td class="f">registration_ticket</td><td class="t">optional&lt;SurfaceCompletionTicket&gt;</td><td class="s">仅 Changed：调用方 <code>wait_until</code> 它，确认 displayer 已建好。</td></tr>
+<tr><td class="f">removal_ticket</td><td class="t">optional&lt;...&gt;</td><td class="s">仅 Removed：拆除回执。</td></tr>
+<tr><td class="f">done</td><td class="t">shared_ptr&lt;promise&lt;void&gt;&gt;</td><td class="s">仅 Removed：Display 拆完 swapchain 后兑现，主线程据此安全销毁 OS 窗口。</td></tr>
+<tr class="group"><td colspan="3">OpticsFrameCommand / UIFrameCommand — 帧就绪（LatestWins，key = surface）</td></tr>
+<tr><td class="f">event</td><td class="t">OpticsFrameReadyEvent / UIFrameReadyEvent</td><td class="s">命令体就是一个事件值（见第 14 节字段表）。<b>同 surface 只保留最后一帧</b>，被覆盖帧的 <code>PublishedImage</code> 令牌随命令析构释放。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s13"><span class="h-num">13</span>快照字段</h2>
+
+<p>快照是"某个完整 tick 的状态"，不是增量。所有 <code>*_view()</code> 函数做同一件事：
+<code>快照行 + CommandBuffer::peek 的待提交值</code>，得到"我现在应该看到什么"。</p>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:200px">字段</th><th style="width:110px">类型</th><th style="width:80px">默认</th><th>语义</th></tr></thead>
+<tbody>
+<tr class="group"><td colspan="4">CameraSnapshot / CameraSnapshotRow</td></tr>
+<tr><td class="f">tick</td><td class="t">uint64</td><td class="c">0</td><td class="s">这份快照对应的 tick。</td></tr>
+<tr><td class="f">rows</td><td class="t">vector&lt;Row&gt;</td><td class="c">{}</td><td class="s">每台相机一行。注意发布方式是"整份重建"，不是增量。</td></tr>
+<tr><td class="f">handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">相机句柄，行的主键。</td></tr>
+<tr><td class="f">position / forward / world_up</td><td class="t">fvec3</td><td class="c">—</td><td class="s">相机基。</td></tr>
+<tr><td class="f">fov / aspect / near_plane / far_plane</td><td class="t">float</td><td class="c">60 / 16:9 / 0.1 / 100</td><td class="s">投影参数。</td></tr>
+<tr><td class="f">projection_x_sign</td><td class="t">float</td><td class="c">1.0</td><td class="s">保留导入相机的镜像基。</td></tr>
+<tr><td class="f">width / height</td><td class="t">uint32</td><td class="c">1920 / 1080</td><td class="s">渲染分辨率。</td></tr>
+<tr><td class="f">surface</td><td class="t">void*</td><td class="c">nullptr</td><td class="s">目标窗口；nullptr = 离屏。</td></tr>
+<tr><td class="f">follows_default_surface</td><td class="t">bool</td><td class="c">true</td><td class="s">是否自动跟随默认 surface。</td></tr>
+<tr><td class="f">view_open</td><td class="t">bool</td><td class="c">false</td><td class="s">编辑器视口是否可见。</td></tr>
+<tr><td class="f">view_x / view_y / view_width / view_height</td><td class="t">int</td><td class="c">120/120/960/540</td><td class="s">屏幕矩形。</td></tr>
+<tr><td class="f">move_speed</td><td class="t">float</td><td class="c">1.0</td><td class="s">编辑器相机飞行速度。</td></tr>
+<tr><td class="f">output_mode</td><td class="t">CameraOutputMode</td><td class="c">FinalColor</td><td class="s">输出通道选择（10 种，见 15 节）。</td></tr>
+<tr><td class="f">render_backend</td><td class="t">CameraRenderBackend</td><td class="c">Native</td><td class="s">光栅 or 路径追踪。</td></tr>
+<tr><td class="f">vision_render_mode</td><td class="t">CameraVisionRenderMode</td><td class="c">PathTracing</td><td class="s">PT / SVGF / SSAT / 渐进 PT / ReSTIR。</td></tr>
+<tr><td class="f">vision_denoise</td><td class="t">bool</td><td class="c">true</td><td class="s">是否降噪。</td></tr>
+<tr><td class="f">vision_denoiser</td><td class="t">CameraVisionDenoiser</td><td class="c">ReBLUR</td><td class="s">Scene / SVGF / ReBLUR / ReLAX。</td></tr>
+<tr><td class="f">vision_accumulation / vision_stable_planes</td><td class="t">bool</td><td class="c">false / true</td><td class="s">累积模式 / 稳定平面假设。</td></tr>
+<tr class="group"><td colspan="4">TransformSnapshot / TransformSnapshotRow</td></tr>
+<tr><td class="f">tick</td><td class="t">uint64</td><td class="c">0</td><td class="s">快照 tick。</td></tr>
+<tr><td class="f">handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">transform 句柄。</td></tr>
+<tr><td class="f">position / euler_rotation / scale</td><td class="t">fvec3</td><td class="c">—</td><td class="s">TRS 三分量。gizmo 用它避免 5–6 把锁的链式读取。</td></tr>
+<tr class="group"><td colspan="4">OpticsSnapshot / OpticsSnapshotRow</td></tr>
+<tr><td class="f">handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">optics 句柄。</td></tr>
+<tr><td class="f">visible / enable_lighting</td><td class="t">bool</td><td class="c">true</td><td class="s">可见 / 受光。</td></tr>
+<tr><td class="f">metallic … clearcoat_gloss</td><td class="t">float ×10</td><td class="c">同设备</td><td class="s">10 个 PBR 标量。</td></tr>
+<tr><td class="f">ambient / diffuse / specular_color</td><td class="t">fvec3</td><td class="c">同设备</td><td class="s">旧版颜色参数。</td></tr>
+<tr><td class="f">shininess</td><td class="t">float</td><td class="c">32.0</td><td class="s">旧版高光指数。</td></tr>
+<tr><td class="f">（刻意不含）</td><td class="t">—</td><td class="c">—</td><td class="s"><b>材质句柄不进来</b>：那是结构变更，走命令通道。</td></tr>
+<tr class="group"><td colspan="4">MechanicsSnapshot / MechanicsSnapshotRow</td></tr>
+<tr><td class="f">handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">mechanics 句柄。</td></tr>
+<tr><td class="f">mass / restitution / damping</td><td class="t">float</td><td class="c">1.0 / 0.8 / 0.99</td><td class="s">物理标量。</td></tr>
+<tr><td class="f">body_type</td><td class="t">BodyType</td><td class="c">Dynamic</td><td class="s">参与方式。</td></tr>
+<tr><td class="f">linear_lock_mask / angular_lock_mask</td><td class="t">uint8</td><td class="c">0</td><td class="s">轴锁定位掩码。</td></tr>
+<tr><td class="f">（刻意不含）</td><td class="t">—</td><td class="c">—</td><td class="s"><b>回调与几何句柄不进来</b>：回调是结构命令，几何句柄由 Actor 解析。</td></tr>
+<tr class="group"><td colspan="4">AcousticsSnapshot / AcousticsSnapshotRow</td></tr>
+<tr><td class="f">handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">acoustics 句柄。</td></tr>
+<tr><td class="f">volume / audio_enabled / resource_id</td><td class="t">float / bool / uint64</td><td class="c">1.0 / true / 0</td><td class="s">三个可写标量的投影。</td></tr>
+<tr class="group"><td colspan="4">EnvironmentSnapshot / EnvironmentSnapshotRow</td></tr>
+<tr><td class="f">handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">environment 句柄。</td></tr>
+<tr><td class="f">sun_direction</td><td class="t">fvec3</td><td class="c">(0,1,0)</td><td class="s">投影自 <code>EnvironmentDevice::sun_position</code>。</td></tr>
+<tr><td class="f">sun_intensity / sky_intensity</td><td class="t">float</td><td class="c">10 / 20</td><td class="s">光照标量。</td></tr>
+<tr><td class="f">floor_grid_enabled</td><td class="t">uint32</td><td class="c">1</td><td class="s">地面网格开关。</td></tr>
+<tr><td class="f">gravity / floor_y / floor_restitution / fixed_dt</td><td class="t">fvec3 / float×3</td><td class="c">—</td><td class="s">物理侧全局参数。</td></tr>
+<tr class="group"><td colspan="4">CameraFrameTiming — 运行时遥测（<b>永不序列化进场景</b>）</td></tr>
+<tr><td class="f">render_ms</td><td class="t">double</td><td class="c">0</td><td class="s">本帧渲染耗时。</td></tr>
+<tr><td class="f">denoise_ms</td><td class="t">double</td><td class="c">0</td><td class="s">降噪耗时。</td></tr>
+<tr><td class="f">frame_ms</td><td class="t">double</td><td class="c">0</td><td class="s">该相机相邻两个完成帧的墙钟间隔（<b>含等待</b>）。</td></tr>
+<tr><td class="f">mode</td><td class="t">CameraVisionRenderMode</td><td class="c">PathTracing</td><td class="s">记录时的渲染模式，防止把不同模式的耗时混算。</td></tr>
+<tr><td class="f">recorded_at</td><td class="t">steady_clock::time_point</td><td class="c">—</td><td class="s">采样时刻，读者据此判断数据是否过期。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>视口 UI / Gizmo 会话状态 <span class="tag">Session Store（独立 mutex，不进快照）</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:200px">字段</th><th style="width:130px">类型</th><th>语义</th></tr></thead>
+<tbody>
+<tr class="group"><td colspan="3">ViewportUiState</td></tr>
+<tr><td class="f">camera_handle</td><td class="t">uintptr_t</td><td class="s">所属相机。</td></tr>
+<tr><td class="f">mode</td><td class="t">ViewportUiMode</td><td class="s"><code>Flat2D</code> / <code>Stereo3D</code>（裸眼 3D 视口）。</td></tr>
+<tr><td class="f">cursor_shape</td><td class="t">ViewportUiCursorShape</td><td class="s"><code>Arrow/Hand/Crosshair/Grab/Grabbing/Hidden</code>。</td></tr>
+<tr><td class="f">calibration</td><td class="t">ViewportUiCalibration</td><td class="s">裸眼 3D 标定参数（透镜节距、倾角、相位、子像素偏移、显示尺寸、视差缩放）。</td></tr>
+<tr><td class="f">pointer</td><td class="t">ViewportUiPointerState</td><td class="s"><code>x / y / cursor_shape / owner_context</code>。远端 CEF 重构后并入 session store。</td></tr>
+<tr class="group"><td colspan="3">ViewportGizmoState / Target / PointerCommand / PointerResult</td></tr>
+<tr><td class="f">target.{camera_handle, scene_id, actor_name, actor_handle}</td><td class="t">混合</td><td class="s">gizmo 当前作用于谁。<code>scene_id</code> 与 <code>actor_name</code> 是<b>给编辑器的可读身份</b>，句柄给引擎。</td></tr>
+<tr><td class="f">hover_axis / active_axis</td><td class="t">ViewportGizmoAxis</td><td class="s">悬停轴 / 正在拖拽的轴。</td></tr>
+<tr><td class="f">dragging / sequence</td><td class="t">bool / uint64</td><td class="s">拖拽中标志 / 交互序号（丢弃过期输入）。</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="s14"><span class="h-num">14</span>事件字段</h2>
+
+<div class="note info">
+<div class="nt">先区分"真事件"与"占位事件"</div>
+<p><code>include/corona/events/</code> 下 9 个头文件、共 47 个事件结构体，其中 <b>19 个是 Demo 占位</b>：
+<code>*DemoEvent</code> / <code>EngineTo*DemoEvent</code> / <code>*ToEngineDemoEvent</code> 三件套，
+字段只有 <code>demo_value</code> 或 <code>delta_time</code>。它们是早期骨架阶段的示例，
+<b>没有真实发布者与订阅者</b>。本文表格中标为"占位"。</p>
+</div>
+
+<h4>引擎与帧 <span class="tag">engine_events.h</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:210px">结构 / 字段</th><th style="width:120px">类型</th><th style="width:100px">通道</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="f">FrameBeginEvent::frame_number</td><td class="t">uint64</td><td class="c">EventStream</td><td class="s">帧开始（<b>声明用途</b>，当前主循环未发布）。</td></tr>
+<tr><td class="f">FrameBeginEvent::delta_time</td><td class="t">float</td><td class="c">EventStream</td><td class="s">距上帧的秒数。</td></tr>
+<tr><td class="f">FrameEndEvent::frame_number</td><td class="t">uint64</td><td class="c">EventStream</td><td class="s">帧结束。</td></tr>
+<tr><td class="f">FrameEndEvent::frame_time</td><td class="t">float</td><td class="c">EventStream</td><td class="s">本帧耗时。</td></tr>
+<tr><td class="f">EngineShutdownEvent</td><td class="t">空结构</td><td class="c"><b>EventStream</b></td><td class="s"><b>唯一真实使用的 EventStream</b>。发布方：<code>SystemBase</code> 捕获异常后、<code>DisplaySystem</code> 设备丢失时。订阅方：<code>Engine::run</code>（<code>max_queue_size=1, DropOldest</code>，只关心"有没有"）。</td></tr>
+<tr><td class="f">EngineDemoEvent::demo_value</td><td class="t">int</td><td class="c">EventBus</td><td class="s">占位。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>场景 / Actor 驻留 <span class="tag">scene_system_events.h</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:230px">结构 / 字段</th><th style="width:110px">类型</th><th style="width:150px">发布 → 订阅</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="f">ActorEnteredFrustumEvent</td><td class="t">—</td><td class="c">Geometry → ?</td><td class="s">三字段 <code>scene / actor / camera</code>（均为 <code>uintptr_t</code>）。表示 actor 进入某相机视锥。</td></tr>
+<tr><td class="f">ActorLeftFrustumEvent</td><td class="t">—</td><td class="c">Geometry → ?</td><td class="s">同上，离开。</td></tr>
+<tr><td class="f">ActorEvictRequestedEvent::gpu_only</td><td class="t">bool</td><td class="c">外部 → Geometry</td><td class="s"><b>关键开关</b>：<code>true</code> 只释放 GPU（快照存 ActorCache + 延迟释放显存），<b>不</b>级联清 CPU——VRAM 压力专用，保证"GPU 压力绝不误伤 CPU"。<code>false</code> 走整体下线。</td></tr>
+<tr><td class="f">ActorRestoreRequestedEvent</td><td class="t">scene, actor</td><td class="c">外部 → Geometry</td><td class="s">从快照唤醒。</td></tr>
+<tr><td class="f">ActorLoadRequestedEvent / ActorUnloadRequestedEvent</td><td class="t">scene, actor</td><td class="c">外部 → Geometry</td><td class="s">请求加载 / 卸载。</td></tr>
+<tr><td class="f">ActorLoadFinishedEvent / ActorUnloadFinishedEvent</td><td class="t">scene, actor</td><td class="c">Geometry → 外部</td><td class="s">完成通知（旧接口，保留兼容）。</td></tr>
+<tr><td class="f">ActorResidencyChangedEvent::loaded</td><td class="t">bool</td><td class="c">Geometry → Optics / Mechanics</td><td class="s"><b>推荐统一监听这一条</b>：<code>true</code>=已加载 GPU 就绪可消费；<code>false</code>=已卸载应停止消费。</td></tr>
+<tr><td class="f">BroadphasePairsEvent::pairs</td><td class="t">vector&lt;pair&lt;uintptr_t,uintptr_t&gt;&gt;</td><td class="c">已不自动发布</td><td class="s">旧版 CPU 八叉树粗筛候选对。<b>Geometry 不再逐帧生成</b>；Mechanics 直接批量提交 GPU 粗筛。需要时显式调 <code>query_pairs()</code>。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>显示与帧就绪 <span class="tag">display_system_events.h</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:220px">结构 / 字段</th><th style="width:140px">类型</th><th style="width:150px">通道</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="f">DisplaySurfaceChangedEvent::surface</td><td class="t">void*</td><td class="c">EventBus（<b>已改用命令</b>）</td><td class="s">新 surface 就绪。</td></tr>
+<tr><td class="f">DisplaySurfaceChangedEvent::registration_ticket</td><td class="t">optional&lt;Ticket&gt;</td><td class="c">同上</td><td class="s">Display 注册完成的回执票据。</td></tr>
+<tr><td class="f">DisplaySurfaceRemovedEvent::done</td><td class="t">shared_ptr&lt;promise&lt;void&gt;&gt;</td><td class="c">EventBus</td><td class="s"><b>同步事件的典型坏例子</b>：处理器只能入队 + 返回，真正的拆除在 Display 的 update 线程，兑现 promise 后主线程才能销毁 OS 窗口。</td></tr>
+<tr><td class="f">OpticsFrameReadyEvent::surface</td><td class="t">void*</td><td class="c"><b>命令</b>（LatestWins）</td><td class="s">目标 surface，同时是合并键。</td></tr>
+<tr><td class="f">…::image_handle</td><td class="t">uintptr_t</td><td class="c">命令</td><td class="s"><code>ImageDevice</code> 槽位地址。</td></tr>
+<tr><td class="f">…::frame_index</td><td class="t">uint64</td><td class="c">命令</td><td class="s">帧序号，用于丢弃过期帧与诊断。</td></tr>
+<tr><td class="f">…::width / height</td><td class="t">uint32</td><td class="c">命令</td><td class="s">图像尺寸。</td></tr>
+<tr><td class="f">…::viewport_x / y / width / height</td><td class="t">uint32</td><td class="c">命令</td><td class="s">图像在 surface 里的目标矩形（支持分屏/小窗）。</td></tr>
+<tr><td class="f">…::published_image</td><td class="t">PublishedImage</td><td class="c">命令</td><td class="s"><b>必填</b>：拷贝生产者分配的<b>生命周期令牌</b>。缺了它，句柄被复用后会取到别人的图。</td></tr>
+<tr><td class="f">OpticsFrameConsumedEvent::submit_serial</td><td class="t">uint64</td><td class="c">EventBus（同线程）</td><td class="s">Display 已提交一个消费该帧的合成。Optics 据此释放 native 帧节流槽位。</td></tr>
+<tr><td class="f">UIFrameReadyEvent::first_present_ticket</td><td class="t">optional&lt;Ticket&gt;</td><td class="c"><b>命令</b></td><td class="s">首帧上屏回执。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>光学 / 截图 / 后端切换 <span class="tag">optics_system_events.h</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:230px">结构 / 字段</th><th style="width:150px">类型</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="f">ScreenshotRequestEvent::camera_handle</td><td class="t">uintptr_t</td><td class="s"><b>匹配键</b>：用相机句柄而非 surface，因此离屏相机也能截图。</td></tr>
+<tr><td class="f">…::file_path</td><td class="t">string</td><td class="s">输出文件路径。</td></tr>
+<tr><td class="f">…::completion_promise</td><td class="t">shared_ptr&lt;promise&lt;bool&gt;&gt;</td><td class="s">请求-应答回执；bool = 成功与否。</td></tr>
+<tr><td class="f">…::deadline</td><td class="t">steady_clock::time_point</td><td class="s">超时上限，防止 Optics 不跑时调用方永久等待。</td></tr>
+<tr><td class="f">…::render_frames</td><td class="t">unsigned</td><td class="s">固定帧数采集：<b>0 = 正常下一帧截图</b>；非 0 = 重置 Vision 历史后连续渲染再回读。</td></tr>
+<tr><td class="f">…::warmup_frames</td><td class="t">unsigned</td><td class="s">正式采集前的预热帧数（让降噪器收敛）。</td></tr>
+<tr><td class="f">…::timings_path</td><td class="t">string</td><td class="s">可选的耗时明细输出路径。</td></tr>
+<tr><td class="f">RenderBackendSwitchEvent::backend</td><td class="t">int</td><td class="s"><code>0</code>=Native（Vulkan 光栅）/<code>1</code>=Vision（Vulkan 路径追踪）。Vision 设备按需惰性初始化。</td></tr>
+<tr><td class="f">…::camera_handle</td><td class="t">uintptr_t</td><td class="s">只切这台相机；0 表示全部。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>音频 / 网络 / 脚本</h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:210px">结构 / 字段</th><th style="width:150px">类型</th><th style="width:170px">通道</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="f">PlayAudioEvent::resource_id</td><td class="t">uint64</td><td class="c">EventBus（跨线程）</td><td class="s">要播放的音频资源。</td></tr>
+<tr><td class="f">…::loop</td><td class="t">bool</td><td class="c">EventBus</td><td class="s">是否循环。</td></tr>
+<tr><td class="f">…::acoustics_handle</td><td class="t">uintptr_t</td><td class="c">EventBus</td><td class="s"><b>非 0 = 空间音频</b>：声学线程每帧据此解析 actor 世界坐标。0 = 旧的全局非空间播放。</td></tr>
+<tr><td class="f">StopAudioEvent::resource_id / acoustics_handle</td><td class="t">uint64 / uintptr_t</td><td class="c">EventBus</td><td class="s">句柄非 0 按句柄停；否则按 resource_id 停。</td></tr>
+<tr><td class="f">PeerConnectedEvent::peer_id</td><td class="t">string</td><td class="c">EventBus</td><td class="s">形如 <code>ip:port</code>（HELLO 之后改为 <code>name@ip:listen_port</code>）。</td></tr>
+<tr><td class="f">…::peer_name</td><td class="t">string</td><td class="c">EventBus</td><td class="s">实例名，用于 UI 显示。</td></tr>
+<tr><td class="f">PeerDisconnectedEvent::peer_id</td><td class="t">string</td><td class="c">EventBus</td><td class="s">断开。</td></tr>
+<tr><td class="f">RemoteSyncReceivedEvent::peer_id</td><td class="t">string</td><td class="c">EventBus</td><td class="s">收到远端同步，供 UI/脚本层刷新。</td></tr>
+<tr><td class="f">NetworkHostStartedEvent::port</td><td class="t">uint16</td><td class="c">EventBus</td><td class="s">监听端口。注意当前是 full-mesh，"主机"只是房间第一个实例的概念。</td></tr>
+<tr><td class="f">NetworkHostStoppedEvent</td><td class="t">空</td><td class="c">EventBus</td><td class="s">已停止。</td></tr>
+<tr><td class="f">ScriptFinishStartEvent</td><td class="t">（含 delta_time）</td><td class="c">EventBus</td><td class="s">Python 初始化完成 → UI 系统订阅后显示窗口。<b>跨线程</b>：Python 线程发布，主线程接收。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s15"><span class="h-num">15</span>共享设备字段</h2>
+
+<p>13 个 <code>Storage</code> 的载荷。这是引擎的"世界"。只有拥有者系统写它，
+其余系统读它；外部线程两者都不直接做（走命令 / 快照）。</p>
+
+<h4>ModelResource · ModelTransform <span class="tag">Storage #1 #2</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:190px">字段</th><th style="width:120px">类型</th><th style="width:80px">默认</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="f">ModelResource::model_id</td><td class="t">uint64</td><td class="c">—</td><td class="s">资源管理器分配的模型 id。<code>0</code> = 尚未导入完成（配合 <code>PendingImport</code>）。</td></tr>
+<tr class="group"><td colspan="4">ModelTransform</td></tr>
+<tr><td class="f">affine_basis</td><td class="t">fmat4x4</td><td class="c">单位阵</td><td class="s">作者给定的线性变换，在可编辑 TRS <b>之后</b>复合。保留剪切/镜像，不做 TRS 分解。</td></tr>
+<tr><td class="f">position</td><td class="t">fvec3</td><td class="c">(0,0,0)</td><td class="s">平移单独存放，使流式加载/拾取能拿到正确的 actor 原点。</td></tr>
+<tr><td class="f">euler_rotation</td><td class="t">fvec3</td><td class="c">(0,0,0)</td><td class="s">欧拉角（度）。</td></tr>
+<tr><td class="f">scale</td><td class="t">fvec3</td><td class="c">(1,1,1)</td><td class="s">缩放。</td></tr>
+<tr><td class="f">compute_matrix()</td><td class="t">fmat4x4</td><td class="c">—</td><td class="s">定义在 <code>shared_data_hub.cpp</code>：避免在同时引入 ocarina/vision 头的 TU 里实例化 <code>ktm::affine3d::rotate</code>（那些头定义了全局 <code>operator*</code>，会与 ktm 产生歧义重载）。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>GeometryDevice <span class="tag">Storage #3 · 字段最多</span></h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:210px">字段</th><th style="width:130px">类型</th><th style="width:80px">默认</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="f">import_options</td><td class="t">ModelImportOptions</td><td class="c">—</td><td class="s">导入选项（简化、LOD、缩放等），在异步 import 时才真正使用。</td></tr>
+<tr><td class="f">transform_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">指向 <code>ModelTransform</code> 槽位。</td></tr>
+<tr><td class="f">model_resource_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">指向 <code>ModelResource</code> 槽位。</td></tr>
+<tr><td class="f">mesh_handles</td><td class="t">vector&lt;MeshDevice&gt;</td><td class="c">{}</td><td class="s">每个子网格的 GPU 缓冲。<b>LRU 淘汰只清它</b>，不改 <code>gpu_build_state</code>。</td></tr>
+<tr><td class="f">mesh_instances</td><td class="t">vector&lt;MeshInstanceDevice&gt;</td><td class="c">{}</td><td class="s">场景实例（同一 MeshDevice 可被多个实例引用）。</td></tr>
+<tr><td class="f">model_nodes</td><td class="t">vector&lt;ModelNodes::Node&gt;</td><td class="c">{}</td><td class="s">模型节点树（用于编辑器层级与逐节点变换）。</td></tr>
+<tr><td class="f">model_node_overrides</td><td class="t">vector&lt;API::ModelNodeOverride&gt;</td><td class="c">{}</td><td class="s">对节点树的覆盖（编辑器逐节点编辑）。</td></tr>
+<tr><td class="f">model_node_revision</td><td class="t">uint64</td><td class="c">0</td><td class="s">节点覆盖版本，用于缓存失效。</td></tr>
+<tr><td class="f">node_instance_prefix</td><td class="t">Matrix</td><td class="c">单位阵</td><td class="s">实例级节点变换前缀。</td></tr>
+<tr><td class="f">has_node_instance_prefix</td><td class="t">bool</td><td class="c">false</td><td class="s">前缀是否有效（避免拿单位阵做无谓乘法）。</td></tr>
+<tr><td class="f">model_node_instances_mapped</td><td class="t">bool</td><td class="c">false</td><td class="s">节点实例是否已映射完成。</td></tr>
+<tr><td class="f">model_node_bounds</td><td class="t">optional&lt;array&lt;float,6&gt;&gt;</td><td class="c">nullopt</td><td class="s">节点级 AABB（min3 + max3）。</td></tr>
+<tr><td class="f">native_local_correction_offset / _scale</td><td class="t">fvec3 / float</td><td class="c">0 / 1.0</td><td class="s">原生本地空间修正，用于对齐导入模型的坐标系。</td></tr>
+<tr><td class="f">gpu_build_state</td><td class="t">GpuBuildState</td><td class="c">Ready</td><td class="s"><code>Ready</code> / <code>PendingImport</code>（只记录了路径，model_id=0）/ <code>PendingBuild</code>（model_id 就绪待建 mesh）/ <code>Failed</code>（不再重试）。</td></tr>
+<tr><td class="f">model_path_utf8</td><td class="t">string</td><td class="c">""</td><td class="s">待异步导入的模型路径（UTF-8）。仅 <code>PendingImport</code> 阶段有意义。</td></tr>
+<tr><td class="f">import_epoch</td><td class="t">uint64</td><td class="c">0</td><td class="s"><b>ABA 防护</b>：发起 import 时写入进程级单调值，回写前比对；不符说明槽位已被 deallocate→复用，丢弃本次结果。0 = 无在途任务。</td></tr>
+<tr><td class="f">is_skinned</td><td class="t">bool</td><td class="c">false</td><td class="s">是否含骨架。GeometrySystem 在建/传 mesh 时探测；非蒙皮恒 false，零开销。</td></tr>
+<tr><td class="f">skin_pose_revision</td><td class="t">uint64</td><td class="c">0</td><td class="s">蒙皮姿态版本，下游据此判断要不要重取。</td></tr>
+<tr><td class="f">animation_player</td><td class="t">shared_ptr&lt;AnimationPlayer&gt;</td><td class="c">新建</td><td class="s">每实例的动画播放器（clip 选择、异步源、局部 TRS 过渡）。</td></tr>
+<tr><td class="f">skinned_cpu_vertices</td><td class="t">vector&lt;vector&lt;byte&gt;&gt;</td><td class="c">{}</td><td class="s"><b>仅活跃 Vision 相机请求 GPU 蒙皮 LOD0 回读时填充</b>，每 mesh 一份原始字节，布局严格等同 <code>Resource::Vertex</code>（pos3+normal3+uv2 = 32 B）。光栅模式及非蒙皮几何为空。</td></tr>
+<tr><td class="f">skinned_aabb_valid</td><td class="t">bool</td><td class="c">false</td><td class="s">尚未蒙皮过（首帧前）时物理回退静态 AABB。</td></tr>
+<tr><td class="f">collision_model_id</td><td class="t">uint64</td><td class="c">0</td><td class="s">Mechanics 在<b>三角数据准备好之后</b>才发布；消费者与当前已加载模型身份比对，避免用旧模型碰撞。</td></tr>
+<tr><td class="f">skinned_aabb_min / max</td><td class="t">fvec3</td><td class="c">0</td><td class="s">蒙皮动态局部 AABB，每帧合并 GPU 蒙皮包围盒；混合静态子网格时按完整碰撞网格补全。</td></tr>
+<tr><td class="f">ik_chains</td><td class="t">vector&lt;IkChain&gt;</td><td class="c">{}</td><td class="s">每帧采样动画 local → 更新自动目标 → 按序求解启用的链；最终 local 只做一次 FK 和蒙皮。</td></tr>
+<tr><td class="f">ik_chains_revision</td><td class="t">uint64</td><td class="c">0</td><td class="s">配置替换时自增；Mechanics 据此丢弃过期的快照结果。</td></tr>
+<tr><td class="f">bone_name_to_node_idx</td><td class="t">unordered_map&lt;string,int&gt;</td><td class="c">{}</td><td class="s">骨骼名 → <code>SkeletonData::nodes</code> 下标。首次求值及模型替换时重建。</td></tr>
+<tr><td class="f">skeleton_cache_model_id</td><td class="t">uint64</td><td class="c">0</td><td class="s">上面这张缓存对应的模型 id（缓存失效判据）。</td></tr>
+<tr><td class="f">leaf_bone_names</td><td class="t">vector&lt;string&gt;</td><td class="c">{}</td><td class="s">叶子骨骼名（<code>children</code> 为空的节点）。编辑器可直接查，不依赖首帧动画。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>MeshDevice · MeshInstanceDevice · MeshMaterialDevice</h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:200px">字段</th><th style="width:130px">类型</th><th>语义</th></tr></thead>
+<tbody>
+<tr class="group"><td colspan="3">MeshDevice — 一个子网格的 GPU 资源</td></tr>
+<tr><td class="f">draw_clusters</td><td class="t">MeshDrawClusters</td><td class="s">绘制簇（按空间/材质分组的索引区间）。</td></tr>
+<tr><td class="f">shadowIndexBuffer</td><td class="t">HardwareBuffer</td><td class="s">阴影 LOD 专用索引缓冲。</td></tr>
+<tr><td class="f">indexBuffer / vertexBuffer</td><td class="t">HardwareBuffer</td><td class="s">光栅化用索引/顶点缓冲。</td></tr>
+<tr><td class="f">indexStorageBuffer / vertexStorageBuffer</td><td class="t">HardwareBuffer</td><td class="s">VBuffer resolve 用存储缓冲。<b>与光栅共享同一块底层分配</b>——不是四份显存。</td></tr>
+<tr><td class="f">materialIndex</td><td class="t">uint32</td><td class="s">材质索引（指向 textures 数组之外的材质表）。</td></tr>
+<tr><td class="f">textureBuffer</td><td class="t">HardwareImage</td><td class="s">打包后的纹理数组（替代逐张 texture）。</td></tr>
+<tr><td class="f">material</td><td class="t">shared_ptr&lt;const MeshMaterialDevice&gt;</td><td class="s">材质来源；<b>可被多个 MeshDevice 共享</b>，因此显存令牌是 shared_ptr。</td></tr>
+<tr><td class="f">materialColor</td><td class="t">array&lt;float,4&gt;</td><td class="s">RGBA 材质色。</td></tr>
+<tr><td class="f">vertex_count / index_count / max_index</td><td class="t">uint32</td><td class="s">CPU/导入侧统计，用于 GPU 可见性与延迟解码诊断。</td></tr>
+<tr><td class="f">mesh_mem</td><td class="t">GpuMemToken</td><td class="s">覆盖 4 个 GPU 缓冲的记账令牌。</td></tr>
+<tr><td class="f">tex_mem</td><td class="t">shared_ptr&lt;GpuMemToken&gt;</td><td class="s">覆盖 <code>textureBuffer</code>；<b>仅真实纹理时非空</b>（占位纹理为空）。同一张纹理只记账一次，最后一个引用释放时才扣减。</td></tr>
+<tr class="group"><td colspan="3">MeshInstanceDevice — 一个场景实例</td></tr>
+<tr><td class="f">mesh_index</td><td class="t">uint32</td><td class="s">指向 <code>mesh_handles</code> 的下标。</td></tr>
+<tr><td class="f">object_id</td><td class="t">uint32</td><td class="s">渲染侧对象 id（写进 G-Buffer 的 ObjectID 通道，供拾取使用）。</td></tr>
+<tr><td class="f">node_index</td><td class="t">uint32</td><td class="s">对应模型节点；<code>UINT32_MAX</code> = 不绑定节点。</td></tr>
+<tr><td class="f">visible</td><td class="t">bool</td><td class="s">逐实例可见性。</td></tr>
+<tr><td class="f">local_bounds_min / max</td><td class="t">array&lt;float,3&gt;</td><td class="s">实例本地 AABB。</td></tr>
+<tr><td class="f">original_transform</td><td class="t">fmat4x4</td><td class="s">作者原始变换（用于恢复/对比）。</td></tr>
+<tr><td class="f">transform</td><td class="t">fmat4x4</td><td class="s">当前网格本地空间 → actor 本地空间（列主序）。</td></tr>
+<tr><td class="f">node_delta_prefix</td><td class="t">Matrix</td><td class="s">作者节点世界空间 → 烘焙/蒙皮顶点的归一化空间。</td></tr>
+<tr class="group"><td colspan="3">MeshMaterialDevice</td></tr>
+<tr><td class="f">Slot</td><td class="t">enum</td><td class="s">8 个槽：<code>BaseColor / Normal / Metallic / Roughness / Occlusion / Emissive / Specular / SpecularColor</code>（+ <code>Count</code>）。</td></tr>
+<tr><td class="f">source</td><td class="t">Resource::MaterialData</td><td class="s">CPU 侧材质源数据。</td></tr>
+<tr><td class="f">textures[8]</td><td class="t">array&lt;HardwareImage,8&gt;</td><td class="s">每槽一张 GPU 图。</td></tr>
+<tr><td class="f">memory[8]</td><td class="t">array&lt;shared_ptr&lt;GpuMemToken&gt;,8&gt;</td><td class="s">每槽的显存记账。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>MechanicsDevice · AcousticsDevice · OpticsDevice</h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:210px">字段</th><th style="width:130px">类型</th><th style="width:80px">默认</th><th>语义</th></tr></thead>
+<tbody>
+<tr class="group"><td colspan="4">MechanicsDevice</td></tr>
+<tr><td class="f">geometry_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">绑定的几何槽位。</td></tr>
+<tr><td class="f">min_xyz / max_xyz</td><td class="t">fvec3</td><td class="c">—</td><td class="s">静态局部 AABB。<b>蒙皮时会被动包围盒覆盖</b>（见 <code>skinned_aabb</code>）。</td></tr>
+<tr><td class="f">mass / restitution / damping</td><td class="t">float</td><td class="c">1.0 / 0.8 / 0.99</td><td class="s">物理标量。</td></tr>
+<tr><td class="f">body_type</td><td class="t">BodyType</td><td class="c">Dynamic</td><td class="s">取代旧的 <code>physics_enabled</code> + <code>collision_shape</code> 双字段。</td></tr>
+<tr><td class="f">linear_lock_mask / angular_lock_mask</td><td class="t">uint8</td><td class="c">0</td><td class="s">轴锁定位掩码（bit0=X…）。</td></tr>
+<tr><td class="f">collision_callback</td><td class="t">function</td><td class="c">空</td><td class="s"><b>只能经结构命令写入</b>（Fifo），因为 std::function 无法随值命令传递、且注册顺序有意义。</td></tr>
+<tr><td class="f">on_move_callback</td><td class="t">function</td><td class="c">空</td><td class="s">同上。</td></tr>
+<tr class="group"><td colspan="4">AcousticsDevice</td></tr>
+<tr><td class="f">geometry_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">绑定的几何（用于取世界坐标做空间音频）。</td></tr>
+<tr><td class="f">resource_id</td><td class="t">uint64</td><td class="c">0</td><td class="s">绑定的音频资源；0 = 未绑定。</td></tr>
+<tr><td class="f">volume</td><td class="t">float</td><td class="c">1.0</td><td class="s">音量。</td></tr>
+<tr><td class="f">audio_enabled</td><td class="t">bool</td><td class="c">true</td><td class="s">是否允许发声。</td></tr>
+<tr class="group"><td colspan="4">OpticsDevice</td></tr>
+<tr><td class="f">geometry_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">绑定的几何。<code>OpticsUpdateCommand</code> 用它做守卫。</td></tr>
+<tr><td class="f">material_overrides / principled</td><td class="t">shared_ptr&lt;const ...&gt;</td><td class="c">nullptr</td><td class="s">整份材质配置（结构负载）。</td></tr>
+<tr><td class="f">visible</td><td class="t">bool</td><td class="c">true</td><td class="s">是否参与渲染。</td></tr>
+<tr><td class="f">bEnableLighting</td><td class="t">bool</td><td class="c">true</td><td class="s">false 时不受灯光照射影响（仍参与渲染，但不接收光照计算）。<b>命名是历史遗留的匈牙利前缀</b>，其余字段已改 snake_case。</td></tr>
+<tr><td class="f">metallic … clearcoatGloss</td><td class="t">float ×10</td><td class="c">见命令表</td><td class="s">Disney Principled BRDF 参数。</td></tr>
+<tr><td class="f">ambient / diffuse / specular_color / shininess</td><td class="t">fvec3×3 + float</td><td class="c">—</td><td class="s">Legacy 参数，保留向后兼容。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>ProfileDevice · ActorDevice · CameraDevice</h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:210px">字段</th><th style="width:130px">类型</th><th style="width:80px">默认</th><th>语义</th></tr></thead>
+<tbody>
+<tr class="group"><td colspan="4">ProfileDevice — 一套组件的句柄包</td></tr>
+<tr><td class="f">optics_handle / acoustics_handle / mechanics_handle / geometry_handle</td><td class="t">uintptr_t ×4</td><td class="c">0</td><td class="s">一个 Profile = Geometry + 三个可选组件。<b>Actor → Profile[] → 各组件</b> 是解析链，<code>resolve_actor_geometry_handles()</code> 要拿 5–6 把锁。</td></tr>
+<tr class="group"><td colspan="4">ActorDevice</td></tr>
+<tr><td class="f">profile_handles</td><td class="t">vector&lt;uintptr_t&gt;</td><td class="c">{}</td><td class="s">该 Actor 拥有的全部 Profile。</td></tr>
+<tr><td class="f">model_path</td><td class="t">filesystem::path</td><td class="c">""</td><td class="s">模型路径（Actor 身份的一部分）。</td></tr>
+<tr><td class="f">model_import_options</td><td class="t">ModelImportOptions</td><td class="c">—</td><td class="s">导入选项副本。</td></tr>
+<tr><td class="f">follow_camera</td><td class="t">bool</td><td class="c">false</td><td class="s">是否跟随相机（HUD/附件）。</td></tr>
+<tr><td class="f">pinned</td><td class="t">bool</td><td class="c">false</td><td class="s">标记后不被距离剔除卸载，也不被不可见帧淘汰。<b>钉住的 actor 会绕过 LRU</b>。</td></tr>
+<tr class="group"><td colspan="4">CameraDevice — 每台相机的完整状态（27+ 字段）</td></tr>
+<tr><td class="f">surface</td><td class="t">void*</td><td class="c">nullptr</td><td class="s">目标窗口/swapchain。</td></tr>
+<tr><td class="f">follows_default_surface</td><td class="t">bool</td><td class="c">true</td><td class="s">自动跟随默认 surface（窗口 resize 时同步尺寸）。</td></tr>
+<tr><td class="f">position / forward / world_up</td><td class="t">fvec3</td><td class="c">(0,0,-5)/(0,0,1)/(0,1,0)</td><td class="s">相机基。<code>compute_view_matrix()</code> 用 <code>look_to_lh</code>。</td></tr>
+<tr><td class="f">fov / aspect</td><td class="t">float</td><td class="c">60 / 16:9</td><td class="s">投影。注意命令缺省 fov 是 45，设备缺省是 60。</td></tr>
+<tr><td class="f">near_plane / far_plane</td><td class="t">float</td><td class="c">0.1 / 100</td><td class="s">裁剪面。</td></tr>
+<tr><td class="f">projection_x_sign</td><td class="t">float</td><td class="c">1.0</td><td class="s">乘到 <code>proj[0][0]</code>，保留导入相机的镜像基。</td></tr>
+<tr><td class="f">width / height</td><td class="t">uint32</td><td class="c">1920/1080</td><td class="s">渲染分辨率。</td></tr>
+<tr><td class="f">output_mode</td><td class="t">CameraOutputMode</td><td class="c">FinalColor</td><td class="s">10 选 1 的输出通道。</td></tr>
+<tr><td class="f">render_backend</td><td class="t">CameraRenderBackend</td><td class="c">Native</td><td class="s">光栅 or 路径追踪。</td></tr>
+<tr><td class="f">vision_render_mode</td><td class="t">CameraVisionRenderMode</td><td class="c">PathTracing</td><td class="s">PT 每帧 1 spp；ReBLUR 持有时间历史。</td></tr>
+<tr><td class="f">vision_denoise / vision_denoiser</td><td class="t">bool / enum</td><td class="c">true / ReBLUR</td><td class="s">降噪开关与算法。</td></tr>
+<tr><td class="f">vision_{reblur,pt,restir,relax}_settings</td><td class="t">string(JSON)</td><td class="c">"{}"</td><td class="s">用户设定的参数。<b>会被写进场景存档</b>。</td></tr>
+<tr><td class="f">vision_reblur_effective_settings</td><td class="t">string</td><td class="c">"{}"</td><td class="s"><b>运行时反馈，不序列化</b>：渲染器实际生效的值（可能被 clamp/修正）。</td></tr>
+<tr><td class="f">vision_pt_effective_settings / restir_effective / relax_effective</td><td class="t">string</td><td class="c">"{}"</td><td class="s">同上，三个降噪器各自的反馈。</td></tr>
+<tr><td class="f">vision_restir_applied_settings</td><td class="t">string</td><td class="c">""</td><td class="s">与运行时反馈匹配的覆盖值，<b>不序列化</b>。</td></tr>
+<tr><td class="f">vision_accumulation / vision_stable_planes</td><td class="t">bool</td><td class="c">false / true</td><td class="s">累积模式 / 稳定平面假设（影响重投影）。</td></tr>
+<tr><td class="f">view_open</td><td class="t">bool</td><td class="c">false</td><td class="s">编辑器视口是否可见。</td></tr>
+<tr><td class="f">viewport_rect_active</td><td class="t">bool</td><td class="c">false</td><td class="s">下面四个矩形是否有效。</td></tr>
+<tr><td class="f">view_x / view_y / view_width / view_height</td><td class="t">int</td><td class="c">120/120/960/540</td><td class="s">屏幕矩形。</td></tr>
+<tr><td class="f">move_speed</td><td class="t">float</td><td class="c">1.0</td><td class="s">编辑器飞行速度。</td></tr>
+<tr><td class="f">actor_pick_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">该相机的拾取槽位（<code>CameraReleaseCommand</code> 会一并释放）。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>剩余四个设备</h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:200px">字段</th><th style="width:140px">类型</th><th style="width:80px">默认</th><th>语义</th></tr></thead>
+<tbody>
+<tr class="group"><td colspan="4">ActorPickDevice</td></tr>
+<tr><td class="f">request_id</td><td class="t">string</td><td class="c">""</td><td class="s">最近一次请求 id。</td></tr>
+<tr><td class="f">x / y</td><td class="t">uint32</td><td class="c">0</td><td class="s">请求的屏幕坐标。</td></tr>
+<tr><td class="f">result_x / result_y</td><td class="t">uint32</td><td class="c">0</td><td class="s">结果坐标。</td></tr>
+<tr><td class="f">actor_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">命中 Actor。</td></tr>
+<tr><td class="f">node_index</td><td class="t">uint32</td><td class="c">UINT32_MAX</td><td class="s">命中子节点。</td></tr>
+<tr><td class="f">pending</td><td class="t">bool</td><td class="c">false</td><td class="s">请求在途。</td></tr>
+<tr><td class="f">result_ready</td><td class="t">bool</td><td class="c">false</td><td class="s">结果可读。</td></tr>
+<tr class="group"><td colspan="4">EnvironmentDevice</td></tr>
+<tr><td class="f">authored_lighting</td><td class="t">shared_ptr&lt;const json&gt;</td><td class="c">nullptr</td><td class="s">作者给定的完整光照配置。<b>结构负载</b>，不进 Environment 命令通道。</td></tr>
+<tr><td class="f">authored_lighting_revision</td><td class="t">size_t</td><td class="c">0</td><td class="s">上面这份配置的版本，用于换绑判定。</td></tr>
+<tr><td class="f">sun_position</td><td class="t">fvec3</td><td class="c">—</td><td class="s">太阳方向/位置（名字是 position，语义是方向——历史遗留）。</td></tr>
+<tr><td class="f">floor_grid_enabled</td><td class="t">uint32</td><td class="c">1</td><td class="s">地面网格开关。</td></tr>
+<tr><td class="f">sun_color</td><td class="t">fvec3</td><td class="c">(1, .949, .853)</td><td class="s">约 5500 K 日光的色温近似。</td></tr>
+<tr><td class="f">sun_intensity / sky_intensity</td><td class="t">float</td><td class="c">10 / 20</td><td class="s">太阳直射辐照度 / 大气散射功率。</td></tr>
+<tr><td class="f">exposure</td><td class="t">float</td><td class="c">1.0</td><td class="s">全局曝光。</td></tr>
+<tr><td class="f">gravity</td><td class="t">fvec3</td><td class="c">(0,-9.8,0)</td><td class="s">重力。</td></tr>
+<tr><td class="f">floor_y / floor_restitution</td><td class="t">float</td><td class="c">0 / 0.6</td><td class="s">地面高度 / 弹性。</td></tr>
+<tr><td class="f">fixed_dt</td><td class="t">float</td><td class="c">1/60</td><td class="s">物理定步长。</td></tr>
+<tr class="group"><td colspan="4">SceneDevice</td></tr>
+<tr><td class="f">enabled</td><td class="t">bool</td><td class="c">true</td><td class="s">场景是否参与（整体开关）。</td></tr>
+<tr><td class="f">simulation_enabled</td><td class="t">bool</td><td class="c">false</td><td class="s">是否推进模拟（编辑器里暂停物理时关闭）。</td></tr>
+<tr><td class="f">environment</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">绑定的环境槽位。</td></tr>
+<tr><td class="f">actor_handles</td><td class="t">vector&lt;uintptr_t&gt;</td><td class="c">{}</td><td class="s">场景内全部 actor。</td></tr>
+<tr><td class="f">visible_actor_handles</td><td class="t">vector&lt;uintptr_t&gt;</td><td class="c">{}</td><td class="s">通过剔选后可见的 actor（Optics 直接用它）。</td></tr>
+<tr><td class="f">camera_handles</td><td class="t">vector&lt;uintptr_t&gt;</td><td class="c">{}</td><td class="s">场景内相机。</td></tr>
+<tr><td class="f">active_camera_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">当前活动相机。</td></tr>
+<tr><td class="f">min_world / max_world / center_world</td><td class="t">fvec3</td><td class="c">—</td><td class="s">场景世界 AABB 与中心（用于相机取景、距离剔除基准）。</td></tr>
+<tr class="group"><td colspan="4">ImageDevice — 帧交换</td></tr>
+<tr><td class="f">image</td><td class="t">HardwareImage</td><td class="c">—</td><td class="s">实际渲染结果。</td></tr>
+<tr><td class="f">submit_receipt</td><td class="t">SubmitReceipt</td><td class="c">—</td><td class="s">本次提交的完成凭据。</td></tr>
+<tr><td class="f">consumed_receipt</td><td class="t">SubmitReceipt</td><td class="c">—</td><td class="s">Display 合成完写入。<b>生产者在覆盖前等待它</b>，防止 GPU 读写竞争。</td></tr>
+<tr><td class="f">metadata</td><td class="t">ImageFrameMetadata</td><td class="c">—</td><td class="s"><code>frame_index / width / height / viewport_x / viewport_y / viewport_width / viewport_height</code>。<b>与图像在同一把槽锁下发布</b>，避免"图是新的、元数据是旧的"。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>关键枚举</h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:210px">枚举</th><th>取值与语义</th></tr></thead>
+<tbody>
+<tr><td class="f">BodyType</td><td class="s"><code>Dynamic</code> 受重力和冲量、与其他物体碰撞弹开 ｜ <code>Kinematic</code> 外部驱动，不受重力和碰撞冲量，但推开 Dynamic 并触发回调 ｜ <code>Static</code> 完全静止，不受任何力，仍触发回调 ｜ <code>Phantom</code> 完全不参与碰撞，不受力（纯视觉/音频）</td></tr>
+<tr><td class="f">CameraOutputMode</td><td class="s"><code>FinalColor / BaseColor / Normal / WorldPosition / ObjectID / VisibilityBuffer / SSAO / SSAORaw / ShadowMaskRaw / ShadowMask</code></td></tr>
+<tr><td class="f">CameraRenderBackend</td><td class="s"><code>Native</code>（Vulkan 光栅）｜ <code>Vision</code>（Vulkan 路径追踪，设备惰性初始化）</td></tr>
+<tr><td class="f">CameraVisionRenderMode</td><td class="s"><code>PathTracing / SVGF / SSAT / ProgressivePathTracing / ReSTIR</code></td></tr>
+<tr><td class="f">CameraVisionDenoiser</td><td class="s"><code>Scene / SVGF / ReBLUR / ReLAX</code></td></tr>
+<tr><td class="f">ViewportUiMode / CursorShape</td><td class="s"><code>Flat2D / Stereo3D</code>；<code>Arrow / Hand / Crosshair / Grab / Grabbing / Hidden</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="s16"><span class="h-num">16</span>网络协议字段</h2>
+
+<p>协同编辑走 ENet（UDP）。约定：<b>1 字节 <code>MessageType</code> 前缀</b>，小端定长字段，
+字符串一律"长度前缀 + 字节"，所有长度都有硬上限（防止畸形包强制超大分配）。</p>
+
+<h4>常量</h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:280px">常量</th><th style="width:110px">值</th><th>用途</th></tr></thead>
+<tbody>
+<tr><td class="f">kProtocolVersion</td><td class="c">1</td><td class="s">二进制格式版本，改格式必须自增</td></tr>
+<tr><td class="f">kDiscoveryProtocolVersion</td><td class="c">2</td><td class="s">发现包版本</td></tr>
+<tr><td class="f">kDefaultPort</td><td class="c">27960</td><td class="s">ENet 监听端口</td></tr>
+<tr><td class="f">kHeartbeatIntervalMs / kPeerTimeoutMs</td><td class="c">1000 / 3000</td><td class="s">心跳间隔 / 判定离线超时</td></tr>
+<tr><td class="f">kSyncIntervalMs</td><td class="c">16</td><td class="s">脏值轮询周期（≈60 Hz）</td></tr>
+<tr><td class="f">kChannelReliable / Transform / Bulk / Realtime</td><td class="c">0 / 1 / 2 / 3</td><td class="s">控制与编辑操作 / 可合并变换 / 快照与文件 / 不可靠保活</td></tr>
+<tr><td class="f">kBulkPacketsPerPollBudget / kBulkBytesPerPollBudget</td><td class="c">8 / 256 KB</td><td class="s">每次 poll 的 bulk 通道预算，防止大包饿死实时流量</td></tr>
+<tr><td class="f">kMaxEditorSyncStringBytes</td><td class="c">1024</td><td class="s">guid / field_name / writer_peer_id 上限</td></tr>
+<tr><td class="f">kMaxEditorSyncValueBytes</td><td class="c">1 MB</td><td class="s">单个字段值上限</td></tr>
+<tr><td class="f">kMaxEditorSyncOperations</td><td class="c">4096</td><td class="s">一次快照的操作数上限</td></tr>
+<tr><td class="f">kEditorSnapshotChunkOperations / kMaxEditorSnapshotChunkBytes</td><td class="c">256 / 1 MB</td><td class="s">分块快照的单块预算</td></tr>
+<tr><td class="f">kEditorSnapshotTimeoutMs</td><td class="c">5000</td><td class="s">分块快照会话超时</td></tr>
+<tr><td class="f">kEditorSyncSchemaVersion / kEditorSnapshotSchemaVersion</td><td class="c">1 / 2</td><td class="s">两种载荷各自的 schema 版本</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>MessageType — 1 字节，31 个消息</h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:90px">码</th><th style="width:250px">枚举</th><th style="width:110px">通道</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="c">0x01</td><td class="f">SYNC_DIRTY</td><td class="c">reliable</td><td class="s">增量脏同步</td></tr>
+<tr><td class="c">0x02</td><td class="f">SYNC_FULL</td><td class="c">reliable</td><td class="s">全量状态快照（新 peer 加入）</td></tr>
+<tr><td class="c">0x03</td><td class="f">HEARTBEAT</td><td class="c"><b>realtime</b></td><td class="s">保活</td></tr>
+<tr><td class="c">0x04</td><td class="f">HELLO</td><td class="c">reliable</td><td class="s">连接后握手，交换稳定身份。<b>必须</b>：ENet 的 CONNECT 事件只暴露对端临时源端口，不暴露监听端口，否则两端 peer id 不对称</td></tr>
+<tr><td class="c">0x05</td><td class="f">EDITOR_SYNC</td><td class="c">reliable<br><span style="color:var(--text-3)">actor.transform → transform</span></td><td class="s">带版本的编辑器状态操作（LWW）</td></tr>
+<tr><td class="c">0x06</td><td class="f">EDITOR_SNAPSHOT_REQUEST</td><td class="c">reliable</td><td class="s">请求当前版本化编辑器状态</td></tr>
+<tr><td class="c">0x07</td><td class="f">EDITOR_SNAPSHOT_CHUNK</td><td class="c"><b>bulk</b></td><td class="s">分块状态数据</td></tr>
+<tr><td class="c">0x08</td><td class="f">EDITOR_SNAPSHOT_BEGIN</td><td class="c">reliable</td><td class="s">开启一个有界的快照会话</td></tr>
+<tr><td class="c">0x09</td><td class="f">EDITOR_SNAPSHOT_END</td><td class="c">reliable</td><td class="s">结束会话</td></tr>
+<tr><td class="c">0x10</td><td class="f">ACTOR_CREATE</td><td class="c">reliable</td><td class="s">Actor 创建（见下方线格式）</td></tr>
+<tr><td class="c">0x11</td><td class="f">FILE_REQUEST</td><td class="c"><b>bulk</b></td><td class="s">向对端要模型文件</td></tr>
+<tr><td class="c">0x12</td><td class="f">FILE_CHUNK</td><td class="c"><b>bulk</b></td><td class="s">文件分块</td></tr>
+<tr><td class="c">0x13</td><td class="f">OWNERSHIP_CLAIM</td><td class="c">reliable</td><td class="s">Actor 所有权移交声明</td></tr>
+<tr><td class="c">0x14</td><td class="f">ACTOR_TRANSFORM_UPDATE</td><td class="c"><b>transform</b></td><td class="s">位姿增量（demo 级 SceneDelta）</td></tr>
+<tr><td class="c">0x15</td><td class="f">ACTOR_DELETE</td><td class="c">reliable</td><td class="s">Actor 删除</td></tr>
+<tr><td class="c">0x16</td><td class="f">ACTOR_SCENE_SNAPSHOT_REQUEST</td><td class="c">reliable</td><td class="s">向 host 要场景快照</td></tr>
+<tr><td class="c">0x17</td><td class="f">ACTOR_SCENE_SNAPSHOT</td><td class="c">reliable</td><td class="s">场景快照 JSON</td></tr>
+<tr><td class="c">0x18</td><td class="f">ACTOR_STATE_UPDATE</td><td class="c">reliable</td><td class="s">轻量 Actor 元数据/状态 JSON</td></tr>
+<tr><td class="c">0x20</td><td class="f">CHAT_JOIN</td><td class="c">reliable</td><td class="s">LanChat 入房 / 成员快照</td></tr>
+<tr><td class="c">0x21</td><td class="f">CHAT_LEAVE</td><td class="c">reliable</td><td class="s">离房</td></tr>
+<tr><td class="c">0x22</td><td class="f">CHAT_MESSAGE</td><td class="c">reliable</td><td class="s">用户/agent 消息</td></tr>
+<tr><td class="c">0x23</td><td class="f">CHAT_MEMBER_UPDATE</td><td class="c">reliable</td><td class="s">成员状态更新</td></tr>
+<tr><td class="c">0x24</td><td class="f">CHAT_AGENT_REGISTER</td><td class="c">reliable</td><td class="s">注册/更新 agent 名单</td></tr>
+<tr><td class="c">0x25</td><td class="f">CHAT_AGENT_REMOVE</td><td class="c">reliable</td><td class="s">移除 agent</td></tr>
+<tr><td class="c">0x26</td><td class="f">CHAT_AGENT_TRIGGER</td><td class="c">reliable</td><td class="s">调用 agent</td></tr>
+<tr><td class="c">0x27</td><td class="f">CHAT_AGENT_REPLY</td><td class="c">reliable</td><td class="s">agent 回复</td></tr>
+<tr><td class="c">0x28</td><td class="f">CHAT_HISTORY_SNAPSHOT</td><td class="c"><b>bulk</b></td><td class="s">完整历史快照</td></tr>
+<tr><td class="c">0x29</td><td class="f">CHAT_JOIN_REJECT</td><td class="c">reliable</td><td class="s">入房被拒</td></tr>
+<tr><td class="c">0x2A</td><td class="f">CHAT_MESSAGE_V2</td><td class="c">reliable</td><td class="s">结构化消息</td></tr>
+<tr><td class="c">0x2B</td><td class="f">CHAT_AGENT_REPLY_V2</td><td class="c">reliable</td><td class="s">结构化 agent 回复</td></tr>
+<tr><td class="c">0x2C</td><td class="f">CHAT_HISTORY_SNAPSHOT_V2</td><td class="c"><b>bulk</b></td><td class="s">结构化历史快照</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>StorageID — 槽位类型映射</h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:100px">值</th><th style="width:240px">枚举</th><th>对应 Storage</th></tr></thead>
+<tbody>
+<tr><td class="c">0</td><td class="f">ST_MODEL_TRANSFORM</td><td class="s">ModelTransformStorage</td></tr>
+<tr><td class="c">1</td><td class="f">ST_GEOMETRY</td><td class="s">GeometryStorage</td></tr>
+<tr><td class="c">2</td><td class="f">ST_OPTICS</td><td class="s">OpticsStorage</td></tr>
+<tr><td class="c">3</td><td class="f">ST_MECHANICS</td><td class="s">MechanicsStorage</td></tr>
+<tr><td class="c">4</td><td class="f">ST_ACOUSTICS</td><td class="s">AcousticsStorage</td></tr>
+<tr><td class="c">5</td><td class="f">ST_SCENE</td><td class="s">SceneStorage</td></tr>
+<tr><td class="c">6</td><td class="f">ST_CAMERA</td><td class="s">CameraStorage</td></tr>
+<tr><td class="c">7</td><td class="f">ST_ACTOR</td><td class="s">ActorStorage</td></tr>
+<tr><td class="c">8</td><td class="f">ST_ENVIRONMENT</td><td class="s">EnvironmentStorage</td></tr>
+<tr><td class="c">9</td><td class="f">ST_MODEL_RESOURCE</td><td class="s">ModelResourceStorage</td></tr>
+</tbody>
+</table>
+</div>
+<div class="note info">
+<div class="nt">注意：StorageID 用 <code>entity_seq</code> 而不是句柄</div>
+<p>槽位地址跨进程无意义，所以协议里用 <code>entity_id</code>（实体序号），
+再经 <code>ResolveActorGuidForEntity</code> / <code>ResolveEntitySeqForActorGuid</code>
+两个回调在本地映射回句柄。LWW 的仲裁键是 <code>actor_guid + field_name</code>。</p>
+</div>
+
+<h4>编辑器同步载荷</h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:200px">字段</th><th style="width:150px">类型</th><th>语义 / 校验</th></tr></thead>
+<tbody>
+<tr><td class="f">EditorSyncOperation::kind</td><td class="t">uint8 枚举</td><td class="s"><code>Upsert=1</code> / <code>Delete=2</code>。其他值一律拒绝。</td></tr>
+<tr><td class="f">actor_guid</td><td class="t">string(≤1024)</td><td class="s">非空。跨进程的 Actor 身份。</td></tr>
+<tr><td class="f">field_name</td><td class="t">string(≤1024)</td><td class="s"><b>Upsert 必须非空</b>；<b>Delete 必须为空</b>（删除整条记录）。</td></tr>
+<tr><td class="f">value</td><td class="t">bytes(≤1 MB)</td><td class="s"><b>Upsert 有值；Delete 必须为空</b>。</td></tr>
+<tr><td class="f">version.counter</td><td class="t">uint64</td><td class="s">Lamport 计数，高者胜。</td></tr>
+<tr><td class="f">version.writer_peer_id</td><td class="t">string(≤1024)</td><td class="s">非空。计数相等时按字典序裁决，保证全网一致。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>Actor 包线格式</h4>
+<pre><code>ACTOR_CREATE (0x10)
+[1B type] [2B guid_len][guid] [2B scene_len][scene] [2B path_len][model_path]
+[36B transform = 9×float (pos3 + rot3 + scale3)]
+[ActorCreatePacked]                       // 旧版 optics 字段，布局不可变
+[2B dependency_count] ([2B len][dep])*    // 依赖资源路径
+[4B actor_json_len][actor_json]           // 可选 v2 尾段
+
+ACTOR_TRANSFORM_UPDATE (0x14)
+[1B type] [2B guid_len][guid] [2B scene_len][scene]
+[36B transform] [2B source_user_id_len][id] [2B correlation_id_len][id]
+
+ACTOR_DELETE (0x15)
+[1B type] [2B guid_len][guid] [2B scene_len][scene] [2B name_len][actor_name]
+
+ACTOR_SCENE_SNAPSHOT_REQUEST (0x16)
+[1B type] [2B scene_len][scene]
+
+ACTOR_SCENE_SNAPSHOT (0x17)
+[1B type] [2B scene_len][scene] [4B json_len][json]
+
+HELLO (0x04)
+[1B type] [2B name_len][instance_name] [2B listen_port]</code></pre>
+
+<div class="note warn">
+<div class="nt"><code>ActorCreatePacked</code> 里写死了 <code>bEnableLighting</code> 这种命名</div>
+<p>它的注释明确写着"receivers must copy the leading 36B wire transform into
+<code>ActorCreatePacked::transform</code>"——因为 transform 既在包体前部又在结构体里，
+接收方必须用前部那份覆盖结构体里的那份。这是典型的"为兼容保留的重复字段"，
+改动时两边都要动。</p>
+</div>
+
+<h4>同步包头</h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:230px">结构</th><th style="width:170px">字段</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="f">SyncDirtyHeader</td><td class="t">seq</td><td class="s">包序号</td></tr>
+<tr><td class="f"></td><td class="t">timestamp_ms</td><td class="s">发出时刻</td></tr>
+<tr><td class="f"></td><td class="t">count</td><td class="s">条目数</td></tr>
+<tr><td class="f">SyncDirtyEntryHeader</td><td class="t">storage_id</td><td class="s">哪个 Storage</td></tr>
+<tr><td class="f"></td><td class="t">entity_id</td><td class="s">实体序号</td></tr>
+<tr><td class="f"></td><td class="t">key_len / value_len</td><td class="s">后随 key 与 value 的字节长度</td></tr>
+<tr><td class="f">SyncFullHeader</td><td class="t">seq / count</td><td class="s">全量快照，条目格式同上</td></tr>
+<tr><td class="f">DiscoveryPacket</td><td class="t">magic[6]</td><td class="s"><code>"CORONA"</code>，固定布局 UDP 广播包（当前实现已不启动 LAN 广播发现，直连 IP 是活跃路径）</td></tr>
+<tr><td class="f"></td><td class="t">protocol_version</td><td class="s">2</td></tr>
+<tr><td class="f"></td><td class="t">instance_name[32]</td><td class="s">实例名</td></tr>
+<tr><td class="f"></td><td class="t">project_id</td><td class="s">项目标识</td></tr>
+<tr><td class="f"></td><td class="t">listen_port / session_role / reserved</td><td class="s">端口 / 角色 / 保留对齐</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s17"><span class="h-num">17</span>编辑器 API 字段</h2>
+
+<p>Vue 与 Python 共用同一张 C++ manifest。<code>EditorApi.list_methods</code> 把整张表
+以 JSON 返回，前端据此建立"包装函数路径 → 规格"的索引并校验参数类型。</p>
+
+<h4>规格结构</h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:200px">结构 / 字段</th><th style="width:190px">类型</th><th>语义</th></tr></thead>
+<tbody>
+<tr><td class="f">EditorApiParamSpec::name</td><td class="t">const char*</td><td class="s">参数名（出现在 JSON args 的语义描述里）。</td></tr>
+<tr><td class="f">…::type</td><td class="t">EditorApiValueType</td><td class="s">期望类型，前端按此校验，类型不符直接抛错而不发请求。</td></tr>
+<tr><td class="f">…::optional</td><td class="t">bool</td><td class="s">是否可省略。</td></tr>
+<tr><td class="f">EditorApiReturnSpec::type</td><td class="t">EditorApiValueType</td><td class="s">返回值类型。</td></tr>
+<tr><td class="f">EditorApiMethodSpec::api_name</td><td class="t">const char*</td><td class="s">跨层唯一名，例如 <code>EditorApi.list_methods</code>。</td></tr>
+<tr><td class="f">…::native_module / native_function</td><td class="t">const char*</td><td class="s">C++ 侧实现位置（模块 + 函数）。<b>manifest 是唯一真相</b>，不复制到 JS/Python。</td></tr>
+<tr><td class="f">…::params / param_count</td><td class="t">ParamSpec* / size_t</td><td class="s">参数表。</td></tr>
+<tr><td class="f">…::return_spec</td><td class="t">ReturnSpec</td><td class="s">返回类型。</td></tr>
+<tr><td class="f">…::js_wrapper</td><td class="t">const char*</td><td class="s">前端包装函数的点路径（如 <code>editor.camera.setFov</code>），用于校验包装函数存在。</td></tr>
+<tr><td class="f">…::python_wrapper</td><td class="t">const char*</td><td class="s">Python 包装函数路径。</td></tr>
+<tr><td class="f">…::async</td><td class="t">bool</td><td class="s">异步方法；非交互式请求有 30 s 响应超时（<code>editorApiTransportLimits.responseTimeoutMs</code>），因为原生 CEF 调用本身没有超时，不设会永久挂起。</td></tr>
+<tr><td class="f">…::allowed_callers</td><td class="t">uint32 位掩码</td><td class="s">权限位，见下。</td></tr>
+<tr><td class="f">EditorApiEventSpec::event_name</td><td class="t">const char*</td><td class="s">事件名。</td></tr>
+<tr><td class="f">…::payload_type</td><td class="t">EditorApiValueType</td><td class="s">载荷类型。</td></tr>
+<tr><td class="f">…::allowed_callers</td><td class="t">uint32</td><td class="s">谁能订阅。</td></tr>
+<tr><td class="f">…::js_wrapper / python_wrapper</td><td class="t">const char*</td><td class="s">订阅包装函数路径。</td></tr>
+<tr><td class="f">EditorApiRequest::api_name</td><td class="t">string</td><td class="s">要调用的方法名。</td></tr>
+<tr><td class="f">…::args</td><td class="t">json array</td><td class="s">位置参数数组（不是对象）。</td></tr>
+<tr><td class="f">…::caller</td><td class="t">EditorApiCaller</td><td class="s">默认 <code>Cef</code>。<b>已退役的 Web 调用位留着，使"省略 caller"默认失败关闭（fail-closed）</b>。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>两个枚举</h4>
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:150px">枚举</th><th>取值</th></tr></thead>
+<tbody>
+<tr><td class="f">EditorApiCaller</td><td class="s"><code>Cef=1&lt;&lt;0</code> ｜ <code>PythonScript=1&lt;&lt;1</code>（项目脚本，受限子集）｜ <code>ScriptRuntime=1&lt;&lt;2</code>（Blockly 生成文件）｜ <code>Native=1&lt;&lt;3</code>（引擎内部）</td></tr>
+<tr><td class="f">EditorApiValueType</td><td class="s"><code>Any / Null / Boolean / Integer / Number / String / Object / Array</code>。前端 <code>editorApiValueMatchesType</code> 逐一对齐 JS 类型（<code>Integer</code> 用 <code>Number.isInteger</code>，<code>Number</code> 用 <code>isFinite</code>，<code>Object</code> 排除数组与 null）。</td></tr>
+</tbody>
+</table>
+</div>
+
+<h4>CEF V8 侧的方法族</h4>
+<p><code>cef_v8_binding.cpp</code> 为每个域注册一个 endpoint：
+<code>ProjectSettings / LanChat / Network / ProjectLauncher / Files / ProjectFiles /
+Scripts / ScriptInput / Viewport / Gizmo / Scene / Window</code>。
+每个 endpoint 的 <code>invoke(Method, args)</code> 把枚举转成 manifest 调用，
+异常走 <code>exception</code> 通道返回而不是崩溃。</p>
+
+<h2 id="s18"><span class="h-num">18</span>已知裂缝与风险</h2>
+
+<p>以下每一条都能在源码里定位，不是推测。</p>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:44px">#</th><th style="width:250px">裂缝</th><th style="width:90px">级别</th><th>证据与影响</th></tr></thead>
+<tbody>
+<tr><td class="c">1</td><td class="f">try_acquire_write 实际是阻塞的</td><td><span class="badge b-gpu">高</span></td><td class="s"><code>CFW_ENABLE_LOCK_TIMEOUT</code> 默认 0，因此 <code>try_acquire_write()</code> 走 <code>lock()</code>（<code>storage.h:29-30, 707</code>）。CEF 快路径的 14 处写会阻塞在 DAG 的槽锁上。<b>要么改成真正的 try_lock，要么全部走命令。</b></td></tr>
+<tr><td class="c">2</td><td class="f">网络线程直写槽位</td><td><span class="badge b-gpu">高</span></td><td class="s"><code>SyncEngine</code> 在 Network 线程里 <code>try_acquire_write</code> 写 ModelTransform / Optics / 其他 Storage（<code>sync_engine.cpp:494-526</code>），<b>绕过了命令通道</b>。远程写与本地 CEF 写之间没有仲裁，与第 5 节"槽位对外部线程不可见"的约束冲突。</td></tr>
+<tr><td class="c">3</td><td class="f">同步事件总线的跨线程调用</td><td><span class="badge b-slot">中</span></td><td class="s"><code>PlayAudioEvent</code>（CEF/脚本线程 → Acoustics）、<code>ScriptFinishStartEvent</code>（Python 线程 → UI）都会在<b>发布者线程</b>执行订阅者代码。目前靠 <code>pending_plays_</code> 缓冲兜住，但这是一种"必须记得加队列"的隐性约定。</td></tr>
+<tr><td class="c">4</td><td class="f">位掩码位号曾经撞车</td><td><span class="badge b-slot">中</span></td><td class="s"><code>CameraStateUpdateField::ViewSettings</code> 原本占用 <code>1u&lt;&lt;17</code>，与 <code>FollowsDefaultSurface</code> 冲突后改到 <code>1u&lt;&lt;18</code>（源码有注释）。位 6、7 仍空洞。新增字段必须查空位。</td></tr>
+<tr><td class="c">5</td><td class="f">默认值不一致</td><td><span class="badge b-ev">低</span></td><td class="s"><code>CameraMoveCommand::fov</code> 默认 45，<code>CameraDevice::fov</code> 默认 60。若某条路径只构造命令不填 fov，相机会被悄悄改成 45°。</td></tr>
+<tr><td class="c">6</td><td class="f">命名漂移</td><td><span class="badge b-ev">低</span></td><td class="s"><code>EnvironmentDevice::sun_position</code> 存的是方向；<code>EnvironmentUpdateCommand::sun_direction</code> 写入 <code>sun_position</code>；<code>OpticsDevice::bEnableLighting</code> 仍是匈牙利前缀。读代码时容易误解语义。</td></tr>
+<tr><td class="c">7</td><td class="f">句柄 = 地址的三个后果</td><td><span class="badge b-slot">中</span></td><td class="s">① 跨进程无意义（网络层必须另设 guid→seq 映射）② 槽位复用有 ABA 风险（已有 <code>import_epoch</code> 这类补丁）③ 长期方案是 <code>index + generation</code>。<code>CommandBuffer</code> 的 key 也是 <code>uintptr_t</code>。</td></tr>
+<tr><td class="c">8</td><td class="f">快照整份重建</td><td><span class="badge b-slot">中</span></td><td class="s">每 tick 遍历整个 storage 重建 <code>vector&lt;Row&gt;</code>。当前廉价，但一旦有人把重载荷（蒙皮/网格）投影进快照，成本会随实体数×载荷线性上升。<b>约定：快照只放标量。</b></td></tr>
+<tr><td class="c">9</td><td class="f">Actor→组件解析要拿 5–6 把锁</td><td><span class="badge b-slot">中</span></td><td class="s"><code>resolve_actor_geometry_handles()</code> 是 actor → profile → {mechanics,optics,acoustics} → geometry 的链式锁。CEF 每个 actor 每次刷新都调一次。这不是并发效率问题，是<b>读路径形状错了</b>——应该是一次快照读。</td></tr>
+<tr><td class="c">10</td><td class="f">EventStream 基本闲置</td><td><span class="badge b-ev">低</span></td><td class="s">9 个事件头、47 个结构体里，只有 <code>EngineShutdownEvent</code> 真正走 EventStream；其中 19 个 <code>*DemoEvent</code> 无发布者无订阅者。要么删，要么在注释里标清"示例"。</td></tr>
+<tr><td class="c">11</td><td class="f">命令入口不统一</td><td><span class="badge b-slot">低</span></td><td class="s">13 条命令队列分散在 <code>shared_data_hub.h</code> 与 6 个领域头里。<code>git grep enqueue_</code> 仍有多个入口。P5 的目标是"只剩统一入口"，尚未达成。</td></tr>
+<tr><td class="c">12</td><td class="f">两种线程模型并存</td><td><span class="badge b-ev">低</span></td><td class="s"><code>CORONA_SYSTEMS_DAG=0</code> 会退回"一系统一线程"。两条路径的时序保证不同（DAG 模式下 <code>dt</code> 由调度器注入，传统模式下系统自测），<b>降级路径的行为需要单独验证</b>。</td></tr>
+<tr><td class="c">13</td><td class="f">120 Hz / 60 Hz 双层节拍</td><td><span class="badge b-ev">低</span></td><td class="s">四个重链路 <code>period_ticks=2</code>，Display 每 tick 都跑。奇数 tick 上 Display 拿到的仍是上一帧的 optics 内容，需要靠 <code>ScenePresentCadence</code> 判断"重复呈现旧帧"并跳过 present。这条逻辑一旦漏判就会白烧 GPU。</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="note danger">
+<div class="nt">最该先修的一条</div>
+<p>第 1 条（<code>try_acquire_write</code> 阻塞）与第 2 条（网络线程直写槽位）是同一类问题的两面：
+<b>外部线程仍在直接碰槽位</b>。命令化的收益（可合并、可排序、可回执、单一仲裁点）只有在
+"所有外部写都走命令"时才成立；留下几个直写口子，仲裁就重新变成不可推理的。</p>
+</div>
+
+<h2 id="s19"><span class="h-num">19</span>证据索引</h2>
+
+<div class="tbl-wrap">
+<table>
+<thead><tr><th style="width:390px">路径</th><th>读这里能确认什么</th></tr></thead>
+<tbody>
+<tr class="grp"><td colspan="2"></td></tr>
+<tr><td class="f">include/corona/kernel/command/command_buffer.h</td><td class="s">命令队列的全部语义：合并策略、有界拒绝、sequence 排序、peek、merge、Stats</td></tr>
+<tr><td class="f">include/corona/kernel/command/snapshot_channel.h</td><td class="s">快照通道：单发布多读、revision、shared_ptr 生命周期</td></tr>
+<tr><td class="f">include/corona/kernel/command/thread_affinity.h</td><td class="s">单写者运行期断言</td></tr>
+<tr><td class="f">include/corona/kernel/event/i_event_bus.h</td><td class="s">同步事件总线接口与 <code>EventId</code></td></tr>
+<tr><td class="f">include/corona/kernel/event/i_event_stream.h</td><td class="s">异步事件流：背压、订阅者独立队列、RAII 订阅句柄</td></tr>
+<tr><td class="f">include/corona/kernel/system/frame_graph.h</td><td class="s">帧图：节点描述、门控、统计、tick 报告</td></tr>
+<tr><td class="f">include/corona/kernel/system/systems_thread.h</td><td class="s">单线程 DAG 执行器：tick 节奏、边界钩子、dump、overrun 统计</td></tr>
+<tr><td class="f">include/corona/kernel/system/i_system_manager.h</td><td class="s">系统注册、DAG 装配、优先级排序</td></tr>
+<tr><td class="f">src/kernel/system/system_manager.cpp</td><td class="s"><code>start_all()</code> 如何在 DAG 模式下用 <code>start_inline()</code>，以及 <code>configure_dag()</code></td></tr>
+<tr><td class="f">src/engine.cpp</td><td class="s">系统注册顺序、DAG 装配、主循环、关闭顺序</td></tr>
+<tr><td class="f">include/corona/shared_data_hub.h</td><td class="s">13 个 Storage、全部命令/快照结构、句柄解析与 Actor 元数据</td></tr>
+<tr><td class="f">src/shared_data_hub.cpp</td><td class="s">句柄解析、快照发布、pick 队列、viewport 会话存储的实现</td></tr>
+<tr><td class="f">include/corona/systems/*/*_commands.h</td><td class="s">各领域的命令 + 快照通道（Optics / Mechanics / Acoustics / Environment / Display）</td></tr>
+<tr><td class="f">include/corona/events/*.h</td><td class="s">全部事件类型（含占位的 Demo 事件）</td></tr>
+<tr><td class="f">include/corona/engine/engine_runtime_api.h</td><td class="s">C++ 公开 API：<code>Geometry / Mechanics / Optics / Acoustics / Actor / Camera / Scene</code></td></tr>
+<tr><td class="f">include/corona/systems/network/protocol.h</td><td class="s">线格式、消息类型、长度上限、各包的 build/parse 与校验</td></tr>
+<tr><td class="f">include/corona/systems/display/published_image.h</td><td class="s">图像发布令牌与生命周期绑定</td></tr>
+<tr><td class="f">src/systems/ui/editor_api/cef_editor_api.h</td><td class="s">编辑器 manifest 的规格结构与调用者权限位</td></tr>
+<tr><td class="f">CoronaEditor/editor/ARCHITECTURE.md</td><td class="s">Vue / C++ / Python 三层职责与 API 分层</td></tr>
+<tr><td class="f">CoronaEditor/editor/Frontend/src/api/editorApi.js</td><td class="s">前端如何按 manifest 校验并索引包装函数</td></tr>
+<tr><td class="f">docs/dag-command-vs-event.md</td><td class="s"><b>本文架构判断的原始出处</b>：13 条通道盘点、四个裂缝、P0–P5 计划与验证记录</td></tr>
+<tr><td class="f">Horizon/include/horizon/core/storage.h</td><td class="s">槽位池：每槽读写锁、句柄 = 地址、容量与分段</td></tr>
+</tbody>
+</table>
+</div>
+
+<hr>
+
+<h3>一句话总览</h3>
+<p class="lead">
+CoronaEngine 的架构可以压成一句话：<b>一条线程按 DAG 顺序跑五个系统，
+所有跨线程交互都收敛成"写走命令、读走快照、通知走事件"三条语义明确的路径，
+共享状态放在带句柄的槽位池里，外部只能通过命令和快照间接接触它。</b>
+这个模型已经落地了大部分（13 条命令队列、6 条快照通道），
+剩下的主要工作是把仍在直写槽位的少数外部路径（网络、部分 CEF 快路径）也收进命令通道。
+</p>
+  </main>
+</div>
+
+<script>
+"use strict";
+/* ------------------------------------------------------------------ *
+ *  极简声明式 SVG 图表渲染器（无外部依赖）
+ *  支持：泳道分组 / 方框节点 / 折线箭头 / 时序图
+ * ------------------------------------------------------------------ */
+
+const NS = "http://www.w3.org/2000/svg";
+const MARKERS = ["", "cmd", "snap", "ev", "slot", "gpu", "ext"];
+const EDGE_COLOR = {
+  "": "var(--border-2)",
+  cmd: "var(--accent)",
+  snap: "var(--violet)",
+  ev: "var(--blue)",
+  slot: "var(--amber)",
+  gpu: "var(--rose)",
+  ext: "var(--cyan)"
+};
+
+function el(tag, attrs, text) {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) if (attrs[k] !== undefined && attrs[k] !== null) n.setAttribute(k, attrs[k]);
+  if (text !== undefined && text !== null) n.textContent = text;
+  return n;
+}
+
+function defs(svg) {
+  const d = el("defs");
+  MARKERS.forEach(function (kind) {
+    const m = el("marker", {
+      id: "arw" + (kind || "x"),
+      viewBox: "0 0 10 10",
+      refX: "9", refY: "5",
+      markerWidth: "7", markerHeight: "7",
+      orient: "auto-start-reverse"
+    });
+    m.appendChild(el("path", { d: "M0,0 L10,5 L0,10 z", fill: EDGE_COLOR[kind] }));
+    d.appendChild(m);
+  });
+  svg.appendChild(d);
+}
+
+function mkSvg(host, w, h) {
+  const svg = el("svg", { viewBox: "0 0 " + w + " " + h, width: w, height: h, role: "img" });
+  defs(svg);
+  host.appendChild(svg);
+  return svg;
+}
+
+/* ---- 方框节点 ---- */
+function drawNode(svg, n) {
+  const g = el("g", { class: "nd " + (n.k ? "k-" + n.k : "") });
+  g.appendChild(el("rect", {
+    class: "body", x: n.x, y: n.y, width: n.w, height: n.h,
+    rx: 9, ry: 9
+  }));
+  const subs = n.sub === undefined ? [] : (Array.isArray(n.sub) ? n.sub : [n.sub]);
+  const lineH = 13;
+  const totalH = 15 + (subs.length ? subs.length * lineH : 0);
+  let ty = n.y + n.h / 2 - totalH / 2 + 12;
+  const cx = n.x + n.w / 2;
+  const tx = el("text", {
+    class: "tt", x: cx, y: ty, "text-anchor": "middle"
+  }, n.title);
+  g.appendChild(tx);
+  subs.forEach(function (s, i) {
+    g.appendChild(el("text", {
+      class: "st", x: cx, y: ty + 14 + i * lineH, "text-anchor": "middle"
+    }, s));
+  });
+  svg.appendChild(g);
+}
+
+/* ---- 泳道 / 分组 ---- */
+function drawGroup(svg, gr) {
+  const g = el("g", { class: "grp" });
+  g.appendChild(el("rect", { x: gr.x, y: gr.y, width: gr.w, height: gr.h, rx: 12, ry: 12 }));
+  if (gr.label) {
+    g.appendChild(el("text", { x: gr.x + 14, y: gr.y + 18 }, gr.label));
+  }
+  svg.appendChild(g);
+}
+
+/* ---- 锚点 ---- */
+function anchorOf(n, side) {
+  const cx = n.x + n.w / 2, cy = n.y + n.h / 2;
+  if (side === "l") return [n.x, cy];
+  if (side === "r") return [n.x + n.w, cy];
+  if (side === "t") return [cx, n.y];
+  return [cx, n.y + n.h];
+}
+function autoSides(a, b) {
+  const dx = (b.x + b.w / 2) - (a.x + a.w / 2);
+  const dy = (b.y + b.h / 2) - (a.y + a.h / 2);
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? ["r", "l"] : ["l", "r"];
+  return dy >= 0 ? ["b", "t"] : ["t", "b"];
+}
+
+/* ---- 折线路径 ---- */
+function pathOf(pts) {
+  return pts.map(function (p, i) { return (i ? "L" : "M") + p[0] + "," + p[1]; }).join(" ");
+}
+function midOf(pts) {
+  let total = 0;
+  const segs = [];
+  for (let i = 1; i < pts.length; i++) {
+    const dx = pts[i][0] - pts[i - 1][0], dy = pts[i][1] - pts[i - 1][1];
+    const len = Math.sqrt(dx * dx + dy * dy);
+    segs.push(len); total += len;
+  }
+  let acc = 0;
+  for (let i = 0; i < segs.length; i++) {
+    if (acc + segs[i] >= total / 2) {
+      const t = segs[i] === 0 ? 0 : (total / 2 - acc) / segs[i];
+      return [
+        pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t,
+        pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t
+      ];
+    }
+    acc += segs[i];
+  }
+  return pts[0];
+}
+
+function estWidth(text, size) {
+  let w = 0;
+  for (const ch of text) {
+    const c = ch.codePointAt(0);
+    if (c >= 0x2e80) w += size;            // CJK / 全角
+    else if (c === 32) w += size * 0.3;
+    else w += size * 0.56;                 // 拉丁 / 等宽近似
+  }
+  return w;
+}
+
+function labelBox(svg, x, y, text, kind) {
+  const wpx = estWidth(text, 10.5) + 9;
+  svg.appendChild(el("rect", {
+    x: x - wpx / 2, y: y - 10, width: wpx, height: 15,
+    rx: 3, fill: "var(--panel)", stroke: "none"
+  }));
+  const t = el("text", {
+    class: "lb " + (kind || ""), x: x, y: y + 1.5, "text-anchor": "middle"
+  }, text);
+  svg.appendChild(t);
+  return wpx;
+}
+
+function drawEdge(svg, e, nodes) {
+  const a = nodes[e.from], b = nodes[e.to];
+  if (!a || !b) return;
+  const sides = (!e.fromSide && !e.toSide) ? autoSides(a, b)
+    : [e.fromSide || autoSides(a, b)[0], e.toSide || autoSides(a, b)[1]];
+  const p0 = anchorOf(a, sides[0]);
+  const p1 = anchorOf(b, sides[1]);
+  const pts = [p0];
+  if (e.via) e.via.forEach(function (v) { pts.push(v); });
+  pts.push(p1);
+  const kind = e.k || "";
+  const path = el("path", {
+    class: "eg " + kind,
+    d: pathOf(pts),
+    "marker-end": "url(#arw" + (kind || "x") + ")"
+  });
+  svg.appendChild(path);
+  if (e.label) {
+    const m = e.via ? midOf(pts) : [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2];
+    const dy = e.labelDy === undefined ? -5 : e.labelDy;
+    labelBox(svg, m[0], m[1] + dy, e.label, kind);
+  }
+}
+
+function drawLine(svg, l) {
+  const kind = l.k || "";
+  const path = el("path", {
+    class: "eg " + kind,
+    d: "M" + l.x1 + "," + l.y1 + "L" + l.x2 + "," + l.y2,
+    "marker-end": "url(#arw" + (kind || "x") + ")"
+  });
+  svg.appendChild(path);
+  if (l.label) labelBox(svg, (l.x1 + l.x2) / 2, (l.y1 + l.y2) / 2 + (l.dy || 0), l.label, kind);
+}
+
+function renderDiagram(id, spec) {
+  const host = document.getElementById(id);
+  if (!host) return;
+  host.innerHTML = "";
+  const svg = mkSvg(host, spec.w, spec.h);
+  const nodes = {};
+  (spec.nodes || []).forEach(function (n) { nodes[n.id] = n; });
+  (spec.groups || []).forEach(function (g) { drawGroup(svg, g); });
+  (spec.lines || []).forEach(function (l) { drawLine(svg, l); });
+  (spec.edges || []).forEach(function (e) { drawEdge(svg, e, nodes); });
+  (spec.nodes || []).forEach(function (n) { drawNode(svg, n); });
+}
+
+/* ---- 时序图 ---- */
+function renderSeq(id, spec) {
+  const host = document.getElementById(id);
+  if (!host) return;
+  host.innerHTML = "";
+  const lanes = spec.lanes;
+  const padL = 26, padR = 26;
+  const laneW = (spec.w - padL - padR) / lanes.length;
+  const headH = spec.headH || 54;
+  const y0 = spec.y0 || (16 + headH + 40);
+  const dy = spec.dy || 42;
+  const H = y0 + spec.steps.length * dy + 26;
+  const svg = mkSvg(host, spec.w, H);
+  const xs = {};
+  lanes.forEach(function (ln, i) {
+    xs[ln.id] = padL + laneW * i + laneW / 2;
+  });
+
+  // lifelines
+  lanes.forEach(function (ln) {
+    svg.appendChild(el("line", {
+      x1: xs[ln.id], y1: 16 + headH, x2: xs[ln.id], y2: H - 10,
+      stroke: "var(--border)", "stroke-width": 1, "stroke-dasharray": "3 5"
+    }));
+  });
+
+  // heads
+  lanes.forEach(function (ln) {
+    const w = laneW - 14, h = headH;
+    const g = el("g", { class: "nd " + (ln.k ? "k-" + ln.k : "") });
+    g.appendChild(el("rect", {
+      class: "body", x: xs[ln.id] - w / 2, y: 16, width: w, height: h, rx: 8, ry: 8
+    }));
+    g.appendChild(el("text", {
+      class: "tt", x: xs[ln.id], y: 16 + (ln.sub ? h / 2 - 2 : h / 2 + 4),
+      "text-anchor": "middle"
+    }, ln.title));
+    if (ln.sub) {
+      g.appendChild(el("text", {
+        class: "st", x: xs[ln.id], y: 16 + h / 2 + 13, "text-anchor": "middle"
+      }, ln.sub));
+    }
+    svg.appendChild(g);
+  });
+
+  // steps
+  spec.steps.forEach(function (s, i) {
+    const y = y0 + i * dy;
+    if (s.note) {
+      const wpx = estWidth(s.note, 10.5) + 14;
+      svg.appendChild(el("rect", {
+        x: 26, y: y - 12, width: wpx, height: 16, rx: 3,
+        fill: "var(--panel-2)", stroke: "var(--border)"
+      }));
+      svg.appendChild(el("text", {
+        class: "lb", x: 32, y: y, "text-anchor": "start"
+      }, s.note));
+    }
+    const kind = s.k || "";
+    if (s.a === s.b) {
+      const x = xs[s.a];
+      const p = "M" + x + "," + (y - 4) + " h34 v26 h-34";
+      svg.appendChild(el("path", {
+        class: "eg " + kind, d: p,
+        "marker-end": "url(#arw" + (kind || "x") + ")"
+      }));
+      if (s.t) {
+        const est = estWidth(s.t, 10.5);
+        const right = x + 40 + est;
+        if (right < spec.w - 10) {
+          svg.appendChild(el("text", { class: "lb " + kind, x: x + 40, y: y + 4, "text-anchor": "start" }, s.t));
+        } else {
+          svg.appendChild(el("text", { class: "lb " + kind, x: x - 8, y: y + 4, "text-anchor": "end" }, s.t));
+        }
+      }
+      return;
+    }
+    const x1 = xs[s.a], x2 = xs[s.b];
+    svg.appendChild(el("line", {
+      x1: x1, y1: y, x2: x2, y2: y,
+      class: "eg " + kind,
+      "marker-end": "url(#arw" + (kind || "x") + ")"
+    }));
+    if (s.t) {
+      const mx = (x1 + x2) / 2;
+      const wpx = s.t.length * 6.15 + 10;
+      svg.appendChild(el("rect", {
+        x: mx - wpx / 2, y: y - 17, width: wpx, height: 15,
+        rx: 3, fill: "var(--panel)", stroke: "none"
+      }));
+      svg.appendChild(el("text", {
+        class: "lb " + kind, x: mx, y: y - 5.5, "text-anchor": "middle"
+      }, s.t));
+    }
+  });
+}
+</script>
+
+<script>
+/* ================================================================== *
+ *  FIG 01 — 分层模块视图
+ * ================================================================== */
+(function () {
+  var W = 1060;
+  var bands = [];
+  function band(y, h, label) { bands.push({ x: 92, y: y, w: W - 104, h: h, label: label, cls: "grp" }); return y; }
+
+  var b6 = 10,  h6 = 86;
+  var b5 = 116, h5 = 86;
+  var b4 = 222, h4 = 110;
+  var b3 = 352, h3 = 172;
+  var b2 = 544, h2 = 112;
+  var b1 = 676, h1 = 88;
+  var b0 = 784, h0 = 76;
+
+  band(b6, h6, "宿主 / 编辑器层");
+  band(b5, h5, "边界适配层");
+  band(b4, h4, "内核层");
+  band(b3, h3, "系统层");
+  band(b2, h2, "共享数据层");
+  band(b1, h1, "渲染后端");
+  band(b0, h0, "平台 / 第三方");
+
+  var nodes = [
+    // host
+    { id: "vue", x: 112, y: b6 + 26, w: 210, h: 46, title: "Vue3 前端", sub: "面板 · Blockly · AI", k: "ext" },
+    { id: "pyr", x: 336, y: b6 + 26, w: 200, h: 46, title: "Python 编辑器运行时", sub: "存档解析 / 校验 / 保存", k: "ext" },
+    { id: "cef", x: 550, y: b6 + 26, w: 180, h: 46, title: "CEF 浏览器 (OSR)", sub: "V8 · 渲染进程", k: "ext" },
+    { id: "tool", x: 744, y: b6 + 26, w: 200, h: 46, title: "构建工具链", sub: "CMake · Conan · dev.py", k: "ext" },
+
+    // boundary
+    { id: "v8", x: 112, y: b5 + 26, w: 300, h: 46, title: "CEF V8 + EditorApi manifest", sub: "JSON 单一契约 · 类型校验", k: "ext" },
+    { id: "era", x: 428, y: b5 + 26, w: 240, h: 46, title: "EngineRuntimeApi", sub: "C++ 类接口 + 句柄", k: "sys" },
+    { id: "papi", x: 684, y: b5 + 26, w: 260, h: 46, title: "Python C API / script runtime", sub: "受限 manifest 子集", k: "ext" },
+
+    // kernel
+    { id: "kc", x: 112, y: b4 + 26, w: 200, h: 36, title: "KernelContext", k: "kernel" },
+    { id: "bus", x: 328, y: b4 + 26, w: 170, h: 36, title: "IEventBus", k: "kernel" },
+    { id: "strm", x: 514, y: b4 + 26, w: 190, h: 36, title: "IEventBusStream", k: "kernel" },
+    { id: "mgr", x: 720, y: b4 + 26, w: 190, h: 36, title: "ISystemManager", k: "kernel" },
+    { id: "fg", x: 112, y: b4 + 72, w: 200, h: 36, title: "FrameGraph", k: "kernel" },
+    { id: "st", x: 328, y: b4 + 72, w: 250, h: 36, title: "SystemsThread (120 Hz)", k: "kernel" },
+    { id: "cmdb", x: 594, y: b4 + 72, w: 316, h: 36, title: "内核通信原语", sub: "CommandBuffer · SnapshotChannel · 亲和性", k: "kernel" },
+
+    // systems
+    { id: "dis", x: 112, y: b3 + 26, w: 196, h: 54, title: "Display", sub: "DAG · 优先级 100", k: "sys" },
+    { id: "opt", x: 324, y: b3 + 26, w: 196, h: 54, title: "Optics", sub: "DAG · 90 · 60 Hz", k: "sys" },
+    { id: "geo", x: 536, y: b3 + 26, w: 196, h: 54, title: "Geometry", sub: "DAG · 85 · 60 Hz", k: "sys" },
+    { id: "mech", x: 748, y: b3 + 26, w: 196, h: 54, title: "Mechanics", sub: "DAG · 75 · 60 Hz", k: "sys" },
+    { id: "aco", x: 112, y: b3 + 92, w: 196, h: 54, title: "Acoustics", sub: "DAG · 70 · 60 Hz", k: "sys" },
+    { id: "scr", x: 324, y: b3 + 92, w: 196, h: 54, title: "Script", sub: "独立线程 · 60 FPS", k: "sys" },
+    { id: "net", x: 536, y: b3 + 92, w: 196, h: 54, title: "Network", sub: "独立线程 · 55", k: "sys" },
+    { id: "ui", x: 748, y: b3 + 92, w: 196, h: 54, title: "UI", sub: "主线程 · 40", k: "sys" },
+
+    // data
+    { id: "hub", x: 112, y: b2 + 30, w: 228, h: 58, title: "SharedDataHub", sub: "13 × Storage<T,128,2>", k: "store" },
+    { id: "cbd", x: 356, y: b2 + 30, w: 218, h: 58, title: "CommandBuffer ×13", sub: "写方向 · 有界 · 可合并", k: "store" },
+    { id: "scd", x: 590, y: b2 + 30, w: 218, h: 58, title: "SnapshotChannel ×6", sub: "读方向 · 单发布多读", k: "store" },
+    { id: "misc", x: 824, y: b2 + 30, w: 220, h: 58, title: "Session / Pick / 回执", sub: "viewport · gizmo · GPU", k: "store" },
+
+    // backend
+    { id: "hzn", x: 112, y: b1 + 28, w: 250, h: 50, title: "Horizon · Ocarina EDSL", sub: "AST → Slang → SPIR-V", k: "gpu" },
+    { id: "hw", x: 378, y: b1 + 28, w: 230, h: 50, title: "HardwareWrapper", sub: "Image · Buffer · Displayer", k: "gpu" },
+    { id: "vis", x: 624, y: b1 + 28, w: 200, h: 50, title: "Vision 路径追踪", sub: "PT · ReSTIR · 降噪", k: "gpu" },
+    { id: "res", x: 840, y: b1 + 28, w: 204, h: 50, title: "ResourceManager", sub: "Scene/Image/Video/Audio", k: "data" },
+
+    // platform
+    { id: "pk1", x: 112, y: b0 + 24, w: 140, h: 34, title: "Vulkan", k: "gpu" },
+    { id: "pk2", x: 268, y: b0 + 24, w: 140, h: 34, title: "SDL3", k: "gpu" },
+    { id: "pk3", x: 424, y: b0 + 24, w: 140, h: 34, title: "CEF", k: "gpu" },
+    { id: "pk4", x: 580, y: b0 + 24, w: 140, h: 34, title: "ENet", k: "gpu" },
+    { id: "pk5", x: 736, y: b0 + 24, w: 140, h: 34, title: "CPython 3", k: "gpu" },
+    { id: "pk6", x: 892, y: b0 + 24, w: 152, h: 34, title: "Assimp / ktm", k: "gpu" }
+  ];
+
+  var edges = [
+    { from: "vue", to: "v8", k: "ext", label: "invoke", fromSide: "b", toSide: "t", via: [[217, 104], [262, 104]] },
+    { from: "pyr", to: "papi", k: "ext", fromSide: "b", toSide: "t", via: [[436, 104], [814, 104]] },
+    { from: "v8", to: "era", k: "cmd", fromSide: "r", toSide: "l" },
+    { from: "papi", to: "era", k: "ext", fromSide: "l", toSide: "r" },
+    { from: "era", to: "kc", k: "cmd", label: "调用内核", fromSide: "b", toSide: "t", via: [[548, 212], [212, 212]] }
+  ];
+
+  renderDiagram("fig1", { w: W, h: 880, groups: bands, nodes: nodes, edges: edges, lines: [] });
+})();
+
+/* ================================================================== *
+ *  FIG 02 — 线程与执行拓扑
+ * ================================================================== */
+(function () {
+  var W = 1080;
+  var lanes = [
+    { y: 16,  h: 96,  label: "主线程 · Engine::run + UiSystem · 60 FPS" },
+    { y: 128, h: 104, label: "DAG 线程 · SystemsThread · 120 Hz" },
+    { y: 248, h: 88,  label: "脚本线程 · ScriptSystem · 60 FPS" },
+    { y: 352, h: 88,  label: "网络线程 · NetworkSystem · 16 ms 轮询" },
+    { y: 456, h: 88,  label: "CEF IO / UI 线程" },
+    { y: 560, h: 92,  label: "工作线程 · 异步任务" }
+  ].map(function (l) { return { x: 0, y: l.y, w: W, h: l.h, label: l.label }; });
+
+  var N = [
+    // main
+    { id: "m1", x: 122, y: 44,  w: 150, h: 42, title: "Engine 主循环", sub: "60 FPS 节拍", k: "sys" },
+    { id: "m2", x: 288, y: 44,  w: 160, h: 42, title: "UiSystem::update", sub: "SDL + CEF 泵", k: "sys" },
+    { id: "m3", x: 464, y: 44,  w: 150, h: 42, title: "VulkanBackend", sub: "UI 层渲染", k: "gpu" },
+    // dag
+    { id: "d0", x: 122, y: 158, w: 108, h: 48, title: "边界钩子", sub: "结构+环境", k: "kernel" },
+    { id: "d1", x: 246, y: 158, w: 108, h: 48, title: "Mechanics", sub: "period 2", k: "sys" },
+    { id: "d2", x: 370, y: 158, w: 108, h: 48, title: "Geometry", sub: "period 2", k: "sys" },
+    { id: "d3", x: 494, y: 158, w: 108, h: 48, title: "Acoustics", sub: "period 2", k: "sys" },
+    { id: "d4", x: 618, y: 158, w: 108, h: 48, title: "Optics", sub: "period 2", k: "sys" },
+    { id: "d5", x: 742, y: 158, w: 108, h: 48, title: "Display", sub: "每 tick", k: "sys" },
+    // script
+    { id: "s1", x: 122, y: 274, w: 170, h: 44, title: "PythonAPI", sub: "runtime coordinator", k: "sys" },
+    { id: "s2", x: 308, y: 274, w: 180, h: 44, title: "解释器 / 项目脚本", sub: "GIL 单线程", k: "sys" },
+    { id: "s3", x: 504, y: 274, w: 180, h: 44, title: "脚本输入路由", sub: "键盘/鼠标 → 脚本", k: "sys" },
+    // network
+    { id: "n1", x: 122, y: 378, w: 200, h: 44, title: "SyncEngine", sub: "脏值哈希 · 16 ms", k: "sys" },
+    { id: "n2", x: 338, y: 378, w: 180, h: 44, title: "ENet 连接 / peer 表", sub: "HELLO · 心跳", k: "ext" },
+    { id: "n3", x: 534, y: 378, w: 150, h: 44, title: "LanChat", sub: "LWW 历史", k: "sys" },
+    // cef
+    { id: "c1", x: 122, y: 482, w: 170, h: 44, title: "CefV8Handler", sub: "endpoint 分派", k: "ext" },
+    { id: "c2", x: 308, y: 482, w: 190, h: 44, title: "EditorApiRegistry", sub: "manifest 校验", k: "ext" },
+    { id: "c3", x: 514, y: 482, w: 180, h: 44, title: "native handlers", sub: "scene / viewport", k: "ext" },
+    // workers
+    { id: "w1", x: 122, y: 586, w: 210, h: 46, title: "Geometry import / build", sub: "异步资源任务", k: "sys" },
+    { id: "w2", x: 348, y: 586, w: 180, h: 46, title: "ActorPick 回读", sub: "readback worker", k: "gpu" },
+    { id: "w3", x: 544, y: 586, w: 190, h: 46, title: "Vision 场景构建", sub: "惰性初始化", k: "gpu" },
+
+    // right column
+    { id: "r1", x: 906, y: 130, w: 152, h: 96, title: "CommandBuffer", sub: ["×13", "写方向"], k: "store" },
+    { id: "r2", x: 906, y: 246, w: 152, h: 96, title: "SnapshotChannel", sub: ["×6", "读方向"], k: "store" },
+    { id: "r3", x: 906, y: 362, w: 152, h: 96, title: "EventBus / Stream", sub: ["同步 / 异步", "通知"], k: "store" },
+    { id: "r4", x: 906, y: 478, w: 152, h: 110, title: "ImageDevice", sub: ["image + receipt", "GPU 握手"], k: "gpu" }
+  ];
+
+  var E = [
+    { from: "m3", to: "r1", k: "cmd", label: "push_ui_frame", fromSide: "r", toSide: "t", via: [[880, 65], [982, 65]] },
+    { from: "c3", to: "r3", k: "ev", label: "事件", fromSide: "r", toSide: "l", via: [[730, 504], [730, 410]] },
+    { from: "n1", to: "r3", k: "ev", label: "peer 事件", fromSide: "b", toSide: "b", via: [[222, 472], [982, 472]] },
+    { from: "d4", to: "r2", k: "snap", label: "publish", fromSide: "b", toSide: "t", via: [[672, 232], [982, 232]] },
+    { from: "d4", to: "r4", k: "gpu", label: "帧就绪", fromSide: "t", toSide: "l", via: [[672, 140], [880, 140], [880, 533]], labelDy: 62 }
+  ];
+
+  renderDiagram("fig2", { w: W, h: 668, groups: lanes, nodes: N, edges: E, lines: [] });
+})();
+
+/* ================================================================== *
+ *  FIG 03 — 三种语义
+ * ================================================================== */
+(function () {
+  var W = 1000;
+  var cy = [
+    { y: 34,  lft: "外部线程",      mid: "命令 CommandBuffer",  rgt: "DAG 拥有者",  lk: "cmd",  lsub: "CEF / 脚本 / 网络", msub: "有界 · 可合并 · 单消费者", rsub: "apply 后写槽位",  tag: "写 = 命令" },
+    { y: 178, lft: "DAG 拥有者",    mid: "事件 EventBus",       rgt: "订阅者",      lk: "ev",   lsub: "Mechanics … Display", msub: "同步广播 · 零回执", rsub: "任意数量 · 互不相关", tag: "通知 = 事件" },
+    { y: 322, lft: "DAG 拥有者",    mid: "快照 SnapshotChannel", rgt: "任意读者",   lk: "snap", lsub: "每 tick 发布一次",   msub: "单发布 · 多读 · 无队列", rsub: "面板 / gizmo / get_*", tag: "读 = 快照" }
+  ];
+  var N = [], E = [], L = [];
+  cy.forEach(function (r, i) {
+    N.push({ id: "l" + i, x: 40,  y: r.y, w: 190, h: 92, title: r.lft, sub: r.lsub, k: "ext" });
+    N.push({ id: "m" + i, x: 286, y: r.y, w: 300, h: 92, title: r.mid, sub: r.msub, k: r.lk === "cmd" ? "store" : "store" });
+    N.push({ id: "r" + i, x: 642, y: r.y, w: 240, h: 92, title: r.rgt, sub: r.rsub, k: "sys" });
+    E.push({ from: "l" + i, to: "m" + i, k: r.lk, fromSide: "r", toSide: "l" });
+    E.push({ from: "m" + i, to: "r" + i, k: r.lk, label: r.lk === "cmd" ? "drain" : (r.lk === "ev" ? "callback" : "read"), fromSide: "r", toSide: "l" });
+    N.push({ id: "t" + i, x: 900, y: r.y + 30, w: 92, h: 32, title: r.tag, k: "" });
+  });
+  renderDiagram("fig3", { w: W, h: 440, groups: [], nodes: N, edges: E, lines: L });
+})();
+
+/* ================================================================== *
+ *  FIG 04 — 一个字段的完整往返
+ * ================================================================== */
+(function () {
+  var W = 1070;
+  var N = [
+    { id: "w",  x: 20,  y: 30,  w: 180, h: 74, title: "外部写者", sub: "CEF / 脚本 / 网络", k: "ext" },
+    { id: "cb", x: 300, y: 30,  w: 190, h: 74, title: "CommandBuffer", sub: "有界 · 按 key 合并", k: "store" },
+    { id: "ow", x: 590, y: 30,  w: 190, h: 74, title: "拥有者 update()", sub: "drain → apply", k: "sys" },
+    { id: "sl", x: 880, y: 30,  w: 180, h: 74, title: "Storage<T> 槽位", sub: "单写者 · 每槽读写锁", k: "data" },
+    { id: "dv", x: 20,  y: 200, w: 180, h: 74, title: "有效值", sub: ["快照 + pending", "*_view() 叠加 peek"], k: "sys" },
+    { id: "rd", x: 300, y: 200, w: 190, h: 74, title: "外部读者", sub: "get_* / 面板 / gizmo", k: "ext" },
+    { id: "sc", x: 590, y: 200, w: 190, h: 74, title: "SnapshotChannel", sub: "publish(revision++)", k: "store" }
+  ];
+  var E = [
+    { from: "w",  to: "cb", k: "cmd",  label: "push",   fromSide: "r", toSide: "l" },
+    { from: "cb", to: "ow", k: "cmd",  label: "drain",  fromSide: "r", toSide: "l" },
+    { from: "ow", to: "sl", k: "slot", label: "写槽位", fromSide: "r", toSide: "l" },
+    { from: "sl", to: "sc", k: "snap", label: "publish", fromSide: "b", toSide: "t", via: [[970, 160], [685, 160]] },
+    { from: "sc", to: "rd", k: "snap", label: "read",   fromSide: "l", toSide: "r" },
+    { from: "rd", to: "dv", k: "snap", label: "叠加",   fromSide: "l", toSide: "r" },
+    { from: "cb", to: "dv", k: "cmd",  label: "peek(key)", fromSide: "b", toSide: "t", via: [[395, 160], [110, 160]] }
+  ];
+  renderDiagram("fig4", { w: W, h: 310, groups: [], nodes: N, edges: E, lines: [] });
+})();
+
+/* ================================================================== *
+ *  FIG 05 — 初始化顺序
+ * ================================================================== */
+renderSeq("fig5", {
+  w: 1080, dy: 42, headH: 54,
+  lanes: [
+    { id: "main", title: "主线程", sub: "Engine", k: "sys" },
+    { id: "kc",   title: "KernelContext", sub: "内核", k: "kernel" },
+    { id: "mgr",  title: "SystemManager", sub: "注册/生命周期", k: "kernel" },
+    { id: "sys",  title: "8 × System", sub: "各自 initialize", k: "sys" },
+    { id: "dag",  title: "SystemsThread", sub: "DAG 装配", k: "sys" }
+  ],
+  steps: [
+    { a: "main", b: "kc",   t: "initialize()", k: "" },
+    { a: "kc",   b: "kc",   t: "建 EventBus / BusStream / SystemManager", k: "" },
+    { a: "kc",   b: "main", t: "ok", k: "" },
+    { a: "main", b: "mgr",  t: "register_system() × 8", k: "" },
+    { a: "main", b: "main", t: "注册 5 个资源解析器（Scene 开简化 + LOD）", k: "" },
+    { a: "main", b: "mgr",  t: "initialize_all()", k: "" },
+    { a: "mgr",  b: "sys",  t: "initialize() 按优先级降序", k: "" },
+    { a: "mgr",  b: "main", t: "全部成功", k: "" },
+    { note: "★ 必须在这里装配：initialize_all() 内部持有非递归锁，此时 get_system() 会重入死锁" },
+    { a: "main", b: "dag",  t: "configure_dag(120Hz, 5 节点)", k: "" },
+    { a: "dag",  b: "dag",  t: "compile() 拓扑排序", k: "" },
+    { a: "main", b: "dag",  t: "set_tick_boundary_hook()", k: "" },
+    { a: "main", b: "main", t: "run()：先订阅关机事件流，再 start_all()", k: "" },
+    { a: "dag",  b: "sys",  t: "start_inline() → 状态 running（不建线程）", k: "" },
+    { a: "main", b: "main", t: "进入 60 FPS 主循环；每帧 Engine::tick() → UiSystem::update()", k: "" }
+  ]
+});
+
+/* ================================================================== *
+ *  FIG 06 — 一个 tick 内的消息流
+ * ================================================================== */
+renderSeq("fig6", {
+  w: 1080, dy: 44, headH: 54,
+  lanes: [
+    { id: "bnd", title: "边界钩子", sub: "所有节点之前", k: "kernel" },
+    { id: "mec", title: "Mechanics", sub: "period 2", k: "sys" },
+    { id: "geo", title: "Geometry", sub: "period 2", k: "sys" },
+    { id: "aco", title: "Acoustics", sub: "period 2", k: "sys" },
+    { id: "opt", title: "Optics", sub: "period 2", k: "sys" },
+    { id: "dis", title: "Display", sub: "每 tick", k: "sys" },
+    { id: "ext", title: "外部线程", sub: "CEF/脚本/网络", k: "ext" }
+  ],
+  steps: [
+    { note: "tick 开始：边界钩子先于所有节点执行" },
+    { a: "bnd", b: "bnd", t: "drain 结构命令（回调注册）+ Environment 命令", k: "cmd" },
+    { a: "bnd", b: "mec", t: "槽位已更新（本 tick 立即生效）", k: "slot" },
+    { a: "mec", b: "mec", t: "GPU 积分 → 粗筛/窄相/接触 → 蒙皮 → IK", k: "" },
+    { a: "mec", b: "geo", t: "skinned_aabb · collision_model_id", k: "slot" },
+    { a: "geo", b: "geo", t: "异步 import → 建 GPU 网格 → 上传；LRU / 八叉树", k: "" },
+    { a: "geo", b: "opt", t: "mesh_handles 就绪", k: "slot" },
+    { a: "mec", b: "aco", t: "变换（空间音频定位）", k: "slot" },
+    { a: "opt", b: "opt", t: "apply 相机命令 → 发布快照 → 光栅/PT → 写 ImageDevice", k: "cmd" },
+    { a: "opt", b: "dis", t: "push OpticsFrameCommand（LatestWins）", k: "cmd" },
+    { a: "dis", b: "dis", t: "drain → 合成 Optics+UI → present → 写 consumed_receipt", k: "gpu" },
+    { a: "dis", b: "opt", t: "OpticsFrameConsumed（释放节流槽）", k: "ev" },
+    { a: "opt", b: "ext", t: "publish CameraSnapshot / TransformSnapshot", k: "snap" },
+    { a: "ext", b: "opt", t: "push 命令（下一 tick 才生效）", k: "cmd" },
+    { note: "tick 结束：节点抛异常不跨出 run_tick，只中止本 tick 并记录 failed_node" }
+  ]
+});
+
+/* ================================================================== *
+ *  FIG 07 — 渲染到上屏
+ * ================================================================== */
+(function () {
+  var W = 1080;
+  var N = [
+    { id: "rn", x: 24,  y: 26,  w: 186, h: 76, title: "Optics.run_frame", sub: "光栅 / 路径追踪", k: "sys" },
+    { id: "im", x: 296, y: 26,  w: 210, h: 76, title: "ImageDevice", sub: ["image + submit_receipt", "+ metadata（同锁）"], k: "store" },
+    { id: "fc", x: 592, y: 26,  w: 190, h: 76, title: "OpticsFrameCommand", sub: "LatestWins · key=surface", k: "cmd" },
+    { id: "ap", x: 868, y: 26,  w: 190, h: 76, title: "Display.apply_pending", sub: "drain 帧命令", k: "sys" },
+    { id: "th", x: 24,  y: 160, w: 186, h: 76, title: "native 帧节流", sub: "拿到回执才释放槽位", k: "sys" },
+    { id: "cr", x: 296, y: 160, w: 210, h: 76, title: "consumed_receipt", sub: "Display 写入", k: "store" },
+    { id: "hd", x: 592, y: 160, w: 190, h: 76, title: "HardwareDisplayer", sub: "swapchain present", k: "gpu" },
+    { id: "cp", x: 868, y: 160, w: 190, h: 76, title: "compose_and_present", sub: "合成 Optics + UI", k: "sys" },
+    { id: "pi", x: 868, y: 290, w: 190, h: 62, title: "PublishedImage 令牌", sub: "绑定一次分配", k: "gpu" }
+  ];
+  var E = [
+    { from: "rn", to: "im", k: "slot", label: "写", fromSide: "r", toSide: "l" },
+    { from: "im", to: "fc", k: "cmd",  label: "包装", fromSide: "r", toSide: "l" },
+    { from: "fc", to: "ap", k: "cmd",  label: "push", fromSide: "r", toSide: "l" },
+    { from: "ap", to: "cp", k: "",     label: "同 tick", fromSide: "b", toSide: "t" },
+    { from: "cp", to: "hd", k: "gpu",  label: "submit", fromSide: "l", toSide: "r" },
+    { from: "hd", to: "cr", k: "gpu",  label: "回写", fromSide: "l", toSide: "r" },
+    { from: "cr", to: "th", k: "gpu",  label: "等待", fromSide: "l", toSide: "r" },
+    { from: "pi", to: "cp", k: "gpu",  label: "校验令牌", fromSide: "t", toSide: "b" }
+  ];
+  renderDiagram("fig7", { w: W, h: 380, groups: [], nodes: N, edges: E, lines: [] });
+})();
+
+/* ================================================================== *
+ *  FIG 08 — Actor 驻留状态机
+ * ================================================================== */
+(function () {
+  var W = 1000;
+  var N = [
+    { id: "al", x: 20,  y: 56,  w: 140, h: 68, title: "allocate", sub: "分配 4 类槽位", k: "kernel" },
+    { id: "pi", x: 250, y: 56,  w: 140, h: 68, title: "PendingImport", sub: "只有 model_path", k: "store" },
+    { id: "pb", x: 480, y: 56,  w: 140, h: 68, title: "PendingBuild", sub: "model_id 就绪", k: "store" },
+    { id: "rd", x: 710, y: 56,  w: 160, h: 68, title: "Ready / Loaded", sub: "GPU 就绪 · 可消费", k: "sys" },
+    { id: "fa", x: 250, y: 226, w: 140, h: 68, title: "Failed", sub: "终态 · 不重试", k: "gpu" },
+    { id: "ev", x: 480, y: 226, w: 140, h: 68, title: "Evicted", sub: "gpu_only", k: "store" },
+    { id: "un", x: 710, y: 226, w: 160, h: 68, title: "Unloaded", sub: "GPU 已释放", k: "sys" }
+  ];
+  var E = [
+    { from: "al", to: "pi", k: "", label: "只给路径", fromSide: "r", toSide: "l" },
+    { from: "pi", to: "pb", k: "", label: "import", fromSide: "r", toSide: "l" },
+    { from: "pb", to: "rd", k: "", label: "建 GPU", fromSide: "r", toSide: "l" },
+    { from: "pi", to: "fa", k: "gpu", label: "失败", fromSide: "b", toSide: "t" },
+    { from: "pb", to: "ev", k: "", label: "restore", fromSide: "b", toSide: "t" },
+    { from: "rd", to: "un", k: "", label: "卸载", fromSide: "b", toSide: "t" },
+    { from: "rd", to: "ev", k: "slot", label: "VRAM 压力", fromSide: "l", toSide: "r", via: [[670, 90], [670, 260]], labelDy: -34 },
+    { from: "un", to: "pb", k: "", label: "load", fromSide: "l", toSide: "r", via: [[690, 260], [690, 90]], labelDy: 36 }
+  ];
+  renderDiagram("fig8", { w: W, h: 320, groups: [], nodes: N, edges: E, lines: [] });
+})();
+
+/* ================================================================== *
+ *  FIG 09 — 编辑器往返
+ * ================================================================== */
+renderSeq("fig9", {
+  w: 1080, dy: 44, headH: 56,
+  lanes: [
+    { id: "vue", title: "Vue 面板", sub: "js_wrapper", k: "ext" },
+    { id: "ad",  title: "editorApi.js", sub: "manifest 校验", k: "ext" },
+    { id: "v8",  title: "CEF V8", sub: "endpoint", k: "ext" },
+    { id: "reg", title: "EditorApiRegistry", sub: "caller 权限位", k: "ext" },
+    { id: "era", title: "EngineRuntimeApi", sub: "C++ 类", k: "sys" },
+    { id: "dag", title: "命令队列 → DAG", sub: "拥有者 apply", k: "sys" },
+    { id: "snp", title: "SnapshotChannel", sub: "下个 tick 发布", k: "store" }
+  ],
+  steps: [
+    { a: "vue", b: "ad",  t: "invoke(api, args)", k: "" },
+    { a: "ad",  b: "ad",  t: "查 manifest：参数类型 / optional / async", k: "" },
+    { a: "ad",  b: "v8",  t: "call_editor_api(...)", k: "ext" },
+    { a: "v8",  b: "reg", t: "EditorApiRequest{api_name,args,caller}", k: "ext" },
+    { a: "reg", b: "reg", t: "校验 allowed_callers 与参数签名", k: "" },
+    { a: "reg", b: "era", t: "native_function(...)", k: "" },
+    { a: "era", b: "dag", t: "push 命令（不直接写槽位）", k: "cmd" },
+    { note: "★ 写操作在下一 tick 才落地；需要“读己之写”时用 peek / *_view()" },
+    { a: "dag", b: "snp", t: "apply 后 publish 快照", k: "snap" },
+    { a: "snp", b: "era", t: "get_* 读快照（任意线程）", k: "snap" },
+    { a: "era", b: "v8",  t: "NativeResult → JSON", k: "ext" },
+    { a: "v8",  b: "ad",  t: "promise resolve", k: "ext" },
+    { a: "ad",  b: "vue", t: "更新 UI", k: "" }
+  ]
+});
+
+/* ================================================================== *
+ *  侧栏高亮 + 主题 + 表格过滤
+ * ================================================================== */
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll(".sidebar a"));
+  var sections = links.map(function (a) {
+    return document.getElementById(a.getAttribute("href").slice(1));
+  });
+  function onScroll() {
+    var y = window.scrollY + 120;
+    var idx = -1;
+    for (var i = 0; i < sections.length; i++) {
+      if (sections[i] && sections[i].offsetTop <= y) idx = i;
+    }
+    links.forEach(function (a, i) { a.classList.toggle("active", i === idx); });
+  }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+
+  var html = document.documentElement;
+  var btn = document.getElementById("themeBtn");
+  btn.addEventListener("click", function () {
+    html.dataset.theme = html.dataset.theme === "dark" ? "light" : "dark";
+  });
+
+  var q = document.getElementById("q");
+  q.addEventListener("input", function () {
+    var term = q.value.trim().toLowerCase();
+    var rows = document.querySelectorAll("tbody tr");
+    for (var i = 0; i < rows.length; i++) {
+      var tr = rows[i];
+      if (tr.classList.contains("group")) continue;
+      if (!term) { tr.classList.remove("hidden"); continue; }
+      var hit = tr.textContent.toLowerCase().indexOf(term) !== -1;
+      tr.classList.toggle("hidden", !hit);
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

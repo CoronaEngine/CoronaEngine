@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoronaEngine · 从 SharedDataHub 到 EnTT ECS 的架构设计</title>
+<style>
+  :root{
+    --bg:#070c11; --panel:#0c141d; --line:#1b2b38;
+    --text:#e8f1f7; --dim:#8ba3b5; --dim2:#5f778a;
+    --cy:#22d3ee; --gr:#34d399; --am:#fbbf24; --rd:#fb7185; --vi:#a78bfa; --bl:#38bdf8;
+    --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;color:var(--text);font:14px/1.65 "Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    background:
+      radial-gradient(1000px 520px at 10% -10%, rgba(52,211,153,.12), transparent 62%),
+      radial-gradient(900px 480px at 92% 0%, rgba(34,211,238,.10), transparent 58%),
+      var(--bg);
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1460px;margin:0 auto;padding:0 26px 90px}
+  header.top{padding:44px 0 14px}
+  .kicker{display:flex;align-items:center;gap:10px;color:var(--dim);font-size:12.5px;letter-spacing:.14em;text-transform:uppercase}
+  .kicker .dot{width:7px;height:7px;border-radius:50%;background:var(--gr);box-shadow:0 0 12px var(--gr)}
+  h1{font-size:clamp(25px,3.3vw,42px);line-height:1.18;margin:14px 0 10px;font-weight:700;letter-spacing:-.02em}
+  h1 .grad{background:linear-gradient(92deg,#6ee7b7 0%,#67e8f9 52%,#c4b5fd 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .lede{max-width:1010px;color:#b9c9d8;font-size:15px;margin:0}
+  .lede b{color:#fff;font-weight:600}
+  .stats{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}
+  .stat{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.015));border:1px solid var(--line);border-radius:12px;padding:10px 15px;min-width:104px}
+  .stat .n{font:600 21px/1.1 var(--mono);color:#fff}
+  .stat .l{font-size:11.5px;color:var(--dim);margin-top:3px}
+  .stat .n em{font-style:normal;color:var(--gr)}
+
+  nav.tabs{position:sticky;top:0;z-index:40;margin-top:24px;padding:9px 0;background:rgba(7,12,17,.86);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);display:flex;gap:6px;flex-wrap:wrap}
+  .tab{border:1px solid transparent;background:transparent;color:var(--dim);padding:8px 15px;border-radius:9px;cursor:pointer;font:500 13.5px/1 inherit}
+  .tab:hover{color:#fff;background:rgba(255,255,255,.04)}
+  .tab.on{color:#04140e;background:linear-gradient(180deg,#6ee7b7,#34d399);font-weight:650;box-shadow:0 4px 18px rgba(52,211,153,.22)}
+
+  section.view{display:none;padding-top:28px}
+  section.view.on{display:block}
+  h2{font-size:19px;margin:4px 0 12px;font-weight:650}
+  h2 .idx{color:var(--dim2);font:500 12px/1 var(--mono);margin-right:9px}
+  h3{font-size:15px;margin:26px 0 10px;font-weight:600;color:#d8e7f1}
+  p.note{color:var(--dim);margin:8px 0 0;font-size:13px}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.008));border:1px solid var(--line);border-radius:16px;padding:20px}
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:repeat(auto-fit,minmax(390px,1fr))}
+  .g3{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+  .g4{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+
+  /* before / after */
+  .ba{display:grid;grid-template-columns:1fr 54px 1fr;gap:14px;align-items:center}
+  @media(max-width:900px){.ba{grid-template-columns:1fr}.ba .arrow{transform:rotate(90deg);justify-self:center}}
+  .ba .box{border:1px solid var(--line);border-radius:14px;padding:16px;background:var(--panel)}
+  .ba .box.now{border-color:rgba(251,113,133,.28)}
+  .ba .box.next{border-color:rgba(52,211,153,.3)}
+  .ba h4{margin:0 0 10px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim2)}
+  .ba .row{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px dashed #17242f;font-size:12.6px;color:#c6d4e0}
+  .ba .row:last-child{border:0}
+  .ba .row b{font:600 12.5px/1.3 var(--mono);color:#fff}
+  .ba .row .v{font:500 12px/1.3 var(--mono);color:#fda4af}
+  .ba .box.next .row .v{color:#6ee7b7}
+  .arrow{display:flex;align-items:center;justify-content:center;color:#3b5a6b;font-size:26px}
+
+  /* layered architecture */
+  .layers{display:grid;gap:10px}
+  .layer{border:1px solid var(--line);border-radius:13px;padding:13px 15px;background:rgba(255,255,255,.02)}
+  .layer .h{display:flex;align-items:center;gap:9px;font:600 12px/1 var(--mono);color:#9fb6c8;letter-spacing:.06em;text-transform:uppercase;margin-bottom:9px}
+  .layer .h .b{width:7px;height:7px;border-radius:2px;background:var(--cy)}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{border:1px solid #24384a;border-radius:7px;padding:5px 9px;font:500 11.3px/1 var(--mono);color:#c7d7e3;background:#0b1720}
+  .lane{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  @media(max-width:800px){.lane{grid-template-columns:1fr}}
+  .pipe{border:1px dashed rgba(251,191,36,.3);border-radius:9px;padding:8px 10px;font-size:11.6px;color:#d8c08c;background:rgba(251,191,36,.04)}
+  .pipe.up{border-color:rgba(52,211,153,.32);color:#a7e8c8;background:rgba(52,211,153,.05)}
+  .core{border:1px solid rgba(34,211,238,.3);border-radius:13px;padding:13px 15px;background:linear-gradient(180deg,rgba(34,211,238,.08),rgba(34,211,238,.015))}
+  .core .sysrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .sys{font:600 11.5px/1 var(--mono);color:#cffafe;background:rgba(0,0,0,.22);border:1px solid rgba(34,211,238,.18);padding:6px 8px;border-radius:6px}
+
+  .principles{margin:0;padding:0;list-style:none;display:grid;gap:10px;counter-reset:p}
+  .principles li{display:flex;gap:11px;align-items:flex-start;font-size:13px;color:#c3d3df;counter-increment:p}
+  .principles li:before{content:"0" counter(p);flex:0 0 22px;height:22px;border-radius:6px;background:rgba(52,211,153,.13);color:#6ee7b7;font:600 10.5px/22px var(--mono);text-align:center;margin-top:2px}
+  .principles b{color:#fff;font-weight:600}
+
+  /* table */
+  .toolbar{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:4px 0 12px}
+  .search{position:relative;flex:1 1 260px}
+  .search input{width:100%;background:#0a141c;border:1px solid #223645;color:var(--text);border-radius:10px;padding:10px 12px 10px 34px;font:13px/1 inherit;outline:none}
+  .search input:focus{border-color:rgba(52,211,153,.55);box-shadow:0 0 0 3px rgba(52,211,153,.1)}
+  .search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);opacity:.5}
+  .count{font:500 11.5px/1 var(--mono);color:var(--dim2);margin-left:auto}
+  .tablewrap{border:1px solid var(--line);border-radius:14px;overflow:auto;background:rgba(8,14,20,.7)}
+  table{border-collapse:separate;border-spacing:0;width:100%;font-size:12.6px}
+  thead th{position:sticky;top:0;z-index:2;background:#0b1721;text-align:left;padding:11px 12px;font:600 11.4px/1.2 inherit;color:#93a9ba;border-bottom:1px solid #20323f;white-space:nowrap}
+  tbody td{padding:10px 12px;border-bottom:1px solid #13212b;vertical-align:top}
+  tbody tr.st{cursor:pointer}
+  tbody tr.st:hover{background:rgba(52,211,153,.05)}
+  .mono{font:600 11.6px/1.3 var(--mono)}
+  .c-name{color:#7dd3fc}
+  .tags{display:flex;gap:4px;flex-wrap:wrap}
+  .t{font:500 10.5px/1 var(--mono);padding:4px 6px;border-radius:5px;border:1px solid transparent;white-space:nowrap}
+  .t.comp{background:rgba(52,211,153,.1);color:#6ee7b7;border-color:rgba(52,211,153,.22)}
+  .t.drop{background:rgba(251,113,133,.1);color:#fda4af;border-color:rgba(251,113,133,.2)}
+  .t.non{background:rgba(167,139,250,.12);color:#c4b5fd;border-color:rgba(167,139,250,.24)}
+  .t.ok{background:rgba(34,211,238,.1);color:#67e8f9;border-color:rgba(34,211,238,.22)}
+  .detail{padding:0 12px 14px;color:#a9bccb;font-size:12.5px;background:rgba(255,255,255,.015);border-bottom:1px solid #13212b}
+  .detail .dl{margin:8px 0 0}
+
+  /* phases */
+  .phases{display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start}
+  @media(max-width:900px){.phases{grid-template-columns:1fr}}
+  .plist{display:flex;flex-direction:column;gap:6px}
+  .pitem{text-align:left;border:1px solid #1b2b38;background:rgba(255,255,255,.02);border-radius:10px;padding:11px 12px;cursor:pointer;color:#c5d5e2}
+  .pitem:hover{border-color:#2a4a5c}
+  .pitem.on{border-color:rgba(52,211,153,.5);background:rgba(52,211,153,.08);color:#fff}
+  .pitem .id{font:700 10.5px/1 var(--mono);color:#6ee7b7}
+  .pitem .t{display:block;font-size:12.8px;font-weight:600;margin-top:5px}
+  .pitem .e{font:500 10.5px/1 var(--mono);color:var(--dim2);margin-top:5px}
+  .pdetail{border:1px solid var(--line);border-radius:14px;padding:20px;background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,.005))}
+  .pdetail h3{margin:0 0 6px;font-size:17px}
+  .pdetail .goal{color:#b9c9d8;font-size:13.2px;margin:0 0 14px}
+  .pdetail ul{margin:0;padding-left:18px;color:#c3d3df;font-size:12.8px}
+  .pdetail li{margin:5px 0}
+  .gate{display:grid;gap:6px;margin-top:14px}
+  .gate div{font-size:12.4px;color:#a7e8c8;background:rgba(52,211,153,.06);border-left:2px solid rgba(52,211,153,.5);padding:7px 10px;border-radius:0 7px 7px 0}
+
+  /* risks */
+  .risk{border:1px solid var(--line);border-radius:13px;background:var(--panel);padding:15px 16px}
+  .risk .rh{display:flex;align-items:center;gap:9px;margin-bottom:7px}
+  .risk .rh b{font-size:13.5px}
+  .lv{font:600 10px/1 var(--mono);padding:4px 6px;border-radius:4px;margin-left:auto}
+  .lv.high{background:rgba(251,113,133,.16);color:#fda4af}
+  .lv.mid{background:rgba(251,191,36,.14);color:#fcd34d}
+  .risk p{margin:0;font-size:12.5px;color:#a9bccb}
+  .risk .m{margin-top:9px;font-size:12.4px;color:#a7e8c8;background:rgba(52,211,153,.06);border-radius:7px;padding:8px 10px}
+
+  /* code */
+  .codewrap{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#0a131b}
+  .codebar{display:flex;gap:4px;padding:8px;border-bottom:1px solid #16242f;background:#0b1721;flex-wrap:wrap}
+  .codebar button{background:transparent;border:1px solid transparent;color:#8ba3b5;padding:7px 12px;border-radius:7px;font:500 12px/1 var(--mono);cursor:pointer}
+  .codebar button.on{background:rgba(52,211,153,.12);border-color:rgba(52,211,153,.3);color:#a7f3d0}
+  pre{margin:0;padding:18px;overflow:auto;font:12.2px/1.65 var(--mono);color:#c9dbe6;max-height:620px}
+  pre .kw{color:#c4b5fd} pre .ty{color:#7dd3fc} pre .cm{color:#5f778a}
+
+  /* notes */
+  .notes-list{display:grid;gap:14px}
+  .notes-list .card h4{margin:0 0 8px;font-size:14.5px}
+  .notes-list .card p,.notes-list .card li{color:#a9bccb;font-size:12.8px}
+  .notes-list .card ul{margin:8px 0 0;padding-left:18px}
+  code{font:500 11.8px/1.4 var(--mono);color:#a5f3fc;background:rgba(34,211,238,.07);padding:2px 5px;border-radius:4px}
+  .callout{border-left:3px solid rgba(251,191,36,.6);background:rgba(251,191,36,.06);padding:10px 13px;border-radius:0 9px 9px 0;color:#fcd9a4;font-size:12.7px}
+  footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);color:var(--dim2);font-size:11.8px;display:flex;gap:16px;flex-wrap:wrap;justify-content:space-between}
+  @media(max-width:700px){.wrap{padding:0 14px 60px}.ba{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="kicker"><span class="dot"></span><span>CoronaEngine · Storage → EnTT 架构设计</span></div>
+    <h1>删掉 13 个 Storage：<span class="grad">用 ECS 重建 DAG 的内部存储与外部边界</span></h1>
+    <p class="lede">目标是把 <b>SharedDataHub 的所有 Storage 容器</b>清空，DAG 内部改成 EnTT registry；外部线程不再碰任何槽位——<b>写只走命令，读只拿快照</b>。这不是一次容器替换：它同时改掉了句柄语义、生命周期、网络身份和整个公开 API。</p>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab on" data-view="overview">总览</button>
+    <button class="tab" data-view="mapping">组件映射</button>
+    <button class="tab" data-view="boundary">快照与命令</button>
+    <button class="tab" data-view="phases">迁移路线</button>
+    <button class="tab" data-view="risks">风险与验收</button>
+    <button class="tab" data-view="code">代码骨架</button>
+    <button class="tab" data-view="notes">口径</button>
+  </nav>
+
+  <main>
+    <!-- 总览 -->
+    <section class="view on" id="view-overview">
+      <h2><span class="idx">01</span>先把账算清楚</h2>
+      <div class="card">
+        <div class="ba">
+          <div class="box now">
+            <h4>现在：13 个 Storage</h4>
+            <div class="row"><span>存储容器</span><b>13 个 <span class="v">Storage&lt;T,128,2&gt;</span></b></div>
+            <div class="row"><span>槽位级锁调用</span><b>492 处 <span class="v">acquire_*</span></b></div>
+            <div class="row"><span>访问器调用点</span><b>509 处 <span class="v">*_storage()</span></b></div>
+            <div class="row"><span>对外暴露字段</span><b>154 个 <span class="v">跨线程可读写</span></b></div>
+            <div class="row"><span>句柄</span><b>uintptr_t <span class="v">= 槽位地址</span></b></div>
+          </div>
+          <div class="arrow">➜</div>
+          <div class="box next">
+            <h4>目标：1 个 registry + 1 个快照</h4>
+            <div class="row"><span>存储容器</span><b>1 个 <span class="v">entt::registry</span></b></div>
+            <div class="row"><span>DAG 内锁</span><b>0 <span class="v">单写者</span></b></div>
+            <div class="row"><span>外部访问</span><b>命令 + 快照 <span class="v">2 条路</span></b></div>
+            <div class="row"><span>对外快照字段</span><b>≈38 个 <span class="v">投影而非全量</span></b></div>
+            <div class="row"><span>句柄</span><b>EntityHandle <span class="v">index+generation</span></b></div>
+          </div>
+        </div>
+        <p class="note" style="margin-top:14px">数字来自本仓库：<code>grep -c "_storage()"</code>、<code>acquire_*</code> 调用点、上一份边界审计的 154 个字段。492 处锁调用是这次重构最直接的收益项。</p>
+      </div>
+
+      <h3>目标架构：三层，两条通道</h3>
+      <div class="card">
+        <div class="layers">
+          <div class="layer">
+            <div class="h"><span class="b"></span>外部线程（不允许触碰 registry）</div>
+            <div class="chips">
+              <span class="chip">主线程 / UiSystem</span><span class="chip">CEF 编辑器 UI</span>
+              <span class="chip">脚本线程</span><span class="chip">网络线程</span><span class="chip">资源线程池</span>
+            </div>
+          </div>
+          <div class="lane">
+            <div class="pipe">↓ 命令（CommandBuffer，双缓冲 / latest-wins 合并）</div>
+            <div class="pipe up">↑ 快照（WorldSnapshot，每 tick 发布一次，只读）</div>
+          </div>
+          <div class="layer core">
+            <div class="h"><span class="b"></span>World（只属于 DAG 线程，120Hz）</div>
+            <div class="chips">
+              <span class="chip">entt::registry</span><span class="chip">CommandBuffer</span><span class="chip">SnapshotPublisher</span><span class="chip">FrameExchange（GPU）</span>
+            </div>
+            <div class="sysrow">
+              <span class="sys">Mechanics</span><span class="sys">Geometry</span><span class="sys">Acoustics</span><span class="sys">Optics</span><span class="sys">Display</span>
+            </div>
+          </div>
+          <div class="lane">
+            <div class="pipe">↓ 提交（SubmitReceipt）</div>
+            <div class="pipe up">↑ present 回执（consumed_receipt）</div>
+          </div>
+          <div class="layer">
+            <div class="h"><span class="b"></span>GPU 与交换链</div>
+            <div class="chips"><span class="chip">Horizon 执行器</span><span class="chip">Vulkan swapchain</span><span class="chip">FrameExchange</span></div>
+          </div>
+        </div>
+      </div>
+
+      <h3>五条不可协商的原则</h3>
+      <div class="card">
+        <ol class="principles">
+          <li><div><b>单写者。</b>registry 只允许 DAG 线程访问；没有锁，也不打算加锁。任何外部线程拿到 registry 引用都是设计错误，用线程断言和头文件边界把它挡在编译期/运行期之外。</div></li>
+          <li><div><b>身份稳定。</b>外部拿到的句柄是 <code>index + generation</code>，不是组件地址。ECS 的 archetype 搬移会让组件地址随时失效，裸指针绝不能离开 DAG 线程。</div></li>
+          <li><div><b>写命令、读快照。</b>没有第三条路。命令是唯一写入口，快照是唯一读出口；两者都只传值、不传指针。</div></li>
+          <li><div><b>结构变更延后。</b>创建/销毁/挂载组件统一在 tick 边界执行，tick 中间不做 archetype 搬移，保证系统遍历期间视图稳定。</div></li>
+          <li><div><b>组件按变更频率拆，不按旧结构体一比一映射。</b>每帧变的（Transform/Skinning）和加载期变的（MeshSet/ModelSource）分开，避免整块组件被高频系统反复拉进 cache。</div></li>
+        </ol>
+      </div>
+
+      <h3>这个方案真正换掉了什么</h3>
+      <div class="grid g3">
+        <div class="card"><h4 style="margin:0 0 6px;font-size:13.5px">句柄语义</h4><p class="note" style="margin:0">从“槽位内存地址”变成“实体 id + 代际”。旧句柄在实体销毁后会被 generation 拒绝，而不是像现在一样指针悬空。</p></div>
+        <div class="card"><h4 style="margin:0 0 6px;font-size:13.5px">访问路径</h4><p class="note" style="margin:0">Geometry 现在每个 actor 要链式拿 5 把锁（scene→actor→profile→mechanics→geometry→transform）；ECS 下一次 view 遍历直接拿到全部组件。</p></div>
+        <div class="card"><h4 style="margin:0 0 6px;font-size:13.5px">网络身份</h4><p class="note" style="margin:0">现在同步依赖 <code>seq_id</code>（槽位物理序号），要求两端布局一致，创建 actor 时甚至要暂停同步；ECS 没有等价物，必须切到 GUID + revision。</p></div>
+      </div>
+    </section>
+
+    <!-- 组件映射 -->
+    <section class="view" id="view-mapping">
+      <h2><span class="idx">02</span>Storage → 组件映射</h2>
+      <p class="note">13 个 Storage 里，10 个变成组件、2 个删除、1 个移出 ECS（GPU 帧交换）；另外 2 个互斥状态结构（遥测 / 视口状态）不进 ECS。点任意行展开字段去向。</p>
+      <div class="toolbar">
+        <div class="search">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="q" type="search" placeholder="搜索 Storage / 组件 / 字段…">
+        </div>
+        <span class="count" id="mcount"></span>
+      </div>
+      <div class="tablewrap" style="max-height:none">
+        <table>
+          <thead><tr><th style="width:230px">原 Storage</th><th style="width:70px">字段</th><th style="width:330px">目标</th><th style="width:250px">删除 / 变化</th><th>说明</th></tr></thead>
+          <tbody id="mtbody"></tbody>
+        </table>
+      </div>
+
+      <h3>组件目录（19 个）</h3>
+      <div class="tablewrap" style="max-height:none;margin-top:10px">
+        <table>
+          <thead><tr><th style="width:150px">组件</th><th style="width:120px">语义</th><th>字段</th><th style="width:110px">变更频率</th><th style="width:170px">主要读者</th><th style="width:80px">估算大小</th></tr></thead>
+          <tbody id="ctbody"></tbody>
+        </table>
+      </div>
+      <p class="note">组件数控制在 20 以内：再细会组合爆炸（视图组合与 cache 命中都会变差），再粗就回到今天的“大结构体 + 整槽锁”。</p>
+    </section>
+
+    <!-- 快照与命令 -->
+    <section class="view" id="view-boundary">
+      <h2><span class="idx">03</span>快照、命令与身份</h2>
+      <div class="grid g2">
+        <div class="card">
+          <h4 style="margin:0 0 10px;font-size:14.5px">快照契约</h4>
+          <div class="tags" style="margin-bottom:10px">
+            <span class="t ok">每 tick 一次</span><span class="t ok">不可变</span><span class="t ok">投影非全量</span><span class="t ok">revision 单调</span>
+          </div>
+          <ul style="margin:0;padding-left:18px;color:#b9c9d8;font-size:12.8px">
+            <li><b>发布点只有一个：</b>tick 末尾，所有系统跑完之后。快照 = 该 tick 的最终状态。</li>
+            <li><b>内容只有投影：</b>actors（位姿/可见/驻留）、cameras（位姿/输出/视口/timing）、scene、stats，合计约 38 个字段；蒙皮、网格、IK、材质内部一律不进。</li>
+            <li><b>所有权：</b>发布者填好一个只读对象后原子换指针；读者拿到 <code>shared_ptr&lt;const WorldSnapshot&gt;</code>，生命周期与 DAG 解耦。</li>
+            <li><b>一致性：</b>单对象内所有字段来自同一 tick；不同对象之间可能差 1 个 revision（120Hz 下 8.3ms）。</li>
+            <li><b>结构变化：</b>实体的创建/销毁通过事件通知；快照里不会出现“半初始化实体”。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h4 style="margin:0 0 10px;font-size:14.5px">命令契约</h4>
+          <div class="tags" style="margin-bottom:10px">
+            <span class="t comp">双缓冲</span><span class="t comp">按实体合并</span><span class="t comp">tick 边界应用</span><span class="t comp">可回执</span>
+          </div>
+          <ul style="margin:0;padding-left:18px;color:#b9c9d8;font-size:12.8px">
+            <li><b>连续量</b>（拖拽、相机移动、滑动条）：按实体合并，只保留最后一条，带 sequence。</li>
+            <li><b>离散量</b>（创建、销毁、挂载、显隐）：FIFO，不合并，失败要有 error 回执。</li>
+            <li><b>结构命令单独一个阶段：</b>先应用 create/destroy/attach，再应用属性命令，最后跑系统。</li>
+            <li><b>背压：</b>队列有界；连续量丢最旧，离散量拒绝并回事件。</li>
+          </ul>
+        </div>
+      </div>
+
+      <h3>身份：三套 id，各司其职</h3>
+      <div class="card">
+        <div class="tablewrap" style="max-height:none;border:0">
+          <table>
+            <thead><tr><th style="width:150px">标识</th><th style="width:190px">形式</th><th style="width:170px">生命周期</th><th>用途</th></tr></thead>
+            <tbody>
+              <tr><td class="mono c-name">entt::entity</td><td class="mono">index(20b)+version(12b)，32 bit</td><td>DAG 内部</td><td>registry 内部索引；不出 DAG 线程。</td></tr>
+              <tr><td class="mono c-name">EntityHandle</td><td class="mono">index(24b)+generation(16b) = 40 bit</td><td>实体存活期</td><td>外部命令与快照的快速身份；&lt; 2^53，可安全穿过 CEF 的 double。</td></tr>
+              <tr><td class="mono c-name">ActorGuid</td><td class="mono">uint64 / 字符串</td><td>永久</td><td>持久化、网络同步、场景引用；跨进程唯一，替代 seq_id。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="note">规则：句柄可以随实体销毁而失效（generation 拒绝）；GUID 永不失效。命令里能用句柄就用句柄，跨越进程/存档一律用 GUID。</p>
+      </div>
+
+      <h3>什么不进 ECS</h3>
+      <div class="grid g3">
+        <div class="card"><h4 style="margin:0 0 6px;font-size:13.5px">FrameExchange</h4><p class="note" style="margin:0">GPU 帧的句柄 + 提交收据 + 消费回执。它是“跨线程传递 GPU 资源”的协议，不是游戏状态。</p></div>
+        <div class="card"><h4 style="margin:0 0 6px;font-size:13.5px">Telemetry</h4><p class="note" style="margin:0">tick 耗时、相机 render/denoise 耗时。ring buffer + 只读视图，写者单一、读者无锁。</p></div>
+        <div class="card"><h4 style="margin:0 0 6px;font-size:13.5px">ViewportChannel</h4><p class="note" style="margin:0">视口 UI 模式、gizmo hover/drag。编辑器会话状态，走命令 + 事件，不进世界。</p></div>
+      </div>
+
+      <div class="callout" style="margin-top:16px">判定标准：<b>它是不是“世界状态”</b>？能被存档、能被网络复制、能被系统按实体遍历的，进 ECS；描述“怎么把世界画出来/怎么交互”的，留在边界结构里。</div>
+    </section>
+
+    <!-- 迁移 -->
+    <section class="view" id="view-phases">
+      <h2><span class="idx">04</span>迁移路线：五个可独立交付的阶段</h2>
+      <p class="note">原则：每个阶段都能单独合并、单独回滚；不允许“大爆炸式”一次性替换。点左侧阶段查看任务与验收门槛。</p>
+      <div class="phases" style="margin-top:16px">
+        <div class="plist" id="plist"></div>
+        <div class="pdetail" id="pdetail"></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h4 style="margin:0 0 8px;font-size:14px">阶段之间的硬依赖</h4>
+        <p class="note" style="margin:0">P1（外部读改成快照）必须先于 P3（重系统组件化）——否则组件化时外部还在直读槽位，会同时改两边。<br>
+        P2（身份与结构变更）必须先于 P4（删容器）——否则网络与句柄还在依赖 seq_id/地址。<br>
+        P0 的 snapshot 投影可以先只覆盖相机与 transform，随后每阶段扩字段。</p>
+      </div>
+    </section>
+
+    <!-- 风险 -->
+    <section class="view" id="view-risks">
+      <h2><span class="idx">05</span>风险与验收</h2>
+      <div class="grid g2" id="riskgrid"></div>
+
+      <h3>验收清单（P4 结束时必须全绿）</h3>
+      <div class="card">
+        <div class="gate" id="accept"></div>
+      </div>
+    </section>
+
+    <!-- 代码 -->
+    <section class="view" id="view-code">
+      <h2><span class="idx">06</span>代码骨架</h2>
+      <p class="note">只表达接口与所有权，不含实现细节。重点是：registry 私有、命令只传值、快照只读、系统只看视图。</p>
+      <div class="codewrap" style="margin-top:16px">
+        <div class="codebar" id="codebar"></div>
+        <pre id="codebody"></pre>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h4 style="margin:0 0 8px;font-size:14px">几个容易写错的点</h4>
+        <ul style="margin:0;padding-left:18px;color:#b9c9d8;font-size:12.8px">
+          <li><code>entt::registry::view&lt;...&gt;()</code> 不要在遍历中做 <code>emplace/remove</code>——会触发 archetype 搬移并使当前迭代器失效。结构变更统一延迟。</li>
+          <li>快照发布必须是 <code>release</code> 写、<code>acquire</code> 读；不要用普通指针裸传。</li>
+          <li>组件里放 <code>shared_ptr</code> 可以（材质、动画播放器），但快照里只能放值或共享只读句柄，不能放 <code>shared_ptr&lt;T&gt;</code> 的可变引用。</li>
+          <li>命令里不要塞 <code>entt::entity</code>；用 <code>EntityHandle</code>，并在应用时校验 generation。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="view" id="view-notes">
+      <h2><span class="idx">07</span>口径</h2>
+      <div class="notes-list">
+        <div class="card"><h4>数字来源</h4><p>Storage 数量与字段数来自 <code>include/corona/shared_data_hub.h</code>；锁调用与访问器调用点来自 <code>src/</code> 静态统计；154 个外部字段来自本仓库的边界审计文档。工作量级 S/M/L 是相对估算，不是承诺。</p></div>
+        <div class="card"><h4>这个设计没有覆盖什么</h4><ul><li>渲染管线内部（Optics 的 pass 组织、Vision 的 RT 管理）不因 ECS 改变。</li><li>资源系统（ResourceManager）仍按资源 id 管理，ECS 只挂句柄/组件。</li><li>编辑器前端（CEF JS / Python）的 API 迁移只给了策略，没有逐个函数改写。</li></ul></div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>CoronaEngine · Storage → EnTT 架构设计（基于当前仓库静态分析）</span>
+    <span id="gen"></span>
+  </footer>
+</div>
+
+<script>
+const DATA = {"stats":{"storages":13,"storageFields":179,"lockCalls":492,"accessorCalls":509,"files":21,"publicApi":98,"handleParams":56,"boundaryFields":154,"privateFields":25,"snapshotTarget":38},"storages":[{"id":"ActorDevice","fields":5,"target":["ActorMeta","ModelSource"],"drop":["profile_handles 句柄链"],"desc":"Actor 聚合。ECS 后 actor 就是实体，profile_handles 这层间接寻址整体消失；model_path/import_options 归 ModelSource。"},{"id":"ProfileDevice","fields":4,"target":["（删除）"],"drop":["整个结构体","4 个 *_handle 字段"],"desc":"纯粹的组件句柄包。ECS 里几何/力学/光学组件直接挂在实体上，不需要 profile 中转。"},{"id":"ModelTransform","fields":4,"target":["Transform"],"drop":["transform_handle"],"desc":"TRS + 创作态基矩阵。成为实体上的第一个组件，所有系统直接按实体访问。"},{"id":"ModelResource","fields":1,"target":["ModelSource"],"drop":["model_resource_handle"],"desc":"只有一个 model_id；并入 ModelSource，资源句柄不再单独占一个槽。"},{"id":"GeometryDevice","fields":30,"target":["GeometryRef","MeshSet","Skinning","IkChainSet","NodeOverrides","Residency"],"drop":["transform_handle","model_resource_handle","mesh_handles 的句柄语义"],"desc":"最大的槽位，按\"变更频率 + 读取者\"拆成 6 个组件：上传状态、网格、蒙皮、IK、节点覆盖、驻留。"},{"id":"MechanicsDevice","fields":9,"target":["RigidBody"],"drop":["geometry_handle"],"desc":"刚体参数。几何通过实体直接找到，不需要 geometry_handle 回指。"},{"id":"OpticsDevice","fields":19,"target":["Material"],"drop":["geometry_handle"],"desc":"可见性 + BRDF。整块作为一个组件，避免拆得太碎导致视图组合爆炸。"},{"id":"AcousticsDevice","fields":4,"target":["Acoustics"],"drop":["geometry_handle"],"desc":"空间音频参数。"},{"id":"SceneDevice","fields":10,"target":["SceneState","SceneBounds"],"drop":["actor_handles / camera_handles 清单"],"desc":"场景清单在 ECS 里就是\"带 SceneTag 的实体\"，不再维护 vector；包围盒与 active camera 保留为场景单例组件。"},{"id":"EnvironmentDevice","fields":12,"target":["Lighting","PhysicsConfig"],"drop":["environment 句柄"],"desc":"拆成渲染光照与物理配置两个单例组件，分别给 Optics 与 Mechanics 用。"},{"id":"CameraDevice","fields":28,"target":["CameraState","CameraOutput","CameraViewport"],"drop":["actor_pick_handle"],"desc":"相机是实体：位姿/投影、输出与 Vision 参数、视口与 surface 三组组件。拾取句柄删除。"},{"id":"ImageDevice","fields":4,"target":["FrameExchange（非 ECS）"],"drop":["image_handle 语义"],"desc":"GPU 帧交换，不是游戏状态。保留为独立双缓冲结构 + 收据，不进 registry。"},{"id":"ActorPickDevice","fields":10,"target":["（删除）"],"drop":["整个结构体"],"desc":"遗留的同步拾取镜像，已由 request/completion 队列承载；迁移时直接删。"},{"id":"CameraFrameTiming","fields":5,"target":["Telemetry（非 ECS）"],"drop":["槽位"],"desc":"运行时遥测，已经是 mutex map；改成 ring + 只读快照。"},{"id":"ViewportUiState / ViewportGizmoState","fields":9,"target":["ViewportChannel（非 ECS）"],"drop":["互斥 map"],"desc":"视口 UI 与 gizmo 交互状态，属于编辑器会话状态，不是世界状态；收敛为命令 + 事件。"}],"components":[{"name":"ActorMeta","cn":"身份/归属","fields":"guid, scene, pinned, follow_camera","cadence":"创建期","readers":"Geometry / Optics / 快照","size":"40 B"},{"name":"ModelSource","cn":"模型来源","fields":"model_path, import_options, model_id","cadence":"加载期","readers":"Geometry","size":"~120 B"},{"name":"Transform","cn":"变换","fields":"position, euler, scale, affine_basis, revision","cadence":"每帧","readers":"Mechanics / Geometry / Optics / Acoustics","size":"80 B"},{"name":"GeometryRef","cn":"几何状态","fields":"gpu_build_state, import_epoch, native_correction","cadence":"加载期 + 每帧","readers":"Geometry / Optics","size":"32 B"},{"name":"MeshSet","cn":"网格与实例","fields":"mesh_handles, mesh_instances, node_bounds, node_prefix","cadence":"加载期","readers":"Mechanics / Optics","size":"~200 B + 堆"},{"name":"Skinning","cn":"蒙皮","fields":"is_skinned, pose_revision, aabb_min/max, cpu_vertices, collision_model_id","cadence":"每帧","readers":"Mechanics / Optics","size":"~64 B + 堆"},{"name":"IkChainSet","cn":"IK 链","fields":"chains, revision, bone_index, leaf_names","cadence":"编辑期","readers":"Mechanics","size":"~80 B + 堆"},{"name":"NodeOverrides","cn":"节点覆盖","fields":"overrides, revision, nodes","cadence":"编辑期","readers":"Geometry / Optics","size":"~48 B + 堆"},{"name":"RigidBody","cn":"刚体","fields":"mass, restitution, damping, body_type, locks","cadence":"编辑期 + 每帧","readers":"Mechanics","size":"32 B"},{"name":"Material","cn":"材质","fields":"visible, enable_lighting, 12 个 BRDF 参数, overrides, principled","cadence":"编辑期","readers":"Optics","size":"~96 B"},{"name":"Acoustics","cn":"音频","fields":"resource_id, volume, audio_enabled","cadence":"编辑期","readers":"Acoustics","size":"16 B"},{"name":"Residency","cn":"驻留","fields":"loaded, pinned, distance, last_seen","cadence":"每帧","readers":"Geometry / Mechanics / Optics","size":"24 B"},{"name":"SceneState","cn":"场景单例","fields":"enabled, simulation_enabled, active_camera","cadence":"编辑期","readers":"全部","size":"24 B"},{"name":"SceneBounds","cn":"场景包围盒","fields":"min_world, max_world, center_world","cadence":"每帧","readers":"Optics / Mechanics","size":"36 B"},{"name":"Lighting","cn":"光照单例","fields":"authored_lighting, sun_*, sky, exposure, floor_grid","cadence":"编辑期 + 每帧","readers":"Optics","size":"~64 B + json"},{"name":"PhysicsConfig","cn":"物理单例","fields":"gravity, floor_y, floor_restitution, fixed_dt","cadence":"编辑期","readers":"Mechanics","size":"28 B"},{"name":"CameraState","cn":"相机位姿","fields":"position, forward, up, fov, aspect, near, far, proj_sign","cadence":"每帧","readers":"Optics / Acoustics / 快照","size":"72 B"},{"name":"CameraOutput","cn":"相机输出","fields":"output_mode, backend, vision_* 参数与回执","cadence":"编辑期","readers":"Optics / 快照","size":"~200 B + string"},{"name":"CameraViewport","cn":"相机视口","fields":"surface, view_open, rect, width/height, move_speed","cadence":"交互期","readers":"Optics / 快照","size":"56 B"}],"snapshot":{"targetFields":38,"sections":[{"name":"actors","fields":"handle, guid, position, rotation, scale, visible, residency","bytes":"72 B × N","note":"渲染/编辑器只需要位姿与可见性，蒙皮、网格、IK 一律不进快照。"},{"name":"cameras","fields":"handle, position, forward, up, fov, aspect, output, view rect, timing","bytes":"~140 B × N","note":"相机是外部最常读的对象；timing 可选，避免每帧写。"},{"name":"scene","fields":"active_camera, bounds, counts, simulation_enabled","bytes":"~64 B","note":"标量集合，单份。"},{"name":"stats","fields":"tick, tick_ms, overruns, entities","bytes":"32 B","note":"健康度，替代 C5 统计快照。"}]},"phases":[{"id":"P0","name":"骨架与依赖","effort":"S","weeks":"1–2 周","goal":"引入 EnTT，建立 World / Snapshot / Command 三件套；SharedDataHub 降级为适配器，行为不变。","tasks":["conanfile.py 增加 entt/3.13+（transitive_headers），新建 include/corona/world/。","World 持有 entt::registry + CommandBuffer + SnapshotPublisher；systems 仍读 hub。","每 tick 末尾从 hub 投影出一份 WorldSnapshot 并发布，先只供新代码读取。","建立线程断言：registry 只能在 DAG 线程访问。"],"gate":["编译 + 现有测试全绿","tick P99 不退化（±5%）","snapshot 发布 < 50μs"]},{"id":"P1","name":"只读面先迁","effort":"M","weeks":"2–3 周","goal":"把所有外部\"读\"改成快照，彻底切断 CEF/脚本/网络的 getter 直读。","tasks":["CEF 属性面板、场景树、相机面板改读 snapshot（替换 118 个外部读字段中的大部分）。","相机用 CameraView 快照；拾取仍走 request/completion。","删除 EngineAPI 里返回内部指针/引用的 getter，改为返回值或 snapshot 索引。","给快照加 revision，UI 侧按 revision 跳过重复绘制。"],"gate":["CEF/脚本对 hub 的 acquire_read 归零","编辑器无 >1 tick 的可见滞后","快照字段覆盖率 ≥ 90% 的外部读需求"]},{"id":"P2","name":"身份与结构变更","effort":"M","weeks":"2–3 周","goal":"实体身份替代槽位地址；创建/销毁走命令，句柄带 generation。","tasks":["EntityHandle{index, generation} 打包 ≤ 40 bit（JS 双精度安全）。","CreateActorCommand 携带客户端生成的 GUID；ActorCreatedEvent 回传 handle。","销毁改为延迟队列，tick 末尾 entt::registry::destroy。","网络身份从 seq_id 切到 GUID；协议加版本号。"],"gate":["双端 2-peer 同步一致","销毁后旧 handle 被 generation 拒绝","无裸 uintptr_t 进入公开 API"]},{"id":"P3","name":"重系统组件化","effort":"L","weeks":"4–6 周","goal":"Geometry / Mechanics / Optics / Acoustics 改读组件视图，删除 profile 句柄链。","tasks":["按组件表迁移 6+1 个组件，systems 改 view<...>。","Geometry 的 5 层句柄追逐（scene→actor→profile→mechanics→geometry→transform）压成一次 view。","蒙皮/物理/材质参数改为命令 + ack。","ImageDevice 拆成 FrameExchange；相机命令队列并入 CommandBuffer。"],"gate":["逐系统视觉/物理回归通过","DAG 内零锁获取","tick P99 改善或持平"]},{"id":"P4","name":"删除容器","effort":"S","weeks":"1 周","goal":"删除 SharedDataHub 的 14 个 Storage 与 493 处锁调用，编译期禁止回潮。","tasks":["删除 *_storage() 访问器与 Storage 头文件。","CI 增加守卫：src/ 中出现 shared_data_hub Storage 引用即失败。","公开 API 只暴露 snapshot / command / event 三类类型。","清理 profile_handles、seq_id、ActorPickDevice 残留。"],"gate":["grep -r \"_storage()\" src == 0","外部头文件不含 entt","全量测试 + 编辑器冒烟"]}],"risks":[{"t":"archetype 移动让指针失效","level":"高","d":"EnTT 在增删组件时会把实体搬到新 archetype，组件地址随之改变。任何跨帧保存的组件指针（如 mesh_handles 元素地址、skinned_cpu_vertices.data()）都会悬空。","m":"组件内只放值语义与 shared_ptr；跨帧引用一律用 EntityHandle + 组件重新获取；禁止把 &component 传出去。"},{"t":"EnTT 非线程安全","level":"高","d":"registry 的任何并发读写都是 UB。只要有一个外部线程绕过快照直接摸 registry，问题就回到今天的状态。","m":"registry 设为 World 私有；对外只返回 Snapshot/Command 类型；开启 DAG 线程 id 断言 + ASan/TSan 构建。"},{"t":"迭代顺序不再稳定","level":"中","d":"archetype 变化会改变 view 的遍历顺序，物理求解与渲染排序可能随之抖动。","m":"需要确定性的系统显式排序（按 EntityHandle 或 stable index）；物理求解器保持固定顺序。"},{"t":"外部 handle 与 JS 双精度","level":"中","d":"CEF 的 V8 number 是 double，超过 2^53 丢精度；现有 uintptr_t 句柄能过是因为地址只有 48 bit。","m":"handle 打包 index(24b)+generation(16b)=40bit；持久化/网络用 GUID 字符串。"},{"t":"网络协议被破坏","level":"高","d":"当前同步按 StorageID + seq_id（槽位物理序号）对齐，甚至要求两端布局一致；ECS 没有等价物。","m":"P2 起用 actor GUID + 组件 revision 做同步；协议升版本并做双端兼容测试。这是本次重构最大的一次协议变更。"},{"t":"快照延迟 1 tick","level":"中","d":"外部读到的是上一 tick 结束时的状态（120Hz 下最坏 8.3ms）。拾取、拖拽等交互如果依赖\"当前帧\"会感觉粘。","m":"连续交互走命令的 latest-wins 合并；精确查询（拾取/包围盒）走 request/response，不用快照。"},{"t":"内存模型变化","level":"中","d":"固定 128×2 槽的 Storage 变成 EnTT 动态池；容量、碎片、峰值不再有硬上限。","m":"保留实体预算与监控；为组件池设置 reserve；在 editor 里暴露 entity/component 计数。"},{"t":"公开 API 与调用点成本","level":"高","d":"98 个公开方法、56 个 handle 参数、509 处 storage 访问点；编辑器 JS 与 Python 绑定都依赖现有签名。","m":"分阶段兼容层：先加 snapshot/command 新 API，旧 API 内部转调；P4 一次性删除并同步改前端。"},{"t":"治理回潮","level":"中","d":"字段不够用时，最省事的做法是\"再加一个直访口子\"，半年后又会长出新的 Storage。","m":"CI 守卫 + 代码评审清单：新增跨线程字段必须走 snapshot 或 command；禁止在公开头文件暴露 registry。"}],"code":[{"name":"World","lang":"cpp","code":"// world.h — 只有 DAG 线程能碰 registry\nclass World {\npublic:\n  EntityHandle create_actor(const ActorDesc& desc);   // 命令在 tick 内执行\n  void request_destroy(EntityHandle h);               // 延迟到 tick 末尾\n\n  void tick(const FrameContext& ctx) {\n    commands_.swap();                 // 双缓冲：取走上一帧生产者写入的命令\n    apply_structural_commands();      // create / destroy / attach\n    apply_property_commands();        // transform / material / rigidbody ...\n\n    mechanics_.update(ctx, reg_);\n    geometry_.update(ctx, reg_);\n    acoustics_.update(ctx, reg_);\n    optics_.update(ctx, reg_);\n\n    collect_garbage();                // entt::registry::destroy\n    snapshot_.publish(reg_, ctx);     // 唯一对外发布点\n  }\n\n  entt::registry& registry() { assert_on_dag_thread(); return reg_; }\nprivate:\n  entt::registry reg_;\n  CommandBuffer commands_;\n  SnapshotPublisher snapshot_;\n  MechanicsSystem mechanics_; /* ... */\n};"},{"name":"组件","lang":"cpp","code":"// components.h — 按变更频率拆分，值语义，不放裸指针\nstruct Transform {\n  ktm::fvec3 position{}, euler{}, scale{1, 1, 1};\n  ktm::fmat4x4 affine{ktm::fmat4x4::from_eye()};\n  std::uint32_t revision{};\n};\n\nstruct RigidBody {\n  float mass{1.0f}, restitution{0.8f}, damping{0.99f};\n  BodyType type{BodyType::Dynamic};\n  std::uint8_t linear_lock{}, angular_lock{};\n};\n\nstruct MeshSet {\n  std::vector<MeshDevice> meshes;          // 仅在加载期改\n  std::vector<MeshInstanceDevice> instances;\n};\n\nstruct Skinning {\n  bool is_skinned{};\n  std::uint64_t pose_revision{};\n  bool aabb_valid{};\n  ktm::fvec3 aabb_min{}, aabb_max{};\n  std::vector<std::vector<std::byte>> cpu_vertices;  // 仅 Vision 回读\n};\n\nstruct Material {\n  bool visible{true};\n  bool enable_lighting{true};\n  std::shared_ptr<const Materials::Principled> principled;\n  std::shared_ptr<const Materials::Overrides> overrides;\n};"},{"name":"命令","lang":"cpp","code":"// command_buffer.h — 外部线程唯一写入口\nstruct SetTransformCmd {\n  EntityHandle entity;\n  ktm::fvec3 value;\n  std::uint8_t op;          // 0=position 1=rotation 2=scale\n  std::uint64_t sequence;   // 生产者在自己的线程内单调\n};\n\nclass CommandBuffer {\npublic:\n  void push(Command&& cmd);     // 多生产者：mutex 保护 back_ 或 MPSC 队列\n  void swap() {                 // DAG tick 开始调用\n    std::scoped_lock lock{mutex_};\n    std::swap(front_, back_);\n  }\n  template <class F> void drain(F&& fn) { for (auto& c : front_) fn(c); front_.clear(); }\nprivate:\n  std::vector<Command> front_, back_;\n  std::mutex mutex_;\n};"},{"name":"快照","lang":"cpp","code":"// snapshot.h — 外部只读；发布者单一\nstruct ActorView {\n  EntityHandle handle;      // index+generation，40 bit\n  std::uint64_t guid;\n  ktm::fvec3 position, rotation, scale;\n  std::uint8_t visible, residency;\n};\n\nstruct CameraView {\n  EntityHandle handle;\n  ktm::fvec3 position, forward, up;\n  float fov, aspect;\n  CameraOutputMode output;\n  int x, y, width, height;\n};\n\nstruct WorldSnapshot {\n  std::uint64_t revision;\n  std::span<const ActorView>  actors;\n  std::span<const CameraView> cameras;\n  SceneView scene;\n  StatsView stats;\n};\n\nclass SnapshotPublisher {\npublic:\n  void publish(const entt::registry&, const FrameContext&);\n  std::shared_ptr<const WorldSnapshot> read() const {\n    return std::atomic_load_explicit(&current_, std::memory_order_acquire);\n  }\nprivate:\n  std::shared_ptr<const WorldSnapshot> current_;\n};"},{"name":"系统","lang":"cpp","code":"// mechanics.cpp — 一次 view 取代五层句柄追逐\nvoid MechanicsSystem::update(const FrameContext& ctx, entt::registry& reg) {\n  // 先蒙皮\n  auto skin = reg.view<Skinning, MeshSet, Transform>();\n  skin.each([&](entt::entity e, Skinning& s, MeshSet& m, Transform& t) {\n    if (!s.is_skinned) return;\n    skin_pose(e, s, m, t);          // GPU 蒙皮，回写 s.aabb_*\n  });\n\n  // 再物理\n  auto bodies = reg.view<RigidBody, Transform>();\n  bodies.each([&](entt::entity, RigidBody& b, Transform& t) {\n    integrate(b, t, ctx.fixed_dt);\n  });\n}"},{"name":"外部","lang":"cpp","code":"// world_client.h — 外部线程能看到的全部\nclass WorldClient {\npublic:\n  // 写：只进命令队列\n  void set_transform(EntityHandle h, const TRS& v);\n  EntityHandle create_actor(const ActorDesc&, std::uint64_t guid);  // 同步返回占位句柄\n  void request_pick(EntityHandle camera, int x, int y, std::uint64_t request_id);\n\n  // 读：只拿快照\n  std::shared_ptr<const WorldSnapshot> snapshot() const { return world_.snapshot(); }\n\n  // 离散变化：事件\n  Subscription on_actor_created(std::function<void(EntityHandle, std::uint64_t guid)>);\nprivate:\n  World& world_;   // 只允许调用上面这些方法\n};"}]};
+</script>
+<script>
+(function(){
+  const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+  const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const S=DATA.stats;
+
+  // stats
+  $('#stats').innerHTML=[
+    [S.storages,'个 Storage 待删'],[S.lockCalls,'处槽位锁'],[S.accessorCalls,'处访问器调用'],
+    [S.boundaryFields,'个字段对外'],[S.snapshotTarget,'个字段进快照'],[S.publicApi,'个公开 API']
+  ].map(([n,l])=>`<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+
+  // tabs
+  const tabs=$$('#tabs .tab');
+  function show(v,instant){
+    tabs.forEach(t=>t.classList.toggle('on',t.dataset.view===v));
+    $$('.view').forEach(s=>s.classList.toggle('on',s.id==='view-'+v));
+    if(location.hash.slice(1)!==v) history.replaceState(null,'','#'+v);
+    window.scrollTo({top:0,behavior:instant?'auto':'smooth'});
+  }
+  tabs.forEach(t=>t.onclick=()=>show(t.dataset.view));
+  show(location.hash&&$('#view-'+location.hash.slice(1))?location.hash.slice(1):'overview', true);
+
+  // mapping table
+  const rows=DATA.storages;
+  const cls=v=>v.includes('删除')?'drop':v.includes('非 ECS')?'non':'comp';
+  function renderMap(filter){
+    const q=(filter||'').trim().toLowerCase();
+    const list=rows.filter(r=>!q||(r.id+' '+r.target.join(' ')+' '+r.desc).toLowerCase().includes(q));
+    $('#mcount').textContent=list.length+' / '+rows.length+' 个存储结构';
+    $('#mtbody').innerHTML=list.map((r,i)=>`
+      <tr class="st" data-i="${rows.indexOf(r)}">
+        <td class="mono c-name">${esc(r.id)}</td>
+        <td class="mono">${r.fields}</td>
+        <td><div class="tags">${r.target.map(t=>`<span class="t ${cls(t)}">${esc(t)}</span>`).join('')}</div></td>
+        <td><div class="tags">${r.drop.map(t=>`<span class="t drop">${esc(t)}</span>`).join('')}</div></td>
+        <td style="color:#a9bccb">${esc(r.desc)}</td>
+      </tr>`).join('');
+  }
+  renderMap('');
+  $('#q').oninput=e=>renderMap(e.target.value);
+
+  // component table
+  $('#ctbody').innerHTML=DATA.components.map(c=>`
+    <tr>
+      <td class="mono c-name">${esc(c.name)}</td>
+      <td style="color:#b9c9d8">${esc(c.cn)}</td>
+      <td class="mono" style="color:#8ba3b5">${esc(c.fields)}</td>
+      <td><span class="t ok">${esc(c.cadence)}</span></td>
+      <td style="color:#a9bccb;font-size:12.2px">${esc(c.readers)}</td>
+      <td class="mono" style="color:#6ee7b7">${esc(c.size)}</td>
+    </tr>`).join('');
+
+  // phases
+  function renderPhase(i){
+    const p=DATA.phases[i];
+    $$('#plist .pitem').forEach(x=>x.classList.toggle('on',+x.dataset.i===i));
+    $('#pdetail').innerHTML=`
+      <div style="display:flex;gap:9px;align-items:center;margin-bottom:8px">
+        <span class="t comp" style="font-size:11px">${esc(p.id)}</span>
+        <span class="t ok">工作量 ${esc(p.effort)} · ${esc(p.weeks)}</span>
+      </div>
+      <h3>${esc(p.name)}</h3>
+      <p class="goal">${esc(p.goal)}</p>
+      <h4 style="margin:0 0 6px;font-size:12px;letter-spacing:.08em;color:var(--dim2);text-transform:uppercase">任务</h4>
+      <ul>${p.tasks.map(t=>`<li>${esc(t)}</li>`).join('')}</ul>
+      <h4 style="margin:14px 0 0;font-size:12px;letter-spacing:.08em;color:var(--dim2);text-transform:uppercase">验收门槛</h4>
+      <div class="gate">${p.gate.map(g=>`<div>✓ ${esc(g)}</div>`).join('')}</div>`;
+  }
+  $('#plist').innerHTML=DATA.phases.map((p,i)=>`<button class="pitem" data-i="${i}">
+    <span class="id">${esc(p.id)}</span><span class="t">${esc(p.name)}</span>
+    <span class="e">${esc(p.effort)} · ${esc(p.weeks)}</span></button>`).join('');
+  $('#plist').addEventListener('click',e=>{const b=e.target.closest('.pitem');if(b)renderPhase(+b.dataset.i);});
+  renderPhase(0);
+
+  // risks
+  $('#riskgrid').innerHTML=DATA.risks.map(r=>`<div class="risk">
+    <div class="rh"><b>${esc(r.t)}</b><span class="lv ${r.level==='高'?'high':'mid'}">${esc(r.level)}</span></div>
+    <p>${esc(r.d)}</p><div class="m">缓解：${esc(r.m)}</div></div>`).join('');
+
+  // acceptance
+  $('#accept').innerHTML=[
+    'src/ 下 <code>_storage()</code> 与 <code>Storage&lt;</code> 引用为 0',
+    '外部头文件不包含 entt，registry 类型不出现在公开 API',
+    'DAG 线程内 acquire 调用为 0（运行期断言 + CI 静态检查）',
+    '快照发布 P99 < 50μs；tick P99 不高于重构前',
+    '两peer 同步断线重连后 GUID 一致，无 seq_id 依赖',
+    '编辑器读到的世界状态陈旧不超过 1 tick',
+    '实体销毁后旧 EntityHandle 被 generation 拒绝（单测）'
+  ].map(x=>`<div>✓ ${x}</div>`).join('');
+
+  // code tabs
+  function renderCode(i){
+    $$('#codebar button').forEach(x=>x.classList.toggle('on',+x.dataset.i===i));
+    const c=DATA.code[i];
+    $('#codebody').textContent=c.code;
+  }
+  $('#codebar').innerHTML=DATA.code.map((c,i)=>`<button data-i="${i}">${esc(c.name)}</button>`).join('');
+  $('#codebar').addEventListener('click',e=>{const b=e.target.closest('button');if(b)renderCode(+b.dataset.i);});
+  renderCode(0);
+
+  $('#gen').textContent='生成于 '+new Date().toLocaleString('zh-CN',{hour12:false});
+})();
+</script>
+</body>
+</html>

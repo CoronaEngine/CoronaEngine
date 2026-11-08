@@ -469,6 +469,11 @@ class Scene {
     std::vector<Camera*> cameras_;
     std::unordered_set<const Actor*> actors_index_;
     std::unordered_set<const Camera*> cameras_index_;
+    // 本对象的"读己之写"镜像：enabled/simulation_enabled 现在以命令形式异步
+    // 落地到 SceneDevice，getter 若继续读槽位会看到上一 tick 的旧值。
+    // 这两个字段只由本对象的 setter 写，DAG 侧不写它们，因此镜像即权威。
+    bool enabled_{true};
+    bool simulation_enabled_{false};
 };
 
 // ============================================================================

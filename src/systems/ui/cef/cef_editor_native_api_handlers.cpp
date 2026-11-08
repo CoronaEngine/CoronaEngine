@@ -50,6 +50,7 @@
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
 #include <corona/shared_data_hub.h>
+#include <corona/systems/network/network_commands.h>
 #include <corona/systems/network/network_system.h>
 #include <corona/systems/script/camera_follow_controller.h>
 #include <corona/engine/engine_runtime_api.h>
@@ -3315,7 +3316,12 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_create(
                                          "Created remote actor is not materialized yet");
         }
         if (auto sys = get_network_system(); actor->engine_actor) {
-            sys->register_actor_identity(actor_guid, actor->engine_actor->get_handle(), false);
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::RegisterActorIdentity;
+            command.guid = actor_guid;
+            command.handle = actor->engine_actor->get_handle();
+            command.flag = false;
+            Corona::Network::push_network_command(std::move(command));
         }
         actor_data["route"] = actor->route;
         actor_data["path"] = actor->route;
@@ -3564,7 +3570,12 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
                                              "Remote actor replacement did not materialize");
             }
             if (auto sys = get_network_system(); actor->engine_actor) {
-                sys->register_actor_identity(actor_guid, actor->engine_actor->get_handle(), false);
+                Corona::Network::NetworkCommand command{};
+                command.kind = Corona::Network::NetworkCommandKind::RegisterActorIdentity;
+                command.guid = actor_guid;
+                command.handle = actor->engine_actor->get_handle();
+                command.flag = false;
+                Corona::Network::push_network_command(std::move(command));
             }
         }
 
@@ -4410,29 +4421,133 @@ std::string detect_wlan_ipv4() {
 #endif
 }
 
-std::vector<NetworkPeerSnapshot> read_network_peers(
-    const std::shared_ptr<Corona::Systems::NetworkSystem>& sys) {
+/// 本机 peer id 也走快照，避免 LanChat 回包直接调 NetworkSystem。
+std::string network_snapshot_peer_id() {
+    const auto snapshot = Corona::Network::NetworkStateChannel::instance().snapshots().read();
+    return snapshot ? snapshot->local_peer_id : std::string{};
+}
+/// 结果型网络调用统一走"命令 + 有界等回执"，并还原成调用方原本期望的结果类型，
+/// 这样各处 reply.* 的赋值逻辑保持不动。
+Corona::Network::LanChatResult submit_lanchat_simple(
+    Corona::Network::NetworkCommandKind kind, std::vector<std::string> params) {
+    Corona::Network::NetworkCommand command{};
+    command.kind = kind;
+    command.params = std::move(params);
+    const auto reply = Corona::Network::submit_and_wait(std::move(command));
+    Corona::Network::LanChatResult result;
+    if (!reply) {
+        result.error = "NETWORK_TIMEOUT";
+        return result;
+    }
+    result.ok = reply->ok;
+    result.error = reply->error;
+    return result;
+}
+
+Corona::Network::LanChatMessageResult submit_lanchat_message(
+    Corona::Network::NetworkCommandKind kind, std::vector<std::string> params) {
+    Corona::Network::NetworkCommand command{};
+    command.kind = kind;
+    command.params = std::move(params);
+    const auto reply = Corona::Network::submit_and_wait(std::move(command));
+    Corona::Network::LanChatMessageResult result;
+    if (!reply) {
+        result.error = "NETWORK_TIMEOUT";
+        return result;
+    }
+    result.accepted = reply->ok;
+    result.error = reply->error;
+    if (reply->has_message) result.message = reply->message;
+    return result;
+}
+
+std::uint16_t network_snapshot_session_port() {
+    const auto snapshot = Corona::Network::NetworkStateChannel::instance().snapshots().read();
+    return snapshot ? snapshot->listen_port : 0;
+}
+
+std::uint16_t network_snapshot_host_port() {
+    const auto snapshot = Corona::Network::NetworkStateChannel::instance().snapshots().read();
+    return snapshot ? snapshot->host_port : 0;
+}
+
+bool network_snapshot_session_active() {
+    const auto snapshot = Corona::Network::NetworkStateChannel::instance().snapshots().read();
+    return snapshot && snapshot->active;
+}
+
+/// LanChat 面板/历史数据按需拉取：投一条查询命令 → 等回执 → 读结果通道。
+/// 刻意不每 tick 发布：history 可能有上千条消息。
+Corona::Network::LanChatQuerySnapshot fetch_lanchat_panel() {
+    Corona::Network::NetworkCommand command{};
+    command.kind = Corona::Network::NetworkCommandKind::RefreshLanChatPanel;
+    Corona::Network::submit_and_wait(std::move(command));
+    const auto snapshot = Corona::Network::LanChatQueryChannel::instance().snapshots().read();
+    return snapshot ? *snapshot : Corona::Network::LanChatQuerySnapshot{};
+}
+
+Corona::Network::LanChatQuerySnapshot fetch_lanchat_room_history(const std::string& room) {
+    Corona::Network::NetworkCommand command{};
+    command.kind = Corona::Network::NetworkCommandKind::LoadLanChatRoomHistory;
+    command.params = {room, "0"};
+    Corona::Network::submit_and_wait(std::move(command));
+    const auto snapshot = Corona::Network::LanChatQueryChannel::instance().snapshots().read();
+    return snapshot ? *snapshot : Corona::Network::LanChatQuerySnapshot{};
+}
+
+std::string lanchat_lock_owner(const std::string& object_id, std::uint64_t now_ms) {
+    Corona::Network::NetworkCommand command{};
+    command.kind = Corona::Network::NetworkCommandKind::LanChatLockedBy;
+    command.params = {object_id, std::to_string(now_ms)};
+    const auto reply = Corona::Network::submit_and_wait(std::move(command));
+    return reply ? reply->text : std::string{};
+}
+
+bool network_connect_to_peer(const std::string& ip, std::uint16_t port, const std::string& name) {
+    Corona::Network::NetworkCommand command{};
+    command.kind = Corona::Network::NetworkCommandKind::ConnectToPeer;
+    command.port = port;
+    command.params = {ip, name};
+    const auto reply = Corona::Network::submit_and_wait(std::move(command));
+    return reply && reply->ok;
+}
+
+std::string lanchat_preview_conflict(const std::string& user_id,
+                                                  const std::array<float, 3>& position,
+                                                  float delta, std::uint64_t now_ms) {
+    Corona::Network::NetworkCommand command{};
+    command.kind = Corona::Network::NetworkCommandKind::LanChatCheckPreviewCollision;
+    command.position = position;
+    command.params = {user_id, std::to_string(delta), std::to_string(now_ms)};
+    const auto reply = Corona::Network::submit_and_wait(std::move(command));
+    return reply ? reply->text : std::string{};
+}
+
+std::vector<NetworkPeerSnapshot> read_network_peers() {
+    // 读快照：CEF 线程不再直接调用 NetworkSystem。
     std::vector<NetworkPeerSnapshot> result;
-    for (const auto& peer : sys->discovered_peers()) {
-        result.push_back({peer.ip, peer.name,
-            peer.role == Corona::Systems::NetworkSystem::SessionRole::Host ? "host" :
-            peer.role == Corona::Systems::NetworkSystem::SessionRole::Client ? "client" : "none",
-            peer.stable_id, peer.port, peer.project_id, peer.last_seen_ms});
+    const auto snapshot = Corona::Network::NetworkStateChannel::instance().snapshots().read();
+    if (!snapshot) return result;
+    result.reserve(snapshot->peers.size());
+    for (const auto& peer : snapshot->peers) {
+        result.push_back({peer.ip, peer.name, peer.role,
+                          peer.stable_id, peer.port, peer.project_id, peer.last_seen_ms});
     }
     return result;
 }
 
-NetworkSessionSnapshot read_network_session(
-    const std::shared_ptr<Corona::Systems::NetworkSystem>& sys) {
+NetworkSessionSnapshot read_network_session() {
     NetworkSessionSnapshot result;
-    result.active = sys->session_state() == Corona::Systems::NetworkSystem::SessionState::Active;
-    result.role = std::string(sys->session_role_name());
-    result.peer_count = sys->peer_count();
-    result.host_address = sys->host_address();
-    result.host_port = sys->host_port();
-    result.listen_port = sys->session_port();
+    if (const auto snapshot = Corona::Network::NetworkStateChannel::instance().snapshots().read()) {
+        result.active = snapshot->active;
+        result.role = snapshot->role;
+        result.peer_count = snapshot->peer_count;
+        result.host_address = snapshot->host_address;
+        result.host_port = snapshot->host_port;
+        result.listen_port = snapshot->listen_port;
+    }
     result.local_ip = detect_wlan_ipv4();
-    result.discovered_peers = read_network_peers(sys);
+    result.discovered_peers = read_network_peers();
     return result;
 }
 
@@ -4715,7 +4830,6 @@ bool is_network_editor_seed_actor(const NativeEditorActor& actor) {
 }
 
 std::size_t seed_network_editor_state(
-    Corona::Systems::NetworkSystem& network_system,
     Corona::Systems::NetworkSystem::SessionRole role) {
     if (role != Corona::Systems::NetworkSystem::SessionRole::Host) return 0;
 
@@ -4746,19 +4860,26 @@ std::size_t seed_network_editor_state(
         optics.shininess = actor_data.value("optics", nlohmann::json::object())
                                .value("shininess", 32.0f);
 
-        network_system.register_actor_identity(
-            actor.actor_guid,
-            actor.engine_actor->get_handle(),
-            true);
-        network_system.broadcast_actor_create(
-            actor.actor_guid,
-            scene->route,
-            actor.route,
-            {},
-            transform,
-            &optics,
-            sizeof(optics),
-            actor_data.dump());
+        {
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::RegisterActorIdentity;
+            command.guid = actor.actor_guid;
+            command.handle = actor.engine_actor->get_handle();
+            command.flag = true;
+            Corona::Network::push_network_command(std::move(command));
+        }
+        {
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::BroadcastActorCreate;
+            command.guid = actor.actor_guid;
+            command.scene = scene->route;
+            command.name = actor.route;
+            command.json = actor_data.dump();
+            for (int i = 0; i < 9; ++i) command.transform[static_cast<std::size_t>(i)] = transform[i];
+            const auto* packed_bytes = reinterpret_cast<const std::uint8_t*>(&optics);
+            command.blob.assign(packed_bytes, packed_bytes + sizeof(optics));
+            Corona::Network::push_network_command(std::move(command));
+        }
         ++seeded_actor_count;
     }
     return seeded_actor_count;
@@ -8649,26 +8770,59 @@ NetworkReply execute_network_operation(const NetworkRequest& request) {
         const auto role = request.role == "client" ? Corona::Systems::NetworkSystem::SessionRole::Client :
             request.role == "none" ? Corona::Systems::NetworkSystem::SessionRole::None :
             Corona::Systems::NetworkSystem::SessionRole::Host;
-        const bool was_active = sys->session_state() == Corona::Systems::NetworkSystem::SessionState::Active;
-        reply.ok = sys->start_session(request.name, request.project_id, request.port, role);
-        reply.session = read_network_session(sys);
-        reply.seeded_actor_count = reply.ok && !was_active ? seed_network_editor_state(*sys, role) : 0;
+        const bool was_active = network_snapshot_session_active();
+        {
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::StartSession;
+            command.params = {request.name, std::to_string(request.project_id),
+                              std::to_string(request.port),
+                              role == Corona::Systems::NetworkSystem::SessionRole::None ? "none"
+                              : role == Corona::Systems::NetworkSystem::SessionRole::Client ? "client"
+                                                                                           : "host"};
+            const auto result = Corona::Network::submit_and_wait(std::move(command));
+            reply.ok = result && result->ok;
+        }
+        reply.session = read_network_session();
+        reply.seeded_actor_count = reply.ok && !was_active ? seed_network_editor_state(role) : 0;
         break;
     }
-    case NetworkMethod::StopSession: sys->stop_session(); break;
-    case NetworkMethod::GetSessionInfo: reply.session = read_network_session(sys); break;
-    case NetworkMethod::GetDiscoveredPeers: reply.peers = read_network_peers(sys); break;
-    case NetworkMethod::ClearDiscoveredPeers: sys->clear_discovered_peers(); break;
+    case NetworkMethod::StopSession: {
+        Corona::Network::NetworkCommand command{};
+        command.kind = Corona::Network::NetworkCommandKind::StopSession;
+        Corona::Network::push_network_command(std::move(command));
+        break;
+    }
+    case NetworkMethod::GetSessionInfo: reply.session = read_network_session(); break;
+    case NetworkMethod::GetDiscoveredPeers: reply.peers = read_network_peers(); break;
+    case NetworkMethod::ClearDiscoveredPeers: {
+        Corona::Network::NetworkCommand command{};
+        command.kind = Corona::Network::NetworkCommandKind::ClearDiscoveredPeers;
+        Corona::Network::push_network_command(std::move(command));
+        break;
+    }
     case NetworkMethod::SearchLan:
-        reply.ok = sys->start_discovery(request.name, request.project_id);
-        reply.discovered_count = sys->discovered_peers().size();
+        {
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::StartDiscovery;
+            command.params = {request.name, std::to_string(request.project_id)};
+            const auto result = Corona::Network::submit_and_wait(std::move(command));
+            reply.ok = result && result->ok;
+            // 发现结果来自快照（下一 tick 才有新数据，这里给的是当前已知数量）
+            const auto snapshot = Corona::Network::NetworkStateChannel::instance().snapshots().read();
+            reply.discovered_count = snapshot ? snapshot->peers.size() : 0;
+        }
         break;
     case NetworkMethod::ConnectToPeer:
-        reply.ok = sys->connect_to_peer(request.ip, request.port, request.name);
-        reply.session = read_network_session(sys);
+        reply.ok = network_connect_to_peer(request.ip, request.port, request.name);
+        reply.session = read_network_session();
         break;
     case NetworkMethod::SetProjectRoot:
-        if (!request.project_root.empty()) sys->set_project_root(request.project_root);
+        if (!request.project_root.empty()) {
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::SetProjectRoot;
+            command.name = request.project_root;
+            Corona::Network::push_network_command(std::move(command));
+        }
         break;
     }
     return reply;
@@ -8697,11 +8851,10 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            const auto result = sys->lanchat_lock_object(
-                arg_string(request.args, 0),
-                arg_string(request.args, 1),
-                arg_string(request.args, 2, "modify"),
-                collaboration_now_ms());
+            const auto result = submit_lanchat_simple(
+                Corona::Network::NetworkCommandKind::LanChatLockObject,
+                {arg_string(request.args, 0), arg_string(request.args, 1),
+                 arg_string(request.args, 2, "modify"), std::to_string(collaboration_now_ms())});
             return native_success({{"ok", result.ok}, {"error", result.error}});
         }},
         {"unlock_object", [](const NativeRequest& request, const NativeContext&) {
@@ -8709,8 +8862,9 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            const auto result = sys->lanchat_unlock_object(
-                arg_string(request.args, 0), arg_string(request.args, 1));
+            const auto result = submit_lanchat_simple(
+                Corona::Network::NetworkCommandKind::LanChatUnlockObject,
+                {arg_string(request.args, 0), arg_string(request.args, 1)});
             return native_success({{"ok", result.ok}, {"error", result.error}});
         }},
         {"get_lock_owner", [](const NativeRequest& request, const NativeContext&) {
@@ -8719,7 +8873,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
             return native_success({
-                {"owner", sys->lanchat_locked_by(arg_string(request.args, 0), collaboration_now_ms())},
+                {"owner", lanchat_lock_owner(arg_string(request.args, 0), collaboration_now_ms())},
             });
         }},
         {"broadcast_intent", [](const NativeRequest& request, const NativeContext&) {
@@ -8729,12 +8883,14 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             }
             const auto position = json_float3_value(request.args.at(2)).value_or(
                 std::array<float, 3>{0.0f, 0.0f, 0.0f});
-            sys->lanchat_broadcast_intent(
-                arg_string(request.args, 0),
-                arg_string(request.args, 1),
-                position,
-                arg_string(request.args, 3, "placing_object"),
-                collaboration_now_ms());
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::LanChatBroadcastIntent;
+            command.user_id = arg_string(request.args, 0);
+            command.name = arg_string(request.args, 1);
+            command.position = position;
+            command.json = arg_string(request.args, 3, "placing_object");
+            command.now_ms = collaboration_now_ms();
+            Corona::Network::push_network_command(std::move(command));
             return native_success({{"ok", true}});
         }},
         {"check_preview_collision", [](const NativeRequest& request, const NativeContext&) {
@@ -8747,7 +8903,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             const float delta = request.args.size() > 2 && request.args[2].is_number()
                 ? request.args[2].get<float>() : 0.5f;
             return native_success({
-                {"conflict_user_id", sys->lanchat_check_preview_collision(
+                {"conflict_user_id", lanchat_preview_conflict(
                     arg_string(request.args, 0), position, delta, collaboration_now_ms())},
             });
         }},
@@ -8983,7 +9139,12 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            sys->set_sync_paused(arg_bool(request.args, 0, false));
+            {
+                Corona::Network::NetworkCommand command{};
+                command.kind = Corona::Network::NetworkCommandKind::SetSyncPaused;
+                command.flag = arg_bool(request.args, 0, false);
+                Corona::Network::push_network_command(std::move(command));
+            }
             return native_success({{"ok", true}});
         }},
         {"register_actor_identity", [](const NativeRequest& request, const NativeContext&) {
@@ -8994,16 +9155,24 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             const std::string actor_guid = arg_string(request.args, 0);
             const std::uintptr_t actor_handle = arg_uintptr(request.args, 1);
             const bool locally_owned = arg_bool(request.args, 2, true);
-            const bool ok = sys->register_actor_identity(actor_guid, actor_handle, locally_owned);
-            return native_success({{"ok", ok}});
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::RegisterActorIdentity;
+            command.guid = actor_guid;
+            command.handle = actor_handle;
+            command.flag = locally_owned;
+            const auto result = Corona::Network::submit_and_wait(std::move(command));
+            return native_success({{"ok", result && result->ok}});
         }},
         {"claim_actor_ownership", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            const bool ok = sys->claim_actor_ownership(arg_string(request.args, 0));
-            return native_success({{"ok", ok}});
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::ClaimActorOwnership;
+            command.guid = arg_string(request.args, 0);
+            const auto result = Corona::Network::submit_and_wait(std::move(command));
+            return native_success({{"ok", result && result->ok}});
         }},
         {"broadcast_actor_transform", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
@@ -9021,8 +9190,14 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
                 source_user_id = actor_data.value("source_user_id", "");
                 correlation_id = actor_data.value("correlation_id", "");
             }
-            sys->broadcast_actor_transform_update(
-                actor_guid, scene_name, transform, source_user_id, correlation_id);
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::BroadcastActorTransformUpdate;
+            command.guid = actor_guid;
+            command.scene = scene_name;
+            for (int i = 0; i < 9; ++i) command.transform[static_cast<std::size_t>(i)] = transform[i];
+            command.source_user_id = source_user_id;
+            command.correlation_id = correlation_id;
+            Corona::Network::push_network_command(std::move(command));
             return native_success({{"ok", true}});
         }},
         {"broadcast_actor_delete", [](const NativeRequest& request, const NativeContext&) {
@@ -9030,10 +9205,12 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            sys->broadcast_actor_delete(
-                arg_string(request.args, 0),
-                arg_string(request.args, 1),
-                arg_string(request.args, 2));
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::BroadcastActorDelete;
+            command.guid = arg_string(request.args, 0);
+            command.scene = arg_string(request.args, 1);
+            command.name = arg_string(request.args, 2);
+            Corona::Network::push_network_command(std::move(command));
             return native_success({{"ok", true}});
         }},
         {"request_actor_scene_snapshot", [](const NativeRequest& request, const NativeContext&) {
@@ -9041,7 +9218,10 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            sys->request_actor_scene_snapshot(arg_string(request.args, 0));
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::RequestActorSceneSnapshot;
+            command.scene = arg_string(request.args, 0);
+            Corona::Network::push_network_command(std::move(command));
             return native_success({{"ok", true}});
         }},
         {"broadcast_actor_scene_snapshot", [](const NativeRequest& request, const NativeContext&) {
@@ -9055,7 +9235,11 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
                     ? request.args[1].get<std::string>()
                     : request.args[1].dump();
             }
-            sys->broadcast_actor_scene_snapshot(arg_string(request.args, 0), snapshot_json);
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::BroadcastActorSceneSnapshot;
+            command.scene = arg_string(request.args, 0);
+            command.json = snapshot_json;
+            Corona::Network::push_network_command(std::move(command));
             return native_success({{"ok", true}});
         }},
         {"broadcast_actor_state_update", [](const NativeRequest& request, const NativeContext&) {
@@ -9069,10 +9253,12 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
                     ? request.args[2].get<std::string>()
                     : request.args[2].dump();
             }
-            sys->broadcast_actor_state_update(
-                arg_string(request.args, 0),
-                arg_string(request.args, 1),
-                actor_json);
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::BroadcastActorStateUpdate;
+            command.guid = arg_string(request.args, 0);
+            command.scene = arg_string(request.args, 1);
+            command.json = actor_json;
+            Corona::Network::push_network_command(std::move(command));
             return native_success({{"ok", true}});
         }},
         {"broadcast_actor_create", [](const NativeRequest& request, const NativeContext&) {
@@ -9111,9 +9297,18 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             Corona::Network::ActorCreatePacked opt;
             initialize_actor_create_packed(opt);
 
-            sys->broadcast_actor_create(actor_guid, scene_name, model_path,
-                                        dependency_paths, transform,
-                                        &opt, sizeof(opt), actor_json);
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::BroadcastActorCreate;
+            command.guid = actor_guid;
+            command.scene = scene_name;
+            command.name = model_path;
+            command.json = actor_json;
+            command.params = dependency_paths;
+            for (int i = 0; i < 9; ++i) command.transform[static_cast<std::size_t>(i)] = transform[i];
+            // 命令异步应用，必须把 packed 拷成字节，不能传地址。
+            const auto* packed_bytes = reinterpret_cast<const std::uint8_t*>(&opt);
+            command.blob.assign(packed_bytes, packed_bytes + sizeof(opt));
+            Corona::Network::push_network_command(std::move(command));
             return native_success({{"ok", true}});
         }},
     };
@@ -9142,72 +9337,128 @@ LanChatOutcome run_lanchat_operation(const LanChatRequest& request, const std::s
         return outcome;
     }
     const auto capture_room = [&] {
-        reply.members = sys->lanchat_members();
-        reply.agents = sys->lanchat_agents();
-        outcome.history = sys->lanchat_history();
+        const auto panel = fetch_lanchat_panel();
+        reply.members = panel.members;
+        reply.agents = panel.agents;
+        outcome.history = panel.history;
     };
     switch (request.method) {
     case LanChatMethod::StartRoom:
     case LanChatMethod::StartLocalRoom: {
-        sys->set_lanchat_event_callback(emit_lanchat_event);
+        {
+            Corona::Network::NetworkCommand callback{};
+            callback.kind = Corona::Network::NetworkCommandKind::SetLanChatEventCallback;
+            callback.lanchat_event_callback = emit_lanchat_event;
+            Corona::Network::push_network_command(std::move(callback));
+        }
         const bool local = request.method == LanChatMethod::StartLocalRoom;
         reply.you = request.nickname.empty() ? "房主" : request.nickname;
-        reply.ok = local ? sys->lanchat_start_local_room(request.room, reply.you)
-                         : sys->lanchat_start_room(request.room, reply.you, request.port);
+        {
+            Corona::Network::NetworkCommand command{};
+            command.kind = local ? Corona::Network::NetworkCommandKind::LanChatStartLocalRoom
+                                 : Corona::Network::NetworkCommandKind::LanChatStartRoom;
+            command.scene = request.room;
+            command.name = reply.you;
+            command.port = request.port;
+            const auto result = Corona::Network::submit_and_wait(std::move(command));
+            reply.ok = result && result->ok;
+        }
         if (reply.ok && request.restore_history)
-            reply.restored_history = sys->lanchat_restore_history_room(request.history_room.value_or(request.room));
+        {
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::LanChatRestoreHistoryRoom;
+            command.scene = request.history_room.value_or(request.room);
+            const auto result = Corona::Network::submit_and_wait(std::move(command));
+            reply.restored_history = result && result->ok;
+        }
         reply.ip = local ? "" : detect_wlan_ipv4();
-        reply.port = local ? 0 : sys->session_port() != 0 ? sys->session_port() : request.port;
+        reply.port = local ? 0 : network_snapshot_session_port() != 0
+                                          ? network_snapshot_session_port() : request.port;
         reply.room = request.room;
-        reply.peer_id = local ? "local-single-player" : sys->local_peer_id();
+        reply.peer_id = local ? "local-single-player" : (network_snapshot_peer_id().empty() ? "local-single-player" : network_snapshot_peer_id());
         if (local) reply.mode = "single";
         capture_room();
         break;
     }
-    case LanChatMethod::StopRoom: sys->lanchat_leave_room(); sys->stop_session(); break;
-    case LanChatMethod::StopLocalRoom: sys->lanchat_stop_local_room(); break;
-    case LanChatMethod::LeaveRoom: sys->lanchat_leave_room(); break;
+    case LanChatMethod::StopRoom:
+    case LanChatMethod::StopLocalRoom:
+    case LanChatMethod::LeaveRoom: {
+        Corona::Network::NetworkCommand leave{};
+        leave.kind = request.method == LanChatMethod::StopLocalRoom
+                         ? Corona::Network::NetworkCommandKind::LanChatStopLocalRoom
+                         : Corona::Network::NetworkCommandKind::LanChatLeaveRoom;
+        Corona::Network::push_network_command(std::move(leave));
+        if (request.method == LanChatMethod::StopRoom) {
+            Corona::Network::NetworkCommand stop{};
+            stop.kind = Corona::Network::NetworkCommandKind::StopSession;
+            Corona::Network::push_network_command(std::move(stop));
+        }
+        break;
+    }
     case LanChatMethod::JoinRoom:
-        sys->set_lanchat_event_callback(emit_lanchat_event);
-        reply.ok = sys->lanchat_join_room(request.ip, request.port, request.room, request.nickname);
+        {
+            Corona::Network::NetworkCommand callback{};
+            callback.kind = Corona::Network::NetworkCommandKind::SetLanChatEventCallback;
+            callback.lanchat_event_callback = emit_lanchat_event;
+            Corona::Network::push_network_command(std::move(callback));
+        }
+        {
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::LanChatJoinRoom;
+            command.guid = request.ip;
+            command.port = request.port;
+            command.scene = request.room;
+            command.name = request.nickname;
+            const auto result = Corona::Network::submit_and_wait(std::move(command));
+            reply.ok = result && result->ok;
+        }
         reply.you = request.nickname;
-        reply.peer_id = sys->local_peer_id();
-        reply.port = sys->host_port() != 0 ? sys->host_port() : request.port;
+        reply.peer_id = network_snapshot_peer_id();
+        reply.port = network_snapshot_host_port() != 0
+                         ? network_snapshot_host_port() : request.port;
         capture_room();
         if (!reply.ok) reply.error = "JOIN_FAILED";
         break;
     case LanChatMethod::SendMessage: {
-        const auto result = sys->lanchat_send_message_ex(request.text, request.message_kind,
-            request.target_agent_id, request.source_user_id, request.correlation_id, wire_metadata);
+        const auto result = submit_lanchat_message(
+            Corona::Network::NetworkCommandKind::LanChatSendMessage,
+            {request.text, request.message_kind, request.target_agent_id,
+             request.source_user_id, request.correlation_id, wire_metadata});
         reply.ok = result.accepted;
         if (reply.ok) { reply.message_id = result.message.message_id; reply.seq = result.message.seq; }
         else reply.error = result.error.empty() ? "SEND_FAILED" : result.error;
         break;
     }
-    case LanChatMethod::ListHistoryRooms: reply.rooms = sys->lanchat_history_rooms(); break;
+    case LanChatMethod::ListHistoryRooms: reply.rooms = fetch_lanchat_panel().history_rooms; break;
     case LanChatMethod::LoadHistoryRoom:
         reply.ok = !request.room.empty();
         reply.room = request.room;
         if (reply.ok) {
-            outcome.history = sys->lanchat_load_history_room(request.room);
-            reply.agents = sys->lanchat_load_history_agents(request.room);
+            const auto room_history = fetch_lanchat_room_history(request.room);
+            outcome.history = room_history.history;
+            reply.agents = room_history.agents;
         } else reply.error = "ROOM_REQUIRED";
         break;
     case LanChatMethod::GetLocalIp:
         reply.ip = detect_wlan_ipv4();
-        reply.port = sys->session_port() != 0 ? sys->session_port() : 27960;
+        reply.port = network_snapshot_session_port() != 0
+                         ? network_snapshot_session_port() : 27960;
         break;
     case LanChatMethod::AddAgent: {
-        const auto peer_id = sys->local_peer_id().empty() ? "local-single-player" : sys->local_peer_id();
+        const auto local_peer = network_snapshot_peer_id();
+        const auto peer_id = local_peer.empty() ? "local-single-player" : local_peer;
         reply.agent_id = make_agent_id(peer_id, request.name);
         reply.name = request.name;
-        const auto result = sys->lanchat_register_agent(reply.agent_id, request.name, request.persona);
+        const auto result = submit_lanchat_simple(
+            Corona::Network::NetworkCommandKind::LanChatRegisterAgent,
+            {reply.agent_id, request.name, request.persona});
         reply.ok = result.ok;
         if (!reply.ok) reply.error = result.error;
         break;
     }
     case LanChatMethod::RemoveAgent: {
-        const auto result = sys->lanchat_remove_agent(request.agent_id);
+        const auto result = submit_lanchat_simple(
+            Corona::Network::NetworkCommandKind::LanChatRemoveAgent, {request.agent_id});
         reply.ok = result.ok;
         if (!reply.ok) reply.error = result.error;
         break;
@@ -9287,7 +9538,7 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
             }
             return native_success({
                 {"ok", true},
-                {"history", build_lanchat_history(sys->lanchat_history())},
+                {"history", build_lanchat_history(fetch_lanchat_panel().history)},
             });
         }},
         {"list_history_rooms", [](const NativeRequest& request, const NativeContext&) {
@@ -9327,16 +9578,17 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
             const auto payload = arg_object(request.args, 0);
-            const auto result = sys->lanchat_send_agent_reply_ex(
-                payload.value("agent_id", ""),
-                payload.value("agent_name", ""),
-                payload.value("text", ""),
-                "agent",
-                payload.value("message_kind", "agent_reply"),
-                payload.value("target_agent_id", ""),
-                payload.value("source_user_id", ""),
-                payload.value("correlation_id", ""),
-                payload.value("metadata_json", ""));
+            const auto result = submit_lanchat_message(
+                Corona::Network::NetworkCommandKind::LanChatSendAgentReply,
+                {payload.value("agent_id", ""),
+                 payload.value("agent_name", ""),
+                 payload.value("text", ""),
+                 "agent",
+                 payload.value("message_kind", "agent_reply"),
+                 payload.value("target_agent_id", ""),
+                 payload.value("source_user_id", ""),
+                 payload.value("correlation_id", ""),
+                 payload.value("metadata_json", "")});
             return native_success(build_lanchat_message_result(result));
         }},
         {"send_system_message", [](const NativeRequest& request, const NativeContext&) {
@@ -9345,16 +9597,17 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
             const auto payload = arg_object(request.args, 0);
-            const auto result = sys->lanchat_send_agent_reply_ex(
-                payload.value("sender_id", ""),
-                payload.value("sender_name", ""),
-                payload.value("text", ""),
-                "system",
-                payload.value("message_kind", "agent_reply"),
-                "",
-                "",
-                payload.value("correlation_id", ""),
-                payload.value("metadata_json", ""));
+            const auto result = submit_lanchat_message(
+                Corona::Network::NetworkCommandKind::LanChatSendAgentReply,
+                {payload.value("sender_id", ""),
+                 payload.value("sender_name", ""),
+                 payload.value("text", ""),
+                 "system",
+                 payload.value("message_kind", "agent_reply"),
+                 "",
+                 "",
+                 payload.value("correlation_id", ""),
+                 payload.value("metadata_json", "")});
             return native_success(build_lanchat_message_result(result));
         }},
         {"send_system_message_to_host", [](const NativeRequest& request, const NativeContext&) {
@@ -9363,13 +9616,14 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
             const auto payload = arg_object(request.args, 0);
-            const auto result = sys->lanchat_send_system_message_to_host_ex(
-                payload.value("sender_id", ""),
-                payload.value("sender_name", ""),
-                payload.value("text", ""),
-                payload.value("message_kind", "action_status"),
-                payload.value("correlation_id", ""),
-                payload.value("metadata_json", ""));
+            const auto result = submit_lanchat_message(
+                Corona::Network::NetworkCommandKind::LanChatSendSystemToHost,
+                {payload.value("sender_id", ""),
+                 payload.value("sender_name", ""),
+                 payload.value("text", ""),
+                 payload.value("message_kind", "action_status"),
+                 payload.value("correlation_id", ""),
+                 payload.value("metadata_json", "")});
             return native_success(build_lanchat_message_result(result));
         }},
         {"send_system_message_to_user", [](const NativeRequest& request, const NativeContext&) {
@@ -9378,14 +9632,15 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
             const auto payload = arg_object(request.args, 0);
-            const auto result = sys->lanchat_send_system_message_to_user_ex(
-                payload.value("target_user_id", ""),
-                payload.value("sender_id", ""),
-                payload.value("sender_name", ""),
-                payload.value("text", ""),
-                payload.value("message_kind", "action_status"),
-                payload.value("correlation_id", ""),
-                payload.value("metadata_json", ""));
+            const auto result = submit_lanchat_message(
+                Corona::Network::NetworkCommandKind::LanChatSendSystemToUser,
+                {payload.value("target_user_id", ""),
+                 payload.value("sender_id", ""),
+                 payload.value("sender_name", ""),
+                 payload.value("text", ""),
+                 payload.value("message_kind", "action_status"),
+                 payload.value("correlation_id", ""),
+                 payload.value("metadata_json", "")});
             return native_success(build_lanchat_message_result(result));
         }},
         {"poll_agent_trigger", [](const NativeRequest&, const NativeContext&) {
@@ -9455,7 +9710,7 @@ void register_lanchat_api_handlers(NativeApiRegistry& registry) {
             }
             return native_success({
                 {"ok", true},
-                {"agents", build_lanchat_agents(sys->lanchat_agents())},
+                {"agents", build_lanchat_agents(fetch_lanchat_panel().agents)},
             });
         }},
         {"get_local_ip", [](const NativeRequest& request, const NativeContext&) {

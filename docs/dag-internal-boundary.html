@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CoronaEngine · DAG 内部数据边界（外部线程读写面）</title>
+<style>
+  :root{
+    --bg:#080a10; --panel:#0e1421; --line:#1d2939;
+    --text:#e9eef8; --dim:#8fa1bb; --dim2:#64748b;
+    --cy:#22d3ee; --am:#fbbf24; --rd:#fb7185; --gr:#34d399; --vi:#a78bfa; --bl:#38bdf8;
+    --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;color:var(--text);font:14px/1.62 "Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+    background:
+      radial-gradient(1000px 480px at 8% -6%, rgba(251,113,133,.13), transparent 60%),
+      radial-gradient(900px 460px at 95% 0%, rgba(251,191,36,.10), transparent 58%),
+      var(--bg);
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1460px;margin:0 auto;padding:0 26px 90px}
+  header.top{padding:42px 0 14px}
+  .kicker{display:flex;align-items:center;gap:10px;color:var(--dim);font-size:12.5px;letter-spacing:.14em;text-transform:uppercase}
+  .kicker .dot{width:7px;height:7px;border-radius:50%;background:var(--rd);box-shadow:0 0 12px var(--rd)}
+  h1{font-size:clamp(25px,3.2vw,41px);line-height:1.2;margin:14px 0 10px;font-weight:700;letter-spacing:-.02em}
+  h1 .grad{background:linear-gradient(92deg,#fda4af 0%,#fbbf24 55%,#67e8f9 100%);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .lede{max-width:1000px;color:#b9c6da;font-size:15px;margin:0}
+  .lede b{color:#fff;font-weight:600}
+  .stats{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}
+  .stat{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.015));border:1px solid var(--line);border-radius:12px;padding:10px 15px;min-width:104px}
+  .stat .n{font:600 21px/1.1 var(--mono);color:#fff}
+  .stat .l{font-size:11.5px;color:var(--dim);letter-spacing:.04em;margin-top:3px}
+  .stat.hot .n{color:#fda4af}
+  .stat.good .n{color:#6ee7b7}
+
+  nav.tabs{position:sticky;top:0;z-index:40;margin-top:24px;padding:9px 0;background:rgba(8,10,16,.85);backdrop-filter:blur(14px);border-bottom:1px solid var(--line);display:flex;gap:6px;flex-wrap:wrap}
+  .tab{border:1px solid transparent;background:transparent;color:var(--dim);padding:8px 15px;border-radius:9px;cursor:pointer;font:500 13.5px/1 inherit}
+  .tab:hover{color:#fff;background:rgba(255,255,255,.04)}
+  .tab.on{color:#1a0a0d;background:linear-gradient(180deg,#fda4af,#fb7185);font-weight:650;box-shadow:0 4px 18px rgba(251,113,133,.22)}
+  .tab .cnt{font:500 11px/1 var(--mono);opacity:.7;margin-left:6px}
+
+  section.view{display:none;padding-top:28px}
+  section.view.on{display:block}
+  h2{font-size:19px;margin:4px 0 12px;font-weight:650}
+  h2 .idx{color:var(--dim2);font:500 12px/1 var(--mono);margin-right:9px}
+  h3{font-size:15px;margin:26px 0 10px;font-weight:600;color:#dbe7f7}
+  p.note{color:var(--dim);margin:8px 0 0;font-size:13px}
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.008));border:1px solid var(--line);border-radius:16px;padding:20px}
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:repeat(auto-fit,minmax(380px,1fr))}
+  .g3{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+  .g5{grid-template-columns:repeat(auto-fit,minmax(215px,1fr))}
+
+  /* boundary model */
+  .model{display:grid;grid-template-columns:1fr 300px 1fr;gap:18px;align-items:stretch}
+  @media(max-width:1000px){.model{grid-template-columns:1fr}}
+  .col h4{margin:0 0 10px;font-size:12px;letter-spacing:.1em;color:var(--dim2);text-transform:uppercase}
+  .peers{display:grid;gap:8px}
+  .peer{border:1px solid #243449;border-radius:10px;padding:9px 11px;background:#0d1522;display:flex;gap:9px;align-items:center}
+  .peer .d{width:8px;height:8px;border-radius:50%;flex:0 0 8px}
+  .peer b{font-size:12.6px;font-weight:600}
+  .peer b{flex:1}
+  .peer span:last-child{font:500 10.5px/1 var(--mono);color:var(--dim2);margin-left:auto}
+  .core{border:1px solid rgba(251,113,133,.35);border-radius:14px;background:linear-gradient(180deg,rgba(251,113,133,.09),rgba(251,113,133,.02));padding:16px}
+  .core h4{color:#fda4af;margin-bottom:12px}
+  .core .sys{font:600 12.5px/1 var(--mono);color:#ffe4e6;padding:7px 9px;border-radius:7px;background:rgba(0,0,0,.22);margin-bottom:6px;display:flex;justify-content:space-between}
+  .core .sys span{color:#fda4af;font-weight:500;font-size:10.5px}
+  .core .priv{margin-top:12px;font-size:11.5px;color:#fca5a5}
+  .bus{display:flex;flex-direction:column;gap:10px;justify-content:center}
+  .bus .row{border:1px dashed rgba(251,191,36,.35);border-radius:10px;padding:10px 12px;background:rgba(251,191,36,.05)}
+  .bus .row b{display:block;font-size:12px;color:#fcd34d}
+  .bus .row span{font-size:11.3px;color:#cbb894}
+  .bus .row.bad{border-color:rgba(251,113,133,.4);background:rgba(251,113,133,.06)}
+  .bus .row.bad b{color:#fda4af}
+  .bus .row.bad span{color:#e5b6b6}
+
+  .findings{margin:0;padding:0;list-style:none;display:grid;gap:10px}
+  .findings li{display:flex;gap:10px;align-items:flex-start;font-size:13px;color:#c3d2e6}
+  .findings li i{flex:0 0 20px;height:20px;border-radius:6px;background:rgba(251,113,133,.14);color:#fda4af;font:600 10.5px/20px var(--mono);text-align:center;font-style:normal;margin-top:2px}
+  .findings li b{color:#fff;font-weight:600}
+
+  .bars{display:grid;gap:7px}
+  .bar{display:grid;grid-template-columns:150px 1fr 42px;gap:10px;align-items:center;font-size:12px}
+  .bar .nm{font:500 11.5px/1.2 var(--mono);color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bar .track{height:9px;border-radius:5px;background:#111b2a;overflow:hidden}
+  .bar .fill{height:100%;border-radius:5px;background:linear-gradient(90deg,#fb7185,#fbbf24)}
+  .bar .n{font:600 11px/1 var(--mono);color:#fda4af;text-align:right}
+
+  /* toolbar + table */
+  .toolbar{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:4px 0 12px}
+  .search{position:relative;flex:1 1 260px;min-width:220px}
+  .search input{width:100%;background:#0b1220;border:1px solid #243449;color:var(--text);border-radius:10px;padding:10px 12px 10px 34px;font:13px/1 inherit;outline:none}
+  .search input:focus{border-color:rgba(251,113,133,.55);box-shadow:0 0 0 3px rgba(251,113,133,.1)}
+  .search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);opacity:.5}
+  select,.btn{background:#0b1220;border:1px solid #243449;color:#cfe0f3;border-radius:9px;padding:9px 10px;font:12.5px/1 inherit;outline:none;cursor:pointer}
+  select:focus,.btn:hover{border-color:rgba(251,113,133,.45)}
+  .seg{display:flex;border:1px solid #243449;border-radius:9px;overflow:hidden}
+  .seg button{background:#0b1220;border:0;color:#9fb1c9;padding:9px 12px;font:12.5px/1 inherit;cursor:pointer}
+  .seg button.on{background:rgba(251,113,133,.16);color:#fda4af}
+  .count{font:500 11.5px/1 var(--mono);color:var(--dim2);margin-left:auto}
+  .tablewrap{border:1px solid var(--line);border-radius:14px;overflow:auto;max-height:calc(100vh - 220px);background:rgba(9,14,22,.68)}
+  table{border-collapse:separate;border-spacing:0;width:100%;font-size:12.6px}
+  thead th{position:sticky;top:0;z-index:2;background:#0d1624;text-align:left;padding:11px 12px;font:600 11.5px/1.2 inherit;color:#9db2cd;border-bottom:1px solid #223146;white-space:nowrap}
+  tbody td{padding:9px 12px;border-bottom:1px solid #141f2e;vertical-align:top}
+  tbody tr{cursor:pointer}
+  tbody tr:hover{background:rgba(251,113,133,.05)}
+  tbody tr.sel{background:rgba(251,113,133,.09)}
+  .sf{font:600 11px/1.3 var(--mono);color:#93c5fd}
+  .fn{font:600 12.3px/1.3 var(--mono);color:#fff}
+  .ty{font:500 11px/1.35 var(--mono);color:#7f96b3;max-width:230px;word-break:break-word}
+  .cm{color:#9fb1c9;font-size:12px}
+  .lbl{font:600 9.8px/1 var(--mono);color:#5f7391;margin-right:3px;align-self:center}
+  .tags{display:flex;flex-wrap:wrap;gap:4px}
+  .tag{font:500 10.6px/1 var(--mono);padding:4px 6px;border-radius:5px;white-space:nowrap;border:1px solid transparent}
+  .tag.dag{background:rgba(34,211,238,.1);color:#67e8f9;border-color:rgba(34,211,238,.22)}
+  .tag.main{background:rgba(56,189,248,.1);color:#7dd3fc;border-color:rgba(56,189,248,.22)}
+  .tag.cef{background:rgba(167,139,250,.12);color:#c4b5fd;border-color:rgba(167,139,250,.24)}
+  .tag.script{background:rgba(52,211,153,.1);color:#6ee7b7;border-color:rgba(52,211,153,.22)}
+  .tag.net{background:rgba(251,191,36,.1);color:#fcd34d;border-color:rgba(251,191,36,.22)}
+  .tag.misc{background:rgba(148,163,184,.1);color:#cbd5e1;border-color:rgba(148,163,184,.2)}
+  .dir{font:600 10.4px/1 var(--mono);padding:4px 7px;border-radius:5px;white-space:nowrap}
+  .dir.rw{background:rgba(251,113,133,.16);color:#fda4af}
+  .dir.w{background:rgba(251,191,36,.14);color:#fcd34d}
+  .dir.r{background:rgba(56,189,248,.14);color:#7dd3fc}
+  .dir.none{background:rgba(148,163,184,.12);color:#94a3b8}
+  .path{font:500 10.8px/1.4 var(--mono);color:#a5b4c8}
+  .empty{padding:40px;text-align:center;color:var(--dim2)}
+
+  /* thread cards */
+  .tcard{border:1px solid var(--line);border-radius:14px;padding:16px;background:var(--panel);position:relative;cursor:pointer}
+  .tcard:before{content:"";position:absolute;inset:0 auto auto 0;width:100%;height:3px;background:var(--c,#22d3ee)}
+  .tcard:hover{border-color:#33465f}
+  .tcard h4{margin:4px 0 2px;font-size:14.5px}
+  .tcard .sub{font:500 10.8px/1.3 var(--mono);color:var(--dim2)}
+  .tcard .big{display:flex;gap:14px;margin:12px 0 6px}
+  .tcard .big div{font:600 19px/1 var(--mono);color:#fff}
+  .tcard .big small{display:block;font:500 10px/1.4 var(--mono);color:var(--dim2);margin-top:3px}
+  .tcard p{margin:8px 0 0;font-size:12.4px;color:#a9bad2}
+  .tcard .top{display:flex;gap:5px;flex-wrap:wrap;margin-top:9px}
+
+  /* advice */
+  .adv{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:0;overflow:hidden}
+  .adv-h{display:flex;gap:10px;align-items:center;padding:13px 16px;border-bottom:1px solid #1a2637;background:rgba(255,255,255,.02)}
+  .adv-h b{font:650 13.5px/1.2 var(--mono)}
+  .adv-h span{font-size:11.5px;color:var(--dim2);margin-left:auto}
+  .adv-b{padding:14px 16px;display:grid;gap:10px}
+  .adv-row{display:grid;grid-template-columns:64px 1fr;gap:10px;font-size:12.7px;color:#c3d2e6}
+  .adv-row em{font-style:normal;color:var(--dim2);font-size:11.5px;letter-spacing:.04em}
+  .adv-row.risk em{color:#fda4af}
+  .plan{display:grid;gap:10px;margin-top:12px}
+  .phase{display:grid;grid-template-columns:110px 1fr;gap:14px;border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:rgba(255,255,255,.02)}
+  .phase .ph{font:600 12px/1.4 var(--mono);color:#fcd34d}
+  .phase .ph small{display:block;color:var(--dim2);font-weight:500;margin-top:4px}
+  .phase ul{margin:0;padding-left:16px;color:#b9c6da;font-size:12.6px}
+  .phase li{margin:3px 0}
+
+  /* drawer */
+  .scrim{position:fixed;inset:0;background:rgba(3,5,10,.62);backdrop-filter:blur(3px);opacity:0;pointer-events:none;transition:.2s;z-index:60}
+  .scrim.on{opacity:1;pointer-events:auto}
+  aside.drawer{position:fixed;top:0;right:0;height:100vh;width:min(470px,94vw);background:#0a111c;border-left:1px solid #223146;box-shadow:-24px 0 60px rgba(0,0,0,.55);transform:translateX(101%);transition:.24s cubic-bezier(.2,.8,.2,1);z-index:61;display:flex;flex-direction:column}
+  aside.drawer.on{transform:none}
+  .dhead{padding:18px 20px;border-bottom:1px solid #1a2637;display:flex;gap:10px;align-items:flex-start}
+  .dhead .x{margin-left:auto;background:none;border:1px solid #24374f;color:var(--dim);border-radius:8px;width:30px;height:30px;cursor:pointer}
+  .dbody{padding:18px 20px 40px;overflow:auto}
+  .dtitle{font:650 15px/1.3 var(--mono);color:#fff;word-break:break-word}
+  .dsub{font:500 11px/1.3 var(--mono);color:#7f96b3;margin-top:4px}
+  .dbody h5{margin:20px 0 8px;font-size:11.5px;letter-spacing:.08em;color:var(--dim2);text-transform:uppercase}
+  .dbody h5:first-child{margin-top:0}
+  .dl{display:grid;grid-template-columns:78px 1fr;gap:6px 10px;font-size:12.4px}
+  .dl dt{color:var(--dim2)}
+  .dl dd{margin:0;color:#d8e6f6;word-break:break-word}
+  .ev{display:block;font:500 11px/1.5 var(--mono);color:#a5f3fc;background:rgba(34,211,238,.06);border:1px solid rgba(34,211,238,.16);border-radius:7px;padding:7px 9px;margin-bottom:6px;word-break:break-all}
+  .ev b{color:#67e8f9;font-weight:600;margin-right:6px}
+  .none{color:#5d7291;font-size:12px;font-style:italic}
+  .advbox{border-left:3px solid rgba(251,113,133,.55);background:rgba(251,113,133,.07);border-radius:0 9px 9px 0;padding:10px 12px;font-size:12.6px;color:#f3c7c7;margin-top:8px}
+
+  /* notes */
+  .notes-list{display:grid;gap:14px}
+  .notes-list .card h4{margin:0 0 8px;font-size:14.5px}
+  .notes-list .card p,.notes-list .card li{color:#a9bad2;font-size:12.8px}
+  .notes-list .card ul{margin:8px 0 0;padding-left:18px}
+  code{font:500 11.8px/1.4 var(--mono);color:#a5f3fc;background:rgba(34,211,238,.07);padding:2px 5px;border-radius:4px}
+  .callout{border-left:3px solid rgba(251,191,36,.6);background:rgba(251,191,36,.06);padding:10px 13px;border-radius:0 9px 9px 0;color:#fcd9a4;font-size:12.7px}
+  footer{margin-top:42px;padding-top:16px;border-top:1px solid var(--line);color:var(--dim2);font-size:11.8px;display:flex;gap:16px;flex-wrap:wrap;justify-content:space-between}
+  @media(max-width:700px){
+    .wrap{padding:0 14px 60px}
+    .tablewrap{max-height:none}
+    .bar{grid-template-columns:110px 1fr 36px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="kicker"><span class="dot"></span><span>CoronaEngine · DAG Boundary Audit</span></div>
+    <h1>把 DAG 的内部数据收回来：<span class="grad">外部线程读写面清单</span></h1>
+    <p class="lede">DAG 线程内部有 <b>179</b> 个设备槽字段，其中 <b>154</b> 个仍被 DAG 之外的线程直接读写——<b>123</b> 个可被外部写、<b>118</b> 个被外部读、<b>87</b> 个双向。真正已经私有的只有 <b>25</b> 个。这份文档逐个列出这些字段、触碰它们的线程、访问路径，以及收回建议。</p>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab on" data-view="overview">总览</button>
+    <button class="tab" data-view="fields">边界字段<span class="cnt" id="fc"></span></button>
+    <button class="tab" data-view="threads">按外部线程</button>
+    <button class="tab" data-view="advice">封装方案</button>
+    <button class="tab" data-view="notes">口径</button>
+  </nav>
+
+  <main>
+    <!-- 总览 -->
+    <section class="view on" id="view-overview">
+      <h2><span class="idx">01</span>边界长什么样</h2>
+      <div class="card">
+        <div class="model">
+          <div class="col">
+            <h4>DAG 之外的线程</h4>
+            <div class="peers" id="peers"></div>
+            <p class="note" style="margin-top:10px">左侧全部通过 <b style="color:#fda4af">共享槽位</b> 直接读写；只有命令/事件是显式协议。</p>
+          </div>
+          <div class="bus">
+            <div class="row bad">
+              <b>直访面（要收回）</b>
+              <span>SharedDataHub 槽位 · 互斥状态 map<br>154 个字段 / 18 个结构体</span>
+            </div>
+            <div class="row">
+              <b>协议面（可保留）</b>
+              <span>C2 命令 · C3/C4 事件 · C6 收据 · C7 回调<br>133 个字段 / 35 个结构体</span>
+            </div>
+          </div>
+          <div class="core">
+            <h4>DAG 线程（120Hz）</h4>
+            <div class="sys">Mechanics <span>period 2</span></div>
+            <div class="sys">Geometry <span>period 2</span></div>
+            <div class="sys">Acoustics <span>period 2</span></div>
+            <div class="sys">Optics <span>period 2</span></div>
+            <div class="sys">Display <span>period 1</span></div>
+            <div class="priv">已私有：25 个字段——GeometryDevice 的网格/蒙皮 13 个、MeshInstanceDevice 4 个、MeshMaterialDevice 3 个……这些本就可以完全内部化。</div>
+          </div>
+        </div>
+      </div>
+
+      <h3>五个判断</h3>
+      <div class="card">
+        <ul class="findings">
+          <li><i>01</i><div><b>最大入口不是队列，是 EngineAPI 门面。</b>154 个边界字段里有 124 个被 <code>EngineRuntimeAPI</code> 直接碰过：它既创建槽位、又提供同步 getter/setter，调用方是 CEF 与脚本，等于把内部结构暴露成了公共 API。</div></li>
+          <li><i>02</i><div><b>87 个字段是双向的。</b>外部既读又写（典型：<code>CameraDevice</code>、<code>GeometryDevice</code>），这类字段最难封——必须先定义“谁拥有”，再拆成命令 + 查询两条路。</div></li>
+          <li><i>03</i><div><b>CameraDevice 是单点最大泄漏面。</b>27 个字段对外，且有三方写者：EngineAPI 创建、CEF 命令队列、脚本直写；读取则散落在 CEF、Acoustics、Geometry、Display。</div></li>
+          <li><i>04</i><div><b>协议面已经有 133 个字段、35 个结构体。</b>相机命令、拾取回执、帧就绪/消费事件、截图 promise 都是现成的“封装后 API 雏形”，不需要从零设计。</div></li>
+          <li><i>05</i><div><b>图像槽不是 DAG 私有。</b>主线程 <code>VulkanBackend</code> 为 UI 图层在同一 ImageStorage 里分配槽，并读 <code>consumed_receipt</code> 做回压——所以 <code>ImageDevice</code> 应定位为“帧交换结构”，收敛可见面（receipt + metadata），而不是整体隐藏。</div></li>
+        </ul>
+      </div>
+
+      <h3>按结构体看泄漏面</h3>
+      <div class="card">
+        <div class="bars" id="bars"></div>
+        <p class="note">条形长度 = 对外字段数；右侧为总数。完整清单见“边界字段”。</p>
+      </div>
+    </section>
+
+    <!-- 字段表 -->
+    <section class="view" id="view-fields">
+      <h2><span class="idx">02</span>边界字段</h2>
+      <p class="note">只列“至少被一个非 DAG 线程读写”的设备槽字段。点任意行查看该字段的读写双方、访问路径与所属结构体的收回建议。</p>
+      <div class="toolbar">
+        <div class="search">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="q" type="search" placeholder="搜索字段 / 结构体 / 说明…（/ 聚焦，Esc 关闭抽屉）">
+        </div>
+        <select id="fstruct"><option value="">全部结构体</option></select>
+        <select id="fthread"><option value="">全部外部线程</option></select>
+        <div class="seg" id="fdir">
+          <button data-d="" class="on">全部</button>
+          <button data-d="rw">双向</button>
+          <button data-d="w">外部写</button>
+          <button data-d="r">外部读</button>
+        </div>
+        <button class="btn" id="fclear">重置</button>
+        <span class="count" id="count"></span>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr>
+            <th style="width:162px">字段</th><th style="width:178px">类型</th><th style="width:130px">所有者</th>
+            <th style="width:150px">外部动作</th><th style="width:130px">DAG 动作</th>
+            <th style="width:150px">访问路径</th><th style="width:78px">通道</th><th>说明</th>
+          </tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 线程 -->
+    <section class="view" id="view-threads">
+      <h2><span class="idx">03</span>按外部线程</h2>
+      <p class="note">点击卡片过滤字段表。每个线程的“路径”是它触达 DAG 内部的手段——路径越短，越难审计。</p>
+      <div class="grid g2" id="threadcards" style="margin-top:16px"></div>
+    </section>
+
+    <!-- 方案 -->
+    <section class="view" id="view-advice">
+      <h2><span class="idx">04</span>封装方案</h2>
+      <p class="note">按结构体给出“现状 → 目标 → 动作 → 风险”。先做低风险删除，再做命令化，最后做查询化。</p>
+      <div class="card" style="margin-top:14px">
+        <h3 style="margin-top:0">建议的实施顺序</h3>
+        <div class="plan" id="plan"></div>
+      </div>
+      <h3>逐结构体</h3>
+      <div class="grid g2" id="advlist"></div>
+    </section>
+
+    <!-- 口径 -->
+    <section class="view" id="view-notes">
+      <h2><span class="idx">05</span>口径与边界</h2>
+      <div class="notes-list" id="notes"></div>
+    </section>
+  </main>
+
+  <footer>
+    <span>CoronaEngine · DAG 内部数据边界审计（静态扫描 + 人工核对）</span>
+    <span id="gen"></span>
+  </footer>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer">
+  <div class="dhead">
+    <div>
+      <div class="dtitle" id="dtitle">—</div>
+      <div class="dsub" id="dsub"></div>
+    </div>
+    <button class="x" id="dclose">✕</button>
+  </div>
+  <div class="dbody" id="dbody"></div>
+</aside>
+
+<script>
+const DATA = {"stats":{"deviceFields":179,"boundary":154,"privateFields":25,"externalWrite":123,"externalRead":118,"both":87,"structs":18,"threads":5,"protocolFields":133,"protocolStructs":35},"fields":[{"s":"GeometryDevice","f":"import_options","t":"Resource::ModelImportOptions","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI","CEF·UI"],"dagW":[],"dagR":["DAG·Geometry"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:825","r":"src/engine/engine_runtime_api.cpp:1865"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"transform_handle","t":"std::uintptr_t","init":"","ch":"C1","extW":["主线程·EngineAPI","网络线程"],"extR":["CEF·UI","脚本线程"],"dagW":["DAG·Geometry"],"dagR":["DAG·Mechanics","DAG·Optics","DAG·Acoustics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写","CEF fast path","脚本直写"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:821","r":"src/systems/acoustics/acoustics_system.cpp:272"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"model_resource_handle","t":"std::uintptr_t","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:822","r":"src/engine/engine_runtime_api.cpp:1186"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"model_nodes","t":"std::vector<ModelNodes::Node>","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":["DAG·Geometry","DAG·Optics"],"dagR":["DAG·Geometry"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:3157","r":"src/engine/engine_runtime_api.cpp:3093"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"model_node_overrides","t":"std::vector<API::ModelNodeOverride>","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics","DAG·Geometry"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI"],"note":"编辑器按节点覆盖；CEF 写，Optics 读。","ev":{"w":"src/engine/engine_runtime_api.cpp:3147","r":"src/engine/engine_runtime_api.cpp:3105"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"model_node_revision","t":"std::uint64_t","init":"0","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":[],"dagR":["DAG·Optics","DAG·Geometry"],"extDir":"rw","dagDir":"r","paths":["EngineAPI"],"note":"节点覆盖/映射版本，用于 Optics 缓存失效。","ev":{"w":"src/engine/engine_runtime_api.cpp:3161","r":"src/engine/engine_runtime_api.cpp:3146"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"model_node_bounds","t":"std::optional<std::array<float,6>>","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":[],"dagR":["DAG·Geometry"],"extDir":"rw","dagDir":"r","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:3160","r":"src/engine/engine_runtime_api.cpp:1237"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"native_local_correction_offset","t":"ktm::fvec3","init":"0.0f, 0.0f, 0.0f","ch":"C1","extW":[],"extR":["主线程·EngineAPI"],"dagW":[],"dagR":["DAG·Optics"],"extDir":"r","dagDir":"r","paths":["EngineAPI"],"note":"","ev":{"w":"","r":"src/engine/engine_runtime_api.cpp:1074"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"native_local_correction_scale","t":"float","init":"1.0f","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":[],"dagR":["DAG·Optics"],"extDir":"w","dagDir":"r","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1077","r":"src/systems/optics/optics_system.cpp:1279"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"gpu_build_state","t":"GpuBuildState","init":"GpuBuildState::Ready","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["主线程·EngineAPI","CEF·UI"],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"Ready/PendingImport/PendingBuild/Failed 状态机，跨帧推进；编辑器与 Mechanics 都会读它判断可用性。","ev":{"w":"src/engine/engine_runtime_api.cpp:827","r":"src/engine/engine_runtime_api.cpp:1157"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"model_path_utf8","t":"std::string","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":[],"dagR":["DAG·Geometry","DAG·Mechanics"],"extDir":"w","dagDir":"r","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:824","r":"src/systems/geometry/geometry_system.cpp:405"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"is_skinned","t":"bool","init":"false","ch":"C1","extW":[],"extR":["主线程·EngineAPI"],"dagW":["DAG·Mechanics"],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"r","dagDir":"rw","paths":["EngineAPI"],"note":"Geometry 构建时探测并置位；Mechanics 只读。","ev":{"w":"src/systems/mechanics/mechanics_system.cpp:362","r":"src/engine/engine_runtime_api.cpp:1228"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"animation_player","t":"std::shared_ptr<Resource::AnimationPlayer>","init":"std::make_shared<Resource::AnimationPlayer>()","ch":"C1","extW":[],"extR":["CEF·UI"],"dagW":[],"dagR":["DAG·Mechanics"],"extDir":"r","dagDir":"r","paths":["CEF fast path"],"note":"","ev":{"w":"","r":"src/systems/mechanics/mechanics_system.cpp:1393"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"skinned_aabb_valid","t":"bool","init":"false","ch":"C1","extW":[],"extR":["主线程·EngineAPI"],"dagW":["DAG·Mechanics"],"dagR":["DAG·Mechanics"],"extDir":"r","dagDir":"rw","paths":["EngineAPI"],"note":"false 表示尚未蒙皮，物理回退静态 AABB。","ev":{"w":"src/systems/mechanics/mechanics_system.cpp:1387","r":"src/engine/engine_runtime_api.cpp:1228"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"collision_model_id","t":"std::uint64_t","init":"","ch":"C1","extW":[],"extR":["主线程·EngineAPI"],"dagW":["DAG·Mechanics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["EngineAPI"],"note":"Mechanics 发布，消费方拿它与已加载模型身份比对，避免旧三角形数据用于新模型。","ev":{"w":"src/systems/mechanics/mechanics_system.cpp:1891","r":"src/engine/engine_runtime_api.cpp:1227"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"ik_chains","t":"std::vector<Resource::IkChain>","init":"","ch":"C1","extW":["CEF·UI"],"extR":["CEF·UI"],"dagW":[],"dagR":["DAG·Mechanics"],"extDir":"rw","dagDir":"r","paths":["CEF fast path"],"note":"IK 链配置；编辑器整表替换并递增 revision，Mechanics 每帧读。","ev":{"w":"src/systems/ui/cef/cef_editor_native_api_handlers.cpp:1377","r":"src/systems/mechanics/mechanics_system.cpp:244"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"GeometryDevice","f":"ik_chains_revision","t":"std::uint64_t","init":"0","ch":"C1","extW":[],"extR":["CEF·UI"],"dagW":[],"dagR":["DAG·Mechanics"],"extDir":"r","dagDir":"r","paths":["CEF fast path"],"note":"配置版本；Mechanics 用它丢弃过期的快照结果。","ev":{"w":"","r":"src/systems/mechanics/mechanics_system.cpp:681"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"MechanicsDevice","f":"geometry_handle","t":"std::uintptr_t","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["脚本线程","网络线程"],"dagW":[],"dagR":["DAG·Mechanics","DAG·Geometry","DAG·Optics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","脚本直写","网络直写"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1299","r":"src/systems/acoustics/acoustics_system.cpp:264"},"owner":"DAG·Mechanics","ownerKind":"DAG 拥有"},{"s":"MechanicsDevice","f":"max_xyz","t":"ktm::fvec3","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"AABB 上界；同上。","ev":{"w":"src/engine/engine_runtime_api.cpp:1484","r":"src/systems/geometry/geometry_system.cpp:424"},"owner":"DAG·Mechanics","ownerKind":"DAG 拥有"},{"s":"MechanicsDevice","f":"min_xyz","t":"ktm::fvec3","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"AABB 下界；导入回填时由 Geometry 写，Mechanics/Optics 读。","ev":{"w":"src/engine/engine_runtime_api.cpp:1485","r":"src/systems/geometry/geometry_system.cpp:424"},"owner":"DAG·Mechanics","ownerKind":"DAG 拥有"},{"s":"MechanicsDevice","f":"mass","t":"float","init":"1.0f","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["主线程·EngineAPI"],"dagW":["DAG·Mechanics"],"dagR":["DAG·Mechanics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"CEF 属性面板直写，Mechanics 每帧读。","ev":{"w":"src/engine/engine_runtime_api.cpp:1513","r":"src/engine/engine_runtime_api.cpp:1520"},"owner":"DAG·Mechanics","ownerKind":"DAG 拥有"},{"s":"MechanicsDevice","f":"restitution","t":"float","init":"0.8f","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["主线程·EngineAPI"],"dagW":["DAG·Mechanics"],"dagR":["DAG·Mechanics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1531","r":"src/engine/engine_runtime_api.cpp:1538"},"owner":"DAG·Mechanics","ownerKind":"DAG 拥有"},{"s":"MechanicsDevice","f":"damping","t":"float","init":"0.99f","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["主线程·EngineAPI","CEF·UI"],"dagW":["DAG·Mechanics"],"dagR":["DAG·Mechanics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1549","r":"src/engine/engine_runtime_api.cpp:1556"},"owner":"DAG·Mechanics","ownerKind":"DAG 拥有"},{"s":"MechanicsDevice","f":"body_type","t":"BodyType","init":"BodyType::Dynamic","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["主线程·EngineAPI","CEF·UI"],"dagW":["DAG·Geometry","DAG·Mechanics"],"dagR":["DAG·Geometry","DAG·Mechanics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"Dynamic/Kinematic/Static/Phantom，决定是否参与积分与碰撞。","ev":{"w":"src/engine/engine_runtime_api.cpp:1567","r":"src/engine/engine_runtime_api.cpp:1574"},"owner":"DAG·Mechanics","ownerKind":"DAG 拥有"},{"s":"MechanicsDevice","f":"linear_lock_mask","t":"uint8_t","init":"0","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["主线程·EngineAPI"],"dagW":[],"dagR":["DAG·Mechanics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1589","r":"src/engine/engine_runtime_api.cpp:1596"},"owner":"DAG·Mechanics","ownerKind":"DAG 拥有"},{"s":"MechanicsDevice","f":"angular_lock_mask","t":"uint8_t","init":"0","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["主线程·EngineAPI"],"dagW":[],"dagR":["DAG·Mechanics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1612","r":"src/engine/engine_runtime_api.cpp:1619"},"owner":"DAG·Mechanics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"geometry_handle","t":"std::uintptr_t","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":[],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1299","r":"src/systems/acoustics/acoustics_system.cpp:264"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"material_overrides","t":"std::shared_ptr<const Materials::Overrides>","init":"","ch":"C1","extW":["CEF·UI"],"extR":[],"dagW":[],"dagR":["DAG·Optics"],"extDir":"w","dagDir":"r","paths":["CEF fast path"],"note":"材质覆盖集合，整体替换语义；CEF 写，Optics 读。","ev":{"w":"src/systems/ui/cef/cef_editor_native_api_handlers.cpp:1326","r":"src/systems/optics/native_material.h:37"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"principled","t":"std::shared_ptr<const Materials::Principled>","init":"","ch":"C1","extW":["CEF·UI"],"extR":[],"dagW":[],"dagR":["DAG·Optics"],"extDir":"w","dagDir":"r","paths":["CEF fast path"],"note":"shared_ptr<const Principled>，CEF/网络整体替换指针，Optics 只读。","ev":{"w":"src/systems/ui/cef/cef_editor_native_api_handlers.cpp:1327","r":"src/systems/optics/native_material.h:19"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"bEnableLighting","t":"bool","init":"true","ch":"C1","extW":["主线程·EngineAPI","网络线程","CEF·UI"],"extR":["主线程·EngineAPI","网络线程"],"dagW":[],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1330","r":"src/engine/engine_runtime_api.cpp:1333"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"metallic","t":"float","init":"0.0f","ch":"C1","extW":["主线程·EngineAPI","网络线程","CEF·UI"],"extR":["主线程·EngineAPI","网络线程","CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1338","r":"src/engine/engine_runtime_api.cpp:1341"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"roughness","t":"float","init":"0.5f","ch":"C1","extW":["主线程·EngineAPI","网络线程","CEF·UI"],"extR":["主线程·EngineAPI","网络线程","CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1345","r":"src/engine/engine_runtime_api.cpp:1348"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"subsurface","t":"float","init":"0.0f","ch":"C1","extW":["主线程·EngineAPI","网络线程"],"extR":["主线程·EngineAPI","网络线程"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1352","r":"src/engine/engine_runtime_api.cpp:1355"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"specular","t":"float","init":"0.5f","ch":"C1","extW":["主线程·EngineAPI","网络线程","CEF·UI"],"extR":["主线程·EngineAPI","网络线程","CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1359","r":"src/engine/engine_runtime_api.cpp:1362"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"specularTint","t":"float","init":"0.0f","ch":"C1","extW":["主线程·EngineAPI","网络线程","CEF·UI"],"extR":["主线程·EngineAPI","网络线程"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1366","r":"src/engine/engine_runtime_api.cpp:1369"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"anisotropic","t":"float","init":"0.0f","ch":"C1","extW":["主线程·EngineAPI","网络线程","CEF·UI"],"extR":["主线程·EngineAPI","网络线程"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1373","r":"src/engine/engine_runtime_api.cpp:1376"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"sheen","t":"float","init":"0.0f","ch":"C1","extW":["主线程·EngineAPI","网络线程","CEF·UI"],"extR":["主线程·EngineAPI","网络线程"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1380","r":"src/engine/engine_runtime_api.cpp:1383"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"sheenTint","t":"float","init":"0.5f","ch":"C1","extW":["主线程·EngineAPI","网络线程","CEF·UI"],"extR":["主线程·EngineAPI","网络线程"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1387","r":"src/engine/engine_runtime_api.cpp:1390"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"clearcoat","t":"float","init":"0.0f","ch":"C1","extW":["主线程·EngineAPI","网络线程","CEF·UI"],"extR":["主线程·EngineAPI","网络线程"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1394","r":"src/engine/engine_runtime_api.cpp:1397"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"clearcoatGloss","t":"float","init":"1.0f","ch":"C1","extW":["主线程·EngineAPI","网络线程","CEF·UI"],"extR":["主线程·EngineAPI","网络线程"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1401","r":"src/engine/engine_runtime_api.cpp:1404"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"ambient","t":"ktm::fvec3","init":"0.2f, 0.2f, 0.2f","ch":"C1","extW":["主线程·EngineAPI","网络线程"],"extR":["主线程·EngineAPI","网络线程","CEF·UI"],"dagW":[],"dagR":[],"extDir":"rw","dagDir":"none","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1408","r":"src/engine/engine_runtime_api.cpp:1411"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"diffuse","t":"ktm::fvec3","init":"0.8f, 0.8f, 0.8f","ch":"C1","extW":["主线程·EngineAPI","网络线程","CEF·UI"],"extR":["主线程·EngineAPI","网络线程","CEF·UI"],"dagW":[],"dagR":[],"extDir":"rw","dagDir":"none","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1415","r":"src/engine/engine_runtime_api.cpp:1418"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"specular_color","t":"ktm::fvec3","init":"1.0f, 1.0f, 1.0f","ch":"C1","extW":["主线程·EngineAPI","网络线程"],"extR":["主线程·EngineAPI","网络线程","CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1422","r":"src/engine/engine_runtime_api.cpp:1425"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"OpticsDevice","f":"shininess","t":"float","init":"32.0f","ch":"C1","extW":["主线程·EngineAPI","网络线程","CEF·UI"],"extR":["主线程·EngineAPI","网络线程","CEF·UI"],"dagW":[],"dagR":[],"extDir":"rw","dagDir":"none","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1429","r":"src/engine/engine_runtime_api.cpp:1432"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"AcousticsDevice","f":"geometry_handle","t":"std::uintptr_t","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":[],"dagR":["DAG·Acoustics"],"extDir":"w","dagDir":"r","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1299","r":"src/systems/acoustics/acoustics_system.cpp:264"},"owner":"DAG·Acoustics","ownerKind":"DAG 拥有"},{"s":"AcousticsDevice","f":"resource_id","t":"std::uint64_t","init":"0","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI","CEF·UI"],"dagW":["DAG·Acoustics"],"dagR":["DAG·Acoustics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"绑定的音频资源 id，0 表示未绑定；EngineAPI 写，Acoustics 读。","ev":{"w":"src/engine/engine_runtime_api.cpp:1740","r":"src/engine/engine_runtime_api.cpp:1749"},"owner":"DAG·Acoustics","ownerKind":"DAG 拥有"},{"s":"AcousticsDevice","f":"volume","t":"float","init":"1.0f","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":[],"dagR":["DAG·Acoustics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1692","r":"src/engine/engine_runtime_api.cpp:1706"},"owner":"DAG·Acoustics","ownerKind":"DAG 拥有"},{"s":"AcousticsDevice","f":"audio_enabled","t":"bool","init":"true","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":[],"dagR":["DAG·Acoustics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1720","r":"src/engine/engine_runtime_api.cpp:1729"},"owner":"DAG·Acoustics","ownerKind":"DAG 拥有"},{"s":"ProfileDevice","f":"optics_handle","t":"std::uintptr_t","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI","网络线程"],"dagW":[],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","CEF fast path","网络直写"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1852","r":"src/systems/geometry/geometry_system.cpp:997"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 只读"},{"s":"ProfileDevice","f":"acoustics_handle","t":"std::uintptr_t","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":[],"dagR":["DAG·Acoustics"],"extDir":"w","dagDir":"r","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1853","r":"src/systems/acoustics/acoustics_system.cpp:155"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 只读"},{"s":"ProfileDevice","f":"mechanics_handle","t":"std::uintptr_t","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":[],"dagR":["DAG·Mechanics","DAG·Geometry"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1854","r":"src/systems/geometry/geometry_system.cpp:393"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 只读"},{"s":"ProfileDevice","f":"geometry_handle","t":"std::uintptr_t","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":[],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1299","r":"src/systems/acoustics/acoustics_system.cpp:264"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 只读"},{"s":"ActorDevice","f":"profile_handles","t":"std::vector<std::uintptr_t>","init":"","ch":"C1","extW":[],"extR":["主线程·EngineAPI","脚本线程","CEF·UI","网络线程"],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"r","dagDir":"rw","paths":["EngineAPI","脚本直写","CEF fast path","网络直写"],"note":"","ev":{"w":"src/systems/geometry/geometry_system.cpp:2080","r":"src/engine/engine_runtime_api.cpp:1869"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 只读"},{"s":"ActorDevice","f":"model_path","t":"std::filesystem::path","init":"","ch":"C1","extW":["主线程·EngineAPI","网络线程"],"extR":["网络线程"],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写"],"note":"模型路径；异步导入时 Geometry 读。","ev":{"w":"src/engine/engine_runtime_api.cpp:1873","r":"src/systems/geometry/geometry_system.cpp:1273"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 只读"},{"s":"ActorDevice","f":"model_import_options","t":"Resource::ModelImportOptions","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":[],"dagR":["DAG·Geometry"],"extDir":"w","dagDir":"r","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1874","r":"src/systems/geometry/geometry_system.cpp:1280"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 只读"},{"s":"ActorDevice","f":"follow_camera","t":"bool","init":"false","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["主线程·EngineAPI","CEF·UI"],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry","DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1970","r":"src/engine/engine_runtime_api.cpp:1983"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 只读"},{"s":"ActorDevice","f":"pinned","t":"bool","init":"false","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":[],"dagR":["DAG·Geometry"],"extDir":"w","dagDir":"r","paths":["EngineAPI"],"note":"钉住后不被距离剔除，Geometry 读。","ev":{"w":"src/engine/engine_runtime_api.cpp:1878","r":"src/systems/geometry/actor_cache.cpp:170"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 只读"},{"s":"ModelTransform","f":"affine_basis","t":"ktm::fmat4x4","init":"ktm::fmat4x4::from_eye()","ch":"C1","extW":[],"extR":["主线程·EngineAPI"],"dagW":[],"dagR":["DAG·Geometry"],"extDir":"r","dagDir":"r","paths":["EngineAPI"],"note":"创作态线性变换；与 TRS 组合后得到最终矩阵。","ev":{"w":"","r":"src/engine/engine_runtime_api.cpp:1002"},"owner":"主线程·EngineAPI / CEF","ownerKind":"外部拥有 · DAG 读写"},{"s":"ModelTransform","f":"euler_rotation","t":"ktm::fvec3","init":"","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["主线程·EngineAPI","网络线程"],"dagW":[],"dagR":["DAG·Geometry","DAG·Mechanics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","CEF fast path","网络直写"],"note":"CEF fast path 写，DAG 读。","ev":{"w":"src/engine/engine_runtime_api.cpp:1005","r":"src/engine/engine_runtime_api.cpp:1043"},"owner":"主线程·EngineAPI / CEF","ownerKind":"外部拥有 · DAG 读写"},{"s":"ModelResource","f":"model_id","t":"std::uint64_t","init":"","ch":"C1","extW":["主线程·EngineAPI","网络线程"],"extR":["主线程·EngineAPI","网络线程","CEF·UI"],"dagW":["DAG·Geometry","DAG·Mechanics"],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:809","r":"src/engine/engine_runtime_api.cpp:1188"},"owner":"DAG·Geometry","ownerKind":"DAG 拥有"},{"s":"SceneDevice","f":"simulation_enabled","t":"bool","init":"false","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":[],"dagR":["DAG·Mechanics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI"],"note":"EngineAPI 写，Mechanics 读；关闭时不累积仿真债。","ev":{"w":"src/engine/engine_runtime_api.cpp:545","r":"src/engine/engine_runtime_api.cpp:554"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 部分写"},{"s":"SceneDevice","f":"environment","t":"std::uintptr_t","init":"","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Mechanics","DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:238","r":"src/systems/mechanics/mechanics_ik.cpp:32"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 部分写"},{"s":"SceneDevice","f":"actor_handles","t":"std::vector<std::uintptr_t>","init":"","ch":"C1","extW":[],"extR":["主线程·EngineAPI"],"dagW":[],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"r","dagDir":"r","paths":["EngineAPI"],"note":"","ev":{"w":"","r":"src/engine/engine_runtime_api.cpp:293"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 部分写"},{"s":"SceneDevice","f":"camera_handles","t":"std::vector<std::uintptr_t>","init":"","ch":"C1","extW":[],"extR":["主线程·EngineAPI","CEF·UI"],"dagW":[],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"r","dagDir":"r","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"","r":"src/engine/engine_runtime_api.cpp:160"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 部分写"},{"s":"SceneDevice","f":"active_camera_handle","t":"std::uintptr_t","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI","CEF·UI"],"dagW":[],"dagR":["DAG·Acoustics","DAG·Optics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","CEF fast path"],"note":"EngineAPI 写，Optics/Acoustics 读。","ev":{"w":"src/engine/engine_runtime_api.cpp:396","r":"src/engine/engine_runtime_api.cpp:153"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 部分写"},{"s":"SceneDevice","f":"min_world","t":"ktm::fvec3","init":"","ch":"C1","extW":[],"extR":["主线程·EngineAPI"],"dagW":["DAG·Geometry","DAG·Optics"],"dagR":["DAG·Mechanics","DAG·Optics"],"extDir":"r","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/systems/geometry/geometry_system.cpp:823","r":"src/engine/engine_runtime_api.cpp:513"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 部分写"},{"s":"SceneDevice","f":"max_world","t":"ktm::fvec3","init":"","ch":"C1","extW":[],"extR":["主线程·EngineAPI"],"dagW":["DAG·Geometry","DAG·Optics"],"dagR":["DAG·Mechanics","DAG·Optics"],"extDir":"r","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/systems/geometry/geometry_system.cpp:824","r":"src/engine/engine_runtime_api.cpp:514"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 部分写"},{"s":"EnvironmentDevice","f":"authored_lighting","t":"std::shared_ptr<const nlohmann::json>","init":"","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["主线程·EngineAPI","CEF·UI"],"dagW":[],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:652","r":"src/engine/engine_runtime_api.cpp:629"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · Optics 写光照"},{"s":"EnvironmentDevice","f":"authored_lighting_revision","t":"std::size_t","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":[],"dagR":["DAG·Optics"],"extDir":"w","dagDir":"r","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:630","r":"src/systems/optics/native_lighting.cpp:136"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · Optics 写光照"},{"s":"EnvironmentDevice","f":"sun_position","t":"ktm::fvec3","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI","网络线程"],"dagW":[],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","网络直写"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:661","r":"src/engine/engine_runtime_api.cpp:567"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · Optics 写光照"},{"s":"EnvironmentDevice","f":"floor_grid_enabled","t":"std::uint32_t","init":"1","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["主线程·EngineAPI","CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:570","r":"src/engine/engine_runtime_api.cpp:705"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · Optics 写光照"},{"s":"EnvironmentDevice","f":"sun_color","t":"ktm::fvec3","init":"1.0f, 0.949f, 0.853f","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:662","r":"src/systems/optics/optics_system.cpp:4213"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · Optics 写光照"},{"s":"EnvironmentDevice","f":"sun_intensity","t":"float","init":"10.0f","ch":"C1","extW":["主线程·EngineAPI","网络线程"],"extR":["主线程·EngineAPI","网络线程"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","网络直写"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:612","r":"src/engine/engine_runtime_api.cpp:621"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · Optics 写光照"},{"s":"EnvironmentDevice","f":"sky_intensity","t":"float","init":"20.0f","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:655","r":"src/engine/engine_runtime_api.cpp:684"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · Optics 写光照"},{"s":"EnvironmentDevice","f":"exposure","t":"float","init":"1.0f","ch":"C1","extW":["网络线程"],"extR":["网络线程"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["网络直写"],"note":"Optics 读写，网络同步会覆盖。","ev":{"w":"src/systems/network/sync_engine.cpp:248","r":"src/systems/network/sync_engine.cpp:223"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · Optics 写光照"},{"s":"EnvironmentDevice","f":"gravity","t":"ktm::fvec3","init":"0.0f, -9.8f, 0.0f","ch":"C1","extW":[],"extR":["主线程·EngineAPI","CEF·UI"],"dagW":[],"dagR":["DAG·Mechanics"],"extDir":"r","dagDir":"r","paths":["EngineAPI","CEF fast path"],"note":"EngineAPI/CEF 写，Mechanics 每帧读；网络同步也会写。","ev":{"w":"","r":"src/engine/engine_runtime_api.cpp:720"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · Optics 写光照"},{"s":"EnvironmentDevice","f":"floor_y","t":"float","init":"0.0f","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":["DAG·Mechanics"],"dagR":["DAG·Mechanics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:740","r":"src/engine/engine_runtime_api.cpp:747"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · Optics 写光照"},{"s":"EnvironmentDevice","f":"floor_restitution","t":"float","init":"0.6f","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":[],"dagR":[],"extDir":"rw","dagDir":"none","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:758","r":"src/engine/engine_runtime_api.cpp:765"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · Optics 写光照"},{"s":"EnvironmentDevice","f":"fixed_dt","t":"float","init":"1.0f / 60.0f","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":[],"dagR":["DAG·Mechanics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI"],"note":"固定步长，Mechanics 的累加器按它切分物理步。","ev":{"w":"src/engine/engine_runtime_api.cpp:776","r":"src/engine/engine_runtime_api.cpp:783"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · Optics 写光照"},{"s":"CameraDevice","f":"surface","t":"void*","init":"","ch":"C1","extW":["主线程·EngineAPI","主线程·UI"],"extR":[],"dagW":["DAG·Optics"],"dagR":["DAG·Optics","DAG·Display","DAG·Mechanics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI","主线程 UI"],"note":"视口绑定；Optics 应用 viewport/state 命令时写，Display 通过事件读。","ev":{"w":"src/engine/engine_runtime_api.cpp:2047","r":"src/engine/engine_runtime_api.cpp:2238"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"follows_default_surface","t":"bool","init":"true","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2254","r":"src/engine/engine_runtime_api.cpp:2684"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"forward","t":"ktm::fvec3","init":"","ch":"C1","extW":["主线程·EngineAPI","脚本线程"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics","DAG·Acoustics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","脚本直写","CEF fast path"],"note":"同上；脚本跟随会与编辑器拖拽同时写，没有队列仲裁。","ev":{"w":"src/engine/engine_runtime_api.cpp:2041","r":"src/engine/engine_runtime_api.cpp:2166"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"world_up","t":"ktm::fvec3","init":"","ch":"C1","extW":["主线程·EngineAPI","脚本线程"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics","DAG·Acoustics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","脚本直写","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2042","r":"src/engine/engine_runtime_api.cpp:2184"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"fov","t":"float","init":"60.0f","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics","DAG·Geometry"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2043","r":"src/engine/engine_runtime_api.cpp:2202"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"aspect","t":"float","init":"16.0f / 9.0f","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2046","r":"src/systems/optics/optics_system.cpp:1010"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"near_plane","t":"float","init":"0.1f","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2597","r":"src/systems/optics/native_camera.h:13"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"far_plane","t":"float","init":"100.0f","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2598","r":"src/systems/optics/native_camera.h:13"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"projection_x_sign","t":"float","init":"1.0f","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2596","r":"src/systems/optics/optics_system.cpp:773"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"output_mode","t":"CameraOutputMode","init":"CameraOutputMode::FinalColor","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"调试输出通道（FinalColor/BaseColor/Normal/…），经位掩码命令写。","ev":{"w":"src/engine/engine_runtime_api.cpp:2339","r":"src/engine/engine_runtime_api.cpp:2349"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"render_backend","t":"CameraRenderBackend","init":"CameraRenderBackend::Native","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2710","r":"src/engine/engine_runtime_api.cpp:2723"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"vision_render_mode","t":"CameraVisionRenderMode","init":"CameraVisionRenderMode::PathTracing","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2739","r":"src/engine/engine_runtime_api.cpp:2740"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"vision_denoise","t":"bool","init":"true","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["主线程·EngineAPI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"请求值；Optics 应用后通过 acknowledge_* 回执，避免重复重建管线。","ev":{"w":"src/engine/engine_runtime_api.cpp:2743","r":"src/engine/engine_runtime_api.cpp:2821"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"vision_denoiser","t":"CameraVisionDenoiser","init":"CameraVisionDenoiser::ReBLUR","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2792","r":"src/engine/engine_runtime_api.cpp:2803"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"vision_restir_applied_settings","t":"std::string","init":"","ch":"C1","extW":[],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["CEF fast path"],"note":"","ev":{"w":"src/systems/optics/optics_system.cpp:2378","r":"src/systems/ui/cef/cef_editor_native_api_handlers.cpp:7207"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"vision_accumulation","t":"bool","init":"false","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2748","r":"src/engine/engine_runtime_api.cpp:2956"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"vision_stable_planes","t":"bool","init":"true","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2983","r":"src/engine/engine_runtime_api.cpp:2991"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"view_open","t":"bool","init":"false","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"浮动视口是否可见；Optics 写，CEF 读。","ev":{"w":"src/engine/engine_runtime_api.cpp:2255","r":"src/engine/engine_runtime_api.cpp:2518"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"view_x","t":"int","init":"120","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"rw","dagDir":"w","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2503","r":"src/engine/engine_runtime_api.cpp:2519"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"view_y","t":"int","init":"120","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"rw","dagDir":"w","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2504","r":"src/engine/engine_runtime_api.cpp:2520"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"view_width","t":"int","init":"960","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"rw","dagDir":"w","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2505","r":"src/engine/engine_runtime_api.cpp:2521"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"view_height","t":"int","init":"540","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"rw","dagDir":"w","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2506","r":"src/engine/engine_runtime_api.cpp:2522"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"move_speed","t":"float","init":"1.0f","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"rw","dagDir":"w","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2507","r":"src/engine/engine_runtime_api.cpp:2523"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"actor_pick_handle","t":"std::uintptr_t","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":[],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","CEF fast path"],"note":"相机创建时分配，Optics 释放相机时回收。","ev":{"w":"src/engine/engine_runtime_api.cpp:2048","r":"src/engine/engine_runtime_api.cpp:2098"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"ImageDevice","f":"image","t":"Horizon::HardwareImage","init":"","ch":"C1","extW":["主线程·UI"],"extR":["主线程·EngineAPI","主线程·UI"],"dagW":["DAG·Geometry","DAG·Optics"],"dagR":["DAG·Display","DAG·Geometry","DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","主线程 UI"],"note":"图像句柄；Optics 写，Display 读。","ev":{"w":"src/systems/geometry/geometry_mesh_builder.cpp:148","r":"src/engine/engine_runtime_api.cpp:924"},"owner":"DAG·Optics / Display","ownerKind":"DAG 拥有"},{"s":"ImageDevice","f":"submit_receipt","t":"Horizon::SubmitReceipt","init":"","ch":"C1","extW":["主线程·UI"],"extR":["主线程·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Display","DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["主线程 UI"],"note":"GPU 提交收据；Display 读 serial 判断是否新帧。","ev":{"w":"src/systems/optics/optics_system.cpp:4918","r":"src/systems/display/display_system.cpp:716"},"owner":"DAG·Optics / Display","ownerKind":"DAG 拥有"},{"s":"ImageDevice","f":"consumed_receipt","t":"Horizon::SubmitReceipt","init":"","ch":"C1","extW":[],"extR":["主线程·UI"],"dagW":["DAG·Display"],"dagR":["DAG·Optics"],"extDir":"r","dagDir":"rw","paths":["主线程 UI"],"note":"Display 合成后回写，Optics 覆盖前 wait_idle。","ev":{"w":"src/systems/display/display_system.cpp:799","r":"src/systems/optics/optics_system.cpp:2961"},"owner":"DAG·Optics / Display","ownerKind":"DAG 拥有"},{"s":"ImageDevice","f":"metadata","t":"Systems::Detail::ImageFrameMetadata","init":"","ch":"C1","extW":["主线程·UI"],"extR":["主线程·EngineAPI"],"dagW":["DAG·Optics","DAG·Display"],"dagR":["DAG·Acoustics","DAG·Mechanics","DAG·Optics","DAG·Display"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","主线程 UI"],"note":"帧号/尺寸/视口矩形，与 image 同一把槽位锁发布。","ev":{"w":"src/systems/optics/optics_system.cpp:4919","r":"src/engine/engine_runtime_api.cpp:3033"},"owner":"DAG·Optics / Display","ownerKind":"DAG 拥有"},{"s":"MeshDevice","f":"indexBuffer","t":"Horizon::HardwareBuffer","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry","DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:925","r":"src/systems/geometry/geometry_mesh_builder.cpp:280"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshDevice","f":"vertexBuffer","t":"Horizon::HardwareBuffer","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:921","r":"src/systems/geometry/geometry_mesh_builder.cpp:280"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshDevice","f":"indexStorageBuffer","t":"Horizon::HardwareBuffer","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry","DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:933","r":"src/systems/geometry/geometry_mesh_builder.cpp:281"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshDevice","f":"vertexStorageBuffer","t":"Horizon::HardwareBuffer","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:929","r":"src/systems/geometry/geometry_mesh_builder.cpp:281"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshDevice","f":"materialIndex","t":"uint32_t","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Geometry","DAG·Optics"],"dagR":["DAG·Geometry","DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:937","r":"src/systems/geometry/geometry_system.cpp:4955"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshDevice","f":"textureBuffer","t":"Horizon::HardwareImage","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:946","r":"src/engine/engine_runtime_api.cpp:943"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshDevice","f":"material","t":"std::shared_ptr<const MeshMaterialDevice>","init":"","ch":"C1","extW":["CEF·UI"],"extR":["CEF·UI"],"dagW":["DAG·Geometry","DAG·Optics"],"dagR":["DAG·Geometry","DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["CEF fast path"],"note":"","ev":{"w":"src/systems/geometry/geometry_mesh_builder.cpp:273","r":"src/systems/geometry/geometry_mesh_builder.cpp:149"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshDevice","f":"materialColor","t":"std::array<float, 4>","init":"1.0f, 1.0f, 1.0f, 1.0f","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Geometry","DAG·Optics"],"dagR":["DAG·Geometry","DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:938","r":"src/systems/geometry/geometry_system.cpp:4956"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshDevice","f":"vertex_count","t":"uint32_t","init":"0","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Geometry","DAG·Optics"],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:939","r":"src/systems/geometry/geometry_system.cpp:2421"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshDevice","f":"index_count","t":"uint32_t","init":"0","ch":"C1","extW":["主线程·EngineAPI","主线程·UI"],"extR":[],"dagW":["DAG·Geometry","DAG·Optics"],"dagR":["DAG·Geometry","DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI","主线程 UI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:940","r":"src/systems/geometry/geometry_system.cpp:2422"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshDevice","f":"max_index","t":"uint32_t","init":"0","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Geometry","DAG·Optics"],"dagR":["DAG·Geometry","DAG·Optics"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:941","r":"src/systems/geometry/geometry_system.cpp:2423"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshDevice","f":"mesh_mem","t":"Corona::Memory::GpuMemToken","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:959","r":"src/systems/geometry/geometry_system.cpp:1032"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshDevice","f":"tex_mem","t":"std::shared_ptr<Corona::Memory::GpuMemToken>","init":"","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry"],"extDir":"w","dagDir":"rw","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:967","r":"src/systems/geometry/geometry_system.cpp:5400"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshInstanceDevice","f":"object_id","t":"std::uint32_t","init":"0","ch":"C1","extW":[],"extR":["网络线程"],"dagW":["DAG·Geometry"],"dagR":["DAG·Geometry"],"extDir":"r","dagDir":"rw","paths":["网络直写"],"note":"","ev":{"w":"src/systems/geometry/geometry_mesh_builder.cpp:331","r":"src/systems/geometry/geometry_mesh_builder.cpp:331"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshInstanceDevice","f":"node_index","t":"std::uint32_t","init":"UINT32_MAX","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["主线程·EngineAPI","CEF·UI"],"dagW":["DAG·Geometry","DAG·Optics"],"dagR":["DAG·Geometry","DAG·Optics"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:3120","r":"src/engine/engine_runtime_api.cpp:2659"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"MeshInstanceDevice","f":"transform","t":"ktm::fmat4x4","init":"ktm::fmat4x4::from_eye()","ch":"C1","extW":[],"extR":["网络线程","CEF·UI","主线程·UI"],"dagW":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"r","dagDir":"rw","paths":["网络直写","CEF fast path","主线程 UI"],"note":"","ev":{"w":"src/systems/geometry/geometry_mesh_builder.cpp:335","r":"src/systems/geometry/actor_cache.cpp:133"},"owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有"},{"s":"ActorPickDevice","f":"request_id","t":"std::string","init":"","ch":"C1","extW":["CEF·UI"],"extR":["CEF·UI"],"dagW":[],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"r","paths":["CEF fast path"],"note":"","ev":{"w":"src/systems/optics/optics_system.cpp:5314","r":"src/systems/optics/optics_system.cpp:4580"},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遗留镜像"},{"s":"ActorPickDevice","f":"result_request_id","t":"std::string","init":"","ch":"C1","extW":[],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["CEF fast path"],"note":"","ev":{"w":"src/systems/optics/optics_system.cpp:5343","r":""},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遗留镜像"},{"s":"ActorPickDevice","f":"result_x","t":"std::uint32_t","init":"0","ch":"C1","extW":[],"extR":["主线程·EngineAPI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["EngineAPI"],"note":"","ev":{"w":"src/systems/optics/optics_system.cpp:5341","r":"src/engine/engine_runtime_api.cpp:2658"},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遗留镜像"},{"s":"ActorPickDevice","f":"result_y","t":"std::uint32_t","init":"0","ch":"C1","extW":[],"extR":["主线程·EngineAPI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["EngineAPI"],"note":"","ev":{"w":"src/systems/optics/optics_system.cpp:5342","r":"src/engine/engine_runtime_api.cpp:2658"},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遗留镜像"},{"s":"ActorPickDevice","f":"actor_handle","t":"std::uintptr_t","init":"0","ch":"C1","extW":[],"extR":["CEF·UI","主线程·EngineAPI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics"],"extDir":"r","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/systems/optics/optics_system.cpp:1943","r":"src/engine/engine_runtime_api.cpp:2629"},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遗留镜像"},{"s":"ActorPickDevice","f":"node_index","t":"std::uint32_t","init":"UINT32_MAX","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":["CEF·UI","主线程·EngineAPI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"rw","dagDir":"w","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:3120","r":"src/engine/engine_runtime_api.cpp:2659"},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遗留镜像"},{"s":"ActorPickDevice","f":"pending","t":"bool","init":"false","ch":"C1","extW":["CEF·UI","主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":[],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"r","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2664","r":"src/systems/mechanics/gpu_floor_sleep.cpp:500"},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遗留镜像"},{"s":"ActorPickDevice","f":"result_ready","t":"bool","init":"false","ch":"C1","extW":["主线程·EngineAPI"],"extR":["主线程·EngineAPI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"rw","dagDir":"w","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2665","r":"src/engine/engine_runtime_api.cpp:2658"},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遗留镜像"},{"s":"CameraDevice","f":"position","t":"ktm::fvec3","init":"","ch":"C1","extW":["主线程·EngineAPI","脚本线程"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics","DAG·Acoustics","DAG·Geometry"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","脚本直写","CEF fast path"],"note":"创建时主线程写；拖拽经 CameraMoveCommand 由 Optics 写；脚本跟随直写。三方竞争同一字段。","ev":{"w":"src/engine/engine_runtime_api.cpp:2041","r":"src/systems/acoustics/acoustics_system.cpp:235"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"width","t":"std::uint32_t","init":"1920","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics","DAG·Display"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"渲染尺寸；Optics 应用视口命令时写，CEF 读。","ev":{"w":"src/engine/engine_runtime_api.cpp:2044","r":"src/systems/ui/cef/cef_realtime_bridge.cpp:1004"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"CameraDevice","f":"height","t":"std::uint32_t","init":"1080","ch":"C1","extW":["主线程·EngineAPI"],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":["DAG·Optics","DAG·Display"],"extDir":"rw","dagDir":"rw","paths":["EngineAPI","CEF fast path"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:2045","r":"src/systems/ui/cef/cef_realtime_bridge.cpp:1005"},"owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建"},{"s":"OpticsDevice","f":"visible","t":"bool","init":"true","ch":"C1","extW":["主线程·EngineAPI","CEF·UI","网络线程"],"extR":[],"dagW":[],"dagR":["DAG·Optics"],"extDir":"w","dagDir":"r","paths":["CEF fast path","EngineAPI","网络直写"],"note":"CEF 属性面板直写；Optics 每帧读，不参与碰撞。","ev":{"w":"src/systems/ui/cef/cef_realtime_bridge.cpp:1510","r":"src/systems/optics/optics_system.cpp:3602"},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"SceneDevice","f":"enabled","t":"bool","init":"true","ch":"C1","extW":["主线程·EngineAPI"],"extR":[],"dagW":[],"dagR":["DAG·Geometry","DAG·Mechanics"],"extDir":"w","dagDir":"r","paths":["EngineAPI"],"note":"","ev":{"w":"src/engine/engine_runtime_api.cpp:1190","r":"src/systems/geometry/geometry_system.cpp:770"},"owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 部分写"},{"s":"ModelTransform","f":"position","t":"ktm::fvec3","init":"0,0,0","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":[],"dagW":[],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics","DAG·Acoustics"],"extDir":"w","dagDir":"r","paths":["CEF fast path","EngineAPI"],"note":"三种写法：API 创建、CEF fast path、脚本；Geometry/Mechanics/Optics 每帧读。","ev":{"w":"src/systems/ui/cef/cef_realtime_bridge.cpp:756","r":"src/systems/geometry/geometry_system.cpp:419"},"owner":"主线程·EngineAPI / CEF","ownerKind":"外部拥有 · DAG 读写"},{"s":"ModelTransform","f":"scale","t":"ktm::fvec3","init":"1,1,1","ch":"C1","extW":["主线程·EngineAPI","CEF·UI"],"extR":[],"dagW":[],"dagR":["DAG·Geometry","DAG·Mechanics","DAG·Optics"],"extDir":"w","dagDir":"r","paths":["CEF fast path","EngineAPI"],"note":"CEF fast path 写，DAG 读。","ev":{"w":"src/systems/ui/cef/cef_realtime_bridge.cpp:765","r":"src/systems/optics/optics_system.cpp:3645"},"owner":"主线程·EngineAPI / CEF","ownerKind":"外部拥有 · DAG 读写"},{"s":"ActorPickDevice","f":"x","t":"std::uint32_t","init":"0","ch":"C1","extW":["CEF·UI"],"extR":["CEF·UI"],"dagW":[],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"r","paths":["CEF fast path"],"note":"","ev":{"w":"src/systems/ui/cef/cef_realtime_bridge.cpp:919","r":"src/systems/optics/optics_system.cpp:5303"},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遗留镜像"},{"s":"ActorPickDevice","f":"y","t":"std::uint32_t","init":"0","ch":"C1","extW":["CEF·UI"],"extR":["CEF·UI"],"dagW":[],"dagR":["DAG·Optics"],"extDir":"rw","dagDir":"r","paths":["CEF fast path"],"note":"","ev":{"w":"src/systems/ui/cef/cef_realtime_bridge.cpp:919","r":"src/systems/optics/optics_system.cpp:5303"},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遗留镜像"},{"s":"ViewportUiState","f":"camera_handle","t":"std::uintptr_t","init":"","ch":"C2","extW":["CEF·UI"],"extR":[],"dagW":[],"dagR":["DAG·Optics / CEF·UI"],"extDir":"w","dagDir":"r","paths":["CEF fast path"],"note":"mutex 保护的 map，非 Storage 槽。","ev":{"w":"","r":""},"owner":"DAG·Optics / CEF","ownerKind":"共享状态"},{"s":"ViewportUiState","f":"mode","t":"ViewportUiMode","init":"ViewportUiMode::Flat2D","ch":"C2","extW":["CEF·UI"],"extR":[],"dagW":[],"dagR":["DAG·Optics / CEF·UI"],"extDir":"w","dagDir":"r","paths":["CEF fast path"],"note":"mutex 保护的 map，非 Storage 槽。","ev":{"w":"","r":""},"owner":"DAG·Optics / CEF","ownerKind":"共享状态"},{"s":"ViewportUiState","f":"cursor_shape","t":"ViewportUiCursorShape","init":"ViewportUiCursorShape::Arrow","ch":"C2","extW":["CEF·UI"],"extR":[],"dagW":[],"dagR":["DAG·Optics / CEF·UI"],"extDir":"w","dagDir":"r","paths":["CEF fast path"],"note":"mutex 保护的 map，非 Storage 槽。","ev":{"w":"","r":""},"owner":"DAG·Optics / CEF","ownerKind":"共享状态"},{"s":"ViewportUiState","f":"calibration","t":"ViewportUiCalibration","init":"","ch":"C2","extW":["CEF·UI"],"extR":[],"dagW":[],"dagR":["DAG·Optics / CEF·UI"],"extDir":"w","dagDir":"r","paths":["CEF fast path"],"note":"mutex 保护的 map，非 Storage 槽。","ev":{"w":"","r":""},"owner":"DAG·Optics / CEF","ownerKind":"共享状态"},{"s":"ViewportGizmoState","f":"target","t":"ViewportGizmoTarget","init":"","ch":"C2","extW":[],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["CEF fast path"],"note":"hover/active 轴与拖拽态。","ev":{"w":"","r":""},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"ViewportGizmoState","f":"hover_axis","t":"ViewportGizmoAxis","init":"ViewportGizmoAxis::None","ch":"C2","extW":[],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["CEF fast path"],"note":"hover/active 轴与拖拽态。","ev":{"w":"","r":""},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"ViewportGizmoState","f":"active_axis","t":"ViewportGizmoAxis","init":"ViewportGizmoAxis::None","ch":"C2","extW":[],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["CEF fast path"],"note":"hover/active 轴与拖拽态。","ev":{"w":"","r":""},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"ViewportGizmoState","f":"dragging","t":"bool","init":"false","ch":"C2","extW":[],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["CEF fast path"],"note":"hover/active 轴与拖拽态。","ev":{"w":"","r":""},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"ViewportGizmoState","f":"sequence","t":"std::uint64_t","init":"","ch":"C2","extW":[],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["CEF fast path"],"note":"hover/active 轴与拖拽态。","ev":{"w":"","r":""},"owner":"DAG·Optics","ownerKind":"DAG 拥有"},{"s":"CameraFrameTiming","f":"render_ms","t":"double","init":"","ch":"C5","extW":[],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["CEF fast path"],"note":"Optics 写，编辑器读。","ev":{"w":"","r":""},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遥测"},{"s":"CameraFrameTiming","f":"denoise_ms","t":"double","init":"","ch":"C5","extW":[],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["CEF fast path"],"note":"runtime-only 遥测，不序列化。","ev":{"w":"","r":""},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遥测"},{"s":"CameraFrameTiming","f":"frame_ms","t":"double","init":"","ch":"C5","extW":[],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["CEF fast path"],"note":"含等待的墙钟节拍；用于判断相机是否被 present 卡住。","ev":{"w":"","r":""},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遥测"},{"s":"CameraFrameTiming","f":"mode","t":"CameraVisionRenderMode","init":"CameraVisionRenderMode::PathTracing","ch":"C5","extW":[],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["CEF fast path"],"note":"runtime-only 遥测，不序列化。","ev":{"w":"","r":""},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遥测"},{"s":"CameraFrameTiming","f":"recorded_at","t":"std::chrono::steady_clock::time_point","init":"","ch":"C5","extW":[],"extR":["CEF·UI"],"dagW":["DAG·Optics"],"dagR":[],"extDir":"r","dagDir":"w","paths":["CEF fast path"],"note":"runtime-only 遥测，不序列化。","ev":{"w":"","r":""},"owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遥测"}],"byThread":[{"name":"EngineAPI 门面","short":"EngineAPI","color":"#38bdf8","desc":"EngineRuntimeAPI 的同步 get/set。调用方是 CEF 编辑器与脚本绑定，因此它既不是\"主线程专属\"，也不是消息通道——每次调用当场拿槽位锁。","id":"主线程·EngineAPI","count":124,"w":108,"r":66,"fields":["GeometryDevice.import_options","GeometryDevice.transform_handle","GeometryDevice.model_resource_handle","GeometryDevice.model_nodes","GeometryDevice.model_node_overrides","GeometryDevice.model_node_revision","GeometryDevice.model_node_bounds","GeometryDevice.native_local_correction_offset","GeometryDevice.native_local_correction_scale","GeometryDevice.gpu_build_state","GeometryDevice.model_path_utf8","GeometryDevice.is_skinned","GeometryDevice.skinned_aabb_valid","GeometryDevice.collision_model_id","MechanicsDevice.geometry_handle","MechanicsDevice.max_xyz","MechanicsDevice.min_xyz","MechanicsDevice.mass","MechanicsDevice.restitution","MechanicsDevice.damping","MechanicsDevice.body_type","MechanicsDevice.linear_lock_mask","MechanicsDevice.angular_lock_mask","OpticsDevice.geometry_handle","OpticsDevice.bEnableLighting","OpticsDevice.metallic","OpticsDevice.roughness","OpticsDevice.subsurface","OpticsDevice.specular","OpticsDevice.specularTint","OpticsDevice.anisotropic","OpticsDevice.sheen","OpticsDevice.sheenTint","OpticsDevice.clearcoat","OpticsDevice.clearcoatGloss","OpticsDevice.ambient","OpticsDevice.diffuse","OpticsDevice.specular_color","OpticsDevice.shininess","AcousticsDevice.geometry_handle","AcousticsDevice.resource_id","AcousticsDevice.volume","AcousticsDevice.audio_enabled","ProfileDevice.optics_handle","ProfileDevice.acoustics_handle","ProfileDevice.mechanics_handle","ProfileDevice.geometry_handle","ActorDevice.profile_handles","ActorDevice.model_path","ActorDevice.model_import_options","ActorDevice.follow_camera","ActorDevice.pinned","ModelTransform.affine_basis","ModelTransform.euler_rotation","ModelResource.model_id","SceneDevice.simulation_enabled","SceneDevice.environment","SceneDevice.actor_handles","SceneDevice.camera_handles","SceneDevice.active_camera_handle","SceneDevice.min_world","SceneDevice.max_world","EnvironmentDevice.authored_lighting","EnvironmentDevice.authored_lighting_revision","EnvironmentDevice.sun_position","EnvironmentDevice.floor_grid_enabled","EnvironmentDevice.sun_color","EnvironmentDevice.sun_intensity","EnvironmentDevice.sky_intensity","EnvironmentDevice.gravity","EnvironmentDevice.floor_y","EnvironmentDevice.floor_restitution","EnvironmentDevice.fixed_dt","CameraDevice.surface","CameraDevice.follows_default_surface","CameraDevice.forward","CameraDevice.world_up","CameraDevice.fov","CameraDevice.aspect","CameraDevice.near_plane","CameraDevice.far_plane","CameraDevice.projection_x_sign","CameraDevice.output_mode","CameraDevice.render_backend","CameraDevice.vision_render_mode","CameraDevice.vision_denoise","CameraDevice.vision_denoiser","CameraDevice.vision_accumulation","CameraDevice.vision_stable_planes","CameraDevice.view_open","CameraDevice.view_x","CameraDevice.view_y","CameraDevice.view_width","CameraDevice.view_height","CameraDevice.move_speed","CameraDevice.actor_pick_handle","ImageDevice.image","ImageDevice.metadata","MeshDevice.indexBuffer","MeshDevice.vertexBuffer","MeshDevice.indexStorageBuffer","MeshDevice.vertexStorageBuffer","MeshDevice.materialIndex","MeshDevice.textureBuffer","MeshDevice.materialColor","MeshDevice.vertex_count","MeshDevice.index_count","MeshDevice.max_index","MeshDevice.mesh_mem","MeshDevice.tex_mem","MeshInstanceDevice.node_index","ActorPickDevice.result_x","ActorPickDevice.result_y","ActorPickDevice.actor_handle","ActorPickDevice.node_index","ActorPickDevice.pending","ActorPickDevice.result_ready","CameraDevice.position","CameraDevice.width","CameraDevice.height","OpticsDevice.visible","SceneDevice.enabled","ModelTransform.position","ModelTransform.scale"],"structs":{"GeometryDevice":14,"MechanicsDevice":9,"OpticsDevice":17,"AcousticsDevice":4,"ProfileDevice":4,"ActorDevice":5,"ModelTransform":4,"ModelResource":1,"SceneDevice":8,"EnvironmentDevice":11,"CameraDevice":26,"ImageDevice":2,"MeshDevice":12,"MeshInstanceDevice":1,"ActorPickDevice":6},"top":[["CameraDevice",26],["OpticsDevice",17],["GeometryDevice",14],["MeshDevice",12]]},{"name":"CEF 编辑器 UI 线程","short":"CEF·UI","color":"#a78bfa","desc":"属性面板与 gizmo 的 fast path：直接 try_acquire_write 槽位，不排队、不回执。","id":"CEF·UI","count":92,"w":42,"r":69,"fields":["GeometryDevice.import_options","GeometryDevice.transform_handle","GeometryDevice.gpu_build_state","GeometryDevice.animation_player","GeometryDevice.ik_chains","GeometryDevice.ik_chains_revision","MechanicsDevice.max_xyz","MechanicsDevice.min_xyz","MechanicsDevice.mass","MechanicsDevice.restitution","MechanicsDevice.damping","MechanicsDevice.body_type","MechanicsDevice.linear_lock_mask","MechanicsDevice.angular_lock_mask","OpticsDevice.geometry_handle","OpticsDevice.material_overrides","OpticsDevice.principled","OpticsDevice.bEnableLighting","OpticsDevice.metallic","OpticsDevice.roughness","OpticsDevice.specular","OpticsDevice.specularTint","OpticsDevice.anisotropic","OpticsDevice.sheen","OpticsDevice.sheenTint","OpticsDevice.clearcoat","OpticsDevice.clearcoatGloss","OpticsDevice.ambient","OpticsDevice.diffuse","OpticsDevice.specular_color","OpticsDevice.shininess","AcousticsDevice.resource_id","ProfileDevice.optics_handle","ProfileDevice.mechanics_handle","ProfileDevice.geometry_handle","ActorDevice.profile_handles","ActorDevice.follow_camera","ModelTransform.euler_rotation","ModelResource.model_id","SceneDevice.environment","SceneDevice.camera_handles","SceneDevice.active_camera_handle","EnvironmentDevice.authored_lighting","EnvironmentDevice.floor_grid_enabled","EnvironmentDevice.gravity","CameraDevice.forward","CameraDevice.world_up","CameraDevice.fov","CameraDevice.aspect","CameraDevice.output_mode","CameraDevice.render_backend","CameraDevice.vision_render_mode","CameraDevice.vision_denoise","CameraDevice.vision_denoiser","CameraDevice.vision_restir_applied_settings","CameraDevice.view_open","CameraDevice.view_x","CameraDevice.view_y","CameraDevice.view_width","CameraDevice.view_height","CameraDevice.move_speed","CameraDevice.actor_pick_handle","MeshDevice.material","MeshInstanceDevice.node_index","MeshInstanceDevice.transform","ActorPickDevice.request_id","ActorPickDevice.result_request_id","ActorPickDevice.actor_handle","ActorPickDevice.node_index","ActorPickDevice.pending","CameraDevice.position","CameraDevice.width","CameraDevice.height","OpticsDevice.visible","ModelTransform.position","ModelTransform.scale","ActorPickDevice.x","ActorPickDevice.y","ViewportUiState.camera_handle","ViewportUiState.mode","ViewportUiState.cursor_shape","ViewportUiState.calibration","ViewportGizmoState.target","ViewportGizmoState.hover_axis","ViewportGizmoState.active_axis","ViewportGizmoState.dragging","ViewportGizmoState.sequence","CameraFrameTiming.render_ms","CameraFrameTiming.denoise_ms","CameraFrameTiming.frame_ms","CameraFrameTiming.mode","CameraFrameTiming.recorded_at"],"structs":{"GeometryDevice":6,"MechanicsDevice":8,"OpticsDevice":18,"AcousticsDevice":1,"ProfileDevice":3,"ActorDevice":2,"ModelTransform":3,"ModelResource":1,"SceneDevice":3,"EnvironmentDevice":3,"CameraDevice":20,"MeshDevice":1,"MeshInstanceDevice":2,"ActorPickDevice":7,"ViewportUiState":4,"ViewportGizmoState":5,"CameraFrameTiming":5},"top":[["CameraDevice",20],["OpticsDevice",18],["MechanicsDevice",8],["ActorPickDevice",7]]},{"name":"网络线程","short":"网络","color":"#fbbf24","desc":"SyncEngine 收到远端快照后直接写 OpticsDevice 材质、EnvironmentDevice、ModelTransform。","id":"网络线程","count":28,"w":21,"r":26,"fields":["GeometryDevice.transform_handle","MechanicsDevice.geometry_handle","OpticsDevice.bEnableLighting","OpticsDevice.metallic","OpticsDevice.roughness","OpticsDevice.subsurface","OpticsDevice.specular","OpticsDevice.specularTint","OpticsDevice.anisotropic","OpticsDevice.sheen","OpticsDevice.sheenTint","OpticsDevice.clearcoat","OpticsDevice.clearcoatGloss","OpticsDevice.ambient","OpticsDevice.diffuse","OpticsDevice.specular_color","OpticsDevice.shininess","ProfileDevice.optics_handle","ActorDevice.profile_handles","ActorDevice.model_path","ModelTransform.euler_rotation","ModelResource.model_id","EnvironmentDevice.sun_position","EnvironmentDevice.sun_intensity","EnvironmentDevice.exposure","MeshInstanceDevice.object_id","MeshInstanceDevice.transform","OpticsDevice.visible"],"structs":{"GeometryDevice":1,"MechanicsDevice":1,"OpticsDevice":16,"ProfileDevice":1,"ActorDevice":2,"ModelTransform":1,"ModelResource":1,"EnvironmentDevice":3,"MeshInstanceDevice":2},"top":[["OpticsDevice",16],["EnvironmentDevice",3],["ActorDevice",2],["MeshInstanceDevice",2]]},{"name":"主线程 UI","short":"主线程 UI","color":"#67e8f9","desc":"视口管理器与 VulkanBackend：提交 surface / 视口矩形相关状态。","id":"主线程·UI","count":7,"w":5,"r":4,"fields":["CameraDevice.surface","ImageDevice.image","ImageDevice.submit_receipt","ImageDevice.consumed_receipt","ImageDevice.metadata","MeshDevice.index_count","MeshInstanceDevice.transform"],"structs":{"CameraDevice":1,"ImageDevice":4,"MeshDevice":1,"MeshInstanceDevice":1},"top":[["ImageDevice",4],["CameraDevice",1],["MeshDevice",1],["MeshInstanceDevice",1]]},{"name":"脚本线程","short":"脚本","color":"#34d399","desc":"CameraFollowController 每帧直接写 CameraDevice 的 position/forward/world_up。","id":"脚本线程","count":6,"w":3,"r":3,"fields":["GeometryDevice.transform_handle","MechanicsDevice.geometry_handle","ActorDevice.profile_handles","CameraDevice.forward","CameraDevice.world_up","CameraDevice.position"],"structs":{"GeometryDevice":1,"MechanicsDevice":1,"ActorDevice":1,"CameraDevice":3},"top":[["CameraDevice",3],["GeometryDevice",1],["MechanicsDevice",1],["ActorDevice",1]]}],"structs":[{"name":"CameraDevice","owner":"DAG·Optics","ownerKind":"DAG 更新 · 主线程创建","boundary":27,"total":28,"w":26,"r":21,"rw":20,"advice":{"now":"27 个字段对外：EngineAPI 创建时写、CEF 经 4 类命令队列写、脚本 CameraFollowController 绕过队列直写；CEF 还大量读回用于面板显示。","target":"CameraDevice 只留在 DAG 内部。外部只允许发\"相机命令\"，读只允许拿\"相机快照\"。","action":"① 脚本直写改成 CameraMoveCommand；② 读取改 CameraSnapshot 查询（或每帧事件携带）；③ 命令结构体独立成 camera_protocol.h，带 revision。","risk":"脚本相机跟随与编辑器拖拽目前无仲裁；收进命令队列后需定义\"谁覆盖谁\"（建议 latest-wins + 显式 owner）。"}},{"name":"OpticsDevice","owner":"DAG·Optics","ownerKind":"DAG 拥有","boundary":19,"total":19,"w":19,"r":16,"rw":16,"advice":{"now":"19 个字段里 19 个对外：CEF 属性面板直写 BRDF 参数，网络线程直写，Optics 每帧读；EngineAPI 创建时写默认值。","target":"材质参数走带 revision 的材质命令；外部只能读 visible 等少量状态。","action":"① SetMaterialCommand（整块或按字段位掩码）；② 引入 material_revision 防回滚；③ 网络同步改为命令的生产者之一，而不是直接写槽位。","risk":"网络与本地同时改同一材质时，\"后落锁者胜\"会丢编辑；revision 能检测但不能消解冲突。"}},{"name":"GeometryDevice","owner":"DAG·Geometry","ownerKind":"DAG 拥有","boundary":17,"total":30,"w":11,"r":14,"rw":8,"advice":{"now":"30 个字段里 17 个对外：EngineAPI 建槽时写 import_options / model_path / gpu_build_state，并读 is_skinned、skinned_aabb_valid、collision_model_id（物理内部状态外泄）；CEF 读写 ik_chains 与 animation_player（shared_ptr）；网络经 transform_handle 间接访问。","target":"对外只保留 transform_handle（不透明句柄）与 gpu_build_state（只读）；蒙皮/物理状态、IK 链、动画播放器全部内部化。","action":"① 新增 GeometryQuery（可见实例、节点矩阵、包围盒、蒙皮状态）；② 节点覆盖/IK 改 SetNodeOverrideCommand、SetIkChainsCommand；③ animation_player 不再暴露 shared_ptr，改播放命令；④ 蒙皮 AABB 只留在 DAG。","risk":"Vision 回读与物理 AABB 都在 DAG 内，内部化不影响；但编辑器骨骼/IK 面板依赖 animation_player，需要新的播放命令接口。"}},{"name":"MeshDevice","owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有","boundary":13,"total":15,"w":13,"r":2,"rw":2,"advice":{"now":"13 个字段被 EngineAPI 直写：脚本图片路径在 API 线程直接创建 GPU buffer 再塞进 Geometry 槽。","target":"GPU 资源只在 DAG 线程创建；外部只提交\"图片 → 网格\"的描述。","action":"① CreateScriptImageCommand{image, vertices, indices}；② Geometry 在 tick 内建 buffer 并持有。","risk":"中：创建 GPU 资源需要 Horizon 上下文，必须确认 DAG 线程持有该上下文。"}},{"name":"EnvironmentDevice","owner":"主线程·EngineAPI","ownerKind":"外部拥有 · Optics 写光照","boundary":12,"total":12,"w":11,"r":10,"rw":9,"advice":{"now":"12 个字段对外：EngineAPI/CEF/网络写光照与重力，Optics 写 sun_intensity/exposure。","target":"环境参数统一命令化，DAG 只读；Optics 的写回改为内部缓存。","action":"① EnvironmentCommand（位掩码）；② 网络同步复用该命令。","risk":"中：网络同步目前按字段直接写，改命令需要映射表。"}},{"name":"ActorPickDevice","owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遗留镜像","boundary":10,"total":10,"w":6,"r":10,"rw":6,"advice":{"now":"10 个字段：CEF 写请求镜像、EngineAPI 同步查询写 x/y/pending、Optics 写结果。","target":"删除。拾取已经由 ActorPickRequestCommand / ActorPickCompletion 队列承载。","action":"① 删除槽位与所有 getter；② 统一走 request/completion（request_id 配对）。","risk":"低。注意同步查询 API 的调用方要改成异步回执。"}},{"name":"MechanicsDevice","owner":"DAG·Mechanics","ownerKind":"DAG 拥有","boundary":9,"total":9,"w":9,"r":9,"rw":9,"advice":{"now":"9 个字段全部对外：EngineAPI 建参数、CEF 属性面板直写 mass/restitution/damping/body_type/lock_mask、Geometry 导入后回填 min/max_xyz、CEF 还反读 AABB。","target":"刚体参数只通过命令写；AABB 是派生数据，收回内部。","action":"① MechanicsCommand{mass,restitution,damping,body_type,lock_mask} + ack；② min_xyz/max_xyz 标 internal，编辑器需要时走查询。","risk":"属性面板是高频拖动，命令队列要合并（同 actor 只保留最后一条）。"}},{"name":"SceneDevice","owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 部分写","boundary":8,"total":10,"w":4,"r":7,"rw":3,"advice":{"now":"8 个字段对外：EngineAPI 读写 actor_handles、camera_handles、active_camera_handle、enabled；min_world/max_world 由 Geometry/Optics 写、API 读；environment 句柄双向。visible_actor_handles 与 center_world 已私有。","target":"只保留\"期望集合\"（actor/camera 清单、active camera、enabled）作为外部写入；派生包围盒与可见集合收回内部。","action":"① min_world/max_world 移入 SceneRuntimeState（DAG 私有）；② active_camera_handle 改 SetActiveCameraCommand + 只读查询；③ environment 句柄改查询。","risk":"编辑器需要可见集合做统计/高亮 → 提供只读查询。"}},{"name":"ActorDevice","owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 只读","boundary":5,"total":5,"w":4,"r":3,"rw":2,"advice":{"now":"5 个字段外部拥有，DAG 只读。","target":"无需收敛；但 DAG 不应直接锁它，应走查询。","action":"可选：ActorQuery 快照。","risk":"低。"}},{"name":"ViewportGizmoState","owner":"DAG·Optics","ownerKind":"DAG 拥有","boundary":5,"total":5,"w":0,"r":5,"rw":0,"advice":{"now":"5 个字段：Optics 写 hover/drag，CEF 读。","target":"改为 gizmo 事件（Optics 发布），外部只订阅。","action":"新增 ViewportGizmoEvent。","risk":"低。"}},{"name":"CameraFrameTiming","owner":"DAG·Optics","ownerKind":"DAG 拥有 · 遥测","boundary":5,"total":5,"w":0,"r":5,"rw":0,"advice":{"now":"5 个字段：Optics 写、CEF 读（已经是 mutex map，不是槽位）。","target":"已经是\"快照式\"边界，可作为其它字段的样板。","action":"保持；补一个异步 GetCameraTiming()。","risk":"低。"}},{"name":"AcousticsDevice","owner":"DAG·Acoustics","ownerKind":"DAG 拥有","boundary":4,"total":4,"w":4,"r":3,"rw":3,"advice":{"now":"4 个字段：EngineAPI 写 resource_id/volume/audio_enabled，Acoustics 读。","target":"音频资源绑定只走 PlayAudioEvent/StopAudioEvent，设备槽内部化。","action":"① 把 resource_id 绑定并进 PlayAudioEvent.acoustics_handle；② volume/audio_enabled 走音频命令。","risk":"低。事件通道已经存在，主要是删直写路径。"}},{"name":"ProfileDevice","owner":"主线程·EngineAPI","ownerKind":"外部拥有 · DAG 只读","boundary":4,"total":4,"w":4,"r":3,"rw":3,"advice":{"now":"4 个句柄字段由 EngineAPI 写，DAG/CEF 读来解引用。","target":"保留为不透明句柄包，禁止跨线程解引用其指向的槽位。","action":"把 profile→*_handle 的解析收进 DAG 内部（或提供 ResolveProfile()）。","risk":"低。"}},{"name":"ModelTransform","owner":"主线程·EngineAPI / CEF","ownerKind":"外部拥有 · DAG 读写","boundary":4,"total":4,"w":3,"r":2,"rw":1,"advice":{"now":"4 个字段：外部写 position/euler_rotation/scale，DAG 读；同时 Mechanics 的 MeshMove 也会写 position。","target":"明确所有权：静态/编辑器驱动 vs 物理驱动，二选一。","action":"① 增加 owner 标记；② 物理驱动时外部写只作为目标值（命令），由 Mechanics 落最终 TRS。","risk":"高：这是物理与编辑器共同写的字段，改语义会影响现有场景。"}},{"name":"ImageDevice","owner":"DAG·Optics / Display","ownerKind":"DAG 拥有","boundary":4,"total":4,"w":3,"r":4,"rw":3,"advice":{"now":"4 个字段：Optics 写 image/submit_receipt/metadata，Display 读并回写 consumed_receipt；主线程 VulkanBackend 为 UI 图层分配自己的槽，并读 consumed_receipt 做回压。","target":"定位为\"帧交换结构\"而不是 DAG 内部状态：对外只暴露收据与帧元数据，不暴露 HardwareImage 句柄。","action":"① 场景帧槽可移入 DAG 私有；② UI 图层槽保留，但把可见面收敛为 receipt + metadata（隐藏 image / HardwareImage）；③ 统一 consumed_receipt 回压语义。","risk":"UI 图层回压依赖 consumed_receipt，删除会退化；先收窄可见字段，不要直接拆掉槽。"}},{"name":"ViewportUiState","owner":"DAG·Optics / CEF","ownerKind":"共享状态","boundary":4,"total":4,"w":4,"r":0,"rw":0,"advice":{"now":"4 个字段：CEF 写模式/校准，Optics 读。","target":"并入视口命令。","action":"viewport 命令加位掩码字段。","risk":"低。"}},{"name":"MeshInstanceDevice","owner":"DAG·Geometry（内嵌）","ownerKind":"DAG 拥有","boundary":3,"total":7,"w":1,"r":3,"rw":1,"advice":{"now":"3 个字段对外，Optics 写 visible，外部读 transform。","target":"实例可见性走命令；transform 只读查询。","action":"① SetInstanceVisibleCommand；② 把 original_transform 收进查询结果。","risk":"低。"}},{"name":"ModelResource","owner":"DAG·Geometry","ownerKind":"DAG 拥有","boundary":1,"total":1,"w":1,"r":1,"rw":1,"advice":{"now":"1 个字段 model_id 由 Geometry 写，EngineAPI 读。","target":"只读查询。","action":"把 model_id 并入 GeometryQuery。","risk":"低。"}}],"protoByCh":{"C2":66,"C3":62,"C4":5},"protoCount":133,"adviceCount":18};
+</script>
+<script>
+(function(){
+  const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+  const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const F=DATA.fields, S=DATA.structs, TH=DATA.byThread, ST=DATA.stats;
+
+  const TCOLOR={'主线程·EngineAPI':'#38bdf8','CEF·UI':'#a78bfa','主线程·UI':'#67e8f9','脚本线程':'#34d399','网络线程':'#fbbf24'};
+  const tcls=t=>t==='主线程·EngineAPI'?'main':t==='CEF·UI'?'cef':t==='脚本线程'?'script':t==='网络线程'?'net':t==='主线程·UI'?'main':'misc';
+  const tag=t=>`<span class="tag ${tcls(t)}">${esc(t)}</span>`;
+  const SHORT={'主线程·EngineAPI':'EngineAPI','主线程·UI':'主线程UI','CEF·UI':'CEF','脚本线程':'脚本','网络线程':'网络'};
+  const tagS=t=>`<span class="tag ${tcls(t)}" title="${esc(t)}">${esc(SHORT[t]||t)}</span>`;
+  const dirLabel=d=>d==='rw'?'双向':d==='w'?'外部写':'外部读';
+  const dirTag=d=>`<span class="dir ${d}">${dirLabel(d)}</span>`;
+  const ownerTag=f=>f.ownerKind.includes('DAG 拥有')?'dag':f.ownerKind.includes('外部拥有')?'misc':'main';
+
+  // stats
+  $('#stats').innerHTML=[
+    [ST.boundary,'边界字段','hot'],[ST.externalWrite,'外部可写','hot'],[ST.externalRead,'外部可读',''],
+    [ST.both,'双向字段','hot'],[ST.privateFields,'已私有','good'],[ST.protocolFields,'协议字段','']
+  ].map(([n,l,c])=>`<div class="stat ${c}"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+  $('#fc').textContent=ST.boundary;
+
+  // tabs
+  const tabs=$$('#tabs .tab');
+  function show(v){
+    tabs.forEach(t=>t.classList.toggle('on',t.dataset.view===v));
+    $$('.view').forEach(s=>s.classList.toggle('on',s.id==='view-'+v));
+    if(location.hash.slice(1)!==v) history.replaceState(null,'','#'+v);
+    window.scrollTo({top:0,behavior:'smooth'});
+  }
+  tabs.forEach(t=>t.onclick=()=>show(t.dataset.view));
+  show(location.hash&&$('#view-'+location.hash.slice(1))?location.hash.slice(1):'overview');
+
+  // peers + bars
+  $('#peers').innerHTML=TH.map(t=>`<div class="peer" data-thread="${esc(t.id)}" style="cursor:pointer">
+    <span class="d" style="background:${t.color}"></span><b>${esc(t.name)}</b><span>${t.count} 字段</span></div>`).join('');
+  const maxB=Math.max(...S.map(s=>s.boundary));
+  $('#bars').innerHTML=S.map(s=>`<div class="bar">
+    <div class="nm" title="${esc(s.name)}">${esc(s.name)}</div>
+    <div class="track"><div class="fill" style="width:${(s.boundary/maxB*100).toFixed(1)}%"></div></div>
+    <div class="n">${s.boundary}/${s.total}</div></div>`).join('');
+
+  // filters
+  const state={q:'',struct:'',thread:'',dir:''};
+  $('#fstruct').innerHTML='<option value="">全部结构体</option>'+S.map(s=>`<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('');
+  $('#fthread').innerHTML='<option value="">全部外部线程</option>'+TH.map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+
+  function render(){
+    const q=state.q.trim().toLowerCase();
+    const rows=F.filter(f=>{
+      if(state.struct&&f.s!==state.struct)return false;
+      if(state.thread&&!f.extW.includes(state.thread)&&!f.extR.includes(state.thread))return false;
+      if(state.dir&&f.extDir!==state.dir)return false;
+      if(q){
+        const hay=(f.s+' '+f.f+' '+f.t+' '+f.note+' '+f.extW.join(' ')+' '+f.extR.join(' ')).toLowerCase();
+        if(!hay.includes(q))return false;
+      }
+      return true;
+    });
+    $('#count').textContent=rows.length+' / '+F.length+' 字段';
+    $('#tbody').innerHTML=rows.length?rows.map(f=>`<tr data-id="${esc(f.s+'.'+f.f)}">
+      <td><div class="sf">${esc(f.s)}</div><div class="fn">${esc(f.f)}</div></td>
+      <td><div class="ty">${esc(f.t)}</div></td>
+      <td><span class="tag ${ownerTag(f)}">${esc(f.owner)}</span></td>
+      <td>
+        <div class="tags"><span class="lbl">写</span>${f.extW.length?f.extW.map(tagS).join(''):'<span class="none">—</span>'}</div>
+        <div class="tags" style="margin-top:4px"><span class="lbl">读</span>${f.extR.length?f.extR.map(tagS).join(''):'<span class="none">—</span>'}</div>
+        <div style="margin-top:6px">${dirTag(f.extDir)}</div></td>
+      <td><div class="tags">${dagTags(f)}</div></td>
+      <td><div class="path">${esc(f.paths.join(' · '))}</div></td>
+      <td><span class="chan" style="font:700 10.5px/1 var(--mono);color:#0a111c;background:#fda4af;padding:4px 6px;border-radius:5px">${esc(f.ch)}</span></td>
+      <td><div class="cm">${esc(f.note)}</div></td>
+    </tr>`).join(''):'<tr><td colspan="8"><div class="empty">没有匹配的字段。</div></td></tr>';
+  }
+  $('#q').oninput=e=>{state.q=e.target.value;render();};
+  $('#fstruct').onchange=e=>{state.struct=e.target.value;render();};
+  $('#fthread').onchange=e=>{state.thread=e.target.value;render();};
+  $('#fdir').onclick=e=>{const b=e.target.closest('button');if(!b)return;state.dir=b.dataset.d;$$('#fdir button').forEach(x=>x.classList.toggle('on',x===b));render();};
+  $('#fclear').onclick=()=>{state.q='';state.struct='';state.thread='';state.dir='';$('#q').value='';$('#fstruct').value='';$('#fthread').value='';$$('#fdir button').forEach(x=>x.classList.toggle('on',x.dataset.d===''));render();};
+
+  function filterByThread(id){
+    state.thread=id;state.struct='';state.q='';state.dir='';
+    $('#q').value='';$('#fstruct').value='';$('#fthread').value=id;
+    $$('#fdir button').forEach(x=>x.classList.toggle('on',x.dataset.d===''));
+    render();show('fields');
+  }
+  document.addEventListener('click',e=>{
+    const p=e.target.closest('[data-thread]');
+    if(p&&p.classList.contains('peer')){filterByThread(p.dataset.thread);return;}
+    const c=e.target.closest('[data-tcard]');
+    if(c){filterByThread(c.dataset.tcard);}
+  });
+
+  // thread cards
+  $('#threadcards').innerHTML=TH.map(t=>`<div class="tcard" data-tcard="${esc(t.id)}" style="--c:${t.color}">
+    <h4>${esc(t.name)}</h4><div class="sub">${esc(t.id)}</div>
+    <div class="big">
+      <div>${t.count}<small>触碰字段</small></div>
+      <div style="color:#fcd34d">${t.w}<small>可写</small></div>
+      <div style="color:#7dd3fc">${t.r}<small>可读</small></div>
+    </div>
+    <p>${esc(t.desc)}</p>
+    <div class="top">${t.top.map(([n,c])=>`<span class="tag misc">${esc(n)} ${c}</span>`).join('')}</div>
+  </div>`).join('');
+
+  // advice
+  const advs=S.filter(s=>s.advice);
+  $('#advlist').innerHTML=advs.map(s=>`<div class="adv">
+    <div class="adv-h"><b>${esc(s.name)}</b><span>${s.boundary}/${s.total} 对外</span></div>
+    <div class="adv-b">
+      <div class="adv-row"><em>现状</em><div>${esc(s.advice.now)}</div></div>
+      <div class="adv-row"><em>目标</em><div>${esc(s.advice.target)}</div></div>
+      <div class="adv-row"><em>动作</em><div>${esc(s.advice.action)}</div></div>
+      <div class="adv-row risk"><em>风险</em><div>${esc(s.advice.risk)}</div></div>
+    </div></div>`).join('');
+
+  $('#plan').innerHTML=[
+    ['第 1 步','低风险删除与搬迁',['删除 ActorPickDevice 槽（10 字段），统一走 request/completion 队列。',
+      'ImageDevice 拆两类：场景帧槽可移入 DAG（Optics/Display 同线程）；UI 图层槽保留，但把可见面收窄为 receipt + metadata。',
+      'MeshMaterialDevice / CameraFrameTiming 保持现状——前者已私有，后者已是快照式边界。']],
+    ['第 2 步','把"外部直写"改成命令',['CameraDevice：脚本 CameraFollowController 直写改为 CameraMoveCommand；CEF 只发命令。',
+      'MechanicsDevice / OpticsDevice / AcousticsDevice：属性面板走 SetXxxCommand（带 actor 去重 / revision）。',
+      'MeshDevice：脚本图片改 CreateScriptImageCommand，由 Geometry 在 tick 内建 GPU 资源。',
+      '目标：外部可写字段 123 → 40 以下。']],
+    ['第 3 步','把"外部直读"改成查询/快照',['GeometryDevice：新增 GeometryQuery（可见实例、节点矩阵、包围盒）。',
+      'CameraDevice：CameraSnapshot 或每帧事件携带；CEF 面板不再直接锁槽。',
+      'SceneDevice：min_world / max_world 收进 DAG 私有；visible_actor_handles / center_world 已经私有，补只读查询即可。',
+      '目标：外部可读字段 118 → 30 以下。']],
+    ['第 4 步','协议固化',['命令/事件结构体独立 header（如 camera_protocol.h），带 revision / sequence。',
+      '沿用已有的 acknowledge_* 回执模式，给每个命令补 ack。',
+      '把"直访面"缩到只剩 hub 内部可见——外部编译期拿不到 Storage 引用。']]
+  ].map(([ph,title,items])=>`<div class="phase"><div class="ph">${ph}<small>${title}</small></div>
+    <ul>${items.map(i=>`<li>${esc(i)}</li>`).join('')}</ul></div>`).join('');
+
+  // drawer
+  const dagTags=f=>{
+    const a=[];
+    if(f.dagW.length)a.push('<span class="tag dag">写 '+f.dagW.map(esc).join(' / ')+'</span>');
+    if(f.dagR.length)a.push('<span class="tag dag">读 '+f.dagR.map(esc).join(' / ')+'</span>');
+    return a.length?a.join(''):'<span class="none">DAG 不直接访问</span>';
+  };
+  const drawer=$('#drawer'),scrim=$('#scrim');
+  function open(f){
+    const meta=S.find(s=>s.name===f.s)||{};
+    $('#dtitle').textContent=f.s+'.'+f.f;
+    $('#dsub').textContent=(meta.owner||'')+' · 通道 '+f.ch;
+    const evW=f.ev&&f.ev.w?`<div class="ev"><b>写</b>${esc(f.ev.w)}</div>`:'';
+    const evR=f.ev&&f.ev.r?`<div class="ev"><b>读</b>${esc(f.ev.r)}</div>`:'';
+    $('#dbody').innerHTML=`
+      <h5>字段</h5>
+      <dl class="dl">
+        <dt>类型</dt><dd><code>${esc(f.t)}</code></dd>
+        <dt>所有者</dt><dd>${esc(f.owner)}（${esc(f.ownerKind)}）</dd>
+        <dt>外部动作</dt><dd>${dirTag(f.extDir)}</dd>
+        <dt>通道</dt><dd>${esc(f.ch)}</dd>
+        <dt>访问路径</dt><dd>${esc(f.paths.join(' · '))}</dd>
+      </dl>
+      <h5>外部线程 · 写</h5>
+      <div class="tags">${f.extW.length?f.extW.map(tag).join(''):'<span class="none">无</span>'}</div>
+      <h5>外部线程 · 读</h5>
+      <div class="tags">${f.extR.length?f.extR.map(tag).join(''):'<span class="none">无</span>'}</div>
+      <h5>DAG 线程</h5>
+      <div class="tags">${dagTags(f)}</div>
+      ${f.note?`<h5>语义 / 时序</h5><p style="margin:0;color:#c3d2e6;font-size:12.8px">${esc(f.note)}</p>`:''}
+      <h5>源码证据</h5>${evW}${evR}${(!evW&&!evR)?'<span class="none">扫描未给出具体行号。</span>':''}
+      ${meta.advice?`<h5>该结构体的收回建议</h5>
+        <div class="advbox"><b style="color:#fda4af">目标：</b>${esc(meta.advice.target)}<br><br>
+        <b style="color:#fda4af">动作：</b>${esc(meta.advice.action)}</div>`:''}
+    `;
+    drawer.classList.add('on');scrim.classList.add('on');
+  }
+  function close(){drawer.classList.remove('on');scrim.classList.remove('on');}
+  $('#dclose').onclick=close;scrim.onclick=close;
+  document.addEventListener('keydown',e=>{if(e.key==='Escape')close();if(e.key==='/'&&document.activeElement.tagName!=='INPUT'){e.preventDefault();show('fields');$('#q').focus();}});
+  $('#tbody').addEventListener('click',e=>{
+    const tr=e.target.closest('tr[data-id]');if(!tr)return;
+    const f=F.find(x=>x.s+'.'+x.f===tr.dataset.id);
+    if(f){$$('#tbody tr.sel').forEach(x=>x.classList.remove('sel'));tr.classList.add('sel');open(f);}
+  });
+
+  // notes
+  $('#notes').innerHTML=`
+    <div class="card"><h4>判定规则</h4>
+      <p>“边界字段”= <code>SharedDataHub</code> 设备槽里，<b>至少有一个非 DAG 线程参与读写</b>的字段（含互斥状态 map：ViewportUiState / ViewportGizmoState / CameraFrameTiming）。</p>
+      <ul>
+        <li><b>外部写</b>：非 DAG 线程对该字段有赋值/修改点（含创建期初始化）。</li>
+        <li><b>外部读</b>：非 DAG 线程读取该字段（含 getter、克隆、判定）。</li>
+        <li><b>双向</b>：两者都有。这类字段不能简单“藏起来”，必须先定所有权。</li>
+        <li><b>已私有</b>：只有 DAG 线程读写——共 ${ST.privateFields} 个，可直接移出全局 hub。</li>
+      </ul>
+    </div>
+    <div class="card"><h4>数据来源</h4>
+      <p>字段清单来自 <code>include/corona/shared_data_hub.h</code>；读写参与方来自 <code>src/</code>、<code>include/</code>、<code>modules/</code> 的静态扫描（<code>-&gt;field</code> / <code>.field</code> 的赋值与读取），关键结构体（CameraDevice、GeometryDevice、MechanicsDevice、ActorPickDevice、*_handle）做了人工覆盖。访问路径由证据所在文件推断（EngineAPI / CEF bridge / sync_engine / camera_follow_controller / 主线程 UI）。</p>
+    </div>
+    <div class="card"><h4>必须注意的偏差</h4>
+      <ul>
+        <li><b>“外部写”包含创建期初始化。</b>例如 EngineAPI 分配槽位并写默认值，不代表每帧都在写。真正危险的是运行期写入（属性面板、网络同步、脚本）。</li>
+        <li><b>EngineAPI 不是一条线程。</b>它是门面，调用方可能是 CEF UI 线程或脚本线程；表中按入口归类，便于定位泄漏源而不是追线程。</li>
+        <li><b>同名字段会合并统计。</b>例如 <code>geometry_handle</code> 出现在 4 个 Device 里；已对关键项人工覆盖，其余行号仅供参考。</li>
+        <li><b>锁粒度是整槽。</b>“某字段只被外部读”不代表安全：锁住槽位就会阻塞 DAG 的所有写入者。</li>
+      </ul>
+    </div>
+    <div class="card"><h4>未纳入</h4>
+      <ul>
+        <li>命令/事件结构体的逐字段明细——它们在另一份文档里；这里只统计数量（${ST.protocolFields} 字段 / ${ST.protocolStructs} 结构体）。</li>
+        <li>DAG 系统私有成员（<code>Impl::</code> 缓存、Mechanics 的 mesh_movers_ 等），它们本来就不跨线程。</li>
+        <li>GPU 执行器内部同步（Horizon / Vulkan 队列）。</li>
+      </ul>
+      <div class="callout" style="margin-top:10px">重新生成：数据集脚本 <code>.workspace/doc/boundary.js</code>，模板 <code>.workspace/doc/template-boundary.html</code>。</div>
+    </div>`;
+
+  $('#gen').textContent='生成于 '+new Date().toLocaleString('zh-CN',{hour12:false});
+  render();
+})();
+</script>
+</body>
+</html>

@@ -10,6 +10,8 @@
 #include <corona/resource/types/image.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/geometry/model_node_geometry.h>
+#include <corona/systems/geometry/geometry_commands.h>
+#include <corona/systems/geometry/scene_commands.h>
 #include <corona/spatial/octree.h>
 #include <corona/systems/geometry/geometry_system.h>
 #include <corona/utils/path_utils.h>
@@ -292,6 +294,11 @@ void GeometrySystem::update() {
     // locks, Vulkan queue acquires, TBB arenas).  Naming the stage on entry makes
     // such a stall visible as "Geometry stuck in phase X" instead of silence.
     Corona::Diagnostics::PhaseScope update_phase{"Geometry", "update"};
+    // DAG 降级路径（CORONA_SYSTEMS_DAG=0）没有 tick 边界钩子：在这里兜底应用
+    // 场景成员命令。DAG 模式下边界阶段已 drain 过，这里是幂等空操作。
+    Corona::apply_pending_scene_commands();
+    // 外部线程（CEF/脚本）对 GeometryDevice 的写入也在这里落地。
+    Corona::apply_pending_geometry_commands();
     auto& hub = SharedDataHub::instance();
     auto& scene_storage = hub.scene_storage();
     auto& camera_storage = hub.camera_storage();
