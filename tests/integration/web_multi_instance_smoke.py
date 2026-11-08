@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools'))
 from profile_process import _Job
 from vision_frontend_probe import Frontend
 from web_environment_smoke import wait
-import web_lanchat_business_smoke
+import web_network_business_smoke
 
 
 SERVICE = """(async()=>{const module=await import(document.querySelector('script[type=module]').src);
@@ -33,8 +33,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('runtime', type=Path)
     parser.add_argument('--output', type=Path, default=Path('build/web-multi-instance-smoke'))
-    parser.add_argument('--lanchat', action='store_true', help='Also verify real LANChat messages, history, roles and explicit leave/rejoin')
-    parser.add_argument('--object-sync', action='store_true', help='Also verify native scene edits replicate between the LANChat participants')
+    parser.add_argument('--object-sync', action='store_true', help='Also verify native scene edits replicate between native network participants')
     args = parser.parse_args()
     runtime = args.runtime.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -141,8 +140,8 @@ def main():
         after = second['dock'].evaluate(f'{SERVICE}.then(s=>s.readEditorUiPolicy())')
         assert after['enabled'] and after['generation'] == second['policy']['generation'], after
         assert environment(second)['sun']['enabled'] is not original[1]['sun']['enabled']
-        if args.lanchat or args.object_sync:
-            evidence['lanchat'] = web_lanchat_business_smoke.run(launches, object_sync=args.object_sync)
+        if args.object_sync:
+            evidence['network'] = web_network_business_smoke.run(launches)
         evidence.update(passed=True, independent_vue_edits=True, foreign_archive_rejected=foreign,
                         independent_dock_close=True, surviving_peer_owner_request=True)
     except Exception:

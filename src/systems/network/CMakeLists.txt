@@ -8,8 +8,7 @@ corona_add_system(network
         peer_manager.cpp
         sync_engine.cpp
         discovery.cpp
-        lanchat_history_store.cpp
-        lanchat_state.cpp
+            collaboration_state.cpp
     DEPENDENCIES
         Horizon
         enet

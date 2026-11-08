@@ -77,8 +77,12 @@ def run(port, root):
             results.append(settled)
         room_retirement = []
         for role in ('host', 'guest'):
-            main.evaluate("window.__joinLifetime.arm('room');location.hash='/JoinGame';true")
+            main.evaluate("window.__joinLifetime.arm('mount');location.hash='/JoinGame';true")
             wait(lambda: main.evaluate("!!document.querySelector('input[placeholder=玩家名]')"), bool, 'room launcher mounted')
+            wait(lambda: main.evaluate('window.__joinLifetime.read()'),
+                 lambda p: 'getSessionInfo' in p['calls'] and p['inflight'] == 0,
+                 'mounted launcher session info delivered')
+            main.evaluate("window.__joinLifetime.arm('room');true")
             if role == 'host':
                 main.evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent.trim()==='创建房间').click();true")
                 main.evaluate("(()=>{const input=document.querySelector('input[placeholder^=给你的房间]');input.value='Retirement probe';"
