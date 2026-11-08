@@ -136,7 +136,7 @@ def run(port, root, control):
     panels = [main, second]
     def release_probe(panel):
         panel.evaluate("""(async()=>{
-          for (const token of window.probeTokens || []) await window.probeApi.off(token);
+          for (const token of window.probeTokens || []) await window.probeRuntime.off(token);
           for (const [method, original] of Object.entries(window.probeReadOriginals || {}))
             window.probeApi.scene[method] = original;
           window.probeTokens=[];window.probeReadOriginals={};
@@ -150,16 +150,18 @@ def run(port, root, control):
         panel.evaluate("""(async () => {
           window.probeEvents=[]; window.probeReads=[]; window.probeTokens=[];
           const module = await import(document.querySelector('script[type=module]').src);
-          const api = Object.values(module).find(value => typeof value?.scene?.observe === 'function');
-          if (!api) throw Error('Production editorApi export is unavailable');
-          window.probeApi = api; window.probeReadOriginals = {};
+          const api = Object.values(module).find(value => typeof value?.scene?.readActive === 'function');
+          const runtime = window.__coronaObserverRuntime || Object.values(module).find(value =>
+            typeof value?.observe === 'function' && typeof value?.off === 'function' && typeof value?.start === 'function');
+          if (!api || !runtime) throw Error('Production editorApi/observer runtime export is unavailable');
+          window.probeApi = api; window.probeRuntime = runtime; window.probeReadOriginals = {};
           for (const method of ['readActive', 'readTransforms']) {
             const original = api.scene[method];
             window.probeReadOriginals[method] = original;
             api.scene[method] = (...args) => { window.probeReads.push(method); return original(...args); };
           }
           for (const kind of ['project', 'tree', 'selection', 'transform']) {
-            window.probeTokens.push(await api.scene.observe(kind, () => window.probeEvents.push(kind)));
+            window.probeTokens.push(await runtime.observe(kind, () => window.probeEvents.push(kind)));
           }
         })()""")
         wait(lambda: panel.evaluate("window.probeReads"), lambda reads: "readTransforms" in reads,
