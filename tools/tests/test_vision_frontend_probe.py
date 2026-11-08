@@ -1,5 +1,6 @@
 """The local CDP endpoint may pause while the engine prepares render resources."""
 import io
+import ast
 import json
 from pathlib import Path
 import sys
@@ -11,6 +12,23 @@ from vision_frontend_probe import Frontend
 
 
 class FrontendDiscoveryTests(unittest.TestCase):
+    def test_packaged_focus_discovery_uses_the_existing_cdp_connection_budget(self):
+        source = Path(__file__).resolve().parents[2] / 'tests/integration/web_focus_smoke.py'
+        tree = ast.parse(source.read_text(encoding='utf-8'))
+        run = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'run')
+        targets = next(node for node in run.body if isinstance(node, ast.FunctionDef) and node.name == 'targets')
+        target = dict(type='page', url='file:///CabbageEditor/Frontend/index.html')
+        calls = []
+        def slow_endpoint(url, timeout):
+            calls.append(timeout)
+            if timeout < 5:
+                raise TimeoutError('five-second render preparation stall')
+            return io.StringIO(json.dumps([target, dict(type='page', url='file:///other/index.html')]))
+        namespace = dict(json=json, urlopen=slow_endpoint, port=9222)
+        exec(compile(ast.Module(body=[targets], type_ignores=[]), str(source), 'exec'), namespace)
+        self.assertEqual(namespace['targets'](), [target])
+        self.assertEqual(calls, [20], 'discovery is one bounded request without a retry')
+
     def test_discovery_allows_the_same_startup_stall_as_websocket_connection(self):
         target = dict(type='page', id='engine', url='file:///CabbageEditor/Frontend/index.html',
                       webSocketDebuggerUrl='ws://127.0.0.1:9222/devtools/page/engine')

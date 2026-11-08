@@ -15,7 +15,7 @@ from web_panel_lifecycle_smoke import minimize_restore
 
 def run(port, root, engine_pid):
     def targets():
-        with urlopen(f'http://127.0.0.1:{port}/json/list', timeout=3) as response:
+        with urlopen(f'http://127.0.0.1:{port}/json/list', timeout=20) as response:
             return [target for target in json.load(response) if target['type'] == 'page'
                     and '/CabbageEditor/Frontend/' in target['url']]
 
