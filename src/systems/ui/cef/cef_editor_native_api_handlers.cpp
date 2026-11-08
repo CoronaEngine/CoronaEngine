@@ -1443,10 +1443,10 @@ NativeEditorCamera materialize_camera_snapshot(NativeEditorScene& scene,
     const auto vision_mode = camera_data.value("vision_render_mode", std::string{"path_tracing"});
     item.engine_camera->set_vision_render_mode(vision_mode);
     item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{legacy_svgf_mode(vision_mode) ? "svgf" : "reblur"}));
-    item.engine_camera->set_vision_reblur_settings(camera_data.value("vision_reblur_settings", nlohmann::json::object()).dump());
-    item.engine_camera->set_vision_pt_settings(camera_data.value("vision_pt_settings", nlohmann::json::object()).dump());
-    item.engine_camera->set_vision_restir_settings(camera_data.value("vision_restir_settings", nlohmann::json::object()).dump());
-    item.engine_camera->set_vision_relax_settings(camera_data.value("vision_relax_settings", nlohmann::json::object()).dump());
+    API::set_vision_settings(API::VisionSettingsFamily::Reblur, camera_data.value("vision_reblur_settings", nlohmann::json::object()), item.engine_camera->get_handle());
+    API::set_vision_settings(API::VisionSettingsFamily::Pt, camera_data.value("vision_pt_settings", nlohmann::json::object()), item.engine_camera->get_handle());
+    API::set_vision_settings(API::VisionSettingsFamily::Restir, camera_data.value("vision_restir_settings", nlohmann::json::object()), item.engine_camera->get_handle());
+    API::set_vision_settings(API::VisionSettingsFamily::Relax, camera_data.value("vision_relax_settings", nlohmann::json::object()), item.engine_camera->get_handle());
     item.engine_camera->set_vision_denoise(
         json_bool_value(camera_data, "vision_denoise", true));
     item.engine_camera->set_vision_accumulation(
@@ -1817,16 +1817,16 @@ nlohmann::json camera_to_json(const NativeEditorCamera& camera) {
     item["vision_denoise"] = camera.engine_camera ? camera.engine_camera->get_vision_denoise() : true;
     item["vision_denoiser"] = camera.engine_camera ? camera.engine_camera->get_vision_denoiser() : "reblur";
     item["vision_reblur_settings"] = camera.engine_camera
-        ? nlohmann::json::parse(camera.engine_camera->get_requested_vision_reblur_settings(), nullptr, false)
+        ? API::get_requested_vision_settings(API::VisionSettingsFamily::Reblur, camera.engine_camera->get_handle())
         : nlohmann::json::object();
     item["vision_pt_settings"] = camera.engine_camera
-        ? nlohmann::json::parse(camera.engine_camera->get_requested_vision_pt_settings(), nullptr, false)
+        ? API::get_requested_vision_settings(API::VisionSettingsFamily::Pt, camera.engine_camera->get_handle())
         : nlohmann::json::object();
     item["vision_restir_settings"] = camera.engine_camera
-        ? nlohmann::json::parse(camera.engine_camera->get_requested_vision_restir_settings(), nullptr, false)
+        ? API::get_requested_vision_settings(API::VisionSettingsFamily::Restir, camera.engine_camera->get_handle())
         : nlohmann::json::object();
     item["vision_relax_settings"] = camera.engine_camera
-        ? nlohmann::json::parse(camera.engine_camera->get_requested_vision_relax_settings(), nullptr, false)
+        ? API::get_requested_vision_settings(API::VisionSettingsFamily::Relax, camera.engine_camera->get_handle())
         : nlohmann::json::object();
     item["vision_accumulation"] = camera.engine_camera ? camera.engine_camera->get_vision_accumulation() : false;
     item["vision_stable_planes"] = camera.engine_camera ? camera.engine_camera->get_vision_stable_planes() : true;
@@ -2446,10 +2446,10 @@ NativeEditorCamera* ensure_native_editor_camera(NativeEditorScene& scene,
     const auto vision_mode = json_string_value(camera_data, {"vision_render_mode"});
     item.engine_camera->set_vision_render_mode(vision_mode.empty() ? "path_tracing" : vision_mode);
     item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{legacy_svgf_mode(vision_mode) ? "svgf" : "reblur"}));
-    item.engine_camera->set_vision_reblur_settings(camera_data.value("vision_reblur_settings", nlohmann::json::object()).dump());
-    item.engine_camera->set_vision_pt_settings(camera_data.value("vision_pt_settings", nlohmann::json::object()).dump());
-    item.engine_camera->set_vision_restir_settings(camera_data.value("vision_restir_settings", nlohmann::json::object()).dump());
-    item.engine_camera->set_vision_relax_settings(camera_data.value("vision_relax_settings", nlohmann::json::object()).dump());
+    API::set_vision_settings(API::VisionSettingsFamily::Reblur, camera_data.value("vision_reblur_settings", nlohmann::json::object()), item.engine_camera->get_handle());
+    API::set_vision_settings(API::VisionSettingsFamily::Pt, camera_data.value("vision_pt_settings", nlohmann::json::object()), item.engine_camera->get_handle());
+    API::set_vision_settings(API::VisionSettingsFamily::Restir, camera_data.value("vision_restir_settings", nlohmann::json::object()), item.engine_camera->get_handle());
+    API::set_vision_settings(API::VisionSettingsFamily::Relax, camera_data.value("vision_relax_settings", nlohmann::json::object()), item.engine_camera->get_handle());
     item.engine_camera->set_vision_denoise(
         json_bool_value(camera_data, "vision_denoise", true));
     item.engine_camera->set_vision_accumulation(
@@ -4714,6 +4714,36 @@ bool is_network_editor_seed_actor(const NativeEditorActor& actor) {
     return true;
 }
 
+void broadcast_network_editor_actor(
+    Corona::Systems::NetworkSystem& network_system,
+    const NativeEditorScene& scene, const NativeEditorActor& actor) {
+    const auto actor_data = actor_to_json(scene, actor);
+    float transform[9] = {0, 0, 0, 0, 0, 0, 1, 1, 1};
+    read_transform_from_actor_json(actor_data, transform);
+
+    Corona::Network::ActorCreatePacked optics;
+    initialize_actor_create_packed(optics);
+    optics.visible = actor_data.value("visible", true);
+    optics.bEnableLighting = true;
+    optics.metallic = actor_data.value("optics", nlohmann::json::object()).value("metallic", 0.0f);
+    optics.roughness = actor_data.value("optics", nlohmann::json::object()).value("roughness", 0.5f);
+    optics.specular = actor_data.value("optics", nlohmann::json::object()).value("specular", 0.5f);
+    optics.shininess = actor_data.value("optics", nlohmann::json::object()).value("shininess", 32.0f);
+    network_system.register_actor_identity(actor.actor_guid, actor.engine_actor->get_handle(), true);
+    // JSON is part of the existing network protocol, entirely on the native
+    // side. The Web call and its reply remain owned, typed V8 values.
+    network_system.broadcast_actor_create(actor.actor_guid, scene.route, actor.route, {},
+        transform, &optics, sizeof(optics), actor_data.dump());
+}
+
+void broadcast_network_editor_actor_state(const NativeEditorScene& scene, const NativeEditorActor& actor) {
+    auto network = get_network_system();
+    if (network && network->session_state() == Corona::Systems::NetworkSystem::SessionState::Active &&
+        is_network_editor_seed_actor(actor)) {
+        network->broadcast_actor_state_update(actor.actor_guid, scene.route, actor_to_json(scene, actor).dump());
+    }
+}
+
 std::size_t seed_network_editor_state(
     Corona::Systems::NetworkSystem& network_system,
     Corona::Systems::NetworkSystem::SessionRole role) {
@@ -4729,36 +4759,7 @@ std::size_t seed_network_editor_state(
     for (const auto& actor : scene->actors) {
         if (!is_network_editor_seed_actor(actor)) continue;
 
-        const auto actor_data = actor_to_json(*scene, actor);
-        float transform[9] = {0, 0, 0, 0, 0, 0, 1, 1, 1};
-        read_transform_from_actor_json(actor_data, transform);
-
-        Corona::Network::ActorCreatePacked optics;
-        initialize_actor_create_packed(optics);
-        optics.visible = actor_data.value("visible", true);
-        optics.bEnableLighting = true;
-        optics.metallic = actor_data.value("optics", nlohmann::json::object())
-                              .value("metallic", 0.0f);
-        optics.roughness = actor_data.value("optics", nlohmann::json::object())
-                               .value("roughness", 0.5f);
-        optics.specular = actor_data.value("optics", nlohmann::json::object())
-                              .value("specular", 0.5f);
-        optics.shininess = actor_data.value("optics", nlohmann::json::object())
-                               .value("shininess", 32.0f);
-
-        network_system.register_actor_identity(
-            actor.actor_guid,
-            actor.engine_actor->get_handle(),
-            true);
-        network_system.broadcast_actor_create(
-            actor.actor_guid,
-            scene->route,
-            actor.route,
-            {},
-            transform,
-            &optics,
-            sizeof(optics),
-            actor_data.dump());
+        broadcast_network_editor_actor(network_system, *scene, actor);
         ++seeded_actor_count;
     }
     return seeded_actor_count;
@@ -5078,25 +5079,11 @@ SceneReply apply_native_camera_render_settings(const SceneRequest& request) {
     const auto found = scene->cameras.begin() + static_cast<std::ptrdiff_t>(camera_index);
     auto& engine = *found->engine_camera;
     if (patch.family) {
-        const auto parse = [](const std::string& text) {
-            auto value = nlohmann::json::parse(text, nullptr, false);
-            return value.is_object() ? value : nlohmann::json::object();
-        };
-        auto requested = nlohmann::json::object();
-        auto effective = nlohmann::json::object();
-        if (*patch.family == "pt") {
-            effective = parse(engine.get_effective_vision_pt_settings());
-            requested = parse(engine.get_requested_vision_pt_settings());
-        } else if (*patch.family == "restir") {
-            effective = parse(engine.get_effective_vision_restir_settings());
-            requested = parse(engine.get_requested_vision_restir_settings());
-        } else if (*patch.family == "reblur") {
-            effective = parse(engine.get_effective_vision_reblur_settings());
-            requested = parse(engine.get_requested_vision_reblur_settings());
-        } else {
-            effective = parse(engine.get_effective_vision_relax_settings());
-            requested = parse(engine.get_requested_vision_relax_settings());
-        }
+        const auto family = *patch.family == "pt" ? API::VisionSettingsFamily::Pt :
+            *patch.family == "restir" ? API::VisionSettingsFamily::Restir :
+            *patch.family == "reblur" ? API::VisionSettingsFamily::Reblur : API::VisionSettingsFamily::Relax;
+        auto requested = API::get_requested_vision_settings(family, engine.get_handle());
+        auto effective = API::get_effective_vision_settings(family, engine.get_handle());
         if (request.method == SceneMethod::ReadCameraRenderSettings) {
             effective.update(requested);
             auto& result = reply.camera_render_settings;
@@ -5106,11 +5093,7 @@ SceneReply apply_native_camera_render_settings(const SceneRequest& request) {
             return reply;
         }
         if (!patch.settings.is_object() || patch.settings.empty()) return fail("INVALID_ARGUMENT", "Vision settings must be a non-empty object");
-        const auto serialized = patch.settings.dump();
-        if (*patch.family == "pt") engine.set_vision_pt_settings(serialized);
-        else if (*patch.family == "restir") engine.set_vision_restir_settings(serialized);
-        else if (*patch.family == "reblur") engine.set_vision_reblur_settings(serialized);
-        else engine.set_vision_relax_settings(serialized);
+        API::set_vision_settings(family, patch.settings, engine.get_handle());
         auto& result = reply.camera_render_settings;
         result.archive_session = scene->archive_session; result.scene = scene->route;
         result.camera_id = found->camera_id; result.family = *patch.family; result.settings = patch.settings;
@@ -5376,6 +5359,11 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             reply.error_message = created.error;
             return reply;
         }
+        if (auto network = get_network_system(); network &&
+            network->session_state() == Corona::Systems::NetworkSystem::SessionState::Active) {
+            auto* actor = find_native_actor(*scene, created.data.at("actor").at("actor_guid").get<std::string>());
+            if (actor && is_network_editor_seed_actor(*actor)) broadcast_network_editor_actor(*network, *scene, *actor);
+        }
         SceneRequest read{SceneMethod::ReadActorProperties};
         read.archive_session = request.archive_session;
         read.read_scene = scene->route;
@@ -5486,8 +5474,31 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
     if (request.method == SceneMethod::FocusActor) return apply_native_actor_focus(request);
     if (request.method == SceneMethod::GetEnvironment || request.method == SceneMethod::SetEnvironment)
         return apply_native_environment(request);
-    if (request.method == SceneMethod::SetActorTransform) return apply_native_actor_transform(request);
-    if (request.method == SceneMethod::SetActorProperties) return apply_native_actor_properties(request);
+    if (request.method == SceneMethod::SetActorTransform) {
+        auto reply = apply_native_actor_transform(request);
+        auto network = get_network_system();
+        auto* scene = native_editor_state().scene.get();
+        auto* actor = scene && reply.error_code.empty() ? find_native_actor(*scene, reply.transform.actor_guid) : nullptr;
+        if (network && network->session_state() == Corona::Systems::NetworkSystem::SessionState::Active &&
+            actor && is_network_editor_seed_actor(*actor)) {
+            const auto& value = reply.transform;
+            float transform[9];
+            std::copy(value.position.begin(), value.position.end(), transform);
+            std::copy(value.rotation.begin(), value.rotation.end(), transform + 3);
+            std::copy(value.scale.begin(), value.scale.end(), transform + 6);
+            network->broadcast_actor_transform_update(value.actor_guid, value.scene, transform, {}, {});
+        }
+        return reply;
+    }
+    if (request.method == SceneMethod::SetActorProperties) {
+        auto reply = apply_native_actor_properties(request);
+        auto* scene = native_editor_state().scene.get();
+        if (scene && reply.error_code.empty()) {
+            if (auto* actor = find_native_actor(*scene, reply.properties.actor_guid))
+                broadcast_network_editor_actor_state(*scene, *actor);
+        }
+        return reply;
+    }
     if (request.method == SceneMethod::RenameActor) {
         SceneReply reply;
         const auto& patch = request.actor_rename;
@@ -5531,6 +5542,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         reply.actor_rename = {*request.archive_session, scene->route, actor->actor_guid, actor->name, new_name};
         actor->name = new_name;
         ++scene->tree_revision;
+        broadcast_network_editor_actor_state(*scene, *actor);
         return reply;
     }
     if (request.method == SceneMethod::DeleteActor) {
@@ -5562,6 +5574,11 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             return reply;
         }
         reply.actor_delete = erase_native_editor_actor(*scene, actor);
+        if (auto network = get_network_system(); network &&
+            network->session_state() == Corona::Systems::NetworkSystem::SessionState::Active) {
+            const auto& deleted = reply.actor_delete;
+            network->broadcast_actor_delete(deleted.actor_guid, deleted.scene, deleted.old_name);
+        }
         return reply;
     }
     if (request.method == SceneMethod::RebindActorResource) {
@@ -7952,12 +7969,12 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
             auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
             if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            auto settings = nlohmann::json::parse(camera->engine_camera->get_effective_vision_pt_settings(), nullptr, false);
+            auto settings = API::get_effective_vision_settings(API::VisionSettingsFamily::Pt, camera->engine_camera->get_handle());
             if (!settings.is_object()) settings = nlohmann::json::object();
             const bool ready = settings.contains("max_depth") && settings.contains("min_depth") && settings.contains("rr_threshold");
             auto adaptive = settings.value("adaptive", nlohmann::json::object());
             settings.erase("adaptive");
-            const auto overrides = nlohmann::json::parse(camera->engine_camera->get_requested_vision_pt_settings(), nullptr, false);
+            const auto overrides = API::get_requested_vision_settings(API::VisionSettingsFamily::Pt, camera->engine_camera->get_handle());
             if (overrides.is_object()) settings.update(overrides);
             return native_success({{"settings", std::move(settings)}, {"adaptive", std::move(adaptive)}, {"ready", ready}});
         }},
@@ -7976,20 +7993,20 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                     (it.key() != "rr_threshold" && value != std::floor(value)))
                     return native_failure("PT parameter out of range: " + it.key(), 2);
             }
-            camera->engine_camera->set_vision_pt_settings(settings.dump());
+            API::set_vision_settings(API::VisionSettingsFamily::Pt, settings, camera->engine_camera->get_handle());
             return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
         }},
         {"get_restir_settings", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
             auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
             if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            const auto overrides = nlohmann::json::parse(camera->engine_camera->get_requested_vision_restir_settings(), nullptr, false);
+            const auto overrides = API::get_requested_vision_settings(API::VisionSettingsFamily::Restir, camera->engine_camera->get_handle());
             auto settings = nlohmann::json::object();
             bool applied = false;
             if (auto state = SharedDataHub::instance().camera_storage().acquire_read(camera->engine_camera->get_handle())) {
-                const auto effective = nlohmann::json::parse(state->vision_restir_effective_settings, nullptr, false);
+                const auto effective = state->vision_restir_effective_settings;
                 if (effective.is_object()) settings = effective;
-                const auto applied_overrides = nlohmann::json::parse(state->vision_restir_applied_settings, nullptr, false);
+                const auto applied_overrides = state->vision_restir_applied_settings;
                 applied = overrides.is_object() && applied_overrides.is_object() && overrides == applied_overrides;
             }
             const bool ready = applied && settings.contains("max_depth") && settings.contains("min_depth") &&
@@ -8003,16 +8020,16 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             if (request.args.size() < 3) return native_failure("Expected ReSTIR settings object", 2);
             const auto& settings = request.args[2];
             if (const auto error = Vision::validate_restir_settings(settings); !error.empty()) return native_failure(error, 2);
-            camera->engine_camera->set_vision_restir_settings(settings.dump());
+            API::set_vision_settings(API::VisionSettingsFamily::Restir, settings, camera->engine_camera->get_handle());
             return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
         }},
         {"get_reblur_settings", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
             auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
             if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            auto settings = nlohmann::json::parse(camera->engine_camera->get_effective_vision_reblur_settings(), nullptr, false);
+            auto settings = API::get_effective_vision_settings(API::VisionSettingsFamily::Reblur, camera->engine_camera->get_handle());
             if (!settings.is_object()) settings = nlohmann::json::object();
-            const auto overrides = nlohmann::json::parse(camera->engine_camera->get_requested_vision_reblur_settings(), nullptr, false);
+            const auto overrides = API::get_requested_vision_settings(API::VisionSettingsFamily::Reblur, camera->engine_camera->get_handle());
             if (overrides.is_object()) settings.update(overrides);
             return native_success({{"settings", std::move(settings)}});
         }},
@@ -8045,16 +8062,16 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 return native_failure("Fast history must not exceed maximum history", 2);
             if (settings.contains("min_radius") && settings.contains("max_radius") && settings["min_radius"] > settings["max_radius"])
                 return native_failure("Minimum radius must not exceed maximum radius", 2);
-            camera->engine_camera->set_vision_reblur_settings(settings.dump());
+            API::set_vision_settings(API::VisionSettingsFamily::Reblur, settings, camera->engine_camera->get_handle());
             return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
         }},
         {"get_relax_settings", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
             auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
             if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            auto settings = nlohmann::json::parse(camera->engine_camera->get_effective_vision_relax_settings(), nullptr, false);
+            auto settings = API::get_effective_vision_settings(API::VisionSettingsFamily::Relax, camera->engine_camera->get_handle());
             if (!settings.is_object()) settings = nlohmann::json::object();
-            const auto overrides = nlohmann::json::parse(camera->engine_camera->get_requested_vision_relax_settings(), nullptr, false);
+            const auto overrides = API::get_requested_vision_settings(API::VisionSettingsFamily::Relax, camera->engine_camera->get_handle());
             if (overrides.is_object()) settings.update(overrides);
             return native_success({{"settings", std::move(settings)}});
         }},
@@ -8111,7 +8128,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 if (settings.contains(history) && settings.contains(fast) && settings[fast] > settings[history])
                     return native_failure("Fast history must not exceed maximum history", 2);
             }
-            camera->engine_camera->set_vision_relax_settings(settings.dump());
+            API::set_vision_settings(API::VisionSettingsFamily::Relax, settings, camera->engine_camera->get_handle());
             return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
         }},
         {"set_vision_denoise", [](const NativeRequest& request, const NativeContext&) {
@@ -9151,9 +9168,12 @@ LanChatOutcome run_lanchat_operation(const LanChatRequest& request, const std::s
     case LanChatMethod::StartLocalRoom: {
         sys->set_lanchat_event_callback(emit_lanchat_event);
         const bool local = request.method == LanChatMethod::StartLocalRoom;
+        const bool was_active = sys->session_state() == Corona::Systems::NetworkSystem::SessionState::Active;
         reply.you = request.nickname.empty() ? "房主" : request.nickname;
         reply.ok = local ? sys->lanchat_start_local_room(request.room, reply.you)
                          : sys->lanchat_start_room(request.room, reply.you, request.port);
+        if (reply.ok && !local && !was_active)
+            seed_network_editor_state(*sys, Corona::Systems::NetworkSystem::SessionRole::Host);
         if (reply.ok && request.restore_history)
             reply.restored_history = sys->lanchat_restore_history_room(request.history_room.value_or(request.room));
         reply.ip = local ? "" : detect_wlan_ipv4();

@@ -45,6 +45,13 @@ struct AcousticsUpdateKey {
     static std::uintptr_t get(const AcousticsUpdateCommand& command) noexcept {
         return command.acoustics_handle;
     }
+
+    static void merge(AcousticsUpdateCommand& pending, const AcousticsUpdateCommand& next) noexcept {
+        if (has_acoustics_field(next.fields, AcousticsField::Volume)) pending.volume = next.volume;
+        if (has_acoustics_field(next.fields, AcousticsField::AudioEnabled)) pending.audio_enabled = next.audio_enabled;
+        if (has_acoustics_field(next.fields, AcousticsField::ResourceId)) pending.resource_id = next.resource_id;
+        pending.fields = pending.fields | next.fields;
+    }
 };
 
 struct AcousticsSnapshotRow {

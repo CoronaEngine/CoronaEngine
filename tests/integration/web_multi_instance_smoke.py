@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools'))
 from profile_process import _Job
 from vision_frontend_probe import Frontend
 from web_environment_smoke import wait
+import web_lanchat_business_smoke
 
 
 SERVICE = """(async()=>{const module=await import(document.querySelector('script[type=module]').src);
@@ -32,6 +33,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('runtime', type=Path)
     parser.add_argument('--output', type=Path, default=Path('build/web-multi-instance-smoke'))
+    parser.add_argument('--lanchat', action='store_true', help='Also verify real LANChat messages, history, roles and explicit leave/rejoin')
+    parser.add_argument('--object-sync', action='store_true', help='Also verify native scene edits replicate between the LANChat participants')
     args = parser.parse_args()
     runtime = args.runtime.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -64,7 +67,7 @@ def main():
             env = dict(os.environ, CORONA_CEF_REMOTE_DEBUG_PORT=str(port),
                        CORONA_CEF_ROOT_CACHE=str(root / 'cache'), CORONA_OPTICS_MAX_FPS='15')
             job = _Job()
-            launch = dict(job=job, child=None, port=port, root=root)
+            launch = dict(job=job, child=None, port=port, root=root, project_root=world)
             launches.append(launch)
             with (root / 'stdout.log').open('wb') as stdout, (root / 'stderr.log').open('wb') as stderr:
                 child = subprocess.Popen([str(executable)], cwd=runtime, env=env,
@@ -138,6 +141,8 @@ def main():
         after = second['dock'].evaluate(f'{SERVICE}.then(s=>s.readEditorUiPolicy())')
         assert after['enabled'] and after['generation'] == second['policy']['generation'], after
         assert environment(second)['sun']['enabled'] is not original[1]['sun']['enabled']
+        if args.lanchat or args.object_sync:
+            evidence['lanchat'] = web_lanchat_business_smoke.run(launches, object_sync=args.object_sync)
         evidence.update(passed=True, independent_vue_edits=True, foreign_archive_rejected=foreign,
                         independent_dock_close=True, surviving_peer_owner_request=True)
     except Exception:
@@ -145,6 +150,8 @@ def main():
         print(evidence['error'], flush=True)
     finally:
         # Keep cleanup restricted to the two launches owned by this runner.
+        evidence['unexpected_process_exits'] = [dict(pid=launch['child'].pid, returncode=launch['child'].poll())
+            for launch in launches if launch['child'] and launch['child'].poll() is not None]
         for client in clients:
             client.socket.close()
         evidence['cleanup_ok'] = True
@@ -163,7 +170,11 @@ def main():
         evidence['optics_failures'] = [line for launch in launches
             for line in (launch['root'] / 'stdout.log').read_text(encoding='utf-8', errors='replace').splitlines()
             if '[SystemsThread/NodeFail] system=Optics' in line and ' error=' in line]
-        evidence['passed'] = evidence['passed'] and evidence['cleanup_ok'] and not evidence['optics_failures']
+        evidence['native_failures'] = [line for launch in launches
+            for line in (launch['root'] / 'stdout.log').read_text(encoding='utf-8', errors='replace').splitlines()
+            if '[CRITICAL][SignalHandler' in line or 'EXCEPTION_ACCESS_VIOLATION' in line]
+        evidence['passed'] = evidence['passed'] and evidence['cleanup_ok'] and not (
+            evidence['optics_failures'] or evidence['native_failures'] or evidence['unexpected_process_exits'])
         (output / 'result.json').write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding='utf-8')
         print(json.dumps(dict(output=str(output), **evidence), ensure_ascii=False, indent=2), flush=True)
     return 0 if evidence['passed'] else 1

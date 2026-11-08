@@ -99,27 +99,8 @@ void UiSystem::start() {
     state_ = Kernel::SystemState::running;
 }
 
-void UiSystem::teardown_main_surface_before_stop() {
-    if (main_surface_torn_down_) {
-        return;
-    }
-    void* main_surface = UI::SdlWindowManager::instance().main_surface();
-    if (main_surface == nullptr) {
-        main_surface_torn_down_ = true;
-        return;
-    }
-
-    // 此刻 Display 线程仍在跑（DAG 尚未 stop），拆除回执可以在几帧内兑现。
-    const auto timeout = std::chrono::milliseconds(2000);
-    main_surface_torn_down_ =
-        UI::SdlWindowManager::instance().request_remove_surface(main_surface, timeout);
-    if (!main_surface_torn_down_) {
-        CFW_LOG_WARNING(
-            "UiSystem: pre-stop main surface teardown timed out; stop() will retry");
-    }
-}
-
 void UiSystem::stop() {
+    if (state_ == Kernel::SystemState::stopped) return;
     CFW_LOG_INFO("UiSystem: Stop called (main thread mode)");
     running_ = false;
 
@@ -144,8 +125,7 @@ void UiSystem::stop() {
             // after SystemManager has joined the Display worker.
         }
     }
-    if (!main_surface_torn_down_ &&
-        UI::SdlWindowManager::instance().main_surface() != nullptr) {
+    if (UI::SdlWindowManager::instance().main_surface() != nullptr) {
         void* main_surface = UI::SdlWindowManager::instance().main_surface();
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
             deadline - std::chrono::steady_clock::now());

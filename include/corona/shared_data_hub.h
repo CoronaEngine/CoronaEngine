@@ -1,5 +1,6 @@
 #pragma once
 #include <horizon/core/storage.h>
+#include <nlohmann/json.hpp>
 #include <corona/camera_command_authority.h>
 #include <corona/kernel/command/command_buffer.h>
 #include <corona/kernel/command/snapshot_channel.h>
@@ -363,15 +364,15 @@ struct CameraDevice {
     // PT produces one sample per pixel per frame; REBLUR owns temporal history.
     bool vision_denoise{true};
     CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
-    std::string vision_reblur_settings{"{}"};
-    std::string vision_pt_settings{"{}"};
-    std::string vision_restir_settings{"{}"};
-    std::string vision_relax_settings{"{}"};
-    std::string vision_reblur_effective_settings{"{}"}; // Runtime feedback, not serialized.
-    std::string vision_pt_effective_settings{"{}"}; // Runtime feedback, not serialized.
-    std::string vision_restir_effective_settings{"{}"}; // Runtime feedback, not serialized.
-    std::string vision_restir_applied_settings; // Overrides matching runtime feedback, not serialized.
-    std::string vision_relax_effective_settings{"{}"}; // Runtime feedback, not serialized.
+    nlohmann::json vision_reblur_settings = nlohmann::json::object();
+    nlohmann::json vision_pt_settings = nlohmann::json::object();
+    nlohmann::json vision_restir_settings = nlohmann::json::object();
+    nlohmann::json vision_relax_settings = nlohmann::json::object();
+    nlohmann::json vision_reblur_effective_settings = nlohmann::json::object(); // Runtime feedback, not serialized.
+    nlohmann::json vision_pt_effective_settings = nlohmann::json::object(); // Runtime feedback, not serialized.
+    nlohmann::json vision_restir_effective_settings = nlohmann::json::object(); // Runtime feedback, not serialized.
+    nlohmann::json vision_restir_applied_settings = nlohmann::json::object(); // Overrides matching runtime feedback, not serialized.
+    nlohmann::json vision_relax_effective_settings = nlohmann::json::object(); // Runtime feedback, not serialized.
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
     bool view_open{false};
@@ -637,10 +638,10 @@ struct CameraStateUpdateCommand {
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{true};
     CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
-    std::string vision_reblur_settings{"{}"};
-    std::string vision_pt_settings{"{}"};
-    std::string vision_restir_settings{"{}"};
-    std::string vision_relax_settings{"{}"};
+    nlohmann::json vision_reblur_settings = nlohmann::json::object();
+    nlohmann::json vision_pt_settings = nlohmann::json::object();
+    nlohmann::json vision_restir_settings = nlohmann::json::object();
+    nlohmann::json vision_relax_settings = nlohmann::json::object();
     bool vision_accumulation{false};
     bool vision_stable_planes{true};
     bool view_open{false};
@@ -922,19 +923,19 @@ class SharedDataHub {
         std::uintptr_t camera_handle) const;
     void acknowledge_camera_vision_denoiser(std::uintptr_t camera_handle,
                                            std::uint64_t applied_sequence);
-    [[nodiscard]] std::optional<std::string> requested_camera_vision_reblur_settings(
+    [[nodiscard]] std::optional<nlohmann::json> requested_camera_vision_reblur_settings(
         std::uintptr_t camera_handle) const;
     void acknowledge_camera_vision_reblur_settings(std::uintptr_t camera_handle,
                                                    std::uint64_t applied_sequence);
-    [[nodiscard]] std::optional<std::string> requested_camera_vision_pt_settings(
+    [[nodiscard]] std::optional<nlohmann::json> requested_camera_vision_pt_settings(
         std::uintptr_t camera_handle) const;
     void acknowledge_camera_vision_pt_settings(std::uintptr_t camera_handle,
                                                    std::uint64_t applied_sequence);
-    [[nodiscard]] std::optional<std::string> requested_camera_vision_restir_settings(
+    [[nodiscard]] std::optional<nlohmann::json> requested_camera_vision_restir_settings(
         std::uintptr_t camera_handle) const;
     void acknowledge_camera_vision_restir_settings(std::uintptr_t camera_handle,
                                                    std::uint64_t applied_sequence);
-    [[nodiscard]] std::optional<std::string> requested_camera_vision_relax_settings(
+    [[nodiscard]] std::optional<nlohmann::json> requested_camera_vision_relax_settings(
         std::uintptr_t camera_handle) const;
     void acknowledge_camera_vision_relax_settings(std::uintptr_t camera_handle,
                                                    std::uint64_t applied_sequence);
@@ -1019,22 +1020,22 @@ class SharedDataHub {
     };
     std::unordered_map<std::uintptr_t, RequestedCameraDenoiser> requested_camera_vision_denoiser_;
     struct RequestedReblurSettings {
-        std::string json;
+        nlohmann::json value;
         std::uint64_t sequence{};
     };
     std::unordered_map<std::uintptr_t, RequestedReblurSettings> requested_camera_vision_reblur_settings_;
     struct RequestedPtSettings {
-        std::string json;
+        nlohmann::json value;
         std::uint64_t sequence{};
     };
     struct RequestedRestirSettings {
-        std::string json;
+        nlohmann::json value;
         std::uint64_t sequence{};
     };
     std::unordered_map<std::uintptr_t, RequestedPtSettings> requested_camera_vision_pt_settings_;
     std::unordered_map<std::uintptr_t, RequestedRestirSettings> requested_camera_vision_restir_settings_;
     struct RequestedRelaxSettings {
-        std::string json;
+        nlohmann::json value;
         std::uint64_t sequence{};
     };
     std::unordered_map<std::uintptr_t, RequestedRelaxSettings> requested_camera_vision_relax_settings_;

@@ -122,7 +122,11 @@ enum class MessageType : uint8_t {
 
 inline int channel_for_message_type(MessageType type) {
     switch (type) {
+    // ENet orders reliable delivery within a channel. Snapshot framing must
+    // share the chunk queue so END cannot overtake its bulk payload.
+    case MessageType::EDITOR_SNAPSHOT_BEGIN:
     case MessageType::EDITOR_SNAPSHOT_CHUNK:
+    case MessageType::EDITOR_SNAPSHOT_END:
     case MessageType::FILE_REQUEST:
     case MessageType::FILE_CHUNK:
     case MessageType::CHAT_HISTORY_SNAPSHOT:

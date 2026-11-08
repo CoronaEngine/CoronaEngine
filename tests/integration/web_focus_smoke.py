@@ -9,9 +9,11 @@ from urllib.parse import parse_qs, urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tools'))
 from vision_frontend_probe import Frontend
 from web_environment_smoke import wait
+from web_view_lifetime_smoke import run_camera
+from web_panel_lifecycle_smoke import minimize_restore
 
 
-def run(port, root):
+def run(port, root, engine_pid):
     def targets():
         with urlopen(f'http://127.0.0.1:{port}/json/list', timeout=3) as response:
             return [target for target in json.load(response) if target['type'] == 'page'
@@ -259,7 +261,25 @@ def run(port, root):
             document.evaluate("window.__scriptInputs=[];window.dispatchEvent(new KeyboardEvent('keydown',{key:'d',code:'KeyD'}));window.dispatchEvent(new KeyboardEvent('keyup',{key:'d',code:'KeyD'}));true")
             assert not any(call['args'][2]['type'].startswith('key') for call in document.evaluate('window.__scriptInputs'))
             assert document.evaluate('typeof globalThis.coronaBridge?.injectInput') == 'undefined'
-        return {'documents': 3, 'archiveSession': scope, 'cameraId': focused['camera_id'],
+        def listeners(client):
+            return client.call('Runtime.evaluate', {
+                'expression': "[document,window].map(target=>Object.fromEntries(['keydown','keyup','resize','blur','visibilitychange'].map(kind=>[kind,(getEventListeners(target)[kind]||[]).map(e=>e.listener.toString()).sort()])))",
+                'includeCommandLineAPI': True, 'returnByValue': True,
+            })['result']['value']
+        before = [listeners(client) for client in (main, camera_view)]
+        hidden_restore = minimize_restore(engine_pid, main, camera_view, targets, service)
+        assert [listeners(client) for client in (main, camera_view)] == before, 'hide/restore duplicated or lost production listeners'
+        camera_view.evaluate('window.__cameraMoveCalls=[];true')
+        camera_view.evaluate("window.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,code:'KeyW',key:'w'}));true")
+        try:
+            restored_movement = wait(lambda: camera_view.evaluate('window.__cameraMoveCalls.filter(call=>Array.isArray(call[2]?.position))'),
+                                     bool, 'CameraView input restored after real HWND minimization')
+        finally:
+            camera_view.evaluate("window.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,code:'KeyW',key:'w'}));true")
+        assert all(call[1] == 'focus-camera' and call[2]['archive_session'] == scope for call in restored_movement), restored_movement
+        hidden_restore.update(listeners_preserved=True, camera_input_restored=True)
+        camera_lifetime = run_camera(camera_view)
+        return {'cameraHiddenRestore': hidden_restore, 'cameraLifetime': camera_lifetime, 'documents': 3, 'archiveSession': scope, 'cameraId': focused['camera_id'],
                 'focusPosition': focused['position'], 'movementFromFocusPosition': moved['position'],
                 'focusResubmissions': 0, 'movementSubmissions': 1, 'retiredFocusRequests': 0,
                 'cameraHoverRead': 'scoped typed V8 projection', 'cameraViewArchiveInRoute': True,

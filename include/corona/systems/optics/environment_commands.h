@@ -61,6 +61,18 @@ struct EnvironmentUpdateKey {
     static std::uintptr_t get(const EnvironmentUpdateCommand& command) noexcept {
         return command.environment_handle;
     }
+
+    static void merge(EnvironmentUpdateCommand& pending, const EnvironmentUpdateCommand& next) noexcept {
+        if (has_environment_field(next.fields, EnvironmentField::SunDirection)) pending.sun_direction = next.sun_direction;
+        if (has_environment_field(next.fields, EnvironmentField::SunIntensity)) pending.sun_intensity = next.sun_intensity;
+        if (has_environment_field(next.fields, EnvironmentField::SkyIntensity)) pending.sky_intensity = next.sky_intensity;
+        if (has_environment_field(next.fields, EnvironmentField::FloorGrid)) pending.floor_grid_enabled = next.floor_grid_enabled;
+        if (has_environment_field(next.fields, EnvironmentField::Gravity)) pending.gravity = next.gravity;
+        if (has_environment_field(next.fields, EnvironmentField::FloorY)) pending.floor_y = next.floor_y;
+        if (has_environment_field(next.fields, EnvironmentField::FloorRestitution)) pending.floor_restitution = next.floor_restitution;
+        if (has_environment_field(next.fields, EnvironmentField::FixedDt)) pending.fixed_dt = next.fixed_dt;
+        pending.fields = pending.fields | next.fields;
+    }
 };
 
 struct EnvironmentSnapshotRow {

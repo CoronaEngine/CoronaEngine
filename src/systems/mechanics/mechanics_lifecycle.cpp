@@ -286,6 +286,10 @@ void MechanicsSystem::update() {
     }
     // tick 边界：先把外部提交的力学参数落到槽位，再跑本帧的蒙皮与物理。
     apply_pending_mechanics_updates();
+    // Getters read the committed snapshot once pending commands are drained.
+    // Publish even on idle ticks so newly loaded and removed components are
+    // reflected without requiring another property edit.
+    Corona::publish_mechanics_snapshot_from_storage();
     // 结构命令（回调注册）在 DAG 模式下已由边界阶段应用；这里兜底降级路径，
     // helper 幂等，没有命令时直接返回。
     Corona::apply_pending_mechanics_structural_commands();

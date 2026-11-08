@@ -898,7 +898,8 @@ NativeResult dispatch_native_api_method(const EditorApiMethodSpec& spec,
 NativeResult run_native_api_method(const EditorApiMethodSpec& spec,
                                    const nlohmann::json& args,
                                    const NativeContext& context,
-                                   Detail::EditorDispatchRoute route) {
+                                   Detail::EditorDispatchRoute route,
+                                   bool allow_python_handoff) {
     ensure_editor_dispatch_hooks();
 
     Detail::EditorDispatchReport report;
@@ -906,7 +907,8 @@ NativeResult run_native_api_method(const EditorApiMethodSpec& spec,
         [spec, args, context] { return dispatch_native_api_method(spec, args, context); },
         route,
         kEditorDispatchTimeout,
-        &report);
+        &report,
+        allow_python_handoff);
 
     if (report.ran_inline_on_caller && route == Detail::EditorDispatchRoute::InlineBusy) {
         // owner 线程正阻塞等 Python：此刻再从 Python 线程等 owner 线程就是互等，所以
@@ -941,7 +943,8 @@ NativeResult run_native_api_method(const EditorApiMethodSpec& spec,
 
 NativeResult invoke_native_api_method(const EditorApiMethodSpec& spec,
                                       const nlohmann::json& args,
-                                      const NativeContext& context) {
+                                      const NativeContext& context,
+                                      EditorApiCaller caller) {
     ensure_editor_dispatch_hooks();
     // 编辑器场景状态只有一个 owner 线程：绘制并派发输入的那个 CEF UI 线程。handler
     // 因此可以安全地对状态做"单线程"假设（缓存、表、unique_ptr 成员），前提是它们
@@ -953,7 +956,9 @@ NativeResult invoke_native_api_method(const EditorApiMethodSpec& spec,
         on_owner_thread,
         Detail::editor_thread_waiting_for_python(),
         Detail::editor_owner_thread_seen());
-    return run_native_api_method(spec, args, context, route);
+    // Only Python callbacks need the owner-wait handoff. Native handlers may
+    // themselves wait for Python, so they must not take over under its state lock.
+    return run_native_api_method(spec, args, context, route, caller != EditorApiCaller::Native);
 }
 
 Script::Python::PythonRuntimeResponse execute_editor_python_callback(
@@ -1103,7 +1108,7 @@ NativeResult EditorApiRegistry::invoke(const EditorApiRequest& request,
     }
     auto caller_context = context;
     caller_context.script_runtime = request.caller == EditorApiCaller::ScriptRuntime;
-    auto result = invoke_native_api_method(*spec, request.args, caller_context);
+    auto result = invoke_native_api_method(*spec, request.args, caller_context, request.caller);
     if (!result.success) {
         return result;
     }

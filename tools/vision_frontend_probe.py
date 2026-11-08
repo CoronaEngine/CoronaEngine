@@ -19,7 +19,9 @@ class Frontend:
         if host not in ("127.0.0.1", "::1"):
             raise ValueError("Only the local engine endpoint is allowed")
         address = "[::1]" if host == "::1" else host
-        with urlopen(f"http://{address}:{port}/json/list", timeout=3) as response:
+        # Render-resource preparation can stall discovery as well as the CDP
+        # socket. Use the same bounded connection budget for both phases.
+        with urlopen(f"http://{address}:{port}/json/list", timeout=20) as response:
             targets = [item for item in json.load(response) if item["type"] == "page"]
         if target_id is not None:
             targets = [item for item in targets if item["id"] == target_id]

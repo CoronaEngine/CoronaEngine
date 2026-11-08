@@ -24,13 +24,18 @@ import web_actor_properties_smoke
 import web_panel_lifecycle_smoke
 import web_project_creation_smoke
 import web_project_picker_smoke
+import web_calibration_smoke
+import web_assistant_smoke
+import web_world_lifetime_smoke
+import web_join_lifetime_smoke
+import web_launcher_lifetime_smoke
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('runtime', type=Path)
     parser.add_argument('--output', type=Path, default=Path('build/web-packaged-ui-smoke'))
-    parser.add_argument('--suite', choices=['focus', 'environment', 'graph', 'properties', 'panels', 'creation', 'picker', 'all'], default='all')
+    parser.add_argument('--suite', choices=['focus', 'environment', 'graph', 'properties', 'panels', 'creation', 'picker', 'calibration', 'assistant', 'join', 'launcher', 'lifetime', 'all'], default='all')
     args = parser.parse_args()
     runtime = args.runtime.resolve()
     executable = runtime / 'corona_engine.exe'
@@ -110,12 +115,16 @@ def main():
             for name, suite in [('focus', web_focus_smoke), ('environment', web_environment_smoke),
                                 ('graph', web_graph_target_smoke), ('properties', web_actor_properties_smoke),
                                 ('panels', web_panel_lifecycle_smoke),
-                                ('creation', web_project_creation_smoke), ('picker', web_project_picker_smoke)]:
+                                ('creation', web_project_creation_smoke), ('picker', web_project_picker_smoke),
+                                ('calibration', web_calibration_smoke), ('assistant', web_assistant_smoke),
+                                ('join', web_join_lifetime_smoke),
+                                ('launcher', web_launcher_lifetime_smoke),
+                                ('lifetime', web_world_lifetime_smoke)]:
                 if args.suite not in ('all', name):
                     continue
                 stage = f'packaged Vue {name}'
                 print(stage, flush=True)
-                if name in ('panels', 'picker'):
+                if name in ('focus', 'panels', 'picker'):
                     evidence['results'][name] = suite.run(port, world, child.pid)
                 elif name == 'creation':
                     evidence['results'][name] = suite.run(port, world, runtime)

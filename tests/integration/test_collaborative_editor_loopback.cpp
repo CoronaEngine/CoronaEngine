@@ -1,6 +1,8 @@
 #include <corona/kernel/core/kernel_context.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/network/network_system.h>
+#include <corona/systems/optics/optics_commands.h>
+#include <corona/systems/mechanics/mechanics_commands.h>
 
 #include "cef/cef_editor_native_api_registry.h"
 #include "collaborative_editor_runtime.h"
@@ -133,6 +135,11 @@ void tick_until_actor_created(NetworkSystem& host, NetworkSystem& client,
 }
 
 nlohmann::json scene_snapshot() {
+    // This host has no render/physics loop to publish the committed frame.
+    Corona::publish_optics_snapshot_from_storage();
+    Corona::publish_mechanics_snapshot_from_storage();
+    Corona::SharedDataHub::instance().publish_camera_snapshot_from_storage();
+    Corona::SharedDataHub::instance().publish_transform_snapshot_from_storage();
     return invoke("SceneTools", "get_scene_snapshot", nlohmann::json::array({"scene.ini"})).data;
 }
 
@@ -180,7 +187,7 @@ void check_restir_camera_preferences(const std::filesystem::path& root) {
     require(accepted && accepted->success && accepted->data.value("pending", false),
             "ReSTIR native API must acknowledge nested settings before the render thread applies them");
     require(hub.requested_camera_vision_restir_settings(handle) ==
-                std::optional<std::string>{R"({"direct":{"temporal":{"open":false}}})"},
+                std::optional<nlohmann::json>{nlohmann::json::parse(R"({"direct":{"temporal":{"open":false}}})")},
             "ReSTIR pending preference must remain available after native acceptance");
 
     // The API intentionally adds optional spatial.sample_num feedback; old partial requests remain valid.
@@ -196,7 +203,7 @@ void check_restir_camera_preferences(const std::filesystem::path& root) {
     {
         auto camera = hub.camera_storage().acquire_write(handle);
         require(static_cast<bool>(camera), "native fixture camera must exist in storage");
-        camera->vision_restir_effective_settings = defaults.dump();
+        camera->vision_restir_effective_settings = defaults;
     }
     auto feedback = invoke("SceneTools", "get_restir_settings", {"scene.ini", "Main Camera"}).data;
     require(!feedback.value("ready", true) && feedback["settings"] == defaults,
@@ -209,8 +216,8 @@ void check_restir_camera_preferences(const std::filesystem::path& root) {
     effective["direct"]["temporal"]["open"] = false;
     {
         auto camera = hub.camera_storage().acquire_write(handle);
-        camera->vision_restir_effective_settings = effective.dump();
-        camera->vision_restir_applied_settings = R"( { "direct": { "temporal": { "open": false } } } )";
+        camera->vision_restir_effective_settings = effective;
+        camera->vision_restir_applied_settings = nlohmann::json::parse(R"( { "direct": { "temporal": { "open": false } } } )");
     }
     feedback = invoke("SceneTools", "get_restir_settings", {"scene.ini", "Main Camera"}).data;
     require(feedback.value("ready", false) && feedback["settings"] == effective,
@@ -224,8 +231,8 @@ void check_restir_camera_preferences(const std::filesystem::path& root) {
     effective["direct"]["M_bsdf"] = 20;
     {
         auto camera = hub.camera_storage().acquire_write(handle);
-        camera->vision_restir_effective_settings = effective.dump();
-        camera->vision_restir_applied_settings = previous.dump();
+        camera->vision_restir_effective_settings = effective;
+        camera->vision_restir_applied_settings = previous;
     }
     const nlohmann::json replacement = {{"direct", {{"M_light", 12}}}};
     invoke("SceneTools", "set_restir_settings", {"scene.ini", "Main Camera", replacement});
@@ -239,8 +246,8 @@ void check_restir_camera_preferences(const std::filesystem::path& root) {
     effective["direct"]["M_light"] = 12;
     {
         auto camera = hub.camera_storage().acquire_write(handle);
-        camera->vision_restir_effective_settings = effective.dump();
-        camera->vision_restir_applied_settings = replacement.dump();
+        camera->vision_restir_effective_settings = effective;
+        camera->vision_restir_applied_settings = replacement;
     }
     feedback = invoke("SceneTools", "get_restir_settings", {"scene.ini", "Main Camera"}).data;
     require(feedback.value("ready", false) && feedback["settings"]["direct"]["M_bsdf"] == 1,
@@ -254,8 +261,8 @@ void check_restir_camera_preferences(const std::filesystem::path& root) {
             "committed reset overrides remain unready until the renderer restores scene defaults");
     {
         auto camera = hub.camera_storage().acquire_write(handle);
-        camera->vision_restir_effective_settings = defaults.dump();
-        camera->vision_restir_applied_settings = "{}";
+        camera->vision_restir_effective_settings = defaults;
+        camera->vision_restir_applied_settings = nlohmann::json::object();
     }
     feedback = invoke("SceneTools", "get_restir_settings", {"scene.ini", "Main Camera"}).data;
     require(feedback.value("ready", false) && feedback["settings"] == defaults,

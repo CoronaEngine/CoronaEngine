@@ -18,6 +18,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -349,6 +350,45 @@ void test_peer_manager_targeted_send_rejects_unknown_peer() {
                 "targeted peer send rejects unknown peer");
 }
 
+void test_peer_manager_callbacks_can_stop_host() {
+    using Corona::Network::PeerManager;
+    for (int callback = 0; callback < 3; ++callback) {
+        PeerManager server;
+        PeerManager client;
+        bool stopped = false;
+        const auto stop = [&] { stopped = true; server.stop(); };
+        if (callback == 0) server.set_on_peer_connected([&](const auto&) { stop(); });
+        if (callback == 1) server.set_on_data_received([&](const auto&, const auto*, auto) { stop(); });
+        if (callback == 2) server.set_on_peer_disconnected([&](const auto&) { stop(); });
+        const bool started = server.start(0, "Callback Server") && client.start(0, "Callback Client");
+        expect_true(started, "callback stop test starts owned localhost peers");
+        if (!started) continue;
+        client.connect_to_peer("127.0.0.1", server.listen_port(), "Callback Server", true);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        bool triggered = false;
+        while (!stopped && std::chrono::steady_clock::now() < deadline) {
+            server.poll();
+            client.poll();
+            if (!triggered && callback != 0 && server.peer_count() && client.peer_count()) {
+                const auto peers = client.peers();
+                if (!peers.empty() && peers.front().hello_done) {
+                    if (callback == 1) {
+                        const uint8_t data = 0xff;
+                        client.broadcast(Corona::Network::kChannelReliable, &data, sizeof(data), true);
+                    } else {
+                        client.disconnect_peer(peers.front().id);
+                    }
+                    triggered = true;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        expect_true(stopped, "connected/data/disconnected callback stops its owned host without invalidating poll");
+        server.poll();
+        server.stop();
+    }
+}
+
 void test_editor_snapshot_request_has_schema_version() {
     auto packet = Corona::Network::build_editor_snapshot_request();
     expect_true(packet.size() == 2 &&
@@ -583,6 +623,42 @@ void test_sync_full_to_sends_begin_chunk_end() {
                     types[2] == Corona::Network::MessageType::EDITOR_SNAPSHOT_END,
                 "targeted snapshot sends begin chunk and end in order");
     sync.shutdown();
+}
+
+void test_first_peer_receives_snapshot_over_real_channels() {
+    using namespace Corona::Network;
+    PeerManager sender;
+    PeerManager receiver;
+    SyncEngine source;
+    SyncEngine destination;
+    source.initialize("snapshot-writer");
+    destination.initialize("snapshot-reader");
+    (void)source.make_local_upsert("before-connect", "actor.state", {1});
+    int applied = 0;
+    destination.set_on_editor_operation_applied([&](const EditorSyncOperation& operation) {
+        if (operation.actor_guid == "before-connect") ++applied;
+    });
+    source.set_on_targeted_outgoing([&](const auto& peer, const auto& packet) {
+        sender.send_to_peer_id(peer, kChannelReliable, packet.data(), packet.size(), true);
+    });
+    sender.set_on_peer_connected([&](const auto& peer) { source.sync_full_to(peer.id); });
+    receiver.set_on_data_received([&](const auto& peer, const auto* data, auto size) {
+        destination.handle_incoming(peer, data, size);
+    });
+    const bool started = sender.start(0, "Snapshot Sender") && receiver.start(0, "Snapshot Receiver");
+    expect_true(started, "snapshot test starts owned localhost peers");
+    if (started) {
+        receiver.connect_to_peer("127.0.0.1", sender.listen_port(), "Snapshot Sender", true);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!applied && std::chrono::steady_clock::now() < deadline) {
+            sender.poll();
+            receiver.poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        expect_true(applied == 1, "first peer applies preexisting state with real control/bulk routing");
+    }
+    sender.stop(); receiver.stop();
+    source.shutdown(); destination.shutdown();
 }
 
 void test_file_request_carries_transfer_id() {
@@ -2343,6 +2419,7 @@ int main() {
     test_sync_engine_creates_versioned_actor_upsert();
     test_sync_engine_does_not_retry_logical_actor_state();
     test_peer_manager_targeted_send_rejects_unknown_peer();
+    test_peer_manager_callbacks_can_stop_host();
     test_editor_snapshot_request_has_schema_version();
     test_editor_snapshot_begin_and_end_carry_session_metadata();
     test_editor_snapshot_chunk_round_trips_operation_packets();
@@ -2352,6 +2429,7 @@ int main() {
     test_editor_snapshot_timeout_replays_incremental_and_requests_retry();
     test_editor_snapshot_conflicting_duplicate_recovers_incremental();
     test_sync_full_to_sends_begin_chunk_end();
+    test_first_peer_receives_snapshot_over_real_channels();
     test_actor_create_carries_actor_guid();
     test_actor_create_unpack_preserves_wire_transform();
     test_actor_create_carries_dependency_paths();

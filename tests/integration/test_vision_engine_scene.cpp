@@ -503,7 +503,7 @@ struct VisionEngineSceneTest {
         Corona::API::set_vision_reblur_settings(R"({"max_history":12})", camera);
         Corona::API::set_vision_denoise(false, camera);
         auto updates = hub.drain_camera_state_updates();
-        expect(updates.size() == 1 && updates[0].vision_reblur_settings == R"({"max_history":12})" &&
+        expect(updates.size() == 1 && updates[0].vision_reblur_settings == nlohmann::json::parse(R"({"max_history":12})") &&
                    Corona::API::get_requested_vision_reblur_settings(camera) == R"({"max_history":12})" &&
                    Corona::API::get_requested_vision_reblur_settings(other) == "{}",
                "REBLUR preferences must remain camera-local and persistable while in flight");
@@ -539,7 +539,7 @@ struct VisionEngineSceneTest {
         auto updates = hub.drain_camera_state_updates();
         expect(updates.size() == 1 && updates[0].vision_denoiser == CameraVisionDenoiser::ReLAX &&
                    Corona::API::get_requested_vision_denoiser(camera) == "relax" &&
-                   updates[0].vision_relax_settings == R"({"diffuse_history":12})" &&
+                   updates[0].vision_relax_settings == nlohmann::json::parse(R"({"diffuse_history":12})") &&
                    Corona::API::get_requested_vision_relax_settings(camera) == R"({"diffuse_history":12})" &&
                    Corona::API::get_requested_vision_relax_settings(other) == "{}",
                "RELAX preferences must remain camera-local and persistable while in flight");
@@ -703,7 +703,7 @@ struct VisionEngineSceneTest {
         auto prepare = [&](std::uintptr_t handle, const std::string& json) {
             if (previous_pipeline) previous_pipeline->activate_global_context();
             expect(system.prepare_vision_camera_view(system.active_vision_runtime(), handle,
-                       16, 16, false, true, true, CameraVisionDenoiser::Scene, "{}", "{}", json),
+                       16, 16, false, true, true, CameraVisionDenoiser::Scene, vision::DataWrap::object(), vision::DataWrap::object(), vision::DataWrap::parse(json)),
                    "PT camera settings must prepare a usable view");
             sync_receiver_camera(pipeline);
         };
@@ -769,7 +769,7 @@ struct VisionEngineSceneTest {
         Corona::API::set_vision_restir_settings(settings, first);
         auto updates = hub.drain_camera_state_updates();
         expect(updates.size() == 1 && updates[0].fields == CameraStateUpdateField::VisionRestirSettings &&
-                   Corona::API::get_requested_vision_restir_settings(first) == settings &&
+                   nlohmann::json::parse(Corona::API::get_requested_vision_restir_settings(first)) == nlohmann::json::parse(settings) &&
                    Corona::API::get_requested_vision_restir_settings(second) == "{}",
                "ReSTIR settings must be queued independently per camera and persist while in flight");
         Corona::API::set_vision_restir_settings(R"({"direct":{"max_age":8}})", first);
@@ -779,7 +779,7 @@ struct VisionEngineSceneTest {
         hub.clear_camera_state_updates(first);
         auto prepare = [&](std::uintptr_t camera, const std::string& json) {
             expect(system.prepare_vision_camera_view(system.active_vision_runtime(), camera,
-                       16, 16, false, true, true, CameraVisionDenoiser::Scene, "{}", "{}", "{}", json),
+                       16, 16, false, true, true, CameraVisionDenoiser::Scene, vision::DataWrap::object(), vision::DataWrap::object(), vision::DataWrap::object(), vision::DataWrap::parse(json)),
                    "ReSTIR camera settings must prepare a usable view");
             // Each new view owns a sensor. Keep it facing the receiver so
             // zero-candidate assertions measure shading, not the visible sky.
@@ -805,14 +805,14 @@ struct VisionEngineSceneTest {
         prepare(first, defaults.dump());
         {
             auto camera = hub.camera_storage().acquire_read(first);
-            expect(camera->vision_restir_applied_settings == defaults.dump() &&
+            expect(camera->vision_restir_applied_settings == defaults &&
                        pipeline.frame_index() == initial_history,
                    "equivalent override inputs must publish readiness without resetting history");
         }
         prepare(first, R"({"direct.M_light":7})");
         {
             auto camera = hub.camera_storage().acquire_read(first);
-            expect(camera->vision_restir_applied_settings == defaults.dump() &&
+            expect(camera->vision_restir_applied_settings == defaults &&
                        pipeline.frame_index() == initial_history,
                    "invalid direct engine inputs must not advance the applied marker or reset history");
         }
@@ -939,27 +939,27 @@ struct VisionEngineSceneTest {
         prepare(first_camera, CameraVisionDenoiser::ReBLUR);
         expect(pipeline.frame_buffer() == reblur_framebuffer.get() && pipeline.frame_index() == reblur_history,
                "reapplying the same denoiser must preserve compiled kernels and history");
-        const std::string parameters = R"({"max_history":12,"fast_history":4,"history_fix_frames":2,"history_fix_stride":8,"diffuse_prepass":0,"specular_prepass":25,"min_radius":2,"max_radius":20,"lobe_fraction":0.25,"roughness_fraction":0.5,"plane_sensitivity":0.125,"min_hit_weight":0.5,"stabilization":0.5,"reconstruction":2,"anti_firefly":false,"antilag_sigma":2,"antilag_sensitivity":1})";
+        const auto parameters = vision::DataWrap::parse(R"({"max_history":12,"fast_history":4,"history_fix_frames":2,"history_fix_stride":8,"diffuse_prepass":0,"specular_prepass":25,"min_radius":2,"max_radius":20,"lobe_fraction":0.25,"roughness_fraction":0.5,"plane_sensitivity":0.125,"min_hit_weight":0.5,"stabilization":0.5,"reconstruction":2,"anti_firefly":false,"antilag_sigma":2,"antilag_sensitivity":1})");
         expect(system.prepare_vision_camera_view(system.active_vision_runtime(), first_camera,
                    16, 16, true, false, true, CameraVisionDenoiser::ReBLUR, parameters),
                "REBLUR parameters must update a live view");
         expect(pipeline.frame_buffer() == reblur_framebuffer.get() && pipeline.frame_index() == 0,
                "parameter edits must reset history without recreating the framebuffer");
         auto* filter = dynamic_cast<vision::IlluminationIntegrator*>(pipeline.renderer().integrator().get())->denoiser();
-        const auto applied = vision::DataWrap::parse(filter->reblur_settings_json());
-        expect(applied == vision::DataWrap::parse(parameters),
+        const auto applied = filter->reblur_settings();
+        expect(applied == parameters,
                "all seventeen editor values must reach the actual REBLUR filter");
         vision::DenoiserDesc source_desc{"ReBLUR"};
         for (const auto& [key, value] : applied.items()) source_desc.set_value(key, value);
         const auto source_filter = vision::Node::create_shared<vision::Denoiser>(source_desc);
-        expect(vision::DataWrap::parse(source_filter->reblur_settings_json()) == applied,
+        expect(source_filter->reblur_settings() == applied,
                "scene descriptors must load all exposed parameters");
-        source_filter->set_reblur_settings(R"({"max_history":7})");
-        const auto overridden = vision::DataWrap::parse(source_filter->reblur_settings_json());
+        source_filter->set_reblur_settings(vision::DataWrap::parse(R"({"max_history":7})"));
+        const auto overridden = source_filter->reblur_settings();
         expect(overridden["max_history"] == 7 && overridden["reconstruction"] == 2 && overridden["antilag_sigma"] == 2,
                "partial camera overrides must retain scene values");
-        source_filter->set_reblur_settings("{}");
-        expect(vision::DataWrap::parse(source_filter->reblur_settings_json()) == applied,
+        source_filter->set_reblur_settings(vision::DataWrap::parse("{}"));
+        expect(source_filter->reblur_settings() == applied,
                "clearing overrides must restore source settings");
         render(pipeline, "REBLUR-edited-parameters");
         const auto edited_history = pipeline.frame_index();
@@ -985,37 +985,37 @@ struct VisionEngineSceneTest {
         const auto default_relax_history = pipeline.frame_index();
         auto* default_relax = dynamic_cast<vision::IlluminationIntegrator*>(pipeline.renderer().integrator().get())->denoiser();
         system.prepare_vision_camera_view(system.active_vision_runtime(), first_camera,
-            16, 16, true, false, true, CameraVisionDenoiser::ReLAX, "{}", default_relax->relax_settings_json());
+            16, 16, true, false, true, CameraVisionDenoiser::ReLAX, vision::DataWrap::object(), default_relax->relax_settings());
         expect(pipeline.frame_index() == default_relax_history,
                "applying unchanged effective RELAX defaults must preserve history even when JSON changes");
-        const std::string relax_parameters = R"({"diffuse_history":12,"specular_history":16,"diffuse_fast_history":4,"specular_fast_history":5,"history_fix_frames":2,"history_fix_stride":8,"history_fix_normal_power":4,"variance_history_threshold":2,"diffuse_prepass":0,"specular_prepass":25,"min_hit_weight":0.5,"atrous_iterations":3,"diffuse_phi":4,"specular_phi":2,"lobe_fraction":0.25,"roughness_fraction":0.5,"specular_variance_boost":1,"specular_lobe_slack":0.125,"color_box_sigma":3,"depth_threshold":0.03125,"luminance_relaxation":0.75,"normal_relaxation":0.5,"roughness_relaxation":0.25,"antilag_acceleration":0.5,"antilag_spatial_sigma":2,"antilag_temporal_sigma":1,"antilag_reset":0.75,"anti_firefly":true,"roughness_stopping":false,"reconstruction":1})";
+        const auto relax_parameters = vision::DataWrap::parse(R"({"diffuse_history":12,"specular_history":16,"diffuse_fast_history":4,"specular_fast_history":5,"history_fix_frames":2,"history_fix_stride":8,"history_fix_normal_power":4,"variance_history_threshold":2,"diffuse_prepass":0,"specular_prepass":25,"min_hit_weight":0.5,"atrous_iterations":3,"diffuse_phi":4,"specular_phi":2,"lobe_fraction":0.25,"roughness_fraction":0.5,"specular_variance_boost":1,"specular_lobe_slack":0.125,"color_box_sigma":3,"depth_threshold":0.03125,"luminance_relaxation":0.75,"normal_relaxation":0.5,"roughness_relaxation":0.25,"antilag_acceleration":0.5,"antilag_spatial_sigma":2,"antilag_temporal_sigma":1,"antilag_reset":0.75,"anti_firefly":true,"roughness_stopping":false,"reconstruction":1})");
         expect(system.prepare_vision_camera_view(system.active_vision_runtime(), first_camera,
                    16, 16, true, false, true, CameraVisionDenoiser::ReLAX, parameters, relax_parameters),
                "RELAX parameters must update a live view");
         expect(pipeline.frame_buffer() == relax_framebuffer.get() && pipeline.frame_index() == 0,
                "RELAX parameter edits must reset history without recreating the framebuffer");
         filter = dynamic_cast<vision::IlluminationIntegrator*>(pipeline.renderer().integrator().get())->denoiser();
-        const auto relax_applied = vision::DataWrap::parse(filter->relax_settings_json());
-        expect(filter->impl_type() == "ReLAX" && relax_applied == vision::DataWrap::parse(relax_parameters),
+        const auto relax_applied = filter->relax_settings();
+        expect(filter->impl_type() == "ReLAX" && relax_applied == relax_parameters,
                "all thirty editor values must reach the actual RELAX filter independently of REBLUR");
         vision::DenoiserDesc relax_desc{"ReLAX"};
         for (const auto& [key, value] : relax_applied.items()) relax_desc.set_value(key, value);
         const auto relax_source = vision::Node::create_shared<vision::Denoiser>(relax_desc);
-        expect(vision::DataWrap::parse(relax_source->relax_settings_json()) == relax_applied,
+        expect(relax_source->relax_settings() == relax_applied,
                "RELAX scene descriptors must load all exposed parameters");
-        relax_source->set_relax_settings(R"({"diffuse_history":7})");
-        const auto relax_partial = vision::DataWrap::parse(relax_source->relax_settings_json());
+        relax_source->set_relax_settings(vision::DataWrap::parse(R"({"diffuse_history":7})"));
+        const auto relax_partial = relax_source->relax_settings();
         expect(relax_partial["diffuse_history"] == 7 && relax_partial["specular_history"] == 16 &&
                    relax_partial["reconstruction"] == 1 && relax_partial["roughness_stopping"] == false,
                "partial RELAX camera overrides must retain scene values");
-        relax_source->set_relax_settings("{}");
-        expect(vision::DataWrap::parse(relax_source->relax_settings_json()) == relax_applied,
+        relax_source->set_relax_settings(vision::DataWrap::parse("{}"));
+        expect(relax_source->relax_settings() == relax_applied,
                "clearing RELAX overrides must restore source settings");
         render(pipeline, "RELAX-edited-parameters");
         const auto relax_history = pipeline.frame_index();
         system.prepare_vision_camera_view(system.active_vision_runtime(), first_camera,
             16, 16, true, false, true, CameraVisionDenoiser::ReLAX, parameters,
-            vision::DataWrap::parse(relax_parameters).dump(2));
+            vision::DataWrap(relax_parameters));
         expect(pipeline.frame_index() == relax_history,
                "unchanged RELAX parameters must preserve temporal history");
         prepare(second_camera, CameraVisionDenoiser::SVGF);

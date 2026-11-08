@@ -29,11 +29,16 @@ const child = spawn(path.join(runtime, 'corona_engine.exe'), [], {
   env: { ...process.env, CORONA_CEF_REMOTE_DEBUG_PORT: String(port),
     CORONA_CEF_ROOT_CACHE: path.join(output, `cache-${Date.now()}`) },
 });
+const launchedAt = Date.now();
+child.once('spawn', () => console.log(`CEF smoke: engine pid=${child.pid} started at ${new Date().toISOString()}`));
+child.once('exit', (code, signal) => console.log(`CEF smoke: engine exit after ${Date.now() - launchedAt}ms code=${code} signal=${signal}`));
+child.once('close', (code, signal) => console.log(`CEF smoke: engine closed after ${Date.now() - launchedAt}ms code=${code} signal=${signal}`));
 let launchError;
 child.on('error', error => { launchError = error; });
 const clients = [];
 let stage = 'starting engine';
 let result;
+let forcedTermination = false;
 const waitFor = async (fn, timeout = 90_000) => {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
@@ -547,22 +552,35 @@ try {
 
     await main.evaluate(`corona.network.setProjectRoot(${JSON.stringify(cameraWorld)})`);
     await main.evaluate(`(() => {
-      window.__chatFromFrame = [];
+      window.__chatFromPeer = [];
+      window.__eventFrameLoaded = false;
       window.__eventFrame = document.createElement('iframe');
+      window.__eventFrame.onload = () => { window.__eventFrameLoaded = true; };
       window.__eventFrame.srcdoc = '<!doctype html><title>LANChat event context</title>';
       document.body.append(window.__eventFrame);
       return true;
     })()`);
-    await waitFor(() => main.evaluate('typeof window.__eventFrame?.contentWindow?.corona?.lanChat?.onEvent === "function"'));
-    assert.equal(await main.evaluate('window.__eventFrame.contentWindow.corona.app.closeProcess().catch(error=>error.code)'), 'PERMISSION_DENIED');
-    assert.match(await main.evaluate(`(()=>{try{
-      window.__eventFrame.contentWindow.corona.lanChat.onEvent(()=>{});return 'unexpected';
-    }catch(e){return String(e);}})()`), /PERMISSION_DENIED/);
-    await main.evaluate(`window.__eventFrame.contentWindow.eval(
-      "window.__frameStop=corona.lanChat.onEvent(event=>parent.__chatFromFrame.push(event)); true")`);
-    assert.match(await main.evaluate(`(()=>{try{
-      window.__eventFrame.contentWindow.__frameStop();return 'unexpected';
-    }catch(e){return String(e);}})()`), /PERMISSION_DENIED/);
+    await waitFor(() => main.evaluate('window.__eventFrameLoaded'));
+    assert.equal(await main.evaluate('typeof window.__eventFrame.contentWindow.corona'), 'undefined',
+      'subframes must not receive native authority');
+    // Same-origin parent functions execute in their owner's realm. Check that
+    // the subframe itself has no native endpoint; use a real top-level Dock
+    // below to exercise delivery and retirement of a separate endpoint.
+    assert.equal(await main.evaluate('window.__eventFrame.contentWindow.eval("typeof corona")'), 'undefined');
+    await main.evaluate(`window.__eventFrame.remove();
+      window.__stopPeerReports = window.__smoke.on('lanchat-event-peer', value => window.__chatFromPeer.push(value)); true`);
+    const eventPeer = await main.evaluate(`corona.window.createPanel(${JSON.stringify({
+      detached: true, nativeDocked: true, panelId: 'lanchat-event-peer', title: 'LANChat context',
+      routePath: `/StartScreen?uiOwner=${scope}&uiSession=smoke&uiWindow=lanchat-event-peer`, width: 320, height: 240,
+    })})`);
+    const eventTarget = await waitFor(async () => (await targets()).find(item => item.url.includes('uiWindow=lanchat-event-peer')));
+    const eventClient = await connect(eventTarget);
+    await eventClient.evaluate(`(() => { ${source}
+      JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); };
+      window.__eventPeerMessages = createWebMessages({scope:${JSON.stringify(scope)},documentId:'lanchat-event-peer'});
+      window.__peerStop = corona.lanChat.onEvent(event => { void window.__eventPeerMessages.emit('lanchat-event-peer', event); });
+      return true;
+    })()`);
     await main.evaluate(`(() => {
       window.__chatEvents = []; window.__retiredChatEvents = [];
       window.__stopThrowingChat = corona.lanChat.onEvent(() => { throw Error('isolate this callback'); });
@@ -603,14 +621,15 @@ try {
       assert.equal(events[1].agents[0].name, 'Agent 中文');
       assert.equal(events[1].agents[0].agent_id, agent.agent_id);
       assert.deepEqual(events[2].agents, []);
-      await waitFor(async () => (await main.evaluate('window.__chatFromFrame.length')) === 3);
-      assert.deepEqual(await main.evaluate('window.__chatFromFrame'), events);
-      await main.evaluate('window.__eventFrame.remove(); window.__eventFrame=null; true');
+      await waitFor(async () => (await main.evaluate('window.__chatFromPeer.length')) === 3);
+      assert.deepEqual(await main.evaluate('window.__chatFromPeer'), events);
+      assert.equal(await main.evaluate(`corona.window.closeTab(${eventPeer.tab_id})`), true);
+      await waitFor(async () => !(await targets()).some(item => item.id === eventTarget.id));
       const afterRelease = await chatCall('sendMessage', 'after context release');
       assert.equal(afterRelease.ok, true);
       await waitFor(async () => (await main.evaluate('window.__chatEvents.length')) === 4);
       await delay(200);
-      assert.equal(await main.evaluate('window.__chatFromFrame.length'), 3, 'released context must receive no further events');
+      assert.equal(await main.evaluate('window.__chatFromPeer.length'), 3, 'released Dock context must receive no further events');
       const rooms = await chatCall('listHistoryRooms');
       assert.equal(rooms.ok, true);
       const savedRoom = rooms.rooms.find(row => row.display_room_id === 'cef-owned-events');
@@ -631,7 +650,8 @@ try {
       assert.ok(restored.history.some(row => row.message_id === sent.message_id));
     } finally {
       await chatCall('stopLocalRoom');
-      await main.evaluate('window.__stopChat(); window.__stopChat(); window.__stopThrowingChat(); window.__stopMutatingChat(); window.__eventFrame?.remove(); true');
+      await main.evaluate('window.__stopChat(); window.__stopChat(); window.__stopThrowingChat(); window.__stopMutatingChat(); window.__stopPeerReports(); window.__eventFrame?.remove(); true');
+      await main.evaluate(`corona.window.closeTab(${eventPeer.tab_id})`);
     }
     evidence[0].lanChatEvents = 'local message and roster event compatibility with JSON disabled; exact text/identity, stable prior roster snapshot, unsubscribe; named methods/subscription and metadata objects, callback mutation/throw isolation, idempotent unsubscribe, context ownership and release, retired generic event denied';
     const listed = await listCameras();
@@ -932,6 +952,32 @@ try {
     assert.equal(typeof actor.handle, 'string');
     assert.equal(typeof actor.actor_guid, 'string');
 
+    // Loading publishes a separate revision. Settle it before measuring whether
+    // rejected creation requests mutate the scene.
+    await waitFor(async () => (await readTree()).actors.some(value =>
+      value.actor_guid === actor.actor_guid && value.load_status === 'loaded'));
+    // Projection equality below spans several requests; a dynamic fixture can
+    // legitimately move under gravity between them.
+    const staticReceipt = await main.evaluate(`corona.scene.setActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({
+      archive_session: camera.archive_session, mechanics: { body_type: 'static' },
+    })})`);
+    console.log('CEF smoke: static Actor receipt', JSON.stringify(staticReceipt));
+    assert.equal(staticReceipt.actor.mechanics.body_type, 'static');
+    let staticPolls = 0;
+    await waitFor(async () => {
+      const state = await main.evaluate(`corona.scene.readActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({archive_session: camera.archive_session})})`);
+      if (++staticPolls === 1 || staticPolls % 100 === 0)
+        console.log('CEF smoke: static Actor state', JSON.stringify(state));
+      return state.mechanics.body_type === 'static';
+    });
+    // Pending read-your-write is insufficient: the committed value must survive
+    // physics ticks after the command has been consumed.
+    for (let tick = 0; tick < 3; ++tick) {
+      await delay(250);
+      const committed = await main.evaluate(`corona.scene.readActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({archive_session: camera.archive_session})})`);
+      assert.equal(committed.mechanics.body_type, 'static');
+      assert.equal(committed.body_type, 'static');
+    }
     const beforeInvalidCreation = await readTree();
     for (const [scene, options, expected] of [
       ['scene.ini', {}, 'INVALID_ARGUMENT'],
@@ -948,8 +994,6 @@ try {
     evidence[0].actorCreation = 'typed V8 with JSON disabled, scoped Actor projection, retired CEF route denied, invalid requests leave scene unchanged';
     stage = 'renaming Actor through scoped typed V8';
     console.log(`CEF smoke: ${stage}`);
-    await waitFor(async () => (await readTree()).actors.some(value =>
-      value.actor_guid === actor.actor_guid && value.load_status === 'loaded'));
     const renameScope = { archive_session: camera.archive_session };
     const renameBefore = await main.evaluate(`corona.scene.readActorIndex('scene.ini',${JSON.stringify(renameScope)})`);
     const renamed = await main.evaluate(`corona.scene.renameActor('scene.ini',${JSON.stringify(actor.actor_guid)},'Renamed transform probe',${JSON.stringify(renameScope)})`);
@@ -1035,7 +1079,13 @@ try {
       assert.equal(field in contextualActor, false, `actor context must exclude ${field}`);
     }
     evidence[0].actorContext = 'scoped typed assistant projection carries transform, size and physics without full Actor JSON';
-    const richTree = await readTree();
+    // Resource rebinding commits before Geometry finishes its GPU upload.
+    // Verify the completed projection after that specific Actor is ready.
+    const richTree = await waitFor(async () => {
+      const tree = await readTree();
+      return tree.actors.some(value => value.actor_guid === actor.actor_guid
+        && value.load_status === 'loaded') ? tree : null;
+    });
     const treeActor = richTree.actors.find(value => value.actor_guid === actor.actor_guid);
     assert.equal(treeActor.name, actor.name);
     assert.equal(treeActor.opaque_handle, String(actor.handle));
@@ -1082,10 +1132,26 @@ try {
     assert.equal(focused.camera.opaque_handle, camera.opaque_handle);
     assert.equal('handle' in focused.camera, false);
     assert.ok(focused.distance >= 1);
+    await delay(250);
     const camerasAfterFocus = (await listCameras()).data.cameras;
+    const snapshotScope = { archive_session: camera.archive_session };
+    await main.evaluate(`corona.scene.setActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({ ...snapshotScope, visible: false })})`);
+    await main.evaluate(`corona.scene.setActorTransform('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({ ...snapshotScope, position: [1, 2, 3] })})`);
+    await delay(250);
+    const committedActor = await main.evaluate(`corona.scene.readActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(snapshotScope)})`);
+    console.log('CEF smoke: committed component snapshots', JSON.stringify({
+      camera: camerasAfterFocus.find(value => value.camera_id === 'smoke-camera').position,
+      expectedCamera: focused.camera.position, visible: committedActor.visible,
+      position: committedActor.geometry.position,
+    }));
+    await main.evaluate(`corona.scene.setActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({ ...snapshotScope, visible: true })})`);
+    await main.evaluate(`corona.scene.setActorTransform('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({ ...snapshotScope, position: [0, 0, 0] })})`);
+    await delay(250);
     assert.deepEqual(camerasAfterFocus.find(value => value.camera_id === 'main-camera'),
       camerasBeforeFocus.find(value => value.camera_id === 'main-camera'));
     assert.deepEqual(camerasAfterFocus.find(value => value.camera_id === 'smoke-camera').position, focused.camera.position);
+    assert.equal(committedActor.visible, false, 'committed visibility must survive command consumption');
+    assert.deepEqual(committedActor.geometry.position, [1, 2, 3], 'committed transform must survive command consumption');
     for (const invalid of [[], ['scene.ini', actor.actor_guid, 'smoke-camera'],
       ['scene.ini', actor.actor_guid, 'smoke-camera', {}], ['scene.ini', actor.actor_guid, 12, focusArgs[3]],
       ['scene.ini', actor.actor_guid, 'smoke-camera', { ...focusArgs[3], cameraHandle: 12 }]]) {
@@ -1103,10 +1169,11 @@ try {
     const patch = { archive_session: camera.archive_session, position: [0, 2, -3], rotation: [0, 0, 0], scale: [2, 1, 3] };
     stage = 'applying native transform patch';
     console.log(`CEF smoke: ${stage}`);
+    const beforeTransform = await main.evaluate(`corona.scene.readActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(indexScope)})`);
     const transformed = await main.evaluate(`corona.scene.setActorTransform('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(patch)})`);
     assert.equal(transformed.status, 'success');
     assert.equal(transformed.actor.actor_guid, actor.actor_guid);
-    assert.equal(transformed.actor.actor_version, actor.actor_version + 1);
+    assert.equal(transformed.actor.actor_version, beforeTransform.actor_version + 1);
     assert.deepEqual(transformed.actor.geometry, { position: patch.position, rotation: patch.rotation, scale: patch.scale });
     const partial = await main.evaluate(`corona.scene.setActorTransform('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({ archive_session: camera.archive_session, rotation: [1, 2, 3] })})`);
     assert.deepEqual(partial.actor.geometry, { ...transformed.actor.geometry, rotation: [1, 2, 3] });
@@ -1627,6 +1694,7 @@ try {
       fixtureScene: cameraWorld });
   }
   result = { date: new Date().toISOString(), passed: true, documents: evidence, nativeBindings: testNativeBindings,
+    engineSha256: createHash('sha256').update(await readFile(path.join(runtime, 'corona_engine.exe'))).digest('hex'),
     fixture: 'file-origin HTML in production BrowserManager windows; test-owned scene loaded through named project V8 binding; no user world',
     limitations: ['Packaged Vue collaboration and CameraView UI remain untested', 'Minimized-window and separate-engine isolation remain untested'] };
   console.log('CEF smoke: all business assertions completed; cleaning up');
@@ -1657,6 +1725,7 @@ try {
   }
   for (const client of clients) client.close();
   if (child.pid && child.exitCode === null) {
+    forcedTermination = true;
     const exited = new Promise(resolve => child.once('close', resolve));
     await new Promise(resolve => {
       const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
@@ -1678,6 +1747,9 @@ try {
 
 // Publish success only after confirming the test-owned engine has exited.
 // taskkill accepting termination does not mean the child has already exited.
+assert.equal(forcedTermination, false, 'Engine must shut down without forced termination');
+assert.equal(child.exitCode, 0, 'Engine must exit normally after the named quit request');
 result.cleanup_ok = true;
+result.graceful_exit = true;
 await writeFile(path.join(output, 'result.json'), JSON.stringify(result, null, 2));
 console.log(JSON.stringify(result, null, 2));

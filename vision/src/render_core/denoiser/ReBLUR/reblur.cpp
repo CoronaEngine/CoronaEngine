@@ -74,17 +74,16 @@ ReBLUR::ReBLUR(const DenoiserDesc &desc) : Denoiser(desc) {
     scene_settings_ = read_settings(desc.parameter_set().data(), Settings{});
     filter_->settings = scene_settings_;
 }
-bool ReBLUR::set_reblur_settings(string_view json) noexcept {
-    if (settings_override_ == json) return false;
-    const auto data = DataWrap::parse(json.begin(), json.end(), nullptr, false);
+bool ReBLUR::set_reblur_settings(const DataWrap& data) noexcept {
+    if (settings_override_ == data) return false;
     if (!data.is_object()) return false;
     filter_->settings = read_settings(data, scene_settings_);
-    settings_override_ = json;
+    settings_override_ = data;
     filter_->reset();
     frame_ = InvalidUI32;
     return true;
 }
-string ReBLUR::reblur_settings_json() const {
+DataWrap ReBLUR::reblur_settings() const {
     const auto &s = filter_->settings;
     return DataWrap{{"max_history", s.max_history}, {"fast_history", s.fast_history},
         {"history_fix_frames", s.history_fix_frames}, {"history_fix_stride", s.history_fix_stride},
@@ -94,7 +93,7 @@ string ReBLUR::reblur_settings_json() const {
         {"plane_sensitivity", s.plane_sensitivity}, {"min_hit_weight", s.min_hit_weight},
         {"stabilization", s.stabilization}, {"antilag_sigma", s.antilag_sigma},
         {"antilag_sensitivity", s.antilag_sensitivity}, {"anti_firefly", bool(s.anti_firefly)},
-        {"reconstruction", static_cast<uint>(s.reconstruction)}}.dump();
+        {"reconstruction", static_cast<uint>(s.reconstruction)}};
 }
 void ReBLUR::initialize_(const NodeDesc &) noexcept {
     DenoiserDesc desc{"svgf"}; desc.set_value("coverage_only", true);

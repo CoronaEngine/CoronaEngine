@@ -2,7 +2,9 @@
 #include <corona/events/acoustics_system_events.h>
 #include <corona/engine/engine_runtime_api.h>
 #include <corona/shared_data_hub.h>
+#include <corona/systems/optics/optics_commands.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
+#include <corona/systems/script/python_runtime_coordinator.h>
 #include "cef/cef_editor_native_api_registry.h"
 #include "cef/cef_editor_native_api_test_support.h"
 #include "cef/cef_window_operations.h"
@@ -12,10 +14,12 @@
 #include "cef/cef_script_input.h"
 #include "cef/browser_ui.h"
 #include "editor_api/cef_editor_api.h"
+#include "editor_api/editor_dispatch.h"
 #include "optics/camera_viewport_updates.h"
 
 #include <filesystem>
 #include <future>
+#include <deque>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -44,6 +48,90 @@ void test_no_generic_web_contracts() {
 
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+void test_native_script_service_wait_does_not_hold_editor_state(bool queued_before_owner_wait) {
+    namespace Dispatch = UI::Detail;
+    namespace Python = Corona::Script::Python;
+    using namespace std::chrono_literals;
+    const auto owner = std::this_thread::get_id();
+    std::mutex queue_mutex;
+    std::condition_variable queue_changed;
+    std::deque<std::function<void()>> tasks;
+    std::atomic<bool> request_seen{false};
+    std::atomic<bool> consumer_done{false};
+    Dispatch::set_editor_dispatch_hooks({
+        .is_owner_thread = [owner] { return std::this_thread::get_id() == owner; },
+        .post_to_owner = [&](std::function<void()> task) {
+            { std::lock_guard lock(queue_mutex); tasks.push_back(std::move(task)); }
+            queue_changed.notify_all();
+            return true;
+        }});
+    require(Dispatch::on_editor_owner_thread(), "dispatch regression must establish its owner");
+    Python::PythonRuntimeCoordinator coordinator;
+    auto* previous = Python::active_python_runtime_coordinator();
+    Python::install_active_python_runtime_coordinator(&coordinator);
+    std::thread consumer([&] {
+        if (auto request = coordinator.wait_pop(5s)) {
+            request_seen = true;
+            queue_changed.notify_all();
+            // FileScripts restoration calls back into the actual scene registry.
+            // A Native handler holding editor_state_mutex while waiting for this
+            // consumer prevents the callback from completing until service timeout.
+            auto callback = UI::EditorApiRegistry::instance().invoke(
+                {"SceneTools.read_active_scene", Json::array(), UI::EditorApiCaller::ScriptRuntime}, {});
+            auto response = callback.success ? Python::PythonRuntimeResponse::success()
+                                             : Python::PythonRuntimeResponse::failure(callback.error);
+            response.service_result = std::make_shared<const Json>(
+                Json{{"status", "stopped"}, {"restored", true}});
+            coordinator.complete(request->request_id, std::move(response));
+        }
+        consumer_done = true;
+    });
+    std::future<UI::NativeResult> native;
+    const auto start_native = [&] {
+        native = std::async(std::launch::async, [&] {
+            return UI::EditorApiRegistry::instance().invoke(
+                {"Scripts.stop", Json::array({Json{{"runId", "dispatch-regression"}}}),
+                 UI::EditorApiCaller::Native}, {});
+        });
+    };
+    if (queued_before_owner_wait) {
+        start_native();
+        std::unique_lock lock(queue_mutex);
+        queue_changed.wait_for(lock, 1s, [&] { return !tasks.empty(); });
+    }
+    bool overtook_owner_wait = false;
+    {
+        Dispatch::EditorWaitingForPythonScope unrelated_owner_request;
+        if (!queued_before_owner_wait) start_native();
+        std::unique_lock lock(queue_mutex);
+        queue_changed.wait_for(lock, 1s, [&] { return !tasks.empty() || request_seen.load(); });
+        // Also cover a request already in the owner queue when its Python wait
+        // starts: the pending Native request must not use the callback takeover.
+        if (queued_before_owner_wait) queue_changed.wait_for(lock, 100ms, [&] { return request_seen.load(); });
+        overtook_owner_wait = request_seen;
+    }
+    const auto deadline = std::chrono::steady_clock::now() + 6s;
+    while ((!consumer_done || native.wait_for(0ms) != std::future_status::ready) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::function<void()> task;
+        {
+            std::lock_guard lock(queue_mutex);
+            if (!tasks.empty()) { task = std::move(tasks.front()); tasks.pop_front(); }
+        }
+        if (task) task();
+        else std::this_thread::sleep_for(1ms);
+    }
+    consumer.join();
+    auto result = native.get();
+    // Flush a queued task already completed through the callback handoff.
+    for (auto& task : tasks) task();
+    Python::install_active_python_runtime_coordinator(previous);
+    Dispatch::clear_editor_dispatch_hooks();
+    require(!overtook_owner_wait, "Native service request must remain queued during an unrelated owner Python wait");
+    require(result.success && result.data.value("restored", false),
+            "Native Scripts.stop must finish its Python scene callback without holding the editor state lock");
 }
 
 void test_identity_lifetime() {
@@ -1072,6 +1160,64 @@ void test_script_input_queue_has_one_owner_and_drops_retired_scopes() {
         require(!endpoint.invoke(method, Json::array(), {}).success, "retired manifest input must be unavailable");
 }
 
+void test_optics_queue_merges_independent_fields() {
+    Corona::OpticsCommandChannel::Buffer commands;
+    Corona::OpticsUpdateCommand material{};
+    material.optics_handle = 1;
+    material.fields = Corona::OpticsField::Metallic | Corona::OpticsField::Visible;
+    material.metallic = 0.9f;
+    material.visible = false;
+    commands.push(material);
+    Corona::OpticsUpdateCommand roughness{};
+    roughness.optics_handle = 1;
+    roughness.fields = Corona::OpticsField::Roughness;
+    roughness.roughness = 0.25f;
+    commands.push(roughness);
+    material.metallic = 0.95f;
+    commands.push(material);
+    const auto merged = commands.drain();
+    require(merged.size() == 1 && merged[0].metallic == 0.95f &&
+                merged[0].roughness == 0.25f && !merged[0].visible &&
+                Corona::has_optics_field(merged[0].fields, Corona::OpticsField::Roughness),
+            "independent Optics setters must retain all fields and use the latest value per field");
+    roughness.geometry_handle = 17;
+    commands.push(roughness);
+    material.geometry_handle = 18;
+    commands.push(material);
+    const auto rebound = commands.drain();
+    require(rebound.size() == 1 && rebound[0].geometry_handle == 18 &&
+                !Corona::has_optics_field(rebound[0].fields, Corona::OpticsField::Roughness),
+            "commands for different geometry owners must not merge their fields");
+}
+
+void test_render_settings_queue_owns_values() {
+    auto& hub = Corona::SharedDataHub::instance();
+    hub.drain_camera_state_updates();
+    for (const auto* family : {"pt", "restir", "reblur", "relax"}) {
+        UI::SceneRequest request{UI::SceneMethod::SetCameraRenderSettings};
+        request.archive_session = "camera-test-archive";
+        request.camera_render_settings.scene = "scene.ini";
+        request.camera_render_settings.camera_id = "primary";
+        request.camera_render_settings.family = family;
+        const Json accepted{{"max_history", 12}, {"enabled", false}};
+        request.camera_render_settings.settings = accepted;
+        const auto reply = UI::execute_scene_operation(request);
+        require(reply.error_code.empty() && reply.camera_render_settings.pending, "render settings accept a scoped object patch");
+        request.camera_render_settings.settings["max_history"] = 99;
+        const auto commands = hub.drain_camera_state_updates();
+        require(commands.size() == 1, "render settings enqueue once");
+        const auto& command = commands.front();
+        const Json value = std::string_view(family) == "pt" ? Json(command.vision_pt_settings) :
+            std::string_view(family) == "restir" ? Json(command.vision_restir_settings) :
+            std::string_view(family) == "reblur" ? Json(command.vision_reblur_settings) : Json(command.vision_relax_settings);
+        require(value.is_object() && value == accepted,
+            "render settings command must own the original object without JSON string encoding");
+        request.method = UI::SceneMethod::ReadCameraRenderSettings;
+        require(UI::execute_scene_operation(request).camera_render_settings.settings == accepted,
+            "requested render settings remain readable after drain and caller mutation");
+    }
+}
+
 int main() {
     try {
         test_no_generic_web_contracts();
@@ -1081,6 +1227,8 @@ int main() {
         require(kernel.initialize(), "kernel initialization failed");
         UI::register_builtin_native_api_handlers();
         UI::load_native_editor_scene_for_test(snapshot());
+        test_optics_queue_merges_independent_fields();
+        test_render_settings_queue_owns_values();
         test_resource_import_results_and_modal_retirement();
         test_audio_adapters_publish_once_with_exact_identity();
         test_native_scene_values_and_non_web_adapters();
@@ -1153,6 +1301,8 @@ int main() {
                 "tree reads cannot create an absent editor scene");
         require(UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.archive_session.empty(),
                 "an empty scene read cannot lazily create an editor scene");
+        test_native_script_service_wait_does_not_hold_editor_state(false);
+        test_native_script_service_wait_does_not_hold_editor_state(true);
         kernel.shutdown();
         std::cout << "CameraWindowIdentityTests passed\n";
         return 0;

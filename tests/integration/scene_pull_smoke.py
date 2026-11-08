@@ -9,6 +9,7 @@ from urllib.request import urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from vision_frontend_probe import Frontend
+from blockly_actor_file_smoke import open_web_project
 
 EVENTS = ["SceneTools.actorChanged", "SceneTools.actorSelectionChanged", "SceneTools.actorTransformUpdated",
           "SceneTools.sceneTreeChanged", "ProjectLauncher.projectOpened"]
@@ -96,7 +97,7 @@ def run(port, root, control):
 
     wait(lambda: main.evaluate("document.readyState === 'complete' && !!document.querySelector('#app[data-v-app] button')"),
          bool, "main frontend mounted")
-    opened = wait(lambda: v8(main, "corona.project.openProject", str(root)),
+    opened = wait(lambda: open_web_project(main, root),
                   lambda r: r.get("status") != "service_initializing", "open")
     assert opened.get("ok"), opened
     state = main.evaluate("corona.scene.readActive()")
@@ -133,6 +134,13 @@ def run(port, root, control):
                          bool, "detached Object window")[0]
     second = Frontend(port, target_id=second_target["id"])
     panels = [main, second]
+    def release_probe(panel):
+        panel.evaluate("""(async()=>{
+          for (const token of window.probeTokens || []) await window.probeApi.off(token);
+          for (const [method, original] of Object.entries(window.probeReadOriginals || {}))
+            window.probeApi.scene[method] = original;
+          window.probeTokens=[];window.probeReadOriginals={};
+        })()""")
     wait(lambda: second.evaluate("!!document.querySelector('.object-panel-shell')"), bool, "second Object panel")
     main.evaluate(f"corona.scene.selectActor({json.dumps(state['scene'])}, 'actor', 'Probe')")
     def x(web):
@@ -203,7 +211,7 @@ def run(port, root, control):
         (control / "resume").touch()
         stopped = v8(main, "corona.scripts.stop", started["runId"], True)
         assert stopped.get("restored"), stopped
-    restored = v8(main, "corona.scene.readTransforms", scope["archive_session"], [guid])["actors"][0]["position"]
+    restored = v8(main, "corona.scene.readTransforms", {**scope, 'actors': [guid]})["actors"][0]["position"]
     assert restored == initial, restored
     other = start_file("separate_run.py", f"""
 import json, sys
@@ -234,10 +242,15 @@ def run():
         wait(lambda: second.evaluate("!!document.querySelector('.lock-row input')"), bool, 'second Vue lock controls')
         second.evaluate("document.querySelector('.lock-row input').click()")
         wait(read_probe, lambda actor: actor['mechanics']['linear_lock'][0] != original_properties['mechanics']['linear_lock'][0], 'second Vue window lock patch')
+        lock_enabled = read_probe()['camera_lock']['enabled']
+        wait(lambda: main.evaluate("document.querySelector('.switch-label input').checked"),
+             lambda value: value is lock_enabled, 'Vue camera-lock baseline')
         main.evaluate("document.querySelector('.switch-label input').click()")
-        wait(read_probe, lambda actor: actor['camera_lock']['enabled'] is True, 'Vue camera-lock patch')
+        wait(read_probe, lambda actor: actor['camera_lock']['enabled'] is not lock_enabled, 'Vue camera-lock toggle')
+        wait(lambda: main.evaluate("document.querySelector('.switch-label input').checked"),
+             lambda value: value is not lock_enabled, 'Vue camera-lock updated control')
         main.evaluate("document.querySelector('.switch-label input').click()")
-        wait(read_probe, lambda actor: actor['camera_lock']['enabled'] is False, 'Vue camera-lock disable')
+        wait(read_probe, lambda actor: actor['camera_lock']['enabled'] is lock_enabled, 'Vue camera-lock restore')
         restore_properties = {**scope, 'visible': original_properties['visible'],
             'follow_camera': original_properties['follow_camera'], 'mechanics': original_properties['mechanics'],
             'camera_lock': {key: original_properties['camera_lock'][key] for key in ['enabled', 'position_offset', 'rotation_offset']}}
@@ -254,7 +267,12 @@ def run():
             **scope, 'project_path': metadata['project_path'], 'name': new_name,
             'core_version': metadata['core_version']}) + ')')
         assert v8(panels[1], "corona.scene.save", state["scene"], scope)["status"] == "saved"
-        assert v8(main, "corona.project.openProject", str(root))["ok"]
+        # Production reopening retires detached documents. Release test hooks
+        # while those documents are alive, before the owner closes them.
+        release_probe(second)
+        second.socket.close()
+        panels.remove(second)
+        assert open_web_project(main, root)["ok"]
         fresh = main.evaluate("corona.scene.readActive()")
         assert fresh["archive_session"] != scope["archive_session"]
         assert main.evaluate('corona.projectSettings.getActiveProjectInfo()')["name"] == new_name
@@ -265,11 +283,7 @@ def run():
         v8(main, "corona.scripts.stop", other["runId"], True)
         for panel in panels:
             try:
-                panel.evaluate("""(async()=>{
-                  for (const token of window.probeTokens || []) await window.probeApi.off(token);
-                  for (const [method, original] of Object.entries(window.probeReadOriginals || {}))
-                    window.probeApi.scene[method] = original;
-                })()""")
+                release_probe(panel)
             finally:
                 panel.socket.close()
 
