@@ -8367,7 +8367,12 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             const float y = arg_float_value(request.args, 2);
             const float viewport_width = arg_float_value(request.args, 3, static_cast<float>(camera->width));
             const float viewport_height = arg_float_value(request.args, 4, static_cast<float>(camera->height));
-            const auto point = map_viewport_pick_point(x, y, viewport_width, viewport_height, camera->width, camera->height);
+            ViewportPickPoint point;
+            {
+                const auto native_camera = Corona::SharedDataHub::instance().camera_storage().try_acquire_read(camera->engine_camera->get_handle());
+                if (!native_camera) return native_failure("Camera is unavailable", 2);
+                point = map_viewport_pick_point(x, y, viewport_width, viewport_height, *native_camera);
+            }
             if (!point.valid) {
                 return native_failure("Invalid viewport size", 2);
             }

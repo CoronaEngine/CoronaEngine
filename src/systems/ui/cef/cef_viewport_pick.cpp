@@ -8,19 +8,6 @@
 namespace Corona::Systems::UI {
 
 ViewportPickPoint map_viewport_pick_point(double x, double y, double width, double height,
-                                          std::uint32_t camera_width, std::uint32_t camera_height) {
-    ViewportPickPoint point;
-    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) || !std::isfinite(height) ||
-        width <= 0 || height <= 0 || !camera_width || !camera_height) return point;
-    point.valid = true;
-    if (x < 0 || y < 0 || x >= width || y >= height) return point;
-    point.inside = true;
-    point.x = static_cast<std::uint32_t>(std::min(x / width * camera_width, double(camera_width - 1)));
-    point.y = static_cast<std::uint32_t>(std::min(y / height * camera_height, double(camera_height - 1)));
-    return point;
-}
-
-ViewportPickPoint map_viewport_pick_point(double x, double y, double width, double height,
                                           const Corona::CameraDevice& camera) {
     ViewportPickPoint point;
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) || !std::isfinite(height) ||

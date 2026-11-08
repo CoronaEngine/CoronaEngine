@@ -11,6 +11,7 @@
 #include "cef/cef_scene_operations.h"
 #include "cef/scene_tree_actor.h"
 #include "cef/cef_viewport_pick.h"
+#include "cef/viewport_image_input.h"
 #include "cef/cef_script_input.h"
 #include "cef/browser_ui.h"
 #include "editor_api/cef_editor_api.h"
@@ -1025,14 +1026,20 @@ void test_pointer_configuration_owns_one_state_and_retires_with_its_context() {
     require(UI::prepare_camera_window_request(request).error_code.empty(), "pointer resolves exact scoped camera");
     request.viewport.emplace(); request.viewport->mode = "stereo3d";
     request.viewport->bounds = UI::ViewportBounds{0, 0, 800, 600, 800, 600};
-    request.viewport->pointer = UI::ViewportPointer{12, 34, "grab"};
+    request.viewport->pointer = UI::ViewportPointer{400, 300, "grab"};
     UI::BrowserTab tab; tab.open = true; tab.docking_pos = "main";
     auto& hub = Corona::SharedDataHub::instance();
+    std::optional<UI::InputDetail::ImagePoint> image_point;
+    {
+        const auto camera = hub.camera_storage().acquire_read(request.camera_handle);
+        image_point = UI::InputDetail::map_viewport_image_point(*camera, 400, 300, 800, 600);
+    }
+    require(image_point.has_value(), "center pointer lies inside the current camera image");
     auto result = UI::apply_viewport_configuration(request, tab);
     require(result.error_code.empty() && result.viewport->pointer.cursor == "grab" && result.viewport->system_cursor_hidden,
         "pointer and system cursor share one actual accepted configuration");
     const auto state = hub.viewport_ui_state(request.camera_handle);
-    require(state.pointer.x == 12 && state.pointer.y == 34 && state.pointer.owner_context == 101 &&
+    require(state.pointer.x == static_cast<float>(image_point->x) && state.pointer.y == static_cast<float>(image_point->y) && state.pointer.owner_context == 101 &&
         state.pointer.cursor_shape == Corona::ViewportUiCursorShape::Grab && tab.hide_system_cursor.load(),
         "rendering reads the typed pointer state directly without another command queue");
     for (int kind = 0; kind < 4; ++kind) {
@@ -1043,7 +1050,7 @@ void test_pointer_configuration_owns_one_state_and_retires_with_its_context() {
         if (kind == 3) invalid.context_id = 0;
         require(!UI::apply_viewport_configuration(invalid, tab).error_code.empty(), "invalid pointer rejects entire patch");
         const auto after = hub.viewport_ui_state(request.camera_handle);
-        require(after.mode == state.mode && after.pointer.x == 12 && tab.hide_system_cursor.load(), "invalid pointer has no partial side effects");
+        require(after.mode == state.mode && after.pointer.x == state.pointer.x && tab.hide_system_cursor.load(), "invalid pointer has no partial side effects");
     }
     auto replacement = request; replacement.context_id = 202; replacement.viewport->pointer->cursor = "crosshair";
     require(UI::apply_viewport_configuration(replacement, tab).error_code.empty(), "new context can own its pointer");
@@ -1076,11 +1083,13 @@ void test_owned_pick_requests_and_coordinate_mapping() {
         "live pick coordinates must start at the compositor image edge");
     require(!UI::map_viewport_pick_point(33, 400, 1536, 825, embedded).inside,
         "embedded image black bars must not submit GPU picks");
-    const auto mapped = UI::map_viewport_pick_point(30, 20, 100, 50, 800, 600);
+    Corona::CameraDevice camera;
+    camera.width = 800; camera.height = 600;
+    const auto mapped = UI::map_viewport_pick_point(30, 20, 100, 50, camera);
     require(mapped.valid && mapped.inside && mapped.x == 240 && mapped.y == 240, "one pixel mapping must serve Web and Python");
-    require(!UI::map_viewport_pick_point(0, 0, std::numeric_limits<double>::infinity(), 50, 800, 600).valid,
+    require(!UI::map_viewport_pick_point(0, 0, std::numeric_limits<double>::infinity(), 50, camera).valid,
         "non-finite dimensions must reject before casts");
-    for (const double x : {-0.01, 100.0}) require(!UI::map_viewport_pick_point(x, 0, 100, 50, 800, 600).inside,
+    for (const double x : {-0.01, 100.0}) require(!UI::map_viewport_pick_point(x, 0, 100, 50, camera).inside,
         "negative and right-edge coordinates must miss without truncation");
     UI::ViewportPickRequests requests;
     UI::ViewportPickRequest request;

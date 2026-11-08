@@ -2,6 +2,7 @@
 #include <corona/utils/runtime_paths.h>
 #include "cef_editor_api.h"
 #include "ui_resource_read.h"
+#include "viewport_image_input.h"
 
 #include <horizon/core/logging.h>
 #include <corona/resource/resource_manager.h>
@@ -260,12 +261,14 @@ bool run_viewport_gizmo_pointer(const ViewportGizmoPointerRequest& request,
 
     const float camera_width = static_cast<float>(std::max(camera->width, 1u));
     const float camera_height = static_cast<float>(std::max(camera->height, 1u));
+    const auto image_point = InputDetail::map_viewport_image_point(
+        *camera, request.x, request.y, request.width, request.height);
     ktm::fvec2 pointer{
-        static_cast<float>(request.x / request.width) * camera_width,
-        static_cast<float>(request.y / request.height) * camera_height,
+        image_point ? static_cast<float>(image_point->x) : 0.0f,
+        image_point ? static_cast<float>(image_point->y) : 0.0f,
     };
     const auto ui_state = hub.viewport_ui_state(camera_handle);
-    if (ui_state.mode == Corona::ViewportUiMode::Stereo3D) {
+    if (image_point && ui_state.mode == Corona::ViewportUiMode::Stereo3D) {
         pointer = Corona::Systems::OpticsDetail::viewport_ui_prewarp_point(
             pointer,
             {
@@ -282,7 +285,7 @@ bool run_viewport_gizmo_pointer(const ViewportGizmoPointerRequest& request,
         camera->width, camera->height, 128.0f);
     const auto& cpu_masks = viewport_gizmo_cpu_masks();
     const auto hover_axis =
-        cpu_masks.valid
+        image_point && cpu_masks.valid
             ? Corona::Systems::OpticsDetail::hit_test_viewport_gizmo_alpha(
                   layout, pointer, cpu_masks.views, 8.0f, 128.0f)
             : Corona::ViewportGizmoAxis::None;
@@ -311,6 +314,23 @@ bool run_viewport_gizmo_pointer(const ViewportGizmoPointerRequest& request,
         s_viewport_gizmo_drags.erase(drag_it);
         hub.update_viewport_gizmo_interaction(
             camera_handle, Corona::ViewportGizmoAxis::None, false);
+        complete_gizmo_reply(result, direct);
+        return true;
+    }
+
+    // Captured release/cancel must finish even outside the displayed image.
+    // Moves in black bars keep the last valid position rather than moving the actor.
+    if (!image_point) {
+        if (drag_it != s_viewport_gizmo_drags.end()) {
+            result.axis = drag_it->second.axis;
+            result.consumed = true;
+            result.position = drag_it->second.last_position;
+            result.ended = up_event;
+            result.dragging = !up_event;
+            if (up_event) s_viewport_gizmo_drags.erase(drag_it);
+        }
+        hub.update_viewport_gizmo_interaction(
+            camera_handle, result.dragging ? result.axis : Corona::ViewportGizmoAxis::None, result.dragging);
         complete_gizmo_reply(result, direct);
         return true;
     }
