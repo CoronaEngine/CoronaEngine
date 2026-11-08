@@ -17,6 +17,8 @@ struct ViewportPickPoint {
 };
 ViewportPickPoint map_viewport_pick_point(double x, double y, double width, double height,
                                           std::uint32_t camera_width, std::uint32_t camera_height);
+ViewportPickPoint map_viewport_pick_point(double x, double y, double width, double height,
+                                          const Corona::CameraDevice& camera);
 
 struct ViewportPickRequest {
     WindowRequest camera{WindowMethod::ConfigureViewport, 0};

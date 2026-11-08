@@ -1067,6 +1067,15 @@ void test_pointer_configuration_owns_one_state_and_retires_with_its_context() {
 }
 
 void test_owned_pick_requests_and_coordinate_mapping() {
+    Corona::CameraDevice embedded;
+    embedded.width = 1920; embedded.height = 1080;
+    embedded.viewport_rect_active = true; embedded.view_open = false;
+    embedded.view_width = 1536; embedded.view_height = 825;
+    const auto edge = UI::map_viewport_pick_point(34, 0, 1536, 825, embedded);
+    require(edge.valid && edge.inside && edge.x == 0 && edge.y == 0,
+        "live pick coordinates must start at the compositor image edge");
+    require(!UI::map_viewport_pick_point(33, 400, 1536, 825, embedded).inside,
+        "embedded image black bars must not submit GPU picks");
     const auto mapped = UI::map_viewport_pick_point(30, 20, 100, 50, 800, 600);
     require(mapped.valid && mapped.inside && mapped.x == 240 && mapped.y == 240, "one pixel mapping must serve Web and Python");
     require(!UI::map_viewport_pick_point(0, 0, std::numeric_limits<double>::infinity(), 50, 800, 600).valid,
