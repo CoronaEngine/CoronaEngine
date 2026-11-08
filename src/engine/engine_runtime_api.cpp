@@ -2950,104 +2950,98 @@ bool get_vision_denoise(std::uintptr_t camera_handle) {
     return false;
 }
 
-void set_vision_reblur_settings(const std::string& json, std::uintptr_t camera_handle) {
+void set_vision_settings(VisionSettingsFamily family, const nlohmann::json& settings, std::uintptr_t camera_handle) {
     const auto handle = resolve_camera_handle(camera_handle);
-    if (handle == 0) return;
+    if (!handle || !settings.is_object()) return;
     CameraStateUpdateCommand command{};
     command.camera_handle = handle;
-    command.fields = CameraStateUpdateField::VisionReblurSettings;
-    command.vision_reblur_settings = json;
+    switch (family) {
+    case VisionSettingsFamily::Pt: command.fields = CameraStateUpdateField::VisionPtSettings; command.vision_pt_settings = settings; break;
+    case VisionSettingsFamily::Restir: command.fields = CameraStateUpdateField::VisionRestirSettings; command.vision_restir_settings = settings; break;
+    case VisionSettingsFamily::Reblur: command.fields = CameraStateUpdateField::VisionReblurSettings; command.vision_reblur_settings = settings; break;
+    case VisionSettingsFamily::Relax: command.fields = CameraStateUpdateField::VisionRelaxSettings; command.vision_relax_settings = settings; break;
+    }
     SharedDataHub::instance().enqueue_camera_state_update(std::move(command));
+}
+
+nlohmann::json get_requested_vision_settings(VisionSettingsFamily family, std::uintptr_t camera_handle) {
+    const auto handle = resolve_camera_handle(camera_handle);
+    auto& hub = SharedDataHub::instance();
+    switch (family) {
+    case VisionSettingsFamily::Pt:
+        if (const auto pending = hub.requested_camera_vision_pt_settings(handle)) return *pending;
+        if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_pt_settings;
+        break;
+    case VisionSettingsFamily::Restir:
+        if (const auto pending = hub.requested_camera_vision_restir_settings(handle)) return *pending;
+        if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_restir_settings;
+        break;
+    case VisionSettingsFamily::Reblur:
+        if (const auto pending = hub.requested_camera_vision_reblur_settings(handle)) return *pending;
+        if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_reblur_settings;
+        break;
+    case VisionSettingsFamily::Relax:
+        if (const auto pending = hub.requested_camera_vision_relax_settings(handle)) return *pending;
+        if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_relax_settings;
+        break;
+    }
+    return nlohmann::json::object();
+}
+
+nlohmann::json get_effective_vision_settings(VisionSettingsFamily family, std::uintptr_t camera_handle) {
+    if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(resolve_camera_handle(camera_handle))) {
+        switch (family) {
+        case VisionSettingsFamily::Pt: return camera->vision_pt_effective_settings;
+        case VisionSettingsFamily::Restir: return camera->vision_restir_effective_settings;
+        case VisionSettingsFamily::Reblur: return camera->vision_reblur_effective_settings;
+        case VisionSettingsFamily::Relax: return camera->vision_relax_effective_settings;
+        }
+    }
+    return nlohmann::json::object();
 }
 
 void set_vision_pt_settings(const std::string& json, std::uintptr_t camera_handle) {
-    const auto handle = resolve_camera_handle(camera_handle);
-    if (handle == 0) return;
-    CameraStateUpdateCommand command{};
-    command.camera_handle = handle;
-    command.fields = CameraStateUpdateField::VisionPtSettings;
-    command.vision_pt_settings = json;
-    SharedDataHub::instance().enqueue_camera_state_update(std::move(command));
+    const auto value = nlohmann::json::parse(json, nullptr, false);
+    if (value.is_object()) set_vision_settings(VisionSettingsFamily::Pt, value, camera_handle);
+}
+std::string get_requested_vision_pt_settings(std::uintptr_t camera_handle) {
+    return get_requested_vision_settings(VisionSettingsFamily::Pt, camera_handle).dump();
+}
+std::string get_effective_vision_pt_settings(std::uintptr_t camera_handle) {
+    return get_effective_vision_settings(VisionSettingsFamily::Pt, camera_handle).dump();
 }
 
 void set_vision_restir_settings(const std::string& json, std::uintptr_t camera_handle) {
-    const auto handle = resolve_camera_handle(camera_handle);
-    if (handle == 0) return;
-    CameraStateUpdateCommand command{};
-    command.camera_handle = handle;
-    command.fields = CameraStateUpdateField::VisionRestirSettings;
-    command.vision_restir_settings = json;
-    SharedDataHub::instance().enqueue_camera_state_update(std::move(command));
+    const auto value = nlohmann::json::parse(json, nullptr, false);
+    if (value.is_object()) set_vision_settings(VisionSettingsFamily::Restir, value, camera_handle);
+}
+std::string get_requested_vision_restir_settings(std::uintptr_t camera_handle) {
+    return get_requested_vision_settings(VisionSettingsFamily::Restir, camera_handle).dump();
+}
+std::string get_effective_vision_restir_settings(std::uintptr_t camera_handle) {
+    return get_effective_vision_settings(VisionSettingsFamily::Restir, camera_handle).dump();
+}
+
+void set_vision_reblur_settings(const std::string& json, std::uintptr_t camera_handle) {
+    const auto value = nlohmann::json::parse(json, nullptr, false);
+    if (value.is_object()) set_vision_settings(VisionSettingsFamily::Reblur, value, camera_handle);
+}
+std::string get_requested_vision_reblur_settings(std::uintptr_t camera_handle) {
+    return get_requested_vision_settings(VisionSettingsFamily::Reblur, camera_handle).dump();
+}
+std::string get_effective_vision_reblur_settings(std::uintptr_t camera_handle) {
+    return get_effective_vision_settings(VisionSettingsFamily::Reblur, camera_handle).dump();
 }
 
 void set_vision_relax_settings(const std::string& json, std::uintptr_t camera_handle) {
-    const auto handle = resolve_camera_handle(camera_handle);
-    if (handle == 0) return;
-    CameraStateUpdateCommand command{};
-    command.camera_handle = handle;
-    command.fields = CameraStateUpdateField::VisionRelaxSettings;
-    command.vision_relax_settings = json;
-    SharedDataHub::instance().enqueue_camera_state_update(std::move(command));
+    const auto value = nlohmann::json::parse(json, nullptr, false);
+    if (value.is_object()) set_vision_settings(VisionSettingsFamily::Relax, value, camera_handle);
 }
-
-std::string get_requested_vision_reblur_settings(std::uintptr_t camera_handle) {
-    const auto handle = resolve_camera_handle(camera_handle);
-    auto& hub = SharedDataHub::instance();
-    if (const auto requested = hub.requested_camera_vision_reblur_settings(handle)) return *requested;
-    if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_reblur_settings;
-    return "{}";
-}
-
-std::string get_requested_vision_pt_settings(std::uintptr_t camera_handle) {
-    const auto handle = resolve_camera_handle(camera_handle);
-    auto& hub = SharedDataHub::instance();
-    if (const auto requested = hub.requested_camera_vision_pt_settings(handle)) return *requested;
-    if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_pt_settings;
-    return "{}";
-}
-
-std::string get_requested_vision_restir_settings(std::uintptr_t camera_handle) {
-    const auto handle = resolve_camera_handle(camera_handle);
-    auto& hub = SharedDataHub::instance();
-    if (const auto requested = hub.requested_camera_vision_restir_settings(handle)) return *requested;
-    if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_restir_settings;
-    return "{}";
-}
-
 std::string get_requested_vision_relax_settings(std::uintptr_t camera_handle) {
-    const auto handle = resolve_camera_handle(camera_handle);
-    auto& hub = SharedDataHub::instance();
-    if (const auto requested = hub.requested_camera_vision_relax_settings(handle)) return *requested;
-    if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_relax_settings;
-    return "{}";
+    return get_requested_vision_settings(VisionSettingsFamily::Relax, camera_handle).dump();
 }
-
-std::string get_effective_vision_reblur_settings(std::uintptr_t camera_handle) {
-    const auto handle = resolve_camera_handle(camera_handle);
-    if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(handle))
-        return camera->vision_reblur_effective_settings;
-    return "{}";
-}
-
-std::string get_effective_vision_pt_settings(std::uintptr_t camera_handle) {
-    const auto handle = resolve_camera_handle(camera_handle);
-    if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(handle))
-        return camera->vision_pt_effective_settings;
-    return "{}";
-}
-
-std::string get_effective_vision_restir_settings(std::uintptr_t camera_handle) {
-    const auto handle = resolve_camera_handle(camera_handle);
-    if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(handle))
-        return camera->vision_restir_effective_settings;
-    return "{}";
-}
-
 std::string get_effective_vision_relax_settings(std::uintptr_t camera_handle) {
-    const auto handle = resolve_camera_handle(camera_handle);
-    if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(handle))
-        return camera->vision_relax_effective_settings;
-    return "{}";
+    return get_effective_vision_settings(VisionSettingsFamily::Relax, camera_handle).dump();
 }
 
 bool get_requested_vision_denoise(std::uintptr_t camera_handle) {

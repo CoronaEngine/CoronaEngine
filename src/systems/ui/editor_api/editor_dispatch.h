@@ -227,7 +227,8 @@ template <typename Fn>
 [[nodiscard]] auto call_on_editor_owner_thread(Fn fn,
                                                std::chrono::milliseconds timeout,
                                                EditorOwnerRun* executed_as = nullptr,
-                                               bool* ran_inline_on_caller = nullptr)
+                                               bool* ran_inline_on_caller = nullptr,
+                                               bool allow_python_handoff = true)
     -> std::optional<std::invoke_result_t<Fn&>> {
     using R = std::invoke_result_t<Fn&>;
     if (ran_inline_on_caller) *ran_inline_on_caller = false;
@@ -280,7 +281,7 @@ template <typename Fn>
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready &&
            std::chrono::steady_clock::now() < deadline) {
-        if (editor_thread_waiting_for_python()) {
+        if (allow_python_handoff && editor_thread_waiting_for_python()) {
             std::unique_lock<std::recursive_mutex> state_lock(editor_state_mutex(), std::try_to_lock);
             if (state_lock.owns_lock() && editor_thread_waiting_for_python() && execute()) {
                 if (ran_inline_on_caller) *ran_inline_on_caller = true;
@@ -314,7 +315,8 @@ template <typename Fn>
 [[nodiscard]] auto call_editor_dispatch(Fn fn,
                                         EditorDispatchRoute route,
                                         std::chrono::milliseconds timeout,
-                                        EditorDispatchReport* report = nullptr)
+                                        EditorDispatchReport* report = nullptr,
+                                        bool allow_python_handoff = true)
     -> std::optional<std::invoke_result_t<Fn&>> {
     EditorDispatchReport local;
     EditorDispatchReport& out = report ? *report : local;
@@ -324,11 +326,18 @@ template <typename Fn>
             return std::optional{fn()};
 
         case EditorDispatchRoute::InlineBusy: {
+            // Native service handlers can synchronously wait for Python again.
+            // Running them under this mutex would block Python's scene callback.
+            if (!allow_python_handoff) {
+                return call_on_editor_owner_thread(std::move(fn), timeout, &out.run,
+                                                   &out.ran_inline_on_caller, false);
+            }
             std::unique_lock<std::recursive_mutex> state_lock(editor_state_mutex());
             if (!editor_thread_waiting_for_python()) {
                 // owner 已经恢复（或即将恢复）：改走 owner 线程，避免与它并发。
                 state_lock.unlock();
-                return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller);
+                return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller,
+                                                   allow_python_handoff);
             }
             out.ran_inline_on_caller = true;
             return std::optional{fn()};
@@ -339,7 +348,8 @@ template <typename Fn>
             if (editor_owner_thread_seen()) {
                 // owner 线程刚刚出现（CEF 起来了）：交回给它，别在这里和它并发。
                 state_lock.unlock();
-                return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller);
+                return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller,
+                                                   allow_python_handoff);
             }
             out.ran_inline_on_caller = true;
             return std::optional{fn()};
@@ -347,7 +357,8 @@ template <typename Fn>
 
         case EditorDispatchRoute::Marshal:
         default:
-            return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller);
+            return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller,
+                                               allow_python_handoff);
     }
 }
 

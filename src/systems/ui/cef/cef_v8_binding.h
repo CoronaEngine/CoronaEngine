@@ -7,7 +7,6 @@
 namespace Corona::Systems::UI {
 
 class CoronaV8Endpoint;
-struct LanChatEventSnapshot;
 
 // Created/released on the context-owning renderer thread. Engine tasks pass
 // native DTOs back through its task runner; they never access V8 handles.
@@ -17,6 +16,5 @@ void release_corona_v8_binding(const std::shared_ptr<CoronaV8Endpoint>& endpoint
 // Native window facts/intents, delivered as DTOs on each context's task runner.
 void notify_corona_window_closed(int tab_id, const std::string& panel_id);
 void request_corona_window_close(int browser_id);
-void notify_corona_lanchat_event(const LanChatEventSnapshot& event);
 
 }  // namespace Corona::Systems::UI

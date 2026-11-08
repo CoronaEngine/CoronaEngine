@@ -56,7 +56,7 @@ class ReBLUR : public Denoiser {
     bool compact_guides_{true};
 #endif
     Settings scene_settings_;
-    string settings_override_;
+    DataWrap settings_override_;
     SP<Denoiser> coverage_;
     bool enabled_{};
     uint frame_{InvalidUI32};
@@ -75,8 +75,8 @@ public:
     void update_resolution(uint2 resolution) noexcept override;
     void set_enabled(bool enabled) noexcept override;
     void set_stable_planes_enabled(bool enabled) noexcept override;
-    bool set_reblur_settings(string_view json) noexcept override;
-    [[nodiscard]] string reblur_settings_json() const override;
+    bool set_reblur_settings(const DataWrap& data) noexcept override;
+    [[nodiscard]] DataWrap reblur_settings() const override;
     [[nodiscard]] bool enabled() noexcept override { return enabled_; }
     [[nodiscard]] bool needs_stable_plane_history(uint frame) const noexcept override {
         return coverage_enabled() && (!coverage_ || coverage_->needs_stable_plane_history(frame));

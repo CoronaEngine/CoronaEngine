@@ -29,11 +29,16 @@ const child = spawn(path.join(runtime, 'corona_engine.exe'), [], {
   env: { ...process.env, CORONA_CEF_REMOTE_DEBUG_PORT: String(port),
     CORONA_CEF_ROOT_CACHE: path.join(output, `cache-${Date.now()}`) },
 });
+const launchedAt = Date.now();
+child.once('spawn', () => console.log(`CEF smoke: engine pid=${child.pid} started at ${new Date().toISOString()}`));
+child.once('exit', (code, signal) => console.log(`CEF smoke: engine exit after ${Date.now() - launchedAt}ms code=${code} signal=${signal}`));
+child.once('close', (code, signal) => console.log(`CEF smoke: engine closed after ${Date.now() - launchedAt}ms code=${code} signal=${signal}`));
 let launchError;
 child.on('error', error => { launchError = error; });
 const clients = [];
 let stage = 'starting engine';
 let result;
+let forcedTermination = false;
 const waitFor = async (fn, timeout = 90_000) => {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
@@ -125,27 +130,26 @@ try {
     assert.equal(await main.evaluate(`typeof corona.scripts?.${method}`), 'function', `scripts.${method} requires a direct V8 binding`);
   }
   assert.equal(await main.evaluate('typeof corona.scene?.readActive'), 'function');
-  assert.equal(await main.evaluate('typeof corona.scene?.readCameras'), 'function');
+  assert.equal(await main.evaluate('typeof corona.scene?.readScene'), 'function');
   assert.equal(await main.evaluate('typeof corona.scene?.selectActor'), 'function');
   for (const method of ['getEnvironment', 'setEnvironment']) {
     assert.equal(await main.evaluate(`typeof corona.scene?.${method}`), 'function', 'environment requires the same direct V8 endpoint');
   }
-  for (const method of ['readActorSkeleton', 'readActorIkChains', 'setActorIkChains']) {
+  for (const method of ['readActorRig', 'setActorIkChains']) {
     assert.equal(await main.evaluate(`typeof corona.scene?.${method}`), 'function', `${method} requires the direct scoped V8 endpoint`);
   }
-  assert.equal(await main.evaluate('typeof corona.scene?.readActorTree'), 'function', 'assistant actor context requires a direct scoped V8 endpoint');
+  assert.equal(await main.evaluate('typeof corona.scene?.readScene'), 'function', 'assistant actor context requires a direct scoped V8 endpoint');
   assert.deepEqual(await main.evaluate(`(async () => {
     JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); };
     return corona.scene.readActive();
   })()`), { archive_session: '' });
   assert.equal(await main.evaluate("corona.scene.getEnvironment('scene.ini',{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
-  assert.equal(await main.evaluate("corona.scene.readActorIndex('scene.ini',{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
+  assert.equal(await main.evaluate("corona.scene.readScene({...({archive_session:'missing'}),scene:'scene.ini',actors:'index'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
   assert.equal(await main.evaluate("corona.scene.readActorProperties('scene.ini','missing',{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
-  assert.equal(await main.evaluate("corona.scene.readActorTree('scene.ini',{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
-  assert.equal(await main.evaluate("corona.scene.readActorSkeleton('scene.ini','actor',{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
-  assert.equal(await main.evaluate("corona.scene.readActorIkChains('scene.ini','actor',{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
+  assert.equal(await main.evaluate("corona.scene.readScene({...({archive_session:'missing'}),scene:'scene.ini',actors:'context'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
+  assert.equal(await main.evaluate("corona.scene.readActorRig('scene.ini','actor',{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
   assert.equal(await main.evaluate("corona.scene.setActorIkChains('scene.ini','actor',[],{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
-  assert.equal(await main.evaluate("corona.scene.readCameras('scene.ini',{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
+  assert.equal(await main.evaluate("corona.scene.readScene({...({archive_session:'missing'}),scene:'scene.ini',cameras:true}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
   assert.deepEqual(await main.evaluate('corona.scene.readActive()'), { archive_session: '' });
   assert.equal(typeof (await main.evaluate('corona.scene.isVisionAvailable()')).available, 'boolean');
 
@@ -451,7 +455,7 @@ try {
     await writeFile(path.join(cameraWorld, 'assets.manifest.json'), '{"format":"corona_scene_assets","version":1,"bundles":[]}');
     const listCameras = async () => ({ data: await main.evaluate(`(async()=>{
       const state=await corona.scene.readActive();
-      return corona.scene.readCameras(state.scene,{archive_session:state.archive_session});})()`) });
+      return corona.scene.readScene({...({archive_session:state.archive_session}),scene:state.scene,cameras:true});})()`) });
     stage = 'orphan mesh movement event removed from the native contract';
 
     evidence[0].orphanMeshMovement = 'legacy bridge absent in every window; retired mesh and Gizmo events absent and subscriptions refused';
@@ -512,128 +516,9 @@ try {
     }
 
     evidence[0].network = 'named V8 direct replies with JSON disabled; strict arguments, inactive connect, discovery, host/client start, active reuse and idempotent stop; legacy CEF routes denied';
-    stage = 'named LANChat methods, strict validation and structured history';
-    const chatCall = (method, ...args) => main.evaluate(`corona.lanChat.${method}(...${JSON.stringify(args)})`);
-    const chatMethods = ['startRoom', 'startLocalRoom', 'stopRoom', 'stopLocalRoom', 'joinRoom',
-      'leaveRoom', 'sendMessage', 'listHistoryRooms', 'loadHistoryRoom', 'getLocalIp', 'addAgent', 'removeAgent'];
-    for (const method of chatMethods) {
-      assert.equal(await main.evaluate(`typeof corona.lanChat?.${method}`), 'function', method);
-    }
-    for (const [method, args] of [
-      ['startRoom', []], ['startRoom', [null]], ['startRoom', [{ port: -1 }]],
-      ['startRoom', [{ port: 65536 }]], ['startRoom', [{ restore_history: 1 }]],
-      ['startRoom', [{ room: 'bad\0room' }]], ['startRoom', [{ password: 'ignored' }]],
-      ['startLocalRoom', [{ port: 0 }]], ['startLocalRoom', [{ mode: 'single' }]],
-      ['joinRoom', [{}]], ['joinRoom', [{ ip: '127.0.0.1', port: 0 }]],
-      ['sendMessage', []], ['sendMessage', [1]], ['sendMessage', ['text', { metadata_json: '{}' }]],
-      ['sendMessage', ['text', { metadata: [] }]], ['sendMessage', ['text', { metadata: null }]],
-      ['addAgent', [{ name: 1 }]], ['addAgent', [{ extra: true }]],
-      ['removeAgent', [{}]], ['loadHistoryRoom', [1]], ['loadHistoryRoom', ['bad\0room']],
-      ...['stopRoom', 'stopLocalRoom', 'leaveRoom', 'listHistoryRooms', 'getLocalIp'].map(method => [method, [true]]),
-    ]) {
-      assert.equal(await main.evaluate(`corona.lanChat.${method}(...${JSON.stringify(args)}).catch(e=>e.code)`), 'INVALID_ARGUMENT', method);
-    }
-
-    const localIp = await chatCall('getLocalIp');
-    assert.equal(localIp.ok, true);
-    assert.equal(typeof localIp.ip, 'string');
-    assert.equal(typeof localIp.port, 'number');
-    assert.deepEqual(await chatCall('loadHistoryRoom', ''), { ok: false, room: '', history: [], agents: [], error: 'ROOM_REQUIRED' });
-    stage = 'named LANChat event ownership, callback isolation and structured metadata';
-    assert.equal(await main.evaluate('typeof corona.lanChat.onEvent'), 'function', 'LANChat events require a named native binding');
-    for (const args of ['', 'null', '{}', '"callback"', '()=>{}, true']) {
-      assert.match(await main.evaluate(`(()=>{try{corona.lanChat.onEvent(${args});return 'unexpected';}catch(e){return String(e);}})()`), /INVALID_ARGUMENT/);
-    }
-
-    await main.evaluate(`corona.network.setProjectRoot(${JSON.stringify(cameraWorld)})`);
-    await main.evaluate(`(() => {
-      window.__chatFromFrame = [];
-      window.__eventFrame = document.createElement('iframe');
-      window.__eventFrame.srcdoc = '<!doctype html><title>LANChat event context</title>';
-      document.body.append(window.__eventFrame);
-      return true;
-    })()`);
-    await waitFor(() => main.evaluate('typeof window.__eventFrame?.contentWindow?.corona?.lanChat?.onEvent === "function"'));
-    assert.equal(await main.evaluate('window.__eventFrame.contentWindow.corona.app.closeProcess().catch(error=>error.code)'), 'PERMISSION_DENIED');
-    assert.match(await main.evaluate(`(()=>{try{
-      window.__eventFrame.contentWindow.corona.lanChat.onEvent(()=>{});return 'unexpected';
-    }catch(e){return String(e);}})()`), /PERMISSION_DENIED/);
-    await main.evaluate(`window.__eventFrame.contentWindow.eval(
-      "window.__frameStop=corona.lanChat.onEvent(event=>parent.__chatFromFrame.push(event)); true")`);
-    assert.match(await main.evaluate(`(()=>{try{
-      window.__eventFrame.contentWindow.__frameStop();return 'unexpected';
-    }catch(e){return String(e);}})()`), /PERMISSION_DENIED/);
-    await main.evaluate(`(() => {
-      window.__chatEvents = []; window.__retiredChatEvents = [];
-      window.__stopThrowingChat = corona.lanChat.onEvent(() => { throw Error('isolate this callback'); });
-      window.__stopMutatingChat = corona.lanChat.onEvent(event => {
-        event.text = 'subscriber mutation';
-        if (event.metadata) event.metadata.note = 'subscriber mutation';
-        if (event.agents?.length) event.agents[0].name = 'subscriber mutation';
-      });
-      window.__stopChat = corona.lanChat.onEvent(event => window.__chatEvents.push(event));
-      const retired = corona.lanChat.onEvent(event => window.__retiredChatEvents.push(event));
-      retired(); retired();
-      return true;
-    })()`);
-    try {
-      const room = await chatCall('startLocalRoom', { room: 'cef-owned-events', nickname: 'Host' });
-      assert.equal(room.ok, true);
-      assert.equal(room.mode, 'single');
-      assert.equal(Object.hasOwn(room, 'data'), false);
-      const chatText = 'quoted "text"\n中文';
-      const metadata = { note: chatText, steps: [1, { flag: true }] };
-      const sent = await chatCall('sendMessage', chatText, { correlation_id: 'cef-correlation', metadata });
-      assert.equal(sent.ok, true);
-      assert.equal(typeof sent.message_id, 'string');
-      assert.ok(sent.seq > 0);
-      const agent = await chatCall('addAgent', { name: 'Agent 中文', persona: 'smoke' });
-      assert.equal(agent.ok, true);
-      assert.deepEqual(await chatCall('removeAgent', agent.agent_id), { ok: true });
-      await waitFor(async () => (await main.evaluate('window.__chatEvents.length')) === 3);
-      const events = await main.evaluate('window.__chatEvents');
-      assert.ok(events.every(event => event.channel === 'lanchat'));
-      assert.deepEqual(events.map(event => event.event), ['message', 'agent_roster', 'agent_roster']);
-      assert.equal(events[0].text, chatText);
-      assert.deepEqual(events[0].metadata, metadata);
-      assert.equal(Object.hasOwn(events[0], 'metadata_json'), false);
-      assert.deepEqual(await main.evaluate('window.__retiredChatEvents'), []);
-      assert.equal(events[0].correlation_id, 'cef-correlation');
-      assert.equal(events[0].from, 'Host');
-      assert.equal(events[1].agents[0].name, 'Agent 中文');
-      assert.equal(events[1].agents[0].agent_id, agent.agent_id);
-      assert.deepEqual(events[2].agents, []);
-      await waitFor(async () => (await main.evaluate('window.__chatFromFrame.length')) === 3);
-      assert.deepEqual(await main.evaluate('window.__chatFromFrame'), events);
-      await main.evaluate('window.__eventFrame.remove(); window.__eventFrame=null; true');
-      const afterRelease = await chatCall('sendMessage', 'after context release');
-      assert.equal(afterRelease.ok, true);
-      await waitFor(async () => (await main.evaluate('window.__chatEvents.length')) === 4);
-      await delay(200);
-      assert.equal(await main.evaluate('window.__chatFromFrame.length'), 3, 'released context must receive no further events');
-      const rooms = await chatCall('listHistoryRooms');
-      assert.equal(rooms.ok, true);
-      const savedRoom = rooms.rooms.find(row => row.display_room_id === 'cef-owned-events');
-      assert.ok(savedRoom?.room_id);
-      const history = await chatCall('loadHistoryRoom', savedRoom.room_id);
-      assert.equal(history.ok, true);
-      const message = history.history.find(row => row.message_id === sent.message_id);
-      assert.ok(message);
-      assert.equal(message.text, chatText);
-      assert.deepEqual(message.metadata, metadata);
-      assert.equal(Object.hasOwn(message, 'metadata_json'), false);
-      assert.equal(Object.hasOwn(history, 'data'), false);
-      await chatCall('stopLocalRoom');
-      const restored = await chatCall('startLocalRoom', { room: 'cef-restored-events', nickname: 'Host',
-        restore_history: true, history_room: savedRoom.room_id });
-      assert.equal(restored.ok, true);
-      assert.equal(restored.restored_history, true);
-      assert.ok(restored.history.some(row => row.message_id === sent.message_id));
-    } finally {
-      await chatCall('stopLocalRoom');
-      await main.evaluate('window.__stopChat(); window.__stopChat(); window.__stopThrowingChat(); window.__stopMutatingChat(); window.__eventFrame?.remove(); true');
-    }
-    evidence[0].lanChatEvents = 'local message and roster event compatibility with JSON disabled; exact text/identity, stable prior roster snapshot, unsubscribe; named methods/subscription and metadata objects, callback mutation/throw isolation, idempotent unsubscribe, context ownership and release, retired generic event denied';
+    stage = 'retired LANChat namespace';
+    assert.equal(await main.evaluate('typeof corona.lanChat'), 'undefined');
+    evidence[0].retiredLanChat = 'namespace absent; network named binding checks passed';
     const listed = await listCameras();
     const camera = listed.data.cameras.find(item => item.camera_id === 'smoke-camera');
     assert.ok(camera?.archive_session);
@@ -743,23 +628,27 @@ try {
     for (const method of ['play_audio', 'stop_audio', 'actor_play_audio', 'actor_stop_audio'])
 
     evidence[0].audioValidation = 'typed audio methods exist; invalid resource IDs and inactive scene/archive rejected; generic native dispatch absent';
-    assert.equal(await main.evaluate('typeof corona.scene.readTree'), 'function');
-    const readTree = () => main.evaluate(`corona.scene.readTree('scene.ini',${JSON.stringify(cameraReadScope)})`);
+    assert.equal(await main.evaluate('typeof corona.scene.readScene'), 'function');
+    const readTree = () => main.evaluate(`corona.scene.readScene({...(${JSON.stringify(cameraReadScope)}),scene:'scene.ini',actors:'tree',cameras:true})`);
     const initialTree = await readTree();
     assert.equal(initialTree.archive_session, sceneRead.archive_session);
     assert.equal(initialTree.scene, 'scene.ini');
     assert.deepEqual(initialTree.cameras, listed.data.cameras);
     assert.deepEqual(initialTree.actors, []);
-    for (const args of [[], ['scene.ini'], ['', cameraReadScope], ['scene.ini', {}],
-      ['scene.ini', { ...cameraReadScope, extra: true }]])
-      assert.equal(await main.evaluate(`corona.scene.readTree(...${JSON.stringify(args)}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
-    for (const args of [['other.ini', cameraReadScope], ['scene.ini', { archive_session: 'retired' }]])
-      assert.equal(await main.evaluate(`corona.scene.readTree(...${JSON.stringify(args)}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
-    for (const args of [[], ['scene.ini'], ['', cameraReadScope], ['scene.ini', {}], ['scene.ini', null],
-      ['scene.ini', { ...cameraReadScope, extra: true }], ['scene.ini', { archive_session: 1 }]])
-      assert.equal(await main.evaluate(`corona.scene.readCameras(...${JSON.stringify(args)}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
-    for (const args of [['other.ini', cameraReadScope], ['scene.ini', { archive_session: 'retired' }]])
-      assert.equal(await main.evaluate(`corona.scene.readCameras(...${JSON.stringify(args)}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
+    for (const request of [null, {}, {scene:'scene.ini'}, {...cameraReadScope,scene:'scene.ini'},
+      {...cameraReadScope,scene:'scene.ini',actors:'bad'}, {...cameraReadScope,scene:'scene.ini',cameras:1},
+      {...cameraReadScope,scene:'scene.ini',cameras:true,extra:true},
+      {archive_session:1,scene:'scene.ini',cameras:true}, {...cameraReadScope,scene:'',cameras:true}])
+      assert.equal(await main.evaluate(`corona.scene.readScene(${JSON.stringify(request)}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    for (const request of [{...cameraReadScope,scene:'other.ini',cameras:true},
+      {archive_session:'retired',scene:'scene.ini',actors:'tree'}])
+      assert.equal(await main.evaluate(`corona.scene.readScene(${JSON.stringify(request)}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
+    for (const method of ['readTree','readActorIndex','readActorTree','readCameras',
+      'setActorProperties','renameActor','setCameraProperties','renameCamera','readActorSkeleton','readActorIkChains'])
+      assert.equal(await main.evaluate(`typeof corona.scene.${method}`), 'undefined');
+    const camerasOnly = await main.evaluate(`corona.scene.readScene({...${JSON.stringify(cameraReadScope)},scene:'scene.ini',cameras:true})`);
+    assert.equal('actors' in camerasOnly, false);
+    assert.deepEqual(camerasOnly.cameras, initialTree.cameras);
     evidence[0].cameraRead = 'one scoped typed V8 camera list with active ID, opaque handles, pose/window/render controls; no advanced settings JSON, no Actor geometry, no scene creation';
     stage = 'legacy numeric results retain the JavaScript safe integer range';
     const integerValues = { signedMin: -2147483648, signedMax: 2147483647,
@@ -932,6 +821,32 @@ try {
     assert.equal(typeof actor.handle, 'string');
     assert.equal(typeof actor.actor_guid, 'string');
 
+    // Loading publishes a separate revision. Settle it before measuring whether
+    // rejected creation requests mutate the scene.
+    await waitFor(async () => (await readTree()).actors.some(value =>
+      value.actor_guid === actor.actor_guid && value.load_status === 'loaded'));
+    // Projection equality below spans several requests; a dynamic fixture can
+    // legitimately move under gravity between them.
+    const staticReceipt = await main.evaluate(`corona.scene.updateActor('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({
+      archive_session: camera.archive_session, mechanics: { body_type: 'static' },
+    })})`);
+    console.log('CEF smoke: static Actor receipt', JSON.stringify(staticReceipt));
+    assert.equal(staticReceipt.actor.mechanics.body_type, 'static');
+    let staticPolls = 0;
+    await waitFor(async () => {
+      const state = await main.evaluate(`corona.scene.readActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({archive_session: camera.archive_session})})`);
+      if (++staticPolls === 1 || staticPolls % 100 === 0)
+        console.log('CEF smoke: static Actor state', JSON.stringify(state));
+      return state.mechanics.body_type === 'static';
+    });
+    // Pending read-your-write is insufficient: the committed value must survive
+    // physics ticks after the command has been consumed.
+    for (let tick = 0; tick < 3; ++tick) {
+      await delay(250);
+      const committed = await main.evaluate(`corona.scene.readActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({archive_session: camera.archive_session})})`);
+      assert.equal(committed.mechanics.body_type, 'static');
+      assert.equal(committed.body_type, 'static');
+    }
     const beforeInvalidCreation = await readTree();
     for (const [scene, options, expected] of [
       ['scene.ini', {}, 'INVALID_ARGUMENT'],
@@ -948,15 +863,14 @@ try {
     evidence[0].actorCreation = 'typed V8 with JSON disabled, scoped Actor projection, retired CEF route denied, invalid requests leave scene unchanged';
     stage = 'renaming Actor through scoped typed V8';
     console.log(`CEF smoke: ${stage}`);
-    await waitFor(async () => (await readTree()).actors.some(value =>
-      value.actor_guid === actor.actor_guid && value.load_status === 'loaded'));
     const renameScope = { archive_session: camera.archive_session };
-    const renameBefore = await main.evaluate(`corona.scene.readActorIndex('scene.ini',${JSON.stringify(renameScope)})`);
-    const renamed = await main.evaluate(`corona.scene.renameActor('scene.ini',${JSON.stringify(actor.actor_guid)},'Renamed transform probe',${JSON.stringify(renameScope)})`);
-    assert.deepEqual(renamed, { status: 'success', archive_session: camera.archive_session, scene: 'scene.ini',
-      actor_guid: actor.actor_guid, old_name: 'Transform probe', new_name: 'Renamed transform probe' });
-    actor.name = renamed.new_name;
-    const renameAfter = await main.evaluate(`corona.scene.readActorIndex('scene.ini',${JSON.stringify(renameScope)})`);
+    const renameBefore = await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(renameScope)}),scene:'scene.ini',actors:'index'})`);
+    const renamed = await main.evaluate(`corona.scene.updateActor('scene.ini',${JSON.stringify(actor.actor_guid)},{...(${JSON.stringify(renameScope)}),name:'Renamed transform probe'})`);
+    assert.equal(renamed.status, 'success');
+    assert.equal(renamed.actor.actor_guid, actor.actor_guid);
+    assert.equal(renamed.actor.name, 'Renamed transform probe');
+    actor.name = renamed.actor.name;
+    const renameAfter = await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(renameScope)}),scene:'scene.ini',actors:'index'})`);
     assert.equal(renameAfter.tree_revision, renameBefore.tree_revision + 1);
     assert.equal(renameAfter.actors.find(value => value.actor_guid === actor.actor_guid).name, actor.name);
     for (const [scene, id, name, scope, code] of [
@@ -965,17 +879,24 @@ try {
       ['scene.ini', 'missing-actor', 'Missing actor', renameScope, 'ACTOR_NOT_FOUND'],
       ['scene.ini', actor.actor_guid, 'Retired archive', { archive_session: 'retired' }, 'PROJECT_CONTEXT_CHANGED'],
     ]) {
-      assert.equal(await main.evaluate(`corona.scene.renameActor(${JSON.stringify(scene)},${JSON.stringify(id)},${JSON.stringify(name)},${JSON.stringify(scope)}).catch(error=>error.code)`), code);
+      assert.equal(await main.evaluate(`corona.scene.updateActor(${JSON.stringify(scene)},${JSON.stringify(id)},{...(${JSON.stringify(scope)}),name:${JSON.stringify(name)}}).catch(error=>error.code)`), code);
     }
 
-    const renameAfterRejected = await main.evaluate(`corona.scene.readActorIndex('scene.ini',${JSON.stringify(renameScope)})`);
+    const renameAfterRejected = await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(renameScope)}),scene:'scene.ini',actors:'index'})`);
     assert.equal(renameAfterRejected.actors.find(value => value.actor_guid === actor.actor_guid).name, actor.name);
+    const beforeMixedName = await main.evaluate(`corona.scene.readActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(renameScope)})`);
+    assert.equal(await main.evaluate(`corona.scene.updateActor('scene.ini',${JSON.stringify(actor.actor_guid)},
+      {...${JSON.stringify(renameScope)},name:'Must not apply',mechanics:{mass:Infinity}}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
+    const afterMixedName = await main.evaluate(`corona.scene.readActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(renameScope)})`);
+    assert.equal(afterMixedName.name, beforeMixedName.name);
+    assert.equal(afterMixedName.actor_version, beforeMixedName.actor_version);
+
     evidence[0].actorRename = 'scoped typed V8, JSON disabled, exact archive/scene/GUID, tree revision update, invalid/stale requests atomic, generic native dispatch absent';
     stage = 'rebinding Actor resource through scoped typed V8';
     console.log(`CEF smoke: ${stage}`);
     const rebindScope = { archive_session: camera.archive_session };
-    const rebindBefore = await main.evaluate(`corona.scene.readActorIndex('scene.ini',${JSON.stringify(rebindScope)})`);
-    const actorContextBeforeRebind = await main.evaluate(`corona.scene.readActorTree('scene.ini',${JSON.stringify(rebindScope)})`);
+    const rebindBefore = await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(rebindScope)}),scene:'scene.ini',actors:'index'})`);
+    const actorContextBeforeRebind = await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(rebindScope)}),scene:'scene.ini',actors:'context'})`);
     const actorBeforeRebind = actorContextBeforeRebind.actors.find(value => value.actor_guid === actor.actor_guid);
     assert.ok(actorBeforeRebind);
     const rebound = await main.evaluate(`corona.scene.rebindActorResource('scene.ini',${JSON.stringify(actor.actor_guid)},'replacement.ply',${JSON.stringify(rebindScope)})`);
@@ -988,7 +909,7 @@ try {
     assert.equal(rebound.actor.name, actor.name);
     assert.equal(rebound.actor.load_status, 'loaded');
     actor.handle = rebound.actor.handle;
-    const rebindAfter = await main.evaluate(`corona.scene.readActorIndex('scene.ini',${JSON.stringify(rebindScope)})`);
+    const rebindAfter = await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(rebindScope)}),scene:'scene.ini',actors:'index'})`);
     assert.equal(rebindAfter.tree_revision, rebindBefore.tree_revision + 1);
     assert.deepEqual(rebindAfter.actors.find(value => value.actor_guid === actor.actor_guid),
       { actor_guid: actor.actor_guid, name: actor.name, type: 'ply' });
@@ -1009,22 +930,38 @@ try {
     stage = 'owned actor index projection without JSON or full scene geometry';
     console.log(`CEF smoke: ${stage}`);
     const indexScope = { archive_session: camera.archive_session };
-    const actorIndex = await main.evaluate(`corona.scene.readActorIndex('scene.ini',${JSON.stringify(indexScope)})`);
+    const actorIndex = await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(indexScope)}),scene:'scene.ini',actors:'index'})`);
     assert.equal(actorIndex.archive_session, camera.archive_session);
     assert.equal(actorIndex.scene, 'scene.ini');
     assert.ok(Number.isSafeInteger(actorIndex.tree_revision));
     const indexedActor = actorIndex.actors.find(value => value.actor_guid === actor.actor_guid);
     assert.deepEqual(indexedActor, { actor_guid: actor.actor_guid, name: actor.name, type: 'ply' });
     assert.equal('cameras' in actorIndex, false);
-    for (const invalid of [[], ['scene.ini'], ['', indexScope], ['scene.ini', {}],
-      ['scene.ini', { ...indexScope, actors: [] }], ['scene.ini', indexScope, 'extra']]) {
-      assert.equal(await main.evaluate(`corona.scene.readActorIndex(...${JSON.stringify(invalid)}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
+    const projected = await main.evaluate(`corona.scene.readScene({...${JSON.stringify(indexScope)},scene:'scene.ini',actors:'index',cameras:true})`);
+    assert.deepEqual(projected.actors, actorIndex.actors);
+    assert.deepEqual(projected.cameras, (await listCameras()).data.cameras);
+    const actorTreeOnly = await main.evaluate(`corona.scene.readScene({...${JSON.stringify(indexScope)},scene:'scene.ini',actors:'tree'})`);
+    assert.equal('cameras' in actorTreeOnly, false);
+    assert.equal('active_camera_id' in actorTreeOnly, false);
+    const rig = await main.evaluate(`corona.scene.readActorRig('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(indexScope)})`);
+    assert.equal(rig.archive_session, camera.archive_session);
+    assert.equal(rig.scene, 'scene.ini');
+    assert.equal(rig.actor, actor.name);
+    assert.equal(rig.skeleton.is_skinned, false);
+    assert.ok(Array.isArray(rig.skeleton.nodes));
+    assert.equal(rig.ik.ready, true);
+    assert.ok(Number.isSafeInteger(rig.ik.revision));
+    assert.ok(Array.isArray(rig.ik.chains));
+
+    for (const invalid of [{...indexScope,scene:'scene.ini',actors:[]},
+      {...indexScope,scene:'scene.ini',actors:'index',extra:true}]) {
+      assert.equal(await main.evaluate(`corona.scene.readScene(${JSON.stringify(invalid)}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
     }
     for (const [scene, scope] of [['other.ini', indexScope], ['scene.ini', { archive_session: 'retired' }]]) {
-      assert.equal(await main.evaluate(`corona.scene.readActorIndex(${JSON.stringify(scene)},${JSON.stringify(scope)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
+      assert.equal(await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(scope)}),scene:${JSON.stringify(scene)},actors:'index'}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
     }
     evidence[0].actorIndex = 'scoped owned DTO, JSON disabled, lightweight fields only, stable GUID, main/CameraView equality, old archive and malformed request rejection';
-    const actorContext = await main.evaluate(`corona.scene.readActorTree('scene.ini',${JSON.stringify(indexScope)})`);
+    const actorContext = await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(indexScope)}),scene:'scene.ini',actors:'context'})`);
     assert.equal(actorContext.archive_session, camera.archive_session);
     assert.equal(actorContext.scene, 'scene.ini');
     const contextualActor = actorContext.actors.find(value => value.actor_guid === actor.actor_guid);
@@ -1035,7 +972,13 @@ try {
       assert.equal(field in contextualActor, false, `actor context must exclude ${field}`);
     }
     evidence[0].actorContext = 'scoped typed assistant projection carries transform, size and physics without full Actor JSON';
-    const richTree = await readTree();
+    // Resource rebinding commits before Geometry finishes its GPU upload.
+    // Verify the completed projection after that specific Actor is ready.
+    const richTree = await waitFor(async () => {
+      const tree = await readTree();
+      return tree.actors.some(value => value.actor_guid === actor.actor_guid
+        && value.load_status === 'loaded') ? tree : null;
+    });
     const treeActor = richTree.actors.find(value => value.actor_guid === actor.actor_guid);
     assert.equal(treeActor.name, actor.name);
     assert.equal(treeActor.opaque_handle, String(actor.handle));
@@ -1050,10 +993,10 @@ try {
       const run=async read=>{const durations=[];let result;for(let i=0;i<20;i++){
         const start=performance.now();result=await read();durations.push(performance.now()-start);
       }return {durations,result};};
-      return {baseline:await run(()=>corona.scene.readTree('scene.ini',${JSON.stringify(indexScope)})),
-        index:await run(()=>corona.scene.readActorIndex('scene.ini',${JSON.stringify(indexScope)})),
+      return {baseline:await run(()=>corona.scene.readScene({...(${JSON.stringify(indexScope)}),scene:'scene.ini',actors:'tree',cameras:true})),
+        index:await run(()=>corona.scene.readScene({...(${JSON.stringify(indexScope)}),scene:'scene.ini',actors:'index'})),
         properties:await run(()=>corona.scene.readActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(indexScope)})),
-        cameras:await run(()=>corona.scene.readCameras('scene.ini',${JSON.stringify(indexScope)}))};
+        cameras:await run(()=>corona.scene.readScene({...(${JSON.stringify(indexScope)}),scene:'scene.ini',cameras:true}))};
     })()`);
     const projectionTiming = sample => {
       const durations = [...sample.durations].sort((a, b) => a - b);
@@ -1082,10 +1025,26 @@ try {
     assert.equal(focused.camera.opaque_handle, camera.opaque_handle);
     assert.equal('handle' in focused.camera, false);
     assert.ok(focused.distance >= 1);
+    await delay(250);
     const camerasAfterFocus = (await listCameras()).data.cameras;
+    const snapshotScope = { archive_session: camera.archive_session };
+    await main.evaluate(`corona.scene.updateActor('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({ ...snapshotScope, visible: false })})`);
+    await main.evaluate(`corona.scene.setActorTransform('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({ ...snapshotScope, position: [1, 2, 3] })})`);
+    await delay(250);
+    const committedActor = await main.evaluate(`corona.scene.readActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(snapshotScope)})`);
+    console.log('CEF smoke: committed component snapshots', JSON.stringify({
+      camera: camerasAfterFocus.find(value => value.camera_id === 'smoke-camera').position,
+      expectedCamera: focused.camera.position, visible: committedActor.visible,
+      position: committedActor.geometry.position,
+    }));
+    await main.evaluate(`corona.scene.updateActor('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({ ...snapshotScope, visible: true })})`);
+    await main.evaluate(`corona.scene.setActorTransform('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({ ...snapshotScope, position: [0, 0, 0] })})`);
+    await delay(250);
     assert.deepEqual(camerasAfterFocus.find(value => value.camera_id === 'main-camera'),
       camerasBeforeFocus.find(value => value.camera_id === 'main-camera'));
     assert.deepEqual(camerasAfterFocus.find(value => value.camera_id === 'smoke-camera').position, focused.camera.position);
+    assert.equal(committedActor.visible, false, 'committed visibility must survive command consumption');
+    assert.deepEqual(committedActor.geometry.position, [1, 2, 3], 'committed transform must survive command consumption');
     for (const invalid of [[], ['scene.ini', actor.actor_guid, 'smoke-camera'],
       ['scene.ini', actor.actor_guid, 'smoke-camera', {}], ['scene.ini', actor.actor_guid, 12, focusArgs[3]],
       ['scene.ini', actor.actor_guid, 'smoke-camera', { ...focusArgs[3], cameraHandle: 12 }]]) {
@@ -1103,10 +1062,11 @@ try {
     const patch = { archive_session: camera.archive_session, position: [0, 2, -3], rotation: [0, 0, 0], scale: [2, 1, 3] };
     stage = 'applying native transform patch';
     console.log(`CEF smoke: ${stage}`);
+    const beforeTransform = await main.evaluate(`corona.scene.readActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(indexScope)})`);
     const transformed = await main.evaluate(`corona.scene.setActorTransform('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(patch)})`);
     assert.equal(transformed.status, 'success');
     assert.equal(transformed.actor.actor_guid, actor.actor_guid);
-    assert.equal(transformed.actor.actor_version, actor.actor_version + 1);
+    assert.equal(transformed.actor.actor_version, beforeTransform.actor_version + 1);
     assert.deepEqual(transformed.actor.geometry, { position: patch.position, rotation: patch.rotation, scale: patch.scale });
     const partial = await main.evaluate(`corona.scene.setActorTransform('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify({ archive_session: camera.archive_session, rotation: [1, 2, 3] })})`);
     assert.deepEqual(partial.actor.geometry, { ...transformed.actor.geometry, rotation: [1, 2, 3] });
@@ -1161,7 +1121,7 @@ try {
       mechanics: { mass: 7, restitution: 0.25, damping: 0.5, body_type: 'kinematic',
         linear_lock: [true, false, true], angular_lock: [false, true, false] },
       camera_lock: { enabled: true, position_offset: [1, 2, 3], rotation_offset: [4, 5, 6] } };
-    const writeProperties = (value, suffix = '') => main.evaluate(`corona.scene.setActorProperties('scene.ini',${JSON.stringify(actor.actor_guid)},${value})${suffix}`);
+    const writeProperties = (value, suffix = '') => main.evaluate(`corona.scene.updateActor('scene.ini',${JSON.stringify(actor.actor_guid)},${value})${suffix}`);
     const propertyResult = await writeProperties(JSON.stringify(properties));
     assert.equal(propertyResult.actor.actor_version, afterBadTransform.actor_version + 1);
     assert.equal(propertyResult.actor.visible, false);
@@ -1218,8 +1178,8 @@ try {
     const cameraClient = await connect(cameraTarget);
     await waitFor(() => cameraClient.evaluate('typeof corona?.window?.getCurrent === "function"'));
     await cameraClient.evaluate(`JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); }; true`);
-    const currentIndex = await main.evaluate(`corona.scene.readActorIndex('scene.ini',${JSON.stringify(indexScope)})`);
-    assert.deepEqual(await cameraClient.evaluate(`corona.scene.readActorIndex('scene.ini',${JSON.stringify(indexScope)})`), currentIndex);
+    const currentIndex = await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(indexScope)}),scene:'scene.ini',actors:'index'})`);
+    assert.deepEqual(await cameraClient.evaluate(`corona.scene.readScene({...(${JSON.stringify(indexScope)}),scene:'scene.ini',actors:'index'})`), currentIndex);
     stage = 'shared native camera properties with JSON disabled';
     console.log(`CEF smoke: ${stage}`);
     const cameraScope = { archive_session: camera.archive_session };
@@ -1309,7 +1269,7 @@ try {
     evidence[0].viewportConfiguration = 'one typed V8 operation replaces three Fast routes; JSON disabled, exact scoped identity, atomic validation, partial preservation and per-window bounds isolation';
     stage = 'shared native camera properties with JSON disabled';
     const cameraPatch = (client, value, suffix = '') => client.evaluate(
-      `corona.scene.setCameraProperties('scene.ini','smoke-camera',${value})${suffix}`);
+      `corona.scene.updateCamera('scene.ini','smoke-camera',${value})${suffix}`);
     const beforeCameraPatch = (await listCameras()).data.cameras;
     const cameraPatchResult = await cameraPatch(main, JSON.stringify({ ...cameraScope, position: [3, 4, -5], fov: 55 }));
     assert.deepEqual(cameraPatchResult.camera.position, [3, 4, -5]);
@@ -1348,7 +1308,7 @@ try {
       ['scene.ini', camera.opaque_handle, camera.archive_session, 'CAMERA_NOT_FOUND'],
       ['scene.ini', 'smoke-camera', 'retired', 'PROJECT_CONTEXT_CHANGED'],
     ]) {
-      assert.equal(await cameraClient.evaluate(`corona.scene.setCameraProperties(${JSON.stringify(scene)},${JSON.stringify(id)},
+      assert.equal(await cameraClient.evaluate(`corona.scene.updateCamera(${JSON.stringify(scene)},${JSON.stringify(id)},
         {archive_session:${JSON.stringify(session)},position:[9,8,7]}).catch(error=>error.code)`), code);
     }
     assert.deepEqual((await listCameras()).data.cameras, afterCameraPatch);
@@ -1382,7 +1342,7 @@ try {
     await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'flat2d' }));
     await main.evaluate(`corona.scene.setActorTransform('scene.ini',${JSON.stringify(actor.actor_guid)},
       {...${JSON.stringify(cameraScope)},position:[0,0,0],rotation:[0,0,0],scale:[1,1,1]})`);
-    await cameraClient.evaluate(`corona.scene.setCameraProperties('scene.ini','smoke-camera',
+    await cameraClient.evaluate(`corona.scene.updateCamera('scene.ini','smoke-camera',
       {...${JSON.stringify(cameraScope)},position:[-0.25,-0.25,3],forward:[0,0,-1],world_up:[0,1,0],fov:60})`);
     let picked;
     try {
@@ -1529,12 +1489,12 @@ try {
     const deleteScope = { archive_session: camera.archive_session };
     await main.evaluate(`corona.scene.selectActor('scene.ini','model',${JSON.stringify(actor.name)},{sourceViewport:'main'})`);
     assert.equal((await main.evaluate('corona.scene.readActive()')).selection.actor_guid, actor.actor_guid);
-    const deleteBefore = await main.evaluate(`corona.scene.readActorIndex('scene.ini',${JSON.stringify(deleteScope)})`);
+    const deleteBefore = await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(deleteScope)}),scene:'scene.ini',actors:'index'})`);
     const deleted = await main.evaluate(`corona.scene.deleteActor('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(deleteScope)})`);
     assert.deepEqual(deleted, { status: 'success', archive_session: camera.archive_session, scene: 'scene.ini',
       actor_guid: actor.actor_guid, old_name: actor.name, tree_revision: deleteBefore.tree_revision + 1,
       selection_cleared: true });
-    const deleteAfter = await main.evaluate(`corona.scene.readActorIndex('scene.ini',${JSON.stringify(deleteScope)})`);
+    const deleteAfter = await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(deleteScope)}),scene:'scene.ini',actors:'index'})`);
     assert.equal(deleteAfter.tree_revision, deleted.tree_revision);
     assert.equal(deleteAfter.actors.some(value => value.actor_guid === actor.actor_guid), false);
     assert.deepEqual((await main.evaluate('corona.scene.readActive()')).selection, {});
@@ -1584,8 +1544,8 @@ try {
     assert.equal(await main.evaluate(`corona.scene.selectActor('scene.ini','scene','').catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.equal(await main.evaluate(`corona.scene.setActorTransform('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(patch)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
     const activeAgain = await main.evaluate('corona.scene.readActive()');
-    assert.equal(await main.evaluate(`corona.scene.readTree('scene.ini',${JSON.stringify(cameraReadScope)}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
-    assert.equal(await main.evaluate(`corona.scene.readCameras('scene.ini',${JSON.stringify(cameraReadScope)}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
+    assert.equal(await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(cameraReadScope)}),scene:'scene.ini',actors:'tree',cameras:true}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
+    assert.equal(await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(cameraReadScope)}),scene:'scene.ini',cameras:true}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.notEqual(activeAgain.archive_session, camera.archive_session);
     const replacedPointer = await viewportPatch(main, JSON.stringify({ archive_session: activeAgain.archive_session, mode: 'flat2d' }));
     assert.equal(replacedPointer.pointer.cursor, 'hidden');
@@ -1627,6 +1587,7 @@ try {
       fixtureScene: cameraWorld });
   }
   result = { date: new Date().toISOString(), passed: true, documents: evidence, nativeBindings: testNativeBindings,
+    engineSha256: createHash('sha256').update(await readFile(path.join(runtime, 'corona_engine.exe'))).digest('hex'),
     fixture: 'file-origin HTML in production BrowserManager windows; test-owned scene loaded through named project V8 binding; no user world',
     limitations: ['Packaged Vue collaboration and CameraView UI remain untested', 'Minimized-window and separate-engine isolation remain untested'] };
   console.log('CEF smoke: all business assertions completed; cleaning up');
@@ -1657,6 +1618,7 @@ try {
   }
   for (const client of clients) client.close();
   if (child.pid && child.exitCode === null) {
+    forcedTermination = true;
     const exited = new Promise(resolve => child.once('close', resolve));
     await new Promise(resolve => {
       const killer = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
@@ -1678,6 +1640,9 @@ try {
 
 // Publish success only after confirming the test-owned engine has exited.
 // taskkill accepting termination does not mean the child has already exited.
+assert.equal(forcedTermination, false, 'Engine must shut down without forced termination');
+assert.equal(child.exitCode, 0, 'Engine must exit normally after the named quit request');
 result.cleanup_ok = true;
+result.graceful_exit = true;
 await writeFile(path.join(output, 'result.json'), JSON.stringify(result, null, 2));
 console.log(JSON.stringify(result, null, 2));

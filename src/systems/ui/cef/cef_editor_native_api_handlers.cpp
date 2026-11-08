@@ -29,7 +29,6 @@
 #include "cef_files_operations.h"
 #include "cef_project_launcher_operations.h"
 #include "cef_network_operations.h"
-#include "cef_lanchat_operations.h"
 #include "cef_v8_binding.h"
 #include "cef_viewport_pick.h"
 #include "cef_editor_native_api_handlers.h"
@@ -165,9 +164,6 @@ const char* editor_api_module_js_wrapper_alias(const char* module) {
     if (name == "FileManager") {
         return "files";
     }
-    if (name == "LANChat") {
-        return "lanChat";
-    }
     if (name == "MainView") {
         return "main";
     }
@@ -199,9 +195,6 @@ const char* editor_api_module_python_wrapper_alias(const char* module) {
     }
     if (name == "FileManager") {
         return "files";
-    }
-    if (name == "LANChat") {
-        return "lan_chat";
     }
     if (name == "MainView") {
         return "main";
@@ -1444,10 +1437,10 @@ NativeEditorCamera materialize_camera_snapshot(NativeEditorScene& scene,
     const auto vision_mode = camera_data.value("vision_render_mode", std::string{"path_tracing"});
     item.engine_camera->set_vision_render_mode(vision_mode);
     item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{legacy_svgf_mode(vision_mode) ? "svgf" : "reblur"}));
-    item.engine_camera->set_vision_reblur_settings(camera_data.value("vision_reblur_settings", nlohmann::json::object()).dump());
-    item.engine_camera->set_vision_pt_settings(camera_data.value("vision_pt_settings", nlohmann::json::object()).dump());
-    item.engine_camera->set_vision_restir_settings(camera_data.value("vision_restir_settings", nlohmann::json::object()).dump());
-    item.engine_camera->set_vision_relax_settings(camera_data.value("vision_relax_settings", nlohmann::json::object()).dump());
+    API::set_vision_settings(API::VisionSettingsFamily::Reblur, camera_data.value("vision_reblur_settings", nlohmann::json::object()), item.engine_camera->get_handle());
+    API::set_vision_settings(API::VisionSettingsFamily::Pt, camera_data.value("vision_pt_settings", nlohmann::json::object()), item.engine_camera->get_handle());
+    API::set_vision_settings(API::VisionSettingsFamily::Restir, camera_data.value("vision_restir_settings", nlohmann::json::object()), item.engine_camera->get_handle());
+    API::set_vision_settings(API::VisionSettingsFamily::Relax, camera_data.value("vision_relax_settings", nlohmann::json::object()), item.engine_camera->get_handle());
     item.engine_camera->set_vision_denoise(
         json_bool_value(camera_data, "vision_denoise", true));
     item.engine_camera->set_vision_accumulation(
@@ -1818,16 +1811,16 @@ nlohmann::json camera_to_json(const NativeEditorCamera& camera) {
     item["vision_denoise"] = camera.engine_camera ? camera.engine_camera->get_vision_denoise() : true;
     item["vision_denoiser"] = camera.engine_camera ? camera.engine_camera->get_vision_denoiser() : "reblur";
     item["vision_reblur_settings"] = camera.engine_camera
-        ? nlohmann::json::parse(camera.engine_camera->get_requested_vision_reblur_settings(), nullptr, false)
+        ? API::get_requested_vision_settings(API::VisionSettingsFamily::Reblur, camera.engine_camera->get_handle())
         : nlohmann::json::object();
     item["vision_pt_settings"] = camera.engine_camera
-        ? nlohmann::json::parse(camera.engine_camera->get_requested_vision_pt_settings(), nullptr, false)
+        ? API::get_requested_vision_settings(API::VisionSettingsFamily::Pt, camera.engine_camera->get_handle())
         : nlohmann::json::object();
     item["vision_restir_settings"] = camera.engine_camera
-        ? nlohmann::json::parse(camera.engine_camera->get_requested_vision_restir_settings(), nullptr, false)
+        ? API::get_requested_vision_settings(API::VisionSettingsFamily::Restir, camera.engine_camera->get_handle())
         : nlohmann::json::object();
     item["vision_relax_settings"] = camera.engine_camera
-        ? nlohmann::json::parse(camera.engine_camera->get_requested_vision_relax_settings(), nullptr, false)
+        ? API::get_requested_vision_settings(API::VisionSettingsFamily::Relax, camera.engine_camera->get_handle())
         : nlohmann::json::object();
     item["vision_accumulation"] = camera.engine_camera ? camera.engine_camera->get_vision_accumulation() : false;
     item["vision_stable_planes"] = camera.engine_camera ? camera.engine_camera->get_vision_stable_planes() : true;
@@ -2447,10 +2440,10 @@ NativeEditorCamera* ensure_native_editor_camera(NativeEditorScene& scene,
     const auto vision_mode = json_string_value(camera_data, {"vision_render_mode"});
     item.engine_camera->set_vision_render_mode(vision_mode.empty() ? "path_tracing" : vision_mode);
     item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{legacy_svgf_mode(vision_mode) ? "svgf" : "reblur"}));
-    item.engine_camera->set_vision_reblur_settings(camera_data.value("vision_reblur_settings", nlohmann::json::object()).dump());
-    item.engine_camera->set_vision_pt_settings(camera_data.value("vision_pt_settings", nlohmann::json::object()).dump());
-    item.engine_camera->set_vision_restir_settings(camera_data.value("vision_restir_settings", nlohmann::json::object()).dump());
-    item.engine_camera->set_vision_relax_settings(camera_data.value("vision_relax_settings", nlohmann::json::object()).dump());
+    API::set_vision_settings(API::VisionSettingsFamily::Reblur, camera_data.value("vision_reblur_settings", nlohmann::json::object()), item.engine_camera->get_handle());
+    API::set_vision_settings(API::VisionSettingsFamily::Pt, camera_data.value("vision_pt_settings", nlohmann::json::object()), item.engine_camera->get_handle());
+    API::set_vision_settings(API::VisionSettingsFamily::Restir, camera_data.value("vision_restir_settings", nlohmann::json::object()), item.engine_camera->get_handle());
+    API::set_vision_settings(API::VisionSettingsFamily::Relax, camera_data.value("vision_relax_settings", nlohmann::json::object()), item.engine_camera->get_handle());
     item.engine_camera->set_vision_denoise(
         json_bool_value(camera_data, "vision_denoise", true));
     item.engine_camera->set_vision_accumulation(
@@ -3085,7 +3078,7 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
     const auto finite = [](const auto& value) {
         return !value || std::all_of(value->begin(), value->end(), [](float x) { return std::isfinite(x); });
     };
-    if (trim_ascii(patch.actor).empty() || (!patch.visible && !patch.follow_camera && !patch.mechanics &&
+    if (trim_ascii(patch.actor).empty() || (!patch.name && !patch.visible && !patch.follow_camera && !patch.mechanics &&
         !patch.camera_lock && !patch.animation_sources)) return fail("INVALID_ARGUMENT", "Actor property patch is empty");
     if (patch.mechanics) {
         const auto& values = *patch.mechanics;
@@ -3105,6 +3098,15 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
     } else scene = resolve_native_editor_scene_request(scene, normalize_route(patch.scene));
     auto* actor = find_native_actor(*scene, patch.actor);
     if (!actor) return fail("ACTOR_NOT_FOUND", "Actor not found: " + patch.actor);
+    std::optional<std::string> new_name;
+    if (patch.name) {
+        if (scene->read_only) return fail("READ_ONLY", "Cannot rename an actor in a read-only scene");
+        new_name = trim_ascii(*patch.name);
+        if (new_name->empty()) return fail("INVALID_ARGUMENT", "Actor name cannot be empty");
+        if (std::any_of(scene->actors.begin(), scene->actors.end(), [&](const NativeEditorActor& other) {
+                return &other != actor && other.name == *new_name;
+            })) return fail("DUPLICATE_ACTOR_NAME", "Actor name already exists: " + *new_name);
+    }
     // Validate every component and derived value before importing assets or
     // mutating any property. A mixed invalid patch must never partly apply.
     if (patch.visible && !actor->optics) return fail("COMPONENT_NOT_FOUND", "Actor has no optics component");
@@ -3156,6 +3158,7 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
             camera->engine_camera->get_handle(), position_offset[0], position_offset[1], position_offset[2]);
         else controller.clear_target();
     }
+    if (new_name) actor->name = *new_name;
     actor->actor_version = std::max(actor->actor_version + 1, 1);
     ++scene->tree_revision;
     reply.properties = actor_properties_snapshot(*scene, *actor);
@@ -3169,7 +3172,7 @@ enum class ActorPropertyAdapter { State, Mechanics, CameraLock };
 NativeResult set_native_actor_properties(const NativeRequest& request, const NativeContext& context, ActorPropertyAdapter kind) {
     try {
         const auto values = arg_object(request.args, 2);
-        SceneRequest write{SceneMethod::SetActorProperties};
+        SceneRequest write{SceneMethod::UpdateActor};
         auto& patch = write.properties;
         patch.scene = arg_string(request.args, 0); patch.actor = arg_string(request.args, 1);
         patch.transient_assets = context.script_runtime;
@@ -4567,177 +4570,6 @@ nlohmann::json network_session_json(const NetworkSessionSnapshot& session) {
 }
 
 
-nlohmann::json build_lanchat_members(
-    const std::vector<Corona::Network::LanChatMember>& members) {
-    nlohmann::json result = nlohmann::json::array();
-    for (const auto& member : members) {
-        result.push_back(member.nickname);
-    }
-    return result;
-}
-
-nlohmann::json build_lanchat_member_details(
-    const std::vector<Corona::Network::LanChatMember>& members) {
-    nlohmann::json result = nlohmann::json::array();
-    for (const auto& member : members) {
-        result.push_back({
-            {"member_id", member.member_id},
-            {"nickname", member.nickname},
-            {"status", member.status},
-        });
-    }
-    return result;
-}
-
-nlohmann::json build_lanchat_history(
-    const std::vector<Corona::Network::LanChatMessage>& history) {
-    nlohmann::json result = nlohmann::json::array();
-    for (const auto& message : history) {
-        result.push_back({
-            {"message_id", message.message_id},
-            {"sender_id", message.sender_id},
-            {"room_id", message.room_id},
-            {"seq", message.seq},
-            {"from", message.sender_name},
-            {"text", message.text},
-            {"ts", message.timestamp_ms / 1000},
-            {"sender_type", message.sender_type},
-            {"message_kind", message.message_kind},
-            {"target_agent_id", message.target_agent_id},
-            {"source_user_id", message.source_user_id},
-            {"correlation_id", message.correlation_id},
-            {"metadata_json", message.metadata_json},
-        });
-    }
-    return result;
-}
-
-nlohmann::json build_lanchat_history_rooms(
-    const std::vector<Corona::Network::LanChatHistoryRoomSummary>& rooms) {
-    nlohmann::json result = nlohmann::json::array();
-    for (const auto& room : rooms) {
-        const std::string load_id = room.session_id.empty() ? room.room_id : room.session_id;
-        result.push_back({
-            {"room_id", load_id},
-            {"session_id", load_id},
-            {"display_room_id", room.room_id},
-            {"message_count", room.message_count},
-            {"last_timestamp_ms", room.last_timestamp_ms},
-            {"last_ts", room.last_timestamp_ms / 1000},
-            {"last_sender_name", room.last_sender_name},
-            {"last_text", room.last_text},
-        });
-    }
-    return result;
-}
-
-nlohmann::json build_lanchat_agents(
-    const std::vector<Corona::Network::LanChatAgent>& agents) {
-    nlohmann::json result = nlohmann::json::array();
-    for (const auto& agent : agents) {
-        result.push_back({
-            {"agent_id", agent.agent_id},
-            {"name", agent.name},
-            {"persona", agent.persona},
-            {"owner", agent.owner_id},
-        });
-    }
-    return result;
-}
-
-LanChatMessageSnapshot project_lanchat_message(const Corona::Network::LanChatMessage& message) {
-    auto metadata = message.metadata_json.empty() ? nlohmann::json::object() :
-        nlohmann::json::parse(message.metadata_json, nullptr, false);
-    if (!metadata.is_object() && !metadata.is_array()) metadata = nlohmann::json::object();
-    return {message.message_id, message.sender_id, message.room_id,
-        message.sender_name, message.text, message.sender_type, message.message_kind,
-        message.target_agent_id, message.source_user_id, message.correlation_id,
-        message.seq, message.timestamp_ms / 1000, std::move(metadata)};
-}
-
-void emit_lanchat_event(const Corona::Network::LanChatEvent& event) {
-    LanChatEventSnapshot snapshot;
-    snapshot.kind = event.kind;
-    snapshot.message = project_lanchat_message(event.message);
-    snapshot.members = event.members;
-    snapshot.agents = event.agents;
-    snapshot.peer_id = event.peer_id;
-    snapshot.room_id = event.room_id;
-    snapshot.code = event.code;
-    snapshot.error_message = event.error_message;
-    for (const auto& message : event.history) snapshot.history.push_back(project_lanchat_message(message));
-    notify_corona_lanchat_event(snapshot);
-
-}
-
-nlohmann::json build_lanchat_message(
-    const Corona::Network::LanChatMessage& message) {
-    return {
-        {"message_id", message.message_id},
-        {"sender_id", message.sender_id},
-        {"sender_name", message.sender_name},
-        {"room_id", message.room_id},
-        {"seq", message.seq},
-        {"from", message.sender_name},
-        {"text", message.text},
-        {"ts", message.timestamp_ms / 1000},
-        {"sender_type", message.sender_type},
-        {"message_kind", message.message_kind},
-        {"target_agent_id", message.target_agent_id},
-        {"source_user_id", message.source_user_id},
-        {"correlation_id", message.correlation_id},
-        {"metadata_json", message.metadata_json},
-    };
-}
-
-nlohmann::json build_lanchat_agent_trigger(
-    const Corona::Network::LanChatAgentTrigger& trigger) {
-    return {
-        {"trigger_id", trigger.trigger_id},
-        {"message_id", trigger.message_id},
-        {"room_id", trigger.room_id},
-        {"sender_id", trigger.sender_id},
-        {"sender_name", trigger.sender_name},
-        {"sender_type", trigger.sender_type},
-        {"message_kind", trigger.message_kind},
-        {"target_agent_id", trigger.target_agent_id},
-        {"source_user_id", trigger.source_user_id},
-        {"correlation_id", trigger.correlation_id},
-        {"metadata_json", trigger.metadata_json},
-        {"agent_id", trigger.agent_id},
-        {"agent_name", trigger.agent_name},
-        {"persona", trigger.persona},
-        {"text", trigger.text},
-        {"history", [&trigger] {
-            nlohmann::json history = nlohmann::json::array();
-            for (const auto& message : trigger.history) {
-                history.push_back(build_lanchat_message(message));
-            }
-            return history;
-        }()},
-    };
-}
-
-nlohmann::json build_lanchat_message_result(
-    const Corona::Network::LanChatMessageResult& result) {
-    nlohmann::json data;
-    data["ok"] = result.accepted;
-    if (result.accepted) {
-        data["message_id"] = result.message.message_id;
-        data["seq"] = result.message.seq;
-    } else {
-        data["error"] = result.error.empty() ? "SEND_FAILED" : result.error;
-    }
-    return data;
-}
-
-std::string make_agent_id(const std::string& owner, const std::string& name) {
-    static uint64_t counter = 0;
-    std::ostringstream out;
-    out << "agent-" << std::hash<std::string>{}(owner + ":" + name) << "-" << ++counter;
-    return out.str();
-}
-
 void read_transform_from_actor_json(const nlohmann::json& actor, float transform[9]) {
     if (!actor.contains("geometry")) {
         return;
@@ -4829,6 +4661,36 @@ bool is_network_editor_seed_actor(const NativeEditorActor& actor) {
     return true;
 }
 
+void broadcast_network_editor_actor(
+    Corona::Systems::NetworkSystem& network_system,
+    const NativeEditorScene& scene, const NativeEditorActor& actor) {
+    const auto actor_data = actor_to_json(scene, actor);
+    float transform[9] = {0, 0, 0, 0, 0, 0, 1, 1, 1};
+    read_transform_from_actor_json(actor_data, transform);
+
+    Corona::Network::ActorCreatePacked optics;
+    initialize_actor_create_packed(optics);
+    optics.visible = actor_data.value("visible", true);
+    optics.bEnableLighting = true;
+    optics.metallic = actor_data.value("optics", nlohmann::json::object()).value("metallic", 0.0f);
+    optics.roughness = actor_data.value("optics", nlohmann::json::object()).value("roughness", 0.5f);
+    optics.specular = actor_data.value("optics", nlohmann::json::object()).value("specular", 0.5f);
+    optics.shininess = actor_data.value("optics", nlohmann::json::object()).value("shininess", 32.0f);
+    network_system.register_actor_identity(actor.actor_guid, actor.engine_actor->get_handle(), true);
+    // JSON is part of the existing network protocol, entirely on the native
+    // side. The Web call and its reply remain owned, typed V8 values.
+    network_system.broadcast_actor_create(actor.actor_guid, scene.route, actor.route, {},
+        transform, &optics, sizeof(optics), actor_data.dump());
+}
+
+void broadcast_network_editor_actor_state(const NativeEditorScene& scene, const NativeEditorActor& actor) {
+    auto network = get_network_system();
+    if (network && network->session_state() == Corona::Systems::NetworkSystem::SessionState::Active &&
+        is_network_editor_seed_actor(actor)) {
+        network->broadcast_actor_state_update(actor.actor_guid, scene.route, actor_to_json(scene, actor).dump());
+    }
+}
+
 std::size_t seed_network_editor_state(
     Corona::Systems::NetworkSystem::SessionRole role) {
     if (role != Corona::Systems::NetworkSystem::SessionRole::Host) return 0;
@@ -4843,43 +4705,7 @@ std::size_t seed_network_editor_state(
     for (const auto& actor : scene->actors) {
         if (!is_network_editor_seed_actor(actor)) continue;
 
-        const auto actor_data = actor_to_json(*scene, actor);
-        float transform[9] = {0, 0, 0, 0, 0, 0, 1, 1, 1};
-        read_transform_from_actor_json(actor_data, transform);
-
-        Corona::Network::ActorCreatePacked optics;
-        initialize_actor_create_packed(optics);
-        optics.visible = actor_data.value("visible", true);
-        optics.bEnableLighting = true;
-        optics.metallic = actor_data.value("optics", nlohmann::json::object())
-                              .value("metallic", 0.0f);
-        optics.roughness = actor_data.value("optics", nlohmann::json::object())
-                               .value("roughness", 0.5f);
-        optics.specular = actor_data.value("optics", nlohmann::json::object())
-                              .value("specular", 0.5f);
-        optics.shininess = actor_data.value("optics", nlohmann::json::object())
-                               .value("shininess", 32.0f);
-
-        {
-            Corona::Network::NetworkCommand command{};
-            command.kind = Corona::Network::NetworkCommandKind::RegisterActorIdentity;
-            command.guid = actor.actor_guid;
-            command.handle = actor.engine_actor->get_handle();
-            command.flag = true;
-            Corona::Network::push_network_command(std::move(command));
-        }
-        {
-            Corona::Network::NetworkCommand command{};
-            command.kind = Corona::Network::NetworkCommandKind::BroadcastActorCreate;
-            command.guid = actor.actor_guid;
-            command.scene = scene->route;
-            command.name = actor.route;
-            command.json = actor_data.dump();
-            for (int i = 0; i < 9; ++i) command.transform[static_cast<std::size_t>(i)] = transform[i];
-            const auto* packed_bytes = reinterpret_cast<const std::uint8_t*>(&optics);
-            command.blob.assign(packed_bytes, packed_bytes + sizeof(optics));
-            Corona::Network::push_network_command(std::move(command));
-        }
+        broadcast_network_editor_actor(network_system, *scene, actor);
         ++seeded_actor_count;
     }
     return seeded_actor_count;
@@ -5096,7 +4922,7 @@ SceneReply apply_native_model_node(const SceneRequest& request) {
 
 SceneReply apply_native_camera_properties(const SceneRequest& request, bool editor_input = true) {
     SceneReply reply;
-    const auto fail = [&](const char* code, const char* message) {
+    const auto fail = [&](const char* code, const std::string& message) {
         reply.error_code = code; reply.error_message = message; return reply;
     };
     const auto& patch = request.camera_properties;
@@ -5114,6 +4940,15 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
         return fail("CAMERA_NOT_FOUND", "Camera identity is unavailable");
     auto& camera = *found;
     auto& engine = *camera.engine_camera;
+    std::optional<std::string> new_name;
+    if (patch.name) {
+        if (scene->read_only) return fail("READ_ONLY", "Cannot rename a camera in a read-only scene");
+        new_name = trim_ascii(*patch.name);
+        if (new_name->empty()) return fail("INVALID_ARGUMENT", "Camera name cannot be empty");
+        if (std::any_of(scene->cameras.begin(), scene->cameras.end(), [&](const NativeEditorCamera& other) {
+                return &other != &camera && other.name == *new_name;
+            })) return fail("DUPLICATE_CAMERA_NAME", "Camera name already exists: " + *new_name);
+    }
     const auto finite = [](const auto& value) { return !value || std::isfinite(*value); };
     const auto vector_valid = [](const auto& value) {
         return !value || std::all_of(value->begin(), value->end(), [](float number) { return std::isfinite(number); });
@@ -5132,7 +4967,11 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
         return fail("INVALID_ARGUMENT", "Invalid camera properties");
     if (editor_input && patch.has_pose() && !Corona::API::is_editor_camera_input_enabled())
         return fail("EDITOR_INPUT_LOCKED", "Runtime owns camera input");
-    // Validate the entire patch before changing any pose or window property.
+    // Every field is validated before applying a name, pose or window property.
+    if (new_name && camera.name != *new_name) {
+        camera.name = *new_name;
+        ++scene->tree_revision;
+    }
     if (patch.position || patch.forward || patch.world_up || patch.fov)
         engine.set(patch.position.value_or(engine.get_position()), patch.forward.value_or(engine.get_forward()),
             patch.world_up.value_or(engine.get_world_up()), patch.fov.value_or(engine.get_fov()));
@@ -5149,8 +4988,13 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
         if (!editor_input && patch.view_open) {
             camera.window_state->requested_open.store(camera.view_open ? 1 : 0);
             engine.set_view_state(camera.view_open, camera.view_x, camera.view_y, camera.view_width, camera.view_height, camera.move_speed);
-        } else {
+        } else if (patch.view_x || patch.view_y || patch.view_width || patch.view_height) {
             engine.set_view_settings(camera.view_x, camera.view_y, camera.view_width, camera.view_height, camera.move_speed);
+        } else if (patch.move_speed) {
+            // A speed-only update must not replay saved window geometry over the embedded viewport.
+            const auto view = engine.get_view_state();
+            engine.set_view_settings(static_cast<int>(view[1]), static_cast<int>(view[2]),
+                static_cast<int>(view[3]), static_cast<int>(view[4]), camera.move_speed);
         }
     }
     reply.camera = camera_properties_snapshot(*scene, camera);
@@ -5199,25 +5043,11 @@ SceneReply apply_native_camera_render_settings(const SceneRequest& request) {
     const auto found = scene->cameras.begin() + static_cast<std::ptrdiff_t>(camera_index);
     auto& engine = *found->engine_camera;
     if (patch.family) {
-        const auto parse = [](const std::string& text) {
-            auto value = nlohmann::json::parse(text, nullptr, false);
-            return value.is_object() ? value : nlohmann::json::object();
-        };
-        auto requested = nlohmann::json::object();
-        auto effective = nlohmann::json::object();
-        if (*patch.family == "pt") {
-            effective = parse(engine.get_effective_vision_pt_settings());
-            requested = parse(engine.get_requested_vision_pt_settings());
-        } else if (*patch.family == "restir") {
-            effective = parse(engine.get_effective_vision_restir_settings());
-            requested = parse(engine.get_requested_vision_restir_settings());
-        } else if (*patch.family == "reblur") {
-            effective = parse(engine.get_effective_vision_reblur_settings());
-            requested = parse(engine.get_requested_vision_reblur_settings());
-        } else {
-            effective = parse(engine.get_effective_vision_relax_settings());
-            requested = parse(engine.get_requested_vision_relax_settings());
-        }
+        const auto family = *patch.family == "pt" ? API::VisionSettingsFamily::Pt :
+            *patch.family == "restir" ? API::VisionSettingsFamily::Restir :
+            *patch.family == "reblur" ? API::VisionSettingsFamily::Reblur : API::VisionSettingsFamily::Relax;
+        auto requested = API::get_requested_vision_settings(family, engine.get_handle());
+        auto effective = API::get_effective_vision_settings(family, engine.get_handle());
         if (request.method == SceneMethod::ReadCameraRenderSettings) {
             effective.update(requested);
             auto& result = reply.camera_render_settings;
@@ -5227,11 +5057,7 @@ SceneReply apply_native_camera_render_settings(const SceneRequest& request) {
             return reply;
         }
         if (!patch.settings.is_object() || patch.settings.empty()) return fail("INVALID_ARGUMENT", "Vision settings must be a non-empty object");
-        const auto serialized = patch.settings.dump();
-        if (*patch.family == "pt") engine.set_vision_pt_settings(serialized);
-        else if (*patch.family == "restir") engine.set_vision_restir_settings(serialized);
-        else if (*patch.family == "reblur") engine.set_vision_reblur_settings(serialized);
-        else engine.set_vision_relax_settings(serialized);
+        API::set_vision_settings(family, patch.settings, engine.get_handle());
         auto& result = reply.camera_render_settings;
         result.archive_session = scene->archive_session; result.scene = scene->route;
         result.camera_id = found->camera_id; result.family = *patch.family; result.settings = patch.settings;
@@ -5264,7 +5090,7 @@ NativeResult apply_non_web_camera_properties(const NativeRequest& request, bool 
     const auto camera_name = arg_string(request.args, 1);
     auto* camera = find_native_camera(*scene, camera_name);
     if (!camera || !camera->engine_camera) return camera_not_found_result(camera_name);
-    SceneRequest write{SceneMethod::SetCameraProperties};
+    SceneRequest write{SceneMethod::UpdateCamera};
     write.archive_session = scene->archive_session;
     auto& patch = write.camera_properties;
     patch.scene = scene->route; patch.camera_id = camera->camera_id;
@@ -5497,6 +5323,11 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             reply.error_message = created.error;
             return reply;
         }
+        if (auto network = get_network_system(); network &&
+            network->session_state() == Corona::Systems::NetworkSystem::SessionState::Active) {
+            auto* actor = find_native_actor(*scene, created.data.at("actor").at("actor_guid").get<std::string>());
+            if (actor && is_network_editor_seed_actor(*actor)) broadcast_network_editor_actor(*network, *scene, *actor);
+        }
         SceneRequest read{SceneMethod::ReadActorProperties};
         read.archive_session = request.archive_session;
         read.read_scene = scene->route;
@@ -5526,11 +5357,10 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         reply.camera = camera_properties_snapshot(*scene, camera);
         return reply;
     }
-    if (request.method == SceneMethod::RenameCamera || request.method == SceneMethod::DeleteCamera) {
+    if (request.method == SceneMethod::DeleteCamera) {
         SceneReply reply;
-        const bool rename = request.method == SceneMethod::RenameCamera;
-        const auto& scene_name = rename ? request.camera_rename.scene : request.camera_delete.scene;
-        const auto& camera_id = rename ? request.camera_rename.camera_id : request.camera_delete.camera_id;
+        const auto& scene_name = request.camera_delete.scene;
+        const auto& camera_id = request.camera_delete.camera_id;
         if (scene_name.empty() || camera_id.empty() || !request.archive_session || request.archive_session->empty()) {
             reply.error_code = "INVALID_ARGUMENT";
             reply.error_message = "Camera mutation requires the observed archive, scene and camera identity";
@@ -5555,27 +5385,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             reply.error_message = "Camera not found: " + camera_id;
             return reply;
         }
-        if (rename) {
-            const auto new_name = trim_ascii(request.camera_rename.name);
-            if (new_name.empty()) {
-                reply.error_code = "INVALID_ARGUMENT";
-                reply.error_message = "Camera name cannot be empty";
-                return reply;
-            }
-            const bool duplicate = std::any_of(scene->cameras.begin(), scene->cameras.end(),
-                [&](const NativeEditorCamera& other) {
-                    return &other != &*camera_it && other.name == new_name;
-                });
-            if (duplicate) {
-                reply.error_code = "DUPLICATE_CAMERA_NAME";
-                reply.error_message = "Camera name already exists: " + new_name;
-                return reply;
-            }
-            camera_it->name = new_name;
-            ++scene->tree_revision;
-            reply.camera = camera_properties_snapshot(*scene, *camera_it);
-            return reply;
-        }
+
         if (scene->cameras.size() <= 1) {
             reply.error_code = "LAST_CAMERA";
             reply.error_message = "A scene must keep at least one camera";
@@ -5600,60 +5410,39 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         reply.deleted_camera = {*request.archive_session, scene->route, camera_id};
         return reply;
     }
-    if (request.method == SceneMethod::SetCameraProperties) return apply_native_camera_properties(request);
+    if (request.method == SceneMethod::UpdateCamera) return apply_native_camera_properties(request);
     if (request.method == SceneMethod::ReadCameraRenderSettings || request.method == SceneMethod::SetCameraRenderSettings)
         return apply_native_camera_render_settings(request);
     if (request.method == SceneMethod::CaptureScreenshot) return capture_native_screenshot(request);
     if (request.method == SceneMethod::FocusActor) return apply_native_actor_focus(request);
     if (request.method == SceneMethod::GetEnvironment || request.method == SceneMethod::SetEnvironment)
         return apply_native_environment(request);
-    if (request.method == SceneMethod::SetActorTransform) return apply_native_actor_transform(request);
-    if (request.method == SceneMethod::SetActorProperties) return apply_native_actor_properties(request);
-    if (request.method == SceneMethod::RenameActor) {
-        SceneReply reply;
-        const auto& patch = request.actor_rename;
-        if (patch.scene.empty() || patch.actor.empty() || patch.name.empty() ||
-            !request.archive_session || request.archive_session->empty()) {
-            reply.error_code = "INVALID_ARGUMENT";
-            reply.error_message = "Actor rename requires the observed archive, scene, actor and name";
-            return reply;
-        }
+    if (request.method == SceneMethod::SetActorTransform) {
+        auto reply = apply_native_actor_transform(request);
+        auto network = get_network_system();
         auto* scene = native_editor_state().scene.get();
-        if (!scene || scene->archive_session != *request.archive_session ||
-            !native_scene_request_matches(*scene, patch.scene)) {
-            reply.error_code = "PROJECT_CONTEXT_CHANGED";
-            reply.error_message = "Actor rename belongs to an inactive archive";
-            return reply;
+        auto* actor = scene && reply.error_code.empty() ? find_native_actor(*scene, reply.transform.actor_guid) : nullptr;
+        if (network && network->session_state() == Corona::Systems::NetworkSystem::SessionState::Active &&
+            actor && is_network_editor_seed_actor(*actor)) {
+            const auto& value = reply.transform;
+            float transform[9];
+            std::copy(value.position.begin(), value.position.end(), transform);
+            std::copy(value.rotation.begin(), value.rotation.end(), transform + 3);
+            std::copy(value.scale.begin(), value.scale.end(), transform + 6);
+            network->broadcast_actor_transform_update(value.actor_guid, value.scene, transform, {}, {});
         }
-        if (scene->read_only) {
-            reply.error_code = "READ_ONLY";
-            reply.error_message = "Cannot rename an actor in a read-only scene";
-            return reply;
-        }
-        auto* actor = find_native_actor(*scene, patch.actor);
-        if (!actor) {
-            reply.error_code = "ACTOR_NOT_FOUND";
-            reply.error_message = "Actor not found: " + patch.actor;
-            return reply;
-        }
-        const auto new_name = trim_ascii(patch.name);
-        if (new_name.empty()) {
-            reply.error_code = "INVALID_ARGUMENT";
-            reply.error_message = "Actor name cannot be empty";
-            return reply;
-        }
-        if (std::any_of(scene->actors.begin(), scene->actors.end(), [&](const NativeEditorActor& other) {
-                return &other != actor && other.name == new_name;
-            })) {
-            reply.error_code = "DUPLICATE_ACTOR_NAME";
-            reply.error_message = "Actor name already exists: " + new_name;
-            return reply;
-        }
-        reply.actor_rename = {*request.archive_session, scene->route, actor->actor_guid, actor->name, new_name};
-        actor->name = new_name;
-        ++scene->tree_revision;
         return reply;
     }
+    if (request.method == SceneMethod::UpdateActor) {
+        auto reply = apply_native_actor_properties(request);
+        auto* scene = native_editor_state().scene.get();
+        if (scene && reply.error_code.empty()) {
+            if (auto* actor = find_native_actor(*scene, reply.properties.actor_guid))
+                broadcast_network_editor_actor_state(*scene, *actor);
+        }
+        return reply;
+    }
+
     if (request.method == SceneMethod::DeleteActor) {
         SceneReply reply;
         const auto& patch = request.actor_delete;
@@ -5683,6 +5472,11 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             return reply;
         }
         reply.actor_delete = erase_native_editor_actor(*scene, actor);
+        if (auto network = get_network_system(); network &&
+            network->session_state() == Corona::Systems::NetworkSystem::SessionState::Active) {
+            const auto& deleted = reply.actor_delete;
+            network->broadcast_actor_delete(deleted.actor_guid, deleted.scene, deleted.old_name);
+        }
         return reply;
     }
     if (request.method == SceneMethod::RebindActorResource) {
@@ -5920,95 +5714,65 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         reply.audio.playing = request.method == SceneMethod::PlayActorAudio;
         return reply;
     }
-    if (request.method == SceneMethod::ReadActorIndex) {
-        if (!request.archive_session || request.archive_session->empty() || request.read_scene.empty()) {
+    if (request.method == SceneMethod::ReadScene) {
+        if (!request.archive_session || request.archive_session->empty() || trim_ascii(request.read_scene).empty() ||
+            (request.scene_read.actors == ActorProjection::None && !request.scene_read.cameras)) {
             reply.error_code = "INVALID_ARGUMENT";
-            reply.error_message = "Actor index requires the observed archive and scene";
+            reply.error_message = "Scene query requires archive, scene and a projection";
             return reply;
         }
         const auto* scene = state.scene.get();
         if (!scene || *request.archive_session != scene->archive_session ||
             !native_scene_request_matches(*scene, request.read_scene)) {
             reply.error_code = "PROJECT_CONTEXT_CHANGED";
-            reply.error_message = "Actor index belongs to an inactive scene";
+            reply.error_message = "Scene query belongs to an inactive scene";
             return reply;
         }
-        reply.actor_index = {scene->archive_session, scene->route, scene->tree_revision, {}};
-        reply.actor_index.actors.reserve(scene->actors.size());
-        // Identity and names only: no geometry locks, render settings or storage
-        // adapter, and a read must never materialize a default editor scene.
-        for (const auto& actor : scene->actors) {
-            const auto extension = actor_file_extension(actor.route);
-            reply.actor_index.actors.push_back({actor.actor_guid, actor.name,
-                extension.empty() ? actor.actor_type : extension});
-        }
-        return reply;
-    }
-    if (request.method == SceneMethod::ReadActorContext) {
-        if (!request.archive_session || request.archive_session->empty() || trim_ascii(request.read_scene).empty()) {
-            reply.error_code = "INVALID_ARGUMENT";
-            reply.error_message = "Actor context requires the observed archive and scene";
-            return reply;
-        }
-        const auto* scene = state.scene.get();
-        if (!scene || *request.archive_session != scene->archive_session ||
-            !native_scene_request_matches(*scene, request.read_scene)) {
-            reply.error_code = "PROJECT_CONTEXT_CHANGED";
-            reply.error_message = "Actor context belongs to an inactive scene";
-            return reply;
-        }
-        auto& result = reply.actor_context;
-        result.archive_session = scene->archive_session;
-        result.scene = scene->route;
-        result.tree_revision = scene->tree_revision;
-        result.actors.reserve(scene->actors.size());
-        for (const auto& actor : scene->actors) {
-            ActorContextRow row;
-            row.actor_guid = actor.actor_guid;
-            row.name = actor.name;
-            const auto extension = actor_file_extension(actor.route);
-            row.type = extension.empty() ? actor.actor_type : extension;
-            row.semantic_role = actor.semantic_role.empty() ? actor.entity_type : actor.semantic_role;
-            row.position = actor.geometry ? actor.geometry->get_position() : actor.position;
-            row.rotation = actor.geometry ? actor.geometry->get_rotation() : actor.rotation;
-            row.scale = actor.geometry ? actor.geometry->get_scale() : actor.scale;
-            const auto world_aabb = native_actor_world_aabb(actor);
-            if (world_aabb) {
-                row.size = {(*world_aabb)[3] - (*world_aabb)[0], (*world_aabb)[4] - (*world_aabb)[1],
-                    (*world_aabb)[5] - (*world_aabb)[2]};
-                row.has_size = true;
-            }
-            const auto body_type = actor.mechanics ? body_type_name(*actor.mechanics) : actor.persisted_body_type;
-            row.physics_enabled = body_type != "phantom";
-            result.actors.push_back(std::move(row));
-        }
-        return reply;
-    }
-    if (request.method == SceneMethod::ReadCameras || request.method == SceneMethod::ReadTree) {
-        if (!request.archive_session || request.archive_session->empty() || trim_ascii(request.read_scene).empty()) {
-            reply.error_code = "INVALID_ARGUMENT";
-            reply.error_message = "Scene reads require the observed archive and scene";
-            return reply;
-        }
-        const auto* scene = state.scene.get();
-        if (!scene || *request.archive_session != scene->archive_session ||
-            !native_scene_request_matches(*scene, request.read_scene)) {
-            reply.error_code = "PROJECT_CONTEXT_CHANGED";
-            reply.error_message = "Read belongs to an inactive scene";
-            return reply;
-        }
-        auto& result = request.method == SceneMethod::ReadTree ? reply.tree.cameras : reply.camera_list;
-        if (!camera_list_snapshot(*scene, result)) {
+        reply.active = {scene->archive_session, scene->route, scene->name,
+            state.project_path, scene->read_only, scene->tree_revision, scene->selection};
+        reply.scene_read = request.scene_read;
+        if (request.scene_read.cameras && !camera_list_snapshot(*scene, reply.camera_list)) {
             reply.error_code = "CAMERA_NOT_FOUND";
             reply.error_message = "Camera runtime is unavailable";
             return reply;
         }
-        if (request.method == SceneMethod::ReadTree) {
-            reply.tree.tree_revision = scene->tree_revision;
+        if (request.scene_read.actors == ActorProjection::Index) {
+            reply.actor_index = {scene->archive_session, scene->route, scene->tree_revision, {}};
+            reply.actor_index.actors.reserve(scene->actors.size());
+            // Identity only. Never acquire geometry or compute bounds for this projection.
+            for (const auto& actor : scene->actors) {
+                const auto extension = actor_file_extension(actor.route);
+                reply.actor_index.actors.push_back({actor.actor_guid, actor.name,
+                    extension.empty() ? actor.actor_type : extension});
+            }
+        } else if (request.scene_read.actors == ActorProjection::Tree) {
             reply.tree.actors.reserve(scene->actors.size());
             for (const auto& actor : scene->actors) reply.tree.actors.push_back(scene_tree_actor_row(actor));
+        } else if (request.scene_read.actors == ActorProjection::Context) {
+            auto& result = reply.actor_context;
+            result.archive_session = scene->archive_session;
+            result.scene = scene->route;
+            result.tree_revision = scene->tree_revision;
+            result.actors.reserve(scene->actors.size());
+            for (const auto& actor : scene->actors) {
+                ActorContextRow row;
+                row.actor_guid = actor.actor_guid;
+                row.name = actor.name;
+                const auto extension = actor_file_extension(actor.route);
+                row.type = extension.empty() ? actor.actor_type : extension;
+                row.semantic_role = actor.semantic_role.empty() ? actor.entity_type : actor.semantic_role;
+                row.position = actor.geometry ? actor.geometry->get_position() : actor.position;
+                row.rotation = actor.geometry ? actor.geometry->get_rotation() : actor.rotation;
+                row.scale = actor.geometry ? actor.geometry->get_scale() : actor.scale;
+                if (const auto bounds = native_actor_world_aabb(actor)) {
+                    row.size = {(*bounds)[3] - (*bounds)[0], (*bounds)[4] - (*bounds)[1], (*bounds)[5] - (*bounds)[2]};
+                    row.has_size = true;
+                }
+                const auto body_type = actor.mechanics ? body_type_name(*actor.mechanics) : actor.persisted_body_type;
+                row.physics_enabled = body_type != "phantom";
+                result.actors.push_back(std::move(row));
+            }
         }
-        // No actor geometry or serialized advanced rendering settings are read.
         return reply;
     }
     if (request.method == SceneMethod::ReadActorProperties) {
@@ -6051,8 +5815,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         value.scale = actor->geometry ? actor->geometry->get_scale() : actor->scale;
         return reply;
     }
-    if (request.method == SceneMethod::ReadActorSkeleton ||
-        request.method == SceneMethod::ReadActorIkChains ||
+    if (request.method == SceneMethod::ReadActorRig ||
         request.method == SceneMethod::SetActorIkChains) {
         if (!request.archive_session || request.archive_session->empty() ||
             trim_ascii(request.ik.scene.empty() ? request.read_scene : request.ik.scene).empty() ||
@@ -6089,7 +5852,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             return reply;
         }
         const auto* skeleton = resource->data.skeleton ? &*resource->data.skeleton : nullptr;
-        if (request.method == SceneMethod::ReadActorSkeleton) {
+        if (request.method == SceneMethod::ReadActorRig) {
             auto& value = reply.actor_skeleton;
             value.archive_session = scene->archive_session; value.scene = scene->route; value.actor = actor->name;
             value.is_skinned = skeleton != nullptr;
@@ -6103,15 +5866,13 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
                     if (node.children.empty()) value.leaves.push_back(node.name);
                 }
             }
-            return reply;
-        }
-        if (request.method == SceneMethod::ReadActorIkChains) {
+
             auto geometry = Corona::SharedDataHub::instance().geometry_storage().try_acquire_read(actor->geometry->get_handle());
             if (!geometry) { reply.error_code = "ACTOR_NOT_READY"; reply.error_message = "IK geometry storage is unavailable"; return reply; }
-            auto& value = reply.actor_ik;
-            value.archive_session = scene->archive_session; value.scene = scene->route; value.actor = actor->name;
-            value.ready = true; value.is_skinned = skeleton != nullptr; value.revision = geometry->ik_chains_revision;
-            value.chains = typed_ik_chains(geometry->ik_chains, skeleton, true);
+            auto& ik = reply.actor_ik;
+            ik.archive_session = scene->archive_session; ik.scene = scene->route; ik.actor = actor->name;
+            ik.ready = true; ik.is_skinned = skeleton != nullptr; ik.revision = geometry->ik_chains_revision;
+            ik.chains = typed_ik_chains(geometry->ik_chains, skeleton, true);
             return reply;
         }
         if (!skeleton) { reply.error_code = "ACTOR_NOT_READY"; reply.error_message = "Actor model has no skeleton"; return reply; }
@@ -8073,12 +7834,12 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
             auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
             if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            auto settings = nlohmann::json::parse(camera->engine_camera->get_effective_vision_pt_settings(), nullptr, false);
+            auto settings = API::get_effective_vision_settings(API::VisionSettingsFamily::Pt, camera->engine_camera->get_handle());
             if (!settings.is_object()) settings = nlohmann::json::object();
             const bool ready = settings.contains("max_depth") && settings.contains("min_depth") && settings.contains("rr_threshold");
             auto adaptive = settings.value("adaptive", nlohmann::json::object());
             settings.erase("adaptive");
-            const auto overrides = nlohmann::json::parse(camera->engine_camera->get_requested_vision_pt_settings(), nullptr, false);
+            const auto overrides = API::get_requested_vision_settings(API::VisionSettingsFamily::Pt, camera->engine_camera->get_handle());
             if (overrides.is_object()) settings.update(overrides);
             return native_success({{"settings", std::move(settings)}, {"adaptive", std::move(adaptive)}, {"ready", ready}});
         }},
@@ -8097,20 +7858,20 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                     (it.key() != "rr_threshold" && value != std::floor(value)))
                     return native_failure("PT parameter out of range: " + it.key(), 2);
             }
-            camera->engine_camera->set_vision_pt_settings(settings.dump());
+            API::set_vision_settings(API::VisionSettingsFamily::Pt, settings, camera->engine_camera->get_handle());
             return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
         }},
         {"get_restir_settings", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
             auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
             if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            const auto overrides = nlohmann::json::parse(camera->engine_camera->get_requested_vision_restir_settings(), nullptr, false);
+            const auto overrides = API::get_requested_vision_settings(API::VisionSettingsFamily::Restir, camera->engine_camera->get_handle());
             auto settings = nlohmann::json::object();
             bool applied = false;
             if (auto state = SharedDataHub::instance().camera_storage().acquire_read(camera->engine_camera->get_handle())) {
-                const auto effective = nlohmann::json::parse(state->vision_restir_effective_settings, nullptr, false);
+                const auto effective = state->vision_restir_effective_settings;
                 if (effective.is_object()) settings = effective;
-                const auto applied_overrides = nlohmann::json::parse(state->vision_restir_applied_settings, nullptr, false);
+                const auto applied_overrides = state->vision_restir_applied_settings;
                 applied = overrides.is_object() && applied_overrides.is_object() && overrides == applied_overrides;
             }
             const bool ready = applied && settings.contains("max_depth") && settings.contains("min_depth") &&
@@ -8124,16 +7885,16 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             if (request.args.size() < 3) return native_failure("Expected ReSTIR settings object", 2);
             const auto& settings = request.args[2];
             if (const auto error = Vision::validate_restir_settings(settings); !error.empty()) return native_failure(error, 2);
-            camera->engine_camera->set_vision_restir_settings(settings.dump());
+            API::set_vision_settings(API::VisionSettingsFamily::Restir, settings, camera->engine_camera->get_handle());
             return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
         }},
         {"get_reblur_settings", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
             auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
             if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            auto settings = nlohmann::json::parse(camera->engine_camera->get_effective_vision_reblur_settings(), nullptr, false);
+            auto settings = API::get_effective_vision_settings(API::VisionSettingsFamily::Reblur, camera->engine_camera->get_handle());
             if (!settings.is_object()) settings = nlohmann::json::object();
-            const auto overrides = nlohmann::json::parse(camera->engine_camera->get_requested_vision_reblur_settings(), nullptr, false);
+            const auto overrides = API::get_requested_vision_settings(API::VisionSettingsFamily::Reblur, camera->engine_camera->get_handle());
             if (overrides.is_object()) settings.update(overrides);
             return native_success({{"settings", std::move(settings)}});
         }},
@@ -8166,16 +7927,16 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 return native_failure("Fast history must not exceed maximum history", 2);
             if (settings.contains("min_radius") && settings.contains("max_radius") && settings["min_radius"] > settings["max_radius"])
                 return native_failure("Minimum radius must not exceed maximum radius", 2);
-            camera->engine_camera->set_vision_reblur_settings(settings.dump());
+            API::set_vision_settings(API::VisionSettingsFamily::Reblur, settings, camera->engine_camera->get_handle());
             return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
         }},
         {"get_relax_settings", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
             auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
             if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            auto settings = nlohmann::json::parse(camera->engine_camera->get_effective_vision_relax_settings(), nullptr, false);
+            auto settings = API::get_effective_vision_settings(API::VisionSettingsFamily::Relax, camera->engine_camera->get_handle());
             if (!settings.is_object()) settings = nlohmann::json::object();
-            const auto overrides = nlohmann::json::parse(camera->engine_camera->get_requested_vision_relax_settings(), nullptr, false);
+            const auto overrides = API::get_requested_vision_settings(API::VisionSettingsFamily::Relax, camera->engine_camera->get_handle());
             if (overrides.is_object()) settings.update(overrides);
             return native_success({{"settings", std::move(settings)}});
         }},
@@ -8232,7 +7993,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 if (settings.contains(history) && settings.contains(fast) && settings[fast] > settings[history])
                     return native_failure("Fast history must not exceed maximum history", 2);
             }
-            camera->engine_camera->set_vision_relax_settings(settings.dump());
+            API::set_vision_settings(API::VisionSettingsFamily::Relax, settings, camera->engine_camera->get_handle());
             return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
         }},
         {"set_vision_denoise", [](const NativeRequest& request, const NativeContext&) {
@@ -8471,7 +8232,12 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             const float y = arg_float_value(request.args, 2);
             const float viewport_width = arg_float_value(request.args, 3, static_cast<float>(camera->width));
             const float viewport_height = arg_float_value(request.args, 4, static_cast<float>(camera->height));
-            const auto point = map_viewport_pick_point(x, y, viewport_width, viewport_height, camera->width, camera->height);
+            ViewportPickPoint point;
+            {
+                const auto native_camera = Corona::SharedDataHub::instance().camera_storage().try_acquire_read(camera->engine_camera->get_handle());
+                if (!native_camera) return native_failure("Camera is unavailable", 2);
+                point = map_viewport_pick_point(x, y, viewport_width, viewport_height, *native_camera);
+            }
             if (!point.valid) {
                 return native_failure("Invalid viewport size", 2);
             }
@@ -8851,10 +8617,11 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            const auto result = submit_lanchat_simple(
-                Corona::Network::NetworkCommandKind::LanChatLockObject,
-                {arg_string(request.args, 0), arg_string(request.args, 1),
-                 arg_string(request.args, 2, "modify"), std::to_string(collaboration_now_ms())});
+            const auto result = sys->lock_object(
+                arg_string(request.args, 0),
+                arg_string(request.args, 1),
+                arg_string(request.args, 2, "modify"),
+                collaboration_now_ms());
             return native_success({{"ok", result.ok}, {"error", result.error}});
         }},
         {"unlock_object", [](const NativeRequest& request, const NativeContext&) {
@@ -8862,9 +8629,8 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            const auto result = submit_lanchat_simple(
-                Corona::Network::NetworkCommandKind::LanChatUnlockObject,
-                {arg_string(request.args, 0), arg_string(request.args, 1)});
+            const auto result = sys->unlock_object(
+                arg_string(request.args, 0), arg_string(request.args, 1));
             return native_success({{"ok", result.ok}, {"error", result.error}});
         }},
         {"get_lock_owner", [](const NativeRequest& request, const NativeContext&) {
@@ -8873,7 +8639,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
             return native_success({
-                {"owner", lanchat_lock_owner(arg_string(request.args, 0), collaboration_now_ms())},
+                {"owner", sys->locked_by(arg_string(request.args, 0), collaboration_now_ms())},
             });
         }},
         {"broadcast_intent", [](const NativeRequest& request, const NativeContext&) {
@@ -8883,14 +8649,12 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             }
             const auto position = json_float3_value(request.args.at(2)).value_or(
                 std::array<float, 3>{0.0f, 0.0f, 0.0f});
-            Corona::Network::NetworkCommand command{};
-            command.kind = Corona::Network::NetworkCommandKind::LanChatBroadcastIntent;
-            command.user_id = arg_string(request.args, 0);
-            command.name = arg_string(request.args, 1);
-            command.position = position;
-            command.json = arg_string(request.args, 3, "placing_object");
-            command.now_ms = collaboration_now_ms();
-            Corona::Network::push_network_command(std::move(command));
+            sys->broadcast_intent(
+                arg_string(request.args, 0),
+                arg_string(request.args, 1),
+                position,
+                arg_string(request.args, 3, "placing_object"),
+                collaboration_now_ms());
             return native_success({{"ok", true}});
         }},
         {"check_preview_collision", [](const NativeRequest& request, const NativeContext&) {
@@ -8903,7 +8667,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             const float delta = request.args.size() > 2 && request.args[2].is_number()
                 ? request.args[2].get<float>() : 0.5f;
             return native_success({
-                {"conflict_user_id", lanchat_preview_conflict(
+                {"conflict_user_id", sys->check_preview_collision(
                     arg_string(request.args, 0), position, delta, collaboration_now_ms())},
             });
         }},
@@ -9316,412 +9080,6 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
     registry.register_module("Network", [](const NativeRequest& request,
                                            const NativeContext& context) {
         return dispatch_method("Network", methods, request, context);
-    });
-}
-
-namespace {
-struct LanChatOutcome {
-    LanChatReply value;
-    std::vector<Corona::Network::LanChatMessage> history;
-};
-
-// The business owner is shared by V8 and the independent Python/native adapter.
-// Serialized metadata enters only the existing network/history boundary here.
-LanChatOutcome run_lanchat_operation(const LanChatRequest& request, const std::string& wire_metadata) {
-    LanChatOutcome outcome;
-    auto& reply = outcome.value;
-    reply.method = request.method;
-    const auto sys = require_network_system();
-    if (!sys) {
-        reply.error_code = "NATIVE_UNAVAILABLE"; reply.error_message = "NetworkSystem unavailable";
-        return outcome;
-    }
-    const auto capture_room = [&] {
-        const auto panel = fetch_lanchat_panel();
-        reply.members = panel.members;
-        reply.agents = panel.agents;
-        outcome.history = panel.history;
-    };
-    switch (request.method) {
-    case LanChatMethod::StartRoom:
-    case LanChatMethod::StartLocalRoom: {
-        {
-            Corona::Network::NetworkCommand callback{};
-            callback.kind = Corona::Network::NetworkCommandKind::SetLanChatEventCallback;
-            callback.lanchat_event_callback = emit_lanchat_event;
-            Corona::Network::push_network_command(std::move(callback));
-        }
-        const bool local = request.method == LanChatMethod::StartLocalRoom;
-        reply.you = request.nickname.empty() ? "房主" : request.nickname;
-        {
-            Corona::Network::NetworkCommand command{};
-            command.kind = local ? Corona::Network::NetworkCommandKind::LanChatStartLocalRoom
-                                 : Corona::Network::NetworkCommandKind::LanChatStartRoom;
-            command.scene = request.room;
-            command.name = reply.you;
-            command.port = request.port;
-            const auto result = Corona::Network::submit_and_wait(std::move(command));
-            reply.ok = result && result->ok;
-        }
-        if (reply.ok && request.restore_history)
-        {
-            Corona::Network::NetworkCommand command{};
-            command.kind = Corona::Network::NetworkCommandKind::LanChatRestoreHistoryRoom;
-            command.scene = request.history_room.value_or(request.room);
-            const auto result = Corona::Network::submit_and_wait(std::move(command));
-            reply.restored_history = result && result->ok;
-        }
-        reply.ip = local ? "" : detect_wlan_ipv4();
-        reply.port = local ? 0 : network_snapshot_session_port() != 0
-                                          ? network_snapshot_session_port() : request.port;
-        reply.room = request.room;
-        reply.peer_id = local ? "local-single-player" : (network_snapshot_peer_id().empty() ? "local-single-player" : network_snapshot_peer_id());
-        if (local) reply.mode = "single";
-        capture_room();
-        break;
-    }
-    case LanChatMethod::StopRoom:
-    case LanChatMethod::StopLocalRoom:
-    case LanChatMethod::LeaveRoom: {
-        Corona::Network::NetworkCommand leave{};
-        leave.kind = request.method == LanChatMethod::StopLocalRoom
-                         ? Corona::Network::NetworkCommandKind::LanChatStopLocalRoom
-                         : Corona::Network::NetworkCommandKind::LanChatLeaveRoom;
-        Corona::Network::push_network_command(std::move(leave));
-        if (request.method == LanChatMethod::StopRoom) {
-            Corona::Network::NetworkCommand stop{};
-            stop.kind = Corona::Network::NetworkCommandKind::StopSession;
-            Corona::Network::push_network_command(std::move(stop));
-        }
-        break;
-    }
-    case LanChatMethod::JoinRoom:
-        {
-            Corona::Network::NetworkCommand callback{};
-            callback.kind = Corona::Network::NetworkCommandKind::SetLanChatEventCallback;
-            callback.lanchat_event_callback = emit_lanchat_event;
-            Corona::Network::push_network_command(std::move(callback));
-        }
-        {
-            Corona::Network::NetworkCommand command{};
-            command.kind = Corona::Network::NetworkCommandKind::LanChatJoinRoom;
-            command.guid = request.ip;
-            command.port = request.port;
-            command.scene = request.room;
-            command.name = request.nickname;
-            const auto result = Corona::Network::submit_and_wait(std::move(command));
-            reply.ok = result && result->ok;
-        }
-        reply.you = request.nickname;
-        reply.peer_id = network_snapshot_peer_id();
-        reply.port = network_snapshot_host_port() != 0
-                         ? network_snapshot_host_port() : request.port;
-        capture_room();
-        if (!reply.ok) reply.error = "JOIN_FAILED";
-        break;
-    case LanChatMethod::SendMessage: {
-        const auto result = submit_lanchat_message(
-            Corona::Network::NetworkCommandKind::LanChatSendMessage,
-            {request.text, request.message_kind, request.target_agent_id,
-             request.source_user_id, request.correlation_id, wire_metadata});
-        reply.ok = result.accepted;
-        if (reply.ok) { reply.message_id = result.message.message_id; reply.seq = result.message.seq; }
-        else reply.error = result.error.empty() ? "SEND_FAILED" : result.error;
-        break;
-    }
-    case LanChatMethod::ListHistoryRooms: reply.rooms = fetch_lanchat_panel().history_rooms; break;
-    case LanChatMethod::LoadHistoryRoom:
-        reply.ok = !request.room.empty();
-        reply.room = request.room;
-        if (reply.ok) {
-            const auto room_history = fetch_lanchat_room_history(request.room);
-            outcome.history = room_history.history;
-            reply.agents = room_history.agents;
-        } else reply.error = "ROOM_REQUIRED";
-        break;
-    case LanChatMethod::GetLocalIp:
-        reply.ip = detect_wlan_ipv4();
-        reply.port = network_snapshot_session_port() != 0
-                         ? network_snapshot_session_port() : 27960;
-        break;
-    case LanChatMethod::AddAgent: {
-        const auto local_peer = network_snapshot_peer_id();
-        const auto peer_id = local_peer.empty() ? "local-single-player" : local_peer;
-        reply.agent_id = make_agent_id(peer_id, request.name);
-        reply.name = request.name;
-        const auto result = submit_lanchat_simple(
-            Corona::Network::NetworkCommandKind::LanChatRegisterAgent,
-            {reply.agent_id, request.name, request.persona});
-        reply.ok = result.ok;
-        if (!reply.ok) reply.error = result.error;
-        break;
-    }
-    case LanChatMethod::RemoveAgent: {
-        const auto result = submit_lanchat_simple(
-            Corona::Network::NetworkCommandKind::LanChatRemoveAgent, {request.agent_id});
-        reply.ok = result.ok;
-        if (!reply.ok) reply.error = result.error;
-        break;
-    }
-    }
-    return outcome;
-}
-
-NativeResult execute_legacy_lanchat_operation(const LanChatRequest& request, const std::string& wire_metadata = {}) {
-    const auto outcome = run_lanchat_operation(request, wire_metadata);
-    const auto& reply = outcome.value;
-    if (!reply.error_code.empty()) return native_failure(reply.error_message, 2);
-    nlohmann::json data = {{"ok", reply.ok}};
-    if (!reply.error.empty()) data["error"] = reply.error;
-    if (request.method == LanChatMethod::StartRoom || request.method == LanChatMethod::StartLocalRoom ||
-        request.method == LanChatMethod::JoinRoom) {
-        data["you"] = reply.you; data["peer_id"] = reply.peer_id; data["port"] = reply.port;
-        data["members"] = build_lanchat_members(reply.members);
-        data["member_details"] = build_lanchat_member_details(reply.members);
-        data["history"] = build_lanchat_history(outcome.history);
-        data["agents"] = build_lanchat_agents(reply.agents);
-        if (request.method != LanChatMethod::JoinRoom) {
-            data["ip"] = reply.ip; data["room"] = reply.room; data["restored_history"] = reply.restored_history;
-            if (request.method == LanChatMethod::StartLocalRoom) data["mode"] = reply.mode;
-        }
-    } else if (request.method == LanChatMethod::ListHistoryRooms) data["rooms"] = build_lanchat_history_rooms(reply.rooms);
-    else if (request.method == LanChatMethod::LoadHistoryRoom) {
-        data["room"] = reply.room; data["history"] = build_lanchat_history(outcome.history);
-        data["agents"] = build_lanchat_agents(reply.agents);
-    } else if (request.method == LanChatMethod::GetLocalIp) { data["ip"] = reply.ip; data["port"] = reply.port; }
-    else if (request.method == LanChatMethod::AddAgent) { data["agent_id"] = reply.agent_id; data["name"] = reply.name; }
-    else if (request.method == LanChatMethod::SendMessage && reply.ok) {
-        data["message_id"] = reply.message_id; data["seq"] = reply.seq;
-    }
-    return native_success(data);
-}
-} // namespace
-
-LanChatReply execute_lanchat_operation(const LanChatRequest& request) {
-    auto outcome = run_lanchat_operation(request, request.metadata ? request.metadata->dump() : std::string{});
-    for (const auto& message : outcome.history)
-        outcome.value.history.push_back(project_lanchat_message(message));
-    return std::move(outcome.value);
-}
-
-void register_lanchat_api_handlers(NativeApiRegistry& registry) {
-    static const NativeMethodTable methods = {
-        {"start_room", [](const NativeRequest& request, const NativeContext&) {
-            LanChatRequest typed{LanChatMethod::StartRoom};
-            const auto payload = arg_object(request.args, 0);
-            typed.room = payload.value("room", ""); typed.nickname = payload.value("nickname", "房主");
-            typed.port = payload.value("port", std::uint16_t{27960});
-            typed.restore_history = payload.value("restore_history", false);
-            if (payload.contains("history_room")) typed.history_room = payload.value("history_room", "");
-            return execute_legacy_lanchat_operation(typed);
-        }},
-        {"start_local_room", [](const NativeRequest& request, const NativeContext&) {
-            LanChatRequest typed{LanChatMethod::StartLocalRoom};
-            const auto payload = arg_object(request.args, 0);
-            typed.room = payload.value("room", ""); typed.nickname = payload.value("nickname", "房主");
-            typed.restore_history = payload.value("restore_history", false);
-            if (payload.contains("history_room")) typed.history_room = payload.value("history_room", "");
-            return execute_legacy_lanchat_operation(typed);
-        }},
-        {"stop_room", [](const NativeRequest& request, const NativeContext&) {
-            LanChatRequest typed{LanChatMethod::StopRoom};
-            return execute_legacy_lanchat_operation(typed);
-        }},
-        {"stop_local_room", [](const NativeRequest& request, const NativeContext&) {
-            LanChatRequest typed{LanChatMethod::StopLocalRoom};
-            return execute_legacy_lanchat_operation(typed);
-        }},
-        {"get_history", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            return native_success({
-                {"ok", true},
-                {"history", build_lanchat_history(fetch_lanchat_panel().history)},
-            });
-        }},
-        {"list_history_rooms", [](const NativeRequest& request, const NativeContext&) {
-            LanChatRequest typed{LanChatMethod::ListHistoryRooms};
-            return execute_legacy_lanchat_operation(typed);
-        }},
-        {"load_history_room", [](const NativeRequest& request, const NativeContext&) {
-            LanChatRequest typed{LanChatMethod::LoadHistoryRoom};
-            typed.room = arg_object(request.args, 0).value("room", "");
-            return execute_legacy_lanchat_operation(typed);
-        }},
-        {"join_room", [](const NativeRequest& request, const NativeContext&) {
-            LanChatRequest typed{LanChatMethod::JoinRoom};
-            const auto payload = arg_object(request.args, 0);
-            typed.room = payload.value("room", ""); typed.nickname = payload.value("nickname", "Guest");
-            typed.ip = payload.value("ip", ""); typed.port = payload.value("port", std::uint16_t{27960});
-            return execute_legacy_lanchat_operation(typed);
-        }},
-        {"leave_room", [](const NativeRequest& request, const NativeContext&) {
-            LanChatRequest typed{LanChatMethod::LeaveRoom};
-            return execute_legacy_lanchat_operation(typed);
-        }},
-        {"send_message", [](const NativeRequest& request, const NativeContext&) {
-            LanChatRequest typed{LanChatMethod::SendMessage};
-            const auto payload = arg_object(request.args, 0);
-            typed.text = payload.value("text", ""); typed.message_kind = payload.value("message_kind", "chat");
-            typed.target_agent_id = payload.value("target_agent_id", "");
-            typed.source_user_id = payload.value("source_user_id", "");
-            typed.correlation_id = payload.value("correlation_id", "");
-            const auto metadata = payload.contains("metadata_json") ? payload.value("metadata_json", "") :
-                payload.contains("metadata") ? payload["metadata"].dump() : std::string{};
-            return execute_legacy_lanchat_operation(typed, metadata);
-        }},
-        {"send_agent_reply", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const auto payload = arg_object(request.args, 0);
-            const auto result = submit_lanchat_message(
-                Corona::Network::NetworkCommandKind::LanChatSendAgentReply,
-                {payload.value("agent_id", ""),
-                 payload.value("agent_name", ""),
-                 payload.value("text", ""),
-                 "agent",
-                 payload.value("message_kind", "agent_reply"),
-                 payload.value("target_agent_id", ""),
-                 payload.value("source_user_id", ""),
-                 payload.value("correlation_id", ""),
-                 payload.value("metadata_json", "")});
-            return native_success(build_lanchat_message_result(result));
-        }},
-        {"send_system_message", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const auto payload = arg_object(request.args, 0);
-            const auto result = submit_lanchat_message(
-                Corona::Network::NetworkCommandKind::LanChatSendAgentReply,
-                {payload.value("sender_id", ""),
-                 payload.value("sender_name", ""),
-                 payload.value("text", ""),
-                 "system",
-                 payload.value("message_kind", "agent_reply"),
-                 "",
-                 "",
-                 payload.value("correlation_id", ""),
-                 payload.value("metadata_json", "")});
-            return native_success(build_lanchat_message_result(result));
-        }},
-        {"send_system_message_to_host", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const auto payload = arg_object(request.args, 0);
-            const auto result = submit_lanchat_message(
-                Corona::Network::NetworkCommandKind::LanChatSendSystemToHost,
-                {payload.value("sender_id", ""),
-                 payload.value("sender_name", ""),
-                 payload.value("text", ""),
-                 payload.value("message_kind", "action_status"),
-                 payload.value("correlation_id", ""),
-                 payload.value("metadata_json", "")});
-            return native_success(build_lanchat_message_result(result));
-        }},
-        {"send_system_message_to_user", [](const NativeRequest& request, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const auto payload = arg_object(request.args, 0);
-            const auto result = submit_lanchat_message(
-                Corona::Network::NetworkCommandKind::LanChatSendSystemToUser,
-                {payload.value("target_user_id", ""),
-                 payload.value("sender_id", ""),
-                 payload.value("sender_name", ""),
-                 payload.value("text", ""),
-                 payload.value("message_kind", "action_status"),
-                 payload.value("correlation_id", ""),
-                 payload.value("metadata_json", "")});
-            return native_success(build_lanchat_message_result(result));
-        }},
-        {"poll_agent_trigger", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const auto trigger = sys->lanchat_pop_agent_trigger();
-            return native_success(trigger ? build_lanchat_agent_trigger(*trigger)
-                                          : nlohmann::json(nullptr));
-        }},
-        {"poll_coordinator_sync_message", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const auto message = sys->lanchat_pop_coordinator_sync_message();
-            return native_success(message ? build_lanchat_message(*message)
-                                          : nlohmann::json(nullptr));
-        }},
-        {"poll_room_event", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const auto event = sys->lanchat_pop_room_event();
-            if (!event) {
-                return native_success(nlohmann::json(nullptr));
-            }
-            return native_success({
-                {"channel", "lanchat"},
-                {"event", event->event},
-                {"room_id", event->room_id},
-            });
-        }},
-        {"poll_sync_event", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            const auto event = sys->lanchat_pop_sync_event();
-            if (!event) {
-                return native_success(nlohmann::json(nullptr));
-            }
-            return native_success({
-                {"channel", "lanchat_sync"},
-                {"event", event->event},
-                {"room_id", event->room_id},
-                {"payload_json", event->payload_json},
-            });
-        }},
-        {"add_agent", [](const NativeRequest& request, const NativeContext&) {
-            LanChatRequest typed{LanChatMethod::AddAgent};
-            const auto payload = arg_object(request.args, 0);
-            typed.name = payload.value("name", "Agent"); typed.persona = payload.value("persona", "");
-            return execute_legacy_lanchat_operation(typed);
-        }},
-        {"remove_agent", [](const NativeRequest& request, const NativeContext&) {
-            LanChatRequest typed{LanChatMethod::RemoveAgent};
-            typed.agent_id = arg_object(request.args, 0).value("agent_id", "");
-            return execute_legacy_lanchat_operation(typed);
-        }},
-        {"list_agents", [](const NativeRequest&, const NativeContext&) {
-            auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
-            return native_success({
-                {"ok", true},
-                {"agents", build_lanchat_agents(fetch_lanchat_panel().agents)},
-            });
-        }},
-        {"get_local_ip", [](const NativeRequest& request, const NativeContext&) {
-            LanChatRequest typed{LanChatMethod::GetLocalIp};
-            return execute_legacy_lanchat_operation(typed);
-        }},
-    };
-
-    registry.register_module("LANChat", [](const NativeRequest& request,
-                                           const NativeContext& context) {
-        return dispatch_method("LANChat", methods, request, context);
     });
 }
 

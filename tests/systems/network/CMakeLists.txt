@@ -59,3 +59,10 @@ target_link_libraries(corona_network_identity_registry_tests
 )
 add_test(NAME NetworkIdentityRegistryTests
          COMMAND corona_network_identity_registry_tests)
+
+add_executable(corona_collaboration_state_tests
+    test_collaboration_state.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/network/collaboration_state.cpp
+)
+target_include_directories(corona_collaboration_state_tests PRIVATE ${PROJECT_SOURCE_DIR}/include)
+add_test(NAME CollaborationStateTests COMMAND corona_collaboration_state_tests)

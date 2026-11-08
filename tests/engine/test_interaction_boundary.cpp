@@ -16,6 +16,7 @@
 #include <corona/systems/mechanics/mechanics_structural_commands.h>
 #include <corona/systems/optics/optics_commands.h>
 #include <corona/systems/acoustics/acoustics_commands.h>
+#include <corona/systems/acoustics/acoustics_system.h>
 #include <corona/systems/optics/environment_commands.h>
 
 #include <cstdio>
@@ -634,10 +635,52 @@ void test_camera_api_construction_does_not_self_deadlock() {
     CHECK(camera.get_fov() == 60.0f);
 }
 
+void test_acoustics_owner_snapshot() {
+    // With no scene or playback, the real owner tick can consume component
+    // commands without opening an audio device. Do not publish on its behalf.
+    auto& storage = SharedDataHub::instance().acoustics_storage();
+    auto& channel = Corona::AcousticsCommandChannel::instance();
+    channel.commands().clear();
+    const auto handle = storage.allocate();
+    Corona::AcousticsUpdateCommand command{};
+    command.acoustics_handle = handle;
+    command.fields = Corona::AcousticsField::Volume;
+    command.volume = 0.75f;
+    channel.commands().push(command);
+    command.fields = Corona::AcousticsField::AudioEnabled;
+    command.audio_enabled = false;
+    channel.commands().push(command);
+    command.fields = Corona::AcousticsField::ResourceId;
+    command.resource_id = 42;
+    channel.commands().push(command);
+    command.fields = Corona::AcousticsField::Volume;
+    command.volume = 0.25f;
+    channel.commands().push(command);
+    const auto pending = Corona::acoustics_view(handle);
+    CHECK(pending && pending->volume == 0.25f);
+    CHECK(pending && !pending->audio_enabled);
+    CHECK(pending && pending->resource_id == 42);
+    Corona::Systems::AcousticsSystem owner;
+    owner.update();
+    CHECK(!channel.commands().peek(handle).has_value());
+    const auto committed = Corona::acoustics_view(handle);
+    CHECK(committed.has_value());
+    CHECK(committed && committed->volume == 0.25f);
+    CHECK(committed && !committed->audio_enabled);
+    CHECK(committed && committed->resource_id == 42);
+    owner.update();
+    CHECK(Corona::acoustics_view(handle).has_value());
+    storage.deallocate(handle);
+    owner.update();
+    CHECK(!Corona::acoustics_view(handle).has_value());
+    channel.snapshots().publish(Corona::AcousticsSnapshot{});
+}
+
 }  // namespace
 
 int main() {
     std::printf("== Interaction boundary (command + snapshot) tests ==\n");
+    test_acoustics_owner_snapshot();
     test_camera_seed_and_committed_read();
     test_camera_pending_overlay();
     test_camera_move_coalescing();

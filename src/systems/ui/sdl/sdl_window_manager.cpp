@@ -156,18 +156,15 @@ bool SdlWindowManager::adopt_platform_window(SDL_Window* window) {
     managed.pending_show = true;
     windows_[id] = managed;
     if (auto* bus = Kernel::KernelContext::instance().event_bus()) {
-        Events::DisplaySurfaceChangedEvent changed;
-        changed.surface = surface;
-        changed.registration_ticket = SurfaceCompletionTicket{};
+        // Platform creation runs on the UI thread. Display may be busy compiling
+        // a scene, and native surface creation may need this thread to dispatch
+        // OS messages. Enqueue registration without blocking it. Display drains
+        // surface commands before UI frames; the existing first-present ticket
+        // keeps this window hidden until registration and presentation succeed.
         Corona::DisplaySurfaceCommand surface_command{};
         surface_command.kind = Corona::DisplaySurfaceCommand::Kind::Changed;
-        surface_command.surface = changed.surface;
-        surface_command.registration_ticket = changed.registration_ticket;
-        Corona::DisplaySurfaceCommandChannel::instance().commands().push(std::move(surface_command));
-        if (!changed.registration_ticket->wait_until(SurfaceCompletionTicket::Clock::now() + std::chrono::seconds(5)))
-            return false;
-        const auto result = changed.registration_ticket->result();
-        return result && result->status == DisplaySurfaceResult::Status::Succeeded;
+        surface_command.surface = surface;
+        return Corona::DisplaySurfaceCommandChannel::instance().commands().push(std::move(surface_command));
     }
     return false;
 }

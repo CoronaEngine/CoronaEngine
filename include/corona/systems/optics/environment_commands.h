@@ -74,11 +74,7 @@ struct EnvironmentUpdateKey {
         return command.environment_handle;
     }
 
-    /// 同 key 合并时只覆盖本条命令声明要改的字段。
-    /// 光照面板（UI 线程）与网络同步（Network 线程）会同时向这条队列推部分
-    /// 字段命令；没有 merge，后到的事件会把对方尚未应用的字段一起冲掉。
-    static void merge(EnvironmentUpdateCommand& pending,
-                      const EnvironmentUpdateCommand& next) noexcept {
+    static void merge(EnvironmentUpdateCommand& pending, const EnvironmentUpdateCommand& next) noexcept {
         if (has_environment_field(next.fields, EnvironmentField::SunDirection)) pending.sun_direction = next.sun_direction;
         if (has_environment_field(next.fields, EnvironmentField::SunIntensity)) pending.sun_intensity = next.sun_intensity;
         if (has_environment_field(next.fields, EnvironmentField::SkyIntensity)) pending.sky_intensity = next.sky_intensity;
@@ -87,12 +83,6 @@ struct EnvironmentUpdateKey {
         if (has_environment_field(next.fields, EnvironmentField::FloorY)) pending.floor_y = next.floor_y;
         if (has_environment_field(next.fields, EnvironmentField::FloorRestitution)) pending.floor_restitution = next.floor_restitution;
         if (has_environment_field(next.fields, EnvironmentField::FixedDt)) pending.fixed_dt = next.fixed_dt;
-        if (has_environment_field(next.fields, EnvironmentField::Exposure)) pending.exposure = next.exposure;
-        if (has_environment_field(next.fields, EnvironmentField::AuthoredLighting)) {
-            pending.authored_lighting = next.authored_lighting;
-            pending.authored_lighting_revision = next.authored_lighting_revision;
-        }
-        if (has_environment_field(next.fields, EnvironmentField::SunColor)) pending.sun_color = next.sun_color;
         pending.fields = pending.fields | next.fields;
     }
 };

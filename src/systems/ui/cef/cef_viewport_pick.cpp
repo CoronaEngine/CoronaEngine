@@ -1,5 +1,6 @@
 #include "cef_viewport_pick.h"
 #include "cef_client.h"
+#include "viewport_image_input.h"
 #include <corona/systems/ui/camera_viewport_manager.h>
 #include <algorithm>
 #include <cmath>
@@ -7,15 +8,16 @@
 namespace Corona::Systems::UI {
 
 ViewportPickPoint map_viewport_pick_point(double x, double y, double width, double height,
-                                          std::uint32_t camera_width, std::uint32_t camera_height) {
+                                          const Corona::CameraDevice& camera) {
     ViewportPickPoint point;
     if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) || !std::isfinite(height) ||
-        width <= 0 || height <= 0 || !camera_width || !camera_height) return point;
+        width <= 0 || height <= 0 || !camera.width || !camera.height) return point;
     point.valid = true;
-    if (x < 0 || y < 0 || x >= width || y >= height) return point;
+    const auto image = InputDetail::map_viewport_image_point(camera, x, y, width, height);
+    if (!image) return point;
     point.inside = true;
-    point.x = static_cast<std::uint32_t>(std::min(x / width * camera_width, double(camera_width - 1)));
-    point.y = static_cast<std::uint32_t>(std::min(y / height * camera_height, double(camera_height - 1)));
+    point.x = static_cast<std::uint32_t>(std::min(image->x, double(camera.width - 1)));
+    point.y = static_cast<std::uint32_t>(std::min(image->y, double(camera.height - 1)));
     return point;
 }
 
@@ -96,7 +98,7 @@ void begin_viewport_pick(ViewportPickRequest request, ViewportPickRequests::Comp
     auto& hub = Corona::SharedDataHub::instance();
     auto native_camera = hub.camera_storage().try_acquire_read(camera.camera_handle);
     if (!native_camera) { finish("camera_unavailable"); return; }
-    const auto point = map_viewport_pick_point(request.x, request.y, request.width, request.height, native_camera->width, native_camera->height);
+    const auto point = map_viewport_pick_point(request.x, request.y, request.width, request.height, *native_camera);
     if (!point.valid) { finish("invalid_argument"); return; }
     if (!point.inside) { finish("miss"); return; }
     if (!native_camera->actor_pick_handle || !hub.actor_pick_storage().try_acquire_read(native_camera->actor_pick_handle)) {

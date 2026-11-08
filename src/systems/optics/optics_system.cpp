@@ -2278,10 +2278,10 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
                                             uint32_t width, uint32_t height,
                                             bool denoise, bool accumulation, bool stable_planes,
                                             CameraVisionDenoiser denoiser,
-                                            const std::string& reblur_settings,
-                                            const std::string& relax_settings,
-                                            const std::string& pt_settings,
-                                            const std::string& restir_settings,
+                                            const nlohmann::json& reblur_settings,
+                                            const nlohmann::json& relax_settings,
+                                            const nlohmann::json& pt_settings,
+                                            const nlohmann::json& restir_settings,
                                             VisionCameraFeedback* deferred_feedback) {
     vision::switch_profile::Scope profile{"view.prepare", "view"};
     auto& pipeline = runtime.pipeline;
@@ -2341,29 +2341,28 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
     if (is_restir || runtime.mode == CameraVisionRenderMode::PathTracing ||
         runtime.mode == CameraVisionRenderMode::ProgressivePathTracing) {
         auto* integrator = pipeline->renderer().integrator().get();
-        const auto &json = is_restir ? restir_settings : pt_settings;
-        const auto overrides = vision::DataWrap::parse(json, nullptr, false);
+        const auto& overrides = is_restir ? restir_settings : pt_settings;
         const bool changed = integrator->set_settings(overrides);
         if (changed) pipeline->invalidate();
         if (is_restir) {
             if (Vision::validate_restir_settings(overrides).empty()) {
-                feedback.restir_effective = integrator->settings().dump();
-                feedback.restir_applied = json;
+                feedback.restir_effective = integrator->settings();
+                feedback.restir_applied = overrides;
             }
         } else if (view_created || changed) {
-            feedback.pt_effective = integrator->settings().dump();
+            feedback.pt_effective = integrator->settings();
         }
     }
     if (auto* illumination = dynamic_cast<vision::IlluminationIntegrator*>(pipeline->renderer().integrator().get())) {
         if (auto* filter = illumination->denoiser(); filter && filter->set_reblur_settings(reblur_settings)) {
             pipeline->invalidate();
-            feedback.reblur_effective = filter->reblur_settings_json();
+            feedback.reblur_effective = filter->reblur_settings();
         }
         if (auto* filter = illumination->denoiser(); filter && filter->impl_type() == "ReLAX") {
             const bool changed = filter->set_relax_settings(relax_settings);
             if (changed) pipeline->invalidate();
             if (view_created || changed) {
-                feedback.relax_effective = filter->relax_settings_json();
+                feedback.relax_effective = filter->relax_settings();
             }
         }
     }
@@ -3288,6 +3287,9 @@ void OpticsSystem::update() {
     // 这些调用是幂等的空操作）。
     Corona::apply_pending_environment_updates();
     apply_pending_optics_updates();
+    // Visibility/material getters must retain consumed values even when the
+    // render cap below skips GPU work for this tick.
+    Corona::publish_optics_snapshot_from_storage();
 
     // Event-driven wakes may bypass SystemBase's periodic wait. An explicitly
     // requested render cap must still bound GPU submissions during such bursts.

@@ -2,20 +2,25 @@
 #include <corona/events/acoustics_system_events.h>
 #include <corona/engine/engine_runtime_api.h>
 #include <corona/shared_data_hub.h>
+#include <corona/systems/optics/optics_commands.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
+#include <corona/systems/script/python_runtime_coordinator.h>
 #include "cef/cef_editor_native_api_registry.h"
 #include "cef/cef_editor_native_api_test_support.h"
 #include "cef/cef_window_operations.h"
 #include "cef/cef_scene_operations.h"
 #include "cef/scene_tree_actor.h"
 #include "cef/cef_viewport_pick.h"
+#include "cef/viewport_image_input.h"
 #include "cef/cef_script_input.h"
 #include "cef/browser_ui.h"
 #include "editor_api/cef_editor_api.h"
+#include "editor_api/editor_dispatch.h"
 #include "optics/camera_viewport_updates.h"
 
 #include <filesystem>
 #include <future>
+#include <deque>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -44,6 +49,90 @@ void test_no_generic_web_contracts() {
 
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+void test_native_script_service_wait_does_not_hold_editor_state(bool queued_before_owner_wait) {
+    namespace Dispatch = UI::Detail;
+    namespace Python = Corona::Script::Python;
+    using namespace std::chrono_literals;
+    const auto owner = std::this_thread::get_id();
+    std::mutex queue_mutex;
+    std::condition_variable queue_changed;
+    std::deque<std::function<void()>> tasks;
+    std::atomic<bool> request_seen{false};
+    std::atomic<bool> consumer_done{false};
+    Dispatch::set_editor_dispatch_hooks({
+        .is_owner_thread = [owner] { return std::this_thread::get_id() == owner; },
+        .post_to_owner = [&](std::function<void()> task) {
+            { std::lock_guard lock(queue_mutex); tasks.push_back(std::move(task)); }
+            queue_changed.notify_all();
+            return true;
+        }});
+    require(Dispatch::on_editor_owner_thread(), "dispatch regression must establish its owner");
+    Python::PythonRuntimeCoordinator coordinator;
+    auto* previous = Python::active_python_runtime_coordinator();
+    Python::install_active_python_runtime_coordinator(&coordinator);
+    std::thread consumer([&] {
+        if (auto request = coordinator.wait_pop(5s)) {
+            request_seen = true;
+            queue_changed.notify_all();
+            // FileScripts restoration calls back into the actual scene registry.
+            // A Native handler holding editor_state_mutex while waiting for this
+            // consumer prevents the callback from completing until service timeout.
+            auto callback = UI::EditorApiRegistry::instance().invoke(
+                {"SceneTools.read_active_scene", Json::array(), UI::EditorApiCaller::ScriptRuntime}, {});
+            auto response = callback.success ? Python::PythonRuntimeResponse::success()
+                                             : Python::PythonRuntimeResponse::failure(callback.error);
+            response.service_result = std::make_shared<const Json>(
+                Json{{"status", "stopped"}, {"restored", true}});
+            coordinator.complete(request->request_id, std::move(response));
+        }
+        consumer_done = true;
+    });
+    std::future<UI::NativeResult> native;
+    const auto start_native = [&] {
+        native = std::async(std::launch::async, [&] {
+            return UI::EditorApiRegistry::instance().invoke(
+                {"Scripts.stop", Json::array({Json{{"runId", "dispatch-regression"}}}),
+                 UI::EditorApiCaller::Native}, {});
+        });
+    };
+    if (queued_before_owner_wait) {
+        start_native();
+        std::unique_lock lock(queue_mutex);
+        queue_changed.wait_for(lock, 1s, [&] { return !tasks.empty(); });
+    }
+    bool overtook_owner_wait = false;
+    {
+        Dispatch::EditorWaitingForPythonScope unrelated_owner_request;
+        if (!queued_before_owner_wait) start_native();
+        std::unique_lock lock(queue_mutex);
+        queue_changed.wait_for(lock, 1s, [&] { return !tasks.empty() || request_seen.load(); });
+        // Also cover a request already in the owner queue when its Python wait
+        // starts: the pending Native request must not use the callback takeover.
+        if (queued_before_owner_wait) queue_changed.wait_for(lock, 100ms, [&] { return request_seen.load(); });
+        overtook_owner_wait = request_seen;
+    }
+    const auto deadline = std::chrono::steady_clock::now() + 6s;
+    while ((!consumer_done || native.wait_for(0ms) != std::future_status::ready) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::function<void()> task;
+        {
+            std::lock_guard lock(queue_mutex);
+            if (!tasks.empty()) { task = std::move(tasks.front()); tasks.pop_front(); }
+        }
+        if (task) task();
+        else std::this_thread::sleep_for(1ms);
+    }
+    consumer.join();
+    auto result = native.get();
+    // Flush a queued task already completed through the callback handoff.
+    for (auto& task : tasks) task();
+    Python::install_active_python_runtime_coordinator(previous);
+    Dispatch::clear_editor_dispatch_hooks();
+    require(!overtook_owner_wait, "Native service request must remain queued during an unrelated owner Python wait");
+    require(result.success && result.data.value("restored", false),
+            "Native Scripts.stop must finish its Python scene callback without holding the editor state lock");
 }
 
 void test_identity_lifetime() {
@@ -298,7 +387,8 @@ void test_native_scene_values_and_non_web_adapters() {
 
 void test_owned_actor_index_projection() {
     const auto before = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
-    UI::SceneRequest read{UI::SceneMethod::ReadActorIndex};
+    UI::SceneRequest read{UI::SceneMethod::ReadScene};
+    read.scene_read = {UI::ActorProjection::Index, false};
     read.read_scene = before.scene;
     read.archive_session = before.archive_session;
     const auto reply = UI::execute_scene_operation(read);
@@ -359,7 +449,8 @@ void test_owned_actor_property_projection() {
 
 void test_owned_camera_projection() {
     const auto before = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
-    UI::SceneRequest read{UI::SceneMethod::ReadCameras};
+    UI::SceneRequest read{UI::SceneMethod::ReadScene};
+    read.scene_read = {UI::ActorProjection::None, true};
     read.read_scene = before.scene; read.archive_session = before.archive_session;
     const auto reply = UI::execute_scene_operation(read);
     require(reply.error_code.empty() && reply.camera_list.archive_session == before.archive_session &&
@@ -399,11 +490,12 @@ void test_owned_camera_projection() {
 
 void test_owned_scene_tree_projection() {
     const auto before = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
-    UI::SceneRequest read{UI::SceneMethod::ReadTree};
+    UI::SceneRequest read{UI::SceneMethod::ReadScene};
+    read.scene_read = {UI::ActorProjection::Tree, true};
     read.read_scene = before.scene; read.archive_session = before.archive_session;
     const auto reply = UI::execute_scene_operation(read);
-    require(reply.error_code.empty() && reply.tree.cameras.archive_session == before.archive_session &&
-        reply.tree.cameras.scene == before.scene && reply.tree.tree_revision == before.tree_revision,
+    require(reply.error_code.empty() && reply.camera_list.archive_session == before.archive_session &&
+        reply.camera_list.scene == before.scene && reply.active.tree_revision == before.tree_revision,
         "tree reads carry the observed archive, scene and revision");
     const auto legacy = UI::NativeApiRegistry::instance().dispatch({"SceneTools", "list_scene_tree", {before.scene}}, {});
     require(legacy && legacy->success && legacy->data["actors"].size() == reply.tree.actors.size(),
@@ -412,11 +504,11 @@ void test_owned_scene_tree_projection() {
         require(Corona::Ui::Cef::scene_tree_actor_to_json(reply.tree.actors[index]) == legacy->data["actors"][index],
             "tree projections share all Actor row values with the non-Web adapter");
     }
-    read.method = UI::SceneMethod::ReadCameras;
+    read.scene_read = {UI::ActorProjection::None, true};
     const auto cameras = UI::execute_scene_operation(read).camera_list;
-    require(cameras.active_camera_id == reply.tree.cameras.active_camera_id &&
-        cameras.cameras.size() == reply.tree.cameras.cameras.size(), "tree reuses the scoped camera projection");
-    read.method = UI::SceneMethod::ReadTree;
+    require(cameras.active_camera_id == reply.camera_list.active_camera_id &&
+        cameras.cameras.size() == reply.camera_list.cameras.size(), "tree reuses the scoped camera projection");
+    read.scene_read = {UI::ActorProjection::Tree, true};
     for (int kind = 0; kind < 4; ++kind) {
         auto invalid = read;
         if (kind == 0) invalid.archive_session.reset();
@@ -473,7 +565,7 @@ void test_one_native_transform_authority() {
 }
 
 void test_one_native_property_authority() {
-    UI::SceneRequest write{UI::SceneMethod::SetActorProperties};
+    UI::SceneRequest write{UI::SceneMethod::UpdateActor};
     write.archive_session = "camera-test-archive";
     auto& patch = write.properties;
     patch.scene = "scene.ini"; patch.actor = "transform-probe";
@@ -519,7 +611,7 @@ void test_one_native_property_authority() {
         read->data["mechanics"]["mass"] == 7 &&
         UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.tree_revision == before.tree_revision + 1,
         "invalid mixed property patches must not change values or either revision");
-    UI::SceneRequest partial{UI::SceneMethod::SetActorProperties};
+    UI::SceneRequest partial{UI::SceneMethod::UpdateActor};
     partial.archive_session = write.archive_session;
     partial.properties.scene = patch.scene; partial.properties.actor = patch.actor;
     partial.properties.visible = false;
@@ -681,7 +773,7 @@ void test_camera_settings_cannot_change_window_lifecycle() {
     auto& hub = Corona::SharedDataHub::instance();
     hub.drain_camera_state_updates();
     const auto active = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
-    UI::SceneRequest request{UI::SceneMethod::SetCameraProperties};
+    UI::SceneRequest request{UI::SceneMethod::UpdateCamera};
     request.archive_session = active.archive_session;
     request.camera_properties.scene = "scene.ini";
     request.camera_properties.camera_id = "primary";
@@ -824,7 +916,7 @@ void test_camera_properties_share_pose_view_and_native_authority() {
         UI::EditorApiCaller::PythonScript}, {}).data["cameras"]; };
     const auto before = read();
     const auto active = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
-    UI::SceneRequest request{UI::SceneMethod::SetCameraProperties};
+    UI::SceneRequest request{UI::SceneMethod::UpdateCamera};
     request.archive_session = active.archive_session;
     auto& patch = request.camera_properties;
     patch.scene = "scene.ini"; patch.camera_id = "primary";
@@ -856,7 +948,7 @@ void test_camera_properties_share_pose_view_and_native_authority() {
     }
     Corona::API::set_editor_camera_input_enabled(false);
     const auto locked = UI::execute_scene_operation(request);
-    UI::SceneRequest settings{UI::SceneMethod::SetCameraProperties};
+    UI::SceneRequest settings{UI::SceneMethod::UpdateCamera};
     settings.archive_session = active.archive_session;
     settings.camera_properties.scene = "scene.ini"; settings.camera_properties.camera_id = "primary";
     settings.camera_properties.move_speed = 0.75f;
@@ -937,14 +1029,20 @@ void test_pointer_configuration_owns_one_state_and_retires_with_its_context() {
     require(UI::prepare_camera_window_request(request).error_code.empty(), "pointer resolves exact scoped camera");
     request.viewport.emplace(); request.viewport->mode = "stereo3d";
     request.viewport->bounds = UI::ViewportBounds{0, 0, 800, 600, 800, 600};
-    request.viewport->pointer = UI::ViewportPointer{12, 34, "grab"};
+    request.viewport->pointer = UI::ViewportPointer{400, 300, "grab"};
     UI::BrowserTab tab; tab.open = true; tab.docking_pos = "main";
     auto& hub = Corona::SharedDataHub::instance();
+    std::optional<UI::InputDetail::ImagePoint> image_point;
+    {
+        const auto camera = hub.camera_storage().acquire_read(request.camera_handle);
+        image_point = UI::InputDetail::map_viewport_image_point(*camera, 400, 300, 800, 600);
+    }
+    require(image_point.has_value(), "center pointer lies inside the current camera image");
     auto result = UI::apply_viewport_configuration(request, tab);
     require(result.error_code.empty() && result.viewport->pointer.cursor == "grab" && result.viewport->system_cursor_hidden,
         "pointer and system cursor share one actual accepted configuration");
     const auto state = hub.viewport_ui_state(request.camera_handle);
-    require(state.pointer.x == 12 && state.pointer.y == 34 && state.pointer.owner_context == 101 &&
+    require(state.pointer.x == static_cast<float>(image_point->x) && state.pointer.y == static_cast<float>(image_point->y) && state.pointer.owner_context == 101 &&
         state.pointer.cursor_shape == Corona::ViewportUiCursorShape::Grab && tab.hide_system_cursor.load(),
         "rendering reads the typed pointer state directly without another command queue");
     for (int kind = 0; kind < 4; ++kind) {
@@ -955,7 +1053,7 @@ void test_pointer_configuration_owns_one_state_and_retires_with_its_context() {
         if (kind == 3) invalid.context_id = 0;
         require(!UI::apply_viewport_configuration(invalid, tab).error_code.empty(), "invalid pointer rejects entire patch");
         const auto after = hub.viewport_ui_state(request.camera_handle);
-        require(after.mode == state.mode && after.pointer.x == 12 && tab.hide_system_cursor.load(), "invalid pointer has no partial side effects");
+        require(after.mode == state.mode && after.pointer.x == state.pointer.x && tab.hide_system_cursor.load(), "invalid pointer has no partial side effects");
     }
     auto replacement = request; replacement.context_id = 202; replacement.viewport->pointer->cursor = "crosshair";
     require(UI::apply_viewport_configuration(replacement, tab).error_code.empty(), "new context can own its pointer");
@@ -979,11 +1077,22 @@ void test_pointer_configuration_owns_one_state_and_retires_with_its_context() {
 }
 
 void test_owned_pick_requests_and_coordinate_mapping() {
-    const auto mapped = UI::map_viewport_pick_point(30, 20, 100, 50, 800, 600);
+    Corona::CameraDevice embedded;
+    embedded.width = 1920; embedded.height = 1080;
+    embedded.viewport_rect_active = true; embedded.view_open = false;
+    embedded.view_width = 1536; embedded.view_height = 825;
+    const auto edge = UI::map_viewport_pick_point(34, 0, 1536, 825, embedded);
+    require(edge.valid && edge.inside && edge.x == 0 && edge.y == 0,
+        "live pick coordinates must start at the compositor image edge");
+    require(!UI::map_viewport_pick_point(33, 400, 1536, 825, embedded).inside,
+        "embedded image black bars must not submit GPU picks");
+    Corona::CameraDevice camera;
+    camera.width = 800; camera.height = 600;
+    const auto mapped = UI::map_viewport_pick_point(30, 20, 100, 50, camera);
     require(mapped.valid && mapped.inside && mapped.x == 240 && mapped.y == 240, "one pixel mapping must serve Web and Python");
-    require(!UI::map_viewport_pick_point(0, 0, std::numeric_limits<double>::infinity(), 50, 800, 600).valid,
+    require(!UI::map_viewport_pick_point(0, 0, std::numeric_limits<double>::infinity(), 50, camera).valid,
         "non-finite dimensions must reject before casts");
-    for (const double x : {-0.01, 100.0}) require(!UI::map_viewport_pick_point(x, 0, 100, 50, 800, 600).inside,
+    for (const double x : {-0.01, 100.0}) require(!UI::map_viewport_pick_point(x, 0, 100, 50, camera).inside,
         "negative and right-edge coordinates must miss without truncation");
     UI::ViewportPickRequests requests;
     UI::ViewportPickRequest request;
@@ -1072,6 +1181,165 @@ void test_script_input_queue_has_one_owner_and_drops_retired_scopes() {
         require(!endpoint.invoke(method, Json::array(), {}).success, "retired manifest input must be unavailable");
 }
 
+void test_optics_queue_merges_independent_fields() {
+    Corona::OpticsCommandChannel::Buffer commands;
+    Corona::OpticsUpdateCommand material{};
+    material.optics_handle = 1;
+    material.fields = Corona::OpticsField::Metallic | Corona::OpticsField::Visible;
+    material.metallic = 0.9f;
+    material.visible = false;
+    commands.push(material);
+    Corona::OpticsUpdateCommand roughness{};
+    roughness.optics_handle = 1;
+    roughness.fields = Corona::OpticsField::Roughness;
+    roughness.roughness = 0.25f;
+    commands.push(roughness);
+    material.metallic = 0.95f;
+    commands.push(material);
+    const auto merged = commands.drain();
+    require(merged.size() == 1 && merged[0].metallic == 0.95f &&
+                merged[0].roughness == 0.25f && !merged[0].visible &&
+                Corona::has_optics_field(merged[0].fields, Corona::OpticsField::Roughness),
+            "independent Optics setters must retain all fields and use the latest value per field");
+    roughness.geometry_handle = 17;
+    commands.push(roughness);
+    material.geometry_handle = 18;
+    commands.push(material);
+    const auto rebound = commands.drain();
+    require(rebound.size() == 1 && rebound[0].metallic == 0.95f &&
+                rebound[0].roughness == 0.25f && !rebound[0].visible &&
+                Corona::has_optics_field(rebound[0].fields, Corona::OpticsField::Roughness),
+            "independent scalar fields must survive a change of geometry guard");
+
+    const auto previous_overrides = std::make_shared<const Corona::Materials::Overrides>();
+    const auto previous_principled = std::make_shared<const Corona::Materials::Principled>();
+    const auto next_principled = std::make_shared<const Corona::Materials::Principled>();
+    Corona::OpticsUpdateCommand previous{};
+    previous.optics_handle = 1; previous.geometry_handle = 17;
+    previous.fields = Corona::OpticsField::MaterialOverrides | Corona::OpticsField::Principled;
+    previous.material_overrides = previous_overrides; previous.principled = previous_principled;
+    Corona::OpticsUpdateCommand next{};
+    next.optics_handle = 1; next.geometry_handle = 18;
+    next.fields = Corona::OpticsField::Principled; next.principled = next_principled;
+    commands.push(roughness); commands.push(previous); commands.push(next);
+    const auto owned = commands.drain();
+    require(owned.size() == 1 && owned[0].geometry_handle == 18 &&
+                owned[0].principled == next_principled && !owned[0].material_overrides &&
+                !Corona::has_optics_field(owned[0].fields, Corona::OpticsField::MaterialOverrides) &&
+                Corona::has_optics_field(owned[0].fields, Corona::OpticsField::Roughness),
+            "new material ownership must discard old payloads while preserving independent scalars");
+    Corona::OpticsDevice device;
+    device.geometry_handle = 17; device.principled = previous_principled;
+    Corona::apply_optics_update(device, owned[0]);
+    require(device.principled == previous_principled && device.roughness == 0.25f,
+            "a mismatched material guard must reject payloads without dropping independent scalars");
+    device.geometry_handle = 18;
+    Corona::apply_optics_update(device, owned[0]);
+    require(device.principled == next_principled, "matching geometry must receive its material payload");
+    next.principled.reset(); commands.push(next);
+    const auto cleared = commands.drain();
+    Corona::apply_optics_update(device, cleared.front());
+    require(!device.principled, "a flagged null payload must explicitly clear the current material");
+}
+
+void test_render_settings_queue_owns_values() {
+    auto& hub = Corona::SharedDataHub::instance();
+    hub.drain_camera_state_updates();
+    for (const auto* family : {"pt", "restir", "reblur", "relax"}) {
+        UI::SceneRequest request{UI::SceneMethod::SetCameraRenderSettings};
+        request.archive_session = "camera-test-archive";
+        request.camera_render_settings.scene = "scene.ini";
+        request.camera_render_settings.camera_id = "primary";
+        request.camera_render_settings.family = family;
+        const Json accepted{{"max_history", 12}, {"enabled", false}};
+        request.camera_render_settings.settings = accepted;
+        const auto reply = UI::execute_scene_operation(request);
+        require(reply.error_code.empty() && reply.camera_render_settings.pending, "render settings accept a scoped object patch");
+        request.camera_render_settings.settings["max_history"] = 99;
+        const auto commands = hub.drain_camera_state_updates();
+        require(commands.size() == 1, "render settings enqueue once");
+        const auto& command = commands.front();
+        const Json value = std::string_view(family) == "pt" ? Json(command.vision_pt_settings) :
+            std::string_view(family) == "restir" ? Json(command.vision_restir_settings) :
+            std::string_view(family) == "reblur" ? Json(command.vision_reblur_settings) : Json(command.vision_relax_settings);
+        require(value.is_object() && value == accepted,
+            "render settings command must own the original object without JSON string encoding");
+        request.method = UI::SceneMethod::ReadCameraRenderSettings;
+        require(UI::execute_scene_operation(request).camera_render_settings.settings == accepted,
+            "requested render settings remain readable after drain and caller mutation");
+    }
+}
+
+void test_consolidated_queries_and_atomic_names() {
+    UI::load_native_editor_scene_for_test(snapshot());
+    const auto before = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
+    UI::SceneRequest query{UI::SceneMethod::ReadScene};
+    query.archive_session = before.archive_session;
+    query.read_scene = before.scene;
+    query.scene_read = {UI::ActorProjection::Index, true};
+    const auto combined = UI::execute_scene_operation(query);
+    require(combined.error_code.empty() && combined.actor_index.actors.size() == 1 &&
+            combined.camera_list.cameras.size() == 2 && combined.active.tree_revision == before.tree_revision,
+            "one scoped scene query must return the requested actor index and cameras");
+    query.scene_read = {UI::ActorProjection::None, true};
+    const auto cameras_only = UI::execute_scene_operation(query);
+    require(cameras_only.error_code.empty() && cameras_only.actor_index.actors.empty() &&
+            cameras_only.actor_context.actors.empty() && cameras_only.tree.actors.empty(),
+            "camera-only queries must not build an Actor projection");
+    query.scene_read = {UI::ActorProjection::Context, false};
+    const auto context = UI::execute_scene_operation(query);
+    require(context.error_code.empty() && context.actor_context.actors.size() == 1 &&
+            context.camera_list.cameras.empty(), "context queries must not load camera state");
+    query.scene_read = {};
+    require(UI::execute_scene_operation(query).error_code == "INVALID_ARGUMENT", "empty projection is invalid");
+
+    UI::SceneRequest actor{UI::SceneMethod::UpdateActor};
+    actor.archive_session = before.archive_session;
+    actor.properties.scene = before.scene;
+    actor.properties.actor = "transform-probe";
+    actor.properties.name = "Renamed atomically";
+    actor.properties.follow_camera = true;
+    actor.properties.mechanics.emplace().mass = std::numeric_limits<float>::infinity();
+    require(UI::execute_scene_operation(actor).error_code == "INVALID_ARGUMENT", "invalid properties reject a mixed name update");
+    UI::SceneRequest read{UI::SceneMethod::ReadActorProperties};
+    read.archive_session = before.archive_session;
+    read.read_scene = before.scene;
+    read.read_actor = actor.properties.actor;
+    const auto unchanged = UI::execute_scene_operation(read).actor_read.properties;
+    require(unchanged.actor == "Transform probe" && !unchanged.follow_camera &&
+            UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.tree_revision == before.tree_revision,
+            "a rejected mixed patch must preserve name, properties and tree revision");
+    actor.properties.mechanics.reset();
+    const auto updated = UI::execute_scene_operation(actor);
+    require(updated.error_code.empty() && updated.properties.actor == "Renamed atomically" &&
+            updated.properties.actor_guid == "transform-probe" && updated.properties.follow_camera &&
+            updated.properties.actor_version == unchanged.actor_version + 1 &&
+            UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.tree_revision == before.tree_revision + 1,
+            "one combined name/property write must preserve GUID and advance revisions once");
+
+    UI::SceneRequest camera{UI::SceneMethod::UpdateCamera};
+    camera.archive_session = before.archive_session;
+    camera.camera_properties.scene = before.scene;
+    camera.camera_properties.camera_id = "primary";
+    camera.camera_properties.name = "Renamed primary";
+    camera.camera_properties.fov = 200;
+    require(UI::execute_scene_operation(camera).error_code == "INVALID_ARGUMENT", "invalid camera pose rejects a mixed name update");
+    query.scene_read = {UI::ActorProjection::None, true};
+    const auto original_camera = UI::execute_scene_operation(query).camera_list.cameras.front().properties;
+    require(original_camera.name == combined.camera_list.cameras.front().properties.name,
+            "invalid camera patches must not rename the camera");
+    camera.camera_properties.fov = 60;
+    const auto renamed = UI::execute_scene_operation(camera);
+    require(renamed.error_code.empty() && renamed.camera.name == "Renamed primary" && renamed.camera.fov == 60,
+            "camera name and base properties share a single update");
+    camera.camera_properties.name = combined.camera_list.cameras.back().properties.name;
+    camera.camera_properties.fov = 80;
+    require(UI::execute_scene_operation(camera).error_code == "DUPLICATE_CAMERA_NAME", "camera names remain unique");
+    require(UI::execute_scene_operation(query).camera_list.cameras.front().properties.fov == 60,
+            "a conflicting camera name must not partially apply the pose");
+    UI::load_native_editor_scene_for_test(snapshot());
+}
+
 int main() {
     try {
         test_no_generic_web_contracts();
@@ -1081,6 +1349,8 @@ int main() {
         require(kernel.initialize(), "kernel initialization failed");
         UI::register_builtin_native_api_handlers();
         UI::load_native_editor_scene_for_test(snapshot());
+        test_optics_queue_merges_independent_fields();
+        test_render_settings_queue_owns_values();
         test_resource_import_results_and_modal_retirement();
         test_audio_adapters_publish_once_with_exact_identity();
         test_native_scene_values_and_non_web_adapters();
@@ -1104,6 +1374,7 @@ int main() {
         test_owned_pick_requests_and_coordinate_mapping();
         test_pick_results_resolve_authoritative_actor_and_scope();
         test_typed_camera_creation_has_no_window_side_effect();
+        test_consolidated_queries_and_atomic_names();
         UI::WindowRequest request{UI::WindowMethod::CreateCameraView, 1};
         request.archive_session = "camera-test-archive";
         request.scene_id = "scene.ini";
@@ -1138,21 +1409,24 @@ int main() {
         UI::reset_native_editor_scene_for_test();
         require(!request.camera_authority->active, "scene shutdown must retire queued camera work");
         require(UI::prepare_camera_window_request(request).error_code == "PROJECT_CONTEXT_CHANGED", "absent scene must be rejected");
-        UI::SceneRequest empty_read{UI::SceneMethod::ReadActorIndex};
+        UI::SceneRequest empty_read{UI::SceneMethod::ReadScene};
+    empty_read.scene_read = {UI::ActorProjection::Index, false};
         empty_read.read_scene = "scene.ini"; empty_read.archive_session = "camera-test-archive";
         require(UI::execute_scene_operation(empty_read).error_code == "PROJECT_CONTEXT_CHANGED",
                 "an actor index cannot create an absent editor scene");
         empty_read.method = UI::SceneMethod::ReadActorProperties; empty_read.read_actor = "transform-probe";
         require(UI::execute_scene_operation(empty_read).error_code == "PROJECT_CONTEXT_CHANGED",
                 "Actor property reads cannot create an absent editor scene");
-        empty_read.method = UI::SceneMethod::ReadCameras;
+        empty_read.method = UI::SceneMethod::ReadScene; empty_read.scene_read = {UI::ActorProjection::None, true};
         require(UI::execute_scene_operation(empty_read).error_code == "PROJECT_CONTEXT_CHANGED",
                 "camera reads cannot create an absent editor scene");
-        empty_read.method = UI::SceneMethod::ReadTree;
+        empty_read.scene_read = {UI::ActorProjection::Tree, true};
         require(UI::execute_scene_operation(empty_read).error_code == "PROJECT_CONTEXT_CHANGED",
                 "tree reads cannot create an absent editor scene");
         require(UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.archive_session.empty(),
                 "an empty scene read cannot lazily create an editor scene");
+        test_native_script_service_wait_does_not_hold_editor_state(false);
+        test_native_script_service_wait_does_not_hold_editor_state(true);
         kernel.shutdown();
         std::cout << "CameraWindowIdentityTests passed\n";
         return 0;

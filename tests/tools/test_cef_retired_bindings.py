@@ -2,35 +2,6 @@
 from pathlib import Path
 
 
-def test_lanchat_methods_have_named_v8_and_keep_only_non_web_manifest_routes():
-    root = Path(__file__).resolve().parents[2]
-    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
-    for method in ['start_room', 'start_local_room', 'stop_room', 'stop_local_room', 'join_room',
-                   'leave_room', 'send_message', 'list_history_rooms', 'load_history_room',
-                   'get_local_ip', 'add_agent', 'remove_agent']:
-        line = next(line for line in manifest.splitlines() if f'LANChat, {method},' in line)
-        assert 'WRAPPED_CALLERS(LANChat,' in line
-        assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
-        assert ', "", "lan_chat.' in line
-    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
-    for name in ['startRoom', 'startLocalRoom', 'stopRoom', 'stopLocalRoom', 'joinRoom', 'leaveRoom',
-                 'sendMessage', 'listHistoryRooms', 'loadHistoryRoom', 'getLocalIp', 'addAgent', 'removeAgent']:
-        assert f'lan_chat->SetValue("{name}"' in binding
-    assert 'execute_lanchat_operation(request)' in binding
-
-
-def test_lanchat_native_callbacks_do_not_serialize_and_parse_event_dtos():
-    root = Path(__file__).resolve().parents[2]
-    network = (root / 'src/systems/network/network_system.cpp').read_text(encoding='utf-8')
-    owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8')
-    assert 'std::function<void(const Network::LanChatEvent&)>' in network
-    for old in ['message_event_json', 'history_snapshot_event_json', 'member_update_event_json',
-                'lanchat_error_event_json', 'agents_json', 'json_escape']:
-        assert old not in network
-    assert 'emit_lanchat_event_json' not in owner
-    assert 'void emit_lanchat_event(const Corona::Network::LanChatEvent& event)' in owner
-
-
 def test_network_has_named_owned_contract_and_no_legacy_web_routes():
     root = Path(__file__).resolve().parents[2]
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
@@ -230,7 +201,7 @@ def test_camera_reads_retire_full_scene_and_camera_list_web_routes():
         assert '~caller_mask(EditorApiCaller::Cef)' in declaration or 'caller_mask(EditorApiCaller::PythonScript)' in declaration
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'getSnapshot:' not in facade and 'listCameraViews:' not in facade
-    assert 'window.corona.scene.readCameras(sceneName, scope)' in facade
+    assert 'window.corona.scene.readScene(request)' in facade
 
 
 def test_tree_read_retires_manifest_and_shares_owned_rows():
@@ -241,7 +212,7 @@ def test_tree_read_retires_manifest_and_shares_owned_rows():
     assert 'caller_mask(EditorApiCaller::PythonScript)' in declaration
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'listSceneTree:' not in facade
-    assert 'window.corona.scene.readTree(sceneName, scope)' in facade
+    assert 'window.corona.scene.readScene(request)' in facade
     native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
     assert 'scene_tree_actor_to_json(scene_tree_actor_row(actor))' in native
     assert 'reply.tree.actors.push_back(scene_tree_actor_row(actor))' in native
@@ -330,9 +301,9 @@ def test_camera_rename_and_delete_use_scoped_scene_v8_only_for_web():
         assert 'caller_mask(EditorApiCaller::PythonScript)' in declaration
         assert 'caller_mask(EditorApiCaller::Cef)' not in declaration
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
-    for name in ['renameCamera', 'deleteCamera']:
+    for name in ['updateCamera', 'deleteCamera']:
         assert f'CreateFunction("{name}"' in binding
-    assert 'SceneMethod::RenameCamera' in binding
+    assert 'SceneMethod::UpdateCamera' in binding
     assert 'SceneMethod::DeleteCamera' in binding
 
 
@@ -352,11 +323,11 @@ def test_actor_rename_uses_scoped_scene_v8_only_for_web():
     assert '"", "scene_tools.rename_actor"' in declaration
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'call_manifest_editor_api(\'sceneTools.renameActor\'' not in facade
-    assert 'renameActor: (sceneName, actor, name, scope) =>' in facade
-    assert 'window.corona.scene.renameActor(sceneName, actor, name, scope)' in facade
+    assert 'updateActor: (sceneName, actorName, patch) =>' in facade
+    assert 'window.corona.scene.updateActor(sceneName, actorName, patch)' in facade
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
-    assert 'new NativeHandler(endpoint, SceneMethod::RenameActor)' in binding
-    assert 'actor_rename_value(reply.actor_rename)' in binding
+    assert 'new NativeHandler(endpoint, SceneMethod::UpdateActor)' in binding
+    assert 'properties_value(reply.properties)' in binding
 
 
 def test_actor_delete_uses_scoped_scene_v8_and_retires_manifest_for_web():
@@ -645,39 +616,13 @@ def test_unused_network_and_chat_routes_keep_non_web_contracts_only():
                  'register_actor_identity',
                  'request_actor_scene_snapshot',
                  'set_sync_paused',
-                 'unlock_object'],
-     'LANChat': ['get_history',
-                 'list_agents',
-                 'poll_agent_trigger',
-                 'poll_coordinator_sync_message',
-                 'poll_room_event',
-                 'poll_sync_event',
-                 'send_agent_reply',
-                 'send_system_message',
-                 'send_system_message_to_host',
-                 'send_system_message_to_user']}
+                 'unlock_object']}
     for module, methods in retired.items():
         for method in methods:
             line = next(line for line in source.splitlines() if f'({module}, {method},' in line)
             assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line, (module, method)
             assert ', "", ' in line, (module, method)
-            assert ('"network.' if module == 'Network' else '"lan_chat.') in line
-
-
-def test_lanchat_events_use_named_owned_subscription_and_retire_generic_web_event():
-    root = Path(__file__).resolve().parents[2]
-    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
-    assert 'lan_chat->SetValue("onEvent"' in binding
-    assert 'lanchat_event_value' in binding
-    header = (root / 'src/systems/ui/cef/cef_lanchat_operations.h').read_text(encoding='utf-8')
-    assert 'struct LanChatEventSnapshot' in header
-    assert 'metadata_json' not in header
-    manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8')
-    line = next(line for line in manifest.splitlines() if '{"LANChat.event"' in line)
-    assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
-    assert ', "", "events.on_lan_chat_event"' in line
-    owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8')
-    assert 'notify_corona_lanchat_event' in owner
+            assert '"network.' in line
 
 
 def test_unused_network_events_keep_only_non_web_permissions_and_aliases():

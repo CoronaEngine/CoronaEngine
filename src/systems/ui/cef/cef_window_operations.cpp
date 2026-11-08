@@ -1,5 +1,6 @@
 #include "cef_window_operations.h"
 #include "cef_client.h"
+#include "viewport_image_input.h"
 #include <corona/systems/ui/camera_viewport_manager.h>
 #include <corona/shared_data_hub.h>
 #include <cmath>
@@ -522,6 +523,22 @@ WindowReply apply_viewport_configuration(const WindowRequest& request, BrowserTa
         if (!source.camera_view && (source.docking_pos != "main" || (!patch.bounds && source.web_camera_handle != request.camera_handle)))
             return fail("PERMISSION_DENIED", "Pointer requires the caller's bound camera surface");
     }
+    std::optional<InputDetail::ImagePoint> pointer_point;
+    if (patch.pointer && *cursor != Corona::ViewportUiCursorShape::Hidden) {
+        const auto& pointer = *patch.pointer;
+        if (source.camera_view) {
+            // Detached CameraView sends camera render pixels directly.
+            pointer_point = InputDetail::ImagePoint{pointer.x, pointer.y};
+        } else {
+            const auto input_width = patch.bounds ? patch.bounds->render_width : source.web_camera_render_width;
+            const auto input_height = patch.bounds ? patch.bounds->render_height : source.web_camera_render_height;
+            if (input_width <= 0 || input_height <= 0)
+                return fail("INVALID_ARGUMENT", "Pointer requires valid viewport render dimensions");
+            const auto camera = Corona::SharedDataHub::instance().camera_storage().try_acquire_read(request.camera_handle);
+            if (!camera) return fail("CAMERA_UNAVAILABLE", "Viewport camera is unavailable");
+            pointer_point = InputDetail::map_viewport_image_point(*camera, pointer.x, pointer.y, input_width, input_height);
+        }
+    }
     // All fields and the native identity lease are valid before any mutation.
     auto& hub = Corona::SharedDataHub::instance();
     if (patch.bounds && source.viewport_pointer_camera && source.viewport_pointer_camera != request.camera_handle)
@@ -538,12 +555,11 @@ WindowReply apply_viewport_configuration(const WindowRequest& request, BrowserTa
         source.web_camera_render_width = bounds.render_width; source.web_camera_render_height = bounds.render_height;
     }
     if (patch.pointer) {
-        if (*cursor == Corona::ViewportUiCursorShape::Hidden) release_viewport_pointer(source, request.context_id);
+        if (*cursor == Corona::ViewportUiCursorShape::Hidden || !pointer_point) release_viewport_pointer(source, request.context_id);
         else {
             if (source.viewport_pointer_owner != request.context_id || source.viewport_pointer_camera != request.camera_handle)
                 release_viewport_pointer(source, source.viewport_pointer_owner);
-            const auto& pointer = *patch.pointer;
-            hub.set_viewport_ui_pointer(request.camera_handle, {static_cast<float>(pointer.x), static_cast<float>(pointer.y), *cursor, request.context_id});
+            hub.set_viewport_ui_pointer(request.camera_handle, {static_cast<float>(pointer_point->x), static_cast<float>(pointer_point->y), *cursor, request.context_id});
             source.viewport_pointer_owner = request.context_id;
             source.viewport_pointer_camera = request.camera_handle;
             source.viewport_pointer_authority = authority;

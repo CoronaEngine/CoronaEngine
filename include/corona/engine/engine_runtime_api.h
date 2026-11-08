@@ -3,6 +3,7 @@
 #include <corona/systems/geometry/model_node_state.h>
 #include <corona/resource/model_import_options.h>
 #include <array>
+#include <nlohmann/json_fwd.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -511,6 +512,11 @@ void set_vision_denoise(bool enabled, std::uintptr_t camera_handle = 0);
 void set_vision_denoiser(const std::string& type, std::uintptr_t camera_handle = 0);
 [[nodiscard]] std::string get_vision_denoiser(std::uintptr_t camera_handle = 0);
 [[nodiscard]] std::string get_requested_vision_denoiser(std::uintptr_t camera_handle = 0);
+enum class VisionSettingsFamily { Pt, Restir, Reblur, Relax };
+void set_vision_settings(VisionSettingsFamily family, const nlohmann::json& settings, std::uintptr_t camera_handle);
+[[nodiscard]] nlohmann::json get_requested_vision_settings(VisionSettingsFamily family, std::uintptr_t camera_handle);
+[[nodiscard]] nlohmann::json get_effective_vision_settings(VisionSettingsFamily family, std::uintptr_t camera_handle);
+// String adapters for independent legacy callers. Native communication uses values.
 void set_vision_reblur_settings(const std::string& json, std::uintptr_t camera_handle = 0);
 void set_vision_pt_settings(const std::string& json, std::uintptr_t camera_handle = 0);
 void set_vision_restir_settings(const std::string& json, std::uintptr_t camera_handle = 0);

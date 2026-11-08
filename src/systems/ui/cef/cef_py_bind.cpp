@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "cef_editor_api.h"
 
@@ -17,7 +17,7 @@ namespace {
 /// 执行（见 `editor_api/editor_dispatch.h`）。而 CEF UI 线程自己也会同步等 Python
 /// （`invoke_python_script_service` → `submit_and_wait`，例如 `Scripts.get_status`）。
 /// 如果这里握着 GIL 等 CEF 线程，Python 消费线程就拿不到 GIL 去答复 CEF 线程，形成
-/// "CEF 等 Python、Python 等 CEF"的环路。实测（LANChat 后台轮询每 ~2.5 s 一次）：
+/// "CEF 等 Python、Python 等 CEF"的环路。历史后台轮询实测：
 /// 每次轮询撞上鼠标事件的 Python 往返就握手成 5 s 超时，期间每帧鼠标事件都在 2 s 超时里
 /// 冻住 UI。放开 GIL 之后这段等待不再拖住整个 Python 运行时。
 ///

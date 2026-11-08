@@ -35,6 +35,18 @@ struct UIFrameCommandKey {
     static std::uintptr_t get(const UIFrameCommand& command) noexcept {
         return reinterpret_cast<std::uintptr_t>(command.event.surface);
     }
+
+    static void merge(UIFrameCommand& pending, const UIFrameCommand& next) {
+        // The producer attaches its first-present receipt only once. Keep it
+        // when newer frames replace the image before Display drains this queue.
+        // A replacement image allocation owns a separate surface lifetime.
+        auto first_present = pending.event.image_handle == next.event.image_handle
+            ? pending.event.first_present_ticket : std::nullopt;
+        pending = next;
+        if (!pending.event.first_present_ticket) {
+            pending.event.first_present_ticket = std::move(first_present);
+        }
+    }
 };
 
 class OpticsFrameCommandChannel {

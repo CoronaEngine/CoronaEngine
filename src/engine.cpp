@@ -268,12 +268,12 @@ void Engine::shutdown() {
 
     auto* sys_mgr = kernel_.system_manager();
     if (sys_mgr) {
-        // 先拆主 surface：此刻 DAG（Display）仍在运行，拆除回执能正常兑现。
-        // 停掉 DAG 之后再拆会等满超时（退出多等约 15 秒，且 swapchain 不释放）。
+        // UI stop retires all windows and camera surfaces through Display/Optics.
+        // Keep the DAG alive until those acknowledgements have completed.
         auto ui_system = sys_mgr->get_system("UI");
         if (auto* ui =
                 dynamic_cast<Corona::Systems::UiSystem*>(ui_system ? ui_system.get() : nullptr)) {
-            ui->teardown_main_surface_before_stop();
+            ui->stop();
         }
 
         sys_mgr->stop_all();

@@ -13,9 +13,15 @@ public:
         while (!stop.stop_requested()) {
             auto request = coordinator_.wait_pop(std::chrono::milliseconds(50));
             if (!request) continue;
-            const auto message = Json::parse(request->payload_json);
-            auto reply = call(request->function.c_str(), message.at("args").at(0), request->module.c_str());
-            coordinator_.complete(request->request_id, Py::PythonRuntimeResponse::success(reply.dump()));
+            try {
+                if (!request->service_args) throw std::runtime_error("Archive service request has no structured arguments");
+                auto reply = call(request->function.c_str(), request->service_args->at(0), request->module.c_str());
+                auto response = Py::PythonRuntimeResponse::success({});
+                response.service_result = std::make_shared<const Json>(std::move(reply));
+                coordinator_.complete(request->request_id, std::move(response));
+            } catch (const std::exception& error) {
+                coordinator_.complete(request->request_id, Py::PythonRuntimeResponse::failure(error.what()));
+            }
         }
     }) { Py::install_active_python_runtime_coordinator(&coordinator_); }
     ~ArchiveTestHost() {

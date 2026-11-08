@@ -7,7 +7,7 @@ import sys
 import time
 import uuid
 
-from blockly_actor_file_smoke import wait_for, dispatch_script_key
+from blockly_actor_file_smoke import wait_for, dispatch_script_key, open_web_project
 
 
 def verify(port, project, peer, relative, control):
@@ -27,13 +27,14 @@ def verify(port, project, peer, relative, control):
         wait_for(reply.exists, bool, name)
         result = json.loads(reply.read_bytes())
         if reject:
-            assert not result["success"] and "PROJECT_CONTEXT_CHANGED" in result["error"], result
-            return
+            expected = "PROJECT_CONTEXT_CHANGED" if reject is True else reject
+            assert not result["success"] and expected in result["error"], result
+            return result
         assert result["success"], result
         return result["data"]
 
     def open_project(path):
-        result = wait_for(lambda: web.evaluate("corona.project.openProject(" + json.dumps(str(path)) + ")"),
+        result = wait_for(lambda: open_web_project(web, path),
                           lambda r: r.get("status") != "service_initializing", "open project")
         assert result["ok"], result
         return web.evaluate("corona.scene.readActive()")["archive_session"]
@@ -47,11 +48,16 @@ def verify(port, project, peer, relative, control):
                 for p in root.rglob("*") if p.is_file()}
 
     def tap(code="KeyD"):
-        dispatch_script_key(web, 'keyDown', code)
-        dispatch_script_key(web, 'keyUp', code)
+        dispatch_script_key(web, 'keyDown', code, port=port)
+        dispatch_script_key(web, 'keyUp', code, port=port)
 
     wait_for(lambda: web.evaluate("!!document.querySelector('#app[data-v-app] button')"), bool, "editor ready")
     session = open_project(project)
+    # Keep a real editor owner without MainPage's independent assistant event
+    # persistence; this probe checks that native script runs leave files alone.
+    web.evaluate("location.hash='/SceneBar'")
+    wait_for(lambda: web.evaluate("!!document.querySelector('[data-guidance=scene-import-model]')"),
+             bool, 'native file editor owner')
     assert call("SceneTools.read_active_scene")["archive_session"] == session
     source = (project / relative).read_bytes()
     assert b"from script_runtime import file_api" in source and b"script_runtime.engine" not in source
@@ -86,15 +92,25 @@ def verify(port, project, peer, relative, control):
         tap("KeyJ" if len(runs) == 1 else "KeyD")
         wait_for(position, lambda v: v == moved, "D moves exactly once")
         if ending == "reload":
-            # Reload remains an independent native contract, not a retired Web route.
-            assert call("SceneTools.reload_scene", "scene.ini", str(project))["status"] == "success"
+            # This legacy method belongs to Python/ScriptRuntime, never Native.
+            # Preserve its caller restriction and exercise same-project reload
+            # through the production named project operation.
+            denied = call("SceneTools.reload_scene", "scene.ini", str(project),
+                          reject="not allowed for this caller")
+            assert denied['code'] == 403, denied
+            assert open_project(project) != session
         else:
             assert call("Scripts.stop", {"runId": run})["restored"]
         stopped = call("Scripts.get_status")
         assert not stopped["threadAlive"] and not stopped["snapshotCaptured"], stopped
         tap()
         time.sleep(.15)
-        assert position() == initial and files() == archived
+        restored = position()
+        assert restored == initial, (ending, 'restored Actor position', initial, restored)
+        current_files = files()
+        assert current_files == archived, (ending, 'archive changes', [str(path)
+            for path in current_files.keys() | archived.keys()
+            if current_files.get(path) != archived.get(path)])
     interpreters = []
     for _ in range(2):
         started = call("Scripts.run_path", {"archive_session": call("SceneTools.read_active_scene")["archive_session"],
@@ -109,7 +125,8 @@ def verify(port, project, peer, relative, control):
     call("Scripts.run_path", {"archive_session": session, "path": relative, "requestId": uuid.uuid4().hex}, reject=True)
     assert position() == initial and files() == archived
     return {"nativeRuns": runs, "before": initial, "moved": moved, "restored": position(),
-            "plainFileModuleTable": interpreters[0], "directReload": True, "staleStartRejected": True, "filesUnchanged": len(archived)}
+            "plainFileModuleTable": interpreters[0], "namedProjectReload": True,
+            "nativeLegacyReloadDenied": True, "staleStartRejected": True, "filesUnchanged": len(archived)}
 
 
 if __name__ == "__main__":

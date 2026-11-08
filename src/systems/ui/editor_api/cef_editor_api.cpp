@@ -1,4 +1,4 @@
-﻿#include <corona/systems/ui/file_script_api.h>
+#include <corona/systems/ui/file_script_api.h>
 #include "cef_editor_api.h"
 
 #include "editor_dispatch.h"
@@ -514,28 +514,6 @@ constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, get_project_info, kNoParams, "", "files.get_project_info", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, open_file, kFileManagerOpenFileParams, "", "files.open_file", EditorApiValueType::Boolean, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, rename_item, kFileManagerRenameItemParams, "", "files.rename_item", EditorApiValueType::Boolean, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, add_agent, kObjectPayloadParam, "", "lan_chat.add_agent", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, get_history, kNoParams, "", "lan_chat.get_history", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, get_local_ip, kNoParams, "", "lan_chat.get_local_ip", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, join_room, kObjectPayloadParam, "", "lan_chat.join_room", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, leave_room, kNoParams, "", "lan_chat.leave_room", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, list_agents, kNoParams, "", "lan_chat.list_agents", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, list_history_rooms, kNoParams, "", "lan_chat.list_history_rooms", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, load_history_room, kObjectPayloadParam, "", "lan_chat.load_history_room", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, remove_agent, kObjectPayloadParam, "", "lan_chat.remove_agent", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, send_message, kObjectPayloadParam, "", "lan_chat.send_message", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, send_agent_reply, kObjectPayloadParam, "", "lan_chat.send_agent_reply", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, send_system_message, kObjectPayloadParam, "", "lan_chat.send_system_message", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, send_system_message_to_host, kObjectPayloadParam, "", "lan_chat.send_system_message_to_host", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, send_system_message_to_user, kObjectPayloadParam, "", "lan_chat.send_system_message_to_user", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, poll_agent_trigger, kNoParams, "", "lan_chat.poll_agent_trigger", EditorApiValueType::Any, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, poll_coordinator_sync_message, kNoParams, "", "lan_chat.poll_coordinator_sync_message", EditorApiValueType::Any, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, poll_room_event, kNoParams, "", "lan_chat.poll_room_event", EditorApiValueType::Any, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, poll_sync_event, kNoParams, "", "lan_chat.poll_sync_event", EditorApiValueType::Any, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, start_local_room, kObjectPayloadParam, "", "lan_chat.start_local_room", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, start_room, kObjectPayloadParam, "", "lan_chat.start_room", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, stop_local_room, kNoParams, "", "lan_chat.stop_local_room", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(LANChat, stop_room, kNoParams, "", "lan_chat.stop_room", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(MainView, import_resource_file, kMainViewImportResourceFileParams, "", "main.import_resource_file", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(MainView, on_init, kPathOptionalParam, "", "main.on_init", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
     EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(MainView, scene_save, kSceneSaveParams, "main.sceneSave", "main.scene_save", EditorApiValueType::Object, non_cef_animation_callers()),
@@ -686,7 +664,6 @@ static_assert([] {
 #undef EDITOR_API_METHOD0_WRAPPED
 
 constexpr auto kEditorApiEvents = std::to_array<EditorApiEventSpec>({
-    {"LANChat.event", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_lan_chat_event"},
     {"Network.actorDeleteSyncBroadcastRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_actor_delete_sync_broadcast_requested"},
     {"Network.actorOwnershipClaimed", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_actor_ownership_claimed"},
     {"Network.actorStateSyncBroadcastRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_actor_state_sync_broadcast_requested"},
@@ -898,7 +875,8 @@ NativeResult dispatch_native_api_method(const EditorApiMethodSpec& spec,
 NativeResult run_native_api_method(const EditorApiMethodSpec& spec,
                                    const nlohmann::json& args,
                                    const NativeContext& context,
-                                   Detail::EditorDispatchRoute route) {
+                                   Detail::EditorDispatchRoute route,
+                                   bool allow_python_handoff) {
     ensure_editor_dispatch_hooks();
 
     Detail::EditorDispatchReport report;
@@ -906,7 +884,8 @@ NativeResult run_native_api_method(const EditorApiMethodSpec& spec,
         [spec, args, context] { return dispatch_native_api_method(spec, args, context); },
         route,
         kEditorDispatchTimeout,
-        &report);
+        &report,
+        allow_python_handoff);
 
     if (report.ran_inline_on_caller && route == Detail::EditorDispatchRoute::InlineBusy) {
         // owner 线程正阻塞等 Python：此刻再从 Python 线程等 owner 线程就是互等，所以
@@ -941,7 +920,8 @@ NativeResult run_native_api_method(const EditorApiMethodSpec& spec,
 
 NativeResult invoke_native_api_method(const EditorApiMethodSpec& spec,
                                       const nlohmann::json& args,
-                                      const NativeContext& context) {
+                                      const NativeContext& context,
+                                      EditorApiCaller caller) {
     ensure_editor_dispatch_hooks();
     // 编辑器场景状态只有一个 owner 线程：绘制并派发输入的那个 CEF UI 线程。handler
     // 因此可以安全地对状态做"单线程"假设（缓存、表、unique_ptr 成员），前提是它们
@@ -953,7 +933,9 @@ NativeResult invoke_native_api_method(const EditorApiMethodSpec& spec,
         on_owner_thread,
         Detail::editor_thread_waiting_for_python(),
         Detail::editor_owner_thread_seen());
-    return run_native_api_method(spec, args, context, route);
+    // Only Python callbacks need the owner-wait handoff. Native handlers may
+    // themselves wait for Python, so they must not take over under its state lock.
+    return run_native_api_method(spec, args, context, route, caller != EditorApiCaller::Native);
 }
 
 Script::Python::PythonRuntimeResponse execute_editor_python_callback(
@@ -1103,7 +1085,7 @@ NativeResult EditorApiRegistry::invoke(const EditorApiRequest& request,
     }
     auto caller_context = context;
     caller_context.script_runtime = request.caller == EditorApiCaller::ScriptRuntime;
-    auto result = invoke_native_api_method(*spec, request.args, caller_context);
+    auto result = invoke_native_api_method(*spec, request.args, caller_context, request.caller);
     if (!result.success) {
         return result;
     }

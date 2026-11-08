@@ -15,6 +15,17 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.request import urlopen
+from urllib.parse import parse_qs, urlsplit
+
+def open_web_project(web, path):
+    """Use the production Web owner so old-window saves finish before replacement."""
+    return web.evaluate("""(async()=>{
+      const module=await import(document.querySelector('script[type=module]').src);
+      const launcher=Object.values(module).find(value=>typeof value?.openProject==='function'
+        &&!value.createWorldProject);
+      if(!launcher)throw Error('Production project launcher missing');
+      return launcher.openProject(""" + json.dumps(str(path)) + ");})()")
 
 def install_host_probe(editor, trace_path, *, delay_first=True):
     """Record the interpreter actually parsing the archive and executing the file."""
@@ -102,17 +113,46 @@ def wait_for(read, condition, description):
     raise AssertionError(f"{description}: {value!r}")
 
 
-def dispatch_script_key(web, event_type, code='KeyD', key='d'):
-    """Programmatic input uses the same scoped V8 entrypoint as viewport input."""
+def dispatch_script_key(web, event_type, code='KeyD', key='d', *, port):
+    """Send scoped input from a real CameraView owning the selected viewport."""
+    from vision_frontend_probe import Frontend
+
     scope = web.evaluate('corona.scene.readActive()')
-    cameras = web.evaluate(f'corona.scene.readCameras({json.dumps(scope["scene"])},'
-                           f'{json.dumps({"archive_session": scope["archive_session"]})})')
+    cameras = web.evaluate('corona.scene.readScene(' + json.dumps({
+        'scene': scope['scene'], 'archive_session': scope['archive_session'], 'cameras': True}) + ')')
     camera_id = cameras['cameras'][0]['camera_id']
     event = {'archive_session': scope['archive_session'], 'type': event_type, 'code': code, 'key': key}
     if event_type == 'keyDown':
         event['modifiers'] = ''
-    result = web.evaluate(f'corona.input.dispatch({json.dumps(scope["scene"])},{json.dumps(camera_id)},{json.dumps(event)})')
-    assert result == {'status': 'queued'}, result
+    service = """(async()=>{const m=await import(document.querySelector('script[type=module]').src);
+      return Object.values(m).find(v=>typeof v?.openNativePanel==='function');})()"""
+    wait_for(lambda: web.evaluate(f'{service}.then(s=>s.readEditorUiPolicy())'),
+             lambda policy: policy and policy.get('enabled'), 'file script window owner ready')
+    camera = {**cameras['cameras'][0], 'scene_id': scope['scene'],
+              'archive_session': scope['archive_session'], 'view_width': 320, 'view_height': 240}
+    created = web.evaluate(f'{service}.then(s=>s.createCameraView({json.dumps(camera)}))')
+
+    def target():
+        with urlopen(f'http://127.0.0.1:{port}/json/list', timeout=3) as response:
+            for item in json.load(response):
+                fragment = urlsplit(item['url']).fragment
+                if item['type'] != 'page' or not fragment.startswith('/CameraView?'):
+                    continue
+                query = parse_qs(fragment.split('?', 1)[1], keep_blank_values=True)
+                if query.get('camera') == [camera_id] and query.get('archive') == [scope['archive_session']]:
+                    return item
+
+    page = wait_for(target, bool, 'file script CameraView')
+    viewport = Frontend(port, target_id=page['id'])
+    try:
+        current = viewport.evaluate('corona.window.getCurrent()')
+        assert current['tabId'] == created['tab_id'], (current, created)
+        wait_for(lambda: viewport.evaluate("!!document.querySelector('.input-layer')"),
+                 bool, 'file script CameraView mounted')
+        result = viewport.evaluate(f'corona.input.dispatch({json.dumps(scope["scene"])},{json.dumps(camera_id)},{json.dumps(event)})')
+        assert result == {'status': 'queued'}, result
+    finally:
+        viewport.socket.close()
 
 
 def verify(port, root, switch_root=None):
@@ -141,20 +181,20 @@ def verify(port, root, switch_root=None):
         assert result["status"] == "success" and position() == value, result
 
     def key_down():
-        dispatch_script_key(web, 'keyDown')
+        dispatch_script_key(web, 'keyDown', port=port)
 
     def key_up():
-        dispatch_script_key(web, 'keyUp')
+        dispatch_script_key(web, 'keyUp', port=port)
 
     wait_for(lambda: web.evaluate("document.readyState === 'complete' && !!document.querySelector('#app[data-v-app] button')"),
              bool, "editor startup page")
     if switch_root:
-        peer = wait_for(lambda: v8("corona.project.openProject", str(switch_root)),
+        peer = wait_for(lambda: open_web_project(web, switch_root),
                         lambda r: r.get("status") != "service_initializing", "archive service")
         assert peer.get("ok"), peer
         peer_start = position()
         assert peer_start != [0, 0, 0], "the switch fixture needs a distinct starting position"
-    opened = wait_for(lambda: v8("corona.project.openProject", str(root)),
+    opened = wait_for(lambda: open_web_project(web, root),
                       lambda r: r.get("status") != "service_initializing", "archive service")
     assert opened.get("ok"), opened
     initial = position()
@@ -169,7 +209,7 @@ def verify(port, root, switch_root=None):
     assert after_save.keys() == before_edit.keys()
     edit_position(initial)
     assert project_files() == after_save
-    assert v8("corona.project.openProject", str(root))["ok"]
+    assert open_web_project(web, root)["ok"]
     assert position() == start, "Reopen must read the saved edit, not the latest in-memory Actor"
     assert project_files() == after_save
     target_fields = {"SCOPE": "SCENE", "v": "presses", "x": 1}
@@ -262,13 +302,15 @@ def verify(port, root, switch_root=None):
               "save": {"initial": initial, "reopened": start, "sceneSha256": saved_files["scene.ini"],
                        "unchangedFilesDuringRun": len(saved_files)}}
     if switch_root:
-        # Run while the normal launcher is visible. Its open action must finish
-        # stopping and restoring A before installing B (both have a Probe actor).
-        web.evaluate("location.hash='/RecentGames'")
+        # Start outside the graph panel so closing that panel does not own this
+        # run. Input must originate from a live viewport before entering the
+        # launcher, which intentionally retires editor windows.
+        web.evaluate("location.hash='/'")
+        wait_for(lambda: web.evaluate("!!document.querySelector('[data-viewport-pick-surface]')"),
+                 bool, 'main editor before switch run')
         peer_path = json.dumps(str(switch_root).replace("\\", "/").lower())
         row = ("[...document.querySelectorAll('.cursor-pointer')].find(e => "
                "e.innerText.toLowerCase().replaceAll(String.fromCharCode(92), '/').includes(" + peer_path + "))")
-        wait_for(lambda: web.evaluate("!!(" + row + ")"), bool, "switch target in Recent Projects")
         switch_request = "switch-" + runs[-1]["requestId"]
         active = v8("corona.scripts.runFile", {"archive_session": first_session, "requestId": switch_request, "project_path": str(root),
                      "path": report["path"], "revision": hashlib.sha256(script).hexdigest(),
@@ -277,6 +319,11 @@ def verify(port, root, switch_root=None):
         key_down()
         wait_for(position, lambda p: p == moved, "move in old project")
         key_up()
+        web.evaluate("location.hash='/RecentGames'")
+        wait_for(lambda: web.evaluate("!!(" + row + ")"), bool, "switch target in Recent Projects")
+        still_running = status()
+        assert still_running.get('runId') == active['runId'] and still_running.get('threadAlive'), still_running
+        assert position() == moved, 'Entering the launcher must not restore a native-owned run'
         web.evaluate("(" + row + ").dispatchEvent(new MouseEvent('dblclick', {bubbles:true}))")
         wait_for(lambda: web.evaluate('corona.scene.readActive()'),
                  lambda s: Path(s["project_path"]).resolve() == switch_root, "project switch")
@@ -290,6 +337,13 @@ def verify(port, root, switch_root=None):
         assert position() == peer_start
         report["switch"] = {"runId": active["runId"], "requestId": switch_request, "from": str(root),
                             "to": str(switch_root), "newProjectPosition": peer_start}
+        # Session-rejection checks do not exercise MainPage's assistant event
+        # persistence. Keep a real editor owner without mounting that producer
+        # again when the archive is reopened below.
+        web.evaluate("location.hash='/SceneBar'")
+        wait_for(lambda: web.evaluate("!!document.querySelector('[data-guidance=scene-import-model]')"
+                                      "&&!document.querySelector('[data-viewport-pick-surface]')"),
+                 bool, 'scope isolation editor owner')
         peer_files = project_files(switch_root)
         stale_target = {"archive_session": first_session, "project_path": str(root),
                         "target_type": "actor", "scene_name": "scene.ini", "actor_name": "Probe"}
@@ -306,15 +360,21 @@ def verify(port, root, switch_root=None):
                                     ").then(value=>value,error=>({code:error.code,error:error.message}))")
             assert rejected.get("code") == "PROJECT_CONTEXT_CHANGED", rejected
             assert not status()["snapshotCaptured"]
-            assert project_files() == saved_files and project_files(switch_root) == peer_files
+            current, current_peer = project_files(), project_files(switch_root)
+            assert current == saved_files and current_peer == peer_files, {
+                'project_changed': [key for key in current.keys() | saved_files.keys()
+                                    if current.get(key) != saved_files.get(key)],
+                'peer_changed': [key for key in current_peer.keys() | peer_files.keys()
+                                 if current_peer.get(key) != peer_files.get(key)],
+            }
             return scope()
 
         sessions = [first_session, verify_rejected()]
-        assert v8("corona.project.openProject", str(root)).get("ok")
+        assert open_web_project(web, root).get("ok")
         sessions.append(verify_rejected())
         assert position() == start
         assert v8("corona.projectFiles.load", {**locator, "archive_session": sessions[-1]})["status"] == "loaded"
-        assert v8("corona.project.openProject", str(root)).get("ok")
+        assert open_web_project(web, root).get("ok")
         sessions.append(verify_rejected())
         assert len(set(sessions)) == 4, sessions
         report["sessionIsolation"] = {"openings": sessions, "staleLoadSaveRunRejected": True,

@@ -395,6 +395,9 @@ CameraSnapshotRow SharedDataHub::camera_view(std::uintptr_t camera_handle) const
             }
             if (has_camera_state_field(update.fields, CameraStateUpdateField::ViewState)) {
                 view.view_open = update.view_open;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::ViewState) ||
+                has_camera_state_field(update.fields, CameraStateUpdateField::ViewSettings)) {
                 view.view_x = update.view_x;
                 view.view_y = update.view_y;
                 view.view_width = update.view_width;
@@ -619,6 +622,9 @@ void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command
     }
     if (has_camera_state_field(command.fields, CameraStateUpdateField::ViewState)) {
         pending.view_open = command.view_open;
+    }
+    if (has_camera_state_field(command.fields, CameraStateUpdateField::ViewState) ||
+        has_camera_state_field(command.fields, CameraStateUpdateField::ViewSettings)) {
         pending.view_x = command.view_x;
         pending.view_y = command.view_y;
         pending.view_width = command.view_width;
@@ -671,35 +677,35 @@ void SharedDataHub::acknowledge_camera_vision_denoiser(
     }
 }
 
-std::optional<std::string> SharedDataHub::requested_camera_vision_reblur_settings(
+std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_reblur_settings(
     std::uintptr_t camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_reblur_settings_.find(camera_handle);
-    if (it != requested_camera_vision_reblur_settings_.end()) return it->second.json;
+    if (it != requested_camera_vision_reblur_settings_.end()) return it->second.value;
     return std::nullopt;
 }
 
-std::optional<std::string> SharedDataHub::requested_camera_vision_pt_settings(
+std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_pt_settings(
     std::uintptr_t camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_pt_settings_.find(camera_handle);
-    if (it != requested_camera_vision_pt_settings_.end()) return it->second.json;
+    if (it != requested_camera_vision_pt_settings_.end()) return it->second.value;
     return std::nullopt;
 }
 
-std::optional<std::string> SharedDataHub::requested_camera_vision_restir_settings(
+std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_restir_settings(
     std::uintptr_t camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_restir_settings_.find(camera_handle);
-    if (it != requested_camera_vision_restir_settings_.end()) return it->second.json;
+    if (it != requested_camera_vision_restir_settings_.end()) return it->second.value;
     return std::nullopt;
 }
 
-std::optional<std::string> SharedDataHub::requested_camera_vision_relax_settings(
+std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_relax_settings(
     std::uintptr_t camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_relax_settings_.find(camera_handle);
-    if (it != requested_camera_vision_relax_settings_.end()) return it->second.json;
+    if (it != requested_camera_vision_relax_settings_.end()) return it->second.value;
     return std::nullopt;
 }
 
@@ -808,6 +814,7 @@ void SharedDataHub::enqueue_camera_release(CameraReleaseCommand command) {
     }
 
     clear_camera_state_updates(command.camera_handle);
+    camera_viewport_updates_.erase(command.camera_handle);
     // Fifo：同一相机多次释放不会被合并，顺序保持不变。
     camera_releases_.push(command);
 }
@@ -876,7 +883,7 @@ void SharedDataHub::clear_viewport_ui_pointer(std::uintptr_t camera_handle,
     if (owner_context != 0 && it->second.pointer.owner_context != owner_context) {
         return;
     }
-    viewport_ui_states_.erase(it);
+    it->second.pointer = {};
 }
 
 void SharedDataHub::set_viewport_gizmo_target(ViewportGizmoTarget target) {

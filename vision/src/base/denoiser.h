@@ -164,10 +164,10 @@ public:
     virtual void set_enabled(bool enabled) noexcept {}
     virtual void set_stable_planes_enabled(bool enabled) noexcept {}
     // Camera-local REBLUR overrides; other denoisers leave them untouched.
-    virtual bool set_reblur_settings(string_view json) noexcept { return false; }
-    [[nodiscard]] virtual string reblur_settings_json() const { return "{}"; }
-    virtual bool set_relax_settings(string_view json) noexcept { return false; }
-    [[nodiscard]] virtual string relax_settings_json() const { return "{}"; }
+    virtual bool set_reblur_settings(const DataWrap& data) noexcept { return false; }
+    [[nodiscard]] virtual DataWrap reblur_settings() const { return DataWrap::object(); }
+    virtual bool set_relax_settings(const DataWrap& data) noexcept { return false; }
+    [[nodiscard]] virtual DataWrap relax_settings() const { return DataWrap::object(); }
     
     [[nodiscard]] virtual bool enabled() noexcept {
         return false;

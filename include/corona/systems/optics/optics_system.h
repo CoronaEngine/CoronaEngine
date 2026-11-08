@@ -174,8 +174,8 @@ class OpticsSystem : public Kernel::SystemBase {
     VisionPipelineRuntime& get_or_create_runtime(const VisionPipelineKey& key);
     VisionPipelineRuntime& active_vision_runtime();
     struct VisionCameraFeedback {
-        std::optional<std::string> restir_effective, restir_applied;
-        std::optional<std::string> pt_effective, reblur_effective, relax_effective;
+        std::optional<nlohmann::json> restir_effective, restir_applied;
+        std::optional<nlohmann::json> pt_effective, reblur_effective, relax_effective;
     };
     void publish_vision_camera_feedback(std::uintptr_t camera_handle,
                                        const VisionCameraFeedback& feedback);
@@ -184,10 +184,10 @@ class OpticsSystem : public Kernel::SystemBase {
                                    uint32_t width, uint32_t height,
                                    bool denoise, bool accumulation, bool stable_planes = true,
                                    CameraVisionDenoiser denoiser = CameraVisionDenoiser::Scene,
-                                   const std::string& reblur_settings = "{}",
-                                   const std::string& relax_settings = "{}",
-                                   const std::string& pt_settings = "{}",
-                                   const std::string& restir_settings = "{}",
+                                   const nlohmann::json& reblur_settings = nlohmann::json::object(),
+                                   const nlohmann::json& relax_settings = nlohmann::json::object(),
+                                   const nlohmann::json& pt_settings = nlohmann::json::object(),
+                                   const nlohmann::json& restir_settings = nlohmann::json::object(),
                                    VisionCameraFeedback* deferred_feedback = nullptr);
     VisionPipelineKey make_vision_pipeline_key(Corona::CameraVisionRenderMode mode) const;
     std::shared_ptr<VisionSceneResource> get_or_create_vision_scene_resource();

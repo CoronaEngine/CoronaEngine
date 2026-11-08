@@ -6,8 +6,7 @@
 #include <corona/kernel/system/system_base.h>
 
 #include <corona/systems/network/protocol.h>
-#include <corona/systems/network/lanchat_history_store.h>
-#include <corona/systems/network/lanchat_state.h>
+#include <corona/systems/network/collaboration_state.h>
 #include <corona/systems/network/network_identity.h>
 #include <corona/systems/network/peer_manager.h>
 #include <corona/systems/network/discovery.h>
@@ -51,17 +50,6 @@ public:
         None = 0,      ///< 未加入任何会话
         Host,          ///< 房主：创建房间并等待客户端输入 IP 加入
         Client         ///< 客户端：通过房主 IP 主动加入
-    };
-
-    struct LanChatRoomEvent {
-        std::string event;
-        std::string room_id;
-    };
-
-    struct LanChatSyncEvent {
-        std::string event;
-        std::string room_id;
-        std::string payload_json;
     };
 
     struct DiscoveredPeer {
@@ -131,7 +119,7 @@ public:
     /// 已连接的 peer 数量。
     [[nodiscard]] size_t peer_count() const;
 
-    /// 本机稳定 peer id，用于 LANChat 消息 sender_id/去重。
+    /// 本机稳定 peer id，用于协作身份识别。
     [[nodiscard]] std::string local_peer_id() const;
     [[nodiscard]] std::vector<DiscoveredPeer> discovered_peers() const;
     void clear_discovered_peers();
@@ -141,90 +129,20 @@ public:
     bool connect_to_peer(const std::string& ip, uint16_t port,
                          const std::string& peer_name);
 
-    /// LANChat event callback with an owned domain snapshot.
-    void set_lanchat_event_callback(std::function<void(const Network::LanChatEvent&)> callback);
-
-    bool lanchat_start_room(const std::string& room_id,
-                            const std::string& nickname,
-                            uint16_t port);
-    bool lanchat_start_local_room(const std::string& room_id,
-                                  const std::string& nickname);
-    void lanchat_stop_local_room();
-    bool lanchat_join_room(const std::string& ip,
-                           uint16_t port,
-                           const std::string& room_id,
-                           const std::string& nickname);
-    void lanchat_leave_room();
-    Network::LanChatMessageResult lanchat_send_message(const std::string& text);
-    Network::LanChatMessageResult lanchat_send_message_ex(
-        const std::string& text,
-        const std::string& message_kind,
-        const std::string& target_agent_id = {},
-        const std::string& source_user_id = {},
-        const std::string& correlation_id = {},
-        const std::string& metadata_json = {});
-    Network::LanChatMessageResult lanchat_send_agent_reply(const std::string& agent_id,
-                                                           const std::string& agent_name,
-                                                           const std::string& text);
-    Network::LanChatMessageResult lanchat_send_agent_reply_ex(
-        const std::string& agent_id,
-        const std::string& agent_name,
-        const std::string& text,
-        const std::string& sender_type,
-        const std::string& message_kind,
-        const std::string& target_agent_id = {},
-        const std::string& source_user_id = {},
-        const std::string& correlation_id = {},
-        const std::string& metadata_json = {});
-    Network::LanChatMessageResult lanchat_send_system_message_to_host_ex(
-        const std::string& sender_id,
-        const std::string& sender_name,
-        const std::string& text,
-        const std::string& message_kind = {},
-        const std::string& correlation_id = {},
-        const std::string& metadata_json = {});
-    Network::LanChatMessageResult lanchat_send_system_message_to_user_ex(
-        const std::string& target_user_id,
-        const std::string& sender_id,
-        const std::string& sender_name,
-        const std::string& text,
-        const std::string& message_kind = {},
-        const std::string& correlation_id = {},
-        const std::string& metadata_json = {});
-    Network::LanChatResult lanchat_register_agent(const std::string& agent_id,
-                                                  const std::string& name,
-                                                  const std::string& persona,
-                                                  const std::string& owner_id = {});
-    Network::LanChatResult lanchat_remove_agent(const std::string& agent_id);
-    [[nodiscard]] const std::vector<Network::LanChatMember>& lanchat_members() const;
-    [[nodiscard]] const std::vector<Network::LanChatMessage>& lanchat_history() const;
-    bool lanchat_restore_history_room(const std::string& room_id);
-    [[nodiscard]] std::vector<Network::LanChatHistoryRoomSummary> lanchat_history_rooms() const;
-    [[nodiscard]] std::vector<Network::LanChatMessage> lanchat_load_history_room(
-        const std::string& room_id,
-        size_t max_messages = 5000) const;
-    [[nodiscard]] std::vector<Network::LanChatAgent> lanchat_load_history_agents(
-        const std::string& room_id) const;
-    [[nodiscard]] const std::vector<Network::LanChatAgent>& lanchat_agents() const;
-    [[nodiscard]] std::optional<Network::LanChatAgentTrigger> lanchat_pop_agent_trigger();
-    [[nodiscard]] std::optional<Network::LanChatMessage> lanchat_pop_coordinator_sync_message();
-    [[nodiscard]] std::optional<LanChatRoomEvent> lanchat_pop_room_event();
-    [[nodiscard]] std::optional<LanChatSyncEvent> lanchat_pop_sync_event();
-
-    Network::LanChatResult lanchat_lock_object(const std::string& object_id,
+    Network::CollaborationResult lock_object(const std::string& object_id,
                                                const std::string& user_id,
                                                const std::string& operation,
                                                uint64_t now_ms);
-    Network::LanChatResult lanchat_unlock_object(const std::string& object_id,
+    Network::CollaborationResult unlock_object(const std::string& object_id,
                                                  const std::string& user_id);
-    [[nodiscard]] std::string lanchat_locked_by(const std::string& object_id,
+    [[nodiscard]] std::string locked_by(const std::string& object_id,
                                                 uint64_t now_ms);
-    void lanchat_broadcast_intent(const std::string& user_id,
+    void broadcast_intent(const std::string& user_id,
                                   const std::string& tooltip,
                                   const std::array<float, 3>& position,
                                   const std::string& status,
                                   uint64_t now_ms);
-    [[nodiscard]] std::string lanchat_check_preview_collision(
+    [[nodiscard]] std::string check_preview_collision(
         const std::string& user_id,
         const std::array<float, 3>& position,
         float delta,
@@ -400,14 +318,6 @@ private:
     void on_data_received(const std::string& peer_id, const uint8_t* data, size_t len);
     void on_custom_message(const std::string& sender_peer_id, const uint8_t* data, size_t len);
     bool is_connected_host_peer(const Network::PeerManager::PeerInfo& info) const;
-    bool is_message_from_connected_host(const std::string& sender_peer_id) const;
-    bool send_to_connected_host_peer(const std::vector<uint8_t>& packet);
-    void notify_lanchat_room_closed();
-    void enqueue_lanchat_sync_event(const std::string& event,
-                                    const std::string& payload_json);
-    void clear_lanchat_room_state();
-    void persist_lanchat_message(const Network::LanChatMessage& message);
-    void persist_lanchat_agents(const std::string& room_id);
 
     struct Impl;
     std::unique_ptr<Impl> impl_;

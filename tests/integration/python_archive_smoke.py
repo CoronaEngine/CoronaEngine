@@ -7,7 +7,7 @@ import shutil
 import sys
 from tempfile import TemporaryDirectory
 
-from blockly_actor_file_smoke import wait_for
+from blockly_actor_file_smoke import wait_for, open_web_project
 
 
 def verify(port, project, peer):
@@ -23,7 +23,7 @@ def verify(port, project, peer):
         return v8("corona.scene.readActorProperties", "scene.ini", actor, {"archive_session": archive_session})
 
     def open_project(root):
-        opened = wait_for(lambda: v8("corona.project.openProject", str(root)),
+        opened = wait_for(lambda: open_web_project(web, root),
                           lambda r: r.get("status") != "service_initializing", "open archive")
         assert opened["ok"], opened
         return web.evaluate("corona.scene.readActive()")["archive_session"]
@@ -37,7 +37,8 @@ def verify(port, project, peer):
     scope = {"archive_session": session, "project_path": str(project)}
     doc = {**scope, "document": "CabbageAssistant/archive-smoke.json"}
     read = v8("corona.projectSettings.readProjectDocument", doc)
-    assert read["success"] and not read.get("revision"), read
+    assert read["success"] and read['content'] is None and not read['corrupt'], read
+    assert read['revision'] == hashlib.sha256(b'').hexdigest(), read
     update = {**doc, "content": {"sample": 1}, "revision": read.get("revision", "")}
     saved = v8("corona.projectSettings.commitProjectDocument", update)
     assert saved["success"] and v8("corona.projectSettings.commitProjectDocument", update)["error"] == "DOCUMENT_CONFLICT"
@@ -83,7 +84,7 @@ def verify(port, project, peer):
     start = v8("corona.scripts.runFile", {**scope, "path": script.relative_to(project).as_posix(), "target_type": "project",
                  "scene_name": "scene.ini", "requestId": "archive-restore", "revision": hashlib.sha256(script.read_bytes()).hexdigest()})
     wait_for(lambda: v8("corona.scripts.getStatus"), lambda r: r.get("marker", {}).get("id") == "removed", "runtime removal")
-    assert all(a["actor_guid"] != actor["actor_guid"] for a in v8("corona.scene.readActorIndex", "scene.ini", {"archive_session": session})["actors"])
+    assert all(a["actor_guid"] != actor["actor_guid"] for a in v8("corona.scene.readScene", {"scene": "scene.ini", "archive_session": session, "actors": "index"})["actors"])
     assert fingerprint() == before
     stop = v8("corona.scripts.stop", start["runId"])
     assert stop["restored"] and not stop["snapshotCaptured"], stop

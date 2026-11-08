@@ -7,6 +7,7 @@ import shutil
 from urllib.request import urlopen
 
 from vision_frontend_probe import Frontend
+from web_environment_smoke import wait
 
 
 def run(port, root, runtime):
@@ -59,10 +60,55 @@ def run(port, root, runtime):
                 assert result['role'] == request['role'] == config['multiplayer']['role']
             assert (path / 'assets.manifest.json').is_file()
             assert main.evaluate('corona.scene.readActive()')['archive_session'] == archive
+        # Exercise the real creation view without creating an additional world.
+        # Hold only the Web facade's delivery of an actual native readiness read.
+        main.evaluate("""(async()=>{
+          const m=await import(document.querySelector('script[type=module]').src);
+          const api=Object.values(m).find(v=>typeof v?.project?.getProjectLoadStatus==='function');
+          const original={read:api.project.getProjectLoadStatus,interval:window.setInterval,clear:window.clearInterval};
+          const p=window.__creationLifetime={reads:0,pending:[],intervals:new Set(),hold:true};
+          api.project.getProjectLoadStatus=(...args)=>{
+            p.reads++;const result=original.read(...args);
+            return p.hold?Promise.resolve(result).then(value=>new Promise(resolve=>p.pending.push(()=>resolve(value)))):result;
+          };
+          window.setInterval=(fn,ms,...args)=>{const id=original.interval.call(window,fn,ms,...args);
+            if(ms===250&&location.hash.startsWith('#/NewGame'))p.intervals.add(id);return id;};
+          window.clearInterval=id=>{p.intervals.delete(id);return original.clear.call(window,id);};
+          p.release=()=>{p.hold=false;for(const resume of p.pending.splice(0))resume();};
+          p.restore=()=>{p.release();api.project.getProjectLoadStatus=original.read;
+            window.setInterval=original.interval;window.clearInterval=original.clear;};
+          location.hash='/NewGame';return true;
+        })()""")
+        wait(lambda: main.evaluate('window.__creationLifetime.pending.length'), lambda n: n > 0,
+             'NewGame real native readiness result waiting')
+        assert main.evaluate("!!document.querySelector('textarea')")
+        main.evaluate("location.hash='/SceneBar';true")
+        wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('textarea')"),
+             bool, 'actual NewGame unmounted')
+        retired = main.evaluate('({reads:window.__creationLifetime.reads,intervals:window.__creationLifetime.intervals.size})')
+        assert retired['intervals'] == 0, retired
+        main.evaluate('window.__creationLifetime.release();new Promise(resolve=>setTimeout(()=>resolve(true),300))')
+        assert main.evaluate('window.__creationLifetime.reads') == retired['reads'], 'retired creation polling restarted'
+        main.evaluate("location.hash='/NewGame';true")
+        wait(lambda: main.evaluate("[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='创造世界'&&!b.disabled)"),
+             bool, 'normal creation remount readiness')
+        main.evaluate("location.hash='/SceneBar';true")
+        wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('textarea')"),
+             bool, 'creation remount retired')
+        assert main.evaluate('window.__creationLifetime.intervals.size') == 0
         return dict(created_worlds=3, roles=['host', 'guest'], invalid_requests_rejected=4,
-                    archive_unchanged=True, direct_values=True)
+                    archive_unchanged=True, direct_values=True,
+                    creationLifetime=dict(nativeReadinessRetired=True, intervalsReleased=True, normalRemount=True))
     finally:
-        main.socket.close()
+        retirement_error = None
+        try:
+            main.evaluate("location.hash='/SceneBar';true")
+            wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')"), bool, 'creation probe retired')
+            main.evaluate('window.__creationLifetime?.restore();true')
+        except Exception as error:
+            retirement_error = error
+        finally:
+            main.socket.close()
         for path in created:
             assert path.parent == data and path not in initial, path
             shutil.rmtree(path)
@@ -78,3 +124,5 @@ def run(port, root, runtime):
             os.replace(temporary, ini)
         elif ini.exists():
             ini.unlink()
+        if retirement_error is not None:
+            raise retirement_error
