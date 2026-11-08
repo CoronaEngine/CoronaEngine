@@ -11,6 +11,27 @@ target_include_directories(corona_model_node_config_tests
 target_link_libraries(corona_model_node_config_tests PRIVATE nlohmann_json::nlohmann_json)
 add_test(NAME ModelNodeConfigTests COMMAND corona_model_node_config_tests)
 
+# 模型节点领域服务（WNC-012）：纯引擎节点数据 + JSON，无 CEF/V8/JS 路由依赖，
+# 验证领域逻辑可以脱离浏览器与 JS 边界单独测试。
+add_executable(corona_scene_model_node_service_tests
+    test_scene_model_node_service.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/ui/editor_api/scene_model_node_service.cpp
+)
+target_include_directories(corona_scene_model_node_service_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_scene_model_node_service_tests PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME SceneModelNodeServiceTests COMMAND corona_scene_model_node_service_tests)
+
+# 环境域决策逻辑（WNC-013）：纯 DTO 校验/太阳-网格状态/物理字段提取，无 CEF 依赖。
+add_executable(corona_scene_environment_service_tests
+    test_scene_environment_service.cpp
+    ${PROJECT_SOURCE_DIR}/src/systems/ui/editor_api/scene_environment_service.cpp
+)
+target_include_directories(corona_scene_environment_service_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_scene_environment_service_tests PRIVATE nlohmann_json::nlohmann_json)
+add_test(NAME SceneEnvironmentServiceTests COMMAND corona_scene_environment_service_tests)
+
 add_executable(corona_actor_selection_routing_tests
     test_actor_selection_routing.cpp
 )

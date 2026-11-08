@@ -156,7 +156,9 @@ def test_actor_creation_retires_only_cef_and_shares_native_business_operation():
     assert 'ReadActorProperties' in typed
     legacy = native.split('{"create_actor",', 1)[1].split('{"rename_actor",', 1)[0]
     assert 'create_native_editor_actor(' in legacy
-    assert 'context.script_runtime' in legacy
+    # The script-runtime distinction now travels as the EditorApiCaller tag
+    # (NativeContext is CEF-free), not as a dedicated boolean field.
+    assert 'context.caller == EditorApiCaller::ScriptRuntime' in legacy
 
 
 def test_audio_and_resource_import_have_one_native_business_implementation():

@@ -23,6 +23,8 @@
 #include "cef_editor_native_api_test_support.h"
 #include "cef_window_operations.h"
 #include "cef_scene_operations.h"
+#include "scene_model_node_service.h"
+#include "scene_environment_service.h"
 #include "cef_scripts_operations.h"
 #include "cef_project_files_operations.h"
 #include "cef_project_settings_operations.h"
@@ -2876,15 +2878,8 @@ SceneReply apply_native_environment(const SceneRequest& request) {
     };
     const auto& patch = request.environment;
     if (request.method == SceneMethod::SetEnvironment) {
-        const auto finite_vector = [](const auto& value) {
-            return !value || std::all_of(value->begin(), value->end(), [](float x) { return std::isfinite(x); });
-        };
-        const auto finite_scalar = [](const auto& value) { return !value || std::isfinite(*value); };
-        if ((!patch.sun && !patch.grid_enabled && !patch.physics) ||
-            (patch.sun && (patch.sun->empty() || !finite_vector(patch.sun->direction))) ||
-            (patch.physics && (patch.physics->empty() || !finite_vector(patch.physics->gravity) ||
-             !finite_scalar(patch.physics->floor_y) || !finite_scalar(patch.physics->floor_restitution) || !finite_scalar(patch.physics->fixed_dt))))
-            return fail("INVALID_ARGUMENT", "Invalid environment patch");
+        const auto invalid = SceneEnvironmentService::validate_patch(patch);
+        if (!invalid.empty()) return fail("INVALID_ARGUMENT", invalid.c_str());
     }
     auto* scene = request.archive_session ? native_editor_state().scene.get() : ensure_native_editor_scene();
     if (request.archive_session) {
@@ -2894,22 +2889,16 @@ SceneReply apply_native_environment(const SceneRequest& request) {
     } else scene = resolve_native_editor_scene_request(scene, normalize_route(patch.scene));
     if (!scene->environment) return fail("COMPONENT_NOT_FOUND", "Native scene environment is unavailable");
     if (request.method == SceneMethod::SetEnvironment) {
-        if (patch.sun) {
-            if (patch.sun->enabled) scene->sun_enabled = *patch.sun->enabled;
-            if (patch.sun->direction) scene->sun_direction = *patch.sun->direction;
-            const auto& direction = scene->sun_direction;
-            const double length_sq = static_cast<double>(direction[0]) * direction[0] +
-                static_cast<double>(direction[1]) * direction[1] + static_cast<double>(direction[2]) * direction[2];
-            if (scene->sun_enabled && length_sq < 1.0e-8) scene->sun_direction = {1, 1, 1};
-        }
-        if (patch.grid_enabled) scene->floor_grid_enabled = *patch.grid_enabled;
-        if (patch.physics) {
-            const auto& physics = *patch.physics;
-            if (physics.gravity) scene->environment->set_gravity(*physics.gravity);
-            if (physics.floor_y) scene->environment->set_floor_y(*physics.floor_y);
-            if (physics.floor_restitution) scene->environment->set_floor_restitution(*physics.floor_restitution);
-            if (physics.fixed_dt) scene->environment->set_fixed_dt(*physics.fixed_dt);
-        }
+        SceneEnvironmentService::EnvironmentScalars scalars{scene->sun_enabled, scene->sun_direction, scene->floor_grid_enabled};
+        SceneEnvironmentService::apply_sun_and_grid(scalars, patch);
+        scene->sun_enabled = scalars.sun_enabled;
+        scene->sun_direction = scalars.sun_direction;
+        scene->floor_grid_enabled = scalars.grid_enabled;
+        const auto physics = SceneEnvironmentService::physics_update(patch);
+        if (physics.gravity) scene->environment->set_gravity(*physics.gravity);
+        if (physics.floor_y) scene->environment->set_floor_y(*physics.floor_y);
+        if (physics.floor_restitution) scene->environment->set_floor_restitution(*physics.floor_restitution);
+        if (physics.fixed_dt) scene->environment->set_fixed_dt(*physics.fixed_dt);
         apply_native_scene_environment(*scene);
     }
     reply.environment = native_environment_snapshot(*scene);
@@ -3171,13 +3160,14 @@ enum class ActorPropertyAdapter { State, Mechanics, CameraLock };
 NativeResult set_native_actor_properties(const NativeRequest& request, const NativeContext& context, ActorPropertyAdapter kind) {
     try {
         const auto values = arg_object(request.args, 2);
+        const bool script_runtime = context.caller == EditorApiCaller::ScriptRuntime;
         SceneRequest write{SceneMethod::UpdateActor};
         auto& patch = write.properties;
         patch.scene = arg_string(request.args, 0); patch.actor = arg_string(request.args, 1);
-        patch.transient_assets = context.script_runtime;
+        patch.transient_assets = script_runtime;
         if (values.contains("archive_session")) write.archive_session = values.at("archive_session").get<std::string>();
         if (kind == ActorPropertyAdapter::State) {
-            if (!context.script_runtime && values.contains("animation_sources") && !write.archive_session)
+            if (!script_runtime && values.contains("animation_sources") && !write.archive_session)
                 return native_failure("PROJECT_CONTEXT_CHANGED", 409);
             patch.visible = actor_data_bool(values, {"visible"});
             patch.follow_camera = actor_data_bool(values, {"follow_camera"});
@@ -4745,14 +4735,6 @@ Corona::Ui::Cef::SceneTreeActorRow scene_tree_actor_row(const NativeEditorActor&
     return row;
 }
 
-ModelNodeSnapshot model_node_snapshot(const Corona::API::ModelNodeState& node, std::size_t child_count, bool actor_visible) {
-    ModelNodeSnapshot result;
-    result.node_index = node.node_index; result.parent_index = node.parent_index; result.name = node.name; result.node_path = node.node_path;
-    result.position = node.position; result.rotation = node.rotation; result.scale = node.scale; result.visible = node.visible;
-    result.effective_visible = node.effective_visible && actor_visible; result.editable = node.editable; result.child_count = child_count;
-    return result;
-}
-
 SceneReply apply_native_model_node(const SceneRequest& request) {
     SceneReply reply;
     auto fail = [&](const char* code, const std::string& message) { reply.error_code = code; reply.error_message = message; return reply; };
@@ -4768,14 +4750,11 @@ SceneReply apply_native_model_node(const SceneRequest& request) {
     if (request.method == SceneMethod::ReadModelNodes) {
         const auto& page_request = request.model_node_page;
         const auto nodes = actor->geometry->get_model_nodes();
-        const auto page = Corona::Ui::Cef::model_node_page(nodes, page_request.parent_index, page_request.offset, page_request.limit);
-        std::unordered_map<std::uint32_t, std::size_t> child_counts;
-        for (const auto& node : nodes) ++child_counts[node.parent_index];
-        auto& result = reply.model_nodes; result.archive_session = scene->archive_session; result.scene = scene->route; result.actor_guid = actor->actor_guid; result.actor = actor->name;
-        result.actor_version = actor->actor_version; result.parent_index = page_request.parent_index; result.total = page.total; result.next_offset = page.next_offset; result.has_more = page.has_more;
-        result.status = page.items.empty() ? actor->geometry->get_gpu_build_state() : "ready";
         const bool actor_visible = actor->optics ? actor->optics->get_visible() : actor->persisted_visible;
-        for (const auto* node : page.items) result.nodes.push_back(model_node_snapshot(*node, child_counts[node->node_index], actor_visible));
+        auto& result = reply.model_nodes = SceneModelNodeService::project_page(nodes, page_request, actor_visible);
+        result.archive_session = scene->archive_session; result.scene = scene->route; result.actor_guid = actor->actor_guid; result.actor = actor->name;
+        result.actor_version = actor->actor_version;
+        result.status = result.nodes.empty() ? actor->geometry->get_gpu_build_state() : "ready";
         return reply;
     }
     const auto& patch = request.model_node;
@@ -4784,15 +4763,9 @@ SceneReply apply_native_model_node(const SceneRequest& request) {
     const auto nodes = actor->geometry->get_model_nodes();
     const auto found = std::find_if(nodes.begin(), nodes.end(), [&](const auto& node) { return node.node_index == patch.node_index; });
     if (found == nodes.end()) return fail("NODE_NOT_FOUND", "Model node is unavailable or not loaded");
-    auto state = *found;
-    if (patch.position) state.position = *patch.position;
-    if (patch.rotation) state.rotation = *patch.rotation;
-    if (patch.scale) state.scale = *patch.scale;
-    if (patch.visible) state.visible = *patch.visible;
+    const auto state = SceneModelNodeService::derive_patched_state(*found, patch);
     if (!actor->geometry->set_model_node_state(patch.node_index, state)) return fail("NODE_EDIT_REJECTED", "Model node edit was rejected");
-    nlohmann::json node_keys = nlohmann::json::array();
-    for (const auto& node : nodes) node_keys.push_back({{"node_index", node.node_index}, {"node_path", node.node_path}});
-    auto [active, unmatched] = ModelNodeConfig::partition(actor->persisted_model_node_overrides, actor->model_node_resource, actor->model_node_current_resource, node_keys);
+    auto [active, unmatched] = ModelNodeConfig::partition(actor->persisted_model_node_overrides, actor->model_node_resource, actor->model_node_current_resource, SceneModelNodeService::node_keys(nodes));
     for (auto& group : unmatched) actor->model_node_unmatched.push_back(std::move(group));
     nlohmann::json patch_json = nlohmann::json::object();
     if (patch.position) patch_json["position"] = *patch.position;
@@ -4802,7 +4775,7 @@ SceneReply apply_native_model_node(const SceneRequest& request) {
     actor->persisted_model_node_overrides = ModelNodeConfig::merge(active, patch.node_index, state.node_path, patch_json); actor->model_node_resource = actor->model_node_current_resource; ++actor->actor_version;
     const auto updated = actor->geometry->get_model_nodes(); const auto it = std::find_if(updated.begin(), updated.end(), [&](const auto& node) { return node.node_index == patch.node_index; });
     const auto child_count = static_cast<std::size_t>(std::count_if(updated.begin(), updated.end(), [&](const auto& node) { return node.parent_index == static_cast<std::int32_t>(patch.node_index); }));
-    auto& result = reply.model_node; result.archive_session = scene->archive_session; result.scene = scene->route; result.actor_guid = actor->actor_guid; result.actor = actor->name; result.actor_version = actor->actor_version; result.parent_index = it->parent_index; result.status = "ready"; result.nodes.push_back(model_node_snapshot(*it, child_count, actor->optics ? actor->optics->get_visible() : actor->persisted_visible));
+    auto& result = reply.model_node; result.archive_session = scene->archive_session; result.scene = scene->route; result.actor_guid = actor->actor_guid; result.actor = actor->name; result.actor_version = actor->actor_version; result.parent_index = it->parent_index; result.status = "ready"; result.nodes.push_back(SceneModelNodeService::make_snapshot(*it, child_count, actor->optics ? actor->optics->get_visible() : actor->persisted_visible));
     return reply;
 }
 
@@ -7199,7 +7172,8 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
         {"set_actor_transform", [](const NativeRequest& request, const NativeContext& context) {
             try {
                 const auto transform = arg_object(request.args, 2);
-                if ((context.browser || transform.contains("archive_session")) &&
+                // Web callers always carry their archive; non-Web callers may omit it.
+                if ((context.caller == EditorApiCaller::Cef || transform.contains("archive_session")) &&
                     !matches_archive_session(*scene_for_request_route(request), transform))
                     return native_failure("PROJECT_CONTEXT_CHANGED", 409);
                 return set_native_editor_actor_transform(
@@ -7536,10 +7510,11 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             auto actor_type = normalize_route(arg_string(request.args, 2, "model"));
             const auto actor_data = arg_object(request.args, 3);
             const auto* scene = native_editor_state().scene.get();
-            if ((!context.script_runtime || actor_data.contains("archive_session")) &&
+            const bool script_runtime = context.caller == EditorApiCaller::ScriptRuntime;
+            if ((!script_runtime || actor_data.contains("archive_session")) &&
                 (!scene || !matches_archive_session(*scene, actor_data)))
                 return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-            return create_native_editor_actor(scene_route, source_path, actor_type, actor_data, context.script_runtime);
+            return create_native_editor_actor(scene_route, source_path, actor_type, actor_data, script_runtime);
         }},
         {"rename_actor", [](const NativeRequest& request, const NativeContext& context) {
             auto* scene = scene_for_request_route(request);
