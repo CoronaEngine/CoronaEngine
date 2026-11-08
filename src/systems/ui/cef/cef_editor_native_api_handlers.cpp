@@ -5029,8 +5029,13 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
         if (!editor_input && patch.view_open) {
             camera.window_state->requested_open.store(camera.view_open ? 1 : 0);
             engine.set_view_state(camera.view_open, camera.view_x, camera.view_y, camera.view_width, camera.view_height, camera.move_speed);
-        } else {
+        } else if (patch.view_x || patch.view_y || patch.view_width || patch.view_height) {
             engine.set_view_settings(camera.view_x, camera.view_y, camera.view_width, camera.view_height, camera.move_speed);
+        } else if (patch.move_speed) {
+            // A speed-only update must not replay saved window geometry over the embedded viewport.
+            const auto view = engine.get_view_state();
+            engine.set_view_settings(static_cast<int>(view[1]), static_cast<int>(view[2]),
+                static_cast<int>(view[3]), static_cast<int>(view[4]), camera.move_speed);
         }
     }
     reply.camera = camera_properties_snapshot(*scene, camera);
