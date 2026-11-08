@@ -139,7 +139,17 @@ Json update(const NativeRequest& request, const NativeContext&) {
 HANDLER
 }
 int main(int argc,char** argv) {
-    update({Json::array({"scene","source-camera",Json::parse(argv[1])})},{});
+    if (argc > 2) {
+        SceneRequest request{SceneMethod::SetCameraProperties};
+        request.archive_session=scene.archive_session;
+        request.camera_properties.scene=scene.route;
+        request.camera_properties.camera_id=camera.camera_id;
+        request.camera_properties.move_speed=Json::parse(argv[1])["move_speed"].get<float>();
+        const auto reply=apply_native_camera_properties(request);
+        if (!reply.error_code.empty()) return 2;
+    } else {
+        update({Json::array({"scene","source-camera",Json::parse(argv[1])})},{});
+    }
     std::cout << Json{{"width",engine.width},{"height",engine.height},
       {"rect",{engine.x,engine.y,engine.view_width,engine.view_height}},
       {"open",engine.open},{"speed",engine.speed},
@@ -162,9 +172,9 @@ int main(int argc,char** argv) {
         yield executable
 
 
-def run_update(executable, state):
+def run_update(executable, state, *, typed=False):
     import json
-    result = subprocess.run([str(executable), json.dumps(state)], capture_output=True, text=True)
+    result = subprocess.run([str(executable), json.dumps(state), *(["typed"] if typed else [])], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 
@@ -176,8 +186,9 @@ def test_resolution_only_keeps_live_viewport_rect(camera_update_harness):
     assert actual["geometry_calls"] == 0
 
 
-def test_speed_only_keeps_live_viewport_and_render_size(camera_update_harness):
-    actual = run_update(camera_update_harness, {"move_speed": 3.5})
+@pytest.mark.parametrize("typed", [False, True], ids=["non-web-adapter", "typed-scene-operation"])
+def test_speed_only_keeps_live_viewport_and_render_size(camera_update_harness, typed):
+    actual = run_update(camera_update_harness, {"move_speed": 3.5}, typed=typed)
     assert actual["rect"] == [0, 0, 1536, 825]
     assert actual["speed"] == 3.5
     assert actual["size_calls"] == 0
