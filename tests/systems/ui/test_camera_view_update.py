@@ -35,6 +35,13 @@ def camera_update_harness():
     adapter_end = source.index("\nnamespace {", adapter_start)
     header = (ROOT / "src/systems/ui/cef/cef_scene_operations.h").read_text(encoding="utf-8")
     patch = header[header.index("struct CameraPropertiesPatch {"):header.index("struct CameraPropertiesSnapshot :")]
+    # The camera property validation lives in a CEF-free domain service now; the
+    # harness inlines it so the extracted handler body still compiles standalone.
+    service_header = (ROOT / "src/systems/ui/editor_api/camera_properties_service.h").read_text(encoding="utf-8")
+    service_source = (ROOT / "src/systems/ui/editor_api/camera_properties_service.cpp").read_text(encoding="utf-8")
+    service_header = service_header.replace('#include "cef/cef_scene_operations.h"', "")
+    service_source = service_source.replace('#include "camera_properties_service.h"', "")
+    service = service_header + "\n" + service_source
     runtime = (ROOT / "src/engine/engine_runtime_api.cpp").read_text(encoding="utf-8")
     runtime_start = runtime.index("void Corona::API::Camera::set_view_state(")
     runtime_end = runtime.index("std::array<float, 6> Corona::API::Camera::get_view_state()", runtime_start)
@@ -47,6 +54,7 @@ def camera_update_harness():
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -55,9 +63,10 @@ def camera_update_harness():
 using Json = nlohmann::json;
 using NativeResult = Json;
 PATCH
+SERVICE
 struct Snapshot { float projection_x_sign=1, near_plane=.1f, far_plane=100; };
 struct SceneReply { std::string error_code,error_message; Snapshot camera; };
-enum class SceneMethod { SetCameraProperties };
+enum class SceneMethod { SetCameraProperties, UpdateCamera };
 struct SceneRequest {
  SceneMethod method;
  std::optional<std::string> archive_session;
@@ -105,12 +114,15 @@ RUNTIME_VIEW_METHODS
 struct WindowState { std::atomic_int requested_open{-1}; };
 struct Camera {
     std::string camera_id="camera-id";
+    std::string name="camera-name";
     std::shared_ptr<WindowState> window_state=std::make_shared<WindowState>();
     bool view_open=false; int view_x=120, view_y=120, view_width=960, view_height=540;
     int width=1280, height=720; float move_speed=1; EngineCamera* engine_camera=&engine;
 };
 struct Scene {
  std::string route="scene",archive_session="archive";
+ std::uint64_t tree_revision=1;
+ bool read_only=false;
  std::vector<Camera> cameras{Camera{}};
 };
 struct State { std::unique_ptr<Scene> scene=std::make_unique<Scene>(); } state;
@@ -133,6 +145,9 @@ float json_float_value(const Json& j,const char* k,float v) { return j.value(k,v
 void persist_native_scene_cameras(Scene&) {}
 Json camera_to_json(Camera&) { return Json::object(); }
 Json native_success(Json j) { return j; }
+// The extracted handler body is namespace-qualified in the engine; this alias
+// keeps the snippet compiling at global scope in the harness.
+namespace CameraPropertiesService = Corona::Systems::UI::CameraPropertiesService;
 OPERATION
 ADAPTER
 Json update(const NativeRequest& request, const NativeContext&) {
@@ -156,6 +171,7 @@ int main(int argc,char** argv) {
       {"geometry_calls",engine.geometry_calls},{"size_calls",engine.size_calls}}.dump();
 }
 '''.replace("HANDLER", handler).replace("PATCH", patch)
+    cpp = cpp.replace("SERVICE", service)
     cpp = cpp.replace("OPERATION", source[operation_start:operation_end])
     cpp = cpp.replace("ADAPTER", source[adapter_start:adapter_end])
     cpp = cpp.replace("CONSUME_VIEW_STATE", optics[consume_start:consume_end])

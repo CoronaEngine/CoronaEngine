@@ -124,7 +124,8 @@ def test_scripts_retire_cef_only_and_use_owned_native_contracts():
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert "call_manifest_editor_api('scripts." not in facade
     native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
-    assert native.count('Script path must be a project-relative .py file') == 1
+    script_service = (root / 'src/systems/ui/editor_api/project_script_service.cpp').read_text(encoding='utf-8-sig')
+    assert script_service.count('Script path must be a project-relative .py file') == 1
     assert native.count('start_native_script_file(') == 3
 
 
@@ -156,7 +157,9 @@ def test_actor_creation_retires_only_cef_and_shares_native_business_operation():
     assert 'ReadActorProperties' in typed
     legacy = native.split('{"create_actor",', 1)[1].split('{"rename_actor",', 1)[0]
     assert 'create_native_editor_actor(' in legacy
-    assert 'context.script_runtime' in legacy
+    # The script-runtime distinction now travels as the EditorApiCaller tag
+    # (NativeContext is CEF-free), not as a dedicated boolean field.
+    assert 'context.caller == EditorApiCaller::ScriptRuntime' in legacy
 
 
 def test_audio_and_resource_import_have_one_native_business_implementation():

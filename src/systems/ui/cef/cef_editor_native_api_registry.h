@@ -1,7 +1,6 @@
 #pragma once
 
-#include <cef_browser.h>
-#include <cef_frame.h>
+#include "editor_api_caller.h"
 
 #include <cstdint>
 #include <functional>
@@ -19,11 +18,12 @@ struct NativeRequest {
     nlohmann::json args = nlohmann::json::array();
 };
 
+// CEF-free by contract: no browser/frame handles cross this boundary. Callers
+// that need CEF behaviour carry an EditorApiCaller tag instead. Internal C++
+// orchestration defaults to Native; the editor dispatch layer overwrites the
+// tag from the request's caller before a handler runs.
 struct NativeContext {
-    CefRefPtr<CefBrowser> browser;
-    CefRefPtr<CefFrame> frame;
-    int64_t query_id = 0;
-    bool script_runtime = false;
+    EditorApiCaller caller = EditorApiCaller::Native;
 };
 
 struct NativeResult {

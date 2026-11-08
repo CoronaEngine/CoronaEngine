@@ -1,4 +1,4 @@
-"""Retire the real packaged NodeGraph while its initial read/subscriptions wait."""
+﻿"""Retire the real packaged NodeGraph while its initial read/subscriptions wait."""
 import time
 
 from web_environment_smoke import wait
@@ -56,8 +56,10 @@ def run_camera_initialization(panel):
       const m=await import(document.querySelector('script[type=module]').src);
       const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
       const app=Object.values(m).find(v=>typeof v?.openNativePanel==='function');
+      const runtime=window.__coronaObserverRuntime||Object.values(m).find(v=>typeof v?.observe==='function'&&typeof v?.off==='function'&&typeof v?.start==='function');
+      if(!runtime)throw Error('observer runtime export is unavailable');
       const original={drag:app.setCurrentTabDragRegions,read:api.scene.readScene,
-        observe:api.scene.observe,off:api.off};
+        observe:runtime.observe,off:runtime.off};
       const probe=window.__cameraInit={route:location.hash,phase:null};
       const camera=()=>!!document.querySelector('.camera-overlay');
       const hold=(kind,result)=>{
@@ -68,18 +70,18 @@ def run_camera_initialization(panel):
       app.setCurrentTabDragRegions=(...args)=>hold('drag',original.drag(...args));
       api.scene.readScene=(...args)=>{if(probe.phase&&camera())probe.phase.reads++;
         return hold('read',original.read(...args));};
-      api.scene.observe=(...args)=>{
+      runtime.observe=(...args)=>{
         if(!probe.phase||!camera())return original.observe(...args);
         const p=probe.phase;p.registrations++;
         return hold('subscription',Promise.resolve(original.observe(...args)).then(token=>{p.token=token;return token;}));
       };
-      api.off=token=>{if(probe.phase?.token===token)probe.phase.releases++;return original.off(token);};
+      runtime.off=token=>{if(probe.phase?.token===token)probe.phase.releases++;return original.off(token);};
       probe.arm=kind=>{probe.phase={kind,pending:[],reads:0,registrations:0,releases:0,token:null};};
       probe.release=()=>{for(const resume of probe.phase.pending.splice(0))resume();};
       probe.snapshot=()=>{const p=probe.phase;return {kind:p.kind,pending:p.pending.length,reads:p.reads,
         registrations:p.registrations,releases:p.releases,token:p.token};};
       probe.restore=()=>{probe.release();probe.phase=null;app.setCurrentTabDragRegions=original.drag;
-        api.scene.readScene=original.read;api.scene.observe=original.observe;api.off=original.off;};
+        api.scene.readScene=original.read;runtime.observe=original.observe;runtime.off=original.off;};
       return true;
     })()""")
     results = []
@@ -125,21 +127,23 @@ def run_node_graph(panel):
     wait(lambda: panel.evaluate("!!document.querySelector('.scene-tools-panel')"), bool, 'lifecycle baseline route')
     panel.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
       const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
-      const original={read:api.scene.readActive,observe:api.scene.observe,off:api.off,
+      const runtime=window.__coronaObserverRuntime||Object.values(m).find(v=>typeof v?.observe==='function'&&typeof v?.off==='function'&&typeof v?.start==='function');
+      if(!runtime)throw Error('observer runtime export is unavailable');
+      const original={read:api.scene.readActive,observe:runtime.observe,off:runtime.off,
         load:api.projectFiles.load,tree:api.scene.readScene,resize:window.ResizeObserver};
       const probe=window.__viewLifetime={phase:null};
       api.scene.readActive=(...args)=>{const phase=probe.phase;
         const hold=phase&&document.querySelector('.node-graph-workspace');
         const result=original.read(...args);
         return hold?Promise.resolve(result).then(value=>new Promise(resolve=>phase.reads.push(()=>resolve(value)))):result;};
-      api.scene.observe=(kind,callback)=>{const phase=probe.phase;
+      runtime.observe=(kind,callback)=>{const phase=probe.phase;
         if(!phase||!document.querySelector('.node-graph-workspace'))return original.observe(kind,callback);
         const entry={kind,callback,token:null,releases:0};phase.subscriptions.push(entry);
         return Promise.resolve(original.observe(kind,callback)).then(token=>{
           entry.token=token;
           return kind==='tree'?new Promise(resolve=>{entry.release=()=>resolve(token);}):token;
         });};
-      api.off=token=>{for(const entry of probe.phase?.subscriptions||[])if(entry.token===token)entry.releases++;
+      runtime.off=token=>{for(const entry of probe.phase?.subscriptions||[])if(entry.token===token)entry.releases++;
         return original.off(token);};
       api.projectFiles.load=(...args)=>{if(probe.phase)probe.phase.loads++;return original.load(...args);};
       api.scene.readScene=(...args)=>{if(probe.phase&&args[0]?.actors==='context')probe.phase.actorReads++;return original.tree(...args);};
@@ -157,7 +161,7 @@ def run_node_graph(panel):
         observers:p.observers,disconnected:p.disconnected,
         subscriptions:p.subscriptions.map(({kind,token,releases})=>({kind,token,releases}))};};
       probe.restore=()=>{if(probe.phase)probe.release();probe.phase=null;api.scene.readActive=original.read;
-        api.scene.observe=original.observe;api.off=original.off;api.projectFiles.load=original.load;
+        runtime.observe=original.observe;runtime.off=original.off;api.projectFiles.load=original.load;
         api.scene.readScene=original.tree;window.ResizeObserver=original.resize;};
       return true;})()""")
     results = []

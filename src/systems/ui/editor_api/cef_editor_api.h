@@ -1,8 +1,7 @@
 #pragma once
 
 #include "cef_editor_native_api_registry.h"
-
-#include <include/cef_frame.h>
+#include "editor_api_caller.h"
 
 #include <Python.h>
 
@@ -15,13 +14,6 @@
 #include <vector>
 
 namespace Corona::Systems::UI {
-
-enum class EditorApiCaller : std::uint32_t {
-    Cef = 1u << 0u,
-    PythonScript = 1u << 1u,
-    ScriptRuntime = 1u << 2u,
-    Native = 1u << 3u,
-};
 
 enum class EditorApiValueType : std::uint32_t {
     Any,

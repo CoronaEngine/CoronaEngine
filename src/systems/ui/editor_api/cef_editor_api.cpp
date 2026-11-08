@@ -1084,7 +1084,7 @@ NativeResult EditorApiRegistry::invoke(const EditorApiRequest& request,
         return args_validation;
     }
     auto caller_context = context;
-    caller_context.script_runtime = request.caller == EditorApiCaller::ScriptRuntime;
+    caller_context.caller = request.caller;
     auto result = invoke_native_api_method(*spec, request.args, caller_context, request.caller);
     if (!result.success) {
         return result;
