@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-FRONTEND_ROOT = Path(__file__).resolve().parents[2]
+FRONTEND_ROOT = Path(__file__).resolve().parents[2] / "CoronaEditor" / "editor" / "Frontend"
 SERVICES_ROOT = FRONTEND_ROOT / "src" / "services"
 COMPAT_ROOT = FRONTEND_ROOT / "src" / "compat"
 

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-EDITOR_ROOT = Path(__file__).resolve().parents[2]
+EDITOR_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_script_runtime_legacy_scene_adapter_is_removed():

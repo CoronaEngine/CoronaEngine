@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
@@ -32,6 +33,21 @@ from build_tools.workflow import (
 
 DEFAULT_TARGET = "corona_engine"
 WORKSPACE_COMMANDS = {f"{workspace.key}-sync": workspace for workspace in WORKSPACES}
+
+
+def materialize_editor_frontend_assets(repo_root: Path) -> None:
+    """Copy engine-owned raw templates into the editor checkout's Frontend tree.
+
+    `fileProgram.js` imports the block program template with Vite's `?raw`
+    loader, so frontend development and packaging both need the file even
+    though its source moved to the engine repository.
+    """
+    source = repo_root / "editor_python" / "frontend_assets" / "block_program.py"
+    target = (repo_root / "CoronaEditor" / "editor" / "Frontend" / "src"
+              / "blockly" / "generators" / "runtime" / "block_program.py")
+    if source.is_file():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
 RECIPE_TOGGLE_ENV = "CORONA_CONAN_EXPORT_LOCAL_RECIPES"
 TARGET_FAMILY_OPTIONS: dict[str, tuple[str, ...]] = {
     "core": (
@@ -162,7 +178,10 @@ def execute(args: argparse.Namespace) -> None:
         install(configuration, target_family, update=True)
         cmake_configure(REPO_ROOT, configuration, target_family)
     elif args.command in WORKSPACE_COMMANDS:
-        sync_workspace(REPO_ROOT, WORKSPACE_COMMANDS[args.command])
+        workspace = WORKSPACE_COMMANDS[args.command]
+        sync_workspace(REPO_ROOT, workspace)
+        if workspace.key == "editor":
+            materialize_editor_frontend_assets(REPO_ROOT)
     elif args.command == "clean":
         clean_repo(REPO_ROOT)
     else:

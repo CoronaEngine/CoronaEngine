@@ -3,7 +3,7 @@ from unittest import mock
 
 from pathlib import Path
 from script_runtime import file_api, file_runner
-from Frontend.src.blockly.generators.runtime import block_program as corona_engine_scratch
+from frontend_assets import block_program as corona_engine_scratch
 
 
 class _NonCooperativeThread:

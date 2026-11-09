@@ -9,7 +9,7 @@ if str(EDITOR_ROOT) not in sys.path:
     sys.path.insert(0, str(EDITOR_ROOT))
 
 from api import editor_api
-from Frontend.src.blockly.generators.runtime import block_program as corona_engine_scratch
+from frontend_assets import block_program as corona_engine_scratch
 
 
 class ScratchCameraAdapterTests(unittest.TestCase):

@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 
 
-SOURCE_ROOT = Path(__file__).resolve().parents[2] / "src"
+SOURCE_ROOT = Path(__file__).resolve().parents[2] / "CoronaEditor" / "editor" / "Frontend" / "src"
 
 
 def sources():

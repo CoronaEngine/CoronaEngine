@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 EDITOR_ROOT = Path(__file__).resolve().parents[1]
-ENGINE_ROOT = EDITOR_ROOT.parent.parent
+ENGINE_ROOT = EDITOR_ROOT.parent
 
 
 def test_scene_datas_compatibility_plugin_is_removed_after_object_panel_migration():

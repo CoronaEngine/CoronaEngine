@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-EDITOR = Path(__file__).resolve().parents[3]
+EDITOR = Path(__file__).resolve().parents[2] / "CoronaEditor" / "editor"
 WEB = EDITOR / "Frontend/src/services"
 
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 class FrontendTestOwnershipTests(unittest.TestCase):
     def setUp(self):
-        self.frontend_root = Path(__file__).resolve().parents[2]
+        self.frontend_root = Path(__file__).resolve().parents[2] / "CoronaEditor" / "editor" / "Frontend"
         self.source_root = self.frontend_root / "src"
         self.javascript_tests_root = self.frontend_root / "tests" / "js"
 

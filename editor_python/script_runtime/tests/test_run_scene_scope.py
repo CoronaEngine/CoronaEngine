@@ -1,4 +1,4 @@
-from Frontend.src.blockly.generators.runtime import block_program as ce
+from frontend_assets import block_program as ce
 import threading
 
 import pytest

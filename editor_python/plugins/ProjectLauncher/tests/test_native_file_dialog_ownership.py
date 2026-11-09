@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 EDITOR_ROOT = Path(__file__).resolve().parents[3]
-ENGINE_ROOT = EDITOR_ROOT.parent.parent
+ENGINE_ROOT = EDITOR_ROOT.parent
 
 
 class NativeFileDialogOwnershipTests(unittest.TestCase):

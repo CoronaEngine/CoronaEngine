@@ -8,7 +8,7 @@ def test_runtime_scene_does_not_reconstruct_a_legacy_python_scene():
     from pathlib import Path
 
     source = (
-        Path(__file__).resolve().parents[2] / "Frontend" / "src" / "blockly" / "generators" / "runtime" / "block_program.py"
+        Path(__file__).resolve().parents[3] / "CoronaEditor" / "editor" / "Frontend" / "src" / "blockly" / "generators" / "runtime" / "block_program.py"
     ).read_text(encoding="utf-8")
     start = source.index("def _runtime_scene")
     end = source.index("def _runtime_scene_key", start)
@@ -20,7 +20,7 @@ def test_known_actor_queries_do_not_fallback_to_legacy_scene_adapter():
     from pathlib import Path
 
     source = (
-        Path(__file__).resolve().parents[2] / "Frontend" / "src" / "blockly" / "generators" / "runtime" / "block_program.py"
+        Path(__file__).resolve().parents[3] / "CoronaEditor" / "editor" / "Frontend" / "src" / "blockly" / "generators" / "runtime" / "block_program.py"
     ).read_text(encoding="utf-8")
     start = source.index("def _iter_known_actors")
     end = source.index("def _deleted_names", start)
@@ -32,7 +32,7 @@ def test_actor_resolution_does_not_fallback_to_legacy_scene_adapter():
     from pathlib import Path
 
     source = (
-        Path(__file__).resolve().parents[2] / "Frontend" / "src" / "blockly" / "generators" / "runtime" / "block_program.py"
+        Path(__file__).resolve().parents[3] / "CoronaEditor" / "editor" / "Frontend" / "src" / "blockly" / "generators" / "runtime" / "block_program.py"
     ).read_text(encoding="utf-8")
     start = source.index("def _resolve_actor")
     end = source.index("def _current_actor", start)
@@ -43,7 +43,7 @@ def test_actor_resolution_does_not_fallback_to_legacy_scene_adapter():
 def test_actor_runtime_target_prefers_native_snapshot_over_legacy_scene(monkeypatch):
     from types import SimpleNamespace
 
-    from Frontend.src.blockly.generators.runtime import block_program as corona_engine
+    from frontend_assets import block_program as corona_engine
 
     native_payload = {
         "scene": "scene.ini",
@@ -68,7 +68,7 @@ def test_actor_runtime_target_prefers_native_snapshot_over_legacy_scene(monkeypa
 
 
 def test_runtime_target_does_not_implicitly_fallback_to_legacy_scene(monkeypatch):
-    from Frontend.src.blockly.generators.runtime import block_program as corona_engine
+    from frontend_assets import block_program as corona_engine
 
     monkeypatch.setattr(
         corona_engine,
@@ -132,7 +132,7 @@ def test_script_runtime_scene_tools_exposes_actor_state_and_physics_aggregates()
 
 def test_native_actor_proxy_uses_script_runtime_scene_tools_for_actor_operations(monkeypatch):
     import api.editor_api
-    from Frontend.src.blockly.generators.runtime import block_program as corona_engine
+    from frontend_assets import block_program as corona_engine
 
     calls = []
 
@@ -205,7 +205,7 @@ def test_native_restore_uses_one_mechanics_patch_and_preserves_body_type(monkeyp
 
 
 def test_script_runtime_has_no_scene_switching_contract():
-    from Frontend.src.blockly.generators.runtime import block_program as corona_engine
+    from frontend_assets import block_program as corona_engine
     from script_runtime.manifest_adapter import ScriptRuntimeSceneAdapter
     assert not hasattr(corona_engine, "setScene")
     assert not hasattr(corona_engine, "nextScene")

@@ -5,13 +5,13 @@ import unittest
 
 class NativeSceneToolsRpcTests(unittest.TestCase):
     def _repo_root(self):
-        return pathlib.Path(__file__).resolve().parents[4]
+        return pathlib.Path(__file__).resolve().parents[4] / "CoronaEditor"
 
     def _engine_root(self):
-        return self._repo_root().parent
+        return pathlib.Path(__file__).resolve().parents[4]
 
     def _handler_source(self):
-        repo_root = self._repo_root().parent
+        repo_root = self._engine_root()
         handler_path = self._engine_root() / "src" / "systems" / "ui" / "cef" / "cef_editor_native_api_handlers.cpp"
         return handler_path.read_text(encoding="utf-8")
 

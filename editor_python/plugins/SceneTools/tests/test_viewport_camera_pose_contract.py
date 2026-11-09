@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-REPO_ROOT = Path(__file__).resolve().parents[5]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 MANIFEST_SOURCE = REPO_ROOT / "src" / "systems" / "ui" / "editor_api" / "cef_editor_api.cpp"
 HANDLER_SOURCE = REPO_ROOT / "src" / "systems" / "ui" / "cef" / "cef_editor_native_api_handlers.cpp"
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 class EditorApiAggregateWrapperTests(unittest.TestCase):
     def setUp(self):
-        self.source_root = Path(__file__).resolve().parents[2] / "src"
+        self.source_root = Path(__file__).resolve().parents[2] / "CoronaEditor" / "editor" / "Frontend" / "src"
         self.api_source = (self.source_root / "api" / "editorApi.js").read_text(
             encoding="utf-8"
         )

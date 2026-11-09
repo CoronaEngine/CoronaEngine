@@ -4,7 +4,7 @@ from pathlib import Path
 
 class LegacyFrontendEntrypointTests(unittest.TestCase):
     def setUp(self):
-        self.frontend_root = Path(__file__).resolve().parents[2]
+        self.frontend_root = Path(__file__).resolve().parents[2] / "CoronaEditor" / "editor" / "Frontend"
 
     def test_legacy_cef_calls_are_isolated_to_compatibility_entrypoint(self):
         source_root = self.frontend_root / "src"

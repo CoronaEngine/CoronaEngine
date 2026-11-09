@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[5]
+ROOT = Path(__file__).resolve().parents[4]
 
 
 class NativeProjectContextSyncTests(unittest.TestCase):

@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 
-FRONTEND_ROOT = Path(__file__).resolve().parents[2]
+FRONTEND_ROOT = Path(__file__).resolve().parents[2] / "CoronaEditor" / "editor" / "Frontend"
 SRC_ROOT = FRONTEND_ROOT / "src"
 
 STATIC_IMPORT_RE = re.compile(r"^\s*import\s+[\w{},\s*]+\s+from\s+['\"]([^'\"]+)['\"]")

@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 EDITOR_ROOT = Path(__file__).resolve().parents[1]
-ENGINE_ROOT = EDITOR_ROOT.parent.parent
+ENGINE_ROOT = EDITOR_ROOT.parent
 HANDLERS = (
     ENGINE_ROOT
     / "src"

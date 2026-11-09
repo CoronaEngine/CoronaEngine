@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 def test_script_runtime_bundled_audio_uses_repository_assets_root():
-    from Frontend.src.blockly.generators.runtime.block_program import _bundled_audio_root
+    from frontend_assets.block_program import _bundled_audio_root
 
     repo_root = Path(__file__).resolve().parents[3]
 

@@ -4,8 +4,8 @@ import pathlib
 import tempfile
 import unittest
 
-from Frontend.tests.python.ai_node_graph_contract import load_contract_catalog
-from Frontend.tests.python.check_ai_contract_catalog import (
+from frontend_tests.ai_node_graph_contract import load_contract_catalog
+from frontend_tests.check_ai_contract_catalog import (
     CONTRACT_PATH,
     TOOLBOX_PATH,
     check_contract_catalog,

@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 def test_cmake_modules_have_a_named_root_owner():
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[2]
     cmake_root = repo_root / "cmake"
     misc_root = repo_root / "misc"
     legacy_root = repo_root / "misc" / "cmake"

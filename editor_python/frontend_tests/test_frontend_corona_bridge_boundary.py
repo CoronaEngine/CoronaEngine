@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 
-FRONTEND_ROOT = Path(__file__).resolve().parents[2]
+FRONTEND_ROOT = Path(__file__).resolve().parents[2] / "CoronaEditor" / "editor" / "Frontend"
 SRC_ROOT = FRONTEND_ROOT / "src"
 
 STRING_LITERAL_RE = re.compile(

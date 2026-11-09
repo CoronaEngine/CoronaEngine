@@ -2,7 +2,7 @@ from pathlib import Path
 import re
 
 EDITOR = Path(__file__).resolve().parents[1]
-ENGINE = EDITOR.parent.parent
+ENGINE = EDITOR.parent
 
 
 def test_manifest_and_handlers_expose_no_multiscene_or_migration_operations():

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-HANDLERS = Path(__file__).resolve().parents[5] / "src/systems/ui/cef/cef_editor_native_api_handlers.cpp"
+HANDLERS = Path(__file__).resolve().parents[4] / "src/systems/ui/cef/cef_editor_native_api_handlers.cpp"
 
 
 def test_native_scene_reload_uses_current_project_and_does_not_write_an_index():

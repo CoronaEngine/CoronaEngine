@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 def test_tools_tests_have_a_dedicated_owner_directory():
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[2]
     tools_root = repo_root / "tools"
     tests_root = tools_root / "tests"
 
@@ -13,7 +13,7 @@ def test_tools_tests_have_a_dedicated_owner_directory():
 
 
 def test_cmake_python_helpers_have_a_tools_build_owner():
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[2]
     tools_build = repo_root / "tools" / "build"
     misc_pytools = repo_root / "misc" / "pytools"
 
