@@ -83,6 +83,12 @@ enum class NetworkCommandKind : std::uint8_t {
     StartSession,                   ///< params: instance_name, project_id, port, role
     StartDiscovery,                 ///< params: instance_name, project_id
     ConnectToPeer,                  ///< params: ip, name; port 走 command.port
+    // ---- 协作对象锁（远端删除 LANChat 后的通用替代 API）----
+    BroadcastIntent,                ///< params: user_id, tooltip, status, now_ms; position 走 command.position
+    LockObject,                     ///< params: object_id, user_id, operation, now_ms —— 需要回执
+    UnlockObject,                   ///< params: object_id, user_id —— 需要回执
+    LockedBy,                       ///< params: object_id, now_ms —— 回执 text
+    CheckPreviewCollision,          ///< params: user_id, delta, now_ms; position 走 command.position —— 回执 text
 };
 
 struct NetworkCommand {
@@ -97,6 +103,7 @@ struct NetworkCommand {
     std::string correlation_id;
 
     std::array<float, 9> transform{};
+    std::array<float, 3> position{};   ///< broadcast_intent / check_preview_collision
     std::uint64_t now_ms{0};
     std::uint64_t handle{0};        ///< register_actor_identity 的 actor_handle
     std::uint16_t port{0};          ///< start_session / connect_to_peer

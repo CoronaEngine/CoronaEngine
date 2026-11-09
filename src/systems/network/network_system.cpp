@@ -351,7 +351,17 @@ void drain_network_commands(NetworkSystem& sys) {
             Corona::Network::NetworkReplyQueue::instance().push(
                 {command.request_id, ok, std::move(error)});
         };
-        // 形参取值：缺省为空串（等价于原签名的默认实参）。
+        // 标量字符串回执（locked_by / check_preview_collision）。
+        const auto reply_text = [&command](std::string text) {
+            if (command.request_id == 0) {
+                return;
+            }
+            Corona::Network::NetworkCommandResult payload;
+            payload.request_id = command.request_id;
+            payload.ok = true;
+            payload.text = std::move(text);
+            Corona::Network::NetworkReplyQueue::instance().push(std::move(payload));
+        };
         const auto arg = [&command](std::size_t index) -> std::string {
             return index < command.params.size() ? command.params[index] : std::string{};
         };
@@ -422,6 +432,27 @@ void drain_network_commands(NetworkSystem& sys) {
                 break;
             case Corona::Network::NetworkCommandKind::ConnectToPeer:
                 reply(sys.connect_to_peer(arg(0), command.port, arg(1)));
+                break;
+            case Corona::Network::NetworkCommandKind::BroadcastIntent:
+                sys.broadcast_intent(arg(0), arg(1), command.position, arg(2), arg_u64(3));
+                break;
+            case Corona::Network::NetworkCommandKind::LockObject: {
+                const auto result = sys.lock_object(arg(0), arg(1), arg(2), arg_u64(3));
+                reply(result.ok, result.error);
+                break;
+            }
+            case Corona::Network::NetworkCommandKind::UnlockObject: {
+                const auto result = sys.unlock_object(arg(0), arg(1));
+                reply(result.ok, result.error);
+                break;
+            }
+            case Corona::Network::NetworkCommandKind::LockedBy:
+                reply_text(sys.locked_by(arg(0), arg_u64(1)));
+                break;
+            case Corona::Network::NetworkCommandKind::CheckPreviewCollision:
+                reply_text(sys.check_preview_collision(
+                    arg(0), command.position,
+                    static_cast<float>(std::strtod(arg(1).c_str(), nullptr)), arg_u64(2)));
                 break;
         }    }
 }

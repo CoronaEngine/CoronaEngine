@@ -4416,6 +4416,54 @@ bool network_connect_to_peer(const std::string& ip, std::uint16_t port, const st
 }
 
 
+/// 协作对象锁走"命令 + 有界等回执"，还原成调用方原本期望的结果类型。
+Corona::Network::CollaborationResult collaboration_lock(const std::string& object_id,
+                                                        const std::string& user_id,
+                                                        const std::string& operation,
+                                                        std::uint64_t now_ms) {
+    Corona::Network::NetworkCommand command{};
+    command.kind = Corona::Network::NetworkCommandKind::LockObject;
+    command.params = {object_id, user_id, operation, std::to_string(now_ms)};
+    const auto reply = Corona::Network::submit_and_wait(std::move(command));
+    Corona::Network::CollaborationResult result;
+    if (!reply) { result.error = "NETWORK_TIMEOUT"; return result; }
+    result.ok = reply->ok;
+    result.error = reply->error;
+    return result;
+}
+
+Corona::Network::CollaborationResult collaboration_unlock(const std::string& object_id,
+                                                          const std::string& user_id) {
+    Corona::Network::NetworkCommand command{};
+    command.kind = Corona::Network::NetworkCommandKind::UnlockObject;
+    command.params = {object_id, user_id};
+    const auto reply = Corona::Network::submit_and_wait(std::move(command));
+    Corona::Network::CollaborationResult result;
+    if (!reply) { result.error = "NETWORK_TIMEOUT"; return result; }
+    result.ok = reply->ok;
+    result.error = reply->error;
+    return result;
+}
+
+std::string collaboration_lock_owner(const std::string& object_id, std::uint64_t now_ms) {
+    Corona::Network::NetworkCommand command{};
+    command.kind = Corona::Network::NetworkCommandKind::LockedBy;
+    command.params = {object_id, std::to_string(now_ms)};
+    const auto reply = Corona::Network::submit_and_wait(std::move(command));
+    return reply ? reply->text : std::string{};
+}
+
+std::string collaboration_conflict(const std::string& user_id,
+                                   const std::array<float, 3>& position,
+                                   float delta, std::uint64_t now_ms) {
+    Corona::Network::NetworkCommand command{};
+    command.kind = Corona::Network::NetworkCommandKind::CheckPreviewCollision;
+    command.position = position;
+    command.params = {user_id, std::to_string(delta), std::to_string(now_ms)};
+    const auto reply = Corona::Network::submit_and_wait(std::move(command));
+    return reply ? reply->text : std::string{};
+}
+
 std::vector<NetworkPeerSnapshot> read_network_peers() {
     // 读快照：CEF 线程不再直接调用 NetworkSystem。
     std::vector<NetworkPeerSnapshot> result;
@@ -4552,7 +4600,6 @@ bool is_network_editor_seed_actor(const NativeEditorActor& actor) {
 }
 
 void broadcast_network_editor_actor(
-    Corona::Systems::NetworkSystem& network_system,
     const NativeEditorScene& scene, const NativeEditorActor& actor) {
     const auto actor_data = actor_to_json(scene, actor);
     float transform[9] = {0, 0, 0, 0, 0, 0, 1, 1, 1};
@@ -4566,23 +4613,42 @@ void broadcast_network_editor_actor(
     optics.roughness = actor_data.value("optics", nlohmann::json::object()).value("roughness", 0.5f);
     optics.specular = actor_data.value("optics", nlohmann::json::object()).value("specular", 0.5f);
     optics.shininess = actor_data.value("optics", nlohmann::json::object()).value("shininess", 32.0f);
-    network_system.register_actor_identity(actor.actor_guid, actor.engine_actor->get_handle(), true);
+    {
+        Corona::Network::NetworkCommand command{};
+        command.kind = Corona::Network::NetworkCommandKind::RegisterActorIdentity;
+        command.guid = actor.actor_guid;
+        command.handle = actor.engine_actor->get_handle();
+        command.flag = true;
+        Corona::Network::push_network_command(std::move(command));
+    }
     // JSON is part of the existing network protocol, entirely on the native
     // side. The Web call and its reply remain owned, typed V8 values.
-    network_system.broadcast_actor_create(actor.actor_guid, scene.route, actor.route, {},
-        transform, &optics, sizeof(optics), actor_data.dump());
+    {
+        Corona::Network::NetworkCommand command{};
+        command.kind = Corona::Network::NetworkCommandKind::BroadcastActorCreate;
+        command.guid = actor.actor_guid;
+        command.scene = scene.route;
+        command.name = actor.route;
+        command.json = actor_data.dump();
+        for (int i = 0; i < 9; ++i) command.transform[static_cast<std::size_t>(i)] = transform[i];
+        const auto* packed_bytes = reinterpret_cast<const std::uint8_t*>(&optics);
+        command.blob.assign(packed_bytes, packed_bytes + sizeof(optics));
+        Corona::Network::push_network_command(std::move(command));
+    }
 }
 
 void broadcast_network_editor_actor_state(const NativeEditorScene& scene, const NativeEditorActor& actor) {
-    auto network = get_network_system();
-    if (network && network->session_state() == Corona::Systems::NetworkSystem::SessionState::Active &&
-        is_network_editor_seed_actor(actor)) {
-        network->broadcast_actor_state_update(actor.actor_guid, scene.route, actor_to_json(scene, actor).dump());
+    if (network_snapshot_session_active() && is_network_editor_seed_actor(actor)) {
+        Corona::Network::NetworkCommand command{};
+        command.kind = Corona::Network::NetworkCommandKind::BroadcastActorStateUpdate;
+        command.guid = actor.actor_guid;
+        command.scene = scene.route;
+        command.json = actor_to_json(scene, actor).dump();
+        Corona::Network::push_network_command(std::move(command));
     }
 }
 
 std::size_t seed_network_editor_state(
-    Corona::Systems::NetworkSystem& network_system,
     Corona::Systems::NetworkSystem::SessionRole role) {
     if (role != Corona::Systems::NetworkSystem::SessionRole::Host) return 0;
 
@@ -4596,7 +4662,7 @@ std::size_t seed_network_editor_state(
     for (const auto& actor : scene->actors) {
         if (!is_network_editor_seed_actor(actor)) continue;
 
-        broadcast_network_editor_actor(network_system, *scene, actor);
+        broadcast_network_editor_actor(*scene, actor);
         ++seeded_actor_count;
     }
     return seeded_actor_count;
@@ -5175,10 +5241,9 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             reply.error_message = created.error;
             return reply;
         }
-        if (auto network = get_network_system(); network &&
-            network->session_state() == Corona::Systems::NetworkSystem::SessionState::Active) {
+        if (network_snapshot_session_active()) {
             auto* actor = find_native_actor(*scene, created.data.at("actor").at("actor_guid").get<std::string>());
-            if (actor && is_network_editor_seed_actor(*actor)) broadcast_network_editor_actor(*network, *scene, *actor);
+            if (actor && is_network_editor_seed_actor(*actor)) broadcast_network_editor_actor(*scene, *actor);
         }
         SceneRequest read{SceneMethod::ReadActorProperties};
         read.archive_session = request.archive_session;
@@ -5271,17 +5336,20 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         return apply_native_environment(request);
     if (request.method == SceneMethod::SetActorTransform) {
         auto reply = apply_native_actor_transform(request);
-        auto network = get_network_system();
         auto* scene = native_editor_state().scene.get();
         auto* actor = scene && reply.error_code.empty() ? find_native_actor(*scene, reply.transform.actor_guid) : nullptr;
-        if (network && network->session_state() == Corona::Systems::NetworkSystem::SessionState::Active &&
-            actor && is_network_editor_seed_actor(*actor)) {
+        if (network_snapshot_session_active() && actor && is_network_editor_seed_actor(*actor)) {
             const auto& value = reply.transform;
             float transform[9];
             std::copy(value.position.begin(), value.position.end(), transform);
             std::copy(value.rotation.begin(), value.rotation.end(), transform + 3);
             std::copy(value.scale.begin(), value.scale.end(), transform + 6);
-            network->broadcast_actor_transform_update(value.actor_guid, value.scene, transform, {}, {});
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::BroadcastActorTransformUpdate;
+            command.guid = value.actor_guid;
+            command.scene = value.scene;
+            for (int i = 0; i < 9; ++i) command.transform[static_cast<std::size_t>(i)] = transform[i];
+            Corona::Network::push_network_command(std::move(command));
         }
         return reply;
     }
@@ -5324,10 +5392,14 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             return reply;
         }
         reply.actor_delete = erase_native_editor_actor(*scene, actor);
-        if (auto network = get_network_system(); network &&
-            network->session_state() == Corona::Systems::NetworkSystem::SessionState::Active) {
+        if (network_snapshot_session_active()) {
             const auto& deleted = reply.actor_delete;
-            network->broadcast_actor_delete(deleted.actor_guid, deleted.scene, deleted.old_name);
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::BroadcastActorDelete;
+            command.guid = deleted.actor_guid;
+            command.scene = deleted.scene;
+            command.name = deleted.old_name;
+            Corona::Network::push_network_command(std::move(command));
         }
         return reply;
     }
@@ -8411,7 +8483,7 @@ NetworkReply execute_network_operation(const NetworkRequest& request) {
             reply.ok = result && result->ok;
         }
         reply.session = read_network_session();
-        reply.seeded_actor_count = reply.ok && !was_active ? seed_network_editor_state(*sys, role) : 0;
+        reply.seeded_actor_count = reply.ok && !was_active ? seed_network_editor_state(role) : 0;
         break;
     }
     case NetworkMethod::StopSession: {
@@ -8479,7 +8551,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            const auto result = sys->lock_object(
+            const auto result = collaboration_lock(
                 arg_string(request.args, 0),
                 arg_string(request.args, 1),
                 arg_string(request.args, 2, "modify"),
@@ -8491,7 +8563,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             if (!sys) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
-            const auto result = sys->unlock_object(
+            const auto result = collaboration_unlock(
                 arg_string(request.args, 0), arg_string(request.args, 1));
             return native_success({{"ok", result.ok}, {"error", result.error}});
         }},
@@ -8501,7 +8573,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
             return native_success({
-                {"owner", sys->locked_by(arg_string(request.args, 0), collaboration_now_ms())},
+                {"owner", collaboration_lock_owner(arg_string(request.args, 0), collaboration_now_ms())},
             });
         }},
         {"broadcast_intent", [](const NativeRequest& request, const NativeContext&) {
@@ -8511,12 +8583,14 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             }
             const auto position = json_float3_value(request.args.at(2)).value_or(
                 std::array<float, 3>{0.0f, 0.0f, 0.0f});
-            sys->broadcast_intent(
-                arg_string(request.args, 0),
-                arg_string(request.args, 1),
-                position,
-                arg_string(request.args, 3, "placing_object"),
-                collaboration_now_ms());
+            Corona::Network::NetworkCommand command{};
+            command.kind = Corona::Network::NetworkCommandKind::BroadcastIntent;
+            command.position = position;
+            command.params = {arg_string(request.args, 0),
+                              arg_string(request.args, 1),
+                              arg_string(request.args, 3, "placing_object"),
+                              std::to_string(collaboration_now_ms())};
+            Corona::Network::push_network_command(std::move(command));
             return native_success({{"ok", true}});
         }},
         {"check_preview_collision", [](const NativeRequest& request, const NativeContext&) {
@@ -8529,7 +8603,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
             const float delta = request.args.size() > 2 && request.args[2].is_number()
                 ? request.args[2].get<float>() : 0.5f;
             return native_success({
-                {"conflict_user_id", sys->check_preview_collision(
+                {"conflict_user_id", collaboration_conflict(
                     arg_string(request.args, 0), position, delta, collaboration_now_ms())},
             });
         }},
