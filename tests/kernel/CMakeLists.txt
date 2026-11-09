@@ -1,3 +1,15 @@
+# EnTT 世界骨架：创建/附加/查询/视图/销毁，以及句柄宽度契约。
+# 只依赖 entt 与引擎 include 根，不需要链接整个 Kernel。
+add_executable(corona_entity_world_tests
+    test_entity_world.cpp
+)
+target_include_directories(corona_entity_world_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(corona_entity_world_tests PRIVATE EnTT::EnTT)
+add_test(NAME EntityWorldTests
+         COMMAND corona_entity_world_tests)
+
 add_executable(corona_system_stop_timeout_tests
     test_system_stop_timeout.cpp
 )
