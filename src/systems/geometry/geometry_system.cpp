@@ -2,7 +2,7 @@
 #include <corona/events/engine_events.h>
 #include <corona/diagnostics/thread_phase.h>
 #include <horizon/core/logging.h>
-#include <horizon/core/storage.h>
+#include <corona/kernel/entity_storage.h>
 #include <corona/resource/resource.h>
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>

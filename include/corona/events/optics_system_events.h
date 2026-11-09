@@ -1,7 +1,7 @@
 #pragma once
 
 #include <corona/kernel/entity_id.h>
-#include <horizon/core/storage.h>
+#include <corona/kernel/entity_storage.h>
 
 #include <future>
 #include <chrono>

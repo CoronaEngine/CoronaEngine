@@ -177,6 +177,7 @@ add_executable(corona_optics_storage_snapshot_tests
 target_include_directories(corona_optics_storage_snapshot_tests
     PRIVATE
         ${PROJECT_SOURCE_DIR}/src/systems/optics
+        ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(corona_optics_storage_snapshot_tests PRIVATE Horizon)
 add_test(NAME OpticsStorageSnapshotTests

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <horizon/core/storage.h>
+#include <corona/kernel/entity_storage.h>
 
 #include <vector>
 

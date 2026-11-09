@@ -14,10 +14,10 @@
 
 namespace Corona::Ecs {
 
-/// 与 `SharedDataHub` 中 13 个 `Kernel::Utils::Storage<T,128,2>` 一一对应的类型。
+/// 与 `SharedDataHub` 中 13 个存储（现已由 Kernel::Utils::EntityStorage 承载）一一对应的类型。
 ///
-/// 注意：这里只是**类型清单**，不代表它们已经成为 entt 组件。当前的存储仍然
-/// 是 `Storage`；切换是一个一个进行的。
+/// 注意：这里只是**类型清单**。底层存储已切换到 entt（EntityStorage），
+/// 这张表用于后续把调用点改写成原生 view/get 时对照。
 using StorageComponentTypes = std::tuple<
     ModelResource,
     ModelTransform,

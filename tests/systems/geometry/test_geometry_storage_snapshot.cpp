@@ -9,7 +9,7 @@ struct Value {
 }  // namespace
 
 int main() {
-    using Storage = Corona::Kernel::Utils::Storage<Value, 2, 1>;
+    using Storage = Corona::Kernel::Utils::EntityStorage<Value, 2, 1>;
     Storage storage;
     const auto first = storage.allocate();
     const auto second = storage.allocate();

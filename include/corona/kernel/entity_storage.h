@@ -153,6 +153,16 @@ class EntityStorage {
 
     [[nodiscard]] WriteHandle try_acquire_write(ObjectId id) { return acquire_write(id); }
 
+    /// 非阻塞写：拿不到锁返回空句柄。
+    [[nodiscard]] WriteHandle try_acquire_write_nowait(ObjectId id) {
+        auto& lock = entity_lock_for(id);
+        std::unique_lock<std::shared_timed_mutex> guard(lock, std::try_to_lock);
+        if (!guard.owns_lock()) {
+            return WriteHandle{};
+        }
+        return WriteHandle(std::move(guard), try_value(id), id);
+    }
+
     [[nodiscard]] bool contains(ObjectId id) const {
         const entt::entity entity = to_entity(id);
         if (entity == entt::null) {
