@@ -342,6 +342,17 @@ def main(argv: list[str] | None = None) -> int:
     # frontend_assets/ and has no same-path owner in any merge source.
     _cleanup_stale_files(merge_sources, dest_root, _ignore)
 
+    # Development-only python assets must not survive in a deployed tree.
+    for name in ("frontend_tests", "frontend_assets"):
+        stale = dest_root / name
+        if stale.is_dir():
+            shutil.rmtree(stale, ignore_errors=True)
+            echo(f"[editor-copy] Removed deployed dev assets: {stale}")
+    stale_conftest = dest_root / "conftest.py"
+    if stale_conftest.is_file():
+        stale_conftest.unlink()
+        echo(f"[editor-copy] Removed deployed dev conftest: {stale_conftest}")
+
     if python_dir:
         # The frontend imports the block program template with Vite's `?raw`
         # loader, so it must exist inside the deployed Frontend tree before the
