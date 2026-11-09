@@ -363,4 +363,4 @@ add_test(NAME ImGuiWorkspaceTests COMMAND corona_imgui_workspace_tests)
 
 add_test(NAME ProjectDocumentStoreTests COMMAND ${Python_EXECUTABLE} -B -m unittest
     runtime.archive.tests.test_documents)
-set_tests_properties(ProjectDocumentStoreTests PROPERTIES WORKING_DIRECTORY "${CORONA_EDITOR_SOURCE_DIR}/editor")
+set_tests_properties(ProjectDocumentStoreTests PROPERTIES WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/editor_python")

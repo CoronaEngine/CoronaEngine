@@ -18,17 +18,25 @@ def _load_copy_module():
 
 
 def test_runtime_contract_is_deployed_and_loads_without_repository_docs(tmp_path):
+    import shutil
     import sys
     module = _load_copy_module()
-    source = REPO_ROOT / "CoronaEditor" / "editor" / "script_runtime" / "blockly"
-    destination = tmp_path / "中文 runtime" / "CabbageEditor" / "script_runtime" / "blockly"
-    module.copy_tree(source, destination, merge_content=True)
-    spec = importlib.util.spec_from_file_location("deployed_contract", destination / "ai_node_graph_contract.py")
+    source = REPO_ROOT / "editor_python" / "frontend_tests" / "ai_node_graph_contract.py"
+    catalog = REPO_ROOT / "CoronaEditor" / "editor" / "Frontend" / "src" / "services" / "aiBlockContract.xml"
+    # The contract reader resolves its catalog relative to the deployed
+    # Frontend tree, so reproduce that layout without repository docs.
+    deployed_python = tmp_path / "deployed" / "Frontend" / "tests" / "python"
+    deployed_services = tmp_path / "deployed" / "Frontend" / "src" / "services"
+    deployed_python.mkdir(parents=True)
+    deployed_services.mkdir(parents=True)
+    shutil.copy2(source, deployed_python / source.name)
+    shutil.copy2(catalog, deployed_services / catalog.name)
+    spec = importlib.util.spec_from_file_location("deployed_contract", deployed_python / source.name)
     contract = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = contract
     try:
         spec.loader.exec_module(contract)
-        assert contract.CONTRACT_PATH.parent == destination
+        assert contract.CONTRACT_PATH == deployed_services / catalog.name
         assert contract.load_contract_catalog()["blocks"]
     finally:
         sys.modules.pop(spec.name, None)
@@ -94,6 +102,57 @@ def test_editor_copy_preserves_deployed_project_and_generated_data(tmp_path):
 
     assert project_script.exists()
     assert generated_script.exists()
+
+
+def test_editor_copy_union_cleanup_keeps_files_owned_by_any_source(tmp_path):
+    module = _load_copy_module()
+    editor_source = tmp_path / "editor"
+    python_source = tmp_path / "editor_python"
+    destination = tmp_path / "CabbageEditor"
+
+    (editor_source / "Frontend" / "src").mkdir(parents=True)
+    (editor_source / "Frontend" / "src" / "main.js").write_text("js\n", encoding="utf-8")
+    (python_source / "runtime").mkdir(parents=True)
+    (python_source / "runtime" / "bootstrap.py").write_text("py\n", encoding="utf-8")
+    stale = destination / "runtime" / "removed.py"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("stale\n", encoding="utf-8")
+
+    module.copy_tree(editor_source, destination, merge_content=True, cleanup=False)
+    module.copy_tree(python_source, destination, merge_content=True, cleanup=False)
+    module._cleanup_stale_files([editor_source, python_source], destination, module._ignore)
+
+    assert (destination / "Frontend" / "src" / "main.js").exists()
+    assert (destination / "runtime" / "bootstrap.py").exists()
+    assert not stale.exists()
+
+
+def test_editor_copy_materializes_block_program_into_frontend(tmp_path, monkeypatch):
+    module = _load_copy_module()
+    editor_source = tmp_path / "editor"
+    python_source = tmp_path / "editor_python"
+    frontend, node, _ = _prepare_frontend_build(module, tmp_path)
+    (frontend / "dist").mkdir()
+    (frontend / "dist" / "index.html").write_text("built", encoding="utf-8")
+    (editor_source / "Frontend").mkdir(parents=True)
+    block_program = python_source / "frontend_assets" / "block_program.py"
+    block_program.parent.mkdir(parents=True)
+    block_program.write_text("BUNDLED = True\n", encoding="utf-8")
+    runner = Mock(return_value=0)
+    monkeypatch.setattr(module, "stream_run", runner)
+
+    result = module.main([
+        "--dest-root", str(tmp_path / "CabbageEditor"),
+        "--src-dir", str(editor_source),
+        "--python-dir", str(python_source),
+        "--merge-content",
+        "--frontend-dir", str(frontend),
+        "--node-dir", str(node),
+    ])
+
+    assert result == 0
+    deployed = tmp_path / "CabbageEditor" / "Frontend" / "src" / "blockly" / "generators" / "runtime" / "block_program.py"
+    assert deployed.read_text(encoding="utf-8") == "BUNDLED = True\n"
 
 
 def _prepare_frontend_build(module, tmp_path):
