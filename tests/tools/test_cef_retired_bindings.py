@@ -446,7 +446,7 @@ def test_web_pick_has_no_fast_route_json_broker_or_result_event():
     assert not (root / 'src/systems/ui/cef/request_response_broker.h').exists()
     for name in ['src/systems/ui/cef/cef_renderer_bridge.cpp', 'src/systems/ui/cef/cef_viewport_gizmo.cpp',
                  'src/systems/ui/editor_api/cef_editor_api.cpp', 'CoronaEditor/editor/Frontend/src/api/editorApi.js',
-                 'CoronaEditor/editor/Frontend/src/api/sceneReader.js', 'editor_python/api/editor_api.py']:
+                 'CoronaEditor/editor/Frontend/src/api/sceneReader.js', 'embedded_python/api/editor_api.py']:
         source = (root / name).read_text(encoding='utf-8-sig')
         for retired in ['"ViewportPick"', '"pickActor"', 'handle_viewport_pick', 'cef_request_response_broker',
                         'actorPickResult', 'onActorPickResult', 'on_actor_pick_result']:

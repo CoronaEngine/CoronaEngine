@@ -55,7 +55,7 @@ def _should_ignore(name: str) -> bool:
         # Dependencies manifests (dev-only lock files)
         "requirements.txt", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
         # Test files and engine-only python development assets
-        "tests", "test", "frontend_tests", "frontend_assets", "conftest.py",
+        "tests", "test", "frontend_assets",
         # Temporary and log files
         ".cache", ".temp", ".tmp", "tmp", ".retired-plugins",
         # OS files
@@ -343,16 +343,11 @@ def main(argv: list[str] | None = None) -> int:
     _cleanup_stale_files(merge_sources, dest_root, _ignore)
 
     # Development-only python assets must not survive in a deployed tree.
-    for name in ("frontend_tests", "frontend_assets"):
+    for name in ("frontend_assets",):
         stale = dest_root / name
         if stale.is_dir():
             shutil.rmtree(stale, ignore_errors=True)
             echo(f"[editor-copy] Removed deployed dev assets: {stale}")
-    stale_conftest = dest_root / "conftest.py"
-    if stale_conftest.is_file():
-        stale_conftest.unlink()
-        echo(f"[editor-copy] Removed deployed dev conftest: {stale_conftest}")
-
     if python_dir:
         # The frontend imports the block program template with Vite's `?raw`
         # loader, so it must exist inside the deployed Frontend tree before the

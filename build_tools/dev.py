@@ -42,7 +42,7 @@ def materialize_editor_frontend_assets(repo_root: Path) -> None:
     loader, so frontend development and packaging both need the file even
     though its source moved to the engine repository.
     """
-    source = repo_root / "editor_python" / "frontend_assets" / "block_program.py"
+    source = repo_root / "embedded_python" / "frontend_assets" / "block_program.py"
     target = (repo_root / "CoronaEditor" / "editor" / "Frontend" / "src"
               / "blockly" / "generators" / "runtime" / "block_program.py")
     if source.is_file():

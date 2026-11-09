@@ -25,19 +25,19 @@ include_guard(GLOBAL)
 set(CORONA_EDITOR_SOURCE_DIR "${PROJECT_SOURCE_DIR}/CoronaEditor")
 # The editor's Python runtime is owned by the engine repository; the editor
 # checkout now only provides the Frontend build and shared assets.
-set(CORONA_EDITOR_PYTHON_SOURCE_DIR "${PROJECT_SOURCE_DIR}/editor_python")
+set(CORONA_EMBEDDED_PYTHON_SOURCE_DIR "${PROJECT_SOURCE_DIR}/embedded_python")
 
 function(corona_validate_editor_sources)
     if(NOT IS_DIRECTORY "${CORONA_EDITOR_SOURCE_DIR}/assets"
        OR NOT EXISTS "${CORONA_EDITOR_SOURCE_DIR}/editor/Frontend/package.json"
-       OR NOT EXISTS "${CORONA_EDITOR_PYTHON_SOURCE_DIR}/main.py"
-       OR NOT EXISTS "${CORONA_EDITOR_PYTHON_SOURCE_DIR}/requirements.txt")
+       OR NOT EXISTS "${CORONA_EMBEDDED_PYTHON_SOURCE_DIR}/main.py"
+       OR NOT EXISTS "${CORONA_EMBEDDED_PYTHON_SOURCE_DIR}/requirements.txt")
         message(FATAL_ERROR
-            "[Corona:Editor] Incomplete workspace at ${CORONA_EDITOR_SOURCE_DIR} or ${CORONA_EDITOR_PYTHON_SOURCE_DIR}. "
+            "[Corona:Editor] Incomplete workspace at ${CORONA_EDITOR_SOURCE_DIR} or ${CORONA_EMBEDDED_PYTHON_SOURCE_DIR}. "
             "Run 'conda run -n coronaengine-dev python build_tools/dev.py configure'.")
     endif()
     message(STATUS "[Corona:Editor] Source checkout: ${CORONA_EDITOR_SOURCE_DIR}")
-    message(STATUS "[Corona:Editor] Python sources: ${CORONA_EDITOR_PYTHON_SOURCE_DIR}")
+    message(STATUS "[Corona:Editor] Python sources: ${CORONA_EMBEDDED_PYTHON_SOURCE_DIR}")
 endfunction()
 
 # ------------------------------------------------------------------------------
@@ -115,7 +115,7 @@ function(corona_install_corona_editor target_name core_target)
 
         string(APPEND _SCRIPT_CONTENT
             " --frontend-dir \"%FRONTEND_DIR%\" --node-dir \"${_CORONA_NODE_DIR}\""
-            " --python-dir \"${CORONA_EDITOR_PYTHON_SOURCE_DIR}\"\n"
+            " --python-dir \"${CORONA_EMBEDDED_PYTHON_SOURCE_DIR}\"\n"
             "if errorlevel 1 (\n"
             "    echo [Corona:Editor] Failed to install editor resources\n"
             "    exit /b 1\n"
@@ -149,7 +149,7 @@ function(corona_install_corona_editor target_name core_target)
 
         string(APPEND _SCRIPT_CONTENT
             " --frontend-dir \"$FRONTEND_DIR\" --node-dir \"${_CORONA_NODE_DIR}\""
-            " --python-dir \"${CORONA_EDITOR_PYTHON_SOURCE_DIR}\"\n"
+            " --python-dir \"${CORONA_EMBEDDED_PYTHON_SOURCE_DIR}\"\n"
             "if [ $? -ne 0 ]; then\n"
             "    echo \"[Corona:Editor] Failed to install editor resources\"\n"
             "    exit 1\n"

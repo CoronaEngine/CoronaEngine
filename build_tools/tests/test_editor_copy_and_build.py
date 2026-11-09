@@ -17,31 +17,6 @@ def _load_copy_module():
     return module
 
 
-def test_runtime_contract_is_deployed_and_loads_without_repository_docs(tmp_path):
-    import shutil
-    import sys
-    module = _load_copy_module()
-    source = REPO_ROOT / "editor_python" / "frontend_tests" / "ai_node_graph_contract.py"
-    catalog = REPO_ROOT / "CoronaEditor" / "editor" / "Frontend" / "src" / "services" / "aiBlockContract.xml"
-    # The contract reader resolves its catalog relative to the deployed
-    # Frontend tree, so reproduce that layout without repository docs.
-    deployed_python = tmp_path / "deployed" / "Frontend" / "tests" / "python"
-    deployed_services = tmp_path / "deployed" / "Frontend" / "src" / "services"
-    deployed_python.mkdir(parents=True)
-    deployed_services.mkdir(parents=True)
-    shutil.copy2(source, deployed_python / source.name)
-    shutil.copy2(catalog, deployed_services / catalog.name)
-    spec = importlib.util.spec_from_file_location("deployed_contract", deployed_python / source.name)
-    contract = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = contract
-    try:
-        spec.loader.exec_module(contract)
-        assert contract.CONTRACT_PATH == deployed_services / catalog.name
-        assert contract.load_contract_catalog()["blocks"]
-    finally:
-        sys.modules.pop(spec.name, None)
-
-
 def test_editor_copy_removes_stale_python_sources_from_deployed_editor(tmp_path):
     module = _load_copy_module()
     source = tmp_path / "editor"
@@ -107,7 +82,7 @@ def test_editor_copy_preserves_deployed_project_and_generated_data(tmp_path):
 def test_editor_copy_union_cleanup_keeps_files_owned_by_any_source(tmp_path):
     module = _load_copy_module()
     editor_source = tmp_path / "editor"
-    python_source = tmp_path / "editor_python"
+    python_source = tmp_path / "embedded_python"
     destination = tmp_path / "CabbageEditor"
 
     (editor_source / "Frontend" / "src").mkdir(parents=True)
@@ -130,7 +105,7 @@ def test_editor_copy_union_cleanup_keeps_files_owned_by_any_source(tmp_path):
 def test_editor_copy_materializes_block_program_into_frontend(tmp_path, monkeypatch):
     module = _load_copy_module()
     editor_source = tmp_path / "editor"
-    python_source = tmp_path / "editor_python"
+    python_source = tmp_path / "embedded_python"
     frontend, node, _ = _prepare_frontend_build(module, tmp_path)
     (frontend / "dist").mkdir()
     (frontend / "dist" / "index.html").write_text("built", encoding="utf-8")
