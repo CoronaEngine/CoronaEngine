@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 
 EDITOR_ROOT = Path(__file__).resolve().parents[2]
-ENGINE_ROOT = EDITOR_ROOT.parent.parent
+ENGINE_ROOT = EDITOR_ROOT.parent
 
 
 class CoronaEditorLifecycleTests(unittest.TestCase):

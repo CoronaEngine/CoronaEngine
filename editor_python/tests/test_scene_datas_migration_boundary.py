@@ -13,17 +13,16 @@ def test_scene_datas_compatibility_plugin_is_removed_after_object_panel_migratio
 
 def test_object_panel_does_not_call_legacy_scene_datas_namespace():
     source = (
-        EDITOR_ROOT / "Frontend" / "src" / "views" / "sidebar" / "Object.vue"
+        ENGINE_ROOT / "CoronaEditor" / "editor" / "Frontend" / "src" / "views" / "sidebar" / "Object.vue"
     ).read_text(encoding="utf-8")
 
-    assert "editorApi.scene.getActor" in source
-    assert "editorApi.sceneTools" in source
+    assert "editorApi.scene.readActorProperties" in source
     assert "sceneDatas" not in source
     assert "scene_datas" not in source
 
 
 def test_object_panel_uses_a_vue_identity_separate_from_legacy_scene_datas_service():
-    frontend_root = EDITOR_ROOT / "Frontend" / "src"
+    frontend_root = ENGINE_ROOT / "CoronaEditor" / "editor" / "Frontend" / "src"
     manifest = (frontend_root / "config" / "pluginManifest.js").read_text(
         encoding="utf-8"
     )

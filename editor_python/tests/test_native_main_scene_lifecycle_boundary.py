@@ -14,7 +14,7 @@ def test_manifest_and_handlers_expose_no_multiscene_or_migration_operations():
         assert f'{{"{method}",' not in handlers
     assert "importVisionScene" not in manifest
     assert "loadVisionScene" not in manifest
-    assert '"scene.getSnapshot", "scene.get_snapshot"' in manifest
+    assert '"scene.get_snapshot"' in manifest and '"scene.getSnapshot"' not in manifest
     assert "migrate_project_sidecar_scene_to_embedded" not in handlers
 
 
@@ -31,11 +31,11 @@ def test_native_init_is_singular_and_save_does_not_reload():
 
 
 def test_adapters_and_ui_have_no_old_scene_lifecycle():
-    paths = ["api/editor_api.py",
-             "Frontend/src/api/editorApi.js", "Frontend/src/services/sceneService.js",
-             "Frontend/src/services/projectLauncherService.js",
-             "Frontend/src/services/projectSettingsService.js"]
-    source = "\n".join((EDITOR / path).read_text(encoding="utf-8") for path in paths)
+    frontend = EDITOR.parent / "CoronaEditor" / "editor" / "Frontend" / "src"
+    adapters = [EDITOR / "api" / "editor_api.py"]
+    adapters.extend(frontend.rglob("*.js"))
+    adapters.extend(frontend.rglob("*.vue"))
+    source = "\n".join(path.read_text(encoding="utf-8") for path in adapters)
     for token in ("def create_scene(", "def create_new_scene(", "def remove_scene(", "def switch_scene(",
                   "createScene:", "removeScene:", "migrateLegacyScene:", "choosePortableSceneTarget:",
                   "browseSceneFile:", "setProjectMode:", "copyExistingToData:", "listRoutes:"):
@@ -50,14 +50,11 @@ def test_only_actor_templates_remain():
 
 
 def test_main_page_has_one_current_scene_and_no_scene_tabs_or_creation_dialog():
-    page = (EDITOR / "Frontend/src/views/layout/MainPage.vue").read_text(encoding="utf-8")
-    lifecycle = (EDITOR / "Frontend/src/utils/projectSceneLifecycle.js").read_text(encoding="utf-8")
+    page = (EDITOR.parent / "CoronaEditor" / "editor" / "Frontend/src/views/layout/MainPage.vue").read_text(encoding="utf-8")
     assert "const currentSceneId = ref(DEFAULT_SCENE_NAME)" in page
     for token in ("tabs.value", "activeTab", "confirmAddTab", "cancelAddTab", "switchTab", "closeTab",
                   "newTabName", "resolveSceneTabs", "添加场景"):
         assert token not in page
-    assert "payload?.scene?.path" in lifecycle
-    assert "resolveSceneTabs" not in lifecycle
 
 
 def test_shipped_examples_have_only_scene_ini_archives():

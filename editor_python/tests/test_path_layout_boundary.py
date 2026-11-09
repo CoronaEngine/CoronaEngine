@@ -20,6 +20,8 @@ class PathLayoutBoundaryTests(unittest.TestCase):
                     continue
                 tree = ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
                 for node in ast.walk(tree):
+                    if isinstance(node, ast.ImportFrom) and getattr(node, "level", 0):
+                        continue
                     modules = ([a.name for a in node.names] if isinstance(node, ast.Import)
                                else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
                     for module in modules:

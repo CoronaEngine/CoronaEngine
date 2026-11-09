@@ -37,7 +37,7 @@ def test_removed_compatibility_roots_contain_no_source_files():
 
 
 def test_embedded_python_path_resolution_supports_packaged_and_conda_layouts():
-    root = EDITOR_ROOT.parent.parent
+    root = EDITOR_ROOT.parent
     path_source = (root / "src" / "systems" / "script" / "python" / "python_path_config.cpp").read_text(
         encoding="utf-8"
     )

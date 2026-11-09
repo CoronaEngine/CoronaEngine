@@ -1,12 +1,12 @@
 from pathlib import Path
 
 
-EDITOR_ROOT = Path(__file__).resolve().parents[1]
+EDITOR_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_script_runtime_legacy_scene_adapter_is_removed():
     engine_source = (
-        EDITOR_ROOT / "Frontend" / "src" / "blockly" / "generators" / "runtime" / "block_program.py"
+        EDITOR_ROOT.parent / "CoronaEditor" / "editor" / "Frontend" / "src" / "blockly" / "generators" / "runtime" / "block_program.py"
     ).read_text(encoding="utf-8")
     blockly_source = (
         EDITOR_ROOT / "script_runtime" / "file_runner.py"

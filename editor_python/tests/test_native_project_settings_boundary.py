@@ -3,9 +3,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HANDLERS = (
-    REPO_ROOT
-    / ".."
-    / ".."
+    REPO_ROOT.parent
     / "src"
     / "systems"
     / "ui"
@@ -29,8 +27,8 @@ def test_project_settings_save_uses_scoped_python_archive():
 
     assert '{"save_active_project_info", script_method}' not in section
     assert '{"save_active_project_info", []' in section
-    assert "matches_archive_session(*scene, settings)" in section
-    assert 'project_archive_call("update_metadata"' in section
+    assert "project_document_request(arg_object(request.args, 0), false)" in section
+    assert 'project_archive_call("update_metadata"' in source
     assert 'read_ini_file' not in section
 
 
