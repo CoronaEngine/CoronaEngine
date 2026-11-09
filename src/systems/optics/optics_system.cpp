@@ -3331,11 +3331,13 @@ void OpticsSystem::update() {
     fallback_large_scenes_to_native_renderer();
     std::vector<std::uintptr_t> requested_vision_cameras;
     bool native_view_requested = false;
-    for (const auto& scene : std::as_const(SharedDataHub::instance().scene_storage())) {
-        if (!scene.enabled) {
+    auto& scenes = SharedDataHub::instance().scene_storage();
+    for (const auto scene_entity : scenes.view()) {
+        auto scene = scenes.try_acquire_read(Corona::Kernel::Utils::to_entity_id(scene_entity));
+        if (!scene || !scene->enabled) {
             continue;
         }
-        for (const auto camera_handle : scene.camera_handles) {
+        for (const auto camera_handle : scene->camera_handles) {
             if (auto camera =
                     SharedDataHub::instance().camera_storage().try_acquire_read(camera_handle);
                 camera) {
@@ -3389,10 +3391,13 @@ void OpticsSystem::update() {
 OpticsSystem::RenderFramePlan OpticsSystem::build_render_frame_plan() {
     RenderFramePlan plan;
     std::unordered_set<std::uintptr_t> scheduled;
-    for (const auto& scene : std::as_const(SharedDataHub::instance().scene_storage())) {
-        if (!scene.enabled) continue;
-        const auto scene_handle = reinterpret_cast<std::uintptr_t>(&scene);
-        for (const auto handle : scene.camera_handles) {
+    auto& scenes = SharedDataHub::instance().scene_storage();
+    for (const auto scene_entity : scenes.view()) {
+        auto scene = scenes.try_acquire_read(Corona::Kernel::Utils::to_entity_id(scene_entity));
+        if (!scene || !scene->enabled) continue;
+        // 场景句柄直接来自实体，不再用 &scene 反推（entt 里引用地址不是实体 ID）
+        const auto scene_handle = Corona::Kernel::Utils::to_entity_id(scene_entity);
+        for (const auto handle : scene->camera_handles) {
             auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(handle);
             if (!camera) continue;
             plan.has_vision_cameras |= camera->render_backend == CameraRenderBackend::Vision;
@@ -5621,13 +5626,18 @@ void OpticsSystem::fail_unrenderable_pending_screenshots() {
 
         bool in_enabled_scene = false;
         bool in_any_scene = false;
-        for (const auto& scene : std::as_const(SharedDataHub::instance().scene_storage())) {
-            if (std::find(scene.camera_handles.begin(), scene.camera_handles.end(), camera_handle) ==
-                scene.camera_handles.end()) {
+        auto& scenes = SharedDataHub::instance().scene_storage();
+        for (const auto scene_entity : scenes.view()) {
+            auto scene = scenes.try_acquire_read(Corona::Kernel::Utils::to_entity_id(scene_entity));
+            if (!scene) {
+                continue;
+            }
+            if (std::find(scene->camera_handles.begin(), scene->camera_handles.end(), camera_handle) ==
+                scene->camera_handles.end()) {
                 continue;
             }
             in_any_scene = true;
-            if (scene.enabled) {
+            if (scene->enabled) {
                 in_enabled_scene = true;
                 break;
             }

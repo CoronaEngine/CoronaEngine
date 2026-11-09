@@ -68,6 +68,10 @@ find_package(astc-encoder CONFIG REQUIRED)
 find_package(ffmpeg CONFIG REQUIRED)
 find_package(quill CONFIG REQUIRED)
 find_package(entt CONFIG REQUIRED)
+# entt 是 header-only，且 shared_data_hub.h（几乎每个目标都包含）要用它。
+# 逐个 target 链接不现实，这里直接把它的 include 目录下放到所有目标。
+get_target_property(CORONA_ENTT_INCLUDE_DIRS EnTT::EnTT INTERFACE_INCLUDE_DIRECTORIES)
+include_directories(${CORONA_ENTT_INCLUDE_DIRS})
 
 include(corona_horizon_workspace)
 corona_add_horizon_workspace()

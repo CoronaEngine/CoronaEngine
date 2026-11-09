@@ -1,5 +1,5 @@
 #pragma once
-#include <horizon/core/storage.h>
+#include <corona/kernel/entity_storage.h>
 #include <nlohmann/json.hpp>
 #include <corona/camera_command_authority.h>
 #include <corona/kernel/entity_id.h>
@@ -816,19 +816,19 @@ class SharedDataHub {
 
    public:
     // 新的 Storage 类型定义，包含默认的容量和内存池参数
-    using ModelResourceStorage = Kernel::Utils::Storage<ModelResource, 128, 2>;
-    using ModelTransformStorage = Kernel::Utils::Storage<ModelTransform, 128, 2>;
-    using GeometryStorage = Kernel::Utils::Storage<GeometryDevice, 128, 2>;
-    using MechanicsStorage = Kernel::Utils::Storage<MechanicsDevice, 128, 2>;
-    using AcousticsStorage = Kernel::Utils::Storage<AcousticsDevice, 128, 2>;
-    using OpticsStorage = Kernel::Utils::Storage<OpticsDevice, 128, 2>;
-    using ProfileStorage = Kernel::Utils::Storage<ProfileDevice, 128, 2>;
-    using ActorStorage = Kernel::Utils::Storage<ActorDevice, 128, 2>;
-    using CameraStorage = Kernel::Utils::Storage<CameraDevice, 128, 2>;
-    using ActorPickStorage = Kernel::Utils::Storage<ActorPickDevice, 128, 2>;
-    using EnvironmentStorage = Kernel::Utils::Storage<EnvironmentDevice, 128, 2>;
-    using SceneStorage = Kernel::Utils::Storage<SceneDevice, 128, 2>;
-    using ImageStorage = Kernel::Utils::Storage<ImageDevice, 128, 2>;
+    using ModelResourceStorage = Kernel::Utils::EntityStorage<ModelResource, 128, 2>;
+    using ModelTransformStorage = Kernel::Utils::EntityStorage<ModelTransform, 128, 2>;
+    using GeometryStorage = Kernel::Utils::EntityStorage<GeometryDevice, 128, 2>;
+    using MechanicsStorage = Kernel::Utils::EntityStorage<MechanicsDevice, 128, 2>;
+    using AcousticsStorage = Kernel::Utils::EntityStorage<AcousticsDevice, 128, 2>;
+    using OpticsStorage = Kernel::Utils::EntityStorage<OpticsDevice, 128, 2>;
+    using ProfileStorage = Kernel::Utils::EntityStorage<ProfileDevice, 128, 2>;
+    using ActorStorage = Kernel::Utils::EntityStorage<ActorDevice, 128, 2>;
+    using CameraStorage = Kernel::Utils::EntityStorage<CameraDevice, 128, 2>;
+    using ActorPickStorage = Kernel::Utils::EntityStorage<ActorPickDevice, 128, 2>;
+    using EnvironmentStorage = Kernel::Utils::EntityStorage<EnvironmentDevice, 128, 2>;
+    using SceneStorage = Kernel::Utils::EntityStorage<SceneDevice, 128, 2>;
+    using ImageStorage = Kernel::Utils::EntityStorage<ImageDevice, 128, 2>;
 
     ModelResourceStorage& model_resource_storage();
     const ModelResourceStorage& model_resource_storage() const;
