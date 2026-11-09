@@ -2,6 +2,7 @@
 #include <horizon/core/storage.h>
 #include <nlohmann/json.hpp>
 #include <corona/camera_command_authority.h>
+#include <corona/kernel/entity_id.h>
 #include <corona/kernel/command/command_buffer.h>
 #include <corona/kernel/command/snapshot_channel.h>
 #include <corona/memory/gpu_mem_ledger.h>
@@ -135,8 +136,8 @@ struct GeometryDevice {
     //   actor_load_states 状态机 + rebuild_actor_gpu_resources，与本字段无关。
     enum class GpuBuildState : std::uint8_t { Ready, PendingImport, PendingBuild, Failed };
 
-    std::uintptr_t transform_handle{};
-    std::uintptr_t model_resource_handle{};
+    EntityId transform_handle{};
+    EntityId model_resource_handle{};
     std::vector<MeshDevice> mesh_handles;
     std::vector<MeshInstanceDevice> mesh_instances;
     std::vector<ModelNodes::Node> model_nodes;
@@ -229,7 +230,7 @@ inline BodyType body_type_from_string(std::string_view s) {
 }
 
 struct MechanicsDevice {
-    std::uintptr_t geometry_handle{};
+    EntityId geometry_handle{};
     ktm::fvec3 max_xyz;
     ktm::fvec3 min_xyz;
 
@@ -246,21 +247,21 @@ struct MechanicsDevice {
     uint8_t angular_lock_mask{0};  // 锁定角度运动（旋转）的轴
 
     // 碰撞回调函数
-    std::function<void(std::uintptr_t, bool, const std::array<float, 3>&, const std::array<float, 3>&)> collision_callback;
+    std::function<void(EntityId, bool, const std::array<float, 3>&, const std::array<float, 3>&)> collision_callback;
 
     // 移动回调函数
     std::function<void()> on_move_callback;
 };
 
 struct AcousticsDevice {
-    std::uintptr_t geometry_handle{};
+    EntityId geometry_handle{};
     std::uint64_t resource_id{0};  // 绑定的音频资源（空间音频物体）；0 表示未绑定
     float volume{1.0f};
     bool audio_enabled{true};
 };
 
 struct OpticsDevice {
-    std::uintptr_t geometry_handle{};
+    EntityId geometry_handle{};
     std::shared_ptr<const Materials::Overrides> material_overrides;
     std::shared_ptr<const Materials::Principled> principled;
 
@@ -289,16 +290,16 @@ struct OpticsDevice {
 };
 
 struct ProfileDevice {
-    std::uintptr_t optics_handle{};
-    std::uintptr_t acoustics_handle{};
-    std::uintptr_t mechanics_handle{};
-    std::uintptr_t geometry_handle{};
+    EntityId optics_handle{};
+    EntityId acoustics_handle{};
+    EntityId mechanics_handle{};
+    EntityId geometry_handle{};
 };
 
 
 
 struct ActorDevice {
-    std::vector<std::uintptr_t> profile_handles;
+    std::vector<EntityId> profile_handles;
     std::filesystem::path model_path;
     Resource::ModelImportOptions model_import_options;
     bool follow_camera{false};
@@ -382,7 +383,7 @@ struct CameraDevice {
     int view_width{960};
     int view_height{540};
     float move_speed{1.0f};
-    std::uintptr_t actor_pick_handle{};
+    EntityId actor_pick_handle{};
 
     CameraDevice() {
         position.x = 0.0f;
@@ -422,7 +423,7 @@ struct ActorPickDevice {
     std::uint32_t y{0};
     std::uint32_t result_x{0};
     std::uint32_t result_y{0};
-    std::uintptr_t actor_handle{0};
+    EntityId actor_handle{0};
     std::uint32_t node_index{UINT32_MAX};
     bool pending{false};
     bool result_ready{false};
@@ -439,7 +440,7 @@ struct ActorPickDevice {
 // 字段只做投影：蒙皮/字符串设置等内部状态不进来。
 // ---------------------------------------------------------------------------
 struct CameraSnapshotRow {
-    std::uintptr_t handle{0};
+    EntityId handle{0};
     ktm::fvec3 position{};
     ktm::fvec3 forward{};
     ktm::fvec3 world_up{};
@@ -500,7 +501,7 @@ constexpr bool has_transform_field(TransformField fields, TransformField field) 
 }
 
 struct TransformUpdateCommand {
-    std::uintptr_t transform_handle{};
+    EntityId transform_handle{};
     TransformField fields{TransformField::None};
     ktm::fvec3 position{};
     ktm::fvec3 euler_rotation{};
@@ -513,14 +514,14 @@ struct TransformUpdateCommand {
 };
 
 struct TransformUpdateKey {
-    static std::uintptr_t get(const TransformUpdateCommand& command) noexcept {
+    static EntityId get(const TransformUpdateCommand& command) noexcept {
         return command.transform_handle;
     }
 };
 
 /// 一份变换快照行：外部线程读这份投影，不再对槽位加锁。
 struct TransformSnapshotRow {
-    std::uintptr_t handle{0};
+    EntityId handle{0};
     ktm::fvec3 position{};
     ktm::fvec3 euler_rotation{};
     ktm::fvec3 scale{1.0f, 1.0f, 1.0f};
@@ -538,7 +539,7 @@ struct TransformSnapshot {
 // kept outside ActorPickDevice so multiple clicks can be in flight without a
 // newer request overwriting an older one.
 struct ActorPickRequestCommand {
-    std::uintptr_t camera_handle{};
+    EntityId camera_handle{};
     std::string scene_id;
     std::string request_id;
     std::uint32_t x{0};
@@ -546,18 +547,18 @@ struct ActorPickRequestCommand {
 };
 
 struct ActorPickCompletion {
-    std::uintptr_t camera_handle{};
+    EntityId camera_handle{};
     std::string scene_id;
     std::string request_id;
     std::string status; // success, miss, error
-    std::uintptr_t actor_handle{};
+    EntityId actor_handle{};
     std::uint32_t x{0};
     std::uint32_t y{0};
     std::uint32_t node_index{UINT32_MAX};
 };
 
 struct CameraMoveCommand {
-    std::uintptr_t camera_handle{};
+    EntityId camera_handle{};
     ktm::fvec3 position{};
     ktm::fvec3 forward{};
     ktm::fvec3 world_up{};
@@ -566,13 +567,13 @@ struct CameraMoveCommand {
 
 /// 相机姿态命令的合并键（LatestWins：同一台相机只保留最后一条）
 struct CameraMoveKey {
-    static std::uintptr_t get(const CameraMoveCommand& command) noexcept {
+    static EntityId get(const CameraMoveCommand& command) noexcept {
         return command.camera_handle;
     }
 };
 
 struct CameraViewportUpdateCommand {
-    std::uintptr_t camera_handle{};
+    EntityId camera_handle{};
     void* surface{};
     bool view_open{false};
     int x{120};
@@ -590,7 +591,7 @@ struct CameraViewportUpdateCommand {
 
 /// 视口更新命令的合并键（LatestWins：同一台相机只保留最后一次视口状态）
 struct CameraViewportUpdateKey {
-    static std::uintptr_t get(const CameraViewportUpdateCommand& command) noexcept {
+    static EntityId get(const CameraViewportUpdateCommand& command) noexcept {
         return command.camera_handle;
     }
 };
@@ -636,7 +637,7 @@ constexpr bool has_camera_state_field(CameraStateUpdateField fields,
 }
 
 struct CameraStateUpdateCommand {
-    std::uintptr_t camera_handle{};
+    EntityId camera_handle{};
     CameraStateUpdateField fields{CameraStateUpdateField::None};
     void* surface{};
     std::uint32_t width{1};
@@ -666,13 +667,13 @@ struct CameraStateUpdateCommand {
 };
 
 struct CameraReleaseCommand {
-    std::uintptr_t camera_handle{};
-    std::uintptr_t actor_pick_handle{};
+    EntityId camera_handle{};
+    EntityId actor_pick_handle{};
 };
 
 /// 相机释放命令的合并键（Fifo 队列只用它做 peek / erase）
 struct CameraReleaseKey {
-    static std::uintptr_t get(const CameraReleaseCommand& command) noexcept {
+    static EntityId get(const CameraReleaseCommand& command) noexcept {
         return command.camera_handle;
     }
 };
@@ -709,7 +710,7 @@ struct ViewportUiPointerState {
 };
 
 struct ViewportUiState {
-    std::uintptr_t camera_handle{};
+    EntityId camera_handle{};
     ViewportUiMode mode{ViewportUiMode::Flat2D};
     ViewportUiCursorShape cursor_shape{ViewportUiCursorShape::Arrow};
     ViewportUiCalibration calibration{};
@@ -718,14 +719,14 @@ struct ViewportUiState {
 };
 
 struct ViewportGizmoTarget {
-    std::uintptr_t camera_handle{};
+    EntityId camera_handle{};
     std::string scene_id;
     std::string actor_name;
-    std::uintptr_t actor_handle{};
+    EntityId actor_handle{};
 };
 
 struct ViewportGizmoPointerCommand {
-    std::uintptr_t camera_handle{};
+    EntityId camera_handle{};
     std::string request_id;
     std::string event_type;
     float x{0.0f};
@@ -739,7 +740,7 @@ struct ViewportGizmoPointerCommand {
 };
 
 struct ViewportGizmoPointerResult {
-    std::uintptr_t camera_handle{};
+    EntityId camera_handle{};
     std::string request_id;
     ViewportGizmoAxis axis{ViewportGizmoAxis::None};
     bool consumed{false};
@@ -779,11 +780,11 @@ struct EnvironmentDevice {
 struct SceneDevice {
     bool enabled{true};
     bool simulation_enabled{false};
-    std::uintptr_t environment{};
-    std::vector<std::uintptr_t> actor_handles;
-    std::vector<std::uintptr_t> visible_actor_handles;
-    std::vector<std::uintptr_t> camera_handles;
-    std::uintptr_t active_camera_handle{};
+    EntityId environment{};
+    std::vector<EntityId> actor_handles;
+    std::vector<EntityId> visible_actor_handles;
+    std::vector<EntityId> camera_handles;
+    EntityId active_camera_handle{};
     ktm::fvec3 min_world;
     ktm::fvec3 max_world;
     ktm::fvec3 center_world;
@@ -852,18 +853,18 @@ class SharedDataHub {
 
     ActorStorage& actor_storage();
     const ActorStorage& actor_storage() const;
-    [[nodiscard]] std::vector<std::uintptr_t> resolve_actor_geometry_handles(
-        std::uintptr_t actor_handle);
-    [[nodiscard]] std::optional<std::uintptr_t>
-    resolve_actor_primary_transform_handle(std::uintptr_t actor_handle);
+    [[nodiscard]] std::vector<EntityId> resolve_actor_geometry_handles(
+        EntityId actor_handle);
+    [[nodiscard]] std::optional<EntityId>
+    resolve_actor_primary_transform_handle(EntityId actor_handle);
 
     // Runtime-only editor metadata keyed by native actor handle. Persisted state
     // remains in scene.ini; this cache only bridges Python proxy actors to native
     // systems such as OpticsSystem.
-    void set_actor_guid(std::uintptr_t actor_handle, std::string actor_guid);
-    [[nodiscard]] std::string actor_guid(std::uintptr_t actor_handle) const;
+    void set_actor_guid(EntityId actor_handle, std::string actor_guid);
+    [[nodiscard]] std::string actor_guid(EntityId actor_handle) const;
     // Explicit scene reload also refreshes retained actors (e.g. directory links).
-    void clear_actor_metadata(std::uintptr_t actor_handle);
+    void clear_actor_metadata(EntityId actor_handle);
 
     CameraStorage& camera_storage();
     const CameraStorage& camera_storage() const;
@@ -871,7 +872,7 @@ class SharedDataHub {
     ActorPickStorage& actor_pick_storage();
     const ActorPickStorage& actor_pick_storage() const;
     void enqueue_actor_pick_request(ActorPickRequestCommand command);
-    std::optional<ActorPickRequestCommand> take_actor_pick_request(std::uintptr_t camera_handle);
+    std::optional<ActorPickRequestCommand> take_actor_pick_request(EntityId camera_handle);
     void enqueue_actor_pick_completion(ActorPickCompletion completion);
     std::vector<ActorPickCompletion> drain_actor_pick_completions();
 
@@ -890,11 +891,11 @@ class SharedDataHub {
     void publish_transform_snapshot_from_storage();
     [[nodiscard]] std::shared_ptr<const TransformSnapshot> transform_snapshot() const;
     [[nodiscard]] std::optional<TransformSnapshotRow> transform_row(
-        std::uintptr_t transform_handle) const;
+        EntityId transform_handle) const;
     /// 有效值 = 快照（已提交）+ 待处理命令（pending）
     [[nodiscard]] std::optional<TransformSnapshotRow> transform_view(
-        std::uintptr_t transform_handle) const;
-    void clear_transform_updates(std::uintptr_t transform_handle);
+        EntityId transform_handle) const;
+    void clear_transform_updates(EntityId transform_handle);
 
     // ---- 相机快照（P1）：DAG 每 tick 发布，外部线程只读 ----
     /// 用一整份新快照替换当前快照（Optics，DAG 线程）
@@ -904,20 +905,20 @@ class SharedDataHub {
     /// 当前快照（任意线程，可为 nullptr）
     [[nodiscard]] std::shared_ptr<const CameraSnapshot> camera_snapshot() const;
     /// 创建相机时从槽位播种一行（主线程，仅创建路径），避免首帧读到空快照
-    void seed_camera_snapshot_from_storage(std::uintptr_t camera_handle);
+    void seed_camera_snapshot_from_storage(EntityId camera_handle);
     /// 销毁相机时移除该行（避免把已释放的槽位暴露给读者）
-    void remove_camera_snapshot_row(std::uintptr_t camera_handle);
+    void remove_camera_snapshot_row(EntityId camera_handle);
     /// 读一行的已提交值（快照）
-    [[nodiscard]] std::optional<CameraSnapshotRow> camera_row(std::uintptr_t camera_handle) const;
+    [[nodiscard]] std::optional<CameraSnapshotRow> camera_row(EntityId camera_handle) const;
     /// 有效值 = 快照（已提交）+ 待处理命令（pending），用于 get_* 的读己之写
-    [[nodiscard]] CameraSnapshotRow camera_view(std::uintptr_t camera_handle) const;
+    [[nodiscard]] CameraSnapshotRow camera_view(EntityId camera_handle) const;
 
-    void publish_camera_frame_timing(std::uintptr_t camera_handle, double render_ms, double denoise_ms,
+    void publish_camera_frame_timing(EntityId camera_handle, double render_ms, double denoise_ms,
                                      CameraVisionRenderMode mode,
                                      std::chrono::steady_clock::time_point completed_at =
                                          std::chrono::steady_clock::now());
     [[nodiscard]] std::optional<CameraFrameTiming> camera_frame_timing(
-        std::uintptr_t camera_handle) const;
+        EntityId camera_handle) const;
     void enqueue_camera_move(CameraMoveCommand command);
     std::vector<CameraMoveCommand> drain_camera_moves();
     void enqueue_camera_viewport_update(CameraViewportUpdateCommand command);
@@ -927,52 +928,52 @@ class SharedDataHub {
     void enqueue_camera_state_update(CameraStateUpdateCommand command);
     std::vector<CameraStateUpdateCommand> drain_camera_state_updates();
     [[nodiscard]] std::optional<bool> requested_camera_vision_denoise(
-        std::uintptr_t camera_handle) const;
-    void acknowledge_camera_vision_denoise(std::uintptr_t camera_handle,
+        EntityId camera_handle) const;
+    void acknowledge_camera_vision_denoise(EntityId camera_handle,
                                           std::uint64_t applied_sequence);
     [[nodiscard]] std::optional<CameraVisionDenoiser> requested_camera_vision_denoiser(
-        std::uintptr_t camera_handle) const;
-    void acknowledge_camera_vision_denoiser(std::uintptr_t camera_handle,
+        EntityId camera_handle) const;
+    void acknowledge_camera_vision_denoiser(EntityId camera_handle,
                                            std::uint64_t applied_sequence);
     [[nodiscard]] std::optional<nlohmann::json> requested_camera_vision_reblur_settings(
-        std::uintptr_t camera_handle) const;
-    void acknowledge_camera_vision_reblur_settings(std::uintptr_t camera_handle,
+        EntityId camera_handle) const;
+    void acknowledge_camera_vision_reblur_settings(EntityId camera_handle,
                                                    std::uint64_t applied_sequence);
     [[nodiscard]] std::optional<nlohmann::json> requested_camera_vision_pt_settings(
-        std::uintptr_t camera_handle) const;
-    void acknowledge_camera_vision_pt_settings(std::uintptr_t camera_handle,
+        EntityId camera_handle) const;
+    void acknowledge_camera_vision_pt_settings(EntityId camera_handle,
                                                    std::uint64_t applied_sequence);
     [[nodiscard]] std::optional<nlohmann::json> requested_camera_vision_restir_settings(
-        std::uintptr_t camera_handle) const;
-    void acknowledge_camera_vision_restir_settings(std::uintptr_t camera_handle,
+        EntityId camera_handle) const;
+    void acknowledge_camera_vision_restir_settings(EntityId camera_handle,
                                                    std::uint64_t applied_sequence);
     [[nodiscard]] std::optional<nlohmann::json> requested_camera_vision_relax_settings(
-        std::uintptr_t camera_handle) const;
-    void acknowledge_camera_vision_relax_settings(std::uintptr_t camera_handle,
+        EntityId camera_handle) const;
+    void acknowledge_camera_vision_relax_settings(EntityId camera_handle,
                                                    std::uint64_t applied_sequence);
     [[nodiscard]] std::optional<bool> requested_camera_vision_accumulation(
-        std::uintptr_t camera_handle) const;
-    void acknowledge_camera_vision_accumulation(std::uintptr_t camera_handle,
+        EntityId camera_handle) const;
+    void acknowledge_camera_vision_accumulation(EntityId camera_handle,
                                                std::uint64_t applied_sequence);
     [[nodiscard]] std::optional<bool> requested_camera_vision_stable_planes(
-        std::uintptr_t camera_handle) const;
-    void acknowledge_camera_vision_stable_planes(std::uintptr_t camera_handle,
+        EntityId camera_handle) const;
+    void acknowledge_camera_vision_stable_planes(EntityId camera_handle,
                                                std::uint64_t applied_sequence);
-    void clear_camera_state_updates(std::uintptr_t camera_handle);
+    void clear_camera_state_updates(EntityId camera_handle);
     void enqueue_camera_release(CameraReleaseCommand command);
     std::vector<CameraReleaseCommand> drain_camera_releases();
-    void set_viewport_ui_mode(std::uintptr_t camera_handle, ViewportUiMode mode);
-    void set_viewport_ui_calibration(std::uintptr_t camera_handle,
+    void set_viewport_ui_mode(EntityId camera_handle, ViewportUiMode mode);
+    void set_viewport_ui_calibration(EntityId camera_handle,
                                      const ViewportUiCalibration& calibration);
-    [[nodiscard]] ViewportUiState viewport_ui_state(std::uintptr_t camera_handle) const;
+    [[nodiscard]] ViewportUiState viewport_ui_state(EntityId camera_handle) const;
     /// 远端 CEF 重构引入：直接写/清 session store 里的指针状态
-    void set_viewport_ui_pointer(std::uintptr_t camera_handle, ViewportUiPointerState pointer);
-    void clear_viewport_ui_pointer(std::uintptr_t camera_handle, std::uint64_t owner_context);
+    void set_viewport_ui_pointer(EntityId camera_handle, ViewportUiPointerState pointer);
+    void clear_viewport_ui_pointer(EntityId camera_handle, std::uint64_t owner_context);
     void set_viewport_gizmo_target(ViewportGizmoTarget target);
-    void clear_viewport_gizmo_target(std::uintptr_t camera_handle);
+    void clear_viewport_gizmo_target(EntityId camera_handle);
     [[nodiscard]] ViewportGizmoState viewport_gizmo_state(
-        std::uintptr_t camera_handle) const;
-    void update_viewport_gizmo_interaction(std::uintptr_t camera_handle,
+        EntityId camera_handle) const;
+    void update_viewport_gizmo_interaction(EntityId camera_handle,
                                            ViewportGizmoAxis axis,
                                            bool dragging,
                                            ViewportGizmoAxis hover_axis =
@@ -988,7 +989,7 @@ class SharedDataHub {
     ProfileStorage profile_storage_;
     ActorStorage actor_storage_;
     mutable std::mutex actor_metadata_mutex_;
-    std::unordered_map<std::uintptr_t, std::string> actor_guids_;
+    std::unordered_map<EntityId, std::string> actor_guids_;
     EnvironmentStorage environment_storage_;
     CameraStorage camera_storage_;
     Kernel::SnapshotChannel<CameraSnapshot> camera_snapshot_;
@@ -997,7 +998,7 @@ class SharedDataHub {
         transform_updates_;
     Kernel::SnapshotChannel<TransformSnapshot> transform_snapshot_;
     mutable std::mutex camera_timing_mutex_;
-    std::unordered_map<std::uintptr_t, CameraFrameTiming> camera_timings_;
+    std::unordered_map<EntityId, CameraFrameTiming> camera_timings_;
     ActorPickStorage actor_pick_storage_;
     mutable std::mutex actor_pick_queue_mutex_;
     std::vector<ActorPickRequestCommand> pending_actor_pick_requests_;
@@ -1019,7 +1020,7 @@ class SharedDataHub {
                           Kernel::CoalescePolicy::LatestWins>
         default_surface_camera_update_{1};
     mutable std::mutex camera_state_update_mutex_;
-    std::unordered_map<std::uintptr_t, CameraStateUpdateCommand>
+    std::unordered_map<EntityId, CameraStateUpdateCommand>
         pending_camera_state_updates_;
     struct RequestedCameraBool {
         bool enabled{false};
@@ -1029,12 +1030,12 @@ class SharedDataHub {
         CameraVisionDenoiser type{CameraVisionDenoiser::Scene};
         std::uint64_t sequence{};
     };
-    std::unordered_map<std::uintptr_t, RequestedCameraDenoiser> requested_camera_vision_denoiser_;
+    std::unordered_map<EntityId, RequestedCameraDenoiser> requested_camera_vision_denoiser_;
     struct RequestedReblurSettings {
         nlohmann::json value;
         std::uint64_t sequence{};
     };
-    std::unordered_map<std::uintptr_t, RequestedReblurSettings> requested_camera_vision_reblur_settings_;
+    std::unordered_map<EntityId, RequestedReblurSettings> requested_camera_vision_reblur_settings_;
     struct RequestedPtSettings {
         nlohmann::json value;
         std::uint64_t sequence{};
@@ -1043,19 +1044,19 @@ class SharedDataHub {
         nlohmann::json value;
         std::uint64_t sequence{};
     };
-    std::unordered_map<std::uintptr_t, RequestedPtSettings> requested_camera_vision_pt_settings_;
-    std::unordered_map<std::uintptr_t, RequestedRestirSettings> requested_camera_vision_restir_settings_;
+    std::unordered_map<EntityId, RequestedPtSettings> requested_camera_vision_pt_settings_;
+    std::unordered_map<EntityId, RequestedRestirSettings> requested_camera_vision_restir_settings_;
     struct RequestedRelaxSettings {
         nlohmann::json value;
         std::uint64_t sequence{};
     };
-    std::unordered_map<std::uintptr_t, RequestedRelaxSettings> requested_camera_vision_relax_settings_;
+    std::unordered_map<EntityId, RequestedRelaxSettings> requested_camera_vision_relax_settings_;
     // Retained after drain until the render thread commits or discards the request.
-    std::unordered_map<std::uintptr_t, RequestedCameraBool>
+    std::unordered_map<EntityId, RequestedCameraBool>
         requested_camera_vision_denoise_;
-    std::unordered_map<std::uintptr_t, RequestedCameraBool>
+    std::unordered_map<EntityId, RequestedCameraBool>
         requested_camera_vision_accumulation_;
-    std::unordered_map<std::uintptr_t, RequestedCameraBool>
+    std::unordered_map<EntityId, RequestedCameraBool>
         requested_camera_vision_stable_planes_;
     std::uint64_t camera_state_update_sequence_{0};
     // 相机释放：Fifo（不可合并 —— 创建/销毁顺序有意义），P5 起统一走 CommandBuffer
@@ -1063,9 +1064,9 @@ class SharedDataHub {
                           Kernel::CoalescePolicy::Fifo>
         camera_releases_;
     mutable std::mutex viewport_ui_mutex_;
-    std::unordered_map<std::uintptr_t, ViewportUiState> viewport_ui_states_;
+    std::unordered_map<EntityId, ViewportUiState> viewport_ui_states_;
     mutable std::mutex viewport_gizmo_mutex_;
-    std::unordered_map<std::uintptr_t, ViewportGizmoState> viewport_gizmo_states_;
+    std::unordered_map<EntityId, ViewportGizmoState> viewport_gizmo_states_;
     std::uint64_t viewport_gizmo_sequence_{0};
 };
 

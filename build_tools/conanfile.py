@@ -90,6 +90,8 @@ class CoronaEngineConan(ConanFile):
         self.requires("meshoptimizer/0.25", transitive_headers=True, transitive_libs=True)
         self.requires("astc-encoder/5.3.0", transitive_headers=True, transitive_libs=True)
         self.requires("ffmpeg/8.1.1", transitive_headers=True, transitive_libs=True)
+        # ECS 容器（Storage -> entt 迁移用）。header-only，只需要头文件。
+        self.requires("entt/3.16.0", transitive_headers=True)
 
         if bool(self.options.with_cef):
             self.requires("cef-binary/143.0.14.gdd46a37.chromium143.0.7499.193",

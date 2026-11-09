@@ -1,5 +1,7 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
+
 #include <corona/systems/geometry/model_node_state.h>
 #include <corona/resource/model_import_options.h>
 #include <array>
@@ -19,7 +21,7 @@ namespace Corona {
 class Model;
 
 namespace API {
-struct ModelNodePickResult { std::uintptr_t actor_handle{0}; std::uint32_t node_index{UINT32_MAX}; };
+struct ModelNodePickResult { EntityId actor_handle{0}; std::uint32_t node_index{UINT32_MAX}; };
 
 struct GeometryRenderStatus {
     bool observed{false};
@@ -98,7 +100,7 @@ class Geometry {
     [[nodiscard]] std::uint64_t get_model_id() const;
     [[nodiscard]] GeometryRenderStatus get_render_status() const;
     /// Instance geometry storage handle, also used by editor configuration APIs.
-    [[nodiscard]] std::uintptr_t get_handle() const;
+    [[nodiscard]] EntityId get_handle() const;
 
    private:
     friend class Mechanics;
@@ -109,13 +111,13 @@ class Geometry {
     Geometry() = default;
 
    protected:
-    [[nodiscard]] std::uintptr_t get_transform_handle() const;
-    [[nodiscard]] std::uintptr_t get_model_resource_handle() const;
+    [[nodiscard]] EntityId get_transform_handle() const;
+    [[nodiscard]] EntityId get_model_resource_handle() const;
 
    private:
-    std::uintptr_t handle_{};
-    std::uintptr_t transform_handle_{};
-    std::uintptr_t model_resource_handle_{};
+    EntityId handle_{};
+    EntityId transform_handle_{};
+    EntityId model_resource_handle_{};
     std::filesystem::path model_path_;
 };
 
@@ -147,7 +149,7 @@ class Mechanics {
     [[nodiscard]] std::tuple<bool, bool, bool> get_angular_lock() const;
 
     // 设置碰撞回调（参数为对方 actor 句柄、began(true=enter,false=exit)、法线、碰撞点）
-    void set_collision_callback(std::function<void(std::uintptr_t, bool, const std::array<float, 3>&, const std::array<float, 3>&)> callback);
+    void set_collision_callback(std::function<void(EntityId, bool, const std::array<float, 3>&, const std::array<float, 3>&)> callback);
 
     // 设置移动回调
     void set_on_move_callback(std::function<void()> callback);
@@ -155,11 +157,11 @@ class Mechanics {
    private:
     friend class Actor;
 
-    [[nodiscard]] std::uintptr_t get_handle() const;
+    [[nodiscard]] EntityId get_handle() const;
     [[nodiscard]] Geometry* get_geometry() const;
 
     Geometry* geometry_;
-    std::uintptr_t handle_{};
+    EntityId handle_{};
 };
 
 // ============================================================================
@@ -209,11 +211,11 @@ class Optics {
    private:
     friend class Actor;
 
-    [[nodiscard]] std::uintptr_t get_handle() const;
+    [[nodiscard]] EntityId get_handle() const;
     [[nodiscard]] Geometry* get_geometry() const;
 
     Geometry* geometry_;
-    std::uintptr_t handle_{};
+    EntityId handle_{};
 };
 
 // ============================================================================
@@ -240,11 +242,11 @@ class Acoustics {
    private:
     friend class Actor;
 
-    [[nodiscard]] std::uintptr_t get_handle() const;
+    [[nodiscard]] EntityId get_handle() const;
     [[nodiscard]] Geometry* get_geometry() const;
 
     Geometry* geometry_;
-    std::uintptr_t handle_{};
+    EntityId handle_{};
 };
 
 // ============================================================================
@@ -274,16 +276,16 @@ class Actor {
     // Relative sources require an absolute scene/project source_base_dir.
     // Clear and rebind (or reload the scene) to refresh changed directory links.
 
-    [[nodiscard]] std::uintptr_t get_handle() const;
+    [[nodiscard]] EntityId get_handle() const;
 
    private:
     friend class Scene;
 
-    std::uintptr_t handle_{};
-    std::unordered_map<std::uintptr_t, Profile> profiles_;
-    std::unordered_map<std::uintptr_t, std::uintptr_t> profile_storage_handles_;
-    std::uintptr_t active_profile_handle_{0};
-    std::uintptr_t next_profile_handle_{1};
+    EntityId handle_{};
+    std::unordered_map<EntityId, Profile> profiles_;
+    std::unordered_map<EntityId, EntityId> profile_storage_handles_;
+    EntityId active_profile_handle_{0};
+    EntityId next_profile_handle_{1};
 };
 
 // ============================================================================
@@ -295,7 +297,7 @@ class ImageEffects {
     ~ImageEffects();
 
    private:
-    std::uintptr_t handle_{};
+    EntityId handle_{};
 };
 
 // ============================================================================
@@ -310,7 +312,7 @@ class Camera {
 
     void set(const std::array<float, 3>& position, const std::array<float, 3>& forward,
              const std::array<float, 3>& world_up, float fov);
-    [[nodiscard]] std::uintptr_t get_handle() const;
+    [[nodiscard]] EntityId get_handle() const;
     void set_surface(void* surface);
     [[nodiscard]] void* get_surface() const;
     void set_offscreen_capture_mode(bool enabled);
@@ -369,13 +371,13 @@ class Camera {
     void set_size(int width, int height);
     [[nodiscard]] std::array<int, 2> get_size() const;
     void set_viewport_rect(int x, int y, int width, int height);
-    [[nodiscard]] std::uintptr_t pick_actor_at_pixel(int x, int y) const;
+    [[nodiscard]] EntityId pick_actor_at_pixel(int x, int y) const;
     [[nodiscard]] ModelNodePickResult pick_model_node_at_pixel(int x, int y) const;
 
    private:
     friend class Scene;
 
-    std::uintptr_t handle_{};
+    EntityId handle_{};
     ImageEffects* image_effects_{nullptr};
     int width_{1920};
     int height_{1080};
@@ -412,9 +414,9 @@ class Environment {
    private:
     friend class Scene;
 
-    [[nodiscard]] std::uintptr_t get_handle() const;
+    [[nodiscard]] EntityId get_handle() const;
 
-    std::uintptr_t handle_{};
+    EntityId handle_{};
 };
 
 // ============================================================================
@@ -444,7 +446,7 @@ class Scene {
     void remove_camera(Camera* camera);
     void clear_cameras();
     void set_active_camera(Camera* camera);
-    [[nodiscard]] std::uintptr_t get_active_camera_handle() const;
+    [[nodiscard]] EntityId get_active_camera_handle() const;
 
     [[nodiscard]] std::size_t camera_count() const;
     [[nodiscard]] bool has_camera(const Camera* camera) const;
@@ -463,7 +465,7 @@ class Scene {
     [[nodiscard]] bool is_simulation_enabled() const;
 
    private:
-    std::uintptr_t handle_{};
+    EntityId handle_{};
 
     Environment* environment_{nullptr};
     std::vector<Actor*> actors_;
@@ -485,70 +487,70 @@ class Scene {
 
 /// 请求切换光学渲染后端。mode: "native" 或 "vision"。
 /// Vision 设备在需要渲染时延迟初始化。
-void set_render_backend(const std::string& mode, std::uintptr_t camera_handle = 0);
+void set_render_backend(const std::string& mode, EntityId camera_handle = 0);
 
 /// 获取当前请求的渲染后端，返回 "native" 或 "vision"。
-[[nodiscard]] std::string get_render_backend(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_render_backend(EntityId camera_handle = 0);
 
 /// Set the Vision algorithm without changing independent denoise/accumulation preferences.
 /// Legacy "svgf" selects "path_tracing" and enables denoise; "ssat" remains supported.
 /// Legacy "progressive_path_tracing" selects "path_tracing" and enables accumulation.
-void set_vision_render_mode(const std::string& mode, std::uintptr_t camera_handle = 0);
+void set_vision_render_mode(const std::string& mode, EntityId camera_handle = 0);
 
 /// 获取当前 camera 请求的 Vision 渲染技术。
-[[nodiscard]] std::string get_vision_render_mode(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_vision_render_mode(EntityId camera_handle = 0);
 
 /// Queue an independent SVGF preference for this camera (disabled by default).
-void set_vision_denoise(bool enabled, std::uintptr_t camera_handle = 0);
+void set_vision_denoise(bool enabled, EntityId camera_handle = 0);
 
 /// Return the camera's committed SVGF preference.
-[[nodiscard]] bool get_vision_denoise(std::uintptr_t camera_handle = 0);
+[[nodiscard]] bool get_vision_denoise(EntityId camera_handle = 0);
 
 /// Return the latest uncommitted preference, or committed state when none is pending.
 /// Persistence uses this to preserve setter requests even while a render update is in flight.
-[[nodiscard]] bool get_requested_vision_denoise(std::uintptr_t camera_handle = 0);
+[[nodiscard]] bool get_requested_vision_denoise(EntityId camera_handle = 0);
 
 /// Select "scene", "svgf", "reblur" or "relax", independently of the enable switch.
-void set_vision_denoiser(const std::string& type, std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_vision_denoiser(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_requested_vision_denoiser(std::uintptr_t camera_handle = 0);
+void set_vision_denoiser(const std::string& type, EntityId camera_handle = 0);
+[[nodiscard]] std::string get_vision_denoiser(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_denoiser(EntityId camera_handle = 0);
 enum class VisionSettingsFamily { Pt, Restir, Reblur, Relax };
-void set_vision_settings(VisionSettingsFamily family, const nlohmann::json& settings, std::uintptr_t camera_handle);
-[[nodiscard]] nlohmann::json get_requested_vision_settings(VisionSettingsFamily family, std::uintptr_t camera_handle);
-[[nodiscard]] nlohmann::json get_effective_vision_settings(VisionSettingsFamily family, std::uintptr_t camera_handle);
+void set_vision_settings(VisionSettingsFamily family, const nlohmann::json& settings, EntityId camera_handle);
+[[nodiscard]] nlohmann::json get_requested_vision_settings(VisionSettingsFamily family, EntityId camera_handle);
+[[nodiscard]] nlohmann::json get_effective_vision_settings(VisionSettingsFamily family, EntityId camera_handle);
 // String adapters for independent legacy callers. Native communication uses values.
-void set_vision_reblur_settings(const std::string& json, std::uintptr_t camera_handle = 0);
-void set_vision_pt_settings(const std::string& json, std::uintptr_t camera_handle = 0);
-void set_vision_restir_settings(const std::string& json, std::uintptr_t camera_handle = 0);
-void set_vision_relax_settings(const std::string& json, std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_requested_vision_reblur_settings(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_requested_vision_pt_settings(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_requested_vision_restir_settings(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_requested_vision_relax_settings(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_effective_vision_reblur_settings(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_effective_vision_pt_settings(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_effective_vision_restir_settings(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_effective_vision_relax_settings(std::uintptr_t camera_handle = 0);
+void set_vision_reblur_settings(const std::string& json, EntityId camera_handle = 0);
+void set_vision_pt_settings(const std::string& json, EntityId camera_handle = 0);
+void set_vision_restir_settings(const std::string& json, EntityId camera_handle = 0);
+void set_vision_relax_settings(const std::string& json, EntityId camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_reblur_settings(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_pt_settings(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_restir_settings(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_relax_settings(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_effective_vision_reblur_settings(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_effective_vision_pt_settings(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_effective_vision_restir_settings(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_effective_vision_relax_settings(EntityId camera_handle = 0);
 
 /// Queue an independent accumulation preference for this camera (disabled by default).
-void set_vision_accumulation(bool enabled, std::uintptr_t camera_handle = 0);
+void set_vision_accumulation(bool enabled, EntityId camera_handle = 0);
 
 /// Return the camera's committed accumulation preference.
-[[nodiscard]] bool get_vision_accumulation(std::uintptr_t camera_handle = 0);
+[[nodiscard]] bool get_vision_accumulation(EntityId camera_handle = 0);
 
 /// Return the latest uncommitted preference, or committed state when none is pending.
 /// Persistence uses this while a render update is in flight.
-[[nodiscard]] bool get_requested_vision_accumulation(std::uintptr_t camera_handle = 0);
+[[nodiscard]] bool get_requested_vision_accumulation(EntityId camera_handle = 0);
 
 /// Queue an independent stable-plane preference for this camera (enabled by default).
-void set_vision_stable_planes(bool enabled, std::uintptr_t camera_handle = 0);
+void set_vision_stable_planes(bool enabled, EntityId camera_handle = 0);
 
 /// Return the camera's committed stable-plane preference.
-[[nodiscard]] bool get_vision_stable_planes(std::uintptr_t camera_handle = 0);
+[[nodiscard]] bool get_vision_stable_planes(EntityId camera_handle = 0);
 
 /// Return the latest uncommitted preference, or committed state when none is pending.
 /// Persistence uses this while a render update is in flight.
-[[nodiscard]] bool get_requested_vision_stable_planes(std::uintptr_t camera_handle = 0);
+[[nodiscard]] bool get_requested_vision_stable_planes(EntityId camera_handle = 0);
 
 // ============================================================================
 // Media (video/audio) import
