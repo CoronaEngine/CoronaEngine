@@ -1,4 +1,5 @@
 #include "cef_shared_texture_probe.h"
+#include <corona/kernel/entity_id.h>
 
 #include <windows.h>
 
@@ -68,7 +69,7 @@ bool try_open_texture(ID3D11Device* device, HANDLE handle) {
 
 }  // namespace
 
-void probe_cef_shared_texture(std::uintptr_t raw_handle, int coded_width, int coded_height) {
+void probe_cef_shared_texture(EntityId raw_handle, int coded_width, int coded_height) {
     static std::mutex probe_mutex;
     static bool probed = false;
 

@@ -34,7 +34,7 @@ constexpr bool has_acoustics_field(AcousticsField fields, AcousticsField field) 
 }
 
 struct AcousticsUpdateCommand {
-    std::uintptr_t acoustics_handle{};
+    EntityId acoustics_handle{};
     AcousticsField fields{AcousticsField::None};
     float volume{1.0f};
     bool audio_enabled{true};
@@ -55,7 +55,7 @@ struct AcousticsUpdateKey {
 };
 
 struct AcousticsSnapshotRow {
-    std::uintptr_t handle{0};
+    EntityId handle{0};
     float volume{1.0f};
     bool audio_enabled{true};
     std::uint64_t resource_id{0};
@@ -84,7 +84,7 @@ class AcousticsCommandChannel {
     Kernel::SnapshotChannel<AcousticsSnapshot> snapshots_;
 };
 
-inline AcousticsSnapshotRow make_acoustics_row(std::uintptr_t handle, const AcousticsDevice& device) {
+inline AcousticsSnapshotRow make_acoustics_row(EntityId handle, const AcousticsDevice& device) {
     AcousticsSnapshotRow row;
     row.handle = handle;
     row.volume = device.volume;
@@ -108,7 +108,7 @@ inline void publish_acoustics_snapshot_from_storage() {
     AcousticsCommandChannel::instance().snapshots().publish(std::move(snapshot));
 }
 
-[[nodiscard]] inline std::optional<AcousticsSnapshotRow> acoustics_row(std::uintptr_t handle) {
+[[nodiscard]] inline std::optional<AcousticsSnapshotRow> acoustics_row(EntityId handle) {
     if (handle == 0) {
         return std::nullopt;
     }
@@ -126,7 +126,7 @@ inline void publish_acoustics_snapshot_from_storage() {
 
 /// 有效值 = 快照（已提交）+ 待处理命令（pending）。
 /// 没有快照但有 pending 时也要能读出来 —— 例如"刚绑定资源就 play()"。
-[[nodiscard]] inline std::optional<AcousticsSnapshotRow> acoustics_view(std::uintptr_t handle) {
+[[nodiscard]] inline std::optional<AcousticsSnapshotRow> acoustics_view(EntityId handle) {
     if (handle == 0) {
         return std::nullopt;
     }

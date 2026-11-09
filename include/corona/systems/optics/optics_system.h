@@ -118,7 +118,7 @@ class OpticsSystem : public Kernel::SystemBase {
     /// @return true when a slot is available for a new submission
     [[nodiscard]] bool ensure_native_frame_slot();
 
-    void bind_native_view_resources(std::uintptr_t camera_handle,
+    void bind_native_view_resources(EntityId camera_handle,
                                     uint32_t width,
                                     uint32_t height,
                                     uint64_t frame_index);
@@ -126,14 +126,14 @@ class OpticsSystem : public Kernel::SystemBase {
     /// 确保给定相机拥有 per-camera 的 UI visibility/depth 图（必要时创建/扩缩），
     /// 并把 hardware_->uiVisibilityImage/uiDepthImage 绑定到它们。Native 与 Vision
     /// 两条路径共用此入口，保证 UI overlay 资源单一来源。不修改 gbufferSize。
-    void ensure_ui_view_resources(std::uintptr_t camera_handle,
+    void ensure_ui_view_resources(EntityId camera_handle,
                                   uint32_t width,
                                   uint32_t height,
                                   uint64_t frame_index);
     void evict_idle_ui_view_resources(uint64_t frame_index);
     struct RenderView {
-        std::uintptr_t scene_handle{};
-        std::uintptr_t camera_handle{};
+        EntityId scene_handle{};
+        EntityId camera_handle{};
         CameraVisionRenderMode vision_mode{CameraVisionRenderMode::PathTracing};
     };
     struct LockedRenderView {
@@ -153,7 +153,7 @@ class OpticsSystem : public Kernel::SystemBase {
     void optics_pipeline(float frame_count, uint64_t frame_index);
     void run_native_frame(float frame_count, uint64_t frame_index,
                           const std::vector<RenderView>& views);
-    void process_pending_screenshots(std::uintptr_t camera_handle, Horizon::HardwareImage& render_target);
+    void process_pending_screenshots(EntityId camera_handle, Horizon::HardwareImage& render_target);
 
 
 
@@ -161,7 +161,7 @@ class OpticsSystem : public Kernel::SystemBase {
     bool init_vision_lazy();  ///< 首次切换到 Vision 时的 lazy 初始化
     void run_vision_frame(float frame_count, uint64_t frame_index,
                          const std::vector<RenderView>& views);
-    void process_vision_actor_pick(std::uintptr_t camera_handle,
+    void process_vision_actor_pick(EntityId camera_handle,
                                    const CameraDevice& camera,
                                    const SceneDevice& scene,
                                    uint64_t frame_index);
@@ -177,10 +177,10 @@ class OpticsSystem : public Kernel::SystemBase {
         std::optional<nlohmann::json> restir_effective, restir_applied;
         std::optional<nlohmann::json> pt_effective, reblur_effective, relax_effective;
     };
-    void publish_vision_camera_feedback(std::uintptr_t camera_handle,
+    void publish_vision_camera_feedback(EntityId camera_handle,
                                        const VisionCameraFeedback& feedback);
     bool prepare_vision_camera_view(VisionPipelineRuntime& runtime,
-                                   std::uintptr_t camera_handle,
+                                   EntityId camera_handle,
                                    uint32_t width, uint32_t height,
                                    bool denoise, bool accumulation, bool stable_planes = true,
                                    CameraVisionDenoiser denoiser = CameraVisionDenoiser::Scene,
@@ -230,14 +230,14 @@ class OpticsSystem : public Kernel::SystemBase {
     std::shared_ptr<VisionSceneResource> vision_scene_resource_;
 
     struct ActorPickRequest {
-        std::uintptr_t pick_handle{0};
-        std::uintptr_t camera_handle{0};
+        EntityId pick_handle{0};
+        EntityId camera_handle{0};
         std::string scene_id;
         std::string request_id;
         std::uint32_t x{0};
         std::uint32_t y{0};
     };
-    std::optional<ActorPickRequest> take_pending_actor_pick(std::uintptr_t camera_handle,
+    std::optional<ActorPickRequest> take_pending_actor_pick(EntityId camera_handle,
                                                           const CameraDevice& camera);
     void complete_actor_pick(const ActorPickRequest& request,
                              const std::vector<std::uintptr_t>& scene_actor_handles,
@@ -266,7 +266,7 @@ class OpticsSystem : public Kernel::SystemBase {
         Horizon::HardwareImage final_output;        ///< RGBA16F final output owned by this surface.
         Horizon::HardwareImage ui_overlay;          ///< Pass 2 camera-follow actor overlay
         Horizon::HardwareImage ui_warped_overlay;   ///< LFD-warped UI overlay for Stereo3D mode
-        std::uintptr_t image_handle = 0;   ///< ImageStorage handle owned by this surface.
+        EntityId image_handle = 0;   ///< ImageStorage handle owned by this surface.
         uint32_t width = 0;                ///< Current output image width in pixels.
         uint32_t height = 0;
         uint64_t last_used_frame = 0;      ///< Last Optics update that acquired this target; used for idle eviction.
@@ -276,7 +276,7 @@ class OpticsSystem : public Kernel::SystemBase {
     /// width/height specify the current camera resolution; surface must not be null.
     SurfaceRenderTarget& acquire_surface_target(void* surface, uint32_t width,
                                                 uint32_t height, uint64_t frame_index);
-    SurfaceRenderTarget& acquire_offscreen_screenshot_target(std::uintptr_t camera_handle,
+    SurfaceRenderTarget& acquire_offscreen_screenshot_target(EntityId camera_handle,
                                                              uint32_t width,
                                                              uint32_t height,
                                                              uint64_t frame_index);
@@ -293,7 +293,7 @@ class OpticsSystem : public Kernel::SystemBase {
     /// 前置条件：调用方已设 hardware_->gbufferSize={w,h}、已 ensure_ui_view_resources
     /// 绑定 uiVisibility/uiDepth，且 background 的生产 pass 已在同一 executor 上记录。
     Horizon::HardwareImage* compose_surface_ui_overlay(Horizon::HardwareStream& stream,
-                                                       std::uintptr_t camera_handle,
+                                                       EntityId camera_handle,
                                                        const CameraDevice& camera,
                                                        const SceneDevice& scene,
                                                        SurfaceRenderTarget& target,
@@ -366,7 +366,7 @@ class OpticsSystem : public Kernel::SystemBase {
     // ---- Vision 外部场景加载（跨线程：事件写请求，渲染线程消费）----
 
     struct PendingScreenshot {
-        std::uintptr_t camera_handle = 0;
+        EntityId camera_handle = 0;
         std::string file_path;
         std::shared_ptr<std::promise<bool>> completion_promise;
         std::chrono::steady_clock::time_point expires_at{};
@@ -379,9 +379,9 @@ class OpticsSystem : public Kernel::SystemBase {
     std::vector<PendingScreenshot> pending_screenshots_;
     std::mutex screenshot_mutex_;
     void begin_screenshot_frame();
-    bool has_pending_screenshot(std::uintptr_t camera_handle);
+    bool has_pending_screenshot(EntityId camera_handle);
     // A zero camera handle cancels every request during shutdown.
-    void fail_pending_screenshots(std::uintptr_t camera_handle);
+    void fail_pending_screenshots(EntityId camera_handle);
     void fail_expired_pending_screenshots();
     void fail_unrenderable_pending_screenshots();
     Kernel::EventId screenshot_request_sub_id_ = 0;

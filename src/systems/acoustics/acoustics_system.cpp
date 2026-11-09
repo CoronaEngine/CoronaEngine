@@ -56,7 +56,7 @@ void AcousticsSystem::destroy_playback(ActivePlayback& ap) {
     // ap.handle 在 ActivePlayback 析构时自动释放（unref + 解锁）。
 }
 
-void AcousticsSystem::process_play_request(std::uint64_t resource_id, bool loop, std::uintptr_t acoustics_handle) {
+void AcousticsSystem::process_play_request(std::uint64_t resource_id, bool loop, EntityId acoustics_handle) {
     if (!engine_ready_) {
         return;
     }
@@ -143,7 +143,7 @@ void AcousticsSystem::process_play_request(std::uint64_t resource_id, bool loop,
                  resource_id, meta.sample_rate, meta.channels, loop, spatial);
 }
 
-void AcousticsSystem::process_stop_request(std::uint64_t resource_id, std::uintptr_t acoustics_handle) {
+void AcousticsSystem::process_stop_request(std::uint64_t resource_id, EntityId acoustics_handle) {
     std::lock_guard lock(playback_mutex_);
     for (auto it = active_playbacks_.begin(); it != active_playbacks_.end();) {
         if (!*it) {
@@ -292,7 +292,7 @@ void AcousticsSystem::update_spatial() {
                 continue;
             }
 
-            std::uintptr_t geometry_handle = 0;
+            EntityId geometry_handle = 0;
             auto acc = acoustics_storage.try_acquire_read(ap.acoustics_handle);
             if (!acc.valid()) {
                 continue;  // 组件已释放，留给监控循环清理

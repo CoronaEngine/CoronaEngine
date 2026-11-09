@@ -1192,7 +1192,7 @@ bool NetworkSystem::process_pending_actor_state_update(
 }
 
 bool NetworkSystem::register_actor_identity(const std::string& actor_guid,
-                                            std::uintptr_t actor_handle,
+                                            EntityId actor_handle,
                                             bool locally_owned) {
     const bool ok = impl_->identity_registry.register_actor(
         actor_guid, actor_handle, locally_owned);

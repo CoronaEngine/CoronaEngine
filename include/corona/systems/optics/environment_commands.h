@@ -52,7 +52,7 @@ constexpr bool has_environment_field(EnvironmentField fields, EnvironmentField f
 }
 
 struct EnvironmentUpdateCommand {
-    std::uintptr_t environment_handle{};
+    EntityId environment_handle{};
     EnvironmentField fields{EnvironmentField::None};
     ktm::fvec3 sun_direction{0.0f, 1.0f, 0.0f};
     float sun_intensity{10.0f};
@@ -88,7 +88,7 @@ struct EnvironmentUpdateKey {
 };
 
 struct EnvironmentSnapshotRow {
-    std::uintptr_t handle{0};
+    EntityId handle{0};
     ktm::fvec3 sun_direction{0.0f, 1.0f, 0.0f};
     float sun_intensity{10.0f};
     float sky_intensity{20.0f};
@@ -126,7 +126,7 @@ class EnvironmentCommandChannel {
     Kernel::SnapshotChannel<EnvironmentSnapshot> snapshots_;
 };
 
-inline EnvironmentSnapshotRow make_environment_row(std::uintptr_t handle,
+inline EnvironmentSnapshotRow make_environment_row(EntityId handle,
                                                   const EnvironmentDevice& device) {
     EnvironmentSnapshotRow row;
     row.handle = handle;
@@ -220,7 +220,7 @@ inline bool apply_pending_environment_updates() {
     return applied;
 }
 
-[[nodiscard]] inline std::optional<EnvironmentSnapshotRow> environment_row(std::uintptr_t handle) {
+[[nodiscard]] inline std::optional<EnvironmentSnapshotRow> environment_row(EntityId handle) {
     if (handle == 0) {
         return std::nullopt;
     }
@@ -237,7 +237,7 @@ inline bool apply_pending_environment_updates() {
 }
 
 /// 有效值 = 快照（已提交）+ 待处理命令（pending）
-[[nodiscard]] inline std::optional<EnvironmentSnapshotRow> environment_view(std::uintptr_t handle) {
+[[nodiscard]] inline std::optional<EnvironmentSnapshotRow> environment_view(EntityId handle) {
     if (handle == 0) {
         return std::nullopt;
     }

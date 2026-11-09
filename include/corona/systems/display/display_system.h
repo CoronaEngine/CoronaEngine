@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include <corona/kernel/entity_id.h>
 #include "horizon.h"
 #include "corona/systems/display/surface_frame_coordinator.h"
 #include "corona/systems/display/surface_lifecycle_acks.h"
@@ -59,7 +60,7 @@ class DisplaySystem : public Kernel::SystemBase {
 
    private:
     struct PendingLayer : Detail::ImageFrameMetadata {
-        std::uintptr_t image_handle = 0;
+        EntityId image_handle = 0;
         Detail::PublishedImage published_image;
         Detail::SurfaceLifecycleAcks::FirstPresentBoundary
             first_present_boundary = 0;

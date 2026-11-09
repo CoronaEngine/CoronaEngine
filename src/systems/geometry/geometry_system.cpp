@@ -49,7 +49,7 @@ namespace {
 // Both cold imports and cache-hit actor rebuilds must publish the same local
 // bounds before their GPU resources become Ready. Otherwise a freshly-created
 // MechanicsDevice keeps its zero AABB and frustum culling tests the actor origin.
-void refresh_geometry_resource_bounds(std::uintptr_t geometry_handle, std::uint64_t model_id) {
+void refresh_geometry_resource_bounds(EntityId geometry_handle, std::uint64_t model_id) {
     auto scene = Resource::ResourceManager::get_instance().acquire_read<Resource::Scene>(model_id);
     if (!scene) return;
     const auto bounds = scene->get_scene_aabb();
@@ -367,7 +367,7 @@ void GeometrySystem::update() {
     // LOD0 回读和 AABB 写回 GeometryDevice，供 Vision / CPU 物理消费。
     update_phase.set("scene_loop");
 
-    for (std::uintptr_t scene_handle : scene_handles) {
+    for (EntityId scene_handle : scene_handles) {
         const auto scene_begin = std::chrono::steady_clock::now();
         std::vector<std::uintptr_t> actor_handles;
         std::vector<std::uintptr_t> camera_handles;
@@ -382,7 +382,7 @@ void GeometrySystem::update() {
         std::unordered_set<Impl::Payload> added_actors;
         std::unordered_set<Impl::Payload> pinned_actors;
         std::unordered_set<Impl::Payload> pinned_not_ready;
-        for (std::uintptr_t actor_handle : actor_handles) {
+        for (EntityId actor_handle : actor_handles) {
             if (added_actors.count(actor_handle)) continue;
 
             auto& actor_storage = hub.actor_storage();
@@ -391,13 +391,13 @@ void GeometrySystem::update() {
             const ActorDevice& actor_dev = *actor_read;
             if (actor_dev.pinned) pinned_actors.insert(actor_handle);
 
-            for (std::uintptr_t profile_handle : actor_dev.profile_handles) {
+            for (EntityId profile_handle : actor_dev.profile_handles) {
                 auto& profile_storage = hub.profile_storage();
                 auto profile_read = profile_storage.acquire_read(profile_handle);
                 if (!profile_read.valid()) continue;
 
                 const ProfileDevice& profile_dev = *profile_read;
-                std::uintptr_t mechanics_handle = profile_dev.mechanics_handle;
+                EntityId mechanics_handle = profile_dev.mechanics_handle;
                 if ( !mechanics_handle ) continue;
 
                 auto& mechanics_storage = hub.mechanics_storage();
@@ -538,7 +538,7 @@ void GeometrySystem::update() {
         std::vector<std::pair<ktm::fvec3,Math::Frustum>> cameras;
         std::unordered_set<Impl::Payload> visible_actors;
         double visible_query_ms_total = 0.0;
-        for (std::uintptr_t camera_handle : camera_handles) {
+        for (EntityId camera_handle : camera_handles) {
             auto cam_read = camera_storage.try_acquire_read_nowait(camera_handle);
             if ( !cam_read.valid() ) continue;
 
@@ -1445,7 +1445,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
 // ============================================================================
 bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
                                                   std::uint64_t rid,
-                                                  std::uintptr_t scene_handle) {
+                                                  EntityId scene_handle) {
     // ---- 第 0 步：获取两个全局单例 ----
     // SharedDataHub：管理所有系统共享的设备数据（actor/profile/geometry 等）
     auto& hub = SharedDataHub::instance();
@@ -1512,7 +1512,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
             // release() 时保留了它（未置零），通过它找到对应的模型资源条目
             // mesh_handles 在 release() 时已 clear()，所以 empty() == true 表示需要重建
             // 初始加载时 Python API 已填充 mesh_handles，此时不为空 → 无需重建
-            std::uintptr_t model_res_handle = 0;  // ModelResource 句柄
+            EntityId model_res_handle = 0;  // ModelResource 句柄
             bool needs_rebuild = false;            // 是否需要重建 GPU 缓冲
             {
                 auto geom_read = hub.geometry_storage().try_acquire_read(geom_handle);
@@ -1583,22 +1583,22 @@ void GeometrySystem::process_async_tasks() {
     auto& actor_storage = hub.actor_storage();
 
     struct CompletedLoadTask {
-        std::uintptr_t scene_handle;
+        EntityId scene_handle;
         std::uintptr_t actor;
         std::uint64_t rid;
     };
     struct CompletedUnloadTask {
-        std::uintptr_t scene_handle;
+        EntityId scene_handle;
         std::uintptr_t actor;
         bool success;
     };
     struct DeferredLoadTask {
-        std::uintptr_t scene_handle;
+        EntityId scene_handle;
         std::uintptr_t actor;
         std::future<std::uint64_t> future;
     };
     struct DeferredUnloadTask {
-        std::uintptr_t scene_handle;
+        EntityId scene_handle;
         std::uintptr_t actor;
         std::future<bool> future;
     };
@@ -2091,7 +2091,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
     bool optics_captured   = false;
     bool physics_captured  = false;
     std::unordered_set<std::uintptr_t> seen_geoms;
-    auto collect_rid = [&](std::uintptr_t geom_handle) {
+    auto collect_rid = [&](EntityId geom_handle) {
         if (!seen_geoms.insert(geom_handle).second) return;  // 已处理
         auto geom = hub.geometry_storage().try_acquire_read(geom_handle);
         if (geom && geom->model_resource_handle) {
@@ -2338,7 +2338,7 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
 // ============================================================================
 
 GeometrySystem::RenderMeshBuffers GeometrySystem::select_render_buffers(
-    std::uintptr_t          geometry_handle,
+    EntityId          geometry_handle,
     uint32_t                mesh_index,
     const ktm::fvec3&       camera_pos,
     float                   camera_fov_deg,
@@ -2432,7 +2432,7 @@ GeometrySystem::RenderMeshBuffers GeometrySystem::select_render_buffers(
 }
 
 GeometrySystem::RenderMeshBuffers GeometrySystem::select_render_buffers_for_instance(
-    std::uintptr_t geometry_handle,
+    EntityId geometry_handle,
     uint32_t mesh_index,
     const ktm::fvec3& camera_pos,
     float camera_fov_deg,
@@ -2549,7 +2549,7 @@ GeometrySystem::RenderMeshBuffers GeometrySystem::select_render_buffers_for_inst
 }
 
 GeometrySystem::RenderMeshBuffers GeometrySystem::select_shadow_render_buffers(
-    std::uintptr_t geometry_handle, uint32_t mesh_index,
+    EntityId geometry_handle, uint32_t mesh_index,
     float world_units_per_texel, float max_abs_scale,
     const RenderMeshBuffers& fallback) const {
     std::shared_lock lock(impl_->lod_cache_mutex);
@@ -2582,7 +2582,7 @@ GeometrySystem::RenderMeshBuffers GeometrySystem::select_shadow_render_buffers(
 }
 
 GeometrySystem::RenderMeshBuffers GeometrySystem::resident_render_buffers(
-    std::uintptr_t           geometry_handle,
+    EntityId           geometry_handle,
     uint32_t                 mesh_index,
     const RenderMeshBuffers& fallback) const {
 
@@ -2629,7 +2629,7 @@ GeometrySystem::RenderMeshBuffers GeometrySystem::resident_render_buffers(
 }
 
 const LODMeshBuffers* GeometrySystem::get_lod_buffers(
-    std::uintptr_t geometry_handle,
+    EntityId geometry_handle,
     uint32_t       mesh_index,
     int            lod_level) const {
 
@@ -2648,7 +2648,7 @@ const LODMeshBuffers* GeometrySystem::get_lod_buffers(
     return level.ready ? &level : nullptr;
 }
 
-int GeometrySystem::get_lod_count(std::uintptr_t geometry_handle,
+int GeometrySystem::get_lod_count(EntityId geometry_handle,
                                   uint32_t       mesh_index) const {
     std::shared_lock lock(impl_->lod_cache_mutex);
     auto key = Impl::make_lod_key(geometry_handle, mesh_index);
@@ -2657,7 +2657,7 @@ int GeometrySystem::get_lod_count(std::uintptr_t geometry_handle,
     return static_cast<int>(it->second.levels.size());
 }
 
-int GeometrySystem::resolve_lod_level(std::uintptr_t geometry_handle,
+int GeometrySystem::resolve_lod_level(EntityId geometry_handle,
                                       uint32_t       mesh_index,
                                       float          screen_ratio) const {
 
@@ -2684,7 +2684,7 @@ int GeometrySystem::resolve_lod_level(std::uintptr_t geometry_handle,
 }
 
 const LODMeshBuffers* GeometrySystem::resolve_lod_buffers(
-    std::uintptr_t geometry_handle,
+    EntityId geometry_handle,
     uint32_t       mesh_index,
     float          screen_ratio) const {
 
@@ -2722,7 +2722,7 @@ const LODMeshBuffers* GeometrySystem::resolve_lod_buffers(
 }
 
 std::vector<std::pair<Horizon::HardwareBuffer, Horizon::HardwareBuffer>>
-GeometrySystem::get_skinning_targets(std::uintptr_t geometry_handle, uint32_t mesh_index) const {
+GeometrySystem::get_skinning_targets(EntityId geometry_handle, uint32_t mesh_index) const {
     // 单次 shared_lock 拷出该 mesh 所有 LOD 级别的 (vertex, vertex_storage) 句柄对。
     // 句柄为引用计数拷贝，拷出后保活底层 buffer，供调用方锁外使用。
     std::vector<std::pair<Horizon::HardwareBuffer, Horizon::HardwareBuffer>> out;
@@ -2737,7 +2737,7 @@ GeometrySystem::get_skinning_targets(std::uintptr_t geometry_handle, uint32_t me
 }
 
 std::vector<GeometrySystem::SkinningLodTarget>
-GeometrySystem::get_skinning_lod_targets(std::uintptr_t geometry_handle, uint32_t mesh_index) const {
+GeometrySystem::get_skinning_lod_targets(EntityId geometry_handle, uint32_t mesh_index) const {
     std::vector<SkinningLodTarget> out;
     std::shared_lock lock(impl_->lod_cache_mutex);
     const auto it = impl_->lod_cache.find(Impl::make_lod_key(geometry_handle, mesh_index));
@@ -2762,7 +2762,7 @@ namespace {
     auto& camera_storage = hub.camera_storage();
     std::vector<ktm::fvec3> positions;
     for (auto sit = hub.scene_storage().cbegin(); sit != hub.scene_storage().cend(); ++sit) {
-        for (std::uintptr_t cam_handle : sit->camera_handles) {
+        for (EntityId cam_handle : sit->camera_handles) {
             if (auto cam = camera_storage.try_acquire_read_nowait(cam_handle)) {
                 positions.push_back(cam->position);
             }
@@ -2920,7 +2920,7 @@ void GeometrySystem::process_pending_geometry_imports() {
     // 近处对象先 import（流式体验），且每帧最多发起 kMaxImportsPerFrame 个，
     // 避免一次性把大量模型全压进 TBB 线程池造成内存/解析突发。
     struct ToImport {
-        std::uintptr_t geom_handle;
+        EntityId geom_handle;
         std::string    path;
         ktm::fvec3     world_pos;
         Resource::ModelImportOptions options;
@@ -3111,7 +3111,7 @@ void GeometrySystem::process_pending_geometry_builds() {
     // 收集 gpu_build_state==PendingBuild 且 model_id 已就绪的 geometry。
     // 仅记录 (geom_handle, model_id, world_pos)，不在持有遍历期间做重活。
     struct PendingBuild {
-        std::uintptr_t geom_handle;
+        EntityId geom_handle;
         std::uint64_t  model_id;
         ktm::fvec3     world_pos;  // 用于按相机距离排序（近处先建）
     };
@@ -3431,8 +3431,8 @@ void GeometrySystem::reconcile_lod_residency() {
     auto& geom_storage = hub.geometry_storage();
 
     struct Lod0DeviceEviction {
-        std::uintptr_t geometry_handle = 0;
-        std::uintptr_t expected_model_resource_handle = 0;
+        EntityId geometry_handle = 0;
+        EntityId expected_model_resource_handle = 0;
         std::vector<std::uint32_t> mesh_indices;
     };
     std::vector<Lod0DeviceEviction> pending_lod0_evictions;
@@ -3463,7 +3463,7 @@ void GeometrySystem::reconcile_lod_residency() {
     {
         auto& camera_storage = hub.camera_storage();
         for (auto sit = hub.scene_storage().cbegin(); sit != hub.scene_storage().cend(); ++sit) {
-            for (std::uintptr_t cam_handle : sit->camera_handles) {
+            for (EntityId cam_handle : sit->camera_handles) {
                 if (auto cam = camera_storage.try_acquire_read_nowait(cam_handle)) {
                     const float eps = compute_angular_epsilon(
                         lod_pixel_budget, cam->fov,
@@ -3496,11 +3496,11 @@ void GeometrySystem::reconcile_lod_residency() {
     //   1) 为并集里尚未驻留的级发起异步构建；
     //   2) 释放并集外、且已超过宽限帧的已驻留级（LOD0 也照常参与释放）。
     // 这样 GPU 上留下的，就是"当前这一帧真正被某个实例用到的级"。
-    const auto reconcile_shared_asset = [&](std::uintptr_t geom_handle,
+    const auto reconcile_shared_asset = [&](EntityId geom_handle,
                                             std::uint32_t mesh_idx,
                                             std::uint64_t lod_key,
                                             std::uint64_t model_id,
-                                            std::uintptr_t model_resource_handle,
+                                            EntityId model_resource_handle,
                                             const ktm::fvec3& world_center) {
         std::uint64_t demand_mask = 0;
         std::size_t   level_count = 0;
@@ -3770,8 +3770,8 @@ void GeometrySystem::reconcile_lod_residency() {
     // 预分配为 geometry 数 × 8（覆盖多数多 mesh geometry 场景，减少 vector reallocation）。
     lod_budget_entries.reserve(geometry_handles.size() * 8);
     for (const auto geom_handle : geometry_handles) {
-        std::uintptr_t model_resource_handle = 0;
-        std::uintptr_t transform_handle = 0;
+        EntityId model_resource_handle = 0;
+        EntityId transform_handle = 0;
         std::uint32_t mesh_count = 0;
         {
             auto geom_read = geom_storage.try_acquire_read(geom_handle);
@@ -4871,7 +4871,7 @@ namespace {
            static_cast<bool>(geo.index_storage);
 }
 
-void log_invalid_mesh_slot_once(std::uintptr_t geometry_handle,
+void log_invalid_mesh_slot_once(EntityId geometry_handle,
                                 std::uint32_t mesh_index,
                                 const GeometrySystem::RenderMeshBuffers& geo,
                                 const Horizon::HardwareImage& texture) {
@@ -4897,7 +4897,7 @@ void log_invalid_mesh_slot_once(std::uintptr_t geometry_handle,
 /// 内部辅助：共享 LOD 路由 + MeshSlot 构建逻辑（有/无相机两条路径共用）
 [[nodiscard]] std::vector<GeometrySystem::MeshSlot>
 build_mesh_slots(const GeometrySystem*        gs,
-                 std::uintptr_t               geometry_handle,
+                 EntityId               geometry_handle,
                  const GeometryDevice&        geom,
                  bool                         use_camera,
                  const ktm::fvec3&            camera_pos,
@@ -4978,7 +4978,7 @@ build_mesh_slots(const GeometrySystem*        gs,
 }  // namespace
 
 std::vector<GeometrySystem::MeshSlot>
-GeometrySystem::query_mesh_slots(std::uintptr_t geometry_handle) const {
+GeometrySystem::query_mesh_slots(EntityId geometry_handle) const {
     auto& geom_storage = SharedDataHub::instance().geometry_storage();
     // 读锁即可：query_mesh_slots 只复制句柄值，不修改 GeometryDevice 状态。
     // storeSampledDescriptor 由调用方在拿到 MeshSlot 后自行调用（对本地副本操作，
@@ -4991,7 +4991,7 @@ GeometrySystem::query_mesh_slots(std::uintptr_t geometry_handle) const {
 }
 
 std::vector<GeometrySystem::MeshSlot>
-GeometrySystem::query_mesh_slots(std::uintptr_t    geometry_handle,
+GeometrySystem::query_mesh_slots(EntityId    geometry_handle,
                                  const ktm::fvec3& camera_pos,
                                  float             camera_fov_deg,
                                  const ktm::fvec3& world_center,
@@ -5007,7 +5007,7 @@ GeometrySystem::query_mesh_slots(std::uintptr_t    geometry_handle,
                             false, 0.0f, 1.0f, actor_transform);
 }
 
-void GeometrySystem::request_shadow_lod(std::uintptr_t geometry_handle,
+void GeometrySystem::request_shadow_lod(EntityId geometry_handle,
                                         uint32_t mesh_index,
                                         float world_units_per_texel,
                                         float max_abs_scale,
@@ -5033,7 +5033,7 @@ void GeometrySystem::request_shadow_lod(std::uintptr_t geometry_handle,
 }
 
 std::vector<GeometrySystem::MeshSlot>
-GeometrySystem::query_shadow_mesh_slots(std::uintptr_t geometry_handle,
+GeometrySystem::query_shadow_mesh_slots(EntityId geometry_handle,
                                         float world_units_per_texel,
                                         float max_abs_scale,
                                         std::uint64_t frame) const {
@@ -5054,7 +5054,7 @@ GeometrySystem::query_shadow_mesh_slots(std::uintptr_t geometry_handle,
 
 std::vector<std::vector<GeometrySystem::ShadowMeshSlot>>
 GeometrySystem::query_shadow_mesh_slots_batch(
-    std::uintptr_t geometry_handle,
+    EntityId geometry_handle,
     std::span<const ShadowLodQuery> cascades,
     float max_abs_scale,
     std::uint64_t frame) const {

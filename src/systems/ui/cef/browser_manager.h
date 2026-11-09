@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include "camera_window_lifetime.h"
 
 #include "horizon.h"
@@ -68,7 +69,7 @@ struct BrowserTab {
     float content_screen_scale = 1.0f;
     CefRect ime_caret{0, 0, 1, 18};
     // Last Web-local camera rectangle; composed with the ImGui content origin each frame.
-    std::uintptr_t web_camera_handle = 0;
+    EntityId web_camera_handle = 0;
     std::shared_ptr<Corona::CameraCommandAuthority> web_camera_authority;
     int web_camera_x = 0, web_camera_y = 0;
     int web_camera_width = 0, web_camera_height = 0;

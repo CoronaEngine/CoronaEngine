@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -20,12 +21,12 @@ namespace Corona::Systems::Detail {
  */
 class PublishedImage {
     struct State {
-        explicit State(std::uintptr_t handle) : image_handle(handle) {
+        explicit State(EntityId handle) : image_handle(handle) {
             (void)coordinator.activate(image_handle);
             snapshot = coordinator.capture(image_handle);
         }
 
-        const std::uintptr_t image_handle;
+        const EntityId image_handle;
         SurfaceFrameCoordinator coordinator;
         SurfaceFrameCoordinator::Snapshot snapshot;
     };
@@ -33,7 +34,7 @@ class PublishedImage {
    public:
     PublishedImage() = default;
 
-    explicit PublishedImage(std::uintptr_t image_handle)
+    explicit PublishedImage(EntityId image_handle)
         : state_(image_handle == 0 ? nullptr : std::make_shared<State>(image_handle)) {}
 
     template <typename Storage>

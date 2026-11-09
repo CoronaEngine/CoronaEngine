@@ -1,3 +1,4 @@
+#include <corona/kernel/entity_id.h>
 /// @file actor_cache.cpp
 /// @brief ActorCache 实现 + ActorStreamingRecord JSON 序列化
 
@@ -185,7 +186,7 @@ ActorCache::ActorCache(size_t mem_capacity, size_t disk_capacity,
                        std::filesystem::path disk_dir)
     : cache_(mem_capacity, disk_capacity, std::move(disk_dir)) {}
 
-std::string ActorCache::make_key(std::uintptr_t handle) {
+std::string ActorCache::make_key(EntityId handle) {
     // 将指针地址格式化为 16 进制字符串
     std::ostringstream oss;
     oss << "actor_0x" << std::hex << handle;
@@ -204,14 +205,14 @@ std::uintptr_t ActorCache::parse_key(const std::string& key) {
     }
 }
 
-bool ActorCache::put(std::uintptr_t actor_handle, const ActorStreamingRecord& record) {
+bool ActorCache::put(EntityId actor_handle, const ActorStreamingRecord& record) {
     std::string key = make_key(actor_handle);
     std::string json = record.to_json();
     CFW_LOG_NOTICE("[ActorCache] Storing actor 0x{:x} ({} bytes)", actor_handle, json.size());
     return cache_.put(key, json.data(), json.size());
 }
 
-std::optional<ActorStreamingRecord> ActorCache::get(std::uintptr_t actor_handle) {
+std::optional<ActorStreamingRecord> ActorCache::get(EntityId actor_handle) {
     std::string key = make_key(actor_handle);
     auto item = cache_.get(key);
     if (!item) return std::nullopt;
@@ -224,11 +225,11 @@ std::optional<ActorStreamingRecord> ActorCache::get(std::uintptr_t actor_handle)
     return rec;
 }
 
-void ActorCache::remove(std::uintptr_t actor_handle) {
+void ActorCache::remove(EntityId actor_handle) {
     cache_.erase(make_key(actor_handle));
 }
 
-bool ActorCache::contains(std::uintptr_t actor_handle) {
+bool ActorCache::contains(EntityId actor_handle) {
     return cache_.contains(make_key(actor_handle));
 }
 

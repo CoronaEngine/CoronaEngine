@@ -17,7 +17,7 @@ CameraFollowController& CameraFollowController::instance() {
     return inst;
 }
 
-void CameraFollowController::set_target(std::uintptr_t actor_handle, std::uintptr_t camera_handle,
+void CameraFollowController::set_target(EntityId actor_handle, EntityId camera_handle,
                                         float offset_x, float offset_y, float offset_z) {
     actor_handle_ = actor_handle;
     camera_handle_ = camera_handle;

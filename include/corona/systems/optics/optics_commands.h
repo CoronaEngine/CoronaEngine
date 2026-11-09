@@ -54,11 +54,11 @@ constexpr bool has_optics_field(OpticsField fields, OpticsField field) {
 }
 
 struct OpticsUpdateCommand {
-    std::uintptr_t optics_handle{};
+    EntityId optics_handle{};
     /// 非 0 时作为材质守卫：只有 optics 设备的 geometry_handle 匹配才应用材质。
     /// 标量与可见性更新不受此守卫影响。
     /// 编辑器按 profile 找到 optics 设备后，会用它确认"这份材质属于当前几何"。
-    std::uintptr_t geometry_handle{};
+    EntityId geometry_handle{};
     std::shared_ptr<const Materials::Overrides> material_overrides;
     std::shared_ptr<const Materials::Principled> principled;
     OpticsField fields{OpticsField::None};
@@ -151,7 +151,7 @@ inline void apply_optics_update(OpticsDevice& device, const OpticsUpdateCommand&
 
 /// 对外投影：标量材质参数 + 可见性（材质句柄不进来）
 struct OpticsSnapshotRow {
-    std::uintptr_t handle{0};
+    EntityId handle{0};
     bool visible{true};
     bool enable_lighting{true};
     float metallic{0.0f};
@@ -193,7 +193,7 @@ class OpticsCommandChannel {
     Kernel::SnapshotChannel<OpticsSnapshot> snapshots_;
 };
 
-inline OpticsSnapshotRow make_optics_row(std::uintptr_t handle, const OpticsDevice& device) {
+inline OpticsSnapshotRow make_optics_row(EntityId handle, const OpticsDevice& device) {
     OpticsSnapshotRow row;
     row.handle = handle;
     row.visible = device.visible;
@@ -230,7 +230,7 @@ inline void publish_optics_snapshot_from_storage() {
     OpticsCommandChannel::instance().snapshots().publish(std::move(snapshot));
 }
 
-[[nodiscard]] inline std::optional<OpticsSnapshotRow> optics_row(std::uintptr_t handle) {
+[[nodiscard]] inline std::optional<OpticsSnapshotRow> optics_row(EntityId handle) {
     if (handle == 0) {
         return std::nullopt;
     }
@@ -247,7 +247,7 @@ inline void publish_optics_snapshot_from_storage() {
 }
 
 /// 有效值 = 快照（已提交）+ 待处理命令（pending）
-[[nodiscard]] inline std::optional<OpticsSnapshotRow> optics_view(std::uintptr_t handle) {
+[[nodiscard]] inline std::optional<OpticsSnapshotRow> optics_view(EntityId handle) {
     if (handle == 0) {
         return std::nullopt;
     }

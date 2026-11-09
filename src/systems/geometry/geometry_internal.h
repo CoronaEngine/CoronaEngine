@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <corona/spatial/octree.h>
 #include <corona/systems/geometry/actor_cache.h>
 #include <corona/systems/geometry/geometry_mesh_builder.h>
@@ -625,7 +626,7 @@ struct GeometrySystem::Impl {
     int cpu_window_eval_counter = 0;
     static constexpr int kCpuWindowEvalInterval = 120;
 
-    [[nodiscard]] static uint64_t make_lod_key(std::uintptr_t geometry_handle,
+    [[nodiscard]] static uint64_t make_lod_key(EntityId geometry_handle,
                                                uint32_t       mesh_index) {
         return (static_cast<uint64_t>(geometry_handle) << 32) | mesh_index;
     }

@@ -30,7 +30,7 @@ using MechanicsCollisionCallback =
 struct MechanicsCallbackBinding {
     enum class Kind : std::uint8_t { Collision, OnMove };
 
-    std::uintptr_t mechanics_handle{};
+    EntityId mechanics_handle{};
     Kind kind{Kind::OnMove};
     MechanicsCollisionCallback collision;
     std::function<void()> on_move;

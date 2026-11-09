@@ -319,7 +319,11 @@ add_test(NAME ModelNodePageTests COMMAND corona_model_node_page_tests)
 
 # 场景树行契约：钉住 UI 依赖的字段，防止快照重新退回 actor_to_json 的整份派发数据。
 add_executable(corona_scene_tree_actor_tests test_scene_tree_actor.cpp)
-target_include_directories(corona_scene_tree_actor_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui)
+# 该用例直接包含 src/systems/ui/cef/scene_tree_actor_row.h，而它现在依赖
+# <corona/kernel/entity_id.h>（句柄别名），所以需要引擎 include 根。
+target_include_directories(corona_scene_tree_actor_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src/systems/ui
+    ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(corona_scene_tree_actor_tests PRIVATE nlohmann_json::nlohmann_json)
 add_test(NAME SceneTreeActorTests COMMAND corona_scene_tree_actor_tests)
 

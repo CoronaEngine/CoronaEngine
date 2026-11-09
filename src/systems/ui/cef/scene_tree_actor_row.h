@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -20,7 +21,7 @@ struct SceneTreeActorRow {
     std::string load_error_message;
     std::string load_error_resource_path;
     std::string load_error_path;
-    std::uintptr_t handle{0};
+    EntityId handle{0};
     bool visible{true};
     bool has_load_error{false};
     std::size_t model_node_count{0};

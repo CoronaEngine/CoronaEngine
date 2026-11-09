@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include "browser_manager.h"
 #include "camera_window_lifetime.h"
 #include <optional>
@@ -66,7 +67,7 @@ struct WindowRequest {
     std::string scene_id;
     std::string camera_id;
     std::string archive_session;
-    std::uintptr_t camera_handle = 0; // Resolved by the native scene owner, never supplied by Web.
+    EntityId camera_handle = 0; // Resolved by the native scene owner, never supplied by Web.
     std::shared_ptr<CameraWindowAuthority> camera_authority;
     std::shared_ptr<CameraWindowState> camera_state;
     int width = 0, height = 0;

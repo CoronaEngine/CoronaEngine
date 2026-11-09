@@ -51,9 +51,9 @@ SharedDataHub::ActorStorage& SharedDataHub::actor_storage() { return actor_stora
 const SharedDataHub::ActorStorage& SharedDataHub::actor_storage() const { return actor_storage_; }
 
 std::vector<std::uintptr_t> SharedDataHub::resolve_actor_geometry_handles(
-    std::uintptr_t actor_handle) {
+    EntityId actor_handle) {
     std::vector<std::uintptr_t> geometry_handles;
-    const auto append_geometry = [&geometry_handles](std::uintptr_t geometry_handle) {
+    const auto append_geometry = [&geometry_handles](EntityId geometry_handle) {
         if (geometry_handle != 0 &&
             std::find(geometry_handles.begin(), geometry_handles.end(),
                       geometry_handle) == geometry_handles.end()) {
@@ -89,7 +89,7 @@ std::vector<std::uintptr_t> SharedDataHub::resolve_actor_geometry_handles(
 
 std::optional<std::uintptr_t>
 SharedDataHub::resolve_actor_primary_transform_handle(
-    std::uintptr_t actor_handle) {
+    EntityId actor_handle) {
     for (const auto geometry_handle :
          resolve_actor_geometry_handles(actor_handle)) {
         const auto geometry = geometry_storage_.try_acquire_read(geometry_handle);
@@ -103,7 +103,7 @@ SharedDataHub::resolve_actor_primary_transform_handle(
     return std::nullopt;
 }
 
-void SharedDataHub::set_actor_guid(std::uintptr_t actor_handle, std::string actor_guid) {
+void SharedDataHub::set_actor_guid(EntityId actor_handle, std::string actor_guid) {
     if (actor_handle == 0) {
         return;
     }
@@ -115,7 +115,7 @@ void SharedDataHub::set_actor_guid(std::uintptr_t actor_handle, std::string acto
     }
 }
 
-std::string SharedDataHub::actor_guid(std::uintptr_t actor_handle) const {
+std::string SharedDataHub::actor_guid(EntityId actor_handle) const {
     std::lock_guard<std::mutex> lock(actor_metadata_mutex_);
     const auto it = actor_guids_.find(actor_handle);
     return it != actor_guids_.end() ? it->second : std::string{};
@@ -126,7 +126,7 @@ std::string SharedDataHub::actor_guid(std::uintptr_t actor_handle) const {
 
 
 
-void SharedDataHub::clear_actor_metadata(std::uintptr_t actor_handle) {
+void SharedDataHub::clear_actor_metadata(EntityId actor_handle) {
     std::lock_guard<std::mutex> lock(actor_metadata_mutex_);
     actor_guids_.erase(actor_handle);
 }
@@ -146,7 +146,7 @@ void SharedDataHub::enqueue_actor_pick_request(ActorPickRequestCommand command) 
 }
 
 std::optional<ActorPickRequestCommand> SharedDataHub::take_actor_pick_request(
-    std::uintptr_t camera_handle) {
+    EntityId camera_handle) {
     std::lock_guard<std::mutex> lock(actor_pick_queue_mutex_);
     const auto it = std::find_if(pending_actor_pick_requests_.begin(),
                                  pending_actor_pick_requests_.end(),
@@ -185,7 +185,7 @@ const SharedDataHub::SceneStorage& SharedDataHub::scene_storage() const { return
 SharedDataHub::ImageStorage& SharedDataHub::image_storage() { return image_storage_; }
 const SharedDataHub::ImageStorage& SharedDataHub::image_storage() const { return image_storage_; }
 
-void SharedDataHub::publish_camera_frame_timing(std::uintptr_t camera_handle, double render_ms, double denoise_ms,
+void SharedDataHub::publish_camera_frame_timing(EntityId camera_handle, double render_ms, double denoise_ms,
                                                 CameraVisionRenderMode mode,
                                                 std::chrono::steady_clock::time_point completed_at) {
     std::lock_guard<std::mutex> lock(camera_timing_mutex_);
@@ -199,7 +199,7 @@ void SharedDataHub::publish_camera_frame_timing(std::uintptr_t camera_handle, do
 }
 
 std::optional<CameraFrameTiming> SharedDataHub::camera_frame_timing(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_timing_mutex_);
     const auto it = camera_timings_.find(camera_handle);
     return it == camera_timings_.end() ? std::nullopt : std::optional{it->second};
@@ -209,7 +209,7 @@ namespace {
 
 // CameraDevice -> 外部可读投影。只搬运"读者需要的字段"，内部状态（字符串设置、
 // actor_pick_handle 等）留在 DAG 内部。
-CameraSnapshotRow make_camera_row(std::uintptr_t handle, const CameraDevice& camera) {
+CameraSnapshotRow make_camera_row(EntityId handle, const CameraDevice& camera) {
     CameraSnapshotRow row;
     row.handle = handle;
     row.position = camera.position;
@@ -264,7 +264,7 @@ std::shared_ptr<const CameraSnapshot> SharedDataHub::camera_snapshot() const {
     return camera_snapshot_.read();
 }
 
-void SharedDataHub::seed_camera_snapshot_from_storage(std::uintptr_t camera_handle) {
+void SharedDataHub::seed_camera_snapshot_from_storage(EntityId camera_handle) {
     if (camera_handle == 0) {
         return;
     }
@@ -295,7 +295,7 @@ void SharedDataHub::seed_camera_snapshot_from_storage(std::uintptr_t camera_hand
     camera_snapshot_.publish(std::move(next));
 }
 
-void SharedDataHub::remove_camera_snapshot_row(std::uintptr_t camera_handle) {
+void SharedDataHub::remove_camera_snapshot_row(EntityId camera_handle) {
     if (camera_handle == 0) {
         return;
     }
@@ -316,7 +316,7 @@ void SharedDataHub::remove_camera_snapshot_row(std::uintptr_t camera_handle) {
     }
 }
 
-std::optional<CameraSnapshotRow> SharedDataHub::camera_row(std::uintptr_t camera_handle) const {
+std::optional<CameraSnapshotRow> SharedDataHub::camera_row(EntityId camera_handle) const {
     if (camera_handle == 0) {
         return std::nullopt;
     }
@@ -332,7 +332,7 @@ std::optional<CameraSnapshotRow> SharedDataHub::camera_row(std::uintptr_t camera
     return std::nullopt;
 }
 
-CameraSnapshotRow SharedDataHub::camera_view(std::uintptr_t camera_handle) const {
+CameraSnapshotRow SharedDataHub::camera_view(EntityId camera_handle) const {
     CameraSnapshotRow view;
     view.handle = camera_handle;
     if (auto committed = camera_row(camera_handle)) {
@@ -423,7 +423,7 @@ std::vector<TransformUpdateCommand> SharedDataHub::drain_transform_updates() {
     return transform_updates_.drain();
 }
 
-void SharedDataHub::clear_transform_updates(std::uintptr_t transform_handle) {
+void SharedDataHub::clear_transform_updates(EntityId transform_handle) {
     transform_updates_.erase(transform_handle);
 }
 
@@ -452,7 +452,7 @@ std::shared_ptr<const TransformSnapshot> SharedDataHub::transform_snapshot() con
 }
 
 std::optional<TransformSnapshotRow> SharedDataHub::transform_row(
-    std::uintptr_t transform_handle) const {
+    EntityId transform_handle) const {
     if (transform_handle == 0) {
         return std::nullopt;
     }
@@ -469,7 +469,7 @@ std::optional<TransformSnapshotRow> SharedDataHub::transform_row(
 }
 
 std::optional<TransformSnapshotRow> SharedDataHub::transform_view(
-    std::uintptr_t transform_handle) const {
+    EntityId transform_handle) const {
     if (transform_handle == 0) {
         return std::nullopt;
     }
@@ -651,7 +651,7 @@ std::vector<CameraStateUpdateCommand> SharedDataHub::drain_camera_state_updates(
 }
 
 std::optional<bool> SharedDataHub::requested_camera_vision_denoise(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_denoise_.find(camera_handle);
     if (it != requested_camera_vision_denoise_.end()) {
@@ -661,7 +661,7 @@ std::optional<bool> SharedDataHub::requested_camera_vision_denoise(
 }
 
 std::optional<CameraVisionDenoiser> SharedDataHub::requested_camera_vision_denoiser(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_denoiser_.find(camera_handle);
     if (it != requested_camera_vision_denoiser_.end()) return it->second.type;
@@ -669,7 +669,7 @@ std::optional<CameraVisionDenoiser> SharedDataHub::requested_camera_vision_denoi
 }
 
 void SharedDataHub::acknowledge_camera_vision_denoiser(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_denoiser_.find(camera_handle);
     if (it != requested_camera_vision_denoiser_.end() && it->second.sequence <= applied_sequence) {
@@ -678,7 +678,7 @@ void SharedDataHub::acknowledge_camera_vision_denoiser(
 }
 
 std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_reblur_settings(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_reblur_settings_.find(camera_handle);
     if (it != requested_camera_vision_reblur_settings_.end()) return it->second.value;
@@ -686,7 +686,7 @@ std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_reblur_sett
 }
 
 std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_pt_settings(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_pt_settings_.find(camera_handle);
     if (it != requested_camera_vision_pt_settings_.end()) return it->second.value;
@@ -694,7 +694,7 @@ std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_pt_settings
 }
 
 std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_restir_settings(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_restir_settings_.find(camera_handle);
     if (it != requested_camera_vision_restir_settings_.end()) return it->second.value;
@@ -702,7 +702,7 @@ std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_restir_sett
 }
 
 std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_relax_settings(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_relax_settings_.find(camera_handle);
     if (it != requested_camera_vision_relax_settings_.end()) return it->second.value;
@@ -710,7 +710,7 @@ std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_relax_setti
 }
 
 void SharedDataHub::acknowledge_camera_vision_reblur_settings(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_reblur_settings_.find(camera_handle);
     if (it != requested_camera_vision_reblur_settings_.end() && it->second.sequence <= applied_sequence) {
@@ -719,7 +719,7 @@ void SharedDataHub::acknowledge_camera_vision_reblur_settings(
 }
 
 void SharedDataHub::acknowledge_camera_vision_pt_settings(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_pt_settings_.find(camera_handle);
     if (it != requested_camera_vision_pt_settings_.end() && it->second.sequence <= applied_sequence) {
@@ -728,7 +728,7 @@ void SharedDataHub::acknowledge_camera_vision_pt_settings(
 }
 
 void SharedDataHub::acknowledge_camera_vision_restir_settings(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_restir_settings_.find(camera_handle);
     if (it != requested_camera_vision_restir_settings_.end() && it->second.sequence <= applied_sequence) {
@@ -737,7 +737,7 @@ void SharedDataHub::acknowledge_camera_vision_restir_settings(
 }
 
 void SharedDataHub::acknowledge_camera_vision_relax_settings(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_relax_settings_.find(camera_handle);
     if (it != requested_camera_vision_relax_settings_.end() && it->second.sequence <= applied_sequence) {
@@ -746,7 +746,7 @@ void SharedDataHub::acknowledge_camera_vision_relax_settings(
 }
 
 void SharedDataHub::acknowledge_camera_vision_denoise(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_denoise_.find(camera_handle);
     if (it != requested_camera_vision_denoise_.end() &&
@@ -756,7 +756,7 @@ void SharedDataHub::acknowledge_camera_vision_denoise(
 }
 
 std::optional<bool> SharedDataHub::requested_camera_vision_accumulation(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_accumulation_.find(camera_handle);
     if (it != requested_camera_vision_accumulation_.end()) {
@@ -766,7 +766,7 @@ std::optional<bool> SharedDataHub::requested_camera_vision_accumulation(
 }
 
 void SharedDataHub::acknowledge_camera_vision_accumulation(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_accumulation_.find(camera_handle);
     if (it != requested_camera_vision_accumulation_.end() &&
@@ -776,7 +776,7 @@ void SharedDataHub::acknowledge_camera_vision_accumulation(
 }
 
 std::optional<bool> SharedDataHub::requested_camera_vision_stable_planes(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_stable_planes_.find(camera_handle);
     if (it != requested_camera_vision_stable_planes_.end()) {
@@ -786,7 +786,7 @@ std::optional<bool> SharedDataHub::requested_camera_vision_stable_planes(
 }
 
 void SharedDataHub::acknowledge_camera_vision_stable_planes(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_stable_planes_.find(camera_handle);
     if (it != requested_camera_vision_stable_planes_.end() &&
@@ -795,7 +795,7 @@ void SharedDataHub::acknowledge_camera_vision_stable_planes(
     }
 }
 
-void SharedDataHub::clear_camera_state_updates(std::uintptr_t camera_handle) {
+void SharedDataHub::clear_camera_state_updates(EntityId camera_handle) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     pending_camera_state_updates_.erase(camera_handle);
     requested_camera_vision_denoise_.erase(camera_handle);
@@ -828,7 +828,7 @@ std::vector<CameraReleaseCommand> SharedDataHub::drain_camera_releases() {
     return releases;
 }
 
-void SharedDataHub::set_viewport_ui_mode(std::uintptr_t camera_handle, ViewportUiMode mode) {
+void SharedDataHub::set_viewport_ui_mode(EntityId camera_handle, ViewportUiMode mode) {
     if (camera_handle == 0) {
         return;
     }
@@ -839,7 +839,7 @@ void SharedDataHub::set_viewport_ui_mode(std::uintptr_t camera_handle, ViewportU
     state.mode = mode;
 }
 
-void SharedDataHub::set_viewport_ui_calibration(std::uintptr_t camera_handle,
+void SharedDataHub::set_viewport_ui_calibration(EntityId camera_handle,
                                                 const ViewportUiCalibration& calibration) {
     if (camera_handle == 0) {
         return;
@@ -851,7 +851,7 @@ void SharedDataHub::set_viewport_ui_calibration(std::uintptr_t camera_handle,
     state.calibration = calibration;
 }
 
-ViewportUiState SharedDataHub::viewport_ui_state(std::uintptr_t camera_handle) const {
+ViewportUiState SharedDataHub::viewport_ui_state(EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(viewport_ui_mutex_);
     const auto it = viewport_ui_states_.find(camera_handle);
     if (it != viewport_ui_states_.end()) {
@@ -862,7 +862,7 @@ ViewportUiState SharedDataHub::viewport_ui_state(std::uintptr_t camera_handle) c
     return state;
 }
 
-void SharedDataHub::set_viewport_ui_pointer(std::uintptr_t camera_handle,
+void SharedDataHub::set_viewport_ui_pointer(EntityId camera_handle,
                                               ViewportUiPointerState pointer) {
     if (camera_handle == 0) {
         return;
@@ -873,7 +873,7 @@ void SharedDataHub::set_viewport_ui_pointer(std::uintptr_t camera_handle,
     state.pointer = pointer;
 }
 
-void SharedDataHub::clear_viewport_ui_pointer(std::uintptr_t camera_handle,
+void SharedDataHub::clear_viewport_ui_pointer(EntityId camera_handle,
                                                 std::uint64_t owner_context) {
     std::lock_guard<std::mutex> lock(viewport_ui_mutex_);
     const auto it = viewport_ui_states_.find(camera_handle);
@@ -904,7 +904,7 @@ void SharedDataHub::set_viewport_gizmo_target(ViewportGizmoTarget target) {
     }
 }
 
-void SharedDataHub::clear_viewport_gizmo_target(std::uintptr_t camera_handle) {
+void SharedDataHub::clear_viewport_gizmo_target(EntityId camera_handle) {
     if (camera_handle == 0) {
         return;
     }
@@ -914,7 +914,7 @@ void SharedDataHub::clear_viewport_gizmo_target(std::uintptr_t camera_handle) {
 }
 
 ViewportGizmoState SharedDataHub::viewport_gizmo_state(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(viewport_gizmo_mutex_);
     const auto it = viewport_gizmo_states_.find(camera_handle);
     if (it != viewport_gizmo_states_.end()) {
@@ -926,7 +926,7 @@ ViewportGizmoState SharedDataHub::viewport_gizmo_state(
 }
 
 void SharedDataHub::update_viewport_gizmo_interaction(
-    std::uintptr_t camera_handle,
+    EntityId camera_handle,
     ViewportGizmoAxis axis,
     bool dragging,
     ViewportGizmoAxis hover_axis) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <corona/events/mechanics_system_events.h>
 #include <corona/events/scene_system_events.h>
 #include <corona/kernel/event/i_event_bus.h>
@@ -106,14 +107,14 @@ class MechanicsSystem : public Kernel::SystemBase {
     ///
     /// 若该骨骼已有 FootPlant 链则更新参数。
     /// 必须在对应模型 gpu_build_state == Ready 之后调用。
-    bool register_foot_plant_chain(std::uintptr_t geom_handle,
+    bool register_foot_plant_chain(EntityId geom_handle,
                                    std::string_view bone_name,
                                    int chain_length = 3,
                                    float damping = 0.88f,
                                    float weight_decay = 0.8f);
 
     /// 注销脚踩地 IK 链。链正在激活中时立即移除，当帧蒙皮使用原动画姿态。
-    void unregister_foot_plant_chain(std::uintptr_t geom_handle,
+    void unregister_foot_plant_chain(EntityId geom_handle,
                                      std::string_view bone_name);
 
    private:
@@ -155,7 +156,7 @@ class MechanicsSystem : public Kernel::SystemBase {
         std::vector<Resource::IkChain>* chains{};
     };
     void update_foot_targets(std::span<const FootPose> poses, float dt);
-    void update_foot_targets(std::uintptr_t geom_handle,
+    void update_foot_targets(EntityId geom_handle,
                              const Resource::SkeletonData& skeleton,
                              const std::vector<std::array<float, 16>>& locals,
                              std::vector<Resource::IkChain>& chains, float dt);

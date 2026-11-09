@@ -70,16 +70,16 @@ public:
     // ---- 核心 API ----
 
     /// 存入 actor 流式记录
-    bool put(std::uintptr_t actor_handle, const ActorStreamingRecord& record);
+    bool put(EntityId actor_handle, const ActorStreamingRecord& record);
 
     /// 获取 actor 流式记录
-    std::optional<ActorStreamingRecord> get(std::uintptr_t actor_handle);
+    std::optional<ActorStreamingRecord> get(EntityId actor_handle);
 
     /// 移除 actor 缓存项
-    void remove(std::uintptr_t actor_handle);
+    void remove(EntityId actor_handle);
 
     /// 检查 actor 是否在缓存中
-    [[nodiscard]] bool contains(std::uintptr_t actor_handle);
+    [[nodiscard]] bool contains(EntityId actor_handle);
 
     // ---- 容量查询 ----
     [[nodiscard]] size_t memory_used() const;
@@ -94,7 +94,7 @@ public:
 private:
     CacheManager cache_;
 
-    [[nodiscard]] static std::string make_key(std::uintptr_t handle);
+    [[nodiscard]] static std::string make_key(EntityId handle);
     [[nodiscard]] static std::uintptr_t parse_key(const std::string& key);
 };
 

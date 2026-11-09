@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <cstdint>
 
 namespace Corona::Events {
@@ -36,14 +37,14 @@ struct PlayAudioEvent {
     /// 关联的声学组件句柄（AcousticsStorage handle）。
     /// 非 0 时为空间音频：声学线程据此每帧解析 actor 的世界坐标。
     /// 0 表示旧的全局非空间播放路径。
-    std::uintptr_t acoustics_handle{0};
+    EntityId acoustics_handle{0};
 };
 
 /// 请求停止音频资源
 struct StopAudioEvent {
     std::uint64_t resource_id{0};
     /// 非 0 时按声学组件句柄停止对应的空间播放；0 时按 resource_id 停止。
-    std::uintptr_t acoustics_handle{0};
+    EntityId acoustics_handle{0};
 };
 
 }  // namespace Corona::Events

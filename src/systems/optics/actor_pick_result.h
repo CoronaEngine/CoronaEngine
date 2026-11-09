@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <cstdint>
 #include <span>
 #include <string_view>
@@ -8,7 +9,7 @@ namespace Corona::Systems::OpticsDetail {
 
 struct ActorPickResolvedResult {
     std::string_view status;
-    std::uintptr_t actor_handle{0};
+    EntityId actor_handle{0};
     std::uint32_t node_index{UINT32_MAX};
 };
 

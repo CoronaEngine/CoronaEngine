@@ -33,7 +33,7 @@ namespace {
 
 
 struct ViewportGizmoDragRuntime {
-    std::uintptr_t actor_handle{};
+    EntityId actor_handle{};
     Corona::ViewportGizmoAxis axis{Corona::ViewportGizmoAxis::None};
     ktm::fvec3 initial_position{};
     ktm::fvec3 last_position{};
@@ -122,7 +122,7 @@ const ViewportGizmoCpuMasks& viewport_gizmo_cpu_masks() {
     return masks;
 }
 
-[[nodiscard]] std::uintptr_t select_scene_camera_handle(const Corona::SceneDevice& scene) {
+[[nodiscard]] EntityId select_scene_camera_handle(const Corona::SceneDevice& scene) {
     if (scene.active_camera_handle != 0 &&
         std::find(scene.camera_handles.begin(),
                   scene.camera_handles.end(),
@@ -162,7 +162,7 @@ ktm::fvec3 viewport_gizmo_axis_vector(Corona::ViewportGizmoAxis axis) {
     }
 }
 
-std::optional<ktm::fvec3> actor_gizmo_position(std::uintptr_t actor_handle) {
+std::optional<ktm::fvec3> actor_gizmo_position(EntityId actor_handle) {
     auto& hub = Corona::SharedDataHub::instance();
     for (const auto geometry_handle :
          hub.resolve_actor_geometry_handles(actor_handle)) {
@@ -178,7 +178,7 @@ std::optional<ktm::fvec3> actor_gizmo_position(std::uintptr_t actor_handle) {
     return std::nullopt;
 }
 
-bool write_actor_gizmo_position(std::uintptr_t actor_handle,
+bool write_actor_gizmo_position(EntityId actor_handle,
                                 const ktm::fvec3& position) {
     bool wrote = false;
     auto& hub = Corona::SharedDataHub::instance();

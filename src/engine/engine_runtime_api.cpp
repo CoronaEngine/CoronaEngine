@@ -151,7 +151,7 @@ H::HardwareImageDesc make_sampled_texture_desc(uint32_t width,
     return out.write_bytes(std::as_bytes(std::span<const unsigned char>(data_ptr, staging.size())));
 }
 
-std::uintptr_t resolve_camera_handle(std::uintptr_t camera_handle) {
+EntityId resolve_camera_handle(EntityId camera_handle) {
     if (camera_handle != 0) {
         return camera_handle;
     }
@@ -1953,7 +1953,7 @@ Corona::API::Actor::Profile* Corona::API::Actor::add_profile(const Profile& prof
         return nullptr;
     }
 
-    std::uintptr_t profile_handle = next_profile_handle_++;
+    EntityId profile_handle = next_profile_handle_++;
     profiles_[profile_handle] = profile;
 
     if (active_profile_handle_ == 0) {
@@ -1961,7 +1961,7 @@ Corona::API::Actor::Profile* Corona::API::Actor::add_profile(const Profile& prof
     }
 
     // 将 Profile 写入引擎侧 ProfileStorage，ActorDevice 只保存 ProfileStorage 的句柄
-    std::uintptr_t storage_profile_handle = SharedDataHub::instance().profile_storage().allocate();
+    EntityId storage_profile_handle = SharedDataHub::instance().profile_storage().allocate();
     if (auto p = SharedDataHub::instance().profile_storage().acquire_write(storage_profile_handle)) {
         // Actor 作为组件类的 friend，可以读取组件句柄；但不能直接调用 Geometry 的受保护 get_handle()
         p->optics_handle = profile.optics ? profile.optics->get_handle() : 0;
@@ -2005,7 +2005,7 @@ void Corona::API::Actor::remove_profile(const Profile* profile) {
         return;
     }
 
-    std::uintptr_t profile_handle = 0;
+    EntityId profile_handle = 0;
     for (const auto& [handle, prof] : profiles_) {
         if (&prof == profile) {
             profile_handle = handle;
@@ -2024,7 +2024,7 @@ void Corona::API::Actor::remove_profile(const Profile* profile) {
     }
 
     const auto storage_profile_it = profile_storage_handles_.find(profile_handle);
-    const std::uintptr_t storage_profile_handle =
+    const EntityId storage_profile_handle =
         storage_profile_it != profile_storage_handles_.end() ? storage_profile_it->second : 0;
 
     profiles_.erase(it);
@@ -2220,7 +2220,7 @@ Corona::API::Camera::Camera(const std::array<float, 3>& position, const std::arr
 
 Corona::API::Camera::~Camera() {
     if (handle_) {
-        std::uintptr_t actor_pick_handle = 0;
+        EntityId actor_pick_handle = 0;
         if (auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(handle_)) {
             actor_pick_handle = camera->actor_pick_handle;
         }
@@ -2753,7 +2753,7 @@ Corona::API::ModelNodePickResult Corona::API::Camera::pick_model_node_at_pixel(i
     }
 
     // 读侧：相机句柄 + 上一次结果。读取只拿读锁，不再写槽位。
-    std::uintptr_t actor_pick_handle = 0;
+    EntityId actor_pick_handle = 0;
     if (auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(handle_)) {
         actor_pick_handle = camera->actor_pick_handle;
     }
@@ -2821,7 +2821,7 @@ bool is_vision_available() {
     return true;
 }
 
-void set_render_backend(const std::string& mode, std::uintptr_t camera_handle) {
+void set_render_backend(const std::string& mode, EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle == 0) {
         CFW_LOG_WARNING("[set_render_backend] No camera is available");
@@ -2842,7 +2842,7 @@ void set_render_backend(const std::string& mode, std::uintptr_t camera_handle) {
     }
 }
 
-std::string get_render_backend(std::uintptr_t camera_handle) {
+std::string get_render_backend(EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
         // 读快照 + 待处理命令（快照 ⊕ pending）：外部线程不再拿相机槽锁。
@@ -2852,7 +2852,7 @@ std::string get_render_backend(std::uintptr_t camera_handle) {
     return "native";
 }
 
-void set_vision_render_mode(const std::string& mode, std::uintptr_t camera_handle) {
+void set_vision_render_mode(const std::string& mode, EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle == 0) {
         CFW_LOG_WARNING("[set_vision_render_mode] No camera is available");
@@ -2876,7 +2876,7 @@ void set_vision_render_mode(const std::string& mode, std::uintptr_t camera_handl
     SharedDataHub::instance().enqueue_camera_state_update(command);
 }
 
-std::string get_vision_render_mode(std::uintptr_t camera_handle) {
+std::string get_vision_render_mode(EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
         // 读快照 + 待处理命令（快照 ⊕ pending）：外部线程不再拿相机槽锁。
@@ -2886,7 +2886,7 @@ std::string get_vision_render_mode(std::uintptr_t camera_handle) {
     return "path_tracing";
 }
 
-void set_vision_denoise(bool enabled, std::uintptr_t camera_handle) {
+void set_vision_denoise(bool enabled, EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle == 0) {
         CFW_LOG_WARNING("[set_vision_denoise] No camera is available");
@@ -2909,7 +2909,7 @@ static std::string vision_denoiser_name(CameraVisionDenoiser type) {
     }
 }
 
-void set_vision_denoiser(const std::string& type, std::uintptr_t camera_handle) {
+void set_vision_denoiser(const std::string& type, EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle == 0) return;
     CameraStateUpdateCommand command{};
@@ -2922,7 +2922,7 @@ void set_vision_denoiser(const std::string& type, std::uintptr_t camera_handle) 
     SharedDataHub::instance().enqueue_camera_state_update(command);
 }
 
-std::string get_vision_denoiser(std::uintptr_t camera_handle) {
+std::string get_vision_denoiser(EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
         // 读快照 + 待处理命令（快照 ⊕ pending）：外部线程不再拿相机槽锁。
@@ -2932,7 +2932,7 @@ std::string get_vision_denoiser(std::uintptr_t camera_handle) {
     return "scene";
 }
 
-std::string get_requested_vision_denoiser(std::uintptr_t camera_handle) {
+std::string get_requested_vision_denoiser(EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (const auto requested = SharedDataHub::instance().requested_camera_vision_denoiser(resolved_handle)) {
         return vision_denoiser_name(*requested);
@@ -2940,7 +2940,7 @@ std::string get_requested_vision_denoiser(std::uintptr_t camera_handle) {
     return get_vision_denoiser(resolved_handle);
 }
 
-bool get_vision_denoise(std::uintptr_t camera_handle) {
+bool get_vision_denoise(EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
         // 读快照 + 待处理命令（快照 ⊕ pending）：外部线程不再拿相机槽锁。
@@ -2950,7 +2950,7 @@ bool get_vision_denoise(std::uintptr_t camera_handle) {
     return false;
 }
 
-void set_vision_settings(VisionSettingsFamily family, const nlohmann::json& settings, std::uintptr_t camera_handle) {
+void set_vision_settings(VisionSettingsFamily family, const nlohmann::json& settings, EntityId camera_handle) {
     const auto handle = resolve_camera_handle(camera_handle);
     if (!handle || !settings.is_object()) return;
     CameraStateUpdateCommand command{};
@@ -2964,7 +2964,7 @@ void set_vision_settings(VisionSettingsFamily family, const nlohmann::json& sett
     SharedDataHub::instance().enqueue_camera_state_update(std::move(command));
 }
 
-nlohmann::json get_requested_vision_settings(VisionSettingsFamily family, std::uintptr_t camera_handle) {
+nlohmann::json get_requested_vision_settings(VisionSettingsFamily family, EntityId camera_handle) {
     const auto handle = resolve_camera_handle(camera_handle);
     auto& hub = SharedDataHub::instance();
     switch (family) {
@@ -2988,7 +2988,7 @@ nlohmann::json get_requested_vision_settings(VisionSettingsFamily family, std::u
     return nlohmann::json::object();
 }
 
-nlohmann::json get_effective_vision_settings(VisionSettingsFamily family, std::uintptr_t camera_handle) {
+nlohmann::json get_effective_vision_settings(VisionSettingsFamily family, EntityId camera_handle) {
     if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(resolve_camera_handle(camera_handle))) {
         switch (family) {
         case VisionSettingsFamily::Pt: return camera->vision_pt_effective_settings;
@@ -3000,51 +3000,51 @@ nlohmann::json get_effective_vision_settings(VisionSettingsFamily family, std::u
     return nlohmann::json::object();
 }
 
-void set_vision_pt_settings(const std::string& json, std::uintptr_t camera_handle) {
+void set_vision_pt_settings(const std::string& json, EntityId camera_handle) {
     const auto value = nlohmann::json::parse(json, nullptr, false);
     if (value.is_object()) set_vision_settings(VisionSettingsFamily::Pt, value, camera_handle);
 }
-std::string get_requested_vision_pt_settings(std::uintptr_t camera_handle) {
+std::string get_requested_vision_pt_settings(EntityId camera_handle) {
     return get_requested_vision_settings(VisionSettingsFamily::Pt, camera_handle).dump();
 }
-std::string get_effective_vision_pt_settings(std::uintptr_t camera_handle) {
+std::string get_effective_vision_pt_settings(EntityId camera_handle) {
     return get_effective_vision_settings(VisionSettingsFamily::Pt, camera_handle).dump();
 }
 
-void set_vision_restir_settings(const std::string& json, std::uintptr_t camera_handle) {
+void set_vision_restir_settings(const std::string& json, EntityId camera_handle) {
     const auto value = nlohmann::json::parse(json, nullptr, false);
     if (value.is_object()) set_vision_settings(VisionSettingsFamily::Restir, value, camera_handle);
 }
-std::string get_requested_vision_restir_settings(std::uintptr_t camera_handle) {
+std::string get_requested_vision_restir_settings(EntityId camera_handle) {
     return get_requested_vision_settings(VisionSettingsFamily::Restir, camera_handle).dump();
 }
-std::string get_effective_vision_restir_settings(std::uintptr_t camera_handle) {
+std::string get_effective_vision_restir_settings(EntityId camera_handle) {
     return get_effective_vision_settings(VisionSettingsFamily::Restir, camera_handle).dump();
 }
 
-void set_vision_reblur_settings(const std::string& json, std::uintptr_t camera_handle) {
+void set_vision_reblur_settings(const std::string& json, EntityId camera_handle) {
     const auto value = nlohmann::json::parse(json, nullptr, false);
     if (value.is_object()) set_vision_settings(VisionSettingsFamily::Reblur, value, camera_handle);
 }
-std::string get_requested_vision_reblur_settings(std::uintptr_t camera_handle) {
+std::string get_requested_vision_reblur_settings(EntityId camera_handle) {
     return get_requested_vision_settings(VisionSettingsFamily::Reblur, camera_handle).dump();
 }
-std::string get_effective_vision_reblur_settings(std::uintptr_t camera_handle) {
+std::string get_effective_vision_reblur_settings(EntityId camera_handle) {
     return get_effective_vision_settings(VisionSettingsFamily::Reblur, camera_handle).dump();
 }
 
-void set_vision_relax_settings(const std::string& json, std::uintptr_t camera_handle) {
+void set_vision_relax_settings(const std::string& json, EntityId camera_handle) {
     const auto value = nlohmann::json::parse(json, nullptr, false);
     if (value.is_object()) set_vision_settings(VisionSettingsFamily::Relax, value, camera_handle);
 }
-std::string get_requested_vision_relax_settings(std::uintptr_t camera_handle) {
+std::string get_requested_vision_relax_settings(EntityId camera_handle) {
     return get_requested_vision_settings(VisionSettingsFamily::Relax, camera_handle).dump();
 }
-std::string get_effective_vision_relax_settings(std::uintptr_t camera_handle) {
+std::string get_effective_vision_relax_settings(EntityId camera_handle) {
     return get_effective_vision_settings(VisionSettingsFamily::Relax, camera_handle).dump();
 }
 
-bool get_requested_vision_denoise(std::uintptr_t camera_handle) {
+bool get_requested_vision_denoise(EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle == 0) {
         return false;
@@ -3055,7 +3055,7 @@ bool get_requested_vision_denoise(std::uintptr_t camera_handle) {
     return get_vision_denoise(resolved_handle);
 }
 
-void set_vision_accumulation(bool enabled, std::uintptr_t camera_handle) {
+void set_vision_accumulation(bool enabled, EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle == 0) {
         CFW_LOG_WARNING("[set_vision_accumulation] No camera is available");
@@ -3069,7 +3069,7 @@ void set_vision_accumulation(bool enabled, std::uintptr_t camera_handle) {
     SharedDataHub::instance().enqueue_camera_state_update(command);
 }
 
-bool get_vision_accumulation(std::uintptr_t camera_handle) {
+bool get_vision_accumulation(EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
         // 读快照 + 待处理命令（快照 ⊕ pending）：外部线程不再拿相机槽锁。
@@ -3079,7 +3079,7 @@ bool get_vision_accumulation(std::uintptr_t camera_handle) {
     return false;
 }
 
-bool get_requested_vision_accumulation(std::uintptr_t camera_handle) {
+bool get_requested_vision_accumulation(EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle == 0) {
         return false;
@@ -3090,7 +3090,7 @@ bool get_requested_vision_accumulation(std::uintptr_t camera_handle) {
     return get_vision_accumulation(resolved_handle);
 }
 
-void set_vision_stable_planes(bool enabled, std::uintptr_t camera_handle) {
+void set_vision_stable_planes(bool enabled, EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle == 0) {
         CFW_LOG_WARNING("[set_vision_stable_planes] No camera is available");
@@ -3104,7 +3104,7 @@ void set_vision_stable_planes(bool enabled, std::uintptr_t camera_handle) {
     SharedDataHub::instance().enqueue_camera_state_update(command);
 }
 
-bool get_vision_stable_planes(std::uintptr_t camera_handle) {
+bool get_vision_stable_planes(EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle != 0) {
         // 读快照 + 待处理命令（快照 ⊕ pending）：外部线程不再拿相机槽锁。
@@ -3114,7 +3114,7 @@ bool get_vision_stable_planes(std::uintptr_t camera_handle) {
     return false;
 }
 
-bool get_requested_vision_stable_planes(std::uintptr_t camera_handle) {
+bool get_requested_vision_stable_planes(EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle == 0) {
         return false;

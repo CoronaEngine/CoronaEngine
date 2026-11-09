@@ -502,11 +502,11 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             actor_to_mech[params.actor].push_back(mh);
         }
     }
-    auto actor_for_mechanics = [&](std::uintptr_t mechanics_handle) {
+    auto actor_for_mechanics = [&](EntityId mechanics_handle) {
         auto it = frame_params.find(mechanics_handle);
         return (it != frame_params.end() && it->second.actor != 0) ? it->second.actor : mechanics_handle;
     };
-    auto first_mechanics_for_actor = [&](std::uintptr_t actor_handle) {
+    auto first_mechanics_for_actor = [&](EntityId actor_handle) {
         auto it = actor_to_mech.find(actor_handle);
         return (it != actor_to_mech.end() && !it->second.empty()) ? it->second.front() : std::uintptr_t{0};
     };
@@ -856,7 +856,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 const float inv_sum = inv_ma * ktm::dot(normal, na) + inv_mb * ktm::dot(normal, nb);
                 if (inv_sum > eps) {
                     const float corr_scale = k_positional_percent * pen_clamped / inv_sum;
-                    const auto record_corr = [&](std::uintptr_t handle, float inv_eff, float sign) {
+                    const auto record_corr = [&](EntityId handle, float inv_eff, float sign) {
                         if (inv_eff <= eps) return;
                         auto& corr = position_correction[handle];  // 默认初始化为 {0,0,0}
                         const auto n = unlocked_normal(handle);
@@ -1434,7 +1434,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
 
     for (auto geom_handle : geom_handles) {
         // ---- 第 1 步：读取 model_resource_handle（brief 读锁）----
-        std::uintptr_t model_resource_handle = 0;
+        EntityId model_resource_handle = 0;
         std::uint64_t previous_skin_model = 0;
         bool geometry_ready = false, geometry_failed = false;
         std::shared_ptr<Resource::AnimationPlayer> player;
@@ -1504,7 +1504,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         std::vector<Horizon::HardwareBuffer> vstoragebufs;
         std::size_t mesh_count = 0;
         std::vector<Resource::IkChain> ik_chains;  // 锁外跑 CCD 用（拷出避免持锁）
-        std::uintptr_t ik_transform_handle = 0;
+        EntityId ik_transform_handle = 0;
         std::uint64_t ik_revision = 0;
         {
             auto geom_write = geom_storage.try_acquire_write(geom_handle);
@@ -1833,7 +1833,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     for (std::size_t offset = 0; offset < geom_handles.size(); ++offset) {
         const auto index = (start + offset) % geom_handles.size();
         const auto key = geom_handles[index];
-        std::uintptr_t resource_handle{}, transform_handle{};
+        EntityId resource_handle{}, transform_handle{};
         {
             auto geometry = geom_storage.try_acquire_read(key);
             if (!geometry || geometry->gpu_build_state != GeometryDevice::GpuBuildState::Ready ||
@@ -1958,7 +1958,7 @@ bool apply_foot_plant_chain(Corona::GeometryDevice& gw, int node_idx, std::strin
 }  // namespace
 
 bool MechanicsSystem::register_foot_plant_chain(
-    std::uintptr_t geom_handle,
+    EntityId geom_handle,
     std::string_view bone_name,
     int chain_length,
     float damping,
@@ -2008,7 +2008,7 @@ bool MechanicsSystem::register_foot_plant_chain(
 }
 
 void MechanicsSystem::unregister_foot_plant_chain(
-    std::uintptr_t geom_handle,
+    EntityId geom_handle,
     std::string_view bone_name) {
 
     auto& geom_st = SharedDataHub::instance().geometry_storage();

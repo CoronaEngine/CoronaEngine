@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <ktm/ktm.h>
 
 #include <atomic>
@@ -16,7 +17,7 @@ class CameraFollowController {
     CameraFollowController(CameraFollowController&&) = delete;
     CameraFollowController& operator=(CameraFollowController&&) = delete;
 
-    void set_target(std::uintptr_t actor_handle, std::uintptr_t camera_handle,
+    void set_target(EntityId actor_handle, EntityId camera_handle,
                     float offset_x, float offset_y, float offset_z);
     void clear_target();
     bool is_active() const;
@@ -39,8 +40,8 @@ class CameraFollowController {
     static ktm::fvec3 cross(const ktm::fvec3& a, const ktm::fvec3& b);
 
     bool active_{false};
-    std::uintptr_t actor_handle_{0};
-    std::uintptr_t camera_handle_{0};
+    EntityId actor_handle_{0};
+    EntityId camera_handle_{0};
     ktm::fvec3 offset_{0.0f, 0.0f, 2.0f};
     bool camera_look_at_{true};
 

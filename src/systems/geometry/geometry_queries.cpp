@@ -30,7 +30,7 @@ std::vector<std::uintptr_t> GeometrySystem::query_aabb(
     std::vector<std::uintptr_t> filtered;
     filtered.reserve(out.size());
     const auto& state_map = it->second.actor_load_states;
-    for (std::uintptr_t actor_handle : out) {
+    for (EntityId actor_handle : out) {
         auto state_it = state_map.find(actor_handle);
         if (state_it != state_map.end() && state_it->second == ActorLoadState::Loaded) {
             filtered.push_back(actor_handle);
@@ -55,7 +55,7 @@ std::vector<std::uintptr_t> GeometrySystem::query_sphere(
     std::vector<std::uintptr_t> filtered;
     filtered.reserve(out.size());
     const auto& state_map = it->second.actor_load_states;
-    for (std::uintptr_t actor_handle : out) {
+    for (EntityId actor_handle : out) {
         auto state_it = state_map.find(actor_handle);
         if (state_it != state_map.end() && state_it->second == ActorLoadState::Loaded) {
             filtered.push_back(actor_handle);
@@ -81,7 +81,7 @@ std::vector<std::uintptr_t> GeometrySystem::query_frustum(
     std::vector<std::uintptr_t> filtered;
     filtered.reserve(out.size());
     const auto& state_map = it->second.actor_load_states;
-    for (std::uintptr_t actor_handle : out) {
+    for (EntityId actor_handle : out) {
         auto state_it = state_map.find(actor_handle);
         if (state_it != state_map.end() && state_it->second == ActorLoadState::Loaded) {
             filtered.push_back(actor_handle);

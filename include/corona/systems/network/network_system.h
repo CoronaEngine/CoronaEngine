@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <corona/events/network_system_events.h>
 #include <corona/kernel/event/i_event_bus.h>
 #include <corona/kernel/event/i_event_stream.h>
@@ -278,7 +279,7 @@ public:
      * 不一致导致的协同抖动。
      */
     bool register_actor_identity(const std::string& actor_guid,
-                                 std::uintptr_t actor_handle,
+                                 EntityId actor_handle,
                                  bool locally_owned = true);
 
     /// 声明本端接管指定 Actor 的 transform 发送权，并通知 peer 停止发送它。

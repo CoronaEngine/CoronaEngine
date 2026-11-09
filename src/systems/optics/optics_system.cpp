@@ -188,12 +188,12 @@ struct OpticsDiagConfig {
     return cfg;
 }
 
-[[nodiscard]] bool diag_actor_allowed(std::uintptr_t actor_handle) {
+[[nodiscard]] bool diag_actor_allowed(EntityId actor_handle) {
     const auto& diag = optics_diag_config();
     return !diag.only_actor || *diag.only_actor == actor_handle;
 }
 
-[[nodiscard]] bool diag_geometry_allowed(std::uintptr_t geometry_handle) {
+[[nodiscard]] bool diag_geometry_allowed(EntityId geometry_handle) {
     const auto& diag = optics_diag_config();
     return !diag.only_geometry || *diag.only_geometry == geometry_handle;
 }
@@ -256,8 +256,8 @@ struct OpticsDiagConfig {
     return out.str();
 }
 
-void log_invalid_optics_mesh_once(std::uintptr_t actor_handle,
-                                  std::uintptr_t geometry_handle,
+void log_invalid_optics_mesh_once(EntityId actor_handle,
+                                  EntityId geometry_handle,
                                   std::uint32_t mesh_index,
                                   bool slot_valid,
                                   bool vertex_valid,
@@ -283,8 +283,8 @@ void log_invalid_optics_mesh_once(std::uintptr_t actor_handle,
                     vertex_descriptor, index_descriptor, texture_descriptor);
 }
 
-void log_optics_material_once(std::uintptr_t actor_handle,
-                              std::uintptr_t geometry_handle,
+void log_optics_material_once(EntityId actor_handle,
+                              EntityId geometry_handle,
                               std::uint32_t mesh_index,
                               std::uint32_t material_id,
                               std::uint32_t texture_descriptor,
@@ -1403,7 +1403,7 @@ bool collect_actor_instances_for_visibility(
                 continue;
             }
             // ---- ��ȡ���α任��Ϣ���������ɣ�texture �� query_mesh_slots �ڲ������----
-            std::uintptr_t transform_handle_a = 0;
+            EntityId transform_handle_a = 0;
             float          nlc_scale_a   = 1.0f;
             ktm::fvec3     nlc_offset_a  = {0.0f, 0.0f, 0.0f};
             if (auto geom_r = geom_storage.try_acquire_read(optics.geometry_handle)) {
@@ -2119,7 +2119,7 @@ struct OpticsSystem::VisionPipelineRuntime {
     std::unordered_map<std::uintptr_t, Horizon::SubmitReceipt> interop_submissions;
     Horizon::HardwareExecutor* interop_executor{nullptr};
 
-    void wait_for_interop_submission(std::uintptr_t camera_handle,
+    void wait_for_interop_submission(EntityId camera_handle,
                                      std::string_view reason,
                                      bool log_wait = true) noexcept {
         auto receipt_it = interop_submissions.find(camera_handle);
@@ -2176,7 +2176,7 @@ struct OpticsSystem::VisionPipelineRuntime {
         }
         Vision::drain_vision_interop_submissions(
             interop_submissions,
-            [&](std::uintptr_t camera_handle, const Horizon::SubmitReceipt& receipt) {
+            [&](EntityId camera_handle, const Horizon::SubmitReceipt& receipt) {
                 if (interop_executor == nullptr) {
                     CFW_LOG_ERROR(
                         "OpticsSystem: missing executor while draining Vision interop submission "
@@ -2274,7 +2274,7 @@ struct OpticsSystem::VisionPipelineRuntime {
 };
 
 bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
-                                            std::uintptr_t camera_handle,
+                                            EntityId camera_handle,
                                             uint32_t width, uint32_t height,
                                             bool denoise, bool accumulation, bool stable_planes,
                                             CameraVisionDenoiser denoiser,
@@ -2399,7 +2399,7 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
     return true;
 }
 
-void OpticsSystem::publish_vision_camera_feedback(std::uintptr_t camera_handle,
+void OpticsSystem::publish_vision_camera_feedback(EntityId camera_handle,
                                                  const VisionCameraFeedback& feedback) {
     if (!feedback.restir_effective && !feedback.pt_effective &&
         !feedback.reblur_effective && !feedback.relax_effective) return;
@@ -2859,7 +2859,7 @@ bool OpticsSystem::ensure_gizmo_axis_textures() {
     return true;
 }
 
-void OpticsSystem::bind_native_view_resources(std::uintptr_t camera_handle,
+void OpticsSystem::bind_native_view_resources(EntityId camera_handle,
                                               uint32_t width,
                                               uint32_t height,
                                               uint64_t frame_index) {
@@ -2905,7 +2905,7 @@ void OpticsSystem::bind_native_view_resources(std::uintptr_t camera_handle,
 
 }
 
-void OpticsSystem::ensure_ui_view_resources(std::uintptr_t camera_handle,
+void OpticsSystem::ensure_ui_view_resources(EntityId camera_handle,
                                             uint32_t width,
                                             uint32_t height,
                                             uint64_t frame_index) {
@@ -3010,7 +3010,7 @@ OpticsSystem::SurfaceRenderTarget& OpticsSystem::acquire_surface_target(void* su
 }
 
 OpticsSystem::SurfaceRenderTarget& OpticsSystem::acquire_offscreen_screenshot_target(
-    std::uintptr_t camera_handle,
+    EntityId camera_handle,
     uint32_t width,
     uint32_t height,
     uint64_t frame_index) {
@@ -3678,7 +3678,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                         continue;
                     }
                     // ---- ��ȡ���α任��Ϣ��������----
-                    std::uintptr_t transform_handle_b = 0;
+                    EntityId transform_handle_b = 0;
                     float          nlc_scale_b  = 1.0f;
                     ktm::fvec3     nlc_offset_b = {0.0f, 0.0f, 0.0f};
                     if (auto geom_r = geom_storage.try_acquire_read(optics.geometry_handle)) {
@@ -3929,9 +3929,9 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         struct ShadowCasterSnapshot {
             std::unordered_map<uint32_t,uint32_t> material_ids;
             std::size_t material_revision{};
-            std::uintptr_t actor_handle = 0;
-            std::uintptr_t profile_handle = 0;
-            std::uintptr_t geometry_handle = 0;
+            EntityId actor_handle = 0;
+            EntityId profile_handle = 0;
+            EntityId geometry_handle = 0;
             std::uint64_t pose_revision = 0;
             ktm::fmat4x4 model_matrix{ktm::fmat4x4::from_eye()};
             Corona::Systems::OpticsDetail::ShadowCasterBoundsSnapshot bounds{};
@@ -5016,7 +5016,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
 
 Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
     Horizon::HardwareStream& stream,
-    std::uintptr_t camera_handle,
+    EntityId camera_handle,
     const CameraDevice& camera,
     const SceneDevice& scene,
     SurfaceRenderTarget& target,
@@ -5324,7 +5324,7 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
 }
 
 std::optional<OpticsSystem::ActorPickRequest> OpticsSystem::take_pending_actor_pick(
-    std::uintptr_t camera_handle, const CameraDevice& camera) {
+    EntityId camera_handle, const CameraDevice& camera) {
     auto& hub = SharedDataHub::instance();
     const auto command = hub.take_actor_pick_request(camera_handle);
     if (!command) {
@@ -5446,7 +5446,7 @@ void OpticsSystem::enqueue_actor_pick_readback(
     }
 }
 
-void OpticsSystem::process_vision_actor_pick(std::uintptr_t camera_handle,
+void OpticsSystem::process_vision_actor_pick(EntityId camera_handle,
                                              const CameraDevice& camera,
                                              const SceneDevice& scene,
                                              uint64_t frame_index) {
@@ -5538,7 +5538,7 @@ void OpticsSystem::begin_screenshot_frame() {
     incoming_screenshots_.clear();
 }
 
-bool OpticsSystem::has_pending_screenshot(std::uintptr_t camera_handle) {
+bool OpticsSystem::has_pending_screenshot(EntityId camera_handle) {
     std::lock_guard<std::mutex> lock(screenshot_mutex_);
     return std::any_of(pending_screenshots_.begin(), pending_screenshots_.end(),
                        [camera_handle](const PendingScreenshot& req) {
@@ -5546,7 +5546,7 @@ bool OpticsSystem::has_pending_screenshot(std::uintptr_t camera_handle) {
                        });
 }
 
-void OpticsSystem::fail_pending_screenshots(std::uintptr_t camera_handle) {
+void OpticsSystem::fail_pending_screenshots(EntityId camera_handle) {
     std::vector<PendingScreenshot> matched;
     {
         std::lock_guard<std::mutex> lock(screenshot_mutex_);
@@ -5638,7 +5638,7 @@ void OpticsSystem::fail_unrenderable_pending_screenshots() {
     }
 }
 
-void OpticsSystem::process_pending_screenshots(std::uintptr_t camera_handle,
+void OpticsSystem::process_pending_screenshots(EntityId camera_handle,
                                                Horizon::HardwareImage& render_target) {
     std::vector<PendingScreenshot> matched;
     {

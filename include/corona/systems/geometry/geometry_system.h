@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 namespace Corona { struct MeshMaterialDevice; }
 
 #include <horizon.h>
@@ -420,13 +421,13 @@ class GeometrySystem : public Kernel::SystemBase {
     /// 调用方不得持有同一 geometry_handle 的锁。
     /// @return 每个 mesh_index 对应一个 MeshSlot；geometry 无效或首次加载中时返回空 vector。
     [[nodiscard]] std::vector<MeshSlot> query_mesh_slots(
-        std::uintptr_t geometry_handle) const;
+        EntityId geometry_handle) const;
 
     /// 查询一个 geometry 的所有 MeshSlot（LOD 选级路由，带相机上下文）。
     ///
     /// 适用：主渲染 pass、阴影 pass、需要 committed_demand 精度的所有路径。
     [[nodiscard]] std::vector<MeshSlot> query_mesh_slots(
-        std::uintptr_t    geometry_handle,
+        EntityId    geometry_handle,
         const ktm::fvec3& camera_pos,
         float             camera_fov_deg,
         const ktm::fvec3& world_center,
@@ -437,7 +438,7 @@ class GeometrySystem : public Kernel::SystemBase {
     /// instance world AABB and chooses the coarsest ready level within the
     /// screen-space error budget.
     [[nodiscard]] RenderMeshBuffers select_render_buffers_for_instance(
-        std::uintptr_t geometry_handle,
+        EntityId geometry_handle,
         uint32_t mesh_index,
         const ktm::fvec3& camera_pos,
         float camera_fov_deg,
@@ -449,7 +450,7 @@ class GeometrySystem : public Kernel::SystemBase {
     /// error fits within one shadow texel, never falling back to a coarser
     /// level than the requested target.
     [[nodiscard]] std::vector<MeshSlot> query_shadow_mesh_slots(
-        std::uintptr_t geometry_handle,
+        EntityId geometry_handle,
         float world_units_per_texel,
         float max_abs_scale,
         std::uint64_t frame = 0) const;
@@ -458,12 +459,12 @@ class GeometrySystem : public Kernel::SystemBase {
     /// LOD cache once, aggregates demand once per mesh, and returns one slot
     /// vector per input cascade. Disabled cascades return an empty vector.
     [[nodiscard]] std::vector<std::vector<ShadowMeshSlot>> query_shadow_mesh_slots_batch(
-        std::uintptr_t geometry_handle,
+        EntityId geometry_handle,
         std::span<const ShadowLodQuery> cascades,
         float max_abs_scale,
         std::uint64_t frame = 0) const;
 
-    void request_shadow_lod(std::uintptr_t geometry_handle, uint32_t mesh_index,
+    void request_shadow_lod(EntityId geometry_handle, uint32_t mesh_index,
                             float world_units_per_texel, float max_abs_scale,
                             std::uint64_t frame) const;
 
@@ -481,7 +482,7 @@ class GeometrySystem : public Kernel::SystemBase {
     /// @param bounding_radius 物体包围球半径
     /// @param fallback        无 LOD 时使用的原始缓冲（通常为 mesh 的 LOD0）
     [[nodiscard]] RenderMeshBuffers select_render_buffers(
-        std::uintptr_t          geometry_handle,
+        EntityId          geometry_handle,
         uint32_t                mesh_index,
         const ktm::fvec3&       camera_pos,
         float                   camera_fov_deg,
@@ -490,7 +491,7 @@ class GeometrySystem : public Kernel::SystemBase {
         const RenderMeshBuffers& fallback) const;
 
     [[nodiscard]] RenderMeshBuffers select_shadow_render_buffers(
-        std::uintptr_t geometry_handle,
+        EntityId geometry_handle,
         uint32_t mesh_index,
         float world_units_per_texel,
         float max_abs_scale,
@@ -519,7 +520,7 @@ class GeometrySystem : public Kernel::SystemBase {
     /// @param mesh_index      子网格索引
     /// @param fallback        调用方持 geom 槽锁时从 MeshDevice 读出的 LOD0 候选缓冲
     [[nodiscard]] RenderMeshBuffers resident_render_buffers(
-        std::uintptr_t           geometry_handle,
+        EntityId           geometry_handle,
         uint32_t                 mesh_index,
         const RenderMeshBuffers& fallback) const;
 
@@ -533,13 +534,13 @@ class GeometrySystem : public Kernel::SystemBase {
     /// 降级策略：如果请求的级别尚未就绪（ready=false），自动返回 LOD 0。
     /// 调用者无需处理未就绪的情况。
     [[nodiscard]] const LODMeshBuffers* get_lod_buffers(
-        std::uintptr_t geometry_handle,
+        EntityId geometry_handle,
         uint32_t       mesh_index,
         int            lod_level) const;
 
     /// 查询某个 mesh 已就绪的 LOD 级别数
     /// @return 0 表示该 mesh 还未上传任何 LOD 数据
-    [[nodiscard]] int get_lod_count(std::uintptr_t geometry_handle,
+    [[nodiscard]] int get_lod_count(EntityId geometry_handle,
                                     uint32_t       mesh_index) const;
 
     /// 一站式 LOD 级别选择：给定屏幕占比，返回应使用的 LOD 级别
@@ -553,7 +554,7 @@ class GeometrySystem : public Kernel::SystemBase {
     /// @param mesh_index      子网格索引
     /// @param screen_ratio    物体在屏幕上的占比（0~1），由 compute_screen_ratio() 算得
     /// @return 应使用的 LOD 级别（0=原始，1..N=各级简化）
-    [[nodiscard]] int resolve_lod_level(std::uintptr_t geometry_handle,
+    [[nodiscard]] int resolve_lod_level(EntityId geometry_handle,
                                         uint32_t       mesh_index,
                                         float          screen_ratio) const;
 
@@ -567,7 +568,7 @@ class GeometrySystem : public Kernel::SystemBase {
     ///
     /// @return 指向 LODMeshBuffers 的指针，或 nullptr 表示该 mesh 无 LOD 数据
     [[nodiscard]] const LODMeshBuffers* resolve_lod_buffers(
-        std::uintptr_t geometry_handle,
+        EntityId geometry_handle,
         uint32_t       mesh_index,
         float          screen_ratio) const;
 
@@ -583,7 +584,7 @@ class GeometrySystem : public Kernel::SystemBase {
     /// @param mesh_index      子网格索引
     /// @return 各 LOD 级别的 (vertexBuffer, vertexStorageBuffer) 句柄对，含 LOD0
     [[nodiscard]] std::vector<std::pair<Horizon::HardwareBuffer, Horizon::HardwareBuffer>>
-    get_skinning_targets(std::uintptr_t geometry_handle, uint32_t mesh_index) const;
+    get_skinning_targets(EntityId geometry_handle, uint32_t mesh_index) const;
 
     struct SkinningLodTarget {
         // Stable index in MeshData::lod_levels, independent of CPU residency.
@@ -597,7 +598,7 @@ class GeometrySystem : public Kernel::SystemBase {
     /// must use this index instead of matching the current nonempty levels.
     /// Nonresident GPU levels retain their index and have empty buffer handles.
     [[nodiscard]] std::vector<SkinningLodTarget>
-    get_skinning_lod_targets(std::uintptr_t geometry_handle, uint32_t mesh_index) const;
+    get_skinning_lod_targets(EntityId geometry_handle, uint32_t mesh_index) const;
 
     // ========================================
     // 统计
@@ -639,7 +640,7 @@ class GeometrySystem : public Kernel::SystemBase {
     /// upload.  In that case ActorLoadFinishedEvent is emitted on publication.
     bool rebuild_actor_gpu_resources(std::uintptr_t actor,
                                      std::uint64_t rid,
-                                     std::uintptr_t scene_handle = 0);
+                                     EntityId scene_handle = 0);
 
     // ========================================
     // 动态减面内部管线（在 update() 中每帧调用，外部不可见）

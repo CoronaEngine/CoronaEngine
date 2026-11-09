@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -14,8 +15,8 @@ struct ViewportGizmoTargetRequest {
     std::string camera_id;
     std::string archive_session;
     std::optional<std::string> actor_guid;
-    std::uintptr_t camera_handle = 0;
-    std::uintptr_t actor_handle = 0;
+    EntityId camera_handle = 0;
+    EntityId actor_handle = 0;
     std::string error_code, error_message;
     std::shared_ptr<CameraWindowAuthority> camera_authority;
 };

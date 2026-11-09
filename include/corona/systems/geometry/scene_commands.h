@@ -41,7 +41,7 @@ enum class SceneCommandKind : std::uint8_t {
 };
 
 struct SceneCommand {
-    std::uintptr_t scene_handle{};
+    EntityId scene_handle{};
     SceneCommandKind kind{SceneCommandKind::SetEnabled};
     /// actor / camera / environment 的槽位句柄；标量命令为 0。
     std::uintptr_t target{};
@@ -72,7 +72,7 @@ class SceneCommandChannel {
 };
 
 /// 入队一条场景命令（任意线程）。
-inline void push_scene_command(std::uintptr_t scene_handle, SceneCommandKind kind,
+inline void push_scene_command(EntityId scene_handle, SceneCommandKind kind,
                                std::uintptr_t target = 0, bool flag = true) {
     if (scene_handle == 0) {
         return;

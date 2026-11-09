@@ -151,7 +151,7 @@ void UiSystem::stop() {
     browser_manager.close_all_tabs();
 
     while (!camera_handles.empty() && std::chrono::steady_clock::now() < deadline) {
-        std::erase_if(camera_handles, [](const std::uintptr_t camera_handle) {
+        std::erase_if(camera_handles, [](const EntityId camera_handle) {
             auto camera =
                 SharedDataHub::instance().camera_storage().try_acquire_read(camera_handle);
             return !camera || camera->surface == nullptr;

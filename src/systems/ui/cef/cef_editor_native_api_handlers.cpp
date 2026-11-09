@@ -4738,7 +4738,7 @@ uint64_t collaboration_now_ms() {
 
 }  // namespace
 
-std::uintptr_t resolve_native_actor_handle_by_guid(const std::string& scene_id,
+EntityId resolve_native_actor_handle_by_guid(const std::string& scene_id,
                                                    const std::string& archive_session,
                                                    const std::string& actor_guid,
                                                    std::string& error_code,
@@ -8853,7 +8853,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
                 return native_failure("NetworkSystem unavailable", 2);
             }
             const std::string actor_guid = arg_string(request.args, 0);
-            const std::uintptr_t actor_handle = arg_uintptr(request.args, 1);
+            const EntityId actor_handle = arg_uintptr(request.args, 1);
             const bool locally_owned = arg_bool(request.args, 2, true);
             Corona::Network::NetworkCommand command{};
             command.kind = Corona::Network::NetworkCommandKind::RegisterActorIdentity;

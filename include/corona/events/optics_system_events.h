@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <horizon/core/storage.h>
 
 #include <future>
@@ -41,7 +42,7 @@ struct OpticsToEngineDemoEvent {
  * display surface) can still take screenshots.
  */
 struct ScreenshotRequestEvent {
-    std::uintptr_t camera_handle = 0;
+    EntityId camera_handle = 0;
     std::string file_path;
     std::shared_ptr<std::promise<bool>> completion_promise;
     std::chrono::steady_clock::time_point deadline{};
@@ -61,7 +62,7 @@ struct ScreenshotRequestEvent {
  */
 struct RenderBackendSwitchEvent {
     int backend = 0;
-    std::uintptr_t camera_handle = 0;
+    EntityId camera_handle = 0;
 };
 
 }  // namespace Corona::Events

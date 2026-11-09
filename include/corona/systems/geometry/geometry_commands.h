@@ -47,7 +47,7 @@ constexpr bool has_geometry_field(GeometryField fields, GeometryField field) {
 }
 
 struct GeometryCommand {
-    std::uintptr_t geometry_handle{};
+    EntityId geometry_handle{};
     GeometryField fields{GeometryField::None};
 
     // NativeLocalCorrection

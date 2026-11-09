@@ -160,7 +160,7 @@ struct PreparedInstance {
 };
 
 struct PreparedGeometry {
-    std::uintptr_t geometry_handle{};
+    EntityId geometry_handle{};
     OpticsDevice optics;
     std::unordered_map<std::size_t, PreparedMesh> meshes;
     std::vector<PreparedInstance> instances;
@@ -194,7 +194,7 @@ using PreparedGroup = std::vector<PreparedGeometry>;
     return true;
 }
 
-void stage_actor_geometry(std::uintptr_t actor_handle,
+void stage_actor_geometry(EntityId actor_handle,
                           PreparedGroup& group,
                           VisionBuildResult& result) {
     auto& hub = SharedDataHub::instance();

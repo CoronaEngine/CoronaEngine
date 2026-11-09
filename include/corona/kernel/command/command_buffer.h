@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 /// 入站命令队列：**单消费者**（拥有数据的 DAG 系统），多生产者（CEF / 脚本 / 网络 / 主线程）。
 ///
 /// 设计要点（见 docs/dag-command-vs-event.md 第 2.1 节）：
@@ -14,7 +15,7 @@
 ///
 /// 用法：
 /// @code
-///   struct CameraMoveCommand { std::uintptr_t camera_handle; ... };
+///   struct CameraMoveCommand { EntityId camera_handle; ... };
 ///   struct CameraMoveKey {
 ///       static std::uintptr_t get(const CameraMoveCommand& c) noexcept { return c.camera_handle; }
 ///   };

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <corona/camera_command_authority.h>
 
 #include <cstdint>
@@ -28,7 +29,7 @@ enum class DetachedWindowCloseAction {
 struct CameraViewportRecord {
     std::string scene_id;
     std::string camera_id;
-    std::uintptr_t camera_handle{};
+    EntityId camera_handle{};
     int tab_id{-1};
     void* surface{};
     int x{120};
@@ -46,7 +47,7 @@ class CameraViewportManager {
     static CameraViewportManager& instance();
 
     bool register_view(std::string scene_id, std::string camera_id,
-                       std::uintptr_t camera_handle, int tab_id,
+                       EntityId camera_handle, int tab_id,
                        std::shared_ptr<CameraWindowState> window_state = {},
                        std::shared_ptr<CameraCommandAuthority> camera_authority = {});
     bool bind_surface(int tab_id, void* surface, int x, int y, int width, int height);

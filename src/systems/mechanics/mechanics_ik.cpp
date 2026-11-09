@@ -1,4 +1,5 @@
 #include "mechanics_internal.h"
+#include <corona/kernel/entity_id.h>
 #include "gpu_performance.h"
 #include "ik_runtime.h"
 
@@ -25,7 +26,7 @@ void MechanicsSystem::refresh_foot_ground_cache() {
     impl_->ik_geometry_actors.clear();
     impl_->ik_scene_floors.clear();
     std::unordered_set<std::uintptr_t> alive;
-    struct SceneSnapshot { std::uintptr_t handle; std::uintptr_t environment; std::vector<std::uintptr_t> actors; };
+    struct SceneSnapshot { EntityId handle; std::uintptr_t environment; std::vector<std::uintptr_t> actors; };
     std::vector<SceneSnapshot> scenes;
     const auto& scene_storage = hub.scene_storage();
     for (const auto& scene : scene_storage) {
@@ -45,7 +46,7 @@ void MechanicsSystem::refresh_foot_ground_cache() {
             std::vector<std::uintptr_t> profiles;
             { auto actor = hub.actor_storage().try_acquire_read(actor_handle); if (actor) profiles = actor->profile_handles; }
             for (auto ph : profiles) {
-                std::uintptr_t mechanics_handle = 0;
+                EntityId mechanics_handle = 0;
                 { auto profile = hub.profile_storage().try_acquire_read(ph); if (profile) mechanics_handle = profile->mechanics_handle; }
                 if (!mechanics_handle) continue;
                 std::uintptr_t gh = 0;
@@ -53,7 +54,7 @@ void MechanicsSystem::refresh_foot_ground_cache() {
                   if (!body || body->body_type == BodyType::Phantom) continue;
                   gh = body->geometry_handle; }
                 if (!gh || alive.count(gh)) continue;
-                std::uintptr_t resource_handle = 0, transform_handle = 0;
+                EntityId resource_handle = 0, transform_handle = 0;
                 { auto geometry = hub.geometry_storage().try_acquire_read(gh);
                   if (!geometry || geometry->gpu_build_state != GeometryDevice::GpuBuildState::Ready || geometry->mesh_handles.empty()) continue;
                   resource_handle = geometry->model_resource_handle;
@@ -105,7 +106,7 @@ void MechanicsSystem::refresh_foot_ground_cache() {
     if (!snapshot_keys.empty()) impl_->gpu_collision->snapshot_ground(snapshot_keys);
 }
 
-void MechanicsSystem::update_foot_targets(std::uintptr_t geom_handle,
+void MechanicsSystem::update_foot_targets(EntityId geom_handle,
     const Resource::SkeletonData& skeleton,
     const std::vector<std::array<float, 16>>& locals,
     std::vector<Resource::IkChain>& chains, float dt) {
@@ -131,7 +132,7 @@ void MechanicsSystem::update_foot_targets(std::span<const FootPose> poses, float
 
     for (const auto& pose : poses) {
         if (!pose.skeleton || !pose.locals || !pose.chains) continue;
-        std::uintptr_t transform_handle = 0;
+        EntityId transform_handle = 0;
         { auto geometry = hub.geometry_storage().try_acquire_read(pose.geometry); if (geometry) transform_handle = geometry->transform_handle; }
         ktm::fmat4x4 model_to_world{}, world_to_model{};
         bool have_transform = false;

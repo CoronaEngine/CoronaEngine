@@ -29,7 +29,7 @@ void MechanicsSystem::process_mesh_moves() {
     for(auto& request:pending) {
         auto run=[&]() -> MeshMoveEvent {
             const auto& q=request.command;
-            auto unavailable=[&](const char* reason, std::uintptr_t handle=0) -> MeshMoveEvent {
+            auto unavailable=[&](const char* reason, EntityId handle=0) -> MeshMoveEvent {
                 if(GpuPerformance::enabled()) CFW_LOG_INFO("Mesh movement pending: actor={} reason={} handle={}",q.actor,reason,handle);
                 return {};
             };
@@ -48,7 +48,7 @@ void MechanicsSystem::process_mesh_moves() {
                 std::vector<Bounds> obstacle_bounds;Bounds moving_bounds;
                 GpuCollisionPipeline::Instance moving{};
                 ModelTransform original;
-                std::uintptr_t transform_handle{};
+                EntityId transform_handle{};
                 for(auto actor_handle:scene.actor_handles) {
                     auto actor=hub.actor_storage().try_acquire_read(actor_handle);
                     if(!actor) return unavailable("actor",actor_handle);

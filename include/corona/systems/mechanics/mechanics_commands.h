@@ -56,7 +56,7 @@ constexpr bool has_mechanics_field(MechanicsField fields, MechanicsField field) 
 }
 
 struct MechanicsUpdateCommand {
-    std::uintptr_t mechanics_handle{};
+    EntityId mechanics_handle{};
     MechanicsField fields{MechanicsField::None};
     float mass{1.0f};
     float restitution{0.8f};
@@ -84,7 +84,7 @@ struct MechanicsUpdateKey {
 
 /// 对外的力学参数投影（不含回调与几何句柄）
 struct MechanicsSnapshotRow {
-    std::uintptr_t handle{0};
+    EntityId handle{0};
     float mass{1.0f};
     float restitution{0.8f};
     float damping{0.99f};
@@ -117,7 +117,7 @@ class MechanicsCommandChannel {
     Kernel::SnapshotChannel<MechanicsSnapshot> snapshots_;
 };
 
-inline MechanicsSnapshotRow make_mechanics_row(std::uintptr_t handle, const MechanicsDevice& device) {
+inline MechanicsSnapshotRow make_mechanics_row(EntityId handle, const MechanicsDevice& device) {
     MechanicsSnapshotRow row;
     row.handle = handle;
     row.mass = device.mass;
@@ -144,7 +144,7 @@ inline void publish_mechanics_snapshot_from_storage() {
     MechanicsCommandChannel::instance().snapshots().publish(std::move(snapshot));
 }
 
-[[nodiscard]] inline std::optional<MechanicsSnapshotRow> mechanics_row(std::uintptr_t handle) {
+[[nodiscard]] inline std::optional<MechanicsSnapshotRow> mechanics_row(EntityId handle) {
     if (handle == 0) {
         return std::nullopt;
     }
@@ -161,7 +161,7 @@ inline void publish_mechanics_snapshot_from_storage() {
 }
 
 /// 有效值 = 快照（已提交）+ 待处理命令（pending），用于 get_* 的读己之写
-[[nodiscard]] inline std::optional<MechanicsSnapshotRow> mechanics_view(std::uintptr_t handle) {
+[[nodiscard]] inline std::optional<MechanicsSnapshotRow> mechanics_view(EntityId handle) {
     if (handle == 0) {
         return std::nullopt;
     }

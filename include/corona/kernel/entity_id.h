@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <cstdint>
 
 namespace Corona {
@@ -22,3 +23,9 @@ using EntityId = std::uintptr_t;
 inline constexpr EntityId kInvalidEntity = 0;
 
 }  // namespace Corona
+
+// 让全局作用域也能直接使用 EntityId。
+// 原因：不少 .cpp 在文件级的匿名命名空间里定义持句柄的 helper（那不在
+// `namespace Corona` 内），逐个文件补 using 容易漏；这里统一导出一次。
+using Corona::EntityId;
+using Corona::kInvalidEntity;

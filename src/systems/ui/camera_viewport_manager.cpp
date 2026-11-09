@@ -32,7 +32,7 @@ CameraViewportManager& CameraViewportManager::instance() {
 }
 
 bool CameraViewportManager::register_view(std::string scene_id, std::string camera_id,
-                                          std::uintptr_t camera_handle, int tab_id,
+                                          EntityId camera_handle, int tab_id,
                                           std::shared_ptr<CameraWindowState> window_state,
                                           std::shared_ptr<CameraCommandAuthority> camera_authority) {
     if (scene_id.empty() || camera_id.empty() || camera_handle == 0 || tab_id < 0) {
