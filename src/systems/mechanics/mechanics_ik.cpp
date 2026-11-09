@@ -29,8 +29,9 @@ void MechanicsSystem::refresh_foot_ground_cache() {
     struct SceneSnapshot { EntityId handle; std::uintptr_t environment; std::vector<std::uintptr_t> actors; };
     std::vector<SceneSnapshot> scenes;
     const auto& scene_storage = hub.scene_storage();
-    for (const auto& scene : scene_storage) {
-        if (scene.enabled) scenes.push_back({reinterpret_cast<std::uintptr_t>(&scene), scene.environment, scene.actor_handles});
+    for (auto scene_it = scene_storage.cbegin(); scene_it != scene_storage.cend(); ++scene_it) {
+        const auto& scene = *scene_it;
+        if (scene.enabled) scenes.push_back({scene_it.id(), scene.environment, scene.actor_handles});
     }
     for (const auto& scene : scenes) {
         float floor = 0.0f;

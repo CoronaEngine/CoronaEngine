@@ -38,10 +38,12 @@ void MechanicsSystem::process_mesh_moves() {
                std::any_of(q.velocity.begin(),q.velocity.end(),[](float x) { return !std::isfinite(x) || std::abs(x)>24; })) return {"invalid"};
             if(std::chrono::steady_clock::now()-request.submitted>std::chrono::seconds(2)) return {"expired"};
             if(!impl_->gpu_collision) return unavailable("pipeline");
-            for(const auto& scene:std::as_const(hub.scene_storage())) {
+            auto& motion_scenes = hub.scene_storage();
+            for(auto scene_it = motion_scenes.cbegin(); scene_it != motion_scenes.cend(); ++scene_it) {
+                const auto& scene = *scene_it;
                 if(!scene.enabled || std::find(scene.camera_handles.begin(),scene.camera_handles.end(),q.camera)==scene.camera_handles.end() ||
                    std::find(scene.actor_handles.begin(),scene.actor_handles.end(),q.actor)==scene.actor_handles.end()) continue;
-                const auto scene_handle=reinterpret_cast<std::uintptr_t>(&scene);
+                const auto scene_handle=scene_it.id();
                 std::vector<GpuCollisionPipeline::Instance> obstacles;
                 std::vector<std::uintptr_t> obstacle_actors;
                 struct Bounds { std::array<float,3> low{},high{};bool valid{}; };

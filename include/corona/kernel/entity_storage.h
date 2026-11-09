@@ -204,6 +204,10 @@ class EntityStorage {
         Iterator(entt::registry* registry, ViewIterator it)
             : registry_(registry), it_(std::move(it)) {}
 
+        /// 当前元素的实体 ID。旧 Storage 里句柄就是槽位地址，调用方习惯用
+        ///  反推；换成 entt 后地址不再是句柄，必须显式取。
+        [[nodiscard]] EntityId id() const { return to_entity_id(*it_); }
+
         [[nodiscard]] T& operator*() const { return *registry_->get<Holder>(*it_).value; }
         [[nodiscard]] T* operator->() const { return registry_->get<Holder>(*it_).value.get(); }
 

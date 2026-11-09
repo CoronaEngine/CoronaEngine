@@ -250,12 +250,12 @@ void SharedDataHub::publish_camera_snapshot_from_storage() {
     CameraSnapshot snapshot;
     snapshot.tick = camera_snapshot_.revision() + 1;
     const auto& storage = camera_storage_;
-    for (const auto& camera : std::as_const(storage)) {
-        const auto handle = reinterpret_cast<std::uintptr_t>(static_cast<const void*>(&camera));
+    for (auto camera_it = storage.cbegin(); camera_it != storage.cend(); ++camera_it) {
+        const auto handle = camera_it.id();
         if (handle == 0) {
             continue;
         }
-        snapshot.rows.push_back(make_camera_row(handle, camera));
+        snapshot.rows.push_back(make_camera_row(handle, *camera_it));
     }
     camera_snapshot_.publish(std::move(snapshot));
 }
@@ -431,8 +431,9 @@ void SharedDataHub::publish_transform_snapshot_from_storage() {
     TransformSnapshot snapshot;
     snapshot.tick = transform_snapshot_.revision() + 1;
     const auto& storage = model_transform_storage_;
-    for (const auto& transform : std::as_const(storage)) {
-        const auto handle = reinterpret_cast<std::uintptr_t>(static_cast<const void*>(&transform));
+    for (auto transform_it = storage.cbegin(); transform_it != storage.cend(); ++transform_it) {
+        const auto handle = transform_it.id();
+        const auto& transform = *transform_it;
         if (handle == 0) {
             continue;
         }

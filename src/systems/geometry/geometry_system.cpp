@@ -58,7 +58,7 @@ void refresh_geometry_resource_bounds(EntityId geometry_handle, std::uint64_t mo
     // Do not acquire a write lock while a storage iterator retains its read lock.
     for (auto it = mechanics.cbegin(); it != mechanics.cend(); ++it) {
         if (it->geometry_handle == geometry_handle) {
-            handles.push_back(reinterpret_cast<std::uintptr_t>(&*it));
+            handles.push_back(it.id());
         }
     }
     for (auto handle : handles) {
@@ -308,7 +308,7 @@ void GeometrySystem::update() {
     {
         for (auto it = scene_storage.cbegin(); it != scene_storage.cend(); ++it) {
             const SceneDevice& scene_dev = *it;
-            scene_handles.push_back(reinterpret_cast<std::uintptr_t>(&scene_dev));
+            scene_handles.push_back(it.id());
         }
     }
 
@@ -2829,7 +2829,7 @@ void GeometrySystem::process_pending_geometry_imports() {
                 }
                 not_ready_detail += " [";
                 not_ready_detail += std::to_string(
-                    static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&geom_dev)));
+                    static_cast<unsigned long long>(it.id()));
                 not_ready_detail += "]" + std::string(state_name(geom_dev.gpu_build_state));
                 not_ready_detail += " meshes=" + std::to_string(geom_dev.mesh_handles.size());
                 not_ready_detail += " model=" + std::to_string(model_id);
@@ -2929,7 +2929,7 @@ void GeometrySystem::process_pending_geometry_imports() {
     for (auto it = geom_storage.cbegin(); it != geom_storage.cend(); ++it) {
         const GeometryDevice& geom_dev = *it;
         if (geom_dev.gpu_build_state != GeometryDevice::GpuBuildState::PendingImport) continue;
-        auto geom_handle = reinterpret_cast<std::uintptr_t>(&geom_dev);
+        auto geom_handle = it.id();
         if (impl_->pending_import_tasks.count(geom_handle)) {
             // 正常只是一帧的窗口（任务已发起、结果未回）。若长期如此，心跳里的
             // import_tasks age_ms 会持续增长 —— 那说明在途任务本身没跑完。
@@ -3121,7 +3121,7 @@ void GeometrySystem::process_pending_geometry_builds() {
         const GeometryDevice& geom_dev = *it;
         if (geom_dev.gpu_build_state != GeometryDevice::GpuBuildState::PendingBuild) continue;
         if (!geom_dev.model_resource_handle) continue;
-        const auto geom_handle = reinterpret_cast<std::uintptr_t>(&geom_dev);
+        const auto geom_handle = it.id();
         // Actor reload/rebuild may have filled the mesh handles while the
         // geometry was still marked PendingBuild. Record it and transition the
         // state after the read-only iteration; never acquire a write lock while
@@ -3235,7 +3235,7 @@ void GeometrySystem::upload_lod_from_scene_data() {
 
     for (auto it = geom_storage.cbegin(); it != geom_storage.cend(); ++it) {
         const GeometryDevice& geom_dev = *it;
-        auto geom_handle = reinterpret_cast<std::uintptr_t>(&geom_dev);
+        auto geom_handle = it.id();
         if (!geom_dev.model_resource_handle) continue;
 
         // 通过 ModelResource 解析真正的 ResourceManager UID

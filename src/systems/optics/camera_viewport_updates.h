@@ -35,8 +35,9 @@ inline bool apply_camera_viewport_update(SharedDataHub& hub, const CameraViewpor
         // The live embedded viewport owns this surface. A retired command must
         // never detach another camera, even when its old handle no longer exists.
         std::vector<std::uintptr_t> obsolete;
-        for (const auto& camera : std::as_const(storage)) {
-            const auto handle = reinterpret_cast<std::uintptr_t>(&camera);
+        for (auto camera_it = storage.cbegin(); camera_it != storage.cend(); ++camera_it) {
+            const auto handle = camera_it.id();
+            const auto& camera = *camera_it;
             if (handle != update.camera_handle && camera.surface == update.surface && !camera.view_open)
                 obsolete.push_back(handle);
         }

@@ -335,7 +335,7 @@ struct SyncEngine::Impl {
         {
             auto& store = hub.model_transform_storage();
             for (auto it = store.cbegin(); it != store.cend(); ++it) {
-                auto obj_id = reinterpret_cast<std::uintptr_t>(&(*it));
+                const auto obj_id = it.id();
                 mt_seq_to_id[store.seq_id(obj_id)] = obj_id;
             }
         }
@@ -344,7 +344,7 @@ struct SyncEngine::Impl {
         {
             auto& store = hub.model_resource_storage();
             for (auto it = store.cbegin(); it != store.cend(); ++it) {
-                auto obj_id = reinterpret_cast<std::uintptr_t>(&(*it));
+                const auto obj_id = it.id();
                 mr_seq_to_id[store.seq_id(obj_id)] = obj_id;
             }
         }
@@ -353,7 +353,7 @@ struct SyncEngine::Impl {
         {
             auto& store = hub.geometry_storage();
             for (auto it = store.cbegin(); it != store.cend(); ++it) {
-                auto obj_id = reinterpret_cast<std::uintptr_t>(&(*it));
+                const auto obj_id = it.id();
                 geo_seq_to_id[store.seq_id(obj_id)] = obj_id;
             }
         }
@@ -362,7 +362,7 @@ struct SyncEngine::Impl {
         {
             auto& store = hub.optics_storage();
             for (auto it = store.cbegin(); it != store.cend(); ++it) {
-                auto obj_id = reinterpret_cast<std::uintptr_t>(&(*it));
+                const auto obj_id = it.id();
                 opt_seq_to_id[store.seq_id(obj_id)] = obj_id;
             }
         }
@@ -371,7 +371,7 @@ struct SyncEngine::Impl {
         {
             auto& store = hub.environment_storage();
             for (auto it = store.cbegin(); it != store.cend(); ++it) {
-                auto obj_id = reinterpret_cast<std::uintptr_t>(&(*it));
+                const auto obj_id = it.id();
                 env_seq_to_id[store.seq_id(obj_id)] = obj_id;
             }
         }
@@ -651,7 +651,7 @@ void SyncEngine::poll_and_sync() {
         auto& store = hub.model_transform_storage();
         for (auto it = store.cbegin(); it != store.cend(); ++it) {
             const ModelTransform& data = *it;
-            auto obj_id = reinterpret_cast<std::uintptr_t>(&data);
+            const auto obj_id = it.id();
             auto ent_seq = store.seq_id(obj_id);
 
             if (!impl_->guid_for_entity) continue;
@@ -700,7 +700,7 @@ void SyncEngine::poll_and_sync() {
         auto& store = hub.optics_storage();
         for (auto it = store.cbegin(); it != store.cend(); ++it) {
             const OpticsDevice& data = *it;
-            auto obj_id = reinterpret_cast<std::uintptr_t>(&data);
+            const auto obj_id = it.id();
             auto ent_seq = store.seq_id(obj_id);
             if (!impl_->guid_for_entity) continue;
             auto actor_guid = impl_->guid_for_entity(StorageID::ST_OPTICS, ent_seq);
@@ -742,7 +742,7 @@ void SyncEngine::poll_and_sync() {
         auto& store = hub.environment_storage();
         for (auto it = store.cbegin(); it != store.cend(); ++it) {
             const EnvironmentDevice& data = *it;
-            auto obj_id = reinterpret_cast<std::uintptr_t>(&data);
+            const auto obj_id = it.id();
             auto ent_seq = store.seq_id(obj_id);
 
             std::string cur_hash = hash_env(data, ent_seq);

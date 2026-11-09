@@ -134,8 +134,9 @@ inline void publish_mechanics_snapshot_from_storage() {
     auto& storage = SharedDataHub::instance().mechanics_storage();
     MechanicsSnapshot snapshot;
     snapshot.tick = MechanicsCommandChannel::instance().snapshots().revision() + 1;
-    for (const auto& device : std::as_const(storage)) {
-        const auto handle = reinterpret_cast<std::uintptr_t>(static_cast<const void*>(&device));
+    for (auto device_it = storage.cbegin(); device_it != storage.cend(); ++device_it) {
+        const auto handle = device_it.id();
+        const auto& device = *device_it;
         if (handle == 0) {
             continue;
         }

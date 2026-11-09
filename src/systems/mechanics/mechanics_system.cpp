@@ -103,7 +103,8 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     scene_mechanics.reserve(4);
 
     // --- 阶段 1：遍历场景 → 读环境(gravity/floor/dt) → 展开 Actor/Profile → 收集 mechanics_handle ---
-    for (const auto& scene : scene_storage) {
+    for (auto scene_it = scene_storage.cbegin(); scene_it != scene_storage.cend(); ++scene_it) {
+        const auto& scene = *scene_it;
         if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
             return;
         }
@@ -112,7 +113,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
         if (!scene.simulation_enabled)
             continue;
-        const auto scene_handle = reinterpret_cast<std::uintptr_t>(&scene);
+        const auto scene_handle = scene_it.id();
         auto& scene_bodies = scene_mechanics.emplace_back();
 
         // 若绑定了 environment：覆盖重力；接触只来自场景三角形。
@@ -1268,7 +1269,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         const GeometryDevice& geometry = *geometry_it;
         if (geometry.is_skinned && geometry.model_resource_handle && !geometry.mesh_handles.empty() &&
             geometry.gpu_build_state == GeometryDevice::GpuBuildState::Ready) {
-            alive_geom_handles.insert(reinterpret_cast<std::uintptr_t>(&geometry));
+            alive_geom_handles.insert(geometry_it.id());
         }
     }
 
@@ -1352,7 +1353,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     bool needs_ground_queries = false;
     for (auto it = geom_storage.cbegin(); it != geom_storage.cend(); ++it) {
         const GeometryDevice& geom_dev = *it;
-        geom_handles.push_back(reinterpret_cast<std::uintptr_t>(&geom_dev));
+        geom_handles.push_back(it.id());
         for (const auto& chain : geom_dev.ik_chains)
             needs_ground_queries |= chain.mode == Resource::IkChain::Mode::FootPlant && chain.enabled && chain.weight > 0;
     }

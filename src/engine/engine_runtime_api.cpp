@@ -2799,9 +2799,10 @@ void set_default_surface(void* surface) {
     // 这里只**读** follows_default_surface，写一律走相机命令通道——
     // 原来的 `camera.surface = surface` 是未加锁的跨线程写。
     std::vector<std::uintptr_t> targets;
-    for (const auto& camera : SharedDataHub::instance().camera_storage()) {
-        if (camera.follows_default_surface) {
-            targets.push_back(reinterpret_cast<std::uintptr_t>(static_cast<const void*>(&camera)));
+    auto& camera_storage_ref = SharedDataHub::instance().camera_storage();
+    for (auto camera_it = camera_storage_ref.cbegin(); camera_it != camera_storage_ref.cend(); ++camera_it) {
+        if (camera_it->follows_default_surface) {
+            targets.push_back(camera_it.id());
         }
     }
     for (const auto handle : targets) {
