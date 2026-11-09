@@ -61,7 +61,39 @@ Engine 停止使用后，Horizon 的引用不受影响，`horizon/core/storage.h
 
 ---
 
-## 2. 尚未完成
+## 2. 验证结果（全量构建 + 全量测试）
+
+```
+ninja -k 0   → 唯一失败仍是既有缺陷 corona_ui_surface_removal_race_tests（源列表缺 main）
+ctest --output-on-failure → 111 个用例，87% 通过（14 失败）
+```
+
+失败分类：
+
+| 用例 | 数量 | 归因 |
+| --- | --- | --- |
+| Vision{Relax,ReSTIR,Reblur,Principled}* | 7 | **环境**：`create_directories: Access is denied`（沙箱禁止在临时目录建目录） |
+| NetworkProtocolTests / PythonPathConfigTests | 2 | 既有（`0xC0000409`，合并前即如此） |
+| SceneFolderTests / ArchiveRoundtripTests / CollaborativeEditorLoopbackTests | 3 | 既有（Python 存档夹具阶段，与 C++ 无交集） |
+| UiSurfaceRemovalRaceTests | 1 | 既有（目标缺 `main()`，链接不出来） |
+| **CameraWindowIdentityTests** | 1 | **未定案**：编辑器 actor 属性读回（type/load/transform）与预期不符，疑似本次改动残留 |
+
+**修复过程中发现并解决的真 bug**（换容器必然撞到的）：
+
+旧 `Storage` 里"槽位地址 == 句柄"，全仓有十几处
+`reinterpret_cast<uintptr_t>(&element)` 用它反推句柄。换成 entt 后元素地址
+与实体无关，这些地方拿到垃圾句柄——表现为快照行查不到、测试里
+`camera_row(handle)` / `mechanics_row(handle)` 全部失败。
+
+统一改成迭代器的 `id()`（`entity_storage.h` 的 `Iterator` 新增 `id()`）。
+涉及：两个快照发布函数、四个 `*_commands.h` 的快照发布、默认 surface 目标收集、
+以及 geometry/mechanics/mesh_motion/camera_viewport_updates/sync_engine 的遍历。
+
+全量通过率 84% → 87%，`InteractionBoundaryTests` 等 4 个用例恢复。
+
+---
+
+## 3. 尚未完成
 
 ### S4 · 跨线程读改快照（47 处）
 
