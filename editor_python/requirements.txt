@@ -1,0 +1,4 @@
+# The editor AI services use the Python standard library.
+# Retained for CoronaEngine image/vision regression tools sharing this environment.
+numpy
+Pillow
