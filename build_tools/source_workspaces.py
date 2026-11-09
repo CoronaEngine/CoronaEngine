@@ -1,4 +1,4 @@
-"""Source dependency baselines. Change these commits to update a pinned version.
+﻿"""Source dependency baselines. Change these commits to update a pinned version.
 
 Build preparation aligns local HEAD to these pins, preserving nonconflicting
 edits. A different live remote branch tip only produces a warning.
@@ -54,7 +54,7 @@ EDITOR = SourceWorkspace(
     directory=Path("CoronaEditor"),
     url="https://github.com/CoronaEngine/CoronaEditor.git",
     ref="codex/remove-story-world",
-    commit="2020dd882853497a47ff58bc33bffe34cf340bd3",
+    commit="1962c88852f99a61e69b71e37bd5805d4211487d",
 )
 
 WORKSPACES = (HORIZON, EDITOR)
