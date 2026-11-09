@@ -54,8 +54,8 @@ def _should_ignore(name: str) -> bool:
         "README.md", "docs",
         # Dependencies manifests (dev-only lock files)
         "requirements.txt", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-        # Test files
-        "tests", "test",
+        # Test files and engine-only python development assets
+        "tests", "test", "frontend_tests", "frontend_assets", "conftest.py",
         # Temporary and log files
         ".cache", ".temp", ".tmp", "tmp", ".retired-plugins",
         # OS files

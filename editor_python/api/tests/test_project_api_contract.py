@@ -46,7 +46,7 @@ def test_project_lifecycle_manifest_methods_have_public_wrappers():
 
 def test_active_project_info_exposes_goal_metadata_for_editor_adapters():
     source = (
-        REPO_ROOT / "CoronaEditor/editor/runtime/archive/project.py"
+        REPO_ROOT / "editor_python/runtime/archive/project.py"
     ).read_text(encoding="utf-8")
 
     assert '"prompt": config.get("world", "prompt"' in source

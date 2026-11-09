@@ -11,7 +11,10 @@ SCHEMA_VERSION = 1
 TARGET_ID = "node_graph:project:global"
 VALID_NODE_TYPES = {"start", "custom", "end"}
 VALID_PORT_SIDES = {"left", "right", "bottom"}
-CONTRACT_PATH = Path(__file__).resolve().parents[2] / "CoronaEditor" / "editor" / "Frontend" / "src/services/aiBlockContract.xml"
+_ROOT = Path(__file__).resolve().parents[2]
+_FRONTEND_ROOT = (_ROOT if (_ROOT / "src/services/aiBlockContract.xml").is_file()
+                  else _ROOT / "CoronaEditor" / "editor" / "Frontend")
+CONTRACT_PATH = _FRONTEND_ROOT / "src/services/aiBlockContract.xml"
 
 
 @dataclass(frozen=True)

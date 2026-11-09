@@ -4,6 +4,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 EDITOR = Path(__file__).resolve().parents[2] / "CoronaEditor" / "editor"
+PYTHON = Path(__file__).resolve().parents[2] / "editor_python"
 WEB = EDITOR / "Frontend/src/services"
 
 
@@ -22,8 +23,8 @@ def test_web_catalog_matches_the_canonical_xml():
 
 
 def test_ai_is_web_owned_without_native_or_python_ai_routes():
-    assert not (EDITOR / "plugins/AITool/main.py").exists()
-    registry = (EDITOR / "runtime/registry.py").read_text(encoding="utf-8")
+    assert not (PYTHON / "plugins/AITool/main.py").exists()
+    registry = (PYTHON / "runtime/registry.py").read_text(encoding="utf-8")
     assert "AITool" not in registry
     transport = (WEB / "aiModelService.js").read_text(encoding="utf-8")
     assert "editorApi" not in transport
