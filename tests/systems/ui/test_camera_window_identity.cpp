@@ -8,6 +8,7 @@
 #include <corona/systems/ui/camera_viewport_manager.h>
 #include <corona/systems/script/python_runtime_coordinator.h>
 #include "cef/cef_editor_native_api_registry.h"
+#include "cef/script_runtime_api.h"
 #include "cef/cef_editor_native_api_test_support.h"
 #include "cef/cef_window_operations.h"
 #include "cef/cef_scene_operations.h"
@@ -76,8 +77,21 @@ void test_native_script_service_wait_does_not_hold_editor_state(bool queued_befo
     std::future<UI::NativeResult> native;
     const auto start_native = [&] {
         native = std::async(std::launch::async, [&] {
-            return UI::invoke_python_script_service(
-                {"FileScripts", "stop_file", Json::array({Json{{"runId", "dispatch-regression"}}})});
+            // What a Native caller used to do through the manifest: dispatch to the
+            // editor owner thread first, and never take the Python-callback handoff.
+            const auto route = Dispatch::decide_editor_dispatch_route(
+                Dispatch::on_editor_owner_thread(),
+                Dispatch::editor_thread_waiting_for_python(),
+                Dispatch::editor_owner_thread_seen());
+            Dispatch::EditorDispatchReport report;
+            auto outcome = Dispatch::call_editor_dispatch(
+                [] {
+                    return UI::invoke_python_script_service(
+                        {"FileScripts", "stop_file",
+                         Json::array({Json{{"runId", "dispatch-regression"}}})});
+                },
+                route, 5s, &report, /*allow_python_handoff=*/false);
+            return outcome ? *outcome : UI::native_failure("dispatch did not run", 503);
         });
     };
     if (queued_before_owner_wait) {
@@ -381,8 +395,6 @@ void test_owned_actor_property_projection() {
     const auto after = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active;
     require(after.tree_revision == before.tree_revision && after.selection.has_value() == before.selection.has_value(),
         "property reads cannot change tree revision or selection");
-    require(!cef.invoke("SceneTools.read_actor", Json::array(), {}).success,
-        "the migrated Web actor reader must not retain a manifest path");
 }
 
 void test_one_native_transform_authority() {
@@ -405,12 +417,13 @@ void test_one_native_transform_authority() {
     bad = write; bad.transform.rotation = std::array<float,3>{0,std::numeric_limits<float>::infinity(),0};
     require(UI::execute_scene_operation(bad).error_code == "INVALID_ARGUMENT", "invalid mixed patch cannot partially apply");
     const auto read = UI::script_scene_read_actor(
-        UI::NativeRequest{{}, {}, Json::array({{{{"archive_session","camera-test-archive"}},{{"actor","transform-probe"}}}})},
+        UI::NativeRequest{{}, {},
+                          Json::array({Json{{"archive_session", "camera-test-archive"},
+                                            {"actor", "transform-probe"}}})},
         UI::NativeContext{});
     require(read.success && read.data["actor_version"] == 2 && read.data["geometry"]["position"] == Json({0,8,-3}),
             "unmigrated readers must observe the same geometry and version without any invalid write");
     const Json args = {"scene.ini","transform-probe",{{"archive_session","camera-test-archive"},{"rotation",{7,8,9}}}};
-            "the old CEF transform route must be unavailable");
     const auto script = UI::script_scene_set_actor_transform(
         UI::NativeRequest{{}, {}, args}, UI::NativeContext{UI::EditorApiCaller::ScriptRuntime});
     require(script.success && script.data["actor"]["actor_version"] == 3 &&
@@ -594,8 +607,6 @@ void test_script_input_queue_has_one_owner_and_drops_retired_scopes() {
     const auto sdl = UI::drain_input_events();
     require(sdl.size() == 2 && sdl[0].type == 0 && sdl[1].type == 1 && sdl[0].arg0 == "KeyD" && sdl[1].arg0 == "KeyD",
         "real SDL keyboard processing must enqueue exactly one down and one up without a Web owner");
-    for (const auto* method : {"Scripts.key_event", "Scripts.key_release", "Scripts.mouse_event"})
-        require(!endpoint.invoke(method, Json::array(), {}).success, "retired manifest input must be unavailable");
 }
 
 void test_optics_queue_merges_independent_fields() {

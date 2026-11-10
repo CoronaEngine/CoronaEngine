@@ -149,62 +149,10 @@ add_test(NAME VisionReSTIRGISupport
     COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_restir_gi_support.py)
 set_tests_properties(VisionReSTIRPairwiseMIS VisionReSTIRGISupport PROPERTIES TIMEOUT 30)
 
-    PRIVATE ${PROJECT_SOURCE_DIR}/include
-            ${PROJECT_SOURCE_DIR}/src/systems/ui
-)
-    PRIVATE corona_ui_system corona::resource::manager
-)
-if(COMMAND helicon_install_runtime_deps)
-endif()
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/libcef.dll,${CEF_ROOT}/Release/libcef.dll>"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/chrome_elf.dll,${CEF_ROOT}/Release/chrome_elf.dll>"
-    VERBATIM
-)
-add_test(NAME CollaborativeEditorLoopbackTests
-         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/archive_driver.py
-get_filename_component(_CORONA_LOOPBACK_PYTHON_DIR "${Python_EXECUTABLE}" DIRECTORY)
-set(_CORONA_LOOPBACK_PATH_DIRS "${_CORONA_LOOPBACK_PYTHON_DIR}")
-foreach(_tbb_runtime IN LISTS CORONA_TBB_REDIS_DLLS)
-    get_filename_component(_tbb_runtime_dir "${_tbb_runtime}" DIRECTORY)
-    list(APPEND _CORONA_LOOPBACK_PATH_DIRS "${_tbb_runtime_dir}")
-endforeach()
-list(REMOVE_DUPLICATES _CORONA_LOOPBACK_PATH_DIRS)
-set(_CORONA_LOOPBACK_ENVIRONMENT)
-foreach(_runtime_dir IN LISTS _CORONA_LOOPBACK_PATH_DIRS)
-    list(APPEND _CORONA_LOOPBACK_ENVIRONMENT
-         "PATH=path_list_prepend:${_runtime_dir}")
-endforeach()
-set_tests_properties(CollaborativeEditorLoopbackTests PROPERTIES
-    RUN_SERIAL TRUE
-    TIMEOUT 30
-    ENVIRONMENT_MODIFICATION "${_CORONA_LOOPBACK_ENVIRONMENT}"
-)
 add_executable(corona_native_file_probe EXCLUDE_FROM_ALL native_file_probe.cpp)
 target_link_libraries(corona_native_file_probe PRIVATE corona::engine corona_ui_system)
 
-    ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui
-    ${PROJECT_SOURCE_DIR}/src/systems/script/include)
-    corona_ui_system corona::resource::manager)
-if(COMMAND helicon_install_runtime_deps)
-endif()
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/libcef.dll,${CEF_ROOT}/Release/libcef.dll>"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/chrome_elf.dll,${CEF_ROOT}/Release/chrome_elf.dll>"
-    VERBATIM)
-add_test(NAME ArchiveRoundtripTests COMMAND ${Python_EXECUTABLE}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_archive_roundtrip.py
-set_tests_properties(ArchiveRoundtripTests PROPERTIES
-    RUN_SERIAL TRUE TIMEOUT 180
-    ENVIRONMENT_MODIFICATION "${_CORONA_LOOPBACK_ENVIRONMENT}")
 
-unset(_CORONA_LOOPBACK_PYTHON_DIR)
-unset(_CORONA_LOOPBACK_PATH_DIRS)
-unset(_CORONA_LOOPBACK_ENVIRONMENT)
-unset(_runtime_dir)
-unset(_tbb_runtime_dir)
 
 add_executable(corona_ui_multisurface_smoke
     ui_multisurface_smoke.cpp

@@ -700,6 +700,9 @@ void validation_recovers_before_reading_a_broken_scene() {
 }  // namespace
 
 int main() {
+    // An escaping exception used to reach std::terminate, which the CRT reports as
+    // 0xC0000409 with no output at all. Naming the throw keeps the failure readable.
+    try {
     material_advisories_do_not_require_degraded_loading();
     ply_import_is_portable_and_hash_checked();
     animation_references_keep_bundles_and_dependencies();
@@ -739,4 +742,11 @@ int main() {
     usd_remote_dependency_is_rejected();
     std::cout << "All scene folder tests passed\n";
     return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "scene folder test threw: " << error.what() << '\n';
+        return 1;
+    } catch (...) {
+        std::cerr << "scene folder test threw a non-standard exception\n";
+        return 1;
+    }
 }

@@ -92,105 +92,6 @@ std::shared_ptr<Corona::Systems::NetworkSystem> get_network_system() {
         sys_mgr->get_system("Network"));
 }
 
-
-const char* editor_api_value_type_name(EditorApiValueType type) {
-    switch (type) {
-        case EditorApiValueType::Any:
-            return "any";
-        case EditorApiValueType::Null:
-            return "null";
-        case EditorApiValueType::Boolean:
-            return "boolean";
-        case EditorApiValueType::Integer:
-            return "integer";
-        case EditorApiValueType::Number:
-            return "number";
-        case EditorApiValueType::String:
-            return "string";
-        case EditorApiValueType::Object:
-            return "object";
-        case EditorApiValueType::Array:
-            return "array";
-    }
-    return "unknown";
-}
-
-const char* editor_api_module_python_wrapper_alias(const char* module) {
-    const std::string_view name = module ? std::string_view(module) : std::string_view();
-    if (name == "CoronaEditor") {
-        return "app";
-    }
-    if (name == "EditorApi") {
-        return "editor";
-    }
-    if (name == "FileManager") {
-        return "files";
-    }
-    if (name == "MainView") {
-        return "main";
-    }
-    if (name == "Network") {
-        return "network";
-    }
-    if (name == "ProjectLauncher") {
-        return "project";
-    }
-    if (name == "ProjectSettings") {
-        return "project_settings";
-    }
-    if (name == "ResourceSearch") {
-        return "resource_search";
-    }
-    if (name == "SceneTools") {
-        return "scene_tools";
-    }
-    return "";
-}
-
-std::string editor_api_python_wrapper_path(const EditorApiMethodSpec& spec) {
-    if (spec.python_wrapper && *spec.python_wrapper) {
-        return spec.python_wrapper;
-    }
-    const std::string module_alias = editor_api_module_python_wrapper_alias(spec.native_module);
-    const std::string function_name = spec.native_function ? spec.native_function : "";
-    if (module_alias.empty() || function_name.empty()) {
-        return {};
-    }
-    return module_alias + "." + function_name;
-}
-
-nlohmann::json editor_api_method_to_json(const EditorApiMethodSpec& spec) {
-    nlohmann::json params = nlohmann::json::array();
-    for (std::size_t index = 0; index < spec.param_count; ++index) {
-        const auto& param = spec.params[index];
-        params.push_back({
-            {"name", param.name ? param.name : ""},
-            {"type", editor_api_value_type_name(param.type)},
-            {"optional", param.optional},
-        });
-    }
-
-    return {
-        {"api", spec.api_name ? spec.api_name : ""},
-        {"native_module", spec.native_module ? spec.native_module : ""},
-        {"native_function", spec.native_function ? spec.native_function : ""},
-        {"params", params},
-        {"return", editor_api_value_type_name(spec.return_spec.type)},
-        {"python_wrapper", editor_api_python_wrapper_path(spec)},
-        {"async", spec.async},
-        {"allowed_callers", spec.allowed_callers},
-    };
-}
-
-nlohmann::json editor_api_event_to_json(const EditorApiEventSpec& spec) {
-    return {
-        {"event", spec.event_name ? spec.event_name : ""},
-        {"payload", editor_api_value_type_name(spec.payload_type)},
-        {"allowed_callers", spec.allowed_callers},
-        {"python_wrapper", spec.python_wrapper ? spec.python_wrapper : ""},
-    };
-}
-
 std::string to_lower_ascii(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
@@ -4061,20 +3962,6 @@ void read_transform_from_actor_json(const nlohmann::json& actor, float transform
         transform[6] = geo["scale"][0].get<float>();
         transform[7] = geo["scale"][1].get<float>();
         transform[8] = geo["scale"][2].get<float>();
-    }
-}
-
-                             const NativeContext& context) {
-    const auto it = methods.find(request.function);
-    if (it == methods.end()) {
-        return native_failure("Unknown " + module + " function: " + request.function);
-    }
-    try {
-        return it->second(request, context);
-    } catch (const std::exception& e) {
-        return native_failure(e.what(), 2);
-    } catch (...) {
-        return native_failure(module + " native handler error", 2);
     }
 }
 
