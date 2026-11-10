@@ -132,28 +132,38 @@ class Geometry {
 // ============================================================================
 // Mechanics: 物理/力学组件，依赖 Geometry
 // ============================================================================
+
+/// One mechanics edit. Omitted fields are left untouched, so a single-field change reads as
+/// set_properties({.body_type = "phantom"}) and a batch as several designated initializers.
+/// This replaces the six set_mass / set_restitution / set_damping / set_body_type /
+/// set_linear_lock / set_angular_lock calls that had to be issued one field at a time.
+struct MechanicsProperties {
+    std::optional<float> mass;
+    std::optional<float> restitution;
+    std::optional<float> damping;
+    std::optional<std::string> body_type;
+    std::optional<std::array<bool, 3>> linear_lock;
+    std::optional<std::array<bool, 3>> angular_lock;
+};
+
 class Mechanics {
    public:
     explicit Mechanics(Geometry& geo);
     ~Mechanics();
 
-    void set_mass(float mass);
+    /// The single mechanics write entry point: one command carrying every field given.
+    void set_properties(const MechanicsProperties& properties);
     [[nodiscard]] float get_mass() const;
-    void set_restitution(float restitution);
     [[nodiscard]] float get_restitution() const;
-    void set_damping(float damping);
     [[nodiscard]] float get_damping() const;
 
     // 物体类型：决定物体如何参与物理模拟（"dynamic"/"kinematic"/"static"）
-    void set_body_type(std::string_view type);
     [[nodiscard]] std::string get_body_type() const;
 
     // 轴锁定：锁定指定轴上的线性运动（平移）
-    void set_linear_lock(bool lock_x, bool lock_y, bool lock_z);
     [[nodiscard]] std::tuple<bool, bool, bool> get_linear_lock() const;
 
     // 轴锁定：锁定指定轴上的角度运动（旋转）
-    void set_angular_lock(bool lock_x, bool lock_y, bool lock_z);
     [[nodiscard]] std::tuple<bool, bool, bool> get_angular_lock() const;
 
     // 设置碰撞回调（参数为对方 actor 句柄、began(true=enter,false=exit)、法线、碰撞点）
@@ -175,45 +185,55 @@ class Mechanics {
 // ============================================================================
 // Optics: 光学/渲染组件，依赖 Geometry
 // ============================================================================
+/// One optics edit. Omitted fields are left untouched, so a single-field change reads as
+/// set_properties({.metallic = 1.0f}) and a material batch as several designated initializers.
+/// Replaces the sixteen per-field setters (metallic/roughness/subsurface/specular/specular_tint/
+/// anisotropic/sheen/sheen_tint/clearcoat/clearcoat_gloss/visible/lighting_enabled/ambient/
+/// diffuse/specular_color/shininess) that had to be issued one field at a time.
+struct OpticsProperties {
+    std::optional<float> metallic;
+    std::optional<float> roughness;
+    std::optional<float> subsurface;
+    std::optional<float> specular;
+    std::optional<float> specular_tint;
+    std::optional<float> anisotropic;
+    std::optional<float> sheen;
+    std::optional<float> sheen_tint;
+    std::optional<float> clearcoat;
+    std::optional<float> clearcoat_gloss;
+    std::optional<bool> visible;
+    std::optional<bool> lighting_enabled;
+    std::optional<std::array<float, 3>> ambient;
+    std::optional<std::array<float, 3>> diffuse;
+    std::optional<std::array<float, 3>> specular_color;
+    std::optional<float> shininess;
+};
+
 class Optics {
    public:
     explicit Optics(Geometry& geo);
     ~Optics();
 
-    void set_metallic(float metallic);
+    /// The single optics write entry point: one command carrying every field given.
+    void set_properties(const OpticsProperties& properties);
     [[nodiscard]] float get_metallic() const;
-    void set_roughness(float roughness);
     [[nodiscard]] float get_roughness() const;
-    void set_subsurface(float subsurface);
     [[nodiscard]] float get_subsurface() const;
-    void set_specular(float specular);
     [[nodiscard]] float get_specular() const;
-    void set_specular_tint(float specularTint);
     [[nodiscard]] float get_specular_tint() const;
-    void set_anisotropic(float anisotropic);
     [[nodiscard]] float get_anisotropic() const;
-    void set_sheen(float sheen);
     [[nodiscard]] float get_sheen() const;
-    void set_sheen_tint(float sheenTint);
     [[nodiscard]] float get_sheen_tint() const;
-    void set_clearcoat(float clearcoat);
     [[nodiscard]] float get_clearcoat() const;
-    void set_clearcoat_gloss(float clearcoatGloss);
     [[nodiscard]] float get_clearcoat_gloss() const;
-    void set_visible(bool visible);
     [[nodiscard]] bool get_visible() const;
 
     // 光照影响开关：false 时物体不受灯光照射影响（仍渲染但不接收光照计算）
-    void set_lighting_enabled(bool enabled);
     [[nodiscard]] bool get_lighting_enabled() const;
 
-    void set_ambient(const std::array<float, 3>& ambient);
     [[nodiscard]] std::array<float, 3> get_ambient() const;
-    void set_diffuse(const std::array<float, 3>& diffuse);
     [[nodiscard]] std::array<float, 3> get_diffuse() const;
-    void set_specular_color(const std::array<float, 3>& specular);
     [[nodiscard]] std::array<float, 3> get_specular_color() const;
-    void set_shininess(float shininess);
     [[nodiscard]] float get_shininess() const;
 
    private:
@@ -229,18 +249,25 @@ class Optics {
 // ============================================================================
 // Acoustics: 声学组件，依赖 Geometry
 // ============================================================================
+/// One acoustics edit. Omitted fields are left untouched. Replaces the three per-field setters
+/// (set_volume / set_audio_enabled / set_audio_resource) that had to be issued one at a time.
+struct AcousticsProperties {
+    std::optional<float> volume;
+    std::optional<bool> audio_enabled;
+    std::optional<std::uint64_t> audio_resource;
+};
+
 class Acoustics {
    public:
     explicit Acoustics(Geometry& geo);
     ~Acoustics();
 
-    void set_volume(float volume);
+    /// The single acoustics write entry point: one command carrying every field given.
+    void set_properties(const AcousticsProperties& properties);
     [[nodiscard]] float get_volume() const;
-    void set_audio_enabled(bool enabled);
     [[nodiscard]] bool get_audio_enabled() const;
 
     /// 绑定要播放的音频资源 id（空间音频物体）
-    void set_audio_resource(std::uint64_t resource_id);
     [[nodiscard]] std::uint64_t get_audio_resource() const;
     /// 在本组件（actor）的世界位置处播放绑定的音频
     void play(bool loop);
@@ -393,28 +420,39 @@ class Camera {
 // ============================================================================
 // Environment: 环境类
 // ============================================================================
+
+/// One environment edit. Omitted fields are left untouched, so a single-field change reads as
+/// set_properties({.sky_intensity = 20.0f}) and a batch as several designated initializers.
+/// Replaces the eight set_sun_direction / set_sun_intensity / set_sky_intensity / set_floor_grid /
+/// set_gravity / set_floor_y / set_floor_restitution / set_fixed_dt calls that had to be issued
+/// one field at a time.
+struct EnvironmentProperties {
+    std::optional<std::array<float, 3>> sun_direction;
+    std::optional<float> sun_intensity;
+    std::optional<float> sky_intensity;
+    std::optional<bool> floor_grid;
+    std::optional<std::array<float, 3>> gravity;
+    std::optional<float> floor_y;
+    std::optional<float> floor_restitution;
+    std::optional<float> fixed_dt;
+};
+
 class Environment {
    public:
     Environment();
     ~Environment();
     void set_authored_lighting(const std::string& description);
 
-    void set_sun_direction(const std::array<float, 3>& direction);
+    /// The single environment write entry point: one command carrying every field given.
+    void set_properties(const EnvironmentProperties& properties);
     [[nodiscard]] std::array<float, 3> get_sun_direction() const;
-    void set_sun_intensity(float intensity);
     [[nodiscard]] float get_sun_intensity() const;
-    void set_sky_intensity(float intensity);
     [[nodiscard]] float get_sky_intensity() const;
-    void set_floor_grid(bool enabled) const;
     [[nodiscard]] bool get_floor_grid() const;
 
-    void set_gravity(const std::array<float, 3>& gravity);
     [[nodiscard]] std::array<float, 3> get_gravity() const;
-    void set_floor_y(float y);
     [[nodiscard]] float get_floor_y() const;
-    void set_floor_restitution(float restitution);
     [[nodiscard]] float get_floor_restitution() const;
-    void set_fixed_dt(float dt);
     [[nodiscard]] float get_fixed_dt() const;
 
    private:

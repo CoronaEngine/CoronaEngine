@@ -43,7 +43,7 @@ def camera_update_harness():
     service_source = service_source.replace('#include "camera_properties_service.h"', "")
     service = service_header + "\n" + service_source
     runtime = (ROOT / "src/engine/engine_runtime_api.cpp").read_text(encoding="utf-8")
-    runtime_start = runtime.index("void Corona::API::Camera::set_view_state(")
+    runtime_start = runtime.index("void Corona::API::Camera::set_view(")
     runtime_end = runtime.index("std::array<float, 6> Corona::API::Camera::get_view_state()", runtime_start)
     optics = (ROOT / "src/systems/optics/optics_system.cpp").read_text(encoding="utf-8")
     consume_start = optics.index("            if (Corona::has_camera_state_field(\n                    update.fields, Corona::CameraStateUpdateField::ViewState)) {")
@@ -73,14 +73,18 @@ struct SceneRequest {
  CameraPropertiesPatch camera_properties;
 };
 namespace Corona::API { bool is_editor_camera_input_enabled() { return true; } }
+namespace Corona::API { struct CameraViewState {
+    std::optional<bool> open;
+    int x=120, y=120, width=960, height=540;
+    float move_speed=1.0f;
+}; }
 struct EngineCamera {
     int width=1920, height=1080, x=0, y=0, view_width=1536, view_height=825;
     bool open=false; float speed=1; int geometry_calls=0, size_calls=0;
     void set_size(int w, int h) { width=w; height=h; ++size_calls; }
     int handle_=1;
     bool& view_open=open; int& view_x=x; int& view_y=y; float& move_speed=speed;
-    void set_view_state(bool,int,int,int,int,float);
-    void set_view_settings(int,int,int,int,float);
+    void set_view(const Corona::API::CameraViewState&);
     std::array<float,6> get_view_state() { return {float(open),float(x),float(y),float(view_width),float(view_height),speed}; }
     std::array<float,3> get_projection() { return {1,.1f,100}; }
     void set_projection(float,float,float) {}

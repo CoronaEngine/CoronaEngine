@@ -384,7 +384,7 @@ def test_actor_resource_rebinding_uses_scoped_scene_v8_and_retires_web_manifest(
     assert 'replacement_data["name"] = actor->name' in operation
     assert 'replacement_data["transform"] = {' in operation
     assert 'loaded.geometry->set_transform(preserved_position, preserved_rotation, preserved_scale)' in operation
-    assert 'loaded.mechanics->set_body_type(preserved_body_type)' in operation
+    assert 'loaded.mechanics->set_properties({.body_type = preserved_body_type})' in operation
     assert 'SceneMethod::ReadActorProperties' in operation
 
 

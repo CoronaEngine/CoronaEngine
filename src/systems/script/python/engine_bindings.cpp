@@ -151,30 +151,52 @@ void BindAll(nanobind::module_& m) {
     nb::class_<Mechanics>(m, "Mechanics")
         .def(nb::init<Geometry&>(), nb::arg("geometry"),
              "Create a Mechanics component attached to a Geometry")
-        .def("set_mass", &Mechanics::set_mass, nb::arg("mass"),
-             "Set object mass")
+        .def("set_properties",
+             [](Mechanics& self, nb::object mass, nb::object restitution, nb::object damping,
+                nb::object body_type, nb::object linear_lock, nb::object angular_lock) {
+                 MechanicsProperties properties;
+                 // Omitted keyword arguments leave the corresponding field untouched.
+                 if (!mass.is_none()) properties.mass = nb::cast<float>(mass);
+                 if (!restitution.is_none()) properties.restitution = nb::cast<float>(restitution);
+                 if (!damping.is_none()) properties.damping = nb::cast<float>(damping);
+                 if (!body_type.is_none()) properties.body_type = nb::cast<std::string>(body_type);
+                 auto read_lock = [](const nb::object& value, std::array<bool, 3>& out) {
+                     const auto sequence = nb::cast<nb::list>(value);
+                     if (nb::len(sequence) != 3) {
+                         throw std::invalid_argument("axis lock needs three booleans");
+                     }
+                     for (std::size_t i = 0; i < 3; ++i) {
+                         out[i] = nb::cast<bool>(sequence[i]);
+                     }
+                 };
+                 if (!linear_lock.is_none()) {
+                     std::array<bool, 3> lock{};
+                     read_lock(linear_lock, lock);
+                     properties.linear_lock = lock;
+                 }
+                 if (!angular_lock.is_none()) {
+                     std::array<bool, 3> lock{};
+                     read_lock(angular_lock, lock);
+                     properties.angular_lock = lock;
+                 }
+                 self.set_properties(properties);
+             },
+             nb::arg("mass") = nb::none(), nb::arg("restitution") = nb::none(),
+             nb::arg("damping") = nb::none(), nb::arg("body_type") = nb::none(),
+             nb::arg("linear_lock") = nb::none(), nb::arg("angular_lock") = nb::none(),
+             "Set any of mass / restitution / damping / body_type / linear_lock / angular_lock in "
+             "one write; body_type is \"dynamic\", \"kinematic\", \"static\" or \"phantom\" and the "
+             "locks are three booleans")
         .def("get_mass", &Mechanics::get_mass,
              "Get object mass")
-        .def("set_restitution", &Mechanics::set_restitution, nb::arg("restitution"),
-             "Set object restitution (bounciness)")
         .def("get_restitution", &Mechanics::get_restitution,
              "Get object restitution")
-        .def("set_damping", &Mechanics::set_damping, nb::arg("damping"),
-             "Set velocity damping factor")
         .def("get_damping", &Mechanics::get_damping,
              "Get velocity damping factor")
-        .def("set_body_type", &Mechanics::set_body_type, nb::arg("type"),
-             "Set body type: \"dynamic\" (gravity + impulses), \"kinematic\" (externally driven), \"static\" (immovable), or \"phantom\" (no collision at all)")
         .def("get_body_type", &Mechanics::get_body_type,
              "Get body type string: \"dynamic\", \"kinematic\", \"static\", or \"phantom\"")
-        .def("set_linear_lock", &Mechanics::set_linear_lock,
-             nb::arg("lock_x"), nb::arg("lock_y"), nb::arg("lock_z"),
-             "Lock/unlock linear movement on X/Y/Z axes")
         .def("get_linear_lock", &Mechanics::get_linear_lock,
              "Get linear axis lock state as (lock_x, lock_y, lock_z) tuple")
-        .def("set_angular_lock", &Mechanics::set_angular_lock,
-             nb::arg("lock_x"), nb::arg("lock_y"), nb::arg("lock_z"),
-             "Lock/unlock angular rotation on X/Y/Z axes")
         .def("get_angular_lock", &Mechanics::get_angular_lock,
              "Get angular axis lock state as (lock_x, lock_y, lock_z) tuple")
         .def("set_collision_callback",
@@ -222,41 +244,78 @@ void BindAll(nanobind::module_& m) {
     nb::class_<Optics>(m, "Optics")
         .def(nb::init<Geometry&>(), nb::arg("geometry"),
              "Create an Optics component attached to a Geometry")
-        .def("set_visible", &Optics::set_visible, nb::arg("visible"),
-             "Set whether this model is rendered")
+        .def("set_properties",
+             [](Optics& self, nb::object visible, nb::object lighting_enabled,
+                nb::object metallic, nb::object roughness, nb::object subsurface,
+                nb::object specular, nb::object specular_tint, nb::object anisotropic,
+                nb::object sheen, nb::object sheen_tint, nb::object clearcoat,
+                nb::object clearcoat_gloss, nb::object ambient, nb::object diffuse,
+                nb::object specular_color, nb::object shininess) {
+                 OpticsProperties properties;
+                 // Omitted keyword arguments leave the corresponding field untouched.
+                 auto read_float3 = [](const nb::object& value, std::array<float, 3>& out) {
+                     const auto sequence = nb::cast<nb::list>(value);
+                     if (nb::len(sequence) != 3) {
+                         throw std::invalid_argument("expected three numbers");
+                     }
+                     for (std::size_t i = 0; i < 3; ++i) out[i] = nb::cast<float>(sequence[i]);
+                 };
+                 if (!visible.is_none()) properties.visible = nb::cast<bool>(visible);
+                 if (!lighting_enabled.is_none()) properties.lighting_enabled = nb::cast<bool>(lighting_enabled);
+                 if (!metallic.is_none()) properties.metallic = nb::cast<float>(metallic);
+                 if (!roughness.is_none()) properties.roughness = nb::cast<float>(roughness);
+                 if (!subsurface.is_none()) properties.subsurface = nb::cast<float>(subsurface);
+                 if (!specular.is_none()) properties.specular = nb::cast<float>(specular);
+                 if (!specular_tint.is_none()) properties.specular_tint = nb::cast<float>(specular_tint);
+                 if (!anisotropic.is_none()) properties.anisotropic = nb::cast<float>(anisotropic);
+                 if (!sheen.is_none()) properties.sheen = nb::cast<float>(sheen);
+                 if (!sheen_tint.is_none()) properties.sheen_tint = nb::cast<float>(sheen_tint);
+                 if (!clearcoat.is_none()) properties.clearcoat = nb::cast<float>(clearcoat);
+                 if (!clearcoat_gloss.is_none()) properties.clearcoat_gloss = nb::cast<float>(clearcoat_gloss);
+                 if (!ambient.is_none()) {
+                     std::array<float, 3> value{};
+                     read_float3(ambient, value);
+                     properties.ambient = value;
+                 }
+                 if (!diffuse.is_none()) {
+                     std::array<float, 3> value{};
+                     read_float3(diffuse, value);
+                     properties.diffuse = value;
+                 }
+                 if (!specular_color.is_none()) {
+                     std::array<float, 3> value{};
+                     read_float3(specular_color, value);
+                     properties.specular_color = value;
+                 }
+                 if (!shininess.is_none()) properties.shininess = nb::cast<float>(shininess);
+                 self.set_properties(properties);
+             },
+             nb::arg("visible") = nb::none(), nb::arg("lighting_enabled") = nb::none(),
+             nb::arg("metallic") = nb::none(), nb::arg("roughness") = nb::none(),
+             nb::arg("subsurface") = nb::none(), nb::arg("specular") = nb::none(),
+             nb::arg("specular_tint") = nb::none(), nb::arg("anisotropic") = nb::none(),
+             nb::arg("sheen") = nb::none(), nb::arg("sheen_tint") = nb::none(),
+             nb::arg("clearcoat") = nb::none(), nb::arg("clearcoat_gloss") = nb::none(),
+             nb::arg("ambient") = nb::none(), nb::arg("diffuse") = nb::none(),
+             nb::arg("specular_color") = nb::none(), nb::arg("shininess") = nb::none(),
+             "Set any optics field in one write")
         .def("get_visible", &Optics::get_visible,
              "Get whether this model is rendered")
-        .def("set_lighting_enabled", &Optics::set_lighting_enabled, nb::arg("enabled"),
-             "Enable or disable lighting influence on this object")
         .def("get_lighting_enabled", &Optics::get_lighting_enabled,
              "Get whether lighting influence is enabled for this object")
-        .def("set_metallic", &Optics::set_metallic, nb::arg("metallic"))
         .def("get_metallic", &Optics::get_metallic)
-        .def("set_roughness", &Optics::set_roughness, nb::arg("roughness"))
         .def("get_roughness", &Optics::get_roughness)
-        .def("set_subsurface", &Optics::set_subsurface, nb::arg("subsurface"))
         .def("get_subsurface", &Optics::get_subsurface)
-        .def("set_specular", &Optics::set_specular, nb::arg("specular"))
         .def("get_specular", &Optics::get_specular)
-        .def("set_specular_tint", &Optics::set_specular_tint, nb::arg("specular_tint"))
         .def("get_specular_tint", &Optics::get_specular_tint)
-        .def("set_anisotropic", &Optics::set_anisotropic, nb::arg("anisotropic"))
         .def("get_anisotropic", &Optics::get_anisotropic)
-        .def("set_sheen", &Optics::set_sheen, nb::arg("sheen"))
         .def("get_sheen", &Optics::get_sheen)
-        .def("set_sheen_tint", &Optics::set_sheen_tint, nb::arg("sheen_tint"))
         .def("get_sheen_tint", &Optics::get_sheen_tint)
-        .def("set_clearcoat", &Optics::set_clearcoat, nb::arg("clearcoat"))
         .def("get_clearcoat", &Optics::get_clearcoat)
-        .def("set_clearcoat_gloss", &Optics::set_clearcoat_gloss, nb::arg("clearcoat_gloss"))
         .def("get_clearcoat_gloss", &Optics::get_clearcoat_gloss)
-        .def("set_ambient", &Optics::set_ambient, nb::arg("ambient"))
         .def("get_ambient", &Optics::get_ambient)
-        .def("set_diffuse", &Optics::set_diffuse, nb::arg("diffuse"))
         .def("get_diffuse", &Optics::get_diffuse)
-        .def("set_specular_color", &Optics::set_specular_color, nb::arg("specular_color"))
         .def("get_specular_color", &Optics::get_specular_color)
-        .def("set_shininess", &Optics::set_shininess, nb::arg("shininess"))
         .def("get_shininess", &Optics::get_shininess);
 
     // ============================================================================
@@ -265,16 +324,24 @@ void BindAll(nanobind::module_& m) {
     nb::class_<Acoustics>(m, "Acoustics")
         .def(nb::init<Geometry&>(), nb::arg("geometry"),
              "Create an Acoustics component attached to a Geometry")
-        .def("set_volume", &Acoustics::set_volume, nb::arg("volume"),
-             "Set audio volume")
+        .def("set_properties",
+             [](Acoustics& self, nb::object volume, nb::object audio_enabled, nb::object audio_resource) {
+                 AcousticsProperties properties;
+                 // Omitted keyword arguments leave the corresponding field untouched.
+                 if (!volume.is_none()) properties.volume = nb::cast<float>(volume);
+                 if (!audio_enabled.is_none()) properties.audio_enabled = nb::cast<bool>(audio_enabled);
+                 if (!audio_resource.is_none()) {
+                     properties.audio_resource = nb::cast<std::uint64_t>(audio_resource);
+                 }
+                 self.set_properties(properties);
+             },
+             nb::arg("volume") = nb::none(), nb::arg("audio_enabled") = nb::none(),
+             nb::arg("audio_resource") = nb::none(),
+             "Set volume, audio enable or the bound audio resource id in one write")
         .def("get_volume", &Acoustics::get_volume,
              "Get audio volume")
-        .def("set_audio_enabled", &Acoustics::set_audio_enabled, nb::arg("enabled"),
-             "Enable or disable audio for this object")
         .def("get_audio_enabled", &Acoustics::get_audio_enabled,
              "Get whether audio is enabled for this object")
-        .def("set_audio_resource", &Acoustics::set_audio_resource, nb::arg("resource_id"),
-             "Bind the audio resource id to play at this object's position")
         .def("get_audio_resource", &Acoustics::get_audio_resource,
              "Get the bound audio resource id")
         .def("play", &Acoustics::play, nb::arg("loop") = false,
@@ -382,36 +449,59 @@ void BindAll(nanobind::module_& m) {
     // ============================================================================
     nb::class_<Environment>(m, "Environment")
         .def(nb::init<>(), "Create an Environment")
-        .def("set_sun_direction", &Environment::set_sun_direction, nb::arg("direction"),
-             "Set sun light direction [x, y, z]")
+        .def("set_properties",
+             [](Environment& self, nb::object sun_direction, nb::object sun_intensity,
+                nb::object sky_intensity, nb::object floor_grid, nb::object gravity,
+                nb::object floor_y, nb::object floor_restitution, nb::object fixed_dt) {
+                 EnvironmentProperties properties;
+                 // Omitted keyword arguments leave the corresponding field untouched.
+                 auto read_float3 = [](const nb::object& value, std::array<float, 3>& out) {
+                     const auto sequence = nb::cast<nb::list>(value);
+                     if (nb::len(sequence) != 3) {
+                         throw std::invalid_argument("expected three numbers");
+                     }
+                     for (std::size_t i = 0; i < 3; ++i) out[i] = nb::cast<float>(sequence[i]);
+                 };
+                 if (!sun_direction.is_none()) {
+                     std::array<float, 3> value{};
+                     read_float3(sun_direction, value);
+                     properties.sun_direction = value;
+                 }
+                 if (!sun_intensity.is_none()) properties.sun_intensity = nb::cast<float>(sun_intensity);
+                 if (!sky_intensity.is_none()) properties.sky_intensity = nb::cast<float>(sky_intensity);
+                 if (!floor_grid.is_none()) properties.floor_grid = nb::cast<bool>(floor_grid);
+                 if (!gravity.is_none()) {
+                     std::array<float, 3> value{};
+                     read_float3(gravity, value);
+                     properties.gravity = value;
+                 }
+                 if (!floor_y.is_none()) properties.floor_y = nb::cast<float>(floor_y);
+                 if (!floor_restitution.is_none()) {
+                     properties.floor_restitution = nb::cast<float>(floor_restitution);
+                 }
+                 if (!fixed_dt.is_none()) properties.fixed_dt = nb::cast<float>(fixed_dt);
+                 self.set_properties(properties);
+             },
+             nb::arg("sun_direction") = nb::none(), nb::arg("sun_intensity") = nb::none(),
+             nb::arg("sky_intensity") = nb::none(), nb::arg("floor_grid") = nb::none(),
+             nb::arg("gravity") = nb::none(), nb::arg("floor_y") = nb::none(),
+             nb::arg("floor_restitution") = nb::none(), nb::arg("fixed_dt") = nb::none(),
+             "Set any environment field in one write: sun direction/intensity, sky intensity, "
+             "floor grid, gravity, floor height/restitution and the physics step")
         .def("get_sun_direction", &Environment::get_sun_direction,
              "Get sun light direction [x, y, z]")
-        .def("set_sun_intensity", &Environment::set_sun_intensity, nb::arg("intensity"),
-             "Set sun light intensity")
         .def("get_sun_intensity", &Environment::get_sun_intensity,
              "Get sun light intensity")
-        .def("set_sky_intensity", &Environment::set_sky_intensity, nb::arg("intensity"),
-             "Set atmospheric sky intensity")
         .def("get_sky_intensity", &Environment::get_sky_intensity,
              "Get atmospheric sky intensity")
-        .def("set_floor_grid", &Environment::set_floor_grid, nb::arg("enabled"),
-             "Enable or disable floor grid rendering")
         .def("get_floor_grid", &Environment::get_floor_grid,
              "Get floor grid rendering state")
-        .def("set_gravity", &Environment::set_gravity, nb::arg("gravity"),
-             "Set gravity vector [x, y, z]")
         .def("get_gravity", &Environment::get_gravity,
              "Get gravity vector [x, y, z]")
-        .def("set_floor_y", &Environment::set_floor_y, nb::arg("y"),
-             "Set floor plane Y height")
         .def("get_floor_y", &Environment::get_floor_y,
              "Get floor plane Y height")
-        .def("set_floor_restitution", &Environment::set_floor_restitution, nb::arg("restitution"),
-             "Set floor restitution (bounciness)")
         .def("get_floor_restitution", &Environment::get_floor_restitution,
              "Get floor restitution")
-        .def("set_fixed_dt", &Environment::set_fixed_dt, nb::arg("dt"),
-             "Set physics fixed time step")
         .def("get_fixed_dt", &Environment::get_fixed_dt,
              "Get physics fixed time step");
 

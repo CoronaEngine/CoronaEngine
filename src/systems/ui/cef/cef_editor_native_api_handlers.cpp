@@ -677,10 +677,10 @@ void apply_native_scene_environment(NativeEditorScene& scene) {
         return;
     }
 
-    scene.environment->set_sun_direction(scene.sun_direction);
-    scene.environment->set_floor_grid(scene.floor_grid_enabled);
-    scene.environment->set_sun_intensity(scene.sun_enabled ? 10.0f : 0.0f);
-    scene.environment->set_sky_intensity(scene.sun_enabled ? 20.0f : 0.0f);
+    scene.environment->set_properties({.sun_direction = scene.sun_direction,
+                                       .sun_intensity = scene.sun_enabled ? 10.0f : 0.0f,
+                                       .sky_intensity = scene.sun_enabled ? 20.0f : 0.0f,
+                                       .floor_grid = scene.floor_grid_enabled});
     scene.environment->set_authored_lighting(scene.authored_lighting.is_null() ? "" : scene.authored_lighting.dump());
 }
 
@@ -713,19 +713,19 @@ void apply_native_actor_optics_state(NativeEditorActor& item) {
         return;
     }
     if (item.persisted_optics.diffuse) {
-        item.optics->set_diffuse(*item.persisted_optics.diffuse);
+        item.optics->set_properties({.diffuse = *item.persisted_optics.diffuse});
     }
     if (item.persisted_optics.metallic) {
-        item.optics->set_metallic(*item.persisted_optics.metallic);
+        item.optics->set_properties({.metallic = *item.persisted_optics.metallic});
     }
     if (item.persisted_optics.roughness) {
-        item.optics->set_roughness(*item.persisted_optics.roughness);
+        item.optics->set_properties({.roughness = *item.persisted_optics.roughness});
     }
     if (item.persisted_optics.specular) {
-        item.optics->set_specular(*item.persisted_optics.specular);
+        item.optics->set_properties({.specular = *item.persisted_optics.specular});
     }
     if (item.persisted_optics.shininess) {
-        item.optics->set_shininess(*item.persisted_optics.shininess);
+        item.optics->set_properties({.shininess = *item.persisted_optics.shininess});
     }
     auto overrides = std::make_shared<const Corona::Materials::Overrides>(
         NativeMaterialConfig::parse(NativeMaterialConfig::resolve(item.persisted_optics)));
@@ -801,15 +801,15 @@ NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
     item.mechanics = std::make_unique<Corona::API::Mechanics>(*item.geometry);
     item.acoustics = std::make_unique<Corona::API::Acoustics>(*item.geometry);
     if (item.actor_type == "ui_image") {
-        item.optics->set_lighting_enabled(false);
-        item.mechanics->set_body_type("phantom");
+        item.optics->set_properties({.lighting_enabled = false});
+        item.mechanics->set_properties({.body_type = "phantom"});
         item.follow_camera = true;
     } else if (item.actor_type == "audio") {
         // 音频物体不渲染、不参与物理；绑定音频资源。
-        item.optics->set_visible(false);
-        item.mechanics->set_body_type("phantom");
+        item.optics->set_properties({.visible = false});
+        item.mechanics->set_properties({.body_type = "phantom"});
         if (item.audio_resource_id != 0) {
-            item.acoustics->set_audio_resource(item.audio_resource_id);
+            item.acoustics->set_properties({.audio_resource = item.audio_resource_id});
         }
     }
 
@@ -1225,9 +1225,9 @@ void materialize_actor_snapshot(NativeEditorScene& scene,
         try {
             auto& actor = add_native_actor_to_scene(
                 scene, std::move(item), asset_path);
-            if (actor.optics) actor.optics->set_visible(actor.persisted_visible);
+            if (actor.optics) actor.optics->set_properties({.visible = actor.persisted_visible});
             if (actor.mechanics && actor.actor_type != "ui_image") {
-                actor.mechanics->set_body_type(actor.persisted_body_type);
+                actor.mechanics->set_properties({.body_type = actor.persisted_body_type});
             }
             return;
         } catch (const std::exception& error) {
@@ -1251,9 +1251,9 @@ void materialize_actor_snapshot(NativeEditorScene& scene,
     item.actor_type = "actor";
     auto& placeholder = add_native_actor_to_scene(scene, std::move(item), std::filesystem::path{});
     placeholder.actor_type = original_type;
-    if (placeholder.optics) placeholder.optics->set_visible(false);
+    if (placeholder.optics) placeholder.optics->set_properties({.visible = false});
     if (placeholder.mechanics) {
-        placeholder.mechanics->set_body_type("phantom");
+        placeholder.mechanics->set_properties({.body_type = "phantom"});
     }
 }
 
@@ -1341,10 +1341,12 @@ NativeEditorScene& materialize_scene_snapshot_into_state(
         scene.environment = std::make_unique<Corona::API::Environment>();
         apply_native_scene_environment(scene);
         const auto physics = environment.value("physics", nlohmann::json::object());
-        if (physics.contains("gravity")) scene.environment->set_gravity(physics["gravity"].get<std::array<float, 3>>());
-        if (physics.contains("floor_y")) scene.environment->set_floor_y(physics["floor_y"].get<float>());
-        if (physics.contains("floor_restitution")) scene.environment->set_floor_restitution(physics["floor_restitution"].get<float>());
-        if (physics.contains("fixed_dt")) scene.environment->set_fixed_dt(physics["fixed_dt"].get<float>());
+        Corona::API::EnvironmentProperties stored_physics;
+        if (physics.contains("gravity")) stored_physics.gravity = physics["gravity"].get<std::array<float, 3>>();
+        if (physics.contains("floor_y")) stored_physics.floor_y = physics["floor_y"].get<float>();
+        if (physics.contains("floor_restitution")) stored_physics.floor_restitution = physics["floor_restitution"].get<float>();
+        if (physics.contains("fixed_dt")) stored_physics.fixed_dt = physics["fixed_dt"].get<float>();
+        scene.environment->set_properties(stored_physics);
         scene.engine_scene->set_environment(scene.environment.get());
         scene.engine_scene->set_simulation_enabled(false);
 
@@ -2472,10 +2474,10 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
             target.follow_camera = *follow_camera;
         }
         if (auto loaded_bt = json_string_value(actor_data, {"body_type"}); !loaded_bt.empty()) {
-            if (target.mechanics) target.mechanics->set_body_type(normalize_body_type(loaded_bt));
+            if (target.mechanics) target.mechanics->set_properties({.body_type = normalize_body_type(loaded_bt)});
         } else if (auto physics_enabled = actor_data_bool(actor_data, {"physics_enabled"})) {
             if (target.mechanics)
-                target.mechanics->set_body_type(*physics_enabled ? "dynamic" : "static");
+                target.mechanics->set_properties({.body_type = *physics_enabled ? "dynamic" : "static"});
         }
     };
 
@@ -2614,15 +2616,15 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
         }
     }
     if (auto loaded_bt = json_string_value(actor_data, {"body_type"}); !loaded_bt.empty()) {
-        if (actor.mechanics) actor.mechanics->set_body_type(normalize_body_type(loaded_bt));
+        if (actor.mechanics) actor.mechanics->set_properties({.body_type = normalize_body_type(loaded_bt)});
     } else if (auto physics_enabled = actor_data_bool(actor_data, {"physics_enabled"})) {
         if (actor.mechanics)
-            actor.mechanics->set_body_type(*physics_enabled ? "dynamic" : "static");
+            actor.mechanics->set_properties({.body_type = *physics_enabled ? "dynamic" : "static"});
     } else if (actor.mechanics && actor.actor_type != "ui_image" && actor.actor_type != "audio") {
         // 新导入的物体默认为"幽灵"：不参与碰撞、不受力，避免刚导入就掉落或互相弹开。
         // 需要物理时在物体栏手动切换为动态/运动学/静态。
         // ui_image 与 audio 已在 add_native_actor_to_scene 内设为 phantom。
-        actor.mechanics->set_body_type("phantom");
+        actor.mechanics->set_properties({.body_type = "phantom"});
     }
 
     ++scene->tree_revision;
@@ -2735,10 +2737,10 @@ SceneReply apply_native_environment(const SceneRequest& request) {
         scene->sun_direction = scalars.sun_direction;
         scene->floor_grid_enabled = scalars.grid_enabled;
         const auto physics = SceneEnvironmentService::physics_update(patch);
-        if (physics.gravity) scene->environment->set_gravity(*physics.gravity);
-        if (physics.floor_y) scene->environment->set_floor_y(*physics.floor_y);
-        if (physics.floor_restitution) scene->environment->set_floor_restitution(*physics.floor_restitution);
-        if (physics.fixed_dt) scene->environment->set_fixed_dt(*physics.fixed_dt);
+        scene->environment->set_properties({.gravity = physics.gravity,
+                                           .floor_y = physics.floor_y,
+                                           .floor_restitution = physics.floor_restitution,
+                                           .fixed_dt = physics.fixed_dt});
         apply_native_scene_environment(*scene);
     }
     reply.environment = native_environment_snapshot(*scene);
@@ -2943,19 +2945,19 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
             request_actor_animation_sources(*scene, *actor, *sources);
         } catch (const std::exception& error) { return fail("INVALID_ARGUMENT", error.what()); }
     }
-    if (patch.visible) actor->optics->set_visible(*patch.visible);
+    if (patch.visible) actor->optics->set_properties({.visible = *patch.visible});
     if (patch.follow_camera) {
         actor->follow_camera = *patch.follow_camera;
         if (actor->engine_actor) actor->engine_actor->set_follow_camera(*patch.follow_camera);
     }
     if (patch.mechanics) {
         const auto& values = *patch.mechanics;
-        if (values.mass) actor->mechanics->set_mass(*values.mass);
-        if (values.restitution) actor->mechanics->set_restitution(*values.restitution);
-        if (values.damping) actor->mechanics->set_damping(*values.damping);
-        if (values.body_type) actor->mechanics->set_body_type(*values.body_type);
-        if (values.linear_lock) actor->mechanics->set_linear_lock((*values.linear_lock)[0], (*values.linear_lock)[1], (*values.linear_lock)[2]);
-        if (values.angular_lock) actor->mechanics->set_angular_lock((*values.angular_lock)[0], (*values.angular_lock)[1], (*values.angular_lock)[2]);
+        if (values.mass) actor->mechanics->set_properties({.mass = *values.mass});
+        if (values.restitution) actor->mechanics->set_properties({.restitution = *values.restitution});
+        if (values.damping) actor->mechanics->set_properties({.damping = *values.damping});
+        if (values.body_type) actor->mechanics->set_properties({.body_type = *values.body_type});
+        if (values.linear_lock) actor->mechanics->set_properties({.linear_lock = std::array<bool, 3>{(*values.linear_lock)[0], (*values.linear_lock)[1], (*values.linear_lock)[2]}});
+        if (values.angular_lock) actor->mechanics->set_properties({.angular_lock = std::array<bool, 3>{(*values.angular_lock)[0], (*values.angular_lock)[1], (*values.angular_lock)[2]}});
     }
     if (patch.camera_lock) {
         actor->camera_lock_enabled = patch.camera_lock->enabled;
@@ -3368,9 +3370,9 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
             const auto actor_index = static_cast<std::size_t>(actor - scene->actors.data());
             auto& loaded = add_native_actor_to_scene(*scene, std::move(desired), replacement_path);
             loaded.load_status = ActorLoadStatus::Loaded;
-            if (loaded.optics) loaded.optics->set_visible(loaded.persisted_visible);
+            if (loaded.optics) loaded.optics->set_properties({.visible = loaded.persisted_visible});
             if (loaded.mechanics && loaded.actor_type != "ui_image") {
-                loaded.mechanics->set_body_type(loaded.persisted_body_type);
+                loaded.mechanics->set_properties({.body_type = loaded.persisted_body_type});
             }
             if (scene->actors[actor_index].engine_actor) {
                 scene->engine_scene->remove_actor(scene->actors[actor_index].engine_actor.get());
@@ -3422,7 +3424,7 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
         }
         if (auto value = actor_data_bool(actor_data, {"visible"})) {
             actor->persisted_visible = *value;
-            if (actor->optics) actor->optics->set_visible(*value);
+            if (actor->optics) actor->optics->set_properties({.visible = *value});
         }
         if (auto value = actor_data_bool(actor_data, {"follow_camera"})) {
             actor->follow_camera = *value;
@@ -3455,25 +3457,25 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
         apply_native_actor_optics_state(*actor);
 
         if (actor->mechanics) {
-            if (auto value = actor_data_float(mechanics, {"mass"})) actor->mechanics->set_mass(*value);
-            if (auto value = actor_data_float(mechanics, {"restitution"})) actor->mechanics->set_restitution(*value);
-            if (auto value = actor_data_float(mechanics, {"damping"})) actor->mechanics->set_damping(*value);
+            if (auto value = actor_data_float(mechanics, {"mass"})) actor->mechanics->set_properties({.mass = *value});
+            if (auto value = actor_data_float(mechanics, {"restitution"})) actor->mechanics->set_properties({.restitution = *value});
+            if (auto value = actor_data_float(mechanics, {"damping"})) actor->mechanics->set_properties({.damping = *value});
             const auto bt = json_string_value(mechanics, {"body_type"});
             if (!bt.empty()) {
                 actor->persisted_body_type = normalize_body_type(bt);
-                actor->mechanics->set_body_type(actor->persisted_body_type);
+                actor->mechanics->set_properties({.body_type = actor->persisted_body_type});
             } else if (auto value = actor_data_bool(mechanics, {"physics_enabled"})) {
                 // 向后兼容
                 actor->persisted_body_type = *value ? "dynamic" : "static";
-                actor->mechanics->set_body_type(actor->persisted_body_type);
+                actor->mechanics->set_properties({.body_type = actor->persisted_body_type});
             }
             const auto linear = mechanics.find("linear_lock");
             if (linear != mechanics.end() && linear->is_array() && linear->size() >= 3) {
-                actor->mechanics->set_linear_lock(json_bool_at(*linear, 0), json_bool_at(*linear, 1), json_bool_at(*linear, 2));
+                actor->mechanics->set_properties({.linear_lock = std::array<bool, 3>{json_bool_at(*linear, 0), json_bool_at(*linear, 1), json_bool_at(*linear, 2)}});
             }
             const auto angular = mechanics.find("angular_lock");
             if (angular != mechanics.end() && angular->is_array() && angular->size() >= 3) {
-                actor->mechanics->set_angular_lock(json_bool_at(*angular, 0), json_bool_at(*angular, 1), json_bool_at(*angular, 2));
+                actor->mechanics->set_properties({.angular_lock = std::array<bool, 3>{json_bool_at(*angular, 0), json_bool_at(*angular, 1), json_bool_at(*angular, 2)}});
             }
         }
 
@@ -5227,8 +5229,8 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             loaded.load_status = ActorLoadStatus::Loaded;
             loaded.load_error_code.clear();
             loaded.load_error_message.clear();
-            if (loaded.optics) loaded.optics->set_visible(loaded.persisted_visible);
-            if (loaded.mechanics && loaded.actor_type != "ui_image") loaded.mechanics->set_body_type(preserved_body_type);
+            if (loaded.optics) loaded.optics->set_properties({.visible = loaded.persisted_visible});
+            if (loaded.mechanics && loaded.actor_type != "ui_image") loaded.mechanics->set_properties({.body_type = preserved_body_type});
             if (scene->actors[actor_index].engine_actor)
                 scene->engine_scene->remove_actor(scene->actors[actor_index].engine_actor.get());
             scene->actors.erase(scene->actors.begin() + static_cast<std::ptrdiff_t>(actor_index));

@@ -497,16 +497,51 @@ Corona::API::Environment::~Environment() {
     }
 }
 
-void Corona::API::Environment::set_sun_direction(const std::array<float, 3>& direction) {
+void Corona::API::Environment::set_properties(const EnvironmentProperties& properties) {
     if (handle_ == 0) {
-        CFW_LOG_WARNING("[Environment::set_sun_direction] Invalid environment handle");
+        CFW_LOG_WARNING("[Environment::set_properties] Invalid environment handle");
         return;
     }
     // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
+    // One command carrying every field the caller supplied; the buffer merges it with any
+    // environment command still pending for the same handle.
     Corona::EnvironmentUpdateCommand command{};
     command.environment_handle = handle_;
-    command.fields = Corona::EnvironmentField::SunDirection;
-    command.sun_direction = ktm::fvec3{direction[0], direction[1], direction[2]};
+    if (properties.sun_direction) {
+        command.fields = command.fields | Corona::EnvironmentField::SunDirection;
+        command.sun_direction = ktm::fvec3{(*properties.sun_direction)[0], (*properties.sun_direction)[1],
+                                           (*properties.sun_direction)[2]};
+    }
+    if (properties.sun_intensity) {
+        command.fields = command.fields | Corona::EnvironmentField::SunIntensity;
+        command.sun_intensity = *properties.sun_intensity;
+    }
+    if (properties.sky_intensity) {
+        command.fields = command.fields | Corona::EnvironmentField::SkyIntensity;
+        command.sky_intensity = *properties.sky_intensity;
+    }
+    if (properties.floor_grid) {
+        command.fields = command.fields | Corona::EnvironmentField::FloorGrid;
+        command.floor_grid_enabled = *properties.floor_grid ? 1u : 0u;
+    }
+    if (properties.gravity) {
+        command.fields = command.fields | Corona::EnvironmentField::Gravity;
+        command.gravity = ktm::fvec3{(*properties.gravity)[0], (*properties.gravity)[1],
+                                     (*properties.gravity)[2]};
+    }
+    if (properties.floor_y) {
+        command.fields = command.fields | Corona::EnvironmentField::FloorY;
+        command.floor_y = *properties.floor_y;
+    }
+    if (properties.floor_restitution) {
+        command.fields = command.fields | Corona::EnvironmentField::FloorRestitution;
+        command.floor_restitution = *properties.floor_restitution;
+    }
+    if (properties.fixed_dt) {
+        command.fields = command.fields | Corona::EnvironmentField::FixedDt;
+        command.fixed_dt = *properties.fixed_dt;
+    }
+    if (command.fields == Corona::EnvironmentField::None) return;
     Corona::EnvironmentCommandChannel::instance().commands().push(command);
 }
 
@@ -517,18 +552,6 @@ std::array<float, 3> Corona::API::Environment::get_sun_direction() const {
 }
 
 
-void Corona::API::Environment::set_sun_intensity(float intensity) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Environment::set_sun_intensity] Invalid environment handle");
-        return;
-    }
-    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
-    Corona::EnvironmentUpdateCommand command{};
-    command.environment_handle = handle_;
-    command.fields = Corona::EnvironmentField::SunIntensity;
-    command.sun_intensity = intensity;
-    Corona::EnvironmentCommandChannel::instance().commands().push(command);
-}
 
 
 float Corona::API::Environment::get_sun_intensity() const {
@@ -589,18 +612,6 @@ void Corona::API::Environment::set_authored_lighting(const std::string& descript
     Corona::EnvironmentCommandChannel::instance().commands().push(std::move(command));
 }
 
-void Corona::API::Environment::set_sky_intensity(float intensity) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Environment::set_sky_intensity] Invalid environment handle");
-        return;
-    }
-    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
-    Corona::EnvironmentUpdateCommand command{};
-    command.environment_handle = handle_;
-    command.fields = Corona::EnvironmentField::SkyIntensity;
-    command.sky_intensity = intensity;
-    Corona::EnvironmentCommandChannel::instance().commands().push(command);
-}
 
 
 float Corona::API::Environment::get_sky_intensity() const {
@@ -608,18 +619,6 @@ float Corona::API::Environment::get_sky_intensity() const {
 }
 
 
-void Corona::API::Environment::set_floor_grid(bool enabled) const {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Environment::set_floor_grid] Invalid environment handle");
-        return;
-    }
-    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
-    Corona::EnvironmentUpdateCommand command{};
-    command.environment_handle = handle_;
-    command.fields = Corona::EnvironmentField::FloorGrid;
-    command.floor_grid_enabled = enabled ? 1u : 0u;
-    Corona::EnvironmentCommandChannel::instance().commands().push(command);
-}
 
 
 bool Corona::API::Environment::get_floor_grid() const {
@@ -631,18 +630,6 @@ std::uintptr_t Corona::API::Environment::get_handle() const {
     return handle_;
 }
 
-void Corona::API::Environment::set_gravity(const std::array<float, 3>& gravity) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Environment::set_gravity] Invalid environment handle");
-        return;
-    }
-    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
-    Corona::EnvironmentUpdateCommand command{};
-    command.environment_handle = handle_;
-    command.fields = Corona::EnvironmentField::Gravity;
-    command.gravity = ktm::fvec3{gravity[0], gravity[1], gravity[2]};
-    Corona::EnvironmentCommandChannel::instance().commands().push(command);
-}
 
 
 std::array<float, 3> Corona::API::Environment::get_gravity() const {
@@ -651,18 +638,6 @@ std::array<float, 3> Corona::API::Environment::get_gravity() const {
 }
 
 
-void Corona::API::Environment::set_floor_y(float y) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Environment::set_floor_y] Invalid environment handle");
-        return;
-    }
-    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
-    Corona::EnvironmentUpdateCommand command{};
-    command.environment_handle = handle_;
-    command.fields = Corona::EnvironmentField::FloorY;
-    command.floor_y = y;
-    Corona::EnvironmentCommandChannel::instance().commands().push(command);
-}
 
 
 float Corona::API::Environment::get_floor_y() const {
@@ -670,18 +645,6 @@ float Corona::API::Environment::get_floor_y() const {
 }
 
 
-void Corona::API::Environment::set_floor_restitution(float restitution) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Environment::set_floor_restitution] Invalid environment handle");
-        return;
-    }
-    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
-    Corona::EnvironmentUpdateCommand command{};
-    command.environment_handle = handle_;
-    command.fields = Corona::EnvironmentField::FloorRestitution;
-    command.floor_restitution = restitution;
-    Corona::EnvironmentCommandChannel::instance().commands().push(command);
-}
 
 
 float Corona::API::Environment::get_floor_restitution() const {
@@ -689,18 +652,6 @@ float Corona::API::Environment::get_floor_restitution() const {
 }
 
 
-void Corona::API::Environment::set_fixed_dt(float dt) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Environment::set_fixed_dt] Invalid environment handle");
-        return;
-    }
-    // tick 边界阶段应用（P4）：Environment 跨 Optics/Mechanics 两个消费者。
-    Corona::EnvironmentUpdateCommand command{};
-    command.environment_handle = handle_;
-    command.fields = Corona::EnvironmentField::FixedDt;
-    command.fixed_dt = dt;
-    Corona::EnvironmentCommandChannel::instance().commands().push(command);
-}
 
 
 float Corona::API::Environment::get_fixed_dt() const {
@@ -1228,50 +1179,95 @@ Corona::API::Geometry* Corona::API::Optics::get_geometry() const {
     return geometry_;
 }
 
-void Corona::API::Optics::set_visible(bool visible) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_visible] Invalid optics handle");
-        return;
-    }
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::Visible;
-    command.visible = visible;
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 bool Corona::API::Optics::get_visible() const {
     return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).visible;
 }
 
 
-void Corona::API::Optics::set_lighting_enabled(bool enabled) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_lighting_enabled] Invalid optics handle");
-        return;
-    }
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::EnableLighting;
-    command.enable_lighting = enabled;
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 bool Corona::API::Optics::get_lighting_enabled() const {
     return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).enable_lighting;
 }
 
 
-void Corona::API::Optics::set_metallic(float metallic) {
+void Corona::API::Optics::set_properties(const OpticsProperties& properties) {
     if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_metallic] Invalid optics handle");
+        CFW_LOG_WARNING("[Optics::set_properties] Invalid optics handle");
         return;
     }
-    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
+    // One command carrying every field the caller supplied; the buffer merges it with any
+    // optics command still pending for the same handle.
     Corona::OpticsUpdateCommand command{};
     command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::Metallic;
-    command.metallic = metallic;
+    if (properties.metallic) {
+        command.fields = command.fields | OpticsField::Metallic;
+        command.metallic = *properties.metallic;
+    }
+    if (properties.roughness) {
+        command.fields = command.fields | OpticsField::Roughness;
+        command.roughness = *properties.roughness;
+    }
+    if (properties.subsurface) {
+        command.fields = command.fields | OpticsField::Subsurface;
+        command.subsurface = *properties.subsurface;
+    }
+    if (properties.specular) {
+        command.fields = command.fields | OpticsField::Specular;
+        command.specular = *properties.specular;
+    }
+    if (properties.specular_tint) {
+        command.fields = command.fields | OpticsField::SpecularTint;
+        command.specular_tint = *properties.specular_tint;
+    }
+    if (properties.anisotropic) {
+        command.fields = command.fields | OpticsField::Anisotropic;
+        command.anisotropic = *properties.anisotropic;
+    }
+    if (properties.sheen) {
+        command.fields = command.fields | OpticsField::Sheen;
+        command.sheen = *properties.sheen;
+    }
+    if (properties.sheen_tint) {
+        command.fields = command.fields | OpticsField::SheenTint;
+        command.sheen_tint = *properties.sheen_tint;
+    }
+    if (properties.clearcoat) {
+        command.fields = command.fields | OpticsField::Clearcoat;
+        command.clearcoat = *properties.clearcoat;
+    }
+    if (properties.clearcoat_gloss) {
+        command.fields = command.fields | OpticsField::ClearcoatGloss;
+        command.clearcoat_gloss = *properties.clearcoat_gloss;
+    }
+    if (properties.shininess) {
+        command.fields = command.fields | OpticsField::Shininess;
+        command.shininess = *properties.shininess;
+    }
+    if (properties.ambient) {
+        command.fields = command.fields | OpticsField::Ambient;
+        command.ambient = ktm::fvec3{(*properties.ambient)[0], (*properties.ambient)[1],
+                                    (*properties.ambient)[2]};
+    }
+    if (properties.diffuse) {
+        command.fields = command.fields | OpticsField::Diffuse;
+        command.diffuse = ktm::fvec3{(*properties.diffuse)[0], (*properties.diffuse)[1],
+                                    (*properties.diffuse)[2]};
+    }
+    if (properties.specular_color) {
+        command.fields = command.fields | OpticsField::SpecularColor;
+        command.specular_color = ktm::fvec3{(*properties.specular_color)[0], (*properties.specular_color)[1],
+                                    (*properties.specular_color)[2]};
+    }
+    if (properties.visible) {
+        command.fields = command.fields | OpticsField::Visible;
+        command.visible = *properties.visible;
+    }
+    if (properties.lighting_enabled) {
+        command.fields = command.fields | OpticsField::EnableLighting;
+        command.enable_lighting = *properties.lighting_enabled;
+    }
+    if (command.fields == Corona::OpticsField::None) return;
     Corona::OpticsCommandChannel::instance().commands().push(command);
 }
 
@@ -1280,231 +1276,78 @@ float Corona::API::Optics::get_metallic() const {
     return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).metallic;
 }
 
-void Corona::API::Optics::set_roughness(float roughness) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_roughness] Invalid optics handle");
-        return;
-    }
-    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::Roughness;
-    command.roughness = roughness;
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 float Corona::API::Optics::get_roughness() const {
     // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
     return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).roughness;
 }
 
-void Corona::API::Optics::set_subsurface(float subsurface) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_subsurface] Invalid optics handle");
-        return;
-    }
-    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::Subsurface;
-    command.subsurface = subsurface;
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 float Corona::API::Optics::get_subsurface() const {
     // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
     return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).subsurface;
 }
 
-void Corona::API::Optics::set_specular(float specular) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_specular] Invalid optics handle");
-        return;
-    }
-    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::Specular;
-    command.specular = specular;
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 float Corona::API::Optics::get_specular() const {
     // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
     return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).specular;
 }
 
-void Corona::API::Optics::set_specular_tint(float specularTint) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_specular_tint] Invalid optics handle");
-        return;
-    }
-    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::SpecularTint;
-    command.specular_tint = specularTint;
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 float Corona::API::Optics::get_specular_tint() const {
     // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
     return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).specular_tint;
 }
 
-void Corona::API::Optics::set_anisotropic(float anisotropic) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_anisotropic] Invalid optics handle");
-        return;
-    }
-    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::Anisotropic;
-    command.anisotropic = anisotropic;
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 float Corona::API::Optics::get_anisotropic() const {
     // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
     return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).anisotropic;
 }
 
-void Corona::API::Optics::set_sheen(float sheen) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_sheen] Invalid optics handle");
-        return;
-    }
-    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::Sheen;
-    command.sheen = sheen;
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 float Corona::API::Optics::get_sheen() const {
     // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
     return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).sheen;
 }
 
-void Corona::API::Optics::set_sheen_tint(float sheenTint) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_sheen_tint] Invalid optics handle");
-        return;
-    }
-    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::SheenTint;
-    command.sheen_tint = sheenTint;
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 float Corona::API::Optics::get_sheen_tint() const {
     // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
     return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).sheen_tint;
 }
 
-void Corona::API::Optics::set_clearcoat(float clearcoat) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_clearcoat] Invalid optics handle");
-        return;
-    }
-    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::Clearcoat;
-    command.clearcoat = clearcoat;
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 float Corona::API::Optics::get_clearcoat() const {
     // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
     return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).clearcoat;
 }
 
-void Corona::API::Optics::set_clearcoat_gloss(float clearcoatGloss) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_clearcoat_gloss] Invalid optics handle");
-        return;
-    }
-    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::ClearcoatGloss;
-    command.clearcoat_gloss = clearcoatGloss;
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 float Corona::API::Optics::get_clearcoat_gloss() const {
     // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
     return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).clearcoat_gloss;
 }
 
-void Corona::API::Optics::set_ambient(const std::array<float, 3>& ambient) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_ambient] Invalid optics handle");
-        return;
-    }
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::Ambient;
-    command.ambient = ktm::fvec3{ambient[0], ambient[1], ambient[2]};
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 std::array<float, 3> Corona::API::Optics::get_ambient() const {
     const auto view = Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{});
     return {view.ambient.x, view.ambient.y, view.ambient.z};
 }
 
-void Corona::API::Optics::set_diffuse(const std::array<float, 3>& diffuse) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_diffuse] Invalid optics handle");
-        return;
-    }
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::Diffuse;
-    command.diffuse = ktm::fvec3{diffuse[0], diffuse[1], diffuse[2]};
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 std::array<float, 3> Corona::API::Optics::get_diffuse() const {
     const auto view = Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{});
     return {view.diffuse.x, view.diffuse.y, view.diffuse.z};
 }
 
-void Corona::API::Optics::set_specular_color(const std::array<float, 3>& specular) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_specular_color] Invalid optics handle");
-        return;
-    }
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::SpecularColor;
-    command.specular_color = ktm::fvec3{specular[0], specular[1], specular[2]};
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 std::array<float, 3> Corona::API::Optics::get_specular_color() const {
     const auto view = Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{});
     return {view.specular_color.x, view.specular_color.y, view.specular_color.z};
 }
 
-void Corona::API::Optics::set_shininess(float shininess) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Optics::set_shininess] Invalid optics handle");
-        return;
-    }
-    // 走命令队列（P3）：标量材质参数由 Optics 在 tick 开头应用。
-    Corona::OpticsUpdateCommand command{};
-    command.optics_handle = handle_;
-    command.fields = Corona::OpticsField::Shininess;
-    command.shininess = shininess;
-    Corona::OpticsCommandChannel::instance().commands().push(command);
-}
 
 float Corona::API::Optics::get_shininess() const {
     // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
@@ -1583,16 +1426,53 @@ Corona::API::Geometry* Corona::API::Mechanics::get_geometry() const {
     return geometry_;
 }
 
-void Corona::API::Mechanics::set_mass(float mass) {
+namespace {
+
+std::uint8_t axis_lock_mask(const std::array<bool, 3>& lock) {
+    std::uint8_t mask = 0;
+    if (lock[0]) mask |= 0b001;
+    if (lock[1]) mask |= 0b010;
+    if (lock[2]) mask |= 0b100;
+    return mask;
+}
+
+}  // namespace
+
+void Corona::API::Mechanics::set_properties(const MechanicsProperties& properties) {
     if (handle_ == 0) {
-        CFW_LOG_WARNING("[Mechanics::set_mass] Invalid mechanics handle");
+        CFW_LOG_WARNING("[Mechanics::set_properties] Invalid mechanics handle");
         return;
     }
     // 走命令队列（P3）：外部线程不再直接写 Mechanics 槽位，由 Mechanics 在 tick 开头应用。
+    // One command carrying every field the caller supplied; the buffer merges it with any
+    // mechanics command still pending for the same handle.
     MechanicsUpdateCommand command{};
     command.mechanics_handle = handle_;
-    command.fields = MechanicsField::Mass;
-    command.mass = mass;
+    if (properties.mass) {
+        command.fields = command.fields | MechanicsField::Mass;
+        command.mass = *properties.mass;
+    }
+    if (properties.restitution) {
+        command.fields = command.fields | MechanicsField::Restitution;
+        command.restitution = *properties.restitution;
+    }
+    if (properties.damping) {
+        command.fields = command.fields | MechanicsField::Damping;
+        command.damping = *properties.damping;
+    }
+    if (properties.body_type) {
+        command.fields = command.fields | MechanicsField::BodyType;
+        command.body_type = body_type_from_string(*properties.body_type);
+    }
+    if (properties.linear_lock) {
+        command.fields = command.fields | MechanicsField::LinearLock;
+        command.linear_lock_mask = axis_lock_mask(*properties.linear_lock);
+    }
+    if (properties.angular_lock) {
+        command.fields = command.fields | MechanicsField::AngularLock;
+        command.angular_lock_mask = axis_lock_mask(*properties.angular_lock);
+    }
+    if (command.fields == MechanicsField::None) return;
     MechanicsCommandChannel::instance().commands().push(command);
 }
 
@@ -1604,17 +1484,6 @@ float Corona::API::Mechanics::get_mass() const {
 }
 
 
-void Corona::API::Mechanics::set_restitution(float restitution) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Mechanics::set_restitution] Invalid mechanics handle");
-        return;
-    }
-    MechanicsUpdateCommand command{};
-    command.mechanics_handle = handle_;
-    command.fields = MechanicsField::Restitution;
-    command.restitution = restitution;
-    MechanicsCommandChannel::instance().commands().push(command);
-}
 
 
 float Corona::API::Mechanics::get_restitution() const {
@@ -1624,17 +1493,6 @@ float Corona::API::Mechanics::get_restitution() const {
 }
 
 
-void Corona::API::Mechanics::set_damping(float damping) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Mechanics::set_damping] Invalid mechanics handle");
-        return;
-    }
-    MechanicsUpdateCommand command{};
-    command.mechanics_handle = handle_;
-    command.fields = MechanicsField::Damping;
-    command.damping = damping;
-    MechanicsCommandChannel::instance().commands().push(command);
-}
 
 
 float Corona::API::Mechanics::get_damping() const {
@@ -1644,17 +1502,6 @@ float Corona::API::Mechanics::get_damping() const {
 }
 
 
-void Corona::API::Mechanics::set_body_type(std::string_view type) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Mechanics::set_body_type] Invalid mechanics handle");
-        return;
-    }
-    MechanicsUpdateCommand command{};
-    command.mechanics_handle = handle_;
-    command.fields = MechanicsField::BodyType;
-    command.body_type = body_type_from_string(type);
-    MechanicsCommandChannel::instance().commands().push(command);
-}
 
 
 std::string Corona::API::Mechanics::get_body_type() const {
@@ -1666,21 +1513,6 @@ std::string Corona::API::Mechanics::get_body_type() const {
 }
 
 
-void Corona::API::Mechanics::set_linear_lock(bool lock_x, bool lock_y, bool lock_z) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Mechanics::set_linear_lock] Invalid mechanics handle");
-        return;
-    }
-    MechanicsUpdateCommand command{};
-    command.mechanics_handle = handle_;
-    command.fields = MechanicsField::LinearLock;
-    std::uint8_t mask = 0;
-    if (lock_x) mask |= 0b001;
-    if (lock_y) mask |= 0b010;
-    if (lock_z) mask |= 0b100;
-    command.linear_lock_mask = mask;
-    MechanicsCommandChannel::instance().commands().push(command);
-}
 
 
 std::tuple<bool, bool, bool> Corona::API::Mechanics::get_linear_lock() const {
@@ -1693,21 +1525,6 @@ std::tuple<bool, bool, bool> Corona::API::Mechanics::get_linear_lock() const {
 }
 
 
-void Corona::API::Mechanics::set_angular_lock(bool lock_x, bool lock_y, bool lock_z) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Mechanics::set_angular_lock] Invalid mechanics handle");
-        return;
-    }
-    MechanicsUpdateCommand command{};
-    command.mechanics_handle = handle_;
-    command.fields = MechanicsField::AngularLock;
-    std::uint8_t mask = 0;
-    if (lock_x) mask |= 0b001;
-    if (lock_y) mask |= 0b010;
-    if (lock_z) mask |= 0b100;
-    command.angular_lock_mask = mask;
-    MechanicsCommandChannel::instance().commands().push(command);
-}
 
 
 std::tuple<bool, bool, bool> Corona::API::Mechanics::get_angular_lock() const {
@@ -1785,16 +1602,29 @@ Corona::API::Acoustics::~Acoustics() {
     }
 }
 
-void Corona::API::Acoustics::set_volume(float volume) {
+void Corona::API::Acoustics::set_properties(const AcousticsProperties& properties) {
     if (handle_ == 0) {
-        CFW_LOG_WARNING("[Acoustics::set_volume] Invalid acoustics handle");
+        CFW_LOG_WARNING("[Acoustics::set_properties] Invalid acoustics handle");
         return;
     }
     // 走命令队列（P3）：外部线程不再直接写 Acoustics 槽位。
+    // One command carrying every field the caller supplied; the buffer merges it with any
+    // acoustics command still pending for the same handle.
     Corona::AcousticsUpdateCommand command{};
     command.acoustics_handle = handle_;
-    command.fields = Corona::AcousticsField::Volume;
-    command.volume = volume;
+    if (properties.volume) {
+        command.fields = command.fields | Corona::AcousticsField::Volume;
+        command.volume = *properties.volume;
+    }
+    if (properties.audio_enabled) {
+        command.fields = command.fields | Corona::AcousticsField::AudioEnabled;
+        command.audio_enabled = *properties.audio_enabled;
+    }
+    if (properties.audio_resource) {
+        command.fields = command.fields | Corona::AcousticsField::ResourceId;
+        command.resource_id = *properties.audio_resource;
+    }
+    if (command.fields == Corona::AcousticsField::None) return;
     Corona::AcousticsCommandChannel::instance().commands().push(command);
 }
 
@@ -1805,17 +1635,6 @@ float Corona::API::Acoustics::get_volume() const {
 }
 
 
-void Corona::API::Acoustics::set_audio_enabled(bool enabled) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Acoustics::set_audio_enabled] Invalid acoustics handle");
-        return;
-    }
-    Corona::AcousticsUpdateCommand command{};
-    command.acoustics_handle = handle_;
-    command.fields = Corona::AcousticsField::AudioEnabled;
-    command.audio_enabled = enabled;
-    Corona::AcousticsCommandChannel::instance().commands().push(command);
-}
 
 
 bool Corona::API::Acoustics::get_audio_enabled() const {
@@ -1824,17 +1643,6 @@ bool Corona::API::Acoustics::get_audio_enabled() const {
 }
 
 
-void Corona::API::Acoustics::set_audio_resource(std::uint64_t resource_id) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Acoustics::set_audio_resource] Invalid acoustics handle");
-        return;
-    }
-    Corona::AcousticsUpdateCommand command{};
-    command.acoustics_handle = handle_;
-    command.fields = Corona::AcousticsField::ResourceId;
-    command.resource_id = resource_id;
-    Corona::AcousticsCommandChannel::instance().commands().push(command);
-}
 
 
 std::uint64_t Corona::API::Acoustics::get_audio_resource() const {
