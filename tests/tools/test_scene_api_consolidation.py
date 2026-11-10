@@ -10,8 +10,14 @@ def test_scene_v8_has_only_the_consolidated_names():
     names = re.findall(r'scene->SetValue\("([^"]+)", CefV8Value::CreateFunction', source)
     assert len(names) == 27
     registered = re.findall(r'(\w+)->SetValue\("[^"]+", CefV8Value::CreateFunction', source)
-    assert len(registered) == 86
-    assert len(set(registered)) == 13
+    # Scene operations are counted above; the rest is the editor surface, which
+    # now includes the single Web -> Python bridge entry. Namespaces that moved
+    # behind the bridge no longer appear here.
+    assert len(registered) == 73
+    assert len(set(registered)) == 12
+    assert re.findall(r'bridge->SetValue\("([^"]+)"', source) == ['call'], (
+        "the Web -> Python surface must stay one function wide"
+    )
     for name in ('readScene', 'updateActor', 'updateCamera', 'readActorRig',
                  'readActive', 'readTransforms', 'setActorTransform', 'setActorIkChains'):
         assert name in names

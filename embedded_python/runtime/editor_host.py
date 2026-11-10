@@ -12,6 +12,42 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+class WebBridgeService:
+    """The single Web -> Python entry point.
+
+    C++ transports ``{"service", "function", "args"}`` verbatim: no schema and
+    no business branch lives on that side.  Routing, the service allowlist and
+    argument handling belong here, where the services themselves live.
+    """
+
+    ALLOWED_SERVICES = frozenset({"ProjectArchive", "FileScripts", "ProjectFiles"})
+
+    @classmethod
+    def call(cls, envelope):
+        if isinstance(envelope, (bytes, bytearray)):
+            envelope = envelope.decode("utf-8")
+        if not isinstance(envelope, str):
+            raise TypeError("Bridge envelope must be a JSON string")
+        request = json.loads(envelope)
+        if not isinstance(request, dict):
+            raise TypeError("Bridge envelope must be a JSON object")
+        service = request.get("service")
+        function = request.get("function")
+        args = request.get("args", [])
+        if not isinstance(service, str) or not service:
+            raise ValueError("Bridge request needs a service name")
+        if not isinstance(function, str) or not function:
+            raise ValueError("Bridge request needs a function name")
+        if not isinstance(args, list):
+            raise TypeError("Bridge request args must be an array")
+        if service not in cls.ALLOWED_SERVICES:
+            raise PermissionError(f"Editor Web layer may not call Python service {service}")
+        response = CoronaEditor.dispatch_script_values_from_cpp(service, function, args)
+        if not response.get("success", False):
+            raise RuntimeError(response.get("error") or f"{service}.{function} failed")
+        return response.get("data")
+
 class CoronaEditor:
     CoronaEngine = get_corona_engine()
     url = core_path.frontend_dist
@@ -69,6 +105,7 @@ class CoronaEditor:
         register = getattr(cls.CoronaEngine, "register_python_script_service_dispatcher", None)
         if callable(register):
             register(cls.dispatch_script_request_from_cpp)
+        cls.module_list.setdefault("EditorBridge", WebBridgeService)
 
     @classmethod
     def unregister_script_dispatcher(cls):

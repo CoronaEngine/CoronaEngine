@@ -1,4 +1,4 @@
-﻿"""Keep retired duplicate native bindings out of both sides of the bridge."""
+"""Keep retired duplicate native bindings out of both sides of the bridge."""
 from pathlib import Path
 
 
@@ -10,7 +10,7 @@ def test_network_has_named_owned_contract_and_no_legacy_web_routes():
         line = next(line for line in manifest.splitlines() if f'Network, {method},' in line)
         assert 'WRAPPED_CALLERS(Network,' in line
         assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
-        assert ', "", "network.' in line
+        assert ', "network.' in line
     header = (root / 'src/systems/ui/cef/cef_network_operations.h').read_text(encoding='utf-8')
     assert 'nlohmann' not in header and 'CefV8' not in header
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
@@ -27,7 +27,7 @@ def test_project_creation_has_one_native_owner_and_named_web_bindings():
         line = next(line for line in manifest.splitlines() if f'ProjectLauncher, {method},' in line)
         assert 'WRAPPED_CALLERS(ProjectLauncher,' in line
         assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
-        assert ', "", "project.' in line
+        assert ', "project.' in line
     owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8')
     assert 'NativeResult create_launcher_project(' in owner
     assert owner.count('target = base_dir / (dir_base + "_"') == 1
@@ -43,7 +43,7 @@ def test_project_launcher_reads_use_named_v8_and_keep_non_web_manifest():
         line = next(line for line in manifest.splitlines() if f'ProjectLauncher, {method},' in line)
         assert 'WRAPPED_CALLERS(ProjectLauncher,' in line
         assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
-        assert ', "", "project.' in line
+        assert ', "project.' in line
     header = (root / 'src/systems/ui/cef/cef_project_launcher_operations.h').read_text(encoding='utf-8')
     assert 'nlohmann' not in header and 'CefV8' not in header
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
@@ -60,7 +60,7 @@ def test_unused_project_launch_methods_keep_non_web_contracts_only():
         line = next(line for line in manifest.splitlines() if f'ProjectLauncher, {method},' in line)
         assert 'WRAPPED_CALLERS(ProjectLauncher,' in line
         assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
-        assert ', "", "project.' in line
+        assert ', "project.' in line
     owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
     assert 'registry.register_module("ProjectLauncher",' in owner
 
@@ -73,7 +73,7 @@ def test_unused_resource_search_is_not_exposed_to_web_but_keeps_python_contracts
         line = next(line for line in manifest.splitlines() if f'ResourceSearch, {method},' in line)
         assert 'WRAPPED_CALLERS(ResourceSearch,' in line
         assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
-        assert ', "", "resource_search.' in line
+        assert ', "resource_search.' in line
     owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
     assert 'register_script_module("ResourceSearch", resource_search_methods)' in owner
 
@@ -86,47 +86,48 @@ def test_file_browser_retirement_preserves_non_web_permissions():
         line = next(line for line in manifest.splitlines() if f'FileManager, {method},' in line)
         assert 'WRAPPED_CALLERS(FileManager,' in line
         assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
-        assert ', "", "files.' in line
+        assert ', "files.' in line
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert "call_manifest_editor_api('files." not in facade
     assert 'callProjectFileMutation' not in facade
     assert 'getProjectInfo:' not in facade and 'getFiles:' not in facade
 
 
-def test_project_files_have_one_named_web_contract_and_no_generic_manifest_owner():
+def test_project_files_moved_behind_the_web_python_bridge():
     root = Path(__file__).resolve().parents[2]
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
     assert 'WRAPPED_CALLERS(ProjectFiles,' not in manifest
     owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
+    assert 'execute_project_files_operation' not in owner
     assert 'project_file_methods' not in owner
     assert 'register_script_module("ProjectFiles"' not in owner
-    operation = owner.split('ProjectFilesReply execute_project_files_operation(', 1)[1].split(
-        'ScriptsReply execute_scripts_operation(', 1)[0]
-    assert 'invoke_python_script_service(' in operation
-    assert '"identity", request.identity' in operation
-    assert '.dump(' not in operation and 'json::parse' not in operation
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
+    assert 'ProjectFilesMethod' not in binding
+    assert 'root->SetValue("projectFiles"' not in binding
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
+    assert "bridgeCall('ProjectFiles'" in facade
     assert "call_manifest_editor_api('projectFiles." not in facade
     target = (root / 'CoronaEditor/editor/Frontend/src/blockly/targetArchive.js').read_text(encoding='utf-8-sig')
     assert 'JSON.' not in target and 'response?.data' not in target
 
 
-def test_scripts_retire_cef_only_and_use_owned_native_contracts():
+def test_scripts_keep_native_contracts_and_move_web_calls_to_the_bridge():
     root = Path(__file__).resolve().parents[2]
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
     for name in ['run_path', 'run_file', 'get_run', 'stop', 'get_status']:
         line = next(line for line in manifest.splitlines() if f'Scripts, {name},' in line)
-        assert ', "", "", ' in line
+        assert ', "", ' in line
         assert line.endswith('caller_mask(EditorApiCaller::Native)),')
-    header = (root / 'src/systems/ui/cef/cef_scripts_operations.h').read_text(encoding='utf-8-sig')
-    for forbidden in ['nlohmann', 'CefV8', 'payload_json']:
-        assert forbidden not in header
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert "call_manifest_editor_api('scripts." not in facade
+    assert "bridgeCall('FileScripts'" in facade
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
+    assert 'ScriptsMethod' not in binding
+    assert 'root->SetValue("scripts"' not in binding
     native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
     script_service = (root / 'src/systems/ui/editor_api/project_script_service.cpp').read_text(encoding='utf-8-sig')
     assert script_service.count('Script path must be a project-relative .py file') == 1
-    assert native.count('start_native_script_file(') == 3
+    assert native.count('start_native_script_file(') == 2
 
 
 def test_native_python_service_transport_uses_owned_values_without_json_text():
@@ -149,7 +150,6 @@ def test_actor_creation_retires_only_cef_and_shares_native_business_operation():
     root = Path(__file__).resolve().parents[2]
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
     declaration = next(line for line in manifest.splitlines() if 'SceneTools, create_actor,' in line)
-    assert ', "", ' in declaration
     assert 'non_cef_animation_callers()' in declaration
     native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
     typed = native.split('if (request.method == SceneMethod::CreateActor)', 1)[1].split('if (request.method == SceneMethod::CreateCamera)', 1)[0]
@@ -191,7 +191,6 @@ def test_audio_and_import_keep_original_python_permissions_after_cef_retirement(
                            ('SceneTools', 'actor_stop_audio')]:
         declaration = next(line for line in manifest.splitlines() if f'{module}, {method},' in line)
         assert 'WRAPPED_CALLERS' in declaration
-        assert ', "", ' in declaration
         assert declaration.endswith('caller_mask(EditorApiCaller::PythonScript)),')
 
 
@@ -200,7 +199,7 @@ def test_camera_reads_retire_full_scene_and_camera_list_web_routes():
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
     for name in ['get_scene_snapshot', 'list_camera_views']:
         declaration = next(line for line in manifest.splitlines() if f'SceneTools, {name},' in line)
-        assert 'WRAPPED_CALLERS' in declaration and '"", "scene' in declaration
+        assert 'WRAPPED_CALLERS' in declaration and ', "scene' in declaration
         assert '~caller_mask(EditorApiCaller::Cef)' in declaration or 'caller_mask(EditorApiCaller::PythonScript)' in declaration
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'getSnapshot:' not in facade and 'listCameraViews:' not in facade
@@ -211,7 +210,7 @@ def test_tree_read_retires_manifest_and_shares_owned_rows():
     root = Path(__file__).resolve().parents[2]
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
     declaration = next(line for line in manifest.splitlines() if 'SceneTools, list_scene_tree,' in line)
-    assert 'WRAPPED_CALLERS' in declaration and '"", "scene_tools.list_scene_tree"' in declaration
+    assert 'WRAPPED_CALLERS' in declaration and ', "scene_tools.list_scene_tree"' in declaration
     assert 'caller_mask(EditorApiCaller::PythonScript)' in declaration
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'listSceneTree:' not in facade
@@ -225,7 +224,7 @@ def test_archive_read_is_not_exposed_to_web_without_a_production_consumer():
     root = Path(__file__).resolve().parents[2]
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
     declaration = next(line for line in manifest.splitlines() if 'SceneTools, read_archive_scene,' in line)
-    assert '"", "scene.read_archive_scene"' in declaration
+    assert ', "scene.read_archive_scene"' in declaration
     assert 'animation_callers() & ~caller_mask(EditorApiCaller::Cef)' in declaration
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'readArchive:' not in facade
@@ -278,7 +277,7 @@ def test_actor_property_read_retires_duplicate_web_routes():
     root = Path(__file__).resolve().parents[2]
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
     declaration = next(line for line in manifest.splitlines() if 'SceneTools, read_actor,' in line)
-    assert '"", "scene.read_actor"' in declaration
+    assert ', "scene.read_actor"' in declaration
     assert '~caller_mask(EditorApiCaller::Cef)' in declaration
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'getActor:' not in facade and 'readActor:' not in facade
@@ -292,7 +291,7 @@ def test_camera_window_toggles_are_not_cef_manifest_routes():
         declaration = next(line for line in manifest.splitlines() if f'SceneTools, {name},' in line)
         assert 'WRAPPED_CALLERS' in declaration
         assert 'caller_mask(EditorApiCaller::PythonScript)' in declaration
-        assert '"", "scene_tools.' in declaration
+        assert ', "scene_tools.' in declaration
 
 
 def test_camera_rename_and_delete_use_scoped_scene_v8_only_for_web():
@@ -323,7 +322,7 @@ def test_actor_rename_uses_scoped_scene_v8_only_for_web():
     declaration = next(line for line in manifest.splitlines() if 'SceneTools, rename_actor,' in line)
     assert 'WRAPPED_CALLERS' in declaration
     assert 'animation_callers() & ~caller_mask(EditorApiCaller::Cef)' in declaration
-    assert '"", "scene_tools.rename_actor"' in declaration
+    assert ', "scene_tools.rename_actor"' in declaration
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'call_manifest_editor_api(\'sceneTools.renameActor\'' not in facade
     assert 'updateActor: (sceneName, actorName, patch) =>' in facade
@@ -339,7 +338,7 @@ def test_actor_delete_uses_scoped_scene_v8_and_retires_manifest_for_web():
     declaration = next(line for line in manifest.splitlines() if 'SceneTools, remove_actor,' in line)
     assert 'WRAPPED_CALLERS' in declaration
     assert 'caller_mask(EditorApiCaller::Cef)' in declaration
-    assert '"", "scene_tools.remove_actor"' in declaration
+    assert ', "scene_tools.remove_actor"' in declaration
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'removeActor:' not in facade
     assert 'window.corona.scene.deleteActor(sceneName, actor, scope)' in facade
@@ -361,7 +360,7 @@ def test_actor_resource_rebinding_uses_scoped_scene_v8_and_retires_web_manifest(
     declaration = next(line for line in manifest.splitlines()
                        if 'SceneTools, rebind_actor_resource,' in line)
     assert 'WRAPPED_CALLERS' in declaration
-    assert '"", "scene_tools.rebind_actor_resource"' in declaration
+    assert ', "scene_tools.rebind_actor_resource"' in declaration
     assert '~caller_mask(EditorApiCaller::Cef)' in declaration
 
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
@@ -560,7 +559,7 @@ def test_main_init_is_python_only_and_has_no_web_facade():
     root = Path(__file__).resolve().parents[2]
     source = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
     declaration = next(line for line in source.splitlines() if 'MainView, on_init,' in line)
-    assert 'WRAPPED_CALLERS' in declaration and ', "", ' in declaration
+    assert 'WRAPPED_CALLERS' in declaration
     assert declaration.endswith('caller_mask(EditorApiCaller::PythonScript)),')
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'onInit:' not in facade
@@ -571,7 +570,7 @@ def test_project_picker_has_named_binding_and_no_generic_timeout_exception():
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
     line = next(line for line in manifest.splitlines() if 'ProjectLauncher, open_project_file,' in line)
     assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
-    assert ', "", "project.open_project_file"' in line
+    assert ', "project.open_project_file"' in line
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
     assert 'project->SetValue("openProjectFile"' in binding
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8')
@@ -586,7 +585,7 @@ def test_project_open_uses_one_owner_and_retires_generic_web_contract():
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8')
     line = next(line for line in manifest.splitlines() if 'ProjectLauncher, open_project,' in line)
     assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
-    assert ', "", "project.open_project"' in line
+    assert ', "project.open_project"' in line
     owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8')
     assert 'NativeResult open_launcher_project(' in owner
     assert 'return open_launcher_project(' in owner
@@ -624,7 +623,6 @@ def test_unused_network_and_chat_routes_keep_non_web_contracts_only():
         for method in methods:
             line = next(line for line in source.splitlines() if f'({module}, {method},' in line)
             assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line, (module, method)
-            assert ', "", ' in line, (module, method)
             assert '"network.' in line
 
 
@@ -635,7 +633,7 @@ def test_unused_network_events_keep_only_non_web_permissions_and_aliases():
     assert len(events) == 8
     for line in events:
         assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line, line
-        assert ', "", "events.on_network_' in line, line
+        assert ', "events.on_network_' in line, line
 
 
 def test_application_exit_is_named_and_keeps_non_web_contract():
@@ -643,7 +641,7 @@ def test_application_exit_is_named_and_keeps_non_web_contract():
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8')
     line = next(line for line in manifest.splitlines() if '(CoronaEditor, close_process,' in line)
     assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
-    assert ', "", "app.close_process"' in line
+    assert ', "app.close_process"' in line
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
     assert 'app->SetValue("closeProcess"' in binding
     owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8')

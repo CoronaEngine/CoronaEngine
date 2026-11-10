@@ -3,12 +3,11 @@
 #include "browser_manager.h"
 #include "cef_window_operations.h"
 #include "cef_scene_operations.h"
-#include "cef_scripts_operations.h"
-#include "cef_project_files_operations.h"
 #include "cef_project_settings_operations.h"
 #include "cef_files_operations.h"
 #include "cef_project_launcher_operations.h"
 #include "cef_network_operations.h"
+#include "cef_bridge_operations.h"
 #include "cef_viewport_pick.h"
 #include "cef_viewport_gizmo.h"
 #include "cef_editor_native_api_handlers.h"
@@ -105,6 +104,7 @@ CefRefPtr<CefV8Value> json_to_v8(const nlohmann::json& value) {
 }
 
 enum class GizmoMethod { SetTarget, Pointer };
+enum class BridgeMethod { Call };
 
 bool object_keys(CefRefPtr<CefV8Value> object, std::initializer_list<const char*> allowed);
 
@@ -216,12 +216,9 @@ bool read_project_launcher(ProjectLauncherRequest& request, const CefV8ValueList
     return world || request.role == "host" || request.role == "guest";
 }
 
-bool read_files(FilesMethod method, const CefV8ValueList& arguments, FilesRequest& request) {
-    const bool named = method == FilesMethod::CreateFolder || method == FilesMethod::CreateActorTemplate || method == FilesMethod::Rename;
-    if (arguments.size() != 1 || !object_keys(arguments[0], named
-        ? std::initializer_list<const char*>{"archive_session", "project_path", "path", "name"}
-        : method == FilesMethod::Open ? std::initializer_list<const char*>{"archive_session", "project_path", "path", "file_type"}
-        : std::initializer_list<const char*>{"archive_session", "project_path", "path"})) return false;
+bool read_files(FilesMethod, const CefV8ValueList& arguments, FilesRequest& request) {
+    if (arguments.size() != 1 || !object_keys(arguments[0],
+        std::initializer_list<const char*>{"archive_session", "project_path", "path", "file_type"})) return false;
     const auto value = arguments[0];
     const auto text = [&](const char* key, std::string& output, bool required = true) {
         const auto item = value->GetValue(key);
@@ -230,27 +227,10 @@ bool read_files(FilesMethod method, const CefV8ValueList& arguments, FilesReques
         return (!required || !output.empty()) && output.find('\0') == std::string::npos;
     };
     if (!text("archive_session", request.archive_session) || !text("project_path", request.project_path) ||
-        !text("path", request.path, method == FilesMethod::Rename || method == FilesMethod::Delete || method == FilesMethod::Open)) return false;
-    if (named && !text("name", request.name)) return false;
-    if (method == FilesMethod::Open && (!text("file_type", request.file_type) ||
-        (request.file_type != "scene" && request.file_type != "actor"))) return false;
+        !text("path", request.path)) return false;
+    if (!text("file_type", request.file_type) ||
+        (request.file_type != "scene" && request.file_type != "actor")) return false;
     return true;
-}
-
-CefRefPtr<CefV8Value> file_tree_value(const FileTreeEntry& entry) {
-    auto value = CefV8Value::CreateObject(nullptr, nullptr);
-    value->SetValue("name", CefV8Value::CreateString(entry.name), V8_PROPERTY_ATTRIBUTE_NONE);
-    value->SetValue("path", CefV8Value::CreateString(entry.path), V8_PROPERTY_ATTRIBUTE_NONE);
-    value->SetValue("isDirectory", CefV8Value::CreateBool(entry.directory), V8_PROPERTY_ATTRIBUTE_NONE);
-    value->SetValue("level", CefV8Value::CreateInt(entry.level), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (entry.size) value->SetValue("size", CefV8Value::CreateDouble(static_cast<double>(*entry.size)), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (entry.directory) {
-        value->SetValue("expanded", CefV8Value::CreateBool(entry.expanded), V8_PROPERTY_ATTRIBUTE_NONE);
-        auto children = CefV8Value::CreateArray(static_cast<int>(entry.children.size()));
-        for (int i = 0; i < static_cast<int>(entry.children.size()); ++i) children->SetValue(i, file_tree_value(entry.children[i]));
-        value->SetValue("children", children, V8_PROPERTY_ATTRIBUTE_NONE);
-    }
-    return value;
 }
 
 CefRefPtr<CefV8Value> project_open_diagnostic_value(const ProjectOpenDiagnostic& diagnostic) {
@@ -328,26 +308,16 @@ CefRefPtr<CefV8Value> project_launcher_value(const ProjectLauncherReply& reply) 
 }
 
 CefRefPtr<CefV8Value> files_value(const FilesReply& reply) {
-    auto value = reply.tree ? file_tree_value(*reply.tree) : CefV8Value::CreateObject(nullptr, nullptr);
+    auto value = CefV8Value::CreateObject(nullptr, nullptr);
     value->SetValue("archive_session", CefV8Value::CreateString(reply.archive_session), V8_PROPERTY_ATTRIBUTE_NONE);
     value->SetValue("project_path", CefV8Value::CreateString(reply.project_path), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (!reply.tree) value->SetValue("ok", CefV8Value::CreateBool(reply.ok), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (!reply.path.empty()) {
-        value->SetValue("path", CefV8Value::CreateString(reply.path), V8_PROPERTY_ATTRIBUTE_NONE);
-        value->SetValue("name", CefV8Value::CreateString(reply.name), V8_PROPERTY_ATTRIBUTE_NONE);
-        value->SetValue("file_type", CefV8Value::CreateString("actor"), V8_PROPERTY_ATTRIBUTE_NONE);
-    }
+    value->SetValue("ok", CefV8Value::CreateBool(reply.ok), V8_PROPERTY_ATTRIBUTE_NONE);
     return value;
 }
 
-bool read_project_settings(ProjectSettingsMethod method, const CefV8ValueList& arguments, ProjectSettingsRequest& request) {
-    if (method == ProjectSettingsMethod::GetInfo) return arguments.empty();
-    const bool save = method == ProjectSettingsMethod::SaveInfo;
-    const bool commit = method == ProjectSettingsMethod::CommitDocument;
-    if (arguments.size() != 1 || !object_keys(arguments[0], save
-        ? std::initializer_list<const char*>{"archive_session", "project_path", "name", "core_version"}
-        : commit ? std::initializer_list<const char*>{"archive_session", "project_path", "document", "revision", "content"}
-        : std::initializer_list<const char*>{"archive_session", "project_path", "document"})) return false;
+bool read_project_settings(ProjectSettingsMethod, const CefV8ValueList& arguments, ProjectSettingsRequest& request) {
+    if (arguments.size() != 1 || !object_keys(arguments[0],
+        std::initializer_list<const char*>{"archive_session", "project_path", "name", "core_version"})) return false;
     const auto value = arguments[0];
     const auto text = [&](const char* key, std::string& output, bool required = true) {
         const auto item = value->GetValue(key);
@@ -356,13 +326,7 @@ bool read_project_settings(ProjectSettingsMethod method, const CefV8ValueList& a
         return (!required || !output.empty()) && output.find('\0') == std::string::npos;
     };
     if (!text("archive_session", request.archive_session) || !text("project_path", request.project_path)) return false;
-    if (save) return text("name", request.name, false) && text("core_version", request.core_version, false);
-    if (!text("document", request.document)) return false;
-    if (!commit) return true;
-    if (!text("revision", request.revision) || request.revision.size() != 64 ||
-        request.revision.find_first_not_of("0123456789abcdef") != std::string::npos || !value->HasValue("content")) return false;
-    const auto content = value->GetValue("content");
-    return content && !content->IsUndefined() && v8_to_json(content, request.content);
+    return text("name", request.name, false) && text("core_version", request.core_version, false);
 }
 
 CefRefPtr<CefV8Value> project_settings_value(const ProjectSettingsReply& reply) {
@@ -377,140 +341,6 @@ CefRefPtr<CefV8Value> project_settings_value(const ProjectSettingsReply& reply) 
         text("project_path", info.project_path); text("archive_session", info.archive_session);
         value->SetValue("read_only", CefV8Value::CreateBool(info.read_only), V8_PROPERTY_ATTRIBUTE_NONE);
         if (!info.source_path.empty()) text("source_path", info.source_path);
-    } else {
-        value->SetValue("success", CefV8Value::CreateBool(reply.success), V8_PROPERTY_ATTRIBUTE_NONE);
-        if (!reply.document_error.empty()) text("error", reply.document_error);
-        if (!reply.revision.empty()) text("revision", reply.revision);
-        if (reply.content) {
-            value->SetValue("content", json_to_v8(*reply.content), V8_PROPERTY_ATTRIBUTE_NONE);
-            value->SetValue("corrupt", CefV8Value::CreateBool(reply.corrupt), V8_PROPERTY_ATTRIBUTE_NONE);
-        }
-    }
-    return value;
-}
-
-bool read_project_file(ProjectFilesMethod method, const CefV8ValueList& arguments, ProjectFilesRequest& request) {
-    if (arguments.size() != 1 || !object_keys(arguments[0], method == ProjectFilesMethod::Save
-        ? std::initializer_list<const char*>{"archive_session", "project_path", "identity", "code", "document"}
-        : std::initializer_list<const char*>{"archive_session", "project_path", "identity"})) return false;
-    const auto value = arguments[0];
-    const auto text = [](CefRefPtr<CefV8Value> value, std::string& output, bool required = true) {
-        if (!value || !value->IsString()) return false;
-        output = value->GetStringValue().ToString();
-        return (!required || !output.empty()) && output.find('\0') == std::string::npos;
-    };
-    if (!text(value->GetValue("archive_session"), request.archive_session) ||
-        !text(value->GetValue("project_path"), request.project_path)) return false;
-    const auto identity = value->GetValue("identity");
-    if (!identity || !identity->IsArray() || identity->GetArrayLength() != 4) return false;
-    for (int i = 0; i < 4; ++i) if (!text(identity->GetValue(i), request.identity[i], i < 2)) return false;
-    if (request.identity[1] == "actor") {
-        if (request.identity[2].empty() || request.identity[3].empty()) return false;
-    } else if (request.identity[1] != "project" || !request.identity[2].empty() || !request.identity[3].empty()) return false;
-    if (method == ProjectFilesMethod::Load) return true;
-    const auto document = value->GetValue("document");
-    if (!document || !document->IsObject() || document->IsArray() || document->IsFunction() ||
-        !value->GetValue("code") || !value->GetValue("code")->IsString()) return false;
-    request.code = value->GetValue("code")->GetStringValue().ToString();
-    return v8_to_json(document, request.document);
-}
-
-CefRefPtr<CefV8Value> project_file_value(const ProjectFilesReply& reply) {
-    auto value = CefV8Value::CreateObject(nullptr, nullptr);
-    value->SetValue("status", CefV8Value::CreateString(reply.status), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (!reply.code.empty()) value->SetValue("code", CefV8Value::CreateString(reply.code), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (!reply.message.empty()) value->SetValue("message", CefV8Value::CreateString(reply.message), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (!reply.revision.empty()) value->SetValue("revision", CefV8Value::CreateString(reply.revision), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (!reply.code_path.empty()) value->SetValue("code_path", CefV8Value::CreateString(reply.code_path), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (!reply.document_path.empty()) value->SetValue("document_path", CefV8Value::CreateString(reply.document_path), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (reply.document) value->SetValue("document", json_to_v8(*reply.document), V8_PROPERTY_ATTRIBUTE_NONE);
-    return value;
-}
-
-bool read_scripts(ScriptsMethod method, const CefV8ValueList& arguments, ScriptsRequest& request) {
-    if (method == ScriptsMethod::GetStatus) return arguments.empty();
-    const auto text = [](CefRefPtr<CefV8Value> value, std::string& output, bool required = true) {
-        if (!value || !value->IsString()) return false;
-        output = value->GetStringValue().ToString();
-        return (!required || !output.empty()) && output.find('\0') == std::string::npos;
-    };
-    if (method == ScriptsMethod::GetRun)
-        return arguments.size() == 1 && text(arguments[0], request.request_id) && request.request_id.size() <= 128;
-    if (method == ScriptsMethod::Stop) {
-        if (arguments.empty() || arguments.size() > 3 || !text(arguments[0], request.run_id, false)) return false;
-        if (arguments.size() > 1 && !arguments[1]->IsUndefined()) {
-            if (!arguments[1]->IsBool()) return false;
-            request.restore_state = arguments[1]->GetBoolValue();
-        }
-        if (arguments.size() > 2 && !arguments[2]->IsUndefined() && !text(arguments[2], request.request_id, false)) return false;
-        return (!request.run_id.empty() || !request.request_id.empty()) && request.request_id.size() <= 128;
-    }
-    if (arguments.size() != 1 || !object_keys(arguments[0], {
-        "requestId", "archive_session", "project_path", "path", "revision", "target_type", "scene_name", "actor_name"})) return false;
-    const auto value = arguments[0];
-    if (!text(value->GetValue("requestId"), request.request_id) || request.request_id.size() > 128 ||
-        !text(value->GetValue("archive_session"), request.archive_session) ||
-        !text(value->GetValue("project_path"), request.project_path) ||
-        !text(value->GetValue("path"), request.path) ||
-        !text(value->GetValue("revision"), request.revision)) return false;
-    if (request.revision.size() != 64 || !std::all_of(request.revision.begin(), request.revision.end(),
-        [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); })) return false;
-    if (value->HasValue("target_type") && !text(value->GetValue("target_type"), request.target_type)) return false;
-    if (value->HasValue("scene_name") && !text(value->GetValue("scene_name"), request.scene_name, false)) return false;
-    if (value->HasValue("actor_name") && !text(value->GetValue("actor_name"), request.actor_name, false)) return false;
-    return request.target_type == "project" || request.target_type == "actor" || request.target_type == "model";
-}
-
-CefRefPtr<CefV8Value> script_snapshot_value(const ScriptSnapshot& snapshot) {
-    auto value = CefV8Value::CreateObject(nullptr, nullptr);
-    if (snapshot.status) value->SetValue("status", CefV8Value::CreateString(*snapshot.status), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.outcome) value->SetValue("outcome", CefV8Value::CreateString(*snapshot.outcome), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.error) value->SetValue("error", CefV8Value::CreateString(*snapshot.error), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.code) value->SetValue("code", CefV8Value::CreateString(*snapshot.code), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.message) value->SetValue("message", CefV8Value::CreateString(*snapshot.message), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.filepath) value->SetValue("filepath", CefV8Value::CreateString(*snapshot.filepath), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.runId) value->SetValue("runId", CefV8Value::CreateString(*snapshot.runId), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.requestId) value->SetValue("requestId", CefV8Value::CreateString(*snapshot.requestId), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.contextId) value->SetValue("contextId", CefV8Value::CreateString(*snapshot.contextId), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.sceneName) value->SetValue("sceneName", CefV8Value::CreateString(*snapshot.sceneName), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.actorName) value->SetValue("actorName", CefV8Value::CreateString(*snapshot.actorName), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.targetType) value->SetValue("targetType", CefV8Value::CreateString(*snapshot.targetType), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.requestedScene) value->SetValue("requestedScene", CefV8Value::CreateString(*snapshot.requestedScene), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.requestedActor) value->SetValue("requestedActor", CefV8Value::CreateString(*snapshot.requestedActor), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.resolvedSceneName) value->SetValue("resolvedSceneName", CefV8Value::CreateString(*snapshot.resolvedSceneName), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.resolvedActorName) value->SetValue("resolvedActorName", CefV8Value::CreateString(*snapshot.resolvedActorName), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.bindingMode) value->SetValue("bindingMode", CefV8Value::CreateString(*snapshot.bindingMode), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.nativeScene) value->SetValue("nativeScene", CefV8Value::CreateString(*snapshot.nativeScene), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.restoreStatus) value->SetValue("restoreStatus", CefV8Value::CreateString(*snapshot.restoreStatus), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.restoreError) value->SetValue("restoreError", CefV8Value::CreateString(*snapshot.restoreError), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.currentNodeId) value->SetValue("currentNodeId", CefV8Value::CreateString(*snapshot.currentNodeId), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.inputLocked) value->SetValue("inputLocked", CefV8Value::CreateBool(*snapshot.inputLocked), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.snapshotCaptured) value->SetValue("snapshotCaptured", CefV8Value::CreateBool(*snapshot.snapshotCaptured), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.threadAlive) value->SetValue("threadAlive", CefV8Value::CreateBool(*snapshot.threadAlive), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.restored) value->SetValue("restored", CefV8Value::CreateBool(*snapshot.restored), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.startedAt) value->SetValue("startedAt", CefV8Value::CreateDouble(*snapshot.startedAt), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.finishedAt) value->SetValue("finishedAt", CefV8Value::CreateDouble(*snapshot.finishedAt), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (snapshot.actorCandidates) {
-        auto rows = CefV8Value::CreateArray(static_cast<int>(snapshot.actorCandidates->size()));
-        for (int i = 0; i < static_cast<int>(snapshot.actorCandidates->size()); ++i) rows->SetValue(i, CefV8Value::CreateString((*snapshot.actorCandidates)[i]));
-        value->SetValue("actorCandidates", rows, V8_PROPERTY_ATTRIBUTE_NONE);
-    }
-    if (snapshot.pendingThreads) {
-        auto rows = CefV8Value::CreateArray(static_cast<int>(snapshot.pendingThreads->size()));
-        for (int i = 0; i < static_cast<int>(snapshot.pendingThreads->size()); ++i) rows->SetValue(i, CefV8Value::CreateString((*snapshot.pendingThreads)[i]));
-        value->SetValue("pendingThreads", rows, V8_PROPERTY_ATTRIBUTE_NONE);
-    }
-    if (snapshot.marker) {
-        auto marker = CefV8Value::CreateObject(nullptr, nullptr);
-        marker->SetValue("id", CefV8Value::CreateString(snapshot.marker->id), V8_PROPERTY_ATTRIBUTE_NONE);
-        marker->SetValue("name", CefV8Value::CreateString(snapshot.marker->name), V8_PROPERTY_ATTRIBUTE_NONE);
-        value->SetValue("marker", marker, V8_PROPERTY_ATTRIBUTE_NONE);
-    }
-    if (snapshot.waiting) {
-        auto marker = CefV8Value::CreateObject(nullptr, nullptr);
-        marker->SetValue("id", CefV8Value::CreateString(snapshot.waiting->id), V8_PROPERTY_ATTRIBUTE_NONE);
-        marker->SetValue("name", CefV8Value::CreateString(snapshot.waiting->name), V8_PROPERTY_ATTRIBUTE_NONE);
-        value->SetValue("waiting", marker, V8_PROPERTY_ATTRIBUTE_NONE);
     }
     return value;
 }
@@ -2285,62 +2115,6 @@ public:
         return promise;
     }
 
-    CefRefPtr<CefV8Value> invoke(ProjectFilesMethod method, const CefV8ValueList& arguments) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        auto promise = CefV8Value::CreatePromise();
-        if (!owns_current_context()) {
-            if (active() && context_ && context_->IsValid()) reject(context_, promise, "PERMISSION_DENIED", "Project file binding belongs to another context");
-            else promise->RejectPromise("CONTEXT_CHANGED");
-            return promise;
-        }
-        ProjectFilesRequest request{method};
-        if (!read_project_file(method, arguments, request)) {
-            reject(context_, promise, "INVALID_ARGUMENT", "Expected scoped project document identity and structured values"); return promise;
-        }
-        const auto id = ++sequence_;
-        pending_.emplace(id, Pending{method, promise});
-        const bool posted = CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
-            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id, ProjectFilesRequest request) {
-                const auto endpoint = weak.lock();
-                if (!endpoint || !endpoint->active()) return;
-                ProjectFilesReply reply;
-                try { reply = execute_project_files_operation(request); }
-                catch (const std::exception& error) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = error.what(); }
-                catch (...) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = "Project document operation failed"; }
-                endpoint->complete(id, std::move(reply));
-            }, weak_from_this(), id, std::move(request))));
-        if (!posted) { pending_.erase(id); reject(context_, promise, "NATIVE_UNAVAILABLE", "Project document owner unavailable"); }
-        return promise;
-    }
-
-    CefRefPtr<CefV8Value> invoke(ScriptsMethod method, const CefV8ValueList& arguments) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        auto promise = CefV8Value::CreatePromise();
-        if (!owns_current_context()) {
-            if (active() && context_ && context_->IsValid()) reject(context_, promise, "PERMISSION_DENIED", "Scripts binding belongs to another context");
-            else promise->RejectPromise("CONTEXT_CHANGED");
-            return promise;
-        }
-        ScriptsRequest request{method};
-        if (!read_scripts(method, arguments, request)) {
-            reject(context_, promise, "INVALID_ARGUMENT", "Expected typed script file, request or run identity"); return promise;
-        }
-        const auto id = ++sequence_;
-        pending_.emplace(id, Pending{method, promise});
-        const bool posted = CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
-            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id, ScriptsRequest request) {
-                const auto endpoint = weak.lock();
-                if (!endpoint || !endpoint->active()) return;
-                ScriptsReply reply;
-                try { reply = execute_scripts_operation(request); }
-                catch (const std::exception& error) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = error.what(); }
-                catch (...) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = "Script operation failed"; }
-                endpoint->complete(id, std::move(reply));
-            }, weak_from_this(), id, std::move(request))));
-        if (!posted) { pending_.erase(id); reject(context_, promise, "NATIVE_UNAVAILABLE", "Script owner unavailable"); }
-        return promise;
-    }
-
     CefRefPtr<CefV8Value> invoke(ScriptInputMethod method, const CefV8ValueList& arguments) {
         CEF_REQUIRE_RENDERER_THREAD();
         auto promise = CefV8Value::CreatePromise();
@@ -2469,6 +2243,43 @@ public:
                     BrowserManager::instance().enqueue_main_thread_task([weak, id, pointer = std::move(pointer)]() mutable { if (const auto e = weak.lock(); e && e->active()) { ViewportGizmoReply reply; if (!pointer.camera_authority) { reply.error_code = "PROJECT_CONTEXT_CHANGED"; reply.error_message = "Camera was retired"; } else { std::lock_guard lock(pointer.camera_authority->mutex); if (!pointer.camera_authority->active) { reply.error_code = "PROJECT_CONTEXT_CHANGED"; reply.error_message = "Camera was retired"; } else reply = execute_viewport_gizmo_pointer(pointer); } e->complete(id, std::move(reply)); } });
                 }
             }, weak, id, method, std::move(target), std::move(pointer))));
+        return promise;
+    }
+
+    CefRefPtr<CefV8Value> invoke(BridgeMethod, const CefV8ValueList& arguments) {
+        CEF_REQUIRE_RENDERER_THREAD();
+        auto promise = CefV8Value::CreatePromise();
+        if (!owns_current_context()) {
+            if (active() && context_ && context_->IsValid())
+                reject(context_, promise, "PERMISSION_DENIED", "Bridge binding belongs to another context");
+            else promise->RejectPromise("CONTEXT_CHANGED");
+            return promise;
+        }
+        if (arguments.size() != 1 || !arguments[0] || !arguments[0]->IsString()) {
+            reject(context_, promise, "INVALID_ARGUMENT", "Expected one JSON envelope string");
+            return promise;
+        }
+        const auto envelope = arguments[0]->GetStringValue().ToString();
+        if (envelope.find('\0') != std::string::npos) {
+            reject(context_, promise, "INVALID_ARGUMENT", "Bridge envelope must not contain NUL bytes");
+            return promise;
+        }
+        const auto id = ++sequence_;
+        pending_.emplace(id, Pending{BridgeMethod::Call, promise});
+        const bool posted = CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
+            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id, std::string envelope) {
+                const auto endpoint = weak.lock();
+                if (!endpoint || !endpoint->active()) return;
+                BridgeReply reply;
+                try { reply = execute_bridge_operation(envelope); }
+                catch (const std::exception& error) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = error.what(); }
+                catch (...) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = "Bridge call failed"; }
+                endpoint->complete(id, std::move(reply));
+            }, weak_from_this(), id, envelope)));
+        if (!posted) {
+            pending_.erase(id);
+            reject(context_, promise, "NATIVE_UNAVAILABLE", "Python service owner is unavailable");
+        }
         return promise;
     }
 
@@ -2721,30 +2532,6 @@ private:
         context_->Exit();
     }
 
-    void resolve(std::uint64_t id, const ProjectFilesReply& reply) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        const auto entry = pending_.find(id);
-        if (entry == pending_.end()) return;
-        const auto promise = entry->second.promise;
-        pending_.erase(entry);
-        if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
-        if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
-        else promise->ResolvePromise(project_file_value(reply));
-        context_->Exit();
-    }
-
-    void resolve(std::uint64_t id, const ScriptsReply& reply) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        const auto entry = pending_.find(id);
-        if (entry == pending_.end()) return;
-        const auto promise = entry->second.promise;
-        pending_.erase(entry);
-        if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
-        if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
-        else promise->ResolvePromise(script_snapshot_value(reply.snapshot));
-        context_->Exit();
-    }
-
     void resolve(std::uint64_t id, const ScriptInputReply& reply) {
         CEF_REQUIRE_RENDERER_THREAD();
         const auto entry = pending_.find(id);
@@ -2770,6 +2557,18 @@ private:
         if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
         if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
         else promise->ResolvePromise(viewport_pick_value(reply));
+        context_->Exit();
+    }
+
+    void resolve(std::uint64_t id, const BridgeReply& reply) {
+        CEF_REQUIRE_RENDERER_THREAD();
+        const auto entry = pending_.find(id);
+        if (entry == pending_.end()) return;
+        const auto promise = entry->second.promise;
+        pending_.erase(entry);
+        if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
+        if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
+        else promise->ResolvePromise(CefV8Value::CreateString(reply.json));
         context_->Exit();
     }
 
@@ -2916,7 +2715,7 @@ private:
     const std::uint64_t context_id_ = ++context_sequence_;
     std::uint64_t sequence_ = 0;
     std::string scene_archive_session_;
-    struct Pending { std::variant<WindowMethod, SceneMethod, ViewportMethod, ScriptInputMethod, GizmoMethod, ScriptsMethod, ProjectFilesMethod, ProjectSettingsMethod, ProjectLauncherMethod, NetworkMethod, FilesMethod> method; CefRefPtr<CefV8Value> promise; };
+    struct Pending { std::variant<WindowMethod, SceneMethod, ViewportMethod, ScriptInputMethod, GizmoMethod, BridgeMethod, ProjectSettingsMethod, ProjectLauncherMethod, NetworkMethod, FilesMethod> method; CefRefPtr<CefV8Value> promise; };
     std::unordered_map<std::uint64_t, Pending> pending_;
     std::map<std::uint64_t, Subscriber> subscribers_;
 };
@@ -3021,29 +2820,13 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     root->SetValue("project", project, V8_PROPERTY_ATTRIBUTE_READONLY);
 
     auto files = CefV8Value::CreateObject(nullptr, nullptr);
-    files->SetValue("getFileTree", CefV8Value::CreateFunction("getFileTree", new NativeHandler(endpoint, FilesMethod::GetTree)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    files->SetValue("createFolder", CefV8Value::CreateFunction("createFolder", new NativeHandler(endpoint, FilesMethod::CreateFolder)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    files->SetValue("createActorTemplate", CefV8Value::CreateFunction("createActorTemplate", new NativeHandler(endpoint, FilesMethod::CreateActorTemplate)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    files->SetValue("renameItem", CefV8Value::CreateFunction("renameItem", new NativeHandler(endpoint, FilesMethod::Rename)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    files->SetValue("deleteItem", CefV8Value::CreateFunction("deleteItem", new NativeHandler(endpoint, FilesMethod::Delete)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    // Opening a file may reload the native scene; every other project file
+    // operation runs through the Web -> Python bridge.
     files->SetValue("openFile", CefV8Value::CreateFunction("openFile", new NativeHandler(endpoint, FilesMethod::Open)), V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("files", files, V8_PROPERTY_ATTRIBUTE_READONLY);
     auto project_settings = CefV8Value::CreateObject(nullptr, nullptr);
-    project_settings->SetValue("readProjectDocument", CefV8Value::CreateFunction("readProjectDocument", new NativeHandler(endpoint, ProjectSettingsMethod::ReadDocument)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    project_settings->SetValue("commitProjectDocument", CefV8Value::CreateFunction("commitProjectDocument", new NativeHandler(endpoint, ProjectSettingsMethod::CommitDocument)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    project_settings->SetValue("getActiveProjectInfo", CefV8Value::CreateFunction("getActiveProjectInfo", new NativeHandler(endpoint, ProjectSettingsMethod::GetInfo)), V8_PROPERTY_ATTRIBUTE_READONLY);
     project_settings->SetValue("saveActiveProjectInfo", CefV8Value::CreateFunction("saveActiveProjectInfo", new NativeHandler(endpoint, ProjectSettingsMethod::SaveInfo)), V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("projectSettings", project_settings, V8_PROPERTY_ATTRIBUTE_READONLY);
-    auto project_files = CefV8Value::CreateObject(nullptr, nullptr);
-    project_files->SetValue("save", CefV8Value::CreateFunction("save", new NativeHandler(endpoint, ProjectFilesMethod::Save)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    project_files->SetValue("load", CefV8Value::CreateFunction("load", new NativeHandler(endpoint, ProjectFilesMethod::Load)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("projectFiles", project_files, V8_PROPERTY_ATTRIBUTE_READONLY);
-    auto scripts = CefV8Value::CreateObject(nullptr, nullptr);
-    scripts->SetValue("runFile", CefV8Value::CreateFunction("runFile", new NativeHandler(endpoint, ScriptsMethod::RunFile)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scripts->SetValue("getRun", CefV8Value::CreateFunction("getRun", new NativeHandler(endpoint, ScriptsMethod::GetRun)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scripts->SetValue("stop", CefV8Value::CreateFunction("stop", new NativeHandler(endpoint, ScriptsMethod::Stop)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scripts->SetValue("getStatus", CefV8Value::CreateFunction("getStatus", new NativeHandler(endpoint, ScriptsMethod::GetStatus)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("scripts", scripts, V8_PROPERTY_ATTRIBUTE_READONLY);
     auto scene = CefV8Value::CreateObject(nullptr, nullptr);
     scene->SetValue("readScene", CefV8Value::CreateFunction("readScene",
         new NativeHandler(endpoint, SceneMethod::ReadScene)), V8_PROPERTY_ATTRIBUTE_READONLY);
@@ -3166,6 +2949,12 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     root->SetValue("viewport", viewport, V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("gizmo", gizmo, V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("window", window, V8_PROPERTY_ATTRIBUTE_READONLY);
+    // One function for every Web -> Python request.  JS builds the envelope and
+    // Python interprets it; no schema or business branch lives on this side.
+    auto bridge = CefV8Value::CreateObject(nullptr, nullptr);
+    bridge->SetValue("call", CefV8Value::CreateFunction("call",
+        new NativeHandler(endpoint, BridgeMethod::Call)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    root->SetValue("bridge", bridge, V8_PROPERTY_ATTRIBUTE_READONLY);
     context->GetGlobal()->SetValue("corona", root, V8_PROPERTY_ATTRIBUTE_READONLY);
     return endpoint;
 }

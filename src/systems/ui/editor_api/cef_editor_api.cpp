@@ -476,176 +476,176 @@ constexpr std::array<EditorApiParamSpec, 2> kSceneToolsActorPlayAudioParams = {{
 
 
 
-#define EDITOR_API_METHOD0_WRAPPED(module, function, js_path, python_path, return_type) \
-    {#module "." #function, #module, #function, nullptr, 0, returns(return_type), js_path, python_path, true, all_callers()}
+#define EDITOR_API_METHOD0_WRAPPED(module, function, python_path, return_type) \
+    {#module "." #function, #module, #function, nullptr, 0, returns(return_type), python_path, true, all_callers()}
 
-#define EDITOR_API_METHOD1_WRAPPED(module, function, js_path, python_path, param0_name, param0_type, return_type) \
-    {#module "." #function, #module, #function, kSceneNameParam.data(), kSceneNameParam.size(), returns(return_type), js_path, python_path, true, all_callers()}
+#define EDITOR_API_METHOD1_WRAPPED(module, function, python_path, param0_name, param0_type, return_type) \
+    {#module "." #function, #module, #function, kSceneNameParam.data(), kSceneNameParam.size(), returns(return_type), python_path, true, all_callers()}
 
-#define EDITOR_API_METHOD_SCHEMA_WRAPPED(module, function, params_array, js_path, python_path, return_type) \
-    {#module "." #function, #module, #function, params_array.data(), params_array.size(), returns(return_type), js_path, python_path, true, all_callers()}
+#define EDITOR_API_METHOD_SCHEMA_WRAPPED(module, function, params_array, python_path, return_type) \
+    {#module "." #function, #module, #function, params_array.data(), params_array.size(), returns(return_type), python_path, true, all_callers()}
 
-#define EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(module, function, params_array, js_path, python_path, return_type, callers) \
-    {#module "." #function, #module, #function, params_array.data(), params_array.size(), returns(return_type), js_path, python_path, true, callers}
+#define EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(module, function, params_array, python_path, return_type, callers) \
+    {#module "." #function, #module, #function, params_array.data(), params_array.size(), returns(return_type), python_path, true, callers}
 
 #define EDITOR_API_METHOD0(module, function, return_type) \
-    EDITOR_API_METHOD0_WRAPPED(module, function, "", "", return_type)
+    EDITOR_API_METHOD0_WRAPPED(module, function, "", return_type)
 
 #define EDITOR_API_METHOD1(module, function, param0_name, param0_type, return_type) \
-    EDITOR_API_METHOD1_WRAPPED(module, function, "", "", param0_name, param0_type, return_type)
+    EDITOR_API_METHOD1_WRAPPED(module, function, "", param0_name, param0_type, return_type)
 
 #define EDITOR_API_METHOD_SCHEMA(module, function, params_array, return_type) \
-    EDITOR_API_METHOD_SCHEMA_WRAPPED(module, function, params_array, "", "", return_type)
+    EDITOR_API_METHOD_SCHEMA_WRAPPED(module, function, params_array, "", return_type)
 
 // Deduce the manifest size from its entries.  Keeping a second hand-maintained
 // count here makes MSVC diagnostics point at the whole initializer when the
 // manifest grows, instead of identifying the actual entry that drifted.
 constexpr auto kEditorApiMethods = std::to_array<EditorApiMethodSpec>({
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(CoronaEditor, close_process, kNoParams, "", "app.close_process", EditorApiValueType::Null, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(EditorApi, list_events, kNoParams, "", "", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(CoronaEditor, close_process, kNoParams, "app.close_process", EditorApiValueType::Null, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(EditorApi, list_events, kNoParams, "", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
     // ScriptRuntime discovers its allowed methods through this same manifest.
     // Individual calls still enforce each method's caller mask.
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(EditorApi, list_methods, kNoParams, "", "", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, create_file, kFileManagerCreateFileParams, "", "files.create_file", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, create_folder, kFileManagerCreateFolderParams, "", "files.create_folder", EditorApiValueType::Boolean, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, delete_item, kFileManagerDeleteParams, "", "files.delete_item", EditorApiValueType::Boolean, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, get_file_tree, kPathOptionalParam, "", "files.get_file_tree", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, get_files, kPathOptionalParam, "", "files.get_files", EditorApiValueType::Array, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, get_project_info, kNoParams, "", "files.get_project_info", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, open_file, kFileManagerOpenFileParams, "", "files.open_file", EditorApiValueType::Boolean, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, rename_item, kFileManagerRenameItemParams, "", "files.rename_item", EditorApiValueType::Boolean, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(MainView, import_resource_file, kMainViewImportResourceFileParams, "", "main.import_resource_file", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(MainView, on_init, kPathOptionalParam, "", "main.on_init", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(MainView, scene_save, kSceneSaveParams, "main.sceneSave", "main.scene_save", EditorApiValueType::Object, non_cef_animation_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_actor_create, kNetworkBroadcastActorCreateParams, "", "network.broadcast_actor_create", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_actor_delete, kNetworkBroadcastActorDeleteParams, "", "network.broadcast_actor_delete", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_actor_scene_snapshot, kNetworkBroadcastSceneSnapshotParams, "", "network.broadcast_scene_snapshot", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_actor_state_update, kNetworkActorStateUpdateParams, "", "network.broadcast_actor_state_update", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_actor_transform, kNetworkActorStateUpdateParams, "", "network.broadcast_actor_transform", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, claim_actor_ownership, kActorGuidParam, "", "network.claim_actor_ownership", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, connect_to_peer, kNetworkConnectToPeerParams, "", "network.connect_to_peer", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, lock_object, kNetworkLockObjectParams, "", "network.lock_object", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, unlock_object, kNetworkUnlockObjectParams, "", "network.unlock_object", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, get_lock_owner, kNetworkLockOwnerParams, "", "network.get_lock_owner", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_intent, kNetworkIntentParams, "", "network.broadcast_intent", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, check_preview_collision, kNetworkPreviewCollisionParams, "", "network.check_preview_collision", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, get_peer_count, kNoParams, "", "network.get_peer_count", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, get_discovered_peers, kNoParams, "", "network.get_discovered_peers", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, clear_discovered_peers, kNoParams, "", "network.clear_discovered_peers", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, search_lan, kNoParams, "", "network.search_lan", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, get_session_info, kNoParams, "", "network.get_session_info", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_create, kNoParams, "", "network.poll_pending_actor_create", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_delete, kNoParams, "", "network.poll_pending_actor_delete", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_scene_snapshot, kNoParams, "", "network.poll_pending_scene_snapshot", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_scene_snapshot_request, kNoParams, "", "network.poll_pending_scene_snapshot_request", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_state_update, kNoParams, "", "network.poll_pending_actor_state_update", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_transform, kNoParams, "", "network.poll_pending_actor_transform", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, register_actor_identity, kNetworkRegisterActorIdentityParams, "", "network.register_actor_identity", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, request_actor_scene_snapshot, kSceneNameParam, "", "network.request_scene_snapshot", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, set_project_root, kProjectRootParam, "", "network.set_project_root", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, set_sync_paused, kPausedParam, "", "network.set_sync_paused", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, start_session, kNetworkStartSessionParams, "", "network.start_session", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, stop_session, kNoParams, "", "network.stop_session", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, browse_folder, kPathOptionalParam, "", "project.browse_folder", EditorApiValueType::String, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, cleanup_portable_scene_assets, kObjectPayloadParam, "", "project.cleanup_portable_scene_assets", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, create_multiplayer_project, kObjectPayloadParam, "", "project.create_multiplayer_project", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, create_project, kObjectPayloadParam, "", "project.create_project", EditorApiValueType::String, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, create_world_project, kObjectPayloadParam, "", "project.create_world_project", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, get_app_version, kNoParams, "", "project.get_app_version", EditorApiValueType::String, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, get_default_project_path, kNoParams, "", "project.get_default_project_path", EditorApiValueType::String, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, get_project_load_status, kNoParams, "", "project.get_project_load_status", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, get_recent_projects, kNoParams, "", "project.get_recent_projects", EditorApiValueType::Array, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, import_portable_asset, kObjectPayloadParam, "", "project.import_portable_asset", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, open_project, kOpenProjectParams, "", "project.open_project", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, open_project_file, kNoParams, "", "project.open_project_file", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, validate_portable_scene, kObjectPayloadParam, "", "project.validate_portable_scene", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectSettings, read_project_document, kObjectPayloadParam, "", "project_settings.read_project_document", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectSettings, commit_project_document, kObjectPayloadParam, "", "project_settings.commit_project_document", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectSettings, get_active_project_info, kNoParams, "", "project_settings.get_active_project_info", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectSettings, save_active_project_info, kObjectPayloadParam, "", "project_settings.save_active_project_info", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ResourceSearch, fuzzy_search, kResourceSearchFuzzySearchParams, "", "resource_search.fuzzy_search", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ResourceSearch, get_stats, kCallerParam, "", "resource_search.get_stats", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ResourceSearch, image_search, kResourceSearchImageSearchParams, "", "resource_search.image_search", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ResourceSearch, list_types, kCallerParam, "", "resource_search.list_types", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ResourceSearch, mark_index_dirty, kResourceSearchMarkIndexDirtyParams, "", "resource_search.mark_index_dirty", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ResourceSearch, prepare_index, kCallerParam, "", "resource_search.prepare_index", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ResourceSearch, rebuild_index, kCallerParam, "", "resource_search.rebuild_index", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, actor_play_audio, kSceneToolsActorPlayAudioParams, "", "scene_tools.actor_play_audio", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, actor_stop_audio, kActorNameParam, "", "scene_tools.actor_stop_audio", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, close_camera_view, kSceneCameraParams, "", "scene_tools.close_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, create_actor, kSceneToolsCreateActorParams, "", "scene_tools.create_actor", EditorApiValueType::Object, non_cef_animation_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, create_camera_view, kSceneToolsCreateCameraViewParams, "", "scene_tools.create_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, delete_camera, kSceneCameraParams, "", "scene_tools.delete_camera", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, floor_grid, kSceneToolsFloorGridParams, "", "scene_tools.floor_grid", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, focus_actor, kSceneToolsFocusActorParams, "", "scene_tools.focus_actor", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_output_mode, kSceneToolsCameraOptionalParams, "", "scene_tools.get_output_mode", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_physics_params, kSceneNameParam, "", "scene_tools.get_physics_params", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_render_backend, kSceneToolsCameraOptionalParams, "", "scene_tools.get_render_backend", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_vision_render_mode, kSceneToolsCameraOptionalParams, "", "scene_tools.get_vision_render_mode", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_vision_denoise, kSceneToolsCameraOptionalParams, "", "scene_tools.get_vision_denoise", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_vision_accumulation, kSceneToolsCameraOptionalParams, "", "scene_tools.get_vision_accumulation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_vision_stable_planes, kSceneToolsCameraOptionalParams, "", "scene_tools.get_vision_stable_planes", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, is_vision_available, kNoParams, "", "scene_tools.is_vision_available", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_active_scene, kNoParams, "", "scene.read_active_scene", EditorApiValueType::Object, (animation_callers() & ~caller_mask(EditorApiCaller::Cef)) | caller_mask(EditorApiCaller::Native)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_actor, kObjectPayloadParam, "", "scene.read_actor", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_transforms, kObjectPayloadParam, "", "scene.read_transforms", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_archive_scene, kObjectPayloadParam, "", "scene.read_archive_scene", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_scene_snapshot, kSceneNameOptionalParam, "", "scene.get_snapshot", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_environment, kSceneNameParam, "", "scene.get_environment", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_environment, kSceneEnvironmentStateParams, "", "scene.set_environment", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_transform, kSceneActorTransformParams, "", "scene.set_actor_transform", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_state, kSceneActorStateParams, "", "scene_tools.set_actor_state", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript) | caller_mask(EditorApiCaller::ScriptRuntime)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_physics, kSceneActorPhysicsParams, "", "scene_tools.set_actor_physics", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_camera_lock, kSceneActorCameraLockParams, "", "scene_tools.set_actor_camera_lock", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, save_actor, kSaveActorParams, "sceneTools.saveActor", "scene_tools.save_actor", EditorApiValueType::Object, non_cef_script_runtime_callers()),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, list_actor_tree, kReadTreeParams, "scene.listActorTree", "scene.list_actor_tree", EditorApiValueType::Array, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, list_camera_views, kSceneNameParam, "", "scene_tools.list_camera_views", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, list_scene_tree, kReadTreeParams, "", "scene_tools.list_scene_tree", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript) | caller_mask(EditorApiCaller::ScriptRuntime)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, open_camera_view, kSceneCameraParams, "", "scene_tools.open_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, pick_actor_at_pixel, kSceneToolsPickActorParams, "", "scene_tools.pick_actor", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, play_audio, kSceneToolsPlayAudioParams, "", "scene_tools.play_audio", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, reload_scene, kSceneToolsReloadSceneParams, "", "scene_tools.reload_scene", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, rebind_actor_resource, kSceneToolsRebindActorResourceParams, "", "scene_tools.rebind_actor_resource", EditorApiValueType::Object, cef_and_script_runtime_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, remove_actor, kSceneActorParams, "", "scene_tools.remove_actor", EditorApiValueType::Object, cef_and_script_runtime_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, rename_actor, kSceneToolsRenameActorParams, "", "scene_tools.rename_actor", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, rename_camera_view, kSceneToolsRenameCameraViewParams, "", "scene_tools.rename_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, save_screenshot, kSceneToolsSaveScreenshotParams, "", "scene_tools.save_screenshot", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, select_actor, kSceneToolsSelectActorParams, "", "scene.select_actor", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, select_screenshot_path, kSceneToolsCameraOptionalParams, "", "scene_tools.select_screenshot_path", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_output_mode, kSceneToolsSetOutputModeParams, "", "scene_tools.set_output_mode", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_physics_params, kSceneToolsSetPhysicsParams, "", "scene_tools.set_physics_params", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_render_backend, kSceneToolsSetRenderBackendParams, "", "scene_tools.set_render_backend", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_render_mode, kSceneToolsSetVisionRenderModeParams, "", "scene_tools.set_vision_render_mode", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_denoise, kSceneToolsSetCameraBoolParams, "", "scene_tools.set_vision_denoise", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_denoiser, kSceneToolsSetVisionDenoiserParams, "", "scene_tools.set_vision_denoiser", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_reblur_settings, kSceneToolsSetReblurSettingsParams, "", "scene_tools.set_reblur_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_pt_settings, kSceneToolsSetReblurSettingsParams, "", "scene_tools.set_pt_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_restir_settings, kSceneToolsSetReblurSettingsParams, "", "scene_tools.set_restir_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_relax_settings, kSceneToolsSetReblurSettingsParams, "", "scene_tools.set_relax_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_pt_settings, kSceneCameraParams, "", "scene_tools.get_pt_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_restir_settings, kSceneCameraParams, "", "scene_tools.get_restir_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_reblur_settings, kSceneCameraParams, "", "scene_tools.get_reblur_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_relax_settings, kSceneCameraParams, "", "scene_tools.get_relax_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_accumulation, kSceneToolsSetCameraBoolParams, "", "scene_tools.set_vision_accumulation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_stable_planes, kSceneToolsSetCameraBoolParams, "", "scene_tools.set_vision_stable_planes", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, stop_audio, kResourceIdParam, "", "scene_tools.stop_audio", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, sun_direction, kSceneToolsSunDirectionParams, "", "scene_tools.sun_direction", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_actor_skeleton_leaves, kSceneActorParams, "", "scene_tools.get_actor_skeleton_leaves", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_animation, kSceneToolsSetAnimationParams, "", "scene_tools.set_actor_animation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, pause_actor_animation, kSceneActorParams, "", "scene_tools.pause_actor_animation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, resume_actor_animation, kSceneActorParams, "", "scene_tools.resume_actor_animation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_model_nodes, kModelNodePageParams, "sceneTools.getModelNodes", "scene_tools.get_model_nodes", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_model_node_state, kModelNodeStateParams, "sceneTools.setModelNodeState", "scene_tools.set_model_node_state", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_actor_ik_chains, kSceneActorParams, "sceneTools.getActorIkChains", "scene_tools.get_actor_ik_chains", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_ik_chains, kSceneToolsSetIkChainsParams, "sceneTools.setActorIkChains", "scene_tools.set_actor_ik_chains", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, update_camera_view, kSceneToolsUpdateCameraViewParams, "", "scene_tools.update_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, capture_viewport, kViewportCaptureParams, "", "viewport.capture", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_camera_pose, kViewportSetCameraPoseParams, "", "viewport.set_camera_pose", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, run_path, kObjectPayloadParam, "", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Native)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, run_file, kObjectPayloadParam, "", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Native)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, get_run, kObjectPayloadParam, "", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Native)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, stop, kObjectPayloadParam, "", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Native)),
-    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, get_status, kNoParams, "", "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Native)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(EditorApi, list_methods, kNoParams, "", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, create_file, kFileManagerCreateFileParams, "files.create_file", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, create_folder, kFileManagerCreateFolderParams, "files.create_folder", EditorApiValueType::Boolean, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, delete_item, kFileManagerDeleteParams, "files.delete_item", EditorApiValueType::Boolean, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, get_file_tree, kPathOptionalParam, "files.get_file_tree", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, get_files, kPathOptionalParam, "files.get_files", EditorApiValueType::Array, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, get_project_info, kNoParams, "files.get_project_info", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, open_file, kFileManagerOpenFileParams, "files.open_file", EditorApiValueType::Boolean, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(FileManager, rename_item, kFileManagerRenameItemParams, "files.rename_item", EditorApiValueType::Boolean, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(MainView, import_resource_file, kMainViewImportResourceFileParams, "main.import_resource_file", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(MainView, on_init, kPathOptionalParam, "main.on_init", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(MainView, scene_save, kSceneSaveParams, "main.scene_save", EditorApiValueType::Object, non_cef_animation_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_actor_create, kNetworkBroadcastActorCreateParams, "network.broadcast_actor_create", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_actor_delete, kNetworkBroadcastActorDeleteParams, "network.broadcast_actor_delete", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_actor_scene_snapshot, kNetworkBroadcastSceneSnapshotParams, "network.broadcast_scene_snapshot", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_actor_state_update, kNetworkActorStateUpdateParams, "network.broadcast_actor_state_update", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_actor_transform, kNetworkActorStateUpdateParams, "network.broadcast_actor_transform", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, claim_actor_ownership, kActorGuidParam, "network.claim_actor_ownership", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, connect_to_peer, kNetworkConnectToPeerParams, "network.connect_to_peer", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, lock_object, kNetworkLockObjectParams, "network.lock_object", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, unlock_object, kNetworkUnlockObjectParams, "network.unlock_object", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, get_lock_owner, kNetworkLockOwnerParams, "network.get_lock_owner", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, broadcast_intent, kNetworkIntentParams, "network.broadcast_intent", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, check_preview_collision, kNetworkPreviewCollisionParams, "network.check_preview_collision", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, get_peer_count, kNoParams, "network.get_peer_count", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, get_discovered_peers, kNoParams, "network.get_discovered_peers", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, clear_discovered_peers, kNoParams, "network.clear_discovered_peers", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, search_lan, kNoParams, "network.search_lan", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, get_session_info, kNoParams, "network.get_session_info", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_create, kNoParams, "network.poll_pending_actor_create", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_delete, kNoParams, "network.poll_pending_actor_delete", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_scene_snapshot, kNoParams, "network.poll_pending_scene_snapshot", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_scene_snapshot_request, kNoParams, "network.poll_pending_scene_snapshot_request", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_state_update, kNoParams, "network.poll_pending_actor_state_update", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, poll_pending_actor_transform, kNoParams, "network.poll_pending_actor_transform", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, register_actor_identity, kNetworkRegisterActorIdentityParams, "network.register_actor_identity", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, request_actor_scene_snapshot, kSceneNameParam, "network.request_scene_snapshot", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, set_project_root, kProjectRootParam, "network.set_project_root", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, set_sync_paused, kPausedParam, "network.set_sync_paused", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, start_session, kNetworkStartSessionParams, "network.start_session", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Network, stop_session, kNoParams, "network.stop_session", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, browse_folder, kPathOptionalParam, "project.browse_folder", EditorApiValueType::String, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, cleanup_portable_scene_assets, kObjectPayloadParam, "project.cleanup_portable_scene_assets", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, create_multiplayer_project, kObjectPayloadParam, "project.create_multiplayer_project", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, create_project, kObjectPayloadParam, "project.create_project", EditorApiValueType::String, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, create_world_project, kObjectPayloadParam, "project.create_world_project", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, get_app_version, kNoParams, "project.get_app_version", EditorApiValueType::String, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, get_default_project_path, kNoParams, "project.get_default_project_path", EditorApiValueType::String, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, get_project_load_status, kNoParams, "project.get_project_load_status", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, get_recent_projects, kNoParams, "project.get_recent_projects", EditorApiValueType::Array, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, import_portable_asset, kObjectPayloadParam, "project.import_portable_asset", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, open_project, kOpenProjectParams, "project.open_project", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, open_project_file, kNoParams, "project.open_project_file", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectLauncher, validate_portable_scene, kObjectPayloadParam, "project.validate_portable_scene", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectSettings, read_project_document, kObjectPayloadParam, "project_settings.read_project_document", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectSettings, commit_project_document, kObjectPayloadParam, "project_settings.commit_project_document", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectSettings, get_active_project_info, kNoParams, "project_settings.get_active_project_info", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ProjectSettings, save_active_project_info, kObjectPayloadParam, "project_settings.save_active_project_info", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ResourceSearch, fuzzy_search, kResourceSearchFuzzySearchParams, "resource_search.fuzzy_search", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ResourceSearch, get_stats, kCallerParam, "resource_search.get_stats", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ResourceSearch, image_search, kResourceSearchImageSearchParams, "resource_search.image_search", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ResourceSearch, list_types, kCallerParam, "resource_search.list_types", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ResourceSearch, mark_index_dirty, kResourceSearchMarkIndexDirtyParams, "resource_search.mark_index_dirty", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ResourceSearch, prepare_index, kCallerParam, "resource_search.prepare_index", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(ResourceSearch, rebuild_index, kCallerParam, "resource_search.rebuild_index", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, actor_play_audio, kSceneToolsActorPlayAudioParams, "scene_tools.actor_play_audio", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, actor_stop_audio, kActorNameParam, "scene_tools.actor_stop_audio", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, close_camera_view, kSceneCameraParams, "scene_tools.close_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, create_actor, kSceneToolsCreateActorParams, "scene_tools.create_actor", EditorApiValueType::Object, non_cef_animation_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, create_camera_view, kSceneToolsCreateCameraViewParams, "scene_tools.create_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, delete_camera, kSceneCameraParams, "scene_tools.delete_camera", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, floor_grid, kSceneToolsFloorGridParams, "scene_tools.floor_grid", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, focus_actor, kSceneToolsFocusActorParams, "scene_tools.focus_actor", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_output_mode, kSceneToolsCameraOptionalParams, "scene_tools.get_output_mode", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_physics_params, kSceneNameParam, "scene_tools.get_physics_params", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_render_backend, kSceneToolsCameraOptionalParams, "scene_tools.get_render_backend", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_vision_render_mode, kSceneToolsCameraOptionalParams, "scene_tools.get_vision_render_mode", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_vision_denoise, kSceneToolsCameraOptionalParams, "scene_tools.get_vision_denoise", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_vision_accumulation, kSceneToolsCameraOptionalParams, "scene_tools.get_vision_accumulation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_vision_stable_planes, kSceneToolsCameraOptionalParams, "scene_tools.get_vision_stable_planes", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, is_vision_available, kNoParams, "scene_tools.is_vision_available", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_active_scene, kNoParams, "scene.read_active_scene", EditorApiValueType::Object, (animation_callers() & ~caller_mask(EditorApiCaller::Cef)) | caller_mask(EditorApiCaller::Native)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_actor, kObjectPayloadParam, "scene.read_actor", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_transforms, kObjectPayloadParam, "scene.read_transforms", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, read_archive_scene, kObjectPayloadParam, "scene.read_archive_scene", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_scene_snapshot, kSceneNameOptionalParam, "scene.get_snapshot", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_environment, kSceneNameParam, "scene.get_environment", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_environment, kSceneEnvironmentStateParams, "scene.set_environment", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_transform, kSceneActorTransformParams, "scene.set_actor_transform", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_state, kSceneActorStateParams, "scene_tools.set_actor_state", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript) | caller_mask(EditorApiCaller::ScriptRuntime)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_physics, kSceneActorPhysicsParams, "scene_tools.set_actor_physics", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_camera_lock, kSceneActorCameraLockParams, "scene_tools.set_actor_camera_lock", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, save_actor, kSaveActorParams, "scene_tools.save_actor", EditorApiValueType::Object, non_cef_script_runtime_callers()),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, list_actor_tree, kReadTreeParams, "scene.list_actor_tree", EditorApiValueType::Array, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, list_camera_views, kSceneNameParam, "scene_tools.list_camera_views", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, list_scene_tree, kReadTreeParams, "scene_tools.list_scene_tree", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript) | caller_mask(EditorApiCaller::ScriptRuntime)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, open_camera_view, kSceneCameraParams, "scene_tools.open_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, pick_actor_at_pixel, kSceneToolsPickActorParams, "scene_tools.pick_actor", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, play_audio, kSceneToolsPlayAudioParams, "scene_tools.play_audio", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, reload_scene, kSceneToolsReloadSceneParams, "scene_tools.reload_scene", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, rebind_actor_resource, kSceneToolsRebindActorResourceParams, "scene_tools.rebind_actor_resource", EditorApiValueType::Object, cef_and_script_runtime_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, remove_actor, kSceneActorParams, "scene_tools.remove_actor", EditorApiValueType::Object, cef_and_script_runtime_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, rename_actor, kSceneToolsRenameActorParams, "scene_tools.rename_actor", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, rename_camera_view, kSceneToolsRenameCameraViewParams, "scene_tools.rename_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, save_screenshot, kSceneToolsSaveScreenshotParams, "scene_tools.save_screenshot", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, select_actor, kSceneToolsSelectActorParams, "scene.select_actor", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, select_screenshot_path, kSceneToolsCameraOptionalParams, "scene_tools.select_screenshot_path", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_output_mode, kSceneToolsSetOutputModeParams, "scene_tools.set_output_mode", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_physics_params, kSceneToolsSetPhysicsParams, "scene_tools.set_physics_params", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_render_backend, kSceneToolsSetRenderBackendParams, "scene_tools.set_render_backend", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_render_mode, kSceneToolsSetVisionRenderModeParams, "scene_tools.set_vision_render_mode", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_denoise, kSceneToolsSetCameraBoolParams, "scene_tools.set_vision_denoise", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_denoiser, kSceneToolsSetVisionDenoiserParams, "scene_tools.set_vision_denoiser", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_reblur_settings, kSceneToolsSetReblurSettingsParams, "scene_tools.set_reblur_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_pt_settings, kSceneToolsSetReblurSettingsParams, "scene_tools.set_pt_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_restir_settings, kSceneToolsSetReblurSettingsParams, "scene_tools.set_restir_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_relax_settings, kSceneToolsSetReblurSettingsParams, "scene_tools.set_relax_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_pt_settings, kSceneCameraParams, "scene_tools.get_pt_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_restir_settings, kSceneCameraParams, "scene_tools.get_restir_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_reblur_settings, kSceneCameraParams, "scene_tools.get_reblur_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_relax_settings, kSceneCameraParams, "scene_tools.get_relax_settings", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_accumulation, kSceneToolsSetCameraBoolParams, "scene_tools.set_vision_accumulation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_vision_stable_planes, kSceneToolsSetCameraBoolParams, "scene_tools.set_vision_stable_planes", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, stop_audio, kResourceIdParam, "scene_tools.stop_audio", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, sun_direction, kSceneToolsSunDirectionParams, "scene_tools.sun_direction", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_actor_skeleton_leaves, kSceneActorParams, "scene_tools.get_actor_skeleton_leaves", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_animation, kSceneToolsSetAnimationParams, "scene_tools.set_actor_animation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, pause_actor_animation, kSceneActorParams, "scene_tools.pause_actor_animation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, resume_actor_animation, kSceneActorParams, "scene_tools.resume_actor_animation", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_model_nodes, kModelNodePageParams, "scene_tools.get_model_nodes", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_model_node_state, kModelNodeStateParams, "scene_tools.set_model_node_state", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, get_actor_ik_chains, kSceneActorParams, "scene_tools.get_actor_ik_chains", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_actor_ik_chains, kSceneToolsSetIkChainsParams, "scene_tools.set_actor_ik_chains", EditorApiValueType::Object, animation_callers() & ~caller_mask(EditorApiCaller::Cef)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, update_camera_view, kSceneToolsUpdateCameraViewParams, "scene_tools.update_camera_view", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, capture_viewport, kViewportCaptureParams, "viewport.capture", EditorApiValueType::Object, caller_mask(EditorApiCaller::PythonScript)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(SceneTools, set_camera_pose, kViewportSetCameraPoseParams, "viewport.set_camera_pose", EditorApiValueType::Object, caller_mask(EditorApiCaller::ScriptRuntime)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, run_path, kObjectPayloadParam, "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Native)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, run_file, kObjectPayloadParam, "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Native)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, get_run, kObjectPayloadParam, "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Native)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, stop, kObjectPayloadParam, "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Native)),
+    EDITOR_API_METHOD_SCHEMA_WRAPPED_CALLERS(Scripts, get_status, kNoParams, "", EditorApiValueType::Object, caller_mask(EditorApiCaller::Native)),
 });
 
 static_assert([] {
@@ -664,14 +664,14 @@ static_assert([] {
 #undef EDITOR_API_METHOD0_WRAPPED
 
 constexpr auto kEditorApiEvents = std::to_array<EditorApiEventSpec>({
-    {"Network.actorDeleteSyncBroadcastRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_actor_delete_sync_broadcast_requested"},
-    {"Network.actorOwnershipClaimed", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_actor_ownership_claimed"},
-    {"Network.actorStateSyncBroadcastRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_actor_state_sync_broadcast_requested"},
-    {"Network.actorSyncBroadcastRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_actor_sync_broadcast_requested"},
-    {"Network.actorTransformSyncBroadcastRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_actor_transform_sync_broadcast_requested"},
-    {"Network.assetImportCompleted", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_asset_import_completed"},
-    {"Network.fileSyncStatusChanged", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_file_sync_status_changed"},
-    {"Network.syncPauseRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "", "events.on_network_sync_pause_requested"},
+    {"Network.actorDeleteSyncBroadcastRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "events.on_network_actor_delete_sync_broadcast_requested"},
+    {"Network.actorOwnershipClaimed", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "events.on_network_actor_ownership_claimed"},
+    {"Network.actorStateSyncBroadcastRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "events.on_network_actor_state_sync_broadcast_requested"},
+    {"Network.actorSyncBroadcastRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "events.on_network_actor_sync_broadcast_requested"},
+    {"Network.actorTransformSyncBroadcastRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "events.on_network_actor_transform_sync_broadcast_requested"},
+    {"Network.assetImportCompleted", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "events.on_network_asset_import_completed"},
+    {"Network.fileSyncStatusChanged", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "events.on_network_file_sync_status_changed"},
+    {"Network.syncPauseRequested", EditorApiValueType::Object, all_callers() & ~caller_mask(EditorApiCaller::Cef), "events.on_network_sync_pause_requested"},
 });
 
 static_assert([] {
@@ -1100,37 +1100,6 @@ nlohmann::json invoke_file_script_api(const std::string& api, const nlohmann::js
     const auto result = EditorApiRegistry::instance().invoke({api, args, EditorApiCaller::Native}, {});
     return {{"success", result.success}, {"code", result.success ? 0 : result.error_code},
             {"data", result.data}, {"error", result.error}};
-}
-
-NativeResult PythonScriptApiClientEndpoint::invoke(const std::string& api_name,
-                                                   const nlohmann::json& args,
-                                                   const NativeContext& context) {
-    return EditorApiRegistry::instance().invoke({api_name, args, EditorApiCaller::PythonScript}, context);
-}
-
-NativeResult ScriptRuntimeApiClientEndpoint::invoke(const std::string& api_name,
-                                                    const nlohmann::json& args,
-                                                    const NativeContext& context) {
-    return EditorApiRegistry::instance().invoke({api_name, args, EditorApiCaller::ScriptRuntime}, context);
-}
-
-std::optional<EditorApiRequest> parse_editor_api_request(const nlohmann::json& payload,
-                                                         EditorApiCaller caller) {
-    if (!payload.is_object()) {
-        return std::nullopt;
-    }
-    const auto api_it = payload.find("api");
-    if (api_it == payload.end() || !api_it->is_string()) {
-        return std::nullopt;
-    }
-
-    EditorApiRequest request;
-    request.api_name = api_it->get<std::string>();
-    request.caller = caller;
-    if (auto args_it = payload.find("args"); args_it != payload.end()) {
-        request.args = args_it->is_null() ? nlohmann::json::array() : *args_it;
-    }
-    return request;
 }
 
 EditorApiCallbackRegistry& EditorApiCallbackRegistry::instance() {

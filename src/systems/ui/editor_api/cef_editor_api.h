@@ -43,7 +43,6 @@ struct EditorApiMethodSpec {
     const EditorApiParamSpec* params;
     std::size_t param_count;
     EditorApiReturnSpec return_spec;
-    const char* js_wrapper;
     const char* python_wrapper;
     bool async;
     std::uint32_t allowed_callers;
@@ -53,7 +52,6 @@ struct EditorApiEventSpec {
     const char* event_name;
     EditorApiValueType payload_type;
     std::uint32_t allowed_callers;
-    const char* js_wrapper;
     const char* python_wrapper;
 };
 
@@ -95,31 +93,6 @@ private:
     EditorApiCallbackRegistry() = default;
 };
 
-class EditorApiEndpointBase {
-public:
-    virtual ~EditorApiEndpointBase() = default;
-
-    virtual NativeResult invoke(const std::string& api_name,
-                                const nlohmann::json& args,
-                                const NativeContext& context) = 0;
-};
-
-class PythonScriptApiClientEndpoint final : public EditorApiEndpointBase {
-public:
-    NativeResult invoke(const std::string& api_name,
-                        const nlohmann::json& args,
-                        const NativeContext& context) override;
-};
-
-class ScriptRuntimeApiClientEndpoint final : public EditorApiEndpointBase {
-public:
-    NativeResult invoke(const std::string& api_name,
-                        const nlohmann::json& args,
-                        const NativeContext& context) override;
-};
-
-std::optional<EditorApiRequest> parse_editor_api_request(const nlohmann::json& payload,
-                                                         EditorApiCaller caller);
 std::optional<EditorApiEventSpec> find_editor_api_event(std::string_view event_name);
 std::size_t emit_editor_api_event(std::string_view event_name, const nlohmann::json& payload);
 std::size_t emit_python_script_event(std::string_view event_name, const nlohmann::json& payload);

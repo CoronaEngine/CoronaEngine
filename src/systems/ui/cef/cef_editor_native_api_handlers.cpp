@@ -15,6 +15,7 @@
 #include "browser_manager.h"
 #include <corona/utils/runtime_paths.h>
 #include "actor_selection_routing.h"
+#include "cef_bridge_operations.h"
 #include "archive_load_policy.h"
 #include "../collaborative_editor_runtime.h"
 #include "cef_client.h"
@@ -31,8 +32,6 @@
 #include "scene_projection_service.h"
 #include "resource_import_service.h"
 #include "project_script_service.h"
-#include "cef_scripts_operations.h"
-#include "cef_project_files_operations.h"
 #include "cef_project_settings_operations.h"
 #include "cef_files_operations.h"
 #include "cef_project_launcher_operations.h"
@@ -140,59 +139,6 @@ const char* editor_api_value_type_name(EditorApiValueType type) {
     return "unknown";
 }
 
-std::string snake_to_lower_camel(const char* value) {
-    if (!value) {
-        return {};
-    }
-    std::string result;
-    bool upper_next = false;
-    for (const char ch : std::string(value)) {
-        if (ch == '_') {
-            upper_next = true;
-            continue;
-        }
-        if (upper_next) {
-            result.push_back(static_cast<char>(std::toupper(static_cast<unsigned char>(ch))));
-            upper_next = false;
-        } else {
-            result.push_back(ch);
-        }
-    }
-    return result;
-}
-
-const char* editor_api_module_js_wrapper_alias(const char* module) {
-    const std::string_view name = module ? std::string_view(module) : std::string_view();
-    if (name == "CoronaEditor") {
-        return "app";
-    }
-    if (name == "EditorApi") {
-        return "editor";
-    }
-    if (name == "FileManager") {
-        return "files";
-    }
-    if (name == "MainView") {
-        return "main";
-    }
-    if (name == "Network") {
-        return "network";
-    }
-    if (name == "ProjectLauncher") {
-        return "project";
-    }
-    if (name == "ProjectSettings") {
-        return "projectSettings";
-    }
-    if (name == "ResourceSearch") {
-        return "resourceSearch";
-    }
-    if (name == "SceneTools") {
-        return "sceneTools";
-    }
-    return "";
-}
-
 const char* editor_api_module_python_wrapper_alias(const char* module) {
     const std::string_view name = module ? std::string_view(module) : std::string_view();
     if (name == "CoronaEditor") {
@@ -225,18 +171,6 @@ const char* editor_api_module_python_wrapper_alias(const char* module) {
     return "";
 }
 
-std::string editor_api_js_wrapper_path(const EditorApiMethodSpec& spec) {
-    if (spec.js_wrapper && *spec.js_wrapper) {
-        return spec.js_wrapper;
-    }
-    const std::string module_alias = editor_api_module_js_wrapper_alias(spec.native_module);
-    const std::string function_name = snake_to_lower_camel(spec.native_function);
-    if (module_alias.empty() || function_name.empty()) {
-        return {};
-    }
-    return module_alias + "." + function_name;
-}
-
 std::string editor_api_python_wrapper_path(const EditorApiMethodSpec& spec) {
     if (spec.python_wrapper && *spec.python_wrapper) {
         return spec.python_wrapper;
@@ -266,7 +200,6 @@ nlohmann::json editor_api_method_to_json(const EditorApiMethodSpec& spec) {
         {"native_function", spec.native_function ? spec.native_function : ""},
         {"params", params},
         {"return", editor_api_value_type_name(spec.return_spec.type)},
-        {"js_wrapper", editor_api_js_wrapper_path(spec)},
         {"python_wrapper", editor_api_python_wrapper_path(spec)},
         {"async", spec.async},
         {"allowed_callers", spec.allowed_callers},
@@ -278,7 +211,6 @@ nlohmann::json editor_api_event_to_json(const EditorApiEventSpec& spec) {
         {"event", spec.event_name ? spec.event_name : ""},
         {"payload", editor_api_value_type_name(spec.payload_type)},
         {"allowed_callers", spec.allowed_callers},
-        {"js_wrapper", spec.js_wrapper ? spec.js_wrapper : ""},
         {"python_wrapper", spec.python_wrapper ? spec.python_wrapper : ""},
     };
 }
@@ -776,25 +708,6 @@ std::optional<std::string> optional_ini_string(const IniSection& section,
     return it->second;
 }
 
-std::optional<float> optional_ini_float(const IniSection& section,
-                                        const std::string& key) {
-    const auto value = optional_ini_string(section, key);
-    if (!value) {
-        return std::nullopt;
-    }
-    return parse_float(*value, 0.0f);
-}
-
-std::optional<std::array<float, 3>> optional_ini_float3(const IniSection& section,
-                                                        const std::string& key) {
-    const auto value = optional_ini_string(section, key);
-    if (!value) {
-        return std::nullopt;
-    }
-    return parse_float3(*value, {0.0f, 0.0f, 0.0f});
-}
-
-
 void apply_native_actor_optics_state(NativeEditorActor& item) {
     if (!item.optics) {
         return;
@@ -916,63 +829,6 @@ NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
     scene.engine_scene->add_actor(item.engine_actor.get());
     scene.actors.push_back(std::move(item));
     return scene.actors.back();
-}
-
-
-NativeEditorCamera make_native_camera(NativeEditorScene& scene,
-                                      const IniSection* camera_section,
-                                      int index) {
-    const std::string prefix = "camera" + std::to_string(index);
-    const auto section_value = [&](const std::string& key, const std::string& fallback) {
-        if (!camera_section) {
-            return fallback;
-        }
-        const auto it = camera_section->find(prefix + "." + key);
-        return it == camera_section->end() ? fallback : it->second;
-    };
-
-    NativeEditorCamera item;
-    item.name = section_value("name", scene.name + (index == 0 ? "_MainCamera" : "_Camera" + std::to_string(index)));
-    item.camera_id = section_value("id", scene.route + "#camera" + std::to_string(index));
-    item.deletable = parse_bool(section_value("deletable", index == 0 ? "false" : "true"), index != 0);
-    auto position = parse_float3(section_value("position", "0.0, 0.0, -5.0"), {0.0f, 0.0f, -5.0f});
-    auto forward = parse_float3(section_value("forward", "0.0, 0.0, 1.0"), {0.0f, 0.0f, 1.0f});
-    auto world_up = parse_float3(section_value("world_up", "0.0, 1.0, 0.0"), {0.0f, 1.0f, 0.0f});
-    const float fov = parse_float(section_value("fov", "45.0"), 45.0f);
-    item.width = parse_int(section_value("width", "1920"), 1920);
-    item.height = parse_int(section_value("height", "1080"), 1080);
-    item.view_open = parse_bool(section_value("view_open", "false"));
-    item.view_x = parse_int(section_value("view_x", "120"), 120);
-    item.view_y = parse_int(section_value("view_y", "120"), 120);
-    item.view_width = parse_int(section_value("view_width", "960"), 960);
-    item.view_height = parse_int(section_value("view_height", "540"), 540);
-    item.move_speed = parse_float(section_value("move_speed", "1.0"), 1.0f);
-    item.vision_spp = section_value("vision_spp", "");
-    item.vision_max_depth = section_value("vision_max_depth", "");
-
-    item.engine_camera = std::make_unique<Corona::API::Camera>(position, forward, world_up, fov);
-    item.engine_camera->set_size(item.width, item.height);
-    item.engine_camera->set_output_mode(section_value("output_mode", "final_color"));
-    item.engine_camera->set_render_backend(section_value("render_backend", "native"));
-    const auto vision_mode = section_value("vision_render_mode", "path_tracing");
-    item.engine_camera->set_vision_render_mode(vision_mode);
-    item.engine_camera->set_vision_denoiser(section_value("vision_denoiser", legacy_svgf_mode(vision_mode) ? "svgf" : "reblur"));
-    item.engine_camera->set_vision_reblur_settings(section_value("vision_reblur_settings", "{}"));
-    item.engine_camera->set_vision_pt_settings(section_value("vision_pt_settings", "{}"));
-    item.engine_camera->set_vision_restir_settings(section_value("vision_restir_settings", "{}"));
-    item.engine_camera->set_vision_relax_settings(section_value("vision_relax_settings", "{}"));
-    item.engine_camera->set_vision_denoise(
-        parse_bool(section_value("vision_denoise", ""), true));
-    item.engine_camera->set_vision_accumulation(
-        parse_bool(section_value("vision_accumulation", ""), legacy_progressive_mode(vision_mode)));
-    item.engine_camera->set_vision_stable_planes(
-        parse_bool(section_value("vision_stable_planes", "true"), true));
-    item.engine_camera->set_view_state(item.view_open, item.view_x, item.view_y,
-                                       item.view_width, item.view_height, item.move_speed);
-    if (index > 0) {
-        item.engine_camera->set_offscreen_capture_mode(true);
-    }
-    return item;
 }
 
 
@@ -3698,20 +3554,6 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_delete(
     }
 }
 
-std::string current_time_string() {
-    const auto now = std::chrono::system_clock::now();
-    const std::time_t raw = std::chrono::system_clock::to_time_t(now);
-    std::tm local{};
-#ifdef _WIN32
-    localtime_s(&local, &raw);
-#else
-    localtime_r(&raw, &local);
-#endif
-    std::ostringstream out;
-    out << std::put_time(&local, "%Y-%m-%d %H:%M:%S");
-    return out.str();
-}
-
 std::filesystem::path editor_root_path() {
     return Utils::editor_directory();
 }
@@ -4191,12 +4033,6 @@ std::array<float, 3> json_float3_or(const nlohmann::json& value,
     };
 }
 
-std::array<float, 3> vision_vec_to_corona(const nlohmann::json& value,
-                                          std::array<float, 3> fallback) {
-    const auto vec = json_float3_or(value, fallback);
-    return {vec[0], vec[1], -vec[2]};
-}
-
 NativeEditorActor* find_native_actor_by_guid(NativeEditorScene& scene,
                                             const std::string& actor_guid) {
     if (actor_guid.empty()) return nullptr;
@@ -4646,6 +4482,30 @@ void broadcast_network_editor_actor_state(const NativeEditorScene& scene, const 
         command.json = actor_to_json(scene, actor).dump();
         Corona::Network::push_network_command(std::move(command));
     }
+}
+
+// Every collaborative mutation assembles the same two command shapes; keeping
+// the assembly here stops each scene entry from repeating the field mapping.
+void broadcast_editor_actor_transform(const ActorTransformSnapshot& value) {
+    float transform[9];
+    std::copy(value.position.begin(), value.position.end(), transform);
+    std::copy(value.rotation.begin(), value.rotation.end(), transform + 3);
+    std::copy(value.scale.begin(), value.scale.end(), transform + 6);
+    Corona::Network::NetworkCommand command{};
+    command.kind = Corona::Network::NetworkCommandKind::BroadcastActorTransformUpdate;
+    command.guid = value.actor_guid;
+    command.scene = value.scene;
+    for (int i = 0; i < 9; ++i) command.transform[static_cast<std::size_t>(i)] = transform[i];
+    Corona::Network::push_network_command(std::move(command));
+}
+
+void broadcast_editor_actor_delete(const ActorDeleteSnapshot& value) {
+    Corona::Network::NetworkCommand command{};
+    command.kind = Corona::Network::NetworkCommandKind::BroadcastActorDelete;
+    command.guid = value.actor_guid;
+    command.scene = value.scene;
+    command.name = value.old_name;
+    Corona::Network::push_network_command(std::move(command));
 }
 
 std::size_t seed_network_editor_state(
@@ -5117,89 +4977,6 @@ static NativeResult start_native_script_file(nlohmann::json payload, bool by_pat
     return invoke_python_script_service({"FileScripts", by_path ? "run_path" : "run_file", nlohmann::json::array({payload})});
 }
 
-ProjectFilesReply execute_project_files_operation(const ProjectFilesRequest& request) {
-    nlohmann::json payload{{"archive_session", request.archive_session}, {"project_path", request.project_path},
-        {"identity", request.identity}};
-    const bool save = request.method == ProjectFilesMethod::Save;
-    if (save) { payload["code"] = request.code; payload["document"] = request.document; }
-    const auto result = invoke_python_script_service({"ProjectFiles", save ? "save" : "load", nlohmann::json::array({std::move(payload)})});
-    ProjectFilesReply reply;
-    if (!result.success) {
-        reply.error_code = ProjectScriptService::project_files_error_code(result.error_code);
-        reply.error_message = result.error;
-        return reply;
-    }
-    const auto& data = result.data;
-    reply.status = data.at("status").get<std::string>();
-    reply.code = data.value("code", std::string{});
-    reply.message = data.value("message", std::string{});
-    reply.revision = data.value("revision", std::string{});
-    reply.code_path = data.value("code_path", std::string{});
-    reply.document_path = data.value("document_path", std::string{});
-    if (data.contains("document")) reply.document = data["document"];
-    return reply;
-}
-
-ScriptsReply execute_scripts_operation(const ScriptsRequest& request) {
-    NativeResult result;
-    if (request.method == ScriptsMethod::RunFile) {
-        result = start_native_script_file({
-            {"requestId", request.request_id}, {"archive_session", request.archive_session},
-            {"project_path", request.project_path}, {"path", request.path}, {"revision", request.revision},
-            {"target_type", request.target_type}, {"scene_name", request.scene_name}, {"actor_name", request.actor_name}}, false);
-    } else if (request.method == ScriptsMethod::GetStatus) {
-        result = invoke_python_script_service({"FileScripts", "get_script_status", nlohmann::json::array()});
-    } else if (request.method == ScriptsMethod::GetRun) {
-        result = invoke_python_script_service({"FileScripts", "get_file_run", {{{"requestId", request.request_id}}}});
-    } else {
-        result = invoke_python_script_service({"FileScripts", "stop_file", {{{"runId", request.run_id},
-            {"requestId", request.request_id}, {"restore_state", request.restore_state}}}});
-    }
-    ScriptsReply reply;
-    if (!result.success) {
-        reply.error_code = ProjectScriptService::bridge_error_code(result.error_code);
-        reply.error_message = result.error;
-        return reply;
-    }
-    const auto& data = result.data;
-    if (!data.is_object()) throw std::runtime_error("Expected a script runtime snapshot");
-    auto& snapshot = reply.snapshot;
-    if (data.contains("status") && !data["status"].is_null()) snapshot.status = data["status"].get<std::string>();
-    if (data.contains("outcome") && !data["outcome"].is_null()) snapshot.outcome = data["outcome"].get<std::string>();
-    if (data.contains("error") && !data["error"].is_null()) snapshot.error = data["error"].get<std::string>();
-    if (data.contains("code") && !data["code"].is_null()) snapshot.code = data["code"].get<std::string>();
-    if (data.contains("message") && !data["message"].is_null()) snapshot.message = data["message"].get<std::string>();
-    if (data.contains("filepath") && !data["filepath"].is_null()) snapshot.filepath = data["filepath"].get<std::string>();
-    if (data.contains("runId") && !data["runId"].is_null()) snapshot.runId = data["runId"].get<std::string>();
-    if (data.contains("requestId") && !data["requestId"].is_null()) snapshot.requestId = data["requestId"].get<std::string>();
-    if (data.contains("contextId") && !data["contextId"].is_null()) snapshot.contextId = data["contextId"].get<std::string>();
-    if (data.contains("sceneName") && !data["sceneName"].is_null()) snapshot.sceneName = data["sceneName"].get<std::string>();
-    if (data.contains("actorName") && !data["actorName"].is_null()) snapshot.actorName = data["actorName"].get<std::string>();
-    if (data.contains("targetType") && !data["targetType"].is_null()) snapshot.targetType = data["targetType"].get<std::string>();
-    if (data.contains("requestedScene") && !data["requestedScene"].is_null()) snapshot.requestedScene = data["requestedScene"].get<std::string>();
-    if (data.contains("requestedActor") && !data["requestedActor"].is_null()) snapshot.requestedActor = data["requestedActor"].get<std::string>();
-    if (data.contains("resolvedSceneName") && !data["resolvedSceneName"].is_null()) snapshot.resolvedSceneName = data["resolvedSceneName"].get<std::string>();
-    if (data.contains("resolvedActorName") && !data["resolvedActorName"].is_null()) snapshot.resolvedActorName = data["resolvedActorName"].get<std::string>();
-    if (data.contains("bindingMode") && !data["bindingMode"].is_null()) snapshot.bindingMode = data["bindingMode"].get<std::string>();
-    if (data.contains("nativeScene") && !data["nativeScene"].is_null()) snapshot.nativeScene = data["nativeScene"].get<std::string>();
-    if (data.contains("restoreStatus") && !data["restoreStatus"].is_null()) snapshot.restoreStatus = data["restoreStatus"].get<std::string>();
-    if (data.contains("restoreError") && !data["restoreError"].is_null()) snapshot.restoreError = data["restoreError"].get<std::string>();
-    if (data.contains("currentNodeId") && !data["currentNodeId"].is_null()) snapshot.currentNodeId = data["currentNodeId"].get<std::string>();
-    if (data.contains("inputLocked") && !data["inputLocked"].is_null()) snapshot.inputLocked = data["inputLocked"].get<bool>();
-    if (data.contains("snapshotCaptured") && !data["snapshotCaptured"].is_null()) snapshot.snapshotCaptured = data["snapshotCaptured"].get<bool>();
-    if (data.contains("threadAlive") && !data["threadAlive"].is_null()) snapshot.threadAlive = data["threadAlive"].get<bool>();
-    if (data.contains("restored") && !data["restored"].is_null()) snapshot.restored = data["restored"].get<bool>();
-    if (data.contains("startedAt") && !data["startedAt"].is_null()) snapshot.startedAt = data["startedAt"].get<double>();
-    if (data.contains("finishedAt") && !data["finishedAt"].is_null()) snapshot.finishedAt = data["finishedAt"].get<double>();
-    if (data.contains("actorCandidates") && !data["actorCandidates"].is_null()) snapshot.actorCandidates = data["actorCandidates"].get<std::vector<std::string>>();
-    if (data.contains("pendingThreads") && !data["pendingThreads"].is_null()) snapshot.pendingThreads = data["pendingThreads"].get<std::vector<std::string>>();
-    if (data.contains("marker") && data["marker"].is_object())
-        snapshot.marker = ScriptMarker{data["marker"].value("id", std::string{}), data["marker"].value("name", std::string{})};
-    if (data.contains("waiting") && data["waiting"].is_object())
-        snapshot.waiting = ScriptMarker{data["waiting"].value("id", std::string{}), data["waiting"].value("name", std::string{})};
-    return reply;
-}
-
 SceneReply execute_scene_operation(const SceneRequest& request) {
     if (request.method == SceneMethod::ReadVisionAvailability) {
         SceneReply reply;
@@ -5338,19 +5115,8 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         auto reply = apply_native_actor_transform(request);
         auto* scene = native_editor_state().scene.get();
         auto* actor = scene && reply.error_code.empty() ? find_native_actor(*scene, reply.transform.actor_guid) : nullptr;
-        if (network_snapshot_session_active() && actor && is_network_editor_seed_actor(*actor)) {
-            const auto& value = reply.transform;
-            float transform[9];
-            std::copy(value.position.begin(), value.position.end(), transform);
-            std::copy(value.rotation.begin(), value.rotation.end(), transform + 3);
-            std::copy(value.scale.begin(), value.scale.end(), transform + 6);
-            Corona::Network::NetworkCommand command{};
-            command.kind = Corona::Network::NetworkCommandKind::BroadcastActorTransformUpdate;
-            command.guid = value.actor_guid;
-            command.scene = value.scene;
-            for (int i = 0; i < 9; ++i) command.transform[static_cast<std::size_t>(i)] = transform[i];
-            Corona::Network::push_network_command(std::move(command));
-        }
+        if (network_snapshot_session_active() && actor && is_network_editor_seed_actor(*actor))
+            broadcast_editor_actor_transform(reply.transform);
         return reply;
     }
     if (request.method == SceneMethod::UpdateActor) {
@@ -5392,15 +5158,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             return reply;
         }
         reply.actor_delete = erase_native_editor_actor(*scene, actor);
-        if (network_snapshot_session_active()) {
-            const auto& deleted = reply.actor_delete;
-            Corona::Network::NetworkCommand command{};
-            command.kind = Corona::Network::NetworkCommandKind::BroadcastActorDelete;
-            command.guid = deleted.actor_guid;
-            command.scene = deleted.scene;
-            command.name = deleted.old_name;
-            Corona::Network::push_network_command(std::move(command));
-        }
+        if (network_snapshot_session_active()) broadcast_editor_actor_delete(reply.actor_delete);
         return reply;
     }
     if (request.method == SceneMethod::RebindActorResource) {
@@ -6077,160 +5835,6 @@ void reset_native_editor_scene_for_test() {
     state.project_path.clear();
 }
 
-std::string create_editor_actor_from_python(const std::string& scene_name,
-                                            const std::string& asset_path,
-                                            const std::string& actor_type,
-                                            const std::string& actor_data_json) {
-    try {
-        nlohmann::json actor_data = nlohmann::json::object();
-        if (!actor_data_json.empty()) {
-            actor_data = nlohmann::json::parse(actor_data_json);
-            if (!actor_data.is_object()) {
-                actor_data = nlohmann::json::object();
-            }
-        }
-
-        const auto result = create_native_editor_actor(scene_name, asset_path, actor_type, actor_data);
-        if (!result.success) {
-            return nlohmann::json{
-                {"status", "error"},
-                {"message", result.error},
-                {"error", result.error},
-            }.dump();
-        }
-        return result.data.dump();
-    } catch (const std::exception& e) {
-        return nlohmann::json{
-            {"status", "error"},
-            {"message", e.what()},
-            {"error", e.what()},
-        }.dump();
-    } catch (...) {
-        return nlohmann::json{
-            {"status", "error"},
-            {"message", "create_editor_actor native handler error"},
-            {"error", "create_editor_actor native handler error"},
-        }.dump();
-    }
-}
-
-std::string remove_editor_actor_from_python(const std::string& scene_name,
-                                            const std::string& actor_name) {
-    try {
-        const auto result = remove_native_editor_actor(scene_name, actor_name);
-        if (!result.success) {
-            return nlohmann::json{
-                {"status", "error"},
-                {"message", result.error},
-                {"error", result.error},
-            }.dump();
-        }
-        return result.data.dump();
-    } catch (const std::exception& e) {
-        return nlohmann::json{
-            {"status", "error"},
-            {"message", e.what()},
-            {"error", e.what()},
-        }.dump();
-    } catch (...) {
-        return nlohmann::json{
-            {"status", "error"},
-            {"message", "remove_editor_actor native handler error"},
-            {"error", "remove_editor_actor native handler error"},
-        }.dump();
-    }
-}
-
-std::string get_editor_actor_bounds_from_python(const std::string& scene_name,
-                                                const std::string& actor_name) {
-    try {
-        auto* scene = ensure_native_editor_scene();
-        const auto scene_route = normalize_route(scene_name);
-        scene = resolve_native_editor_scene_request(scene, scene_route);
-        auto* actor = find_native_actor(*scene, actor_name);
-        if (!actor) {
-            return nlohmann::json{
-                {"status", "error"},
-                {"message", "Actor not found: " + actor_name},
-            }.dump();
-        }
-        const auto aabb = native_actor_world_aabb(*actor);
-        if (!aabb) {
-            return nlohmann::json{
-                {"status", "error"},
-                {"message", "Actor has no native bounds: " + actor_name},
-            }.dump();
-        }
-        return nlohmann::json{
-            {"status", "success"},
-            {"scene", scene->route},
-            {"actor", actor_to_json(*scene, *actor)},
-            {"aabb", aabb_to_json(*aabb)},
-        }.dump();
-    } catch (const std::exception& e) {
-        return nlohmann::json{
-            {"status", "error"},
-            {"message", e.what()},
-        }.dump();
-    } catch (...) {
-        return nlohmann::json{
-            {"status", "error"},
-            {"message", "get_editor_actor_bounds native handler error"},
-        }.dump();
-    }
-}
-
-std::string get_editor_actor_geometry_status_from_python(const std::string& scene_name,
-                                                         const std::string& actor_name) {
-    try {
-        auto* scene = ensure_native_editor_scene();
-        const auto scene_route = normalize_route(scene_name);
-        scene = resolve_native_editor_scene_request(scene, scene_route);
-        auto* actor = find_native_actor(*scene, actor_name);
-        if (!actor) {
-            return nlohmann::json{
-                {"status", "error"},
-                {"message", "Actor not found: " + actor_name},
-            }.dump();
-        }
-        const bool valid = actor->geometry && actor->geometry->is_valid();
-        const auto render_status = actor->geometry
-            ? actor->geometry->get_render_status()
-            : Corona::API::GeometryRenderStatus{};
-        const auto gpu_state = valid ? render_status.gpu_build_state : std::string("Invalid");
-        const auto mesh_count = valid ? render_status.mesh_count : 0;
-        const auto model_id = valid ? actor->geometry->get_model_id() : 0;
-        const bool render_ready = actor->actor_type == "audio"
-            ? valid && gpu_state == "Ready"
-            : valid && render_status.ready;
-        return nlohmann::json{
-            {"status", "success"},
-            {"scene", scene->route},
-            {"actor", actor->name},
-            {"actor_type", actor->actor_type},
-            {"ready", render_ready},
-            {"collision_ready", render_status.collision_ready},
-            {"failed", gpu_state == "Failed"},
-            {"gpu_build_state", gpu_state},
-            {"mesh_count", mesh_count},
-            {"render_status_observed", render_status.observed},
-            {"renderable_mesh_count", render_status.renderable_mesh_count},
-            {"invalid_mesh_count", render_status.invalid_mesh_count},
-            {"model_id", model_id},
-        }.dump();
-    } catch (const std::exception& e) {
-        return nlohmann::json{
-            {"status", "error"},
-            {"message", e.what()},
-        }.dump();
-    } catch (...) {
-        return nlohmann::json{
-            {"status", "error"},
-            {"message", "get_editor_actor_geometry_status native handler error"},
-        }.dump();
-    }
-}
-
 std::string get_editor_scene_snapshot_from_python(const std::string& scene_name) {
     try {
         auto* scene = ensure_native_editor_scene();
@@ -6283,71 +5887,6 @@ std::string get_editor_scene_snapshot_from_python(const std::string& scene_name)
         return nlohmann::json{
             {"status", "error"},
             {"message", "get_editor_scene_snapshot native handler error"},
-        }.dump();
-    }
-}
-
-std::string set_editor_actor_transform_from_python(const std::string& scene_name,
-                                                   const std::string& actor_name,
-                                                   const std::string& transform_json) {
-    try {
-        nlohmann::json transform_data = nlohmann::json::object();
-        if (!transform_json.empty()) {
-            transform_data = nlohmann::json::parse(transform_json);
-            if (!transform_data.is_object()) {
-                transform_data = nlohmann::json::object();
-            }
-        }
-        const auto result = set_native_editor_actor_transform(scene_name, actor_name, transform_data);
-        if (!result.success) {
-            return nlohmann::json{
-                {"status", "error"},
-                {"message", result.error},
-                {"error", result.error},
-            }.dump();
-        }
-        return result.data.dump();
-    } catch (const std::exception& e) {
-        return nlohmann::json{
-            {"status", "error"},
-            {"message", e.what()},
-            {"error", e.what()},
-        }.dump();
-    } catch (...) {
-        return nlohmann::json{
-            {"status", "error"},
-            {"message", "set_editor_actor_transform native handler error"},
-            {"error", "set_editor_actor_transform native handler error"},
-        }.dump();
-    }
-}
-
-std::string get_editor_scene_bounds_from_python(const std::string& scene_name) {
-    try {
-        auto* scene = ensure_native_editor_scene();
-        const auto scene_route = normalize_route(scene_name);
-        scene = resolve_native_editor_scene_request(scene, scene_route);
-        const auto aabb = native_scene_world_aabb(*scene);
-        if (!aabb) {
-            return nlohmann::json{
-                {"status", "error"},
-                {"message", "Scene has no native actor bounds"},
-            }.dump();
-        }
-        return nlohmann::json{
-            {"status", "success"},
-            {"scene", scene->route},
-            {"aabb", aabb_to_json(*aabb)},
-        }.dump();
-    } catch (const std::exception& e) {
-        return nlohmann::json{
-            {"status", "error"},
-            {"message", e.what()},
-        }.dump();
-    } catch (...) {
-        return nlohmann::json{
-            {"status", "error"},
-            {"message", "get_editor_scene_bounds native handler error"},
         }.dump();
     }
 }
@@ -6472,19 +6011,6 @@ NativeResult open_project_file(const std::filesystem::path& root, const std::str
     if (type == "scene") reload_native_editor_scene("", route_for_project_storage(root, path_to_utf8(*target)));
     return native_success(true);
 }
-
-FileTreeEntry file_tree_entry(const nlohmann::json& data, unsigned depth = 0) {
-    if (depth >= 128) throw std::runtime_error("Project file tree is too deep");
-    FileTreeEntry entry;
-    entry.name = data.at("name").get<std::string>();
-    entry.path = data.at("path").get<std::string>();
-    entry.directory = data.at("isDirectory").get<bool>();
-    entry.level = data.at("level").get<int>();
-    entry.expanded = data.value("expanded", false);
-    if (data.contains("size")) entry.size = data["size"].get<std::uint64_t>();
-    if (data.contains("children")) for (const auto& child : data["children"]) entry.children.push_back(file_tree_entry(child, depth + 1));
-    return entry;
-}
 }
 
 FilesReply execute_files_operation(const FilesRequest& request) {
@@ -6497,36 +6023,17 @@ FilesReply execute_files_operation(const FilesRequest& request) {
     if (scene->read_only) { reply.error_code = "READ_ONLY_PROJECT"; reply.error_message = "Project is read-only"; return reply; }
     reply.archive_session = request.archive_session;
     reply.project_path = path_to_utf8(scene->project_root);
-    NativeResult result;
-    if (request.method == FilesMethod::Open) {
-        const auto route = std::filesystem::weakly_canonical(scene->project_root / path_from_utf8(request.path));
-        if (!is_path_within(scene->project_root, route)) {
-            reply.error_code = "INVALID_PROJECT_PATH"; reply.error_message = "Path outside current project"; return reply;
-        }
-        result = open_project_file(scene->project_root, request.path, request.file_type);
-    } else {
-        const char* operation = request.method == FilesMethod::GetTree ? "get_file_tree" :
-            request.method == FilesMethod::CreateFolder ? "create_folder" :
-            request.method == FilesMethod::CreateActorTemplate ? "create_file" :
-            request.method == FilesMethod::Rename ? "rename_item" : "delete_item";
-        auto args = nlohmann::json::array({request.path});
-        if (request.method == FilesMethod::CreateFolder || request.method == FilesMethod::CreateActorTemplate || request.method == FilesMethod::Rename)
-            args.push_back(request.name);
-        if (request.method == FilesMethod::CreateActorTemplate) args.push_back("actor");
-        args.push_back({{"archive_session", request.archive_session}});
-        result = project_file_request(operation, std::move(args));
+    const auto route = std::filesystem::weakly_canonical(scene->project_root / path_from_utf8(request.path));
+    if (!is_path_within(scene->project_root, route)) {
+        reply.error_code = "INVALID_PROJECT_PATH"; reply.error_message = "Path outside current project"; return reply;
     }
+    const auto result = open_project_file(scene->project_root, request.path, request.file_type);
     if (!result.success) {
         reply.error_code = result.error_code == 409 ? "PROJECT_CONTEXT_CHANGED" : result.error_code == 404 ? "FILE_NOT_FOUND" :
             result.error_code == 504 ? "EDITOR_API_TIMEOUT" : "FILE_OPERATION_FAILED";
         reply.error_message = result.error; return reply;
     }
     reply.ok = true;
-    if (request.method == FilesMethod::GetTree) reply.tree = file_tree_entry(result.data);
-    else if (request.method == FilesMethod::CreateActorTemplate) {
-        reply.path = result.data.at("path").get<std::string>();
-        reply.name = result.data.at("name").get<std::string>();
-    }
     return reply;
 }
 
@@ -7074,47 +6581,29 @@ NativeResult save_project_info(const nlohmann::json& settings) {
 ProjectSettingsReply execute_project_settings_operation(const ProjectSettingsRequest& request) {
     NativeResult result;
     ProjectSettingsReply reply;
-    const bool metadata = request.method == ProjectSettingsMethod::GetInfo || request.method == ProjectSettingsMethod::SaveInfo;
-    if (request.method == ProjectSettingsMethod::GetInfo) result = native_success(active_project_info_json());
-    else if (request.method == ProjectSettingsMethod::SaveInfo) {
-        const auto* scene = native_editor_state().scene.get();
-        if (!scene || absolute_normalized_path(path_from_utf8(request.project_path)) != scene->project_root)
-            result = native_failure("PROJECT_CONTEXT_CHANGED", 409);
-        else result = save_project_info({{"archive_session", request.archive_session},
-            {"name", request.name}, {"core_version", request.core_version}});
-    } else {
-        nlohmann::json payload{{"archive_session", request.archive_session}, {"project_path", request.project_path},
-            {"document", request.document}, {"revision_only", true}};
-        const bool commit = request.method == ProjectSettingsMethod::CommitDocument;
-        if (commit) { payload["revision"] = request.revision; payload["content"] = request.content; }
-        result = project_document_request(payload, commit);
-    }
+    const auto* scene = native_editor_state().scene.get();
+    if (!scene || absolute_normalized_path(path_from_utf8(request.project_path)) != scene->project_root)
+        result = native_failure("PROJECT_CONTEXT_CHANGED", 409);
+    else result = save_project_info({{"archive_session", request.archive_session},
+        {"name", request.name}, {"core_version", request.core_version}});
     if (!result.success) {
         reply.error_code = ProjectScriptService::project_settings_error_code(result.error_code);
         reply.error_message = result.error;
         return reply;
     }
     const auto& data = result.data;
-    if (metadata) {
-        ProjectInfoSnapshot info;
-        info.name = data.value("name", std::string{});
-        info.mode = data.value("mode", std::string{});
-        info.prompt = data.value("prompt", std::string{});
-        info.core_version = data.value("core_version", std::string{});
-        info.create_time = data.value("create_time", std::string{});
-        info.last_opened = data.value("last_opened", std::string{});
-        info.project_path = data.at("project_path").get<std::string>();
-        info.archive_session = data.at("archive_session").get<std::string>();
-        info.read_only = data.value("read_only", false);
-        info.source_path = data.value("source_path", std::string{});
-        reply.info = std::move(info);
-    } else {
-        reply.success = data.at("success").get<bool>();
-        reply.document_error = data.value("error", std::string{});
-        reply.revision = data.value("revision", std::string{});
-        reply.corrupt = data.value("corrupt", false);
-        if (data.contains("content")) reply.content = data["content"];
-    }
+    ProjectInfoSnapshot info;
+    info.name = data.value("name", std::string{});
+    info.mode = data.value("mode", std::string{});
+    info.prompt = data.value("prompt", std::string{});
+    info.core_version = data.value("core_version", std::string{});
+    info.create_time = data.value("create_time", std::string{});
+    info.last_opened = data.value("last_opened", std::string{});
+    info.project_path = data.at("project_path").get<std::string>();
+    info.archive_session = data.at("archive_session").get<std::string>();
+    info.read_only = data.value("read_only", false);
+    info.source_path = data.value("source_path", std::string{});
+    reply.info = std::move(info);
     return reply;
 }
 
@@ -9017,6 +8506,32 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
                                            const NativeContext& context) {
         return dispatch_method("Network", methods, request, context);
     });
+}
+
+// Transport only.  The envelope, its schema and the service allowlist belong to
+// the Python side; keeping this free of branches is what makes the editor
+// surface one function wide.
+BridgeReply execute_bridge_operation(const std::string& envelope) {
+    BridgeReply reply;
+    if (envelope.empty()) {
+        reply.error_code = "INVALID_ARGUMENT";
+        reply.error_message = "Bridge envelope is empty";
+        return reply;
+    }
+    const auto result = invoke_python_script_service(
+        {"EditorBridge", "call", nlohmann::json::array({envelope})},
+        "python-bridge",
+        std::chrono::seconds(300));
+    if (!result.success) {
+        reply.error_code = result.error_code == 504 ? "EDITOR_API_TIMEOUT"
+                           : result.error_code == 429 ? "SERVICE_BUSY"
+                           : result.error_code == 503 ? "SERVICE_UNAVAILABLE"
+                                                      : "SERVICE_FAILED";
+        reply.error_message = result.error;
+        return reply;
+    }
+    reply.json = result.data.is_string() ? result.data.get<std::string>() : result.data.dump();
+    return reply;
 }
 
 }  // namespace Corona::Systems::UI
