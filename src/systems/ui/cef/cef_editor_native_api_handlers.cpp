@@ -5913,15 +5913,17 @@ struct VisionToggleSpec {
 
 
 
-void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
-    static const NativeMethodTable methods = {
-        {"get_environment", [](const NativeRequest& request, const NativeContext&) {
+// Named entry points for the ScriptRuntime caller. The table below still forwards to them
+// while the JSON manifest is retired; once it is gone these functions are the whole
+// contract and the table, the registry and the api-name strings disappear with it.
+
+NativeResult script_scene_get_environment(const NativeRequest& request, const NativeContext& context) {
             SceneRequest read{SceneMethod::GetEnvironment};
             read.environment.scene = arg_string(request.args, 0);
             return native_environment_result(read);
-        }},
+}
 
-        {"read_active_scene", [](const NativeRequest&, const NativeContext&) {
+NativeResult script_scene_read_active_scene(const NativeRequest& request, const NativeContext& context) {
             const auto state = execute_scene_operation({SceneMethod::ReadActive}).active;
             if (state.archive_session.empty()) return native_success({{"archive_session", ""}});
             auto selection = nlohmann::json::object();
@@ -5935,8 +5937,9 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             return native_success({{"archive_session", state.archive_session}, {"scene", state.scene},
                 {"name", state.name}, {"project_path", state.project_path}, {"read_only", state.read_only},
                 {"tree_revision", state.tree_revision}, {"selection", std::move(selection)}});
-        }},
-        {"read_actor", [](const NativeRequest& request, const NativeContext&) {
+}
+
+NativeResult script_scene_read_actor(const NativeRequest& request, const NativeContext& context) {
             auto* scene = native_editor_state().scene.get();
             const auto query = arg_object(request.args, 0);
             if (!scene || !matches_archive_session(*scene, query)) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
@@ -5944,8 +5947,9 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             auto* actor = find_native_actor(*scene, id);
             if (!actor) return native_failure("Actor not found: " + id, 404);
             return native_success(actor_to_json(*scene, *actor));
-        }},
-        {"read_transforms", [](const NativeRequest& request, const NativeContext&) {
+}
+
+NativeResult script_scene_read_transforms(const NativeRequest& request, const NativeContext& context) {
             const auto query = arg_object(request.args, 0);
             auto* scene = native_editor_state().scene.get();
             if (!scene || !matches_archive_session(*scene, query)) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
@@ -5959,14 +5963,16 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                     {"scale", actor->geometry ? actor->geometry->get_scale() : actor->scale}});
             }
             return native_success({{"archive_session", scene->archive_session}, {"actors", std::move(values)}});
-        }},
-        {"read_archive_scene", [](const NativeRequest& request, const NativeContext&) {
+}
+
+NativeResult script_scene_read_archive_scene(const NativeRequest& request, const NativeContext& context) {
             auto* scene = native_editor_state().scene.get();
             if (!scene || !matches_archive_session(*scene, arg_object(request.args, 0)))
                 return native_failure("PROJECT_CONTEXT_CHANGED", 409);
             return native_success({{"archive_session", scene->archive_session}, {"scene", archive_scene_values(*scene)}});
-        }},
-        {"get_scene_snapshot", [](const NativeRequest& request, const NativeContext&) {
+}
+
+NativeResult script_scene_get_scene_snapshot(const NativeRequest& request, const NativeContext& context) {
             try {
                 const auto raw = get_editor_scene_snapshot_from_python(arg_string(request.args, 0));
                 const auto data = nlohmann::json::parse(raw);
@@ -5977,8 +5983,9 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             } catch (const std::exception& e) {
                 return native_failure(e.what(), 2);
             }
-        }},
-        {"set_actor_transform", [](const NativeRequest& request, const NativeContext& context) {
+}
+
+NativeResult script_scene_set_actor_transform(const NativeRequest& request, const NativeContext& context) {
             try {
                 const auto transform = arg_object(request.args, 2);
                 // Web callers always carry their archive; non-Web callers may omit it.
@@ -5990,15 +5997,17 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             } catch (const std::exception& e) {
                 return native_failure(e.what(), 2);
             }
-        }},
-        {"set_environment", [](const NativeRequest& request, const NativeContext&) {
-            return set_native_environment(request);
-        }},
+}
 
-        {"set_actor_state", [](const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_set_environment(const NativeRequest& request, const NativeContext& context) {
+            return set_native_environment(request);
+}
+
+NativeResult script_scene_set_actor_state(const NativeRequest& request, const NativeContext& context) {
             return set_native_actor_properties(request, context, ActorPropertyAdapter::State);
-        }},
-        {"set_actor_animation", [](const NativeRequest& request, const NativeContext&) {
+}
+
+NativeResult script_scene_set_actor_animation(const NativeRequest& request, const NativeContext& context) {
             try {
                 auto* scene = scene_for_request_route(request);
                 auto* actor = find_native_actor(*scene, arg_string(request.args, 1));
@@ -6013,21 +6022,25 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 return native_success({{"status", "accepted"}, {"scene", scene->route},
                                        {"actor", actor_to_json(*scene, *actor)}});
             } catch (const std::exception& error) { return native_failure(error.what(), 2); }
-        }},
-        {"pause_actor_animation", [](const NativeRequest& request, const NativeContext&) {
-            return set_native_actor_animation_paused(request, true);
-        }},
-        {"resume_actor_animation", [](const NativeRequest& request, const NativeContext&) {
-            return set_native_actor_animation_paused(request, false);
-        }},
-        {"set_actor_physics", [](const NativeRequest& request, const NativeContext& context) {
-            return set_native_actor_properties(request, context, ActorPropertyAdapter::Mechanics);
-        }},
-        {"set_camera_pose", [](const NativeRequest& request, const NativeContext&) {
-            return apply_non_web_camera_properties(request, true);
-        }},
+}
 
-        {"create_actor", [](const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_pause_actor_animation(const NativeRequest& request, const NativeContext& context) {
+            return set_native_actor_animation_paused(request, true);
+}
+
+NativeResult script_scene_resume_actor_animation(const NativeRequest& request, const NativeContext& context) {
+            return set_native_actor_animation_paused(request, false);
+}
+
+NativeResult script_scene_set_actor_physics(const NativeRequest& request, const NativeContext& context) {
+            return set_native_actor_properties(request, context, ActorPropertyAdapter::Mechanics);
+}
+
+NativeResult script_scene_set_camera_pose(const NativeRequest& request, const NativeContext& context) {
+            return apply_non_web_camera_properties(request, true);
+}
+
+NativeResult script_scene_create_actor(const NativeRequest& request, const NativeContext& context) {
             const auto scene_route = arg_string(request.args, 0);
             const auto source_path = arg_string(request.args, 1);
             auto actor_type = normalize_route(arg_string(request.args, 2, "model"));
@@ -6038,12 +6051,67 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 (!scene || !matches_archive_session(*scene, actor_data)))
                 return native_failure("PROJECT_CONTEXT_CHANGED", 409);
             return create_native_editor_actor(scene_route, source_path, actor_type, actor_data, script_runtime);
-        }},
+}
 
-        {"remove_actor", [](const NativeRequest& request, const NativeContext&) {
+NativeResult script_scene_remove_actor(const NativeRequest& request, const NativeContext& context) {
             const auto scene_route = arg_string(request.args, 0);
             const auto actor_name = arg_string(request.args, 1);
             return remove_native_editor_actor(scene_route, actor_name);
+}
+
+void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
+    static const NativeMethodTable methods = {
+        {"get_environment", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_get_environment(request, context);
+        }},
+
+        {"read_active_scene", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_read_active_scene(request, context);
+        }},
+        {"read_actor", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_read_actor(request, context);
+        }},
+        {"read_transforms", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_read_transforms(request, context);
+        }},
+        {"read_archive_scene", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_read_archive_scene(request, context);
+        }},
+        {"get_scene_snapshot", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_get_scene_snapshot(request, context);
+        }},
+        {"set_actor_transform", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_set_actor_transform(request, context);
+        }},
+        {"set_environment", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_set_environment(request, context);
+        }},
+
+        {"set_actor_state", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_set_actor_state(request, context);
+        }},
+        {"set_actor_animation", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_set_actor_animation(request, context);
+        }},
+        {"pause_actor_animation", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_pause_actor_animation(request, context);
+        }},
+        {"resume_actor_animation", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_resume_actor_animation(request, context);
+        }},
+        {"set_actor_physics", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_set_actor_physics(request, context);
+        }},
+        {"set_camera_pose", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_set_camera_pose(request, context);
+        }},
+
+        {"create_actor", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_create_actor(request, context);
+        }},
+
+        {"remove_actor", [](const NativeRequest& request, const NativeContext& context) {
+            return script_scene_remove_actor(request, context);
         }},
         // ---- Per-instance IK configuration and runtime inspection ----
     };
