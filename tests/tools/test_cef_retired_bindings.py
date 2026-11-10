@@ -4,13 +4,12 @@ from pathlib import Path
 
 def test_network_has_named_owned_contract_and_no_legacy_web_routes():
     root = Path(__file__).resolve().parents[2]
+    # The JSON manifest family for Network is deleted, not merely hidden from Web:
+    # every one of its callers is gone and the typed V8 binding below is the only
+    # contract that remains.
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
-    for method in ['start_session', 'stop_session', 'get_session_info', 'get_discovered_peers',
-                   'clear_discovered_peers', 'search_lan', 'connect_to_peer', 'set_project_root']:
-        line = next(line for line in manifest.splitlines() if f'Network, {method},' in line)
-        assert 'WRAPPED_CALLERS(Network,' in line
-        assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
-        assert ', "network.' in line
+    rows = [line for line in manifest.splitlines() if '(Network, ' in line]
+    assert not rows, f'the retired Network manifest family came back: {rows[:2]}'
     header = (root / 'src/systems/ui/cef/cef_operations.h').read_text(encoding='utf-8')
     assert 'nlohmann' not in header and 'CefV8' not in header
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
@@ -602,32 +601,31 @@ def test_project_open_uses_one_owner_and_retires_generic_web_contract():
 def test_unused_network_and_chat_routes_keep_non_web_contracts_only():
     root = Path(__file__).resolve().parents[2]
     source = (root / "src/systems/ui/editor_api/cef_editor_api.cpp").read_text(encoding="utf-8")
-    retired = {'Network': ['broadcast_actor_create',
-                 'broadcast_actor_delete',
-                 'broadcast_actor_state_update',
-                 'broadcast_actor_transform',
-                 'broadcast_intent',
-                 'broadcast_actor_scene_snapshot',
-                 'check_preview_collision',
-                 'claim_actor_ownership',
-                 'get_lock_owner',
-                 'get_peer_count',
-                 'lock_object',
-                 'poll_pending_actor_create',
-                 'poll_pending_actor_delete',
-                 'poll_pending_actor_state_update',
-                 'poll_pending_actor_transform',
-                 'poll_pending_actor_scene_snapshot',
-                 'poll_pending_actor_scene_snapshot_request',
-                 'register_actor_identity',
-                 'request_actor_scene_snapshot',
-                 'set_sync_paused',
-                 'unlock_object']}
-    for module, methods in retired.items():
-        for method in methods:
-            line = next(line for line in source.splitlines() if f'({module}, {method},' in line)
-            assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line, (module, method)
-            assert '"network.' in line
+    # These routes had no production caller at all, so the whole family was deleted
+    # rather than kept behind a non-Web caller mask.
+    retired = ['broadcast_actor_create',
+               'broadcast_actor_delete',
+               'broadcast_actor_state_update',
+               'broadcast_actor_transform',
+               'broadcast_intent',
+               'broadcast_actor_scene_snapshot',
+               'check_preview_collision',
+               'claim_actor_ownership',
+               'get_lock_owner',
+               'get_peer_count',
+               'lock_object',
+               'poll_pending_actor_create',
+               'poll_pending_actor_delete',
+               'poll_pending_actor_state_update',
+               'poll_pending_actor_transform',
+               'poll_pending_actor_scene_snapshot',
+               'poll_pending_actor_scene_snapshot_request',
+               'register_actor_identity',
+               'request_actor_scene_snapshot',
+               'set_sync_paused',
+               'unlock_object']
+    for method in retired:
+        assert f'(Network, {method},' not in source, f'retired Network route came back: {method}'
 
 
 def test_unused_network_events_keep_only_non_web_permissions_and_aliases():

@@ -130,7 +130,6 @@ void register_main_view_api_handlers(NativeApiRegistry& registry);
 void register_project_launcher_api_handlers(NativeApiRegistry& registry);
 void register_file_manager_api_handlers(NativeApiRegistry& registry);
 void register_project_settings_api_handlers(NativeApiRegistry& registry);
-void register_network_api_handlers(NativeApiRegistry& registry);
 void register_editor_api_handlers(NativeApiRegistry& registry);
 void register_python_script_api_handlers(NativeApiRegistry& registry);
 
@@ -222,7 +221,6 @@ void register_builtin_native_api_handlers() {
         register_main_view_api_handlers(registry);
         register_project_settings_api_handlers(registry);
         register_scene_tools_api_handlers(registry);
-        register_network_api_handlers(registry);
         register_editor_api_handlers(registry);
         register_python_script_api_handlers(registry);
     });

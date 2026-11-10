@@ -502,53 +502,6 @@ class _EventsApi(_DynamicApiNamespace):
         return _register_manifest_editor_api_event_callback("events.on_network_sync_pause_requested", callback)
 
 
-class _NetworkApi(_DynamicApiNamespace):
-    def __init__(self):
-        super().__init__("network")
-
-    @staticmethod
-    def lock_object(object_id, user_id, operation="modify"):
-        return _invoke_manifest_cpp_api(
-            "network.lock_object", [object_id, user_id, operation]
-        )
-
-    @staticmethod
-    def unlock_object(object_id, user_id):
-        return _invoke_manifest_cpp_api(
-            "network.unlock_object", [object_id, user_id]
-        )
-
-    @staticmethod
-    def get_lock_owner(object_id):
-        return _invoke_manifest_cpp_api("network.get_lock_owner", [object_id])
-
-    @staticmethod
-    def get_session_info():
-        return _invoke_manifest_cpp_api("network.get_session_info", [])
-
-    @staticmethod
-    def broadcast_intent(user_id, tooltip, position, status="placing_object"):
-        return _invoke_manifest_cpp_api(
-            "network.broadcast_intent", [user_id, tooltip, position, status]
-        )
-
-    @staticmethod
-    def check_preview_collision(user_id, position, delta=0.5):
-        return _invoke_manifest_cpp_api(
-            "network.check_preview_collision", [user_id, position, delta]
-        )
-
-
-def get_network_adapter(native_engine=None):
-    """Return the manifest-backed public network contract."""
-    native_engine = _resolve_native_engine(native_engine)
-    if native_engine is None:
-        return None
-    if callable(getattr(native_engine, "_invoke_cpp_editor_api", None)):
-        return CoronaEditorApi.network
-    return None
-
-
 class _SceneToolsApi(_DynamicApiNamespace):
     def __init__(self):
         super().__init__("scene_tools")
@@ -953,7 +906,6 @@ class CoronaEditorApi(metaclass=_CoronaEditorApiMeta):
     project = _ProjectApi()
     files = _FilesApi()
     project_settings = _ProjectSettingsApi()
-    network = _NetworkApi()
     scene = _SceneApi()
     scene_tools = _SceneToolsApi()
     viewport = _ViewportApi()
