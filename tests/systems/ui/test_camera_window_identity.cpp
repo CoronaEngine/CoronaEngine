@@ -1,4 +1,6 @@
 #include <corona/kernel/core/kernel_context.h>
+#include <cstdlib>
+#include <functional>
 #include <corona/events/acoustics_system_events.h>
 #include <corona/engine/engine_runtime_api.h>
 #include <corona/shared_data_hub.h>
@@ -1324,40 +1326,54 @@ void test_consolidated_queries_and_atomic_names() {
 }
 
 int main() {
+    auto& kernel = Corona::Kernel::KernelContext::instance();
+    int failures = 0;
+    // Each group runs isolated: `require` throws on a group's first failing assertion, and the
+    // group is recorded and skipped so the remaining groups still run. Without this the suite
+    // stopped at the first failure and every later camera/viewport/pick assertion — the coverage
+    // that has to gate the interface refactor — never executed at all.
+    const auto run = [&failures](const char* name, const std::function<void()>& body) {
+        try {
+            body();
+        } catch (const std::exception& error) {
+            std::cerr << "  FAILED " << name << ": " << error.what() << '\n';
+            ++failures;
+        }
+    };
     try {
-        test_no_generic_web_contracts();
-        test_identity_lifetime();
-        test_script_input_queue_has_one_owner_and_drops_retired_scopes();
-        auto& kernel = Corona::Kernel::KernelContext::instance();
+        run("no_generic_web_contracts", test_no_generic_web_contracts);
+        run("identity_lifetime", test_identity_lifetime);
+        run("script_input_queue_owner", test_script_input_queue_has_one_owner_and_drops_retired_scopes);
         require(kernel.initialize(), "kernel initialization failed");
         UI::register_builtin_native_api_handlers();
         UI::load_native_editor_scene_for_test(snapshot());
-        test_optics_queue_merges_independent_fields();
-        test_render_settings_queue_owns_values();
-        test_resource_import_results_and_modal_retirement();
-        test_audio_adapters_publish_once_with_exact_identity();
-        test_native_scene_values_and_non_web_adapters();
-        test_owned_actor_index_projection();
-        test_owned_actor_property_projection();
-        test_owned_camera_projection();
-        test_owned_scene_tree_projection();
-        test_one_native_transform_authority();
-        test_one_native_property_authority();
-        test_one_native_environment_authority();
-        test_one_scoped_native_focus_application();
-        test_camera_settings_cannot_change_window_lifecycle();
-        test_window_owner_publishes_camera_open_state();
-        test_scoped_screenshot_rejects_invalid_identity_without_mutation();
-        test_camera_properties_share_pose_view_and_native_authority();
-        test_viewport_configuration_shares_identity_and_applies_atomically();
-        test_pointer_configuration_owns_one_state_and_retires_with_its_context();
-        test_camera_release_discards_queued_viewport_updates();
-        test_deferred_viewports_use_the_original_camera_authority();
-        test_cached_web_viewport_binding_retires_with_its_camera();
-        test_owned_pick_requests_and_coordinate_mapping();
-        test_pick_results_resolve_authoritative_actor_and_scope();
-        test_typed_camera_creation_has_no_window_side_effect();
-        test_consolidated_queries_and_atomic_names();
+        run("optics_queue", test_optics_queue_merges_independent_fields);
+        run("render_settings_queue", test_render_settings_queue_owns_values);
+        run("resource_import", test_resource_import_results_and_modal_retirement);
+        run("audio_adapters", test_audio_adapters_publish_once_with_exact_identity);
+        run("native_scene_values", test_native_scene_values_and_non_web_adapters);
+        run("actor_index_projection", test_owned_actor_index_projection);
+        run("actor_property_projection", test_owned_actor_property_projection);
+        run("camera_projection", test_owned_camera_projection);
+        run("scene_tree_projection", test_owned_scene_tree_projection);
+        run("transform_authority", test_one_native_transform_authority);
+        run("property_authority", test_one_native_property_authority);
+        run("environment_authority", test_one_native_environment_authority);
+        run("focus_application", test_one_scoped_native_focus_application);
+        run("camera_settings_lifecycle", test_camera_settings_cannot_change_window_lifecycle);
+        run("camera_open_state", test_window_owner_publishes_camera_open_state);
+        run("screenshot_identity", test_scoped_screenshot_rejects_invalid_identity_without_mutation);
+        run("camera_properties", test_camera_properties_share_pose_view_and_native_authority);
+        run("viewport_configuration", test_viewport_configuration_shares_identity_and_applies_atomically);
+        run("pointer_configuration", test_pointer_configuration_owns_one_state_and_retires_with_its_context);
+        run("camera_release", test_camera_release_discards_queued_viewport_updates);
+        run("deferred_viewports", test_deferred_viewports_use_the_original_camera_authority);
+        run("cached_viewport_binding", test_cached_web_viewport_binding_retires_with_its_camera);
+        run("pick_requests", test_owned_pick_requests_and_coordinate_mapping);
+        run("pick_results", test_pick_results_resolve_authoritative_actor_and_scope);
+        run("typed_camera_creation", test_typed_camera_creation_has_no_window_side_effect);
+        run("consolidated_queries", test_consolidated_queries_and_atomic_names);
+        run("camera_window_lifecycle", [&] {
         UI::WindowRequest request{UI::WindowMethod::CreateCameraView, 1};
         request.archive_session = "camera-test-archive";
         request.scene_id = "scene.ini";
@@ -1408,13 +1424,23 @@ int main() {
                 "tree reads cannot create an absent editor scene");
         require(UI::execute_scene_operation({UI::SceneMethod::ReadActive}).active.archive_session.empty(),
                 "an empty scene read cannot lazily create an editor scene");
-        test_native_script_service_wait_does_not_hold_editor_state(false);
-        test_native_script_service_wait_does_not_hold_editor_state(true);
+        });
+        run("script_service_wait_uncontended",
+            [&] { test_native_script_service_wait_does_not_hold_editor_state(false); });
+        run("script_service_wait_contended",
+            [&] { test_native_script_service_wait_does_not_hold_editor_state(true); });
+        if (failures != 0) {
+            std::cerr << "CameraWindowIdentityTests: " << failures << " group(s) failed\n";
+            std::_Exit(1);
+        }
         kernel.shutdown();
         std::cout << "CameraWindowIdentityTests passed\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "CameraWindowIdentityTests failed: " << error.what() << '\n';
-        return 1;
+        // `require` throws, so a failing setup step skips the kernel.shutdown() at the end of
+        // this function. Tearing the kernel down from that half-mutated state crashes in static
+        // destruction, which reports "SegFault" and hides the assertion that actually failed.
+        std::_Exit(1);
     }
 }
