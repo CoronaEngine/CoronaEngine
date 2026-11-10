@@ -6668,6 +6668,54 @@ void tick_native_animation_updates() {
     }, route, kCollaborativeApplyDispatchTimeout);
 }
 
+// The six vision toggles are the one render-settings family that differs only in which camera
+// accessor it calls: identical arguments, identical response keys. One pair of entry points and
+// one spec table replace six copies of the same eighteen lines. `echo_in_snapshot` records the
+// one behavioural difference between them — only the denoiser echoes its value back inside the
+// camera snapshot — so the consolidation keeps the observable shapes exactly as they were.
+struct VisionToggleSpec {
+    bool (Corona::API::Camera::*get)() const;
+    void (Corona::API::Camera::*set)(bool);
+    bool echo_in_snapshot;
+};
+
+const std::map<std::string, VisionToggleSpec>& vision_toggles() {
+    static const std::map<std::string, VisionToggleSpec> toggles{
+        {"vision_denoise", {&Corona::API::Camera::get_vision_denoise,
+                            &Corona::API::Camera::set_vision_denoise, true}},
+        {"vision_accumulation", {&Corona::API::Camera::get_vision_accumulation,
+                                 &Corona::API::Camera::set_vision_accumulation, false}},
+        {"vision_stable_planes", {&Corona::API::Camera::get_vision_stable_planes,
+                                  &Corona::API::Camera::set_vision_stable_planes, false}},
+    };
+    return toggles;
+}
+
+NativeResult vision_toggle_result(const NativeRequest& request, const std::string& toggle, bool write) {
+    auto* scene = ensure_native_editor_scene();
+    scene = resolve_native_editor_scene_request(scene, normalize_route(arg_string(request.args, 0)));
+    const auto camera_name = arg_string(request.args, 1);
+    auto* camera = find_native_camera(*scene, camera_name);
+    if (!camera || !camera->engine_camera) {
+        return native_failure("Camera not found: " + camera_name, 2);
+    }
+    const auto& spec = vision_toggles().at(toggle);
+    auto& engine_camera = *camera->engine_camera;
+    if (!write) {
+        return native_success({{"status", "success"},
+                               {"enabled", (engine_camera.*(spec.get))()},
+                               {"camera", camera_to_json(*camera)}});
+    }
+    const bool enabled = json_bool_at(request.args, 2, false);
+    (engine_camera.*(spec.set))(enabled);
+    auto snapshot = camera_to_json(*camera);
+    if (spec.echo_in_snapshot) snapshot[toggle] = enabled;
+    return native_success({{"status", "success"},
+                           {"pending", true},
+                           {"enabled", enabled},
+                           {"camera", std::move(snapshot)}});
+}
+
 void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
         {"get_environment", [](const NativeRequest& request, const NativeContext&) {
@@ -7420,112 +7468,22 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
         }},
         {"set_vision_denoise", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto scene_route = normalize_route(arg_string(request.args, 0));
-            scene = resolve_native_editor_scene_request(scene, scene_route);
-            const auto camera_name = arg_string(request.args, 1);
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return native_failure("Camera not found: " + camera_name, 2);
-            }
-
-            const bool enabled = json_bool_at(request.args, 2, false);
-            camera->engine_camera->set_vision_denoise(enabled);
-            // The renderer commits the queued update asynchronously.
-            auto snapshot = camera_to_json(*camera);
-            snapshot["vision_denoise"] = enabled;
-            return native_success({
-                {"status", "success"},
-                {"pending", true},
-                {"enabled", enabled},
-                {"camera", std::move(snapshot)},
-            });
+            return vision_toggle_result(request, "vision_denoise", true);
         }},
         {"get_vision_denoise", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto scene_route = normalize_route(arg_string(request.args, 0));
-            scene = resolve_native_editor_scene_request(scene, scene_route);
-            const auto camera_name = arg_string(request.args, 1);
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return native_failure("Camera not found: " + camera_name, 2);
-            }
-
-            return native_success({
-                {"status", "success"},
-                {"enabled", camera->engine_camera->get_vision_denoise()},
-                {"camera", camera_to_json(*camera)},
-            });
+            return vision_toggle_result(request, "vision_denoise", false);
         }},
         {"set_vision_accumulation", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto scene_route = normalize_route(arg_string(request.args, 0));
-            scene = resolve_native_editor_scene_request(scene, scene_route);
-            const auto camera_name = arg_string(request.args, 1);
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return native_failure("Camera not found: " + camera_name, 2);
-            }
-
-            const bool enabled = json_bool_at(request.args, 2, false);
-            camera->engine_camera->set_vision_accumulation(enabled);
-            return native_success({
-                {"status", "success"},
-                {"pending", true},
-                {"enabled", enabled},
-                {"camera", camera_to_json(*camera)},
-            });
+            return vision_toggle_result(request, "vision_accumulation", true);
         }},
         {"get_vision_accumulation", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto scene_route = normalize_route(arg_string(request.args, 0));
-            scene = resolve_native_editor_scene_request(scene, scene_route);
-            const auto camera_name = arg_string(request.args, 1);
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return native_failure("Camera not found: " + camera_name, 2);
-            }
-
-            return native_success({
-                {"status", "success"},
-                {"enabled", camera->engine_camera->get_vision_accumulation()},
-                {"camera", camera_to_json(*camera)},
-            });
+            return vision_toggle_result(request, "vision_accumulation", false);
         }},
         {"set_vision_stable_planes", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto scene_route = normalize_route(arg_string(request.args, 0));
-            scene = resolve_native_editor_scene_request(scene, scene_route);
-            const auto camera_name = arg_string(request.args, 1);
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return native_failure("Camera not found: " + camera_name, 2);
-            }
-
-            const bool enabled = json_bool_at(request.args, 2, false);
-            camera->engine_camera->set_vision_stable_planes(enabled);
-            return native_success({
-                {"status", "success"},
-                {"pending", true},
-                {"enabled", enabled},
-                {"camera", camera_to_json(*camera)},
-            });
+            return vision_toggle_result(request, "vision_stable_planes", true);
         }},
         {"get_vision_stable_planes", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto scene_route = normalize_route(arg_string(request.args, 0));
-            scene = resolve_native_editor_scene_request(scene, scene_route);
-            const auto camera_name = arg_string(request.args, 1);
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return native_failure("Camera not found: " + camera_name, 2);
-            }
-
-            return native_success({
-                {"status", "success"},
-                {"enabled", camera->engine_camera->get_vision_stable_planes()},
-                {"camera", camera_to_json(*camera)},
-            });
+            return vision_toggle_result(request, "vision_stable_planes", false);
         }},
         {"set_output_mode", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = ensure_native_editor_scene();

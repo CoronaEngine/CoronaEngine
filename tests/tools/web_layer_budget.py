@@ -26,7 +26,7 @@ CONSERVATIVE_TARGET = 15_747
 TARGET_LINES = 13_807
 
 # Current ratchet. Never above BASELINE_LINES, lowered by each slimming task.
-CORE_BUDGET = 17_477
+CORE_BUDGET = 17_435
 
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
@@ -34,7 +34,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/archive_load_policy.h", 21),
     ("src/systems/ui/cef/camera_window_lifetime.h", 46),
     ("src/systems/ui/cef/cef_bridge_operations.h", 22),
-    ("src/systems/ui/cef/cef_editor_native_api_handlers.cpp", 8537),
+    ("src/systems/ui/cef/cef_editor_native_api_handlers.cpp", 8495),
     ("src/systems/ui/cef/cef_editor_native_api_handlers.h", 17),
     ("src/systems/ui/cef/cef_editor_native_api_registry.cpp", 309),
     ("src/systems/ui/cef/cef_editor_native_api_registry.h", 80),

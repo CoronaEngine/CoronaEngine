@@ -1325,6 +1325,39 @@ void test_consolidated_queries_and_atomic_names() {
     UI::load_native_editor_scene_for_test(snapshot());
 }
 
+void test_registry_render_settings_bool_surface() {
+    const auto read_toggle = [](const char* function) {
+        return UI::NativeApiRegistry::instance().dispatch(
+            {"SceneTools", function, {"scene.ini", "secondary"}}, {});
+    };
+    const auto write_toggle = [](const char* function, bool value) {
+        return UI::NativeApiRegistry::instance().dispatch(
+            {"SceneTools", function, {"scene.ini", "secondary", value}}, {});
+    };
+    // The six vision toggles are the one render-settings family that is a true template: same
+    // arguments, same response keys, only the camera method differs. These assertions pin the
+    // shape the Python side sees, so folding them onto one table-driven pair cannot silently
+    // change it.
+    for (const auto* toggle : {"vision_denoise", "vision_accumulation", "vision_stable_planes"}) {
+        const std::string getter = std::string("get_") + toggle;
+        const std::string setter = std::string("set_") + toggle;
+        const auto before = read_toggle(getter.c_str());
+        require(before && before->success && before->data.contains("enabled") &&
+                    before->data.contains("camera"),
+                "a vision toggle answers with an enabled flag and a camera snapshot");
+        const bool flipped = !before->data["enabled"].get<bool>();
+        const auto written = write_toggle(setter.c_str(), flipped);
+        require(written && written->success && written->data.value("status", "") == "success" &&
+                    written->data.value("pending", false) &&
+                    written->data["enabled"].get<bool>() == flipped,
+                "a vision toggle acknowledges the accepted value while the renderer commits it");
+        const auto after = read_toggle(getter.c_str());
+        require(after && after->success && after->data["enabled"].get<bool>() == flipped,
+                "a vision toggle round-trips through the camera");
+        write_toggle(setter.c_str(), !flipped);
+    }
+}
+
 int main() {
     auto& kernel = Corona::Kernel::KernelContext::instance();
     int failures = 0;
@@ -1355,6 +1388,7 @@ int main() {
         run("actor_index_projection", test_owned_actor_index_projection);
         run("actor_property_projection", test_owned_actor_property_projection);
         run("camera_projection", test_owned_camera_projection);
+        run("registry_render_settings_bools", test_registry_render_settings_bool_surface);
         run("scene_tree_projection", test_owned_scene_tree_projection);
         run("transform_authority", test_one_native_transform_authority);
         run("property_authority", test_one_native_property_authority);
