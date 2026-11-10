@@ -3,10 +3,7 @@
 #include "editor_api_caller.h"
 
 #include <cstdint>
-#include <functional>
-#include <optional>
 #include <string>
-#include <unordered_map>
 
 #include <nlohmann/json.hpp>
 
@@ -35,20 +32,6 @@ struct NativeResult {
     std::string route = "native-cpp";
 };
 
-using NativeHandlerFn = std::function<NativeResult(const NativeRequest&, const NativeContext&)>;
-using NativeMethodTable = std::unordered_map<std::string, NativeHandlerFn>;
-
-class NativeApiRegistry {
-public:
-    static NativeApiRegistry& instance();
-
-    void register_module(std::string module, NativeHandlerFn handler);
-    std::optional<NativeResult> dispatch(const NativeRequest& request,
-                                         const NativeContext& context) const;
-
-private:
-    std::unordered_map<std::string, NativeHandlerFn> handlers_;
-};
 
 NativeResult native_success(nlohmann::json data = nlohmann::json::object(),
                             std::string route = "native-cpp");
@@ -57,10 +40,7 @@ NativeResult native_failure(std::string error,
                             std::string route = "native-cpp");
 NativeResult native_unhandled();
 
-std::string native_success_json(const NativeRequest& request, const NativeResult& result);
-std::string unsupported_editor_api_route_json(const NativeRequest& request);
 
-void register_builtin_native_api_handlers();
 void tick_native_animation_updates();
 
 /// Reports a native editor API request that entered dispatch and never returned.

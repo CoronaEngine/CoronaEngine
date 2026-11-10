@@ -149,32 +149,21 @@ add_test(NAME VisionReSTIRGISupport
     COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_restir_gi_support.py)
 set_tests_properties(VisionReSTIRPairwiseMIS VisionReSTIRGISupport PROPERTIES TIMEOUT 30)
 
-add_executable(corona_collaborative_editor_loopback_tests
-    test_collaborative_editor_loopback.cpp
-    ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp
-)
-target_include_directories(corona_collaborative_editor_loopback_tests
     PRIVATE ${PROJECT_SOURCE_DIR}/include
             ${PROJECT_SOURCE_DIR}/src/systems/ui
 )
-target_link_libraries(corona_collaborative_editor_loopback_tests
     PRIVATE corona_ui_system corona::resource::manager
 )
 if(COMMAND helicon_install_runtime_deps)
-    helicon_install_runtime_deps(corona_collaborative_editor_loopback_tests)
 endif()
-add_custom_command(TARGET corona_collaborative_editor_loopback_tests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/libcef.dll,${CEF_ROOT}/Release/libcef.dll>"
-            "$<TARGET_FILE_DIR:corona_collaborative_editor_loopback_tests>/libcef.dll"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/chrome_elf.dll,${CEF_ROOT}/Release/chrome_elf.dll>"
-            "$<TARGET_FILE_DIR:corona_collaborative_editor_loopback_tests>/chrome_elf.dll"
     VERBATIM
 )
 add_test(NAME CollaborativeEditorLoopbackTests
          COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/archive_driver.py
-                 $<TARGET_FILE:corona_collaborative_editor_loopback_tests> ${CORONA_EDITOR_SOURCE_DIR})
 get_filename_component(_CORONA_LOOPBACK_PYTHON_DIR "${Python_EXECUTABLE}" DIRECTORY)
 set(_CORONA_LOOPBACK_PATH_DIRS "${_CORONA_LOOPBACK_PYTHON_DIR}")
 foreach(_tbb_runtime IN LISTS CORONA_TBB_REDIS_DLLS)
@@ -195,28 +184,18 @@ set_tests_properties(CollaborativeEditorLoopbackTests PROPERTIES
 add_executable(corona_native_file_probe EXCLUDE_FROM_ALL native_file_probe.cpp)
 target_link_libraries(corona_native_file_probe PRIVATE corona::engine corona_ui_system)
 
-add_executable(corona_archive_roundtrip_tests
-    test_archive_roundtrip.cpp
-    ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp)
-target_include_directories(corona_archive_roundtrip_tests PRIVATE
     ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui
     ${PROJECT_SOURCE_DIR}/src/systems/script/include)
-target_link_libraries(corona_archive_roundtrip_tests PRIVATE
     corona_ui_system corona::resource::manager)
 if(COMMAND helicon_install_runtime_deps)
-    helicon_install_runtime_deps(corona_archive_roundtrip_tests)
 endif()
-add_custom_command(TARGET corona_archive_roundtrip_tests POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/libcef.dll,${CEF_ROOT}/Release/libcef.dll>"
-        "$<TARGET_FILE_DIR:corona_archive_roundtrip_tests>/libcef.dll"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/chrome_elf.dll,${CEF_ROOT}/Release/chrome_elf.dll>"
-        "$<TARGET_FILE_DIR:corona_archive_roundtrip_tests>/chrome_elf.dll"
     VERBATIM)
 add_test(NAME ArchiveRoundtripTests COMMAND ${Python_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/test_archive_roundtrip.py
-    $<TARGET_FILE:corona_archive_roundtrip_tests> ${CORONA_EDITOR_SOURCE_DIR})
 set_tests_properties(ArchiveRoundtripTests PROPERTIES
     RUN_SERIAL TRUE TIMEOUT 180
     ENVIRONMENT_MODIFICATION "${_CORONA_LOOPBACK_ENVIRONMENT}")

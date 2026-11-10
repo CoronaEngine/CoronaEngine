@@ -28,7 +28,7 @@ namespace UI = Corona::Systems::UI;
 /// Runs an editor operation on the CEF UI (editor state owner) thread.
 ///
 /// `editor_dispatch.h` guarantees that every reader of the native editor scene runs
-/// on one thread; `EditorApiRegistry` used to install these hooks, and with the JSON
+/// on one thread; the retired JSON manifest used to install these hooks, and with it
 /// manifest retired the only remaining caller installs them here.
 class EditorOwnerTask final : public CefTask {
    public:
@@ -133,21 +133,6 @@ void BindCef(nanobind::module_& m) {
         Corona::Systems::UI::unregister_python_script_service_dispatcher();
     });
 
-    m.def("register_python_script_callback", [](const std::string& event_name, nb::object callback) {
-        return Corona::Systems::UI::register_python_script_callback_callable(event_name, callback.ptr());
-    }, nb::arg("event_name"), nb::arg("callback"));
-    m.def("unregister_python_script_callback", [](std::uint64_t token) {
-        return Corona::Systems::UI::EditorApiCallbackRegistry::instance().unregister(token);
-    }, nb::arg("token"));
-
-    m.def("emit_editor_api_event", [](const std::string& event_name, const std::string& payload_json) {
-        auto payload = nlohmann::json::parse(payload_json.empty() ? "{}" : payload_json, nullptr, false);
-        if (payload.is_discarded()) {
-            return static_cast<std::size_t>(0);
-        }
-        return Corona::Systems::UI::emit_editor_api_event(event_name, payload);
-    }, nb::arg("event_name"), nb::arg("payload_json"));
-
     // The ScriptRuntime editor contract. One named binding per operation: the Python
     // adapter below the interpreter decides which one to call, so C++ carries no name
     // table, no argument schema and no caller mask.
@@ -173,49 +158,6 @@ void BindCef(nanobind::module_& m) {
     bind_script_operation("script_scene_create_actor", Corona::Systems::UI::script_scene_create_actor);
     bind_script_operation("script_scene_remove_actor", Corona::Systems::UI::script_scene_remove_actor);
 
-    // Retired with the JSON manifest; kept until the table, the registry and the
-    // Python adapter that validates against them are deleted in the next step.
-    m.def("_invoke_cpp_editor_api", [](const std::string& api_name, const std::string& args_json) {
-        auto args = nlohmann::json::parse(args_json.empty() ? "[]" : args_json, nullptr, false);
-        if (args.is_discarded()) {
-            return nlohmann::json{{"success", false}, {"error", "Invalid Editor API args JSON"}}.dump();
-        }
-        Corona::Systems::UI::NativeResult result;
-        {
-            nanobind::gil_scoped_release release;
-            result = Corona::Systems::UI::EditorApiRegistry::instance().invoke(
-                {api_name, args, Corona::Systems::UI::EditorApiCaller::PythonScript}, {});
-        }
-        nlohmann::json response = {{"success", result.success}, {"route", result.route}};
-        if (result.success) {
-            response["data"] = result.data;
-        } else {
-            response["error"] = result.error;
-            response["error_code"] = result.error_code;
-        }
-        return response.dump();
-    }, nb::arg("api_name"), nb::arg("args_json"));
-
-    m.def("_invoke_cpp_script_api", [](const std::string& api_name, const std::string& args_json) {
-        auto args = nlohmann::json::parse(args_json.empty() ? "[]" : args_json, nullptr, false);
-        if (args.is_discarded()) {
-            return nlohmann::json{{"success", false}, {"error", "Invalid Script Runtime API args JSON"}}.dump();
-        }
-        Corona::Systems::UI::NativeResult result;
-        {
-            nanobind::gil_scoped_release release;
-            result = Corona::Systems::UI::EditorApiRegistry::instance().invoke(
-                {api_name, args, Corona::Systems::UI::EditorApiCaller::ScriptRuntime}, {});
-        }
-        nlohmann::json response = {{"success", result.success}, {"route", result.route}};
-        if (result.success) {
-            response["data"] = result.data;
-        } else {
-            response["error"] = result.error;
-            response["error_code"] = result.error_code;
-        }
-        return response.dump();
-    }, nb::arg("api_name"), nb::arg("args_json"));
 }
 
 }  // namespace EngineScripts

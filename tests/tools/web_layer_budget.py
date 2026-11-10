@@ -26,11 +26,10 @@ CONSERVATIVE_TARGET = 15_747
 TARGET_LINES = 13_807
 
 # Current ratchet. Never above BASELINE_LINES, lowered by each slimming task.
-# Temporarily 117 lines above the previous rung: cef_py_bind.cpp now carries the
-# ScriptRuntime bindings and their dispatch glue, which used to live in
-# cef_editor_api.cpp. The manifest table, the registry and the two _invoke_cpp_*
-# bindings are deleted next, which takes this well below 14,900.
-CORE_BUDGET = 15_053
+# The JSON manifest is gone: table, registry, caller masks, the two `_invoke_cpp_*`
+# bindings and six handler modules. The interface core is now below the programme
+# target this file recorded when the migration started.
+CORE_BUDGET = 13_667
 
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),

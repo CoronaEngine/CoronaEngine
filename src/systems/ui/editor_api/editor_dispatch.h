@@ -1,16 +1,16 @@
-﻿#pragma once
+#pragma once
 
 /// 编辑器状态派发：单一 owner 线程（CEF UI 线程）
 ///
 /// 背景：编辑器场景状态（`native_editor_state()` 及其 `NativeEditorScene`）被三类线程
 /// 触碰 —— CEF UI 线程（JS 请求）、引擎主线程（协作同步）、Python/Script 运行时线程
-/// （`_invoke_cpp_editor_api`）。它们此前的唯一"同步"是运气：状态里没有一把锁，handler
+/// （`script_scene_*` 具名绑定）。它们此前的唯一"同步"是运气：状态里没有一把锁，handler
 /// 也按单线程写（缓存、表、`unique_ptr` 成员）。并发进来就是堆损坏。
 ///
 /// 方案 A：让**所有** handler 只在 owner 线程执行。
 ///   - owner 线程上的调用（JS）：就地执行（该线程本来串行）；
 ///   - 其它线程：把执行打包 post 到 owner 线程并**有界**等待（超时返回错误/撤销，不无限
-///     等待，避免把 Python 线程或引擎主线程也拖死）。Python（`_invoke_cpp_editor_api`）和
+///     等待，避免把 Python 线程或引擎主线程也拖死）。Python（`script_scene_*`）和
 ///     引擎主线程的协作同步（`tick_collaborative_editor_runtime`）都走这条路；
 ///   - CEF 还没起来 / headless（从没见过 owner 线程）：没有 owner 可投递，就地执行，
 ///     但**加 `editor_state_mutex`**，让多个外来线程之间仍然串行。

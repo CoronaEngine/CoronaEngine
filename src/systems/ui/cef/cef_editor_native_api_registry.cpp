@@ -125,43 +125,6 @@ void report_stuck_native_api_request() {
         request.dispatcher_thread_id);
 }
 
-void register_scene_tools_api_handlers(NativeApiRegistry& registry);
-void register_editor_api_handlers(NativeApiRegistry& registry);
-void register_python_script_api_handlers(NativeApiRegistry& registry);
-
-NativeApiRegistry& NativeApiRegistry::instance() {
-    static NativeApiRegistry registry;
-    return registry;
-}
-
-void NativeApiRegistry::register_module(std::string module, NativeHandlerFn handler) {
-    handlers_[std::move(module)] = std::move(handler);
-}
-
-std::optional<NativeResult> NativeApiRegistry::dispatch(
-    const NativeRequest& request,
-    const NativeContext& context) const {
-    const auto it = handlers_.find(request.module);
-    if (it == handlers_.end()) {
-        return std::nullopt;
-    }
-    const auto started = std::chrono::steady_clock::now();
-    const auto sequence = g_in_flight_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
-    begin_native_request(request, sequence);
-    NativeResult result;
-    {
-        // Clears the in-flight mark on every exit path, including a throwing
-        // handler, so a completed request can never be reported as stuck.
-        const InFlightRequestGuard guard(sequence);
-        result = it->second(request, context);
-    }
-    report_slow_native_request(request, result, started);
-    if (!result.handled) {
-        return std::nullopt;
-    }
-    return result;
-}
-
 NativeResult native_success(nlohmann::json data, std::string route) {
     NativeResult result;
     result.success = true;
@@ -186,36 +149,6 @@ NativeResult native_unhandled() {
     result.success = false;
     result.route = "unhandled";
     return result;
-}
-
-std::string native_success_json(const NativeRequest& request, const NativeResult& result) {
-    nlohmann::json payload;
-    payload["success"] = true;
-    payload["data"] = result.data;
-    payload["function"] = request.function;
-    payload["module"] = request.module;
-    payload["route"] = result.route;
-    return payload.dump();
-}
-
-std::string unsupported_editor_api_route_json(const NativeRequest& request) {
-    nlohmann::json payload;
-    payload["success"] = false;
-    payload["error"] = request.module + "." + request.function + " is not supported by Editor API";
-    payload["module"] = request.module;
-    payload["function"] = request.function;
-    payload["route"] = "unsupported";
-    return payload.dump();
-}
-
-void register_builtin_native_api_handlers() {
-    static std::once_flag once;
-    std::call_once(once, [] {
-        auto& registry = NativeApiRegistry::instance();
-        register_scene_tools_api_handlers(registry);
-        register_editor_api_handlers(registry);
-        register_python_script_api_handlers(registry);
-    });
 }
 
 std::string arg_string(const nlohmann::json& args, size_t index, std::string fallback) {

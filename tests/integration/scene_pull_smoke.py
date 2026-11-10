@@ -34,13 +34,19 @@ def run():
             return original(name, args)
         return wrapped
     try:
-        for name in ('_invoke_cpp_script_api', '_invoke_cpp_editor_api'):
-            originals[name] = getattr(CoronaEngine, name)
-            setattr(CoronaEngine, name, counted(originals[name]))
+        # The JSON manifest is retired: the ScriptRuntime talks to C++ through named
+        # `script_scene_*` bindings, and the manifest-era channels must be gone.
+        for retired in ('_invoke_cpp_script_api', '_invoke_cpp_editor_api',
+                        'register_python_script_callback'):
+            assert not hasattr(CoronaEngine, retired), f'Retired manifest channel came back: {retired}'
+        for name in ('script_scene_read_active_scene', 'script_scene_read_actor',
+                     'script_scene_read_archive_scene'):
+            original = getattr(CoronaEngine, name)
+            originals[name] = original
+            setattr(CoronaEngine, name, counted(original))
         for event in EVENTS:
-            token = CoronaEngine.register_python_script_callback(event, lambda *args, event=event: callbacks.append(event))
-            if token: tokens.append(token)
-            assert not token, f'Retired push event unexpectedly available: {event}'
+            assert not hasattr(CoronaEngine, 'register_python_script_callback'), (
+                f'Retired push event channel came back: {event}')
         session = scene.read_active()['archive_session']
         before = scene.read_actor(session, GUID)['geometry']['position']
         archive = scene.read_archive(session)

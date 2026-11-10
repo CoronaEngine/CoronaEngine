@@ -19,6 +19,7 @@
 #include "archive_load_policy.h"
 #include "../collaborative_editor_runtime.h"
 #include "cef_client.h"
+#include <corona/systems/ui/file_script_api.h>
 #include "cef_editor_api.h"
 #include "cef_editor_native_api_registry.h"
 #include "cef_editor_native_api_test_support.h"
@@ -4063,9 +4064,6 @@ void read_transform_from_actor_json(const nlohmann::json& actor, float transform
     }
 }
 
-NativeResult dispatch_method(const std::string& module,
-                             const NativeMethodTable& methods,
-                             const NativeRequest& request,
                              const NativeContext& context) {
     const auto it = methods.find(request.function);
     if (it == methods.end()) {
@@ -6059,104 +6057,6 @@ NativeResult script_scene_remove_actor(const NativeRequest& request, const Nativ
             return remove_native_editor_actor(scene_route, actor_name);
 }
 
-void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
-    static const NativeMethodTable methods = {
-        {"get_environment", script_scene_get_environment},
-
-        {"read_active_scene", script_scene_read_active_scene},
-        {"read_actor", script_scene_read_actor},
-        {"read_transforms", script_scene_read_transforms},
-        {"read_archive_scene", script_scene_read_archive_scene},
-        {"get_scene_snapshot", script_scene_get_scene_snapshot},
-        {"set_actor_transform", script_scene_set_actor_transform},
-        {"set_environment", script_scene_set_environment},
-
-        {"set_actor_state", script_scene_set_actor_state},
-        {"set_actor_animation", script_scene_set_actor_animation},
-        {"pause_actor_animation", script_scene_pause_actor_animation},
-        {"resume_actor_animation", script_scene_resume_actor_animation},
-        {"set_actor_physics", script_scene_set_actor_physics},
-        {"set_camera_pose", script_scene_set_camera_pose},
-
-        {"create_actor", script_scene_create_actor},
-
-        {"remove_actor", script_scene_remove_actor},
-        // ---- Per-instance IK configuration and runtime inspection ----
-    };
-
-    registry.register_module("SceneTools", [](const NativeRequest& request,
-                                              const NativeContext& context) {
-        const auto it = methods.find(request.function);
-        if (it == methods.end()) {
-            return native_unhandled();
-        }
-        try {
-            return it->second(request, context);
-        } catch (const std::exception& e) {
-            return native_failure(e.what(), 2);
-        } catch (...) {
-            return native_failure("SceneTools native handler error", 2);
-        }
-    });
-}
-
-void register_editor_api_handlers(NativeApiRegistry& registry) {
-    static const NativeMethodTable methods = {
-        {"list_methods", [](const NativeRequest&, const NativeContext&) {
-            nlohmann::json methods_json = nlohmann::json::array();
-            for (const auto& spec : EditorApiRegistry::instance().list_methods()) {
-                methods_json.push_back(editor_api_method_to_json(spec));
-            }
-            return native_success({
-                {"methods", methods_json},
-            });
-        }},
-        {"list_events", [](const NativeRequest&, const NativeContext&) {
-            nlohmann::json events_json = nlohmann::json::array();
-            for (const auto& spec : EditorApiRegistry::instance().list_events()) {
-                events_json.push_back(editor_api_event_to_json(spec));
-            }
-            return native_success({
-                {"events", events_json},
-            });
-        }},
-    };
-
-    registry.register_module("EditorApi", [](const NativeRequest& request,
-                                             const NativeContext& context) {
-        return dispatch_method("EditorApi", methods, request, context);
-    });
-}
-
-void register_python_script_api_handlers(NativeApiRegistry& registry) {
-    static const auto start_file = [](const NativeRequest& request, const NativeContext&) {
-        return start_native_script_file(arg_object(request.args, 0), request.function == "run_path");
-    };
-    static const NativeMethodTable script_files = {
-        {"run_file", start_file},
-        {"run_path", start_file},
-        {"get_status", [](const NativeRequest& request, const NativeContext&) {
-            return invoke_python_script_service({"FileScripts", "get_script_status", request.args});
-        }},
-        {"get_run", [](const NativeRequest& request, const NativeContext&) {
-            return invoke_python_script_service({"FileScripts", "get_file_run", request.args});
-        }},
-        {"stop", [](const NativeRequest& request, const NativeContext&) {
-            return invoke_python_script_service({"FileScripts", "stop_file", request.args});
-        }},
-    };
-
-    auto register_script_module = [&](const char* module, const NativeMethodTable& methods) {
-        const auto* method_table = &methods;
-        registry.register_module(module, [module, method_table](const NativeRequest& request,
-                                                                const NativeContext& context) {
-            return dispatch_method(module, *method_table, request, context);
-        });
-    };
-
-    register_script_module("Scripts", script_files);
-}
-
 NetworkReply execute_network_operation(const NetworkRequest& request) {
     NetworkReply reply;
     reply.method = request.method;
@@ -6253,6 +6153,28 @@ BridgeReply execute_bridge_operation(const std::string& envelope) {
     }
     reply.json = result.data.is_string() ? result.data.get<std::string>() : result.data.dump();
     return reply;
+}
+
+nlohmann::json invoke_file_script_api(const std::string& api, const nlohmann::json& args) {
+    const auto envelope = [](const NativeResult& result) {
+        return nlohmann::json{{"success", result.success},
+                              {"code", result.success ? 0 : result.error_code},
+                              {"data", result.data},
+                              {"error", result.error}};
+    };
+    if (api == "Scripts.run_file" || api == "Scripts.run_path") {
+        return envelope(start_native_script_file(arg_object(args, 0), api == "Scripts.run_path"));
+    }
+    if (api == "Scripts.get_status") {
+        return envelope(invoke_python_script_service({"FileScripts", "get_script_status", args}));
+    }
+    if (api == "Scripts.get_run") {
+        return envelope(invoke_python_script_service({"FileScripts", "get_file_run", args}));
+    }
+    if (api == "Scripts.stop") {
+        return envelope(invoke_python_script_service({"FileScripts", "stop_file", args}));
+    }
+    return {{"success", false}, {"code", 404}, {"error", api + " is not a file script route"}};
 }
 
 }  // namespace Corona::Systems::UI
