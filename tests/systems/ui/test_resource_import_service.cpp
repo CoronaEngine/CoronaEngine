@@ -1,5 +1,5 @@
 // 资源导入决策（WNC-013）：纯 DTO/引擎 POD 输入，无 CEF 依赖。
-#include "editor_api/resource_import_service.h"
+#include "editor_api/editor_api_services.h"
 
 #include <cstdlib>
 #include <iostream>

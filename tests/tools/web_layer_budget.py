@@ -26,7 +26,7 @@ CONSERVATIVE_TARGET = 15_747
 TARGET_LINES = 13_807
 
 # Current ratchet. Never above BASELINE_LINES, lowered by each slimming task.
-CORE_BUDGET = 17_265
+CORE_BUDGET = 17_245
 
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
@@ -59,25 +59,18 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/ui_resource_read.h", 32),
     ("src/systems/ui/cef/viewport_image_input.h", 42),
     ("src/systems/ui/editor_api/actor_properties_service.cpp", 70),
-    ("src/systems/ui/editor_api/actor_properties_service.h", 30),
+    ("src/systems/ui/editor_api/editor_api_services.h", 329),
     ("src/systems/ui/editor_api/camera_properties_service.cpp", 87),
-    ("src/systems/ui/editor_api/camera_properties_service.h", 42),
     ("src/systems/ui/editor_api/camera_render_settings_service.cpp", 38),
-    ("src/systems/ui/editor_api/camera_render_settings_service.h", 22),
     ("src/systems/ui/editor_api/cef_editor_api.cpp", 1292),
     ("src/systems/ui/editor_api/cef_editor_api.h", 110),
     ("src/systems/ui/editor_api/editor_api_caller.h", 19),
     ("src/systems/ui/editor_api/editor_dispatch.h", 377),
     ("src/systems/ui/editor_api/project_script_service.cpp", 57),
-    ("src/systems/ui/editor_api/project_script_service.h", 48),
     ("src/systems/ui/editor_api/resource_import_service.cpp", 55),
-    ("src/systems/ui/editor_api/resource_import_service.h", 50),
     ("src/systems/ui/editor_api/scene_environment_service.cpp", 59),
-    ("src/systems/ui/editor_api/scene_environment_service.h", 38),
     ("src/systems/ui/editor_api/scene_model_node_service.cpp", 63),
-    ("src/systems/ui/editor_api/scene_model_node_service.h", 39),
     ("src/systems/ui/editor_api/scene_projection_service.cpp", 26),
-    ("src/systems/ui/editor_api/scene_projection_service.h", 32),
     ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 182),
 ]
 

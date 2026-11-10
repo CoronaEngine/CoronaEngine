@@ -40,10 +40,20 @@ def camera_update_harness():
     patch = header[header.index("struct CameraPropertiesPatch {"):header.index("struct CameraPropertiesSnapshot :")]
     # The camera property validation lives in a CEF-free domain service now; the
     # harness inlines it so the extracted handler body still compiles standalone.
-    service_header = (ROOT / "src/systems/ui/editor_api/camera_properties_service.h").read_text(encoding="utf-8")
+    # The services share one header, so take only the pieces this harness needs: the shared
+    # ValidationError and the CameraPropertiesService block. Inlining the whole header would
+    # drag in engine and JSON includes that the standalone compile has no path for.
+    service_text = (ROOT / "src/systems/ui/editor_api/editor_api_services.h").read_text(encoding="utf-8")
+    validation_start = service_text.index("struct ValidationError {")
+    validation = service_text[validation_start:service_text.index("};", validation_start) + 2]
+    camera_start = service_text.index("namespace Corona::Systems::UI::CameraPropertiesService {")
+    camera_end = service_text.index("}  // namespace Corona::Systems::UI::CameraPropertiesService")
+    camera_block = service_text[camera_start:camera_end].replace(
+        "namespace Corona::Systems::UI::CameraPropertiesService {", "namespace CameraPropertiesService {")
+    service_header = ("namespace Corona::Systems::UI {\n" + validation + "\n"
+                      + camera_block + "}\n}\n")
     service_source = (ROOT / "src/systems/ui/editor_api/camera_properties_service.cpp").read_text(encoding="utf-8")
-    service_header = service_header.replace('#include "cef/cef_scene_operations.h"', "")
-    service_source = service_source.replace('#include "camera_properties_service.h"', "")
+    service_source = service_source.replace('#include "editor_api_services.h"', "")
     service = service_header + "\n" + service_source
     runtime = (ROOT / "src/engine/engine_runtime_api.cpp").read_text(encoding="utf-8")
     runtime_start = runtime.index("void Corona::API::Camera::set_view(")

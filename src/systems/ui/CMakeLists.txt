@@ -69,14 +69,7 @@ set(UI_SYSTEM_SOURCES
     cef/cef_shared_texture_probe.h
     cef/popup_overlay.h
     editor_api/cef_editor_api.h
-    editor_api/scene_model_node_service.h
-    editor_api/scene_environment_service.h
-    editor_api/actor_properties_service.h
-    editor_api/camera_properties_service.h
-    editor_api/camera_render_settings_service.h
-    editor_api/scene_projection_service.h
-    editor_api/resource_import_service.h
-    editor_api/project_script_service.h
+    editor_api/editor_api_services.h
     cef/scene_folder.h
     sdl/sdl_utils.h
 

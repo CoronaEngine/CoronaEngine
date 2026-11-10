@@ -1,4 +1,4 @@
-#include "scene_model_node_service.h"
+#include "editor_api_services.h"
 
 #include "cef/model_node_page.h"
 

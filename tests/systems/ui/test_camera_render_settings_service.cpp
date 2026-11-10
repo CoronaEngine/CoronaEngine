@@ -1,5 +1,5 @@
 // Camera 渲染设置校验（WNC-013）：纯 DTO 白名单与优先级，无 CEF/引擎依赖。
-#include "editor_api/camera_render_settings_service.h"
+#include "editor_api/editor_api_services.h"
 
 #include <cstdlib>
 #include <iostream>

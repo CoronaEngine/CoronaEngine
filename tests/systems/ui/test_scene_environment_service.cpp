@@ -1,5 +1,5 @@
 // 环境域决策逻辑（WNC-013）：纯 DTO 输入，无 CEF / 无引擎单例依赖。
-#include "editor_api/scene_environment_service.h"
+#include "editor_api/editor_api_services.h"
 
 #include <array>
 #include <cmath>

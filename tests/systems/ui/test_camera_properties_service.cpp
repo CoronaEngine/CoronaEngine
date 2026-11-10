@@ -1,7 +1,7 @@
 // Camera 属性更新校验（WNC-013）：纯 DTO，无 CEF/引擎依赖。
 // 注意：apply_native_camera_properties 被 tests/systems/ui/test_camera_view_update.py
 // 直接抽取源码编译，修改本服务时必须同步该 harness 的 SERVICE 注入。
-#include "editor_api/camera_properties_service.h"
+#include "editor_api/editor_api_services.h"
 
 #include <array>
 #include <cstdlib>

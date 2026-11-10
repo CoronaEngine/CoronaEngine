@@ -1,5 +1,5 @@
 // 脚本/项目文件桥规则（WNC-014）：纯 DTO/文件系统路径，无 CEF 依赖。
-#include "editor_api/project_script_service.h"
+#include "editor_api/editor_api_services.h"
 
 #include <cstdlib>
 #include <filesystem>

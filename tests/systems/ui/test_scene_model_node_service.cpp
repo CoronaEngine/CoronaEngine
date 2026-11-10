@@ -1,6 +1,6 @@
 // 模型节点领域服务（WNC-012）：纯引擎节点数据 + JSON，无 CEF/V8/JS 路由依赖。
 // 该测试只包含服务头（连同纯数据 DTO），不链接 CEF、不自建 scene 单例。
-#include "editor_api/scene_model_node_service.h"
+#include "editor_api/editor_api_services.h"
 
 #include <array>
 #include <cstdint>

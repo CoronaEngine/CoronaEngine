@@ -1,6 +1,6 @@
 // updateActor 校验逻辑（WNC-013）：纯 DTO，无 CEF/引擎依赖。
 // 这些规则保证"混合无效 patch 绝不部分应用"（计划 §7）。
-#include "editor_api/actor_properties_service.h"
+#include "editor_api/editor_api_services.h"
 
 #include <array>
 #include <cstdlib>

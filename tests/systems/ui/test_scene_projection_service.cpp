@@ -1,5 +1,5 @@
 // scene 投影规则（WNC-013）：纯 DTO，无 CEF/引擎依赖。
-#include "editor_api/scene_projection_service.h"
+#include "editor_api/editor_api_services.h"
 
 #include <cstdlib>
 #include <iostream>
