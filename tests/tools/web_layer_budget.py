@@ -26,7 +26,7 @@ CONSERVATIVE_TARGET = 15_747
 TARGET_LINES = 13_807
 
 # Current ratchet. Never above BASELINE_LINES, lowered by each slimming task.
-CORE_BUDGET = 17_245
+CORE_BUDGET = 16_651
 
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),

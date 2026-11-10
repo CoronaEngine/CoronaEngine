@@ -106,3 +106,73 @@ def test_zero_caller_manifest_rows_are_gone():
 def test_resource_search_has_no_manifest_entry_left():
     rows = _manifest_rows(_text(API), "ResourceSearch")
     assert not rows, f"ResourceSearch still has manifest rows: {rows[:3]}"
+
+
+# ---------------------------------------------------------------------------
+# The end state of the shrink: the manifest keeps only the restricted
+# ScriptRuntime subset plus the two introspection rows the Python adapter still
+# validates itself against.  Everything else is gone.
+# ---------------------------------------------------------------------------
+SCRIPT_RUNTIME_ROWS = {
+    ("SceneTools", "get_scene_snapshot"),
+    ("SceneTools", "read_active_scene"),
+    ("SceneTools", "read_actor"),
+    ("SceneTools", "read_transforms"),
+    ("SceneTools", "read_archive_scene"),
+    ("SceneTools", "get_environment"),
+    ("SceneTools", "set_environment"),
+    ("SceneTools", "set_actor_transform"),
+    ("SceneTools", "create_actor"),
+    ("SceneTools", "remove_actor"),
+    ("SceneTools", "set_actor_state"),
+    ("SceneTools", "set_actor_animation"),
+    ("SceneTools", "pause_actor_animation"),
+    ("SceneTools", "resume_actor_animation"),
+    ("SceneTools", "set_actor_physics"),
+    ("SceneTools", "set_camera_pose"),
+}
+
+# `api/editor_api.py` validates every call against the C++ method table, so the
+# introspection pair has to outlive the rest of the table.
+INTROSPECTION_ROWS = {
+    ("EditorApi", "list_methods"),
+    ("EditorApi", "list_events"),
+}
+
+
+# `tests/integration/native_file_run_smoke.py` drives these five through the
+# `corona_native_file_probe` binary and `invoke_file_script_api`, which is the only
+# C++-side entry left.  They disappear with the probe's manifest call, not before.
+SCRIPTS_NATIVE_ROWS = {
+    ("Scripts", "run_path"),
+    ("Scripts", "run_file"),
+    ("Scripts", "get_run"),
+    ("Scripts", "stop"),
+    ("Scripts", "get_status"),
+}
+
+
+def _all_manifest_rows(text: str) -> set[tuple[str, str]]:
+    import re
+
+    pairs = re.findall(r"EDITOR_API_METHOD_SCHEMA\w*\(\s*(\w+)\s*,\s*(\w+)\s*,", text)
+    # The macro definitions themselves match the same shape; `module` is their
+    # formal-parameter placeholder.
+    return {pair for pair in pairs if pair[0] != "module"}
+
+
+def test_manifest_holds_only_the_script_runtime_subset():
+    rows = _all_manifest_rows(_text(API))
+    expected = SCRIPT_RUNTIME_ROWS | INTROSPECTION_ROWS | SCRIPTS_NATIVE_ROWS
+    extra = sorted(rows - expected)
+    missing = sorted(expected - rows)
+    assert not extra, f"manifest rows outside the ScriptRuntime subset survived: {extra}"
+    assert not missing, f"ScriptRuntime rows disappeared from the manifest: {missing}"
+
+
+def test_manifest_still_cannot_be_reached_from_web():
+    api = _text(API)
+    assert "Generic API methods must not be exposed to Web callers" in api, (
+        "the compile-time guard that keeps the manifest off the Web surface is gone"
+    )
+
