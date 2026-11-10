@@ -1,7 +1,6 @@
-#include "cef_app.h"
+#include "cef_process.h"
 
 #include "cef_osr_mode.h"
-#include "cef_renderer_bridge.h"
 
 namespace Corona::Systems::UI {
 

@@ -57,7 +57,7 @@ set(UI_SYSTEM_SOURCES
     # Internal headers (listed for IDE visibility, matching other systems).
     cef/browser_manager.h
     cef/browser_ui.h
-    cef/cef_app.h
+    cef/cef_process.h
     cef/cef_viewport_pick.h
     cef/cef_viewport_gizmo.h
     cef/cef_editor_native_api_handlers.h
@@ -78,7 +78,6 @@ set(UI_SYSTEM_SOURCES
     editor_api/resource_import_service.h
     editor_api/project_script_service.h
     cef/scene_folder.h
-    cef/cef_renderer_bridge.h
     sdl/sdl_utils.h
 
     ${PROJECT_SOURCE_DIR}/include/corona/systems/ui/vulkan_backend.h

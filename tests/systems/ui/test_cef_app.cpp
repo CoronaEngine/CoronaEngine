@@ -10,7 +10,7 @@
 #include <string_view>
 #include <vector>
 
-#include "cef/cef_app.h"
+#include "cef/cef_process.h"
 #include "cef/cef_osr_mode.h"
 #include "cef/browser_manager.h"
 #include "cef/cef_client.h"

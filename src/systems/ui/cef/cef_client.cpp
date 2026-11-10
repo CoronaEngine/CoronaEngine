@@ -23,7 +23,7 @@
 #include <wrapper/cef_closure_task.h>
 
 #include "browser_manager.h"
-#include "cef_app.h"
+#include "cef_process.h"
 #include "cef_editor_api.h"
 #include "cef_osr_mode.h"
 #include "cef_shared_texture_probe.h"

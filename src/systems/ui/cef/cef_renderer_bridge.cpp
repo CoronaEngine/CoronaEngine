@@ -1,9 +1,7 @@
 #include <include/cef_v8.h>
 #include <wrapper/cef_helpers.h>
 
-#include "cef_app.h"
-#include "cef_renderer_bridge.h"
-#include "cef_v8_binding.h"
+#include "cef_process.h"
 
 #include <unordered_map>
 
