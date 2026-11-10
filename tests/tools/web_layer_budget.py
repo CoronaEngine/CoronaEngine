@@ -26,23 +26,19 @@ CONSERVATIVE_TARGET = 15_747
 TARGET_LINES = 13_807
 
 # Current ratchet. Never above BASELINE_LINES, lowered by each slimming task.
-CORE_BUDGET = 17_280
+CORE_BUDGET = 17_249
 
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
     ("src/systems/ui/cef/archive_load_policy.h", 21),
     ("src/systems/ui/cef/camera_window_lifetime.h", 46),
-    ("src/systems/ui/cef/cef_bridge_operations.h", 22),
+    ("src/systems/ui/cef/cef_operations.h", 172),
     ("src/systems/ui/cef/cef_editor_native_api_handlers.cpp", 8460),
     ("src/systems/ui/cef/cef_editor_native_api_handlers.h", 17),
     ("src/systems/ui/cef/cef_editor_native_api_registry.cpp", 309),
     ("src/systems/ui/cef/cef_editor_native_api_registry.h", 80),
-    ("src/systems/ui/cef/cef_files_operations.h", 22),
-    ("src/systems/ui/cef/cef_network_operations.h", 40),
     ("src/systems/ui/cef/cef_paths.h", 41),
-    ("src/systems/ui/cef/cef_project_launcher_operations.h", 54),
-    ("src/systems/ui/cef/cef_project_settings_operations.h", 29),
     ("src/systems/ui/cef/cef_py_bind.cpp", 104),
     ("src/systems/ui/cef/cef_scene_operations.h", 428),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),

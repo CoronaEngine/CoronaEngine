@@ -11,7 +11,7 @@ def test_network_has_named_owned_contract_and_no_legacy_web_routes():
         assert 'WRAPPED_CALLERS(Network,' in line
         assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
         assert ', "network.' in line
-    header = (root / 'src/systems/ui/cef/cef_network_operations.h').read_text(encoding='utf-8')
+    header = (root / 'src/systems/ui/cef/cef_operations.h').read_text(encoding='utf-8')
     assert 'nlohmann' not in header and 'CefV8' not in header
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
     for name in ['startSession', 'stopSession', 'getSessionInfo', 'getDiscoveredPeers',
@@ -47,7 +47,7 @@ def test_project_launcher_reads_use_named_v8_and_keep_non_web_manifest():
         assert 'WRAPPED_CALLERS(ProjectLauncher,' in line
         assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
         assert ', "project.' in line
-    header = (root / 'src/systems/ui/cef/cef_project_launcher_operations.h').read_text(encoding='utf-8')
+    header = (root / 'src/systems/ui/cef/cef_operations.h').read_text(encoding='utf-8')
     assert 'nlohmann' not in header and 'CefV8' not in header
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
     for name in ['getAppVersion', 'getRecentProjects', 'getProjectLoadStatus']:
