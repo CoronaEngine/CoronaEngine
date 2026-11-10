@@ -1,24 +1,23 @@
 # API Ownership
 
-manifest/schema 是跨层契约唯一来源；本文只说明 owner，不复制完整 schema。
+跨层契约按调用方分裂成两份，互相不重叠；JSON manifest 已删除。
 
-| 语义 | C++ owner | Python adapter | Vue adapter |
+| 语义 | C++ owner | Python 侧 | Vue 侧 |
 |---|---|---|---|
-| 项目与设置 | `project.*`、`projectSettings.*` | `CoronaEditorApi.project` / `project_settings` | `editorApi.project` |
-| 场景与 Actor | `scene.*`、`sceneTools.*` | `CoronaEditorApi.scene` / `scene_tools` | `editorApi.scene` / `sceneTools` |
-| 视口与相机 | `viewport.*`、`sceneTools.*` | `CoronaEditorApi.viewport` | viewport facade |
-| 文件与资源 | `files.*`、`resource.*` | `CoronaEditorApi.files` / `resource_search` | files/resource facade |
-| 网络与 LANChat | `network.*`、`lanChat.*` | `CoronaEditorApi.network` / `lan_chat` | network facade |
-| 角色脚本能力 | Script Runtime binding | `script_runtime.native_engine_adapter` | 不直接使用 |
+| Web ↔ C++ | `src/systems/ui/cef/cef_v8_binding.cpp` 的 typed V8 具名绑定 | 不参与 | `src/api/editorApi.js` |
+| Web → Python 服务 | `src/systems/ui/cef/cef_python_bridge.cpp`（只做传输） | `runtime/editor_host.py` 的服务白名单 | `corona.bridge.call` |
+| 脚本 ↔ C++ | `src/systems/ui/cef/script_runtime_api.h` 的 16 条具名入口 | `script_runtime/native_scene_adapter.py` | 不参与 |
 
 ## 规则
 
 1. C++ 持有场景、Actor、资源、变换和 revision 的权威事实。
-2. Vue/Python 只能调用聚合契约，不直接暴露 `camera()`、`geometry()` 等底层对象。
-3. Python 普通业务使用 `api.editor_api`；角色脚本和 Blockly 只能使用受限 Script Runtime
-   adapter。
+2. Web 只能调用 typed V8 具名契约；不得再引入 api-name 表、caller 掩码或 JSON 传输。
+3. 角色脚本只能使用 `script_scene_*` 具名入口；模块边界即权限边界。
 4. adapter 只负责参数/结果转换，不复制校验、状态机或错误码。
-5. 新业务先登记 manifest，再实现各语言薄 adapter；禁止新增第二份 API schema。
+5. 新增语义：Web 加一份 V8 具名绑定，脚本加到 `script_runtime_api.h`；禁止新增第二份 schema。
 
-仓内已放弃旧外部 import 兼容。`backend`、`CoronaCore`、`CoronaPlugin`、`utils`、
-`scripts` 及 `runtime.legacy*` 均已删除；旧项目或插件必须迁移到 canonical owner。
+## 历史
+
+`backend`、`CoronaCore`、`CoronaPlugin`、`utils`、`scripts`、`runtime.legacy*` 与
+JSON manifest（api-name 表 + `EditorApiRegistry` + `NativeApiRegistry` +
+`_invoke_cpp_*` 绑定）均已删除，不提供兼容层。

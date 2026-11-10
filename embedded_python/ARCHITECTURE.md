@@ -14,13 +14,17 @@
 ## API 分层
 
 - `include/corona/engine/engine_runtime_api.h`：C++ Engine Runtime 底层接口。
-- `src/systems/ui/editor_api/cef_editor_api.h` 与 manifest 实现：编辑器聚合契约。
-- `editor/api/editor_api.py`：Python 聚合契约 adapter。
+- `src/systems/ui/cef/cef_v8_binding.cpp`：Web 唯一的 C++ 契约（typed V8 具名绑定）。
+- `src/systems/ui/cef/script_runtime_api.h`：Script Runtime 的 16 条具名入口。
+- `embedded_python/api/editor_api.py`：Python 侧受限契约入口。
 - `editor/Frontend/src/api`：Vue 聚合契约 adapter。
-- `editor/script_runtime/manifest_adapter.py`：角色脚本可用的受限聚合子集。
+- `script_runtime/native_scene_adapter.py`：角色脚本可用的受限子集。
 
-底层接口只有一个 owner；跨层 adapter 不复制 schema，而是按 caller channel 调用同一
-manifest。新增业务语义应先登记 manifest，再补 Vue/Python 薄 adapter。
+JSON manifest（api-name 表 + caller 掩码 + `EditorApiRegistry`/`NativeApiRegistry`）
+已删除；Web 与 Script Runtime 各走一份具名契约。
+
+底层接口只有一个 owner；跨层 adapter 不复制业务状态机。新增 Web 语义直接加 typed
+V8 具名绑定；新增脚本语义加到 `script_runtime_api.h` 的具名入口。
 
 ## Python 目录
 
