@@ -7991,13 +7991,16 @@ NativeResult execute_legacy_network_operation(const NetworkRequest& request) {
 }
 } // namespace
 
+// Twenty network handlers opened with the same four-line guard. Returning the failure through one
+// helper keeps the unavailable message in a single place and each call site one line shorter.
+NativeResult network_unavailable() {
+    return native_failure("NetworkSystem unavailable", 2);
+}
 void register_network_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
         {"lock_object", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             const auto result = collaboration_lock(
                 arg_string(request.args, 0),
                 arg_string(request.args, 1),
@@ -8007,27 +8010,21 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"unlock_object", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             const auto result = collaboration_unlock(
                 arg_string(request.args, 0), arg_string(request.args, 1));
             return native_success({{"ok", result.ok}, {"error", result.error}});
         }},
         {"get_lock_owner", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             return native_success({
                 {"owner", collaboration_lock_owner(arg_string(request.args, 0), collaboration_now_ms())},
             });
         }},
         {"broadcast_intent", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             const auto position = json_float3_value(request.args.at(2)).value_or(
                 std::array<float, 3>{0.0f, 0.0f, 0.0f});
             Corona::Network::NetworkCommand command{};
@@ -8042,9 +8039,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"check_preview_collision", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             const auto position = json_float3_value(request.args.at(1)).value_or(
                 std::array<float, 3>{0.0f, 0.0f, 0.0f});
             const float delta = request.args.size() > 2 && request.args[2].is_number()
@@ -8101,9 +8096,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"poll_pending_actor_create", [](const NativeRequest&, const NativeContext& context) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             nlohmann::json payload;
             std::string actor_guid, scene_name, model_path, actor_json;
             Corona::Network::ActorCreatePacked packed;
@@ -8155,9 +8148,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"poll_pending_actor_transform", [](const NativeRequest&, const NativeContext& context) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             nlohmann::json payload;
             std::string actor_guid, scene_name, source_user_id, correlation_id;
             float transform[9] = {0,0,0, 0,0,0, 1,1,1};
@@ -8190,9 +8181,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"poll_pending_actor_delete", [](const NativeRequest&, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             nlohmann::json payload;
             std::string actor_guid, scene_name, actor_name;
             if (sys->peek_pending_actor_delete(actor_guid, scene_name, actor_name)) {
@@ -8215,9 +8204,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"poll_pending_actor_scene_snapshot_request", [](const NativeRequest&, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             nlohmann::json payload;
             std::string scene_name;
             if (sys->pop_pending_actor_scene_snapshot_request(scene_name)) {
@@ -8231,9 +8218,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"poll_pending_actor_scene_snapshot", [](const NativeRequest&, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             nlohmann::json payload;
             std::string scene_name, snapshot_json;
             if (sys->pop_pending_actor_scene_snapshot(scene_name, snapshot_json)) {
@@ -8248,9 +8233,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"poll_pending_actor_state_update", [](const NativeRequest&, const NativeContext& context) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             nlohmann::json payload;
             std::string actor_guid, scene_name, actor_json;
             if (sys->peek_pending_actor_state_update(actor_guid, scene_name, actor_json)) {
@@ -8283,9 +8266,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"set_sync_paused", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             {
                 Corona::Network::NetworkCommand command{};
                 command.kind = Corona::Network::NetworkCommandKind::SetSyncPaused;
@@ -8296,9 +8277,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"register_actor_identity", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             const std::string actor_guid = arg_string(request.args, 0);
             const EntityId actor_handle = arg_uintptr(request.args, 1);
             const bool locally_owned = arg_bool(request.args, 2, true);
@@ -8312,9 +8291,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"claim_actor_ownership", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             Corona::Network::NetworkCommand command{};
             command.kind = Corona::Network::NetworkCommandKind::ClaimActorOwnership;
             command.guid = arg_string(request.args, 0);
@@ -8323,9 +8300,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"broadcast_actor_transform", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             const std::string actor_guid = arg_string(request.args, 0);
             const std::string scene_name = arg_string(request.args, 1);
             float transform[9] = {0,0,0, 0,0,0, 1,1,1};
@@ -8349,9 +8324,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"broadcast_actor_delete", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             Corona::Network::NetworkCommand command{};
             command.kind = Corona::Network::NetworkCommandKind::BroadcastActorDelete;
             command.guid = arg_string(request.args, 0);
@@ -8362,9 +8335,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"request_actor_scene_snapshot", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             Corona::Network::NetworkCommand command{};
             command.kind = Corona::Network::NetworkCommandKind::RequestActorSceneSnapshot;
             command.scene = arg_string(request.args, 0);
@@ -8373,9 +8344,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"broadcast_actor_scene_snapshot", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             std::string snapshot_json;
             if (request.args.size() > 1) {
                 snapshot_json = request.args[1].is_string()
@@ -8391,9 +8360,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"broadcast_actor_state_update", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             std::string actor_json;
             if (request.args.size() > 2) {
                 actor_json = request.args[2].is_string()
@@ -8410,9 +8377,7 @@ void register_network_api_handlers(NativeApiRegistry& registry) {
         }},
         {"broadcast_actor_create", [](const NativeRequest& request, const NativeContext&) {
             auto sys = require_network_system();
-            if (!sys) {
-                return native_failure("NetworkSystem unavailable", 2);
-            }
+            if (!sys) return network_unavailable();
             std::string actor_guid = arg_string(request.args, 0);
             const std::string scene_name = arg_string(request.args, 1);
             const std::string model_path = arg_string(request.args, 2);

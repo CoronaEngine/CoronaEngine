@@ -113,10 +113,6 @@ constexpr std::array<EditorApiParamSpec, 1> kSceneNameOptionalParam = {{
     param("scene_name", EditorApiValueType::String, true),
 }};
 
-constexpr std::array<EditorApiParamSpec, 1> kPathParam = {{
-    param("path", EditorApiValueType::String),
-}};
-
 constexpr std::array<EditorApiParamSpec, 2> kOpenProjectParams = {{
     param("path", EditorApiValueType::String),
     param("options", EditorApiValueType::Object, true),
@@ -306,12 +302,6 @@ constexpr std::array<EditorApiParamSpec, 4> kSceneToolsSetAnimationParams = {{
     param("actor_name", EditorApiValueType::String),
     param("animation", EditorApiValueType::String),
     param("blend_seconds", EditorApiValueType::Number, true),
-}};
-
-constexpr std::array<EditorApiParamSpec, 3> kSceneToolsSelectModelFileParams = {{
-    param("scene_name", EditorApiValueType::String),
-    param("actor_name", EditorApiValueType::String),
-    param("file_type", EditorApiValueType::String, true),
 }};
 
 constexpr std::array<EditorApiParamSpec, 2> kSceneCameraParams = {{
