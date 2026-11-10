@@ -1,48 +1,122 @@
 #pragma once
 
 #include "cef_editor_api.h"
+#include "script_runtime_api.h"
+
+#include "editor_dispatch.h"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 
+#include <include/cef_task.h>
+#include <include/base/cef_callback.h>
+#include <wrapper/cef_closure_task.h>
+#include <wrapper/cef_helpers.h>
+
+#include <chrono>
+#include <functional>
+#include <mutex>
+#include <optional>
 #include <string>
 
 namespace EngineScripts {
 
 namespace {
 
-/// 调用编辑器 API 时必须**放开 GIL**。
+namespace UI = Corona::Systems::UI;
+
+/// Runs an editor operation on the CEF UI (editor state owner) thread.
 ///
-/// `_invoke_cpp_editor_api` 现在会把 handler 派发到 CEF UI（编辑器状态 owner）线程并等它
-/// 执行（见 `editor_api/editor_dispatch.h`）。而 CEF UI 线程自己也会同步等 Python
-/// （`invoke_python_script_service` → `submit_and_wait`，例如 `Scripts.get_status`）。
-/// 如果这里握着 GIL 等 CEF 线程，Python 消费线程就拿不到 GIL 去答复 CEF 线程，形成
-/// "CEF 等 Python、Python 等 CEF"的环路。历史后台轮询实测：
-/// 每次轮询撞上鼠标事件的 Python 往返就握手成 5 s 超时，期间每帧鼠标事件都在 2 s 超时里
-/// 冻住 UI。放开 GIL 之后这段等待不再拖住整个 Python 运行时。
+/// `editor_dispatch.h` guarantees that every reader of the native editor scene runs
+/// on one thread; `EditorApiRegistry` used to install these hooks, and with the JSON
+/// manifest retired the only remaining caller installs them here.
+class EditorOwnerTask final : public CefTask {
+   public:
+    explicit EditorOwnerTask(std::function<void()> fn) : fn_(std::move(fn)) {}
+    void Execute() override {
+        if (fn_) fn_();
+    }
+
+   private:
+    std::function<void()> fn_;
+    IMPLEMENT_REFCOUNTING(EditorOwnerTask);
+};
+
+void ensure_editor_dispatch_hooks() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        UI::Detail::EditorDispatchHooks hooks;
+        hooks.is_owner_thread = [] { return CefCurrentlyOn(TID_UI); };
+        hooks.post_to_owner = [](std::function<void()> task) {
+            return CefPostTask(TID_UI, CefRefPtr<CefTask>(new EditorOwnerTask(std::move(task))));
+        };
+        UI::Detail::set_editor_dispatch_hooks(std::move(hooks));
+    });
+}
+
+/// A dispatch that never returns leaves the caller blocked forever; the bound is the
+/// same one the manifest used, so a busy editor still answers with a timeout.
+constexpr std::chrono::milliseconds kEditorDispatchTimeout{5000};
+
+using ScriptOperation = UI::NativeResult (*)(const UI::NativeRequest&, const UI::NativeContext&);
+
+/// Runs one named ScriptRuntime operation and returns the JSON envelope the Python
+/// adapter already expects.
 ///
-/// handler 全是 C++，Python 相关工作本来就走 coordinator 队列（不在这里直接触 Python
-/// C-API），所以释放 GIL 不会让任何 handler 摸到没有 GIL 的 Python 对象。
-std::string invoke_editor_endpoint_off_gil(const std::string& api_name,
-                                          const nlohmann::json& args,
-                                          Corona::Systems::UI::EditorApiCaller caller) {
-    Corona::Systems::UI::register_builtin_native_api_handlers();
-    Corona::Systems::UI::NativeContext context;
-    Corona::Systems::UI::NativeResult result;
+/// The GIL is released while the operation is dispatched: an operation can wait on
+/// the Python runtime (the scene snapshot comes back through the dispatcher), and the
+/// CEF UI thread that runs it can itself be waiting for Python.  Holding the GIL here
+/// turned that handshake into a 5 s timeout in the field.
+std::string invoke_script_operation(ScriptOperation operation, const std::string& args_json) {
+    auto args = nlohmann::json::parse(args_json.empty() ? "[]" : args_json, nullptr, false);
+    if (args.is_discarded() || !args.is_array()) {
+        return nlohmann::json{{"success", false},
+                              {"error", "Invalid Script Runtime API args JSON"},
+                              {"error_code", 400}}
+            .dump();
+    }
+
+    ensure_editor_dispatch_hooks();
+    UI::NativeRequest request;
+    request.args = std::move(args);
+    UI::NativeContext context;
+    context.caller = UI::EditorApiCaller::ScriptRuntime;
+
+    const bool on_owner_thread = UI::Detail::on_editor_owner_thread();
+    const auto route = UI::Detail::decide_editor_dispatch_route(
+        on_owner_thread,
+        UI::Detail::editor_thread_waiting_for_python(),
+        UI::Detail::editor_owner_thread_seen());
+
+    UI::Detail::EditorDispatchReport report;
+    std::optional<UI::NativeResult> result;
     {
         nanobind::gil_scoped_release release;
-        result = Corona::Systems::UI::EditorApiRegistry::instance().invoke(
-            {api_name, args, caller}, context);
+        result = UI::Detail::call_editor_dispatch(
+            [operation, request, context] { return operation(request, context); },
+            route,
+            kEditorDispatchTimeout,
+            &report);
     }
+
+    if (!result) {
+        const bool timed_out = report.run == UI::Detail::EditorOwnerRun::Timeout;
+        return nlohmann::json{{"success", false},
+                              {"error", timed_out ? "Script Runtime API timed out waiting for the editor thread"
+                                                  : "Script Runtime API could not be posted to the editor thread"},
+                              {"error_code", timed_out ? 504 : 503}}
+            .dump();
+    }
+
     nlohmann::json response = {
-        {"success", result.success},
-        {"route", result.route},
+        {"success", result->success},
+        {"route", "script-runtime"},
     };
-    if (result.success) {
-        response["data"] = result.data;
+    if (result->success) {
+        response["data"] = result->data;
     } else {
-        response["error"] = result.error;
-        response["error_code"] = result.error_code;
+        response["error"] = result->error;
+        response["error_code"] = result->error_code;
     }
     return response.dump();
 }
@@ -74,30 +148,73 @@ void BindCef(nanobind::module_& m) {
         return Corona::Systems::UI::emit_editor_api_event(event_name, payload);
     }, nb::arg("event_name"), nb::arg("payload_json"));
 
+    // The ScriptRuntime editor contract. One named binding per operation: the Python
+    // adapter below the interpreter decides which one to call, so C++ carries no name
+    // table, no argument schema and no caller mask.
+    const auto bind_script_operation = [&m](const char* name, ScriptOperation operation) {
+        m.def(name, [operation](const std::string& args_json) {
+            return invoke_script_operation(operation, args_json);
+        }, nb::arg("args_json"));
+    };
+    bind_script_operation("script_scene_get_environment", Corona::Systems::UI::script_scene_get_environment);
+    bind_script_operation("script_scene_read_active_scene", Corona::Systems::UI::script_scene_read_active_scene);
+    bind_script_operation("script_scene_read_actor", Corona::Systems::UI::script_scene_read_actor);
+    bind_script_operation("script_scene_read_transforms", Corona::Systems::UI::script_scene_read_transforms);
+    bind_script_operation("script_scene_read_archive_scene", Corona::Systems::UI::script_scene_read_archive_scene);
+    bind_script_operation("script_scene_get_scene_snapshot", Corona::Systems::UI::script_scene_get_scene_snapshot);
+    bind_script_operation("script_scene_set_actor_transform", Corona::Systems::UI::script_scene_set_actor_transform);
+    bind_script_operation("script_scene_set_environment", Corona::Systems::UI::script_scene_set_environment);
+    bind_script_operation("script_scene_set_actor_state", Corona::Systems::UI::script_scene_set_actor_state);
+    bind_script_operation("script_scene_set_actor_animation", Corona::Systems::UI::script_scene_set_actor_animation);
+    bind_script_operation("script_scene_pause_actor_animation", Corona::Systems::UI::script_scene_pause_actor_animation);
+    bind_script_operation("script_scene_resume_actor_animation", Corona::Systems::UI::script_scene_resume_actor_animation);
+    bind_script_operation("script_scene_set_actor_physics", Corona::Systems::UI::script_scene_set_actor_physics);
+    bind_script_operation("script_scene_set_camera_pose", Corona::Systems::UI::script_scene_set_camera_pose);
+    bind_script_operation("script_scene_create_actor", Corona::Systems::UI::script_scene_create_actor);
+    bind_script_operation("script_scene_remove_actor", Corona::Systems::UI::script_scene_remove_actor);
+
+    // Retired with the JSON manifest; kept until the table, the registry and the
+    // Python adapter that validates against them are deleted in the next step.
     m.def("_invoke_cpp_editor_api", [](const std::string& api_name, const std::string& args_json) {
         auto args = nlohmann::json::parse(args_json.empty() ? "[]" : args_json, nullptr, false);
         if (args.is_discarded()) {
-            nlohmann::json response = {
-                {"success", false},
-                {"error", "Invalid Editor API args JSON"},
-            };
-            return response.dump();
+            return nlohmann::json{{"success", false}, {"error", "Invalid Editor API args JSON"}}.dump();
         }
-        return invoke_editor_endpoint_off_gil(api_name, args,
-                                              Corona::Systems::UI::EditorApiCaller::PythonScript);
+        Corona::Systems::UI::NativeResult result;
+        {
+            nanobind::gil_scoped_release release;
+            result = Corona::Systems::UI::EditorApiRegistry::instance().invoke(
+                {api_name, args, Corona::Systems::UI::EditorApiCaller::PythonScript}, {});
+        }
+        nlohmann::json response = {{"success", result.success}, {"route", result.route}};
+        if (result.success) {
+            response["data"] = result.data;
+        } else {
+            response["error"] = result.error;
+            response["error_code"] = result.error_code;
+        }
+        return response.dump();
     }, nb::arg("api_name"), nb::arg("args_json"));
 
     m.def("_invoke_cpp_script_api", [](const std::string& api_name, const std::string& args_json) {
         auto args = nlohmann::json::parse(args_json.empty() ? "[]" : args_json, nullptr, false);
         if (args.is_discarded()) {
-            nlohmann::json response = {
-                {"success", false},
-                {"error", "Invalid Script Runtime API args JSON"},
-            };
-            return response.dump();
+            return nlohmann::json{{"success", false}, {"error", "Invalid Script Runtime API args JSON"}}.dump();
         }
-        return invoke_editor_endpoint_off_gil(api_name, args,
-                                              Corona::Systems::UI::EditorApiCaller::ScriptRuntime);
+        Corona::Systems::UI::NativeResult result;
+        {
+            nanobind::gil_scoped_release release;
+            result = Corona::Systems::UI::EditorApiRegistry::instance().invoke(
+                {api_name, args, Corona::Systems::UI::EditorApiCaller::ScriptRuntime}, {});
+        }
+        nlohmann::json response = {{"success", result.success}, {"route", result.route}};
+        if (result.success) {
+            response["data"] = result.data;
+        } else {
+            response["error"] = result.error;
+            response["error_code"] = result.error_code;
+        }
+        return response.dump();
     }, nb::arg("api_name"), nb::arg("args_json"));
 }
 

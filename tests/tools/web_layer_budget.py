@@ -26,11 +26,11 @@ CONSERVATIVE_TARGET = 15_747
 TARGET_LINES = 13_807
 
 # Current ratchet. Never above BASELINE_LINES, lowered by each slimming task.
-# Temporarily 36 lines above the previous rung: the ScriptRuntime entry points were
-# extracted out of the name table (PR "named entry points"), which costs signatures
-# plus blank lines before the table itself, the registry and the two nanobind
-# entry points are deleted. The next task lowers this well below 14,900.
-CORE_BUDGET = 14_936
+# Temporarily 117 lines above the previous rung: cef_py_bind.cpp now carries the
+# ScriptRuntime bindings and their dispatch glue, which used to live in
+# cef_editor_api.cpp. The manifest table, the registry and the two _invoke_cpp_*
+# bindings are deleted next, which takes this well below 14,900.
+CORE_BUDGET = 15_053
 
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
@@ -43,7 +43,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/cef_editor_native_api_registry.cpp", 309),
     ("src/systems/ui/cef/cef_editor_native_api_registry.h", 80),
     ("src/systems/ui/cef/cef_paths.h", 41),
-    ("src/systems/ui/cef/cef_py_bind.cpp", 104),
+    ("src/systems/ui/cef/cef_py_bind.cpp", 221),
     ("src/systems/ui/cef/cef_scene_operations.h", 428),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),
