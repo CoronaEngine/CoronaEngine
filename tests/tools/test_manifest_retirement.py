@@ -67,3 +67,42 @@ def test_network_web_contract_is_untouched():
     for name in NETWORK_V8_METHODS:
         assert f'network->SetValue("{name}"' in v8, f"typed V8 lost corona.network.{name}"
     assert "execute_network_operation" in _text(HANDLERS), "Web network implementation disappeared"
+
+
+# ---------------------------------------------------------------------------
+# Zero-caller rows.  Nothing in the repository outside the manifest itself
+# named these: no Python service, no script runtime, no integration script.
+# ---------------------------------------------------------------------------
+ZERO_CALLER_ROWS = [
+    ("ResourceSearch", "fuzzy_search"),
+    ("ResourceSearch", "get_stats"),
+    ("ResourceSearch", "image_search"),
+    ("ResourceSearch", "list_types"),
+    ("ResourceSearch", "mark_index_dirty"),
+    ("ResourceSearch", "prepare_index"),
+    ("ResourceSearch", "rebuild_index"),
+    ("SceneTools", "actor_play_audio"),
+    ("SceneTools", "actor_stop_audio"),
+    ("SceneTools", "get_actor_ik_chains"),
+    ("SceneTools", "get_actor_skeleton_leaves"),
+    ("SceneTools", "get_model_nodes"),
+    ("SceneTools", "list_scene_tree"),
+    ("SceneTools", "pick_actor"),
+    ("SceneTools", "play_audio"),
+    ("SceneTools", "rename_actor"),
+    ("SceneTools", "select_screenshot_path"),
+    ("SceneTools", "set_actor_ik_chains"),
+    ("SceneTools", "set_model_node_state"),
+    ("SceneTools", "stop_audio"),
+]
+
+
+def test_zero_caller_manifest_rows_are_gone():
+    api = _text(API)
+    survivors = [f"{m}.{fn}" for m, fn in ZERO_CALLER_ROWS if f"({m}, {fn}," in api]
+    assert not survivors, f"rows with no caller survived: {survivors}"
+
+
+def test_resource_search_has_no_manifest_entry_left():
+    rows = _manifest_rows(_text(API), "ResourceSearch")
+    assert not rows, f"ResourceSearch still has manifest rows: {rows[:3]}"

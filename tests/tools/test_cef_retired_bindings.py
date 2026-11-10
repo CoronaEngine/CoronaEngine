@@ -68,17 +68,15 @@ def test_unused_project_launch_methods_keep_non_web_contracts_only():
     assert 'registry.register_module("ProjectLauncher",' in owner
 
 
-def test_unused_resource_search_is_not_exposed_to_web_but_keeps_python_contracts():
+def test_unused_resource_search_has_no_manifest_entry_at_all():
     root = Path(__file__).resolve().parents[2]
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
+    # ResourceSearch only ever forwarded back into Python, and nothing called it:
+    # the whole namespace is gone rather than kept behind a Python-only mask.
     for method in ['fuzzy_search', 'get_stats', 'image_search', 'list_types',
                    'mark_index_dirty', 'prepare_index', 'rebuild_index']:
-        line = next(line for line in manifest.splitlines() if f'ResourceSearch, {method},' in line)
-        assert 'WRAPPED_CALLERS(ResourceSearch,' in line
-        assert 'all_callers() & ~caller_mask(EditorApiCaller::Cef)' in line
-        assert ', "resource_search.' in line
-    owner = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
-    assert 'register_script_module("ResourceSearch", resource_search_methods)' in owner
+        assert f'ResourceSearch, {method},' not in manifest, method
+    assert '(ResourceSearch, ' not in manifest
 
 
 def test_file_browser_retirement_preserves_non_web_permissions():
@@ -189,12 +187,16 @@ def test_typed_resource_import_preserves_audio_metadata():
 def test_audio_and_import_keep_original_python_permissions_after_cef_retirement():
     root = Path(__file__).resolve().parents[2]
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
-    for module, method in [('MainView', 'import_resource_file'), ('SceneTools', 'play_audio'),
-                           ('SceneTools', 'stop_audio'), ('SceneTools', 'actor_play_audio'),
-                           ('SceneTools', 'actor_stop_audio')]:
-        declaration = next(line for line in manifest.splitlines() if f'{module}, {method},' in line)
-        assert 'WRAPPED_CALLERS' in declaration
-        assert declaration.endswith('caller_mask(EditorApiCaller::PythonScript)),')
+    declaration = next(line for line in manifest.splitlines() if 'MainView, import_resource_file,' in line)
+    assert 'WRAPPED_CALLERS' in declaration
+    assert declaration.endswith('caller_mask(EditorApiCaller::PythonScript)),')
+    # The four audio shadow routes had no caller outside the manifest; they are
+    # deleted and only the typed V8 audio contract remains for Web.
+    for method in ['play_audio', 'stop_audio', 'actor_play_audio', 'actor_stop_audio']:
+        assert f'SceneTools, {method},' not in manifest, method
+    binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
+    for name in ['playResource', 'stopResource', 'playActor', 'stopActor']:
+        assert f'audio->SetValue("{name}"' in binding, name
 
 
 def test_camera_reads_retire_full_scene_and_camera_list_web_routes():
@@ -212,14 +214,13 @@ def test_camera_reads_retire_full_scene_and_camera_list_web_routes():
 def test_tree_read_retires_manifest_and_shares_owned_rows():
     root = Path(__file__).resolve().parents[2]
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
-    declaration = next(line for line in manifest.splitlines() if 'SceneTools, list_scene_tree,' in line)
-    assert 'WRAPPED_CALLERS' in declaration and ', "scene_tools.list_scene_tree"' in declaration
-    assert 'caller_mask(EditorApiCaller::PythonScript)' in declaration
+    # `scene_tools.list_scene_tree` was the shadow of the typed readScene projection
+    # and had no caller left; the row is deleted.
+    assert 'SceneTools, list_scene_tree,' not in manifest
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'listSceneTree:' not in facade
     assert 'window.corona.scene.readScene(request)' in facade
     native = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8-sig')
-    assert 'scene_tree_actor_to_json(scene_tree_actor_row(actor))' in native
     assert 'reply.tree.actors.push_back(scene_tree_actor_row(actor))' in native
 
 
@@ -322,10 +323,9 @@ def test_camera_v8_properties_cannot_write_window_lifecycle():
 def test_actor_rename_uses_scoped_scene_v8_only_for_web():
     root = Path(__file__).resolve().parents[2]
     manifest = (root / 'src/systems/ui/editor_api/cef_editor_api.cpp').read_text(encoding='utf-8-sig')
-    declaration = next(line for line in manifest.splitlines() if 'SceneTools, rename_actor,' in line)
-    assert 'WRAPPED_CALLERS' in declaration
-    assert 'animation_callers() & ~caller_mask(EditorApiCaller::Cef)' in declaration
-    assert ', "scene_tools.rename_actor"' in declaration
+    # `scene_tools.rename_actor` had no caller left once Web moved to updateActor;
+    # the row is deleted rather than kept behind a Python-only mask.
+    assert 'SceneTools, rename_actor,' not in manifest
     facade = (root / 'CoronaEditor/editor/Frontend/src/api/editorApi.js').read_text(encoding='utf-8-sig')
     assert 'call_manifest_editor_api(\'sceneTools.renameActor\'' not in facade
     assert 'updateActor: (sceneName, actorName, patch) =>' in facade
