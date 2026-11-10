@@ -361,3 +361,12 @@ target_include_directories(corona_imgui_workspace_tests PRIVATE ${PROJECT_SOURCE
 target_link_libraries(corona_imgui_workspace_tests PRIVATE corona::imgui)
 add_test(NAME ImGuiWorkspaceTests COMMAND corona_imgui_workspace_tests)
 
+
+# 变换命令合并：LatestWins 只保留同 key 的最后一条命令，若调用方把 position/rotation/scale
+# 分三次入队（编辑器的 transform patch 正是如此），只剩最后一个字段生效。这个测试驱动偏离
+# 真实调用方的那种写法，断言三个字段都落地。
+add_executable(corona_transform_command_merge_tests test_transform_command_merge.cpp)
+target_include_directories(corona_transform_command_merge_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include)
+target_link_libraries(corona_transform_command_merge_tests PRIVATE corona::engine)
+add_test(NAME TransformCommandMergeTests COMMAND corona_transform_command_merge_tests)

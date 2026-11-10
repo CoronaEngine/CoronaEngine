@@ -517,6 +517,30 @@ struct TransformUpdateKey {
     static EntityId get(const TransformUpdateCommand& command) noexcept {
         return command.transform_handle;
     }
+
+    /// LatestWins keeps only one command per transform, which silently dropped fields whenever a
+    /// caller issued position, rotation and scale as three separate commands. The editor's
+    /// transform patch does exactly that (API::Geometry::set_position / set_rotation / set_scale
+    /// each enqueue one single-field command), so only the last field was ever applied: reading the
+    /// transform back showed a stale position while scale looked correct.
+    ///
+    /// Merge the fields the incoming command actually carries. A matrix already contains TRS, so
+    /// when either side carries one the latest edit still wins outright - that path keeps the
+    /// pre-existing behaviour exactly.
+    static void merge(TransformUpdateCommand& pending, const TransformUpdateCommand& next) noexcept {
+        if (has_transform_field(next.fields, TransformField::Matrix) ||
+            has_transform_field(pending.fields, TransformField::Matrix)) {
+            pending = next;
+            return;
+        }
+        if (has_transform_field(next.fields, TransformField::Position)) pending.position = next.position;
+        if (has_transform_field(next.fields, TransformField::Rotation)) {
+            pending.euler_rotation = next.euler_rotation;
+        }
+        if (has_transform_field(next.fields, TransformField::Scale)) pending.scale = next.scale;
+        pending.fields = static_cast<TransformField>(
+            static_cast<std::uint32_t>(pending.fields) | static_cast<std::uint32_t>(next.fields));
+    }
 };
 
 /// 一份变换快照行：外部线程读这份投影，不再对槽位加锁。

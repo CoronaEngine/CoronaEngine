@@ -124,12 +124,10 @@ void BindAll(nanobind::module_& m) {
              "Create a Geometry from a model file path")
         .def_static("from_image", &Geometry::from_image, nb::arg("image_path"),
                     "Create a Geometry as a textured quad (UI plane) from an image file")
-        .def("set_position", &Geometry::set_position, nb::arg("position"),
-             "Set local position [x, y, z]")
-        .def("set_rotation", &Geometry::set_rotation, nb::arg("euler"),
-             "Set local rotation (Euler angles ZYX order) [pitch, yaw, roll]")
-        .def("set_scale", &Geometry::set_scale, nb::arg("scale"),
-             "Set local scale [x, y, z]")
+        .def("set_transform", &Geometry::set_transform, nb::arg("position"), nb::arg("rotation"),
+             nb::arg("scale"),
+             "Set the complete local transform; pass all three vectors, read the current ones first "
+             "if the caller only wants to change one")
         .def("set_matrix", &Geometry::set_matrix, nb::arg("matrix"),
              "Set a column-major affine matrix, preserving shear and reflection")
         .def("get_matrix", &Geometry::get_matrix)

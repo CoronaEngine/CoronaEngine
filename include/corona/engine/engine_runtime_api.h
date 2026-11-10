@@ -73,9 +73,17 @@ class Geometry {
     [[nodiscard]] std::vector<ModelNodeOverride> get_model_node_overrides() const;
     bool set_model_node_overrides(const std::vector<ModelNodeOverride>& overrides);
 
-    void set_position(const std::array<float, 3>& pos);
-    void set_rotation(const std::array<float, 3>& euler);
-    void set_scale(const std::array<float, 3>& size);
+    /// The single inbound channel for a geometry transform: one complete TRS, one command.
+    ///
+    /// The decomposed set_position/set_rotation/set_scale pair-up was removed with it. Each of
+    /// those enqueued its own single-field TransformUpdateCommand, and SharedDataHub coalesces per
+    /// transform handle, so a caller that set position then rotation then scale only ever had the
+    /// LAST field applied - actor creation, transform patches, property patches and resource
+    /// rebinding all silently lost position and rotation. Callers that hold a partial patch must
+    /// complete it from the current values first, exactly as Camera::set() requires a full pose.
+    void set_transform(const std::array<float, 3>& position,
+                       const std::array<float, 3>& rotation,
+                       const std::array<float, 3>& scale);
     // Column-major affine matrix. Preserve shear and reflection without TRS decomposition.
     void set_matrix(const std::array<float, 16>& matrix);
     [[nodiscard]] std::array<float, 16> get_matrix() const;

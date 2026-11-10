@@ -952,44 +952,22 @@ std::array<float, 16> Corona::API::Geometry::get_matrix() const {
     return result;
 }
 
-void Corona::API::Geometry::set_position(const std::array<float, 3>& pos) {
+void Corona::API::Geometry::set_transform(const std::array<float, 3>& position,
+                                          const std::array<float, 3>& rotation,
+                                          const std::array<float, 3>& scale) {
     if (transform_handle_ == 0) {
-        CFW_LOG_WARNING("[Geometry::set_position] Invalid transform handle");
+        CFW_LOG_WARNING("[Geometry::set_transform] Invalid transform handle");
         return;
     }
 
+    // One command carrying the whole TRS. Issuing position, rotation and scale as three commands
+    // used to lose two of them, because the hub coalesces per transform handle.
     Corona::TransformUpdateCommand command{};
     command.transform_handle = transform_handle_;
-    command.fields = Corona::TransformField::Position;
-    command.position = ktm::fvec3{pos[0], pos[1], pos[2]};
-    SharedDataHub::instance().enqueue_transform_update(command);
-}
-
-void Corona::API::Geometry::set_rotation(const std::array<float, 3>& euler) {
-    if (transform_handle_ == 0) {
-        CFW_LOG_WARNING("[Geometry::set_rotation] Invalid transform handle");
-        return;
-    }
-
-    // 直接写入容器中的局部旋转参数（欧拉角 ZYX 顺序）
-    Corona::TransformUpdateCommand command{};
-    command.transform_handle = transform_handle_;
-    command.fields = Corona::TransformField::Rotation;
-    command.euler_rotation = ktm::fvec3{euler[0], euler[1], euler[2]};
-    SharedDataHub::instance().enqueue_transform_update(command);
-}
-
-void Corona::API::Geometry::set_scale(const std::array<float, 3>& scl) {
-    if (transform_handle_ == 0) {
-        CFW_LOG_WARNING("[Geometry::set_scale] Invalid transform handle");
-        return;
-    }
-
-    // 直接写入容器中的局部缩放参数
-    Corona::TransformUpdateCommand command{};
-    command.transform_handle = transform_handle_;
-    command.fields = Corona::TransformField::Scale;
-    command.scale = ktm::fvec3{scl[0], scl[1], scl[2]};
+    command.fields = Corona::TransformField::All;
+    command.position = ktm::fvec3{position[0], position[1], position[2]};
+    command.euler_rotation = ktm::fvec3{rotation[0], rotation[1], rotation[2]};
+    command.scale = ktm::fvec3{scale[0], scale[1], scale[2]};
     SharedDataHub::instance().enqueue_transform_update(command);
 }
 

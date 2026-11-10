@@ -1013,28 +1013,42 @@ def _init_internal_actor(ctx: ScratchRuntimeContext):
     ctx.scene = None
 
 
+def _write_transform(target, *, position=None, rotation=None, scale=None):
+    """Write a complete transform, starting from the current values for the fields not changed.
+
+    Geometry exposes one transform entry point on purpose: the engine used to offer
+    set_position/set_rotation/set_scale, each of which enqueued its own single-field command, and
+    the hub coalesces per transform handle - so writing position, rotation and scale as three
+    separate calls silently kept only the last one.
+    """
+    if target is None or not hasattr(target, "set_transform"):
+        return False
+    target.set_transform(
+        list(position) if position is not None else list(target.get_position()),
+        list(rotation) if rotation is not None else list(target.get_rotation()),
+        list(scale) if scale is not None else list(target.get_scale()),
+    )
+    return True
+
+
 def _sync_position():
     ctx = _current_context()
     check_stop()
+    position = [ctx.x, ctx.y, ctx.z]
     failures = []
     attempted = False
     with _engine_lock:
-        if ctx.geometry is not None and hasattr(ctx.geometry, "set_position"):
+        for target, label in ((ctx.geometry, "geometry"), (ctx.actor, "actor")):
+            if target is None or not hasattr(target, "set_transform"):
+                continue
             attempted = True
             try:
-                ctx.geometry.set_position([ctx.x, ctx.y, ctx.z])
-                return True
+                if _write_transform(target, position=position):
+                    return True
             except Exception as exc:
-                failures.append(f"geometry.set_position: {exc}")
-        if ctx.actor is not None and hasattr(ctx.actor, "set_position"):
-            attempted = True
-            try:
-                ctx.actor.set_position([ctx.x, ctx.y, ctx.z])
-                return True
-            except Exception as exc:
-                failures.append(f"actor.set_position: {exc}")
+                failures.append(f"{label}.set_transform: {exc}")
     if ctx.external_target:
-        detail = "; ".join(failures) if failures else "target exposes no set_position interface"
+        detail = "; ".join(failures) if failures else "target exposes no set_transform interface"
         raise RuntimeError(f"Failed to move bound Actor '{ctx.actor_name}': {detail}")
     return not attempted
 
@@ -1046,22 +1060,17 @@ def _sync_scale():
     failures = []
     attempted = False
     with _engine_lock:
-        if ctx.geometry is not None and hasattr(ctx.geometry, "set_scale"):
+        for target, label in ((ctx.geometry, "geometry"), (ctx.actor, "actor")):
+            if target is None or not hasattr(target, "set_transform"):
+                continue
             attempted = True
             try:
-                ctx.geometry.set_scale([scale, scale, scale])
-                return True
+                if _write_transform(target, scale=[scale, scale, scale]):
+                    return True
             except Exception as exc:
-                failures.append(f"geometry.set_scale: {exc}")
-        if ctx.actor is not None and hasattr(ctx.actor, "set_scale"):
-            attempted = True
-            try:
-                ctx.actor.set_scale([scale, scale, scale])
-                return True
-            except Exception as exc:
-                failures.append(f"actor.set_scale: {exc}")
+                failures.append(f"{label}.set_transform: {exc}")
     if ctx.external_target:
-        detail = "; ".join(failures) if failures else "target exposes no set_scale interface"
+        detail = "; ".join(failures) if failures else "target exposes no set_transform interface"
         raise RuntimeError(f"Failed to scale bound Actor '{ctx.actor_name}': {detail}")
     return not attempted
 
@@ -1082,19 +1091,24 @@ def _apply_rotation():
                     ctx.mechanics.set_physics_enabled(False)
             except Exception:
                 pass
-        for target, method in (
-            (ctx.kinematics, "set_rotation"),
-            (ctx.geometry, "set_rotation"),
-            (ctx.actor, "set_rotation"),
-        ):
-            if target is not None and hasattr(target, method):
+        if ctx.kinematics is not None and hasattr(ctx.kinematics, "set_rotation"):
+            attempted = True
+            try:
+                ctx.kinematics.set_rotation(rot)
+                success = True
+            except Exception as exc:
+                failures.append(f"{type(ctx.kinematics).__name__}.set_rotation: {exc}")
+        if not success:
+            for target, label in ((ctx.geometry, "geometry"), (ctx.actor, "actor")):
+                if target is None or not hasattr(target, "set_transform"):
+                    continue
                 attempted = True
                 try:
-                    getattr(target, method)(rot)
-                    success = True
-                    break
+                    if _write_transform(target, rotation=rot):
+                        success = True
+                        break
                 except Exception as exc:
-                    failures.append(f"{type(target).__name__}.{method}: {exc}")
+                    failures.append(f"{label}.set_transform: {exc}")
         if mech_was_enabled and ctx.mechanics is not None:
             try:
                 ctx.mechanics.set_physics_enabled(True)
@@ -2194,12 +2208,10 @@ def _set_actor_position(actor, pos):
         _current_context().previous_actor_positions[_actor_identity(actor)] = list(previous)
     try:
         geom = getattr(actor, '_geometry', None)
-        if geom is not None and geom is not actor and hasattr(geom, 'set_position'):
-            geom.set_position(pos)
-            return True
-        if hasattr(actor, 'set_position'):
-            actor.set_position(pos)
-            return True
+        if geom is not None and geom is not actor and hasattr(geom, 'set_transform'):
+            return _write_transform(geom, position=pos)
+        if hasattr(actor, 'set_transform'):
+            return _write_transform(actor, position=pos)
     except Exception as exc:
         _logger.debug("[ScratchWrapper] set actor position failed: %s", exc)
     return False

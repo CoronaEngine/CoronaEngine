@@ -777,9 +777,7 @@ NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
     } else {
         item.geometry = std::make_unique<Corona::API::Geometry>(path_to_utf8(asset_path), item.import_options);
     }
-    item.geometry->set_position(item.position);
-    item.geometry->set_rotation(item.rotation);
-    item.geometry->set_scale(item.scale);
+    item.geometry->set_transform(item.position, item.rotation, item.scale);
     if (item.authored_matrix) item.geometry->set_matrix(*item.authored_matrix);
     if (!item.persisted_animation_sources.empty()) {
         std::vector<std::filesystem::path> paths;
@@ -2465,24 +2463,11 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
     auto apply_actor_data_to_existing = [&](NativeEditorActor& target) {
         if (actor_data.contains("animation_sources"))
             request_actor_animation_sources(*scene, target, prepare_animation_sources(*scene, actor_data.at("animation_sources"), memory_only));
-        if (auto position = actor_data_float3(actor_data, "position")) {
-            target.position = *position;
-            if (target.geometry) {
-                target.geometry->set_position(*position);
-            }
-        }
-        if (auto rotation = actor_data_float3(actor_data, "rotation")) {
-            target.rotation = *rotation;
-            if (target.geometry) {
-                target.geometry->set_rotation(*rotation);
-            }
-        }
-        if (auto scale = actor_data_float3(actor_data, "scale")) {
-            target.scale = *scale;
-            if (target.geometry) {
-                target.geometry->set_scale(*scale);
-            }
-        }
+        // The actor keeps the authoritative TRS cache; the geometry takes one complete write.
+        if (auto position = actor_data_float3(actor_data, "position")) target.position = *position;
+        if (auto rotation = actor_data_float3(actor_data, "rotation")) target.rotation = *rotation;
+        if (auto scale = actor_data_float3(actor_data, "scale")) target.scale = *scale;
+        if (target.geometry) target.geometry->set_transform(target.position, target.rotation, target.scale);
         if (auto follow_camera = actor_data_bool(actor_data, {"follow_camera"})) {
             target.follow_camera = *follow_camera;
         }
@@ -2624,7 +2609,7 @@ NativeResult create_native_editor_actor(const std::string& scene_route_arg,
                 const auto min_y_world = position[1] + aabb[1] * scale[1];
                 position[1] += ground_y - min_y_world;
                 actor.position = position;
-                actor.geometry->set_position(position);
+                actor.geometry->set_transform(actor.position, actor.rotation, actor.scale);
             }
         }
     }
@@ -2871,25 +2856,16 @@ SceneReply apply_native_actor_transform(const SceneRequest& request) {
     if (!actor && patch.actor.rfind("__shell_", 0) != 0) actor = find_native_actor(*scene, "__shell_" + patch.actor);
     if (!actor) return fail("ACTOR_NOT_FOUND", "Actor not found: " + patch.actor);
 
-    if (patch.position) {
-        actor->position = *patch.position;
-        if (actor->geometry) {
-            actor->geometry->set_position(*patch.position);
-        }
-    }
-    if (patch.rotation) {
-        actor->rotation = *patch.rotation;
-        if (actor->geometry) {
-            actor->geometry->set_rotation(*patch.rotation);
-        }
-    }
-    if (patch.scale) {
-        actor->scale = *patch.scale;
-        if (actor->geometry) {
-            actor->geometry->set_scale(*patch.scale);
-        }
-    }
+    // The patch fills the actor's authoritative TRS cache, then the geometry takes one complete
+    // write: Geometry only accepts a whole transform, so the fields this patch omits come from the
+    // cache. Three separate writes used to lose every field but the last.
+    if (patch.position) actor->position = *patch.position;
+    if (patch.rotation) actor->rotation = *patch.rotation;
+    if (patch.scale) actor->scale = *patch.scale;
+    if (actor->geometry) actor->geometry->set_transform(actor->position, actor->rotation, actor->scale);
     actor->actor_version = std::max(actor->actor_version + 1, 1);
+    // Read back through the geometry: with one complete command queued, transform_view() merges the
+    // pending write immediately, so this reports the value just applied rather than the old snapshot.
     reply.transform = {scene->route, actor->name, actor->actor_guid, actor->actor_version,
         actor->geometry ? actor->geometry->get_position() : actor->position,
         actor->geometry ? actor->geometry->get_rotation() : actor->rotation,
@@ -3428,17 +3404,21 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
         actor->actor_version = std::max(actor_data.value("actor_version", actor->actor_version), 1);
         actor->persisted_snapshot = actor_data;
 
+        bool transform_touched = false;
         if (auto value = actor_data_float3(actor_data, "position")) {
             actor->position = *value;
-            if (actor->geometry) actor->geometry->set_position(*value);
+            transform_touched = true;
         }
         if (auto value = actor_data_float3(actor_data, "rotation")) {
             actor->rotation = *value;
-            if (actor->geometry) actor->geometry->set_rotation(*value);
+            transform_touched = true;
         }
         if (auto value = actor_data_float3(actor_data, "scale")) {
             actor->scale = *value;
-            if (actor->geometry) actor->geometry->set_scale(*value);
+            transform_touched = true;
+        }
+        if (transform_touched && actor->geometry) {
+            actor->geometry->set_transform(actor->position, actor->rotation, actor->scale);
         }
         if (auto value = actor_data_bool(actor_data, {"visible"})) {
             actor->persisted_visible = *value;
@@ -5239,9 +5219,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
             loaded.rotation = preserved_rotation;
             loaded.scale = preserved_scale;
             if (loaded.geometry) {
-                loaded.geometry->set_position(preserved_position);
-                loaded.geometry->set_rotation(preserved_rotation);
-                loaded.geometry->set_scale(preserved_scale);
+                loaded.geometry->set_transform(preserved_position, preserved_rotation, preserved_scale);
             }
             loaded.load_status = ActorLoadStatus::Loaded;
             loaded.load_error_code.clear();
