@@ -6061,58 +6061,26 @@ NativeResult script_scene_remove_actor(const NativeRequest& request, const Nativ
 
 void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
-        {"get_environment", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_get_environment(request, context);
-        }},
+        {"get_environment", script_scene_get_environment},
 
-        {"read_active_scene", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_read_active_scene(request, context);
-        }},
-        {"read_actor", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_read_actor(request, context);
-        }},
-        {"read_transforms", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_read_transforms(request, context);
-        }},
-        {"read_archive_scene", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_read_archive_scene(request, context);
-        }},
-        {"get_scene_snapshot", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_get_scene_snapshot(request, context);
-        }},
-        {"set_actor_transform", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_set_actor_transform(request, context);
-        }},
-        {"set_environment", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_set_environment(request, context);
-        }},
+        {"read_active_scene", script_scene_read_active_scene},
+        {"read_actor", script_scene_read_actor},
+        {"read_transforms", script_scene_read_transforms},
+        {"read_archive_scene", script_scene_read_archive_scene},
+        {"get_scene_snapshot", script_scene_get_scene_snapshot},
+        {"set_actor_transform", script_scene_set_actor_transform},
+        {"set_environment", script_scene_set_environment},
 
-        {"set_actor_state", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_set_actor_state(request, context);
-        }},
-        {"set_actor_animation", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_set_actor_animation(request, context);
-        }},
-        {"pause_actor_animation", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_pause_actor_animation(request, context);
-        }},
-        {"resume_actor_animation", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_resume_actor_animation(request, context);
-        }},
-        {"set_actor_physics", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_set_actor_physics(request, context);
-        }},
-        {"set_camera_pose", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_set_camera_pose(request, context);
-        }},
+        {"set_actor_state", script_scene_set_actor_state},
+        {"set_actor_animation", script_scene_set_actor_animation},
+        {"pause_actor_animation", script_scene_pause_actor_animation},
+        {"resume_actor_animation", script_scene_resume_actor_animation},
+        {"set_actor_physics", script_scene_set_actor_physics},
+        {"set_camera_pose", script_scene_set_camera_pose},
 
-        {"create_actor", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_create_actor(request, context);
-        }},
+        {"create_actor", script_scene_create_actor},
 
-        {"remove_actor", [](const NativeRequest& request, const NativeContext& context) {
-            return script_scene_remove_actor(request, context);
-        }},
+        {"remove_actor", script_scene_remove_actor},
         // ---- Per-instance IK configuration and runtime inspection ----
     };
 
