@@ -621,18 +621,18 @@ void test_camera_api_construction_does_not_self_deadlock() {
     Corona::API::Camera camera;
     CHECK(camera.get_handle() != 0);
 
-    const auto position = camera.get_position();
+    const auto position = camera.get_pose().position;
     CHECK(position[2] == -5.0f);   // 默认构造位置
-    CHECK(camera.get_fov() == 45.0f);
+    CHECK(camera.get_pose().fov == 45.0f);
 
     // 读路径走快照 ⊕ pending，构造后即可读到值（不必等 DAG tick）
     camera.set(std::array<float, 3>{1.0f, 2.0f, 3.0f},
                std::array<float, 3>{0.0f, 0.0f, 1.0f},
                std::array<float, 3>{0.0f, 1.0f, 0.0f},
                60.0f);
-    const auto moved = camera.get_position();
+    const auto moved = camera.get_pose().position;
     CHECK(moved[0] == 1.0f && moved[1] == 2.0f && moved[2] == 3.0f);
-    CHECK(camera.get_fov() == 60.0f);
+    CHECK(camera.get_pose().fov == 60.0f);
 }
 
 void test_acoustics_owner_snapshot() {

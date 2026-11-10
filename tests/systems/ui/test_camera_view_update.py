@@ -44,7 +44,7 @@ def camera_update_harness():
     service = service_header + "\n" + service_source
     runtime = (ROOT / "src/engine/engine_runtime_api.cpp").read_text(encoding="utf-8")
     runtime_start = runtime.index("void Corona::API::Camera::set_view(")
-    runtime_end = runtime.index("std::array<float, 6> Corona::API::Camera::get_view_state()", runtime_start)
+    runtime_end = runtime.index("Corona::API::CameraViewState Corona::API::Camera::get_view()", runtime_start)
     optics = (ROOT / "src/systems/optics/optics_system.cpp").read_text(encoding="utf-8")
     consume_start = optics.index("            if (Corona::has_camera_state_field(\n                    update.fields, Corona::CameraStateUpdateField::ViewState)) {")
     consume_end = optics.index("\n        }\n    }\n    return updates;", consume_start)
@@ -78,6 +78,12 @@ namespace Corona::API { struct CameraViewState {
     int x=120, y=120, width=960, height=540;
     float move_speed=1.0f;
 }; }
+namespace Corona::API { struct CameraPose {
+    std::array<float, 3> position{0.0f, 0.0f, 0.0f};
+    std::array<float, 3> forward{0.0f, 0.0f, 1.0f};
+    std::array<float, 3> world_up{0.0f, 1.0f, 0.0f};
+    float fov{45.0f};
+}; }
 struct EngineCamera {
     int width=1920, height=1080, x=0, y=0, view_width=1536, view_height=825;
     bool open=false; float speed=1; int geometry_calls=0, size_calls=0;
@@ -85,14 +91,17 @@ struct EngineCamera {
     int handle_=1;
     bool& view_open=open; int& view_x=x; int& view_y=y; float& move_speed=speed;
     void set_view(const Corona::API::CameraViewState&);
-    std::array<float,6> get_view_state() { return {float(open),float(x),float(y),float(view_width),float(view_height),speed}; }
+    Corona::API::CameraViewState get_view() {
+        Corona::API::CameraViewState state;
+        state.open = open;
+        state.x = x; state.y = y; state.width = view_width; state.height = view_height;
+        state.move_speed = speed;
+        return state;
+    }
     std::array<float,3> get_projection() { return {1,.1f,100}; }
     void set_projection(float,float,float) {}
-    std::array<float,3> get_position() { return {}; }
-    std::array<float,3> get_forward() { return {0,0,-1}; }
-    std::array<float,3> get_world_up() { return {0,1,0}; }
-    float get_fov() { return 60; }
-    void set(std::array<float,3>,std::array<float,3>,std::array<float,3>,float) {}
+    Corona::API::CameraPose get_pose() { return Corona::API::CameraPose{}; }
+                void set(std::array<float,3>,std::array<float,3>,std::array<float,3>,float) {}
     void set_move_speed(float s) { speed=std::max(s,.01f); }
 };
 EngineCamera engine;

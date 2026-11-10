@@ -449,7 +449,7 @@ nlohmann::json native_model_node_page(const NativeEditorActor& actor, std::int64
     nlohmann::json items = nlohmann::json::array();
     if (!actor.geometry) return {{"nodes", items}, {"total", 0}, {"next_offset", 0}, {"has_more", false}};
     const auto nodes = actor.geometry->get_model_nodes();
-    const bool actor_visible = actor.optics ? actor.optics->get_visible() : actor.persisted_visible;
+    const bool actor_visible = actor.optics ? actor.optics->get_state().visible : actor.persisted_visible;
     ModelNodePageRequest request;
     request.parent_index = parent_index;
     request.offset = offset;
@@ -518,7 +518,7 @@ std::shared_ptr<Corona::Resource::AnimationPlayer> actor_animation_player(const 
 }
 
 std::string body_type_name(const Corona::API::Mechanics& mechanics) {
-    return mechanics.get_body_type();
+    return mechanics.get_state().body_type;
 }
 
 std::string normalize_body_type(std::string value) {
@@ -834,9 +834,9 @@ EnvironmentSnapshot native_environment_snapshot(const NativeEditorScene& scene) 
     if (!scene.environment) {
         throw std::runtime_error("Native scene environment is unavailable");
     }
+    const auto physics = scene.environment->get_state();
     return {scene.archive_session, scene.route, scene.sun_enabled, scene.floor_grid_enabled, scene.sun_direction,
-        {scene.environment->get_gravity(), scene.environment->get_floor_y(),
-         scene.environment->get_floor_restitution(), scene.environment->get_fixed_dt()}};
+        {physics.gravity, physics.floor_y, physics.floor_restitution, physics.fixed_dt}};
 }
 
 nlohmann::json native_scene_environment_payload(const NativeEditorScene& scene) {
@@ -1648,10 +1648,10 @@ nlohmann::json camera_to_json(const NativeEditorCamera& camera) {
     item["name"] = camera.name;
     item["handle"] = camera.engine_camera ? camera.engine_camera->get_handle() : 0;
     item["opaque_handle"] = std::to_string(camera.engine_camera ? camera.engine_camera->get_handle() : 0);
-    item["position"] = camera.engine_camera ? camera.engine_camera->get_position() : std::array<float, 3>{0.0f, 0.0f, -5.0f};
-    item["forward"] = camera.engine_camera ? camera.engine_camera->get_forward() : std::array<float, 3>{0.0f, 0.0f, 1.0f};
-    item["world_up"] = camera.engine_camera ? camera.engine_camera->get_world_up() : std::array<float, 3>{0.0f, 1.0f, 0.0f};
-    item["fov"] = camera.engine_camera ? camera.engine_camera->get_fov() : 45.0f;
+    item["position"] = camera.engine_camera ? camera.engine_camera->get_pose().position : std::array<float, 3>{0.0f, 0.0f, -5.0f};
+    item["forward"] = camera.engine_camera ? camera.engine_camera->get_pose().forward : std::array<float, 3>{0.0f, 0.0f, 1.0f};
+    item["world_up"] = camera.engine_camera ? camera.engine_camera->get_pose().world_up : std::array<float, 3>{0.0f, 1.0f, 0.0f};
+    item["fov"] = camera.engine_camera ? camera.engine_camera->get_pose().fov : 45.0f;
     const auto projection = camera.engine_camera ? camera.engine_camera->get_projection()
                                                 : std::array<float, 3>{1.0f, 0.1f, 100.0f};
     item["projection_x_sign"] = projection[0];
@@ -1756,7 +1756,7 @@ nlohmann::json actor_to_json(const NativeEditorScene& scene, const NativeEditorA
                            ? body_type_name(*actor.mechanics)
                            : actor.persisted_body_type;
     item["visible"] = actor.load_status == ActorLoadStatus::Loaded && actor.optics
-                          ? actor.optics->get_visible()
+                          ? actor.optics->get_state().visible
                           : actor.persisted_visible;
     item["script"] = "";
     item["follow_camera"] = actor.follow_camera;
@@ -1791,26 +1791,28 @@ nlohmann::json actor_to_json(const NativeEditorScene& scene, const NativeEditorA
         })
         : nlohmann::json::array({0.0f, 0.0f, 0.0f});
     if (actor.mechanics) {
-        const auto [linear_x, linear_y, linear_z] = actor.mechanics->get_linear_lock();
-        const auto [angular_x, angular_y, angular_z] = actor.mechanics->get_angular_lock();
+        const auto mechanics_state = actor.mechanics->get_state();
         item["mechanics"] = {
-            {"mass", actor.mechanics->get_mass()},
-            {"restitution", actor.mechanics->get_restitution()},
-            {"damping", actor.mechanics->get_damping()},
+            {"mass", mechanics_state.mass},
+            {"restitution", mechanics_state.restitution},
+            {"damping", mechanics_state.damping},
             {"body_type", actor.load_status == ActorLoadStatus::Loaded
-                             ? actor.mechanics->get_body_type()
+                             ? mechanics_state.body_type
                              : actor.persisted_body_type},
-            {"linear_lock", {linear_x, linear_y, linear_z}},
-            {"angular_lock", {angular_x, angular_y, angular_z}},
+            {"linear_lock", {mechanics_state.linear_lock[0], mechanics_state.linear_lock[1],
+                             mechanics_state.linear_lock[2]}},
+            {"angular_lock", {mechanics_state.angular_lock[0], mechanics_state.angular_lock[1],
+                              mechanics_state.angular_lock[2]}},
         };
     }
     if (actor.optics) {
+        const auto optics_state = actor.optics->get_state();
         item["optics"] = {
-            {"diffuse", actor.optics->get_diffuse()},
-            {"metallic", actor.optics->get_metallic()},
-            {"roughness", actor.optics->get_roughness()},
-            {"specular", actor.optics->get_specular()},
-            {"shininess", actor.optics->get_shininess()},
+            {"diffuse", optics_state.diffuse},
+            {"metallic", optics_state.metallic},
+            {"roughness", optics_state.roughness},
+            {"specular", optics_state.specular},
+            {"shininess", optics_state.shininess},
         };
         if (actor.persisted_optics.emission) {
             item["optics"]["emission"] = *actor.persisted_optics.emission;
@@ -1974,10 +1976,10 @@ NativeEditorCamera& create_native_camera_view(NativeEditorScene& scene, const st
     std::array<float, 3> world_up{0.0f, 1.0f, 0.0f};
     float fov = 45.0f;
     if (auto* source = find_native_camera(scene, {}); source && source->engine_camera) {
-        position = source->engine_camera->get_position();
-        forward = source->engine_camera->get_forward();
-        world_up = source->engine_camera->get_world_up();
-        fov = source->engine_camera->get_fov();
+        position = source->engine_camera->get_pose().position;
+        forward = source->engine_camera->get_pose().forward;
+        world_up = source->engine_camera->get_pose().world_up;
+        fov = source->engine_camera->get_pose().fov;
         item.width = source->width;
         item.height = source->height;
         item.move_speed = source->move_speed;
@@ -2828,9 +2830,9 @@ SceneReply apply_native_actor_focus(const SceneRequest& request) {
         return fail("INVALID_BOUNDS", "Actor focus pose is not finite");
     focus.distance = static_cast<float>(distance);
     const std::array<float, 3> next_position{focus.center[0], focus.center[1], static_cast<float>(camera_z)};
-    camera.engine_camera->set(next_position, {0,0,1}, {0,1,0}, camera.engine_camera->get_fov());
-    focus.camera = {camera.camera_id, camera.name, camera.engine_camera->get_handle(), camera.engine_camera->get_position(),
-        camera.engine_camera->get_forward(), camera.engine_camera->get_world_up(), camera.engine_camera->get_fov()};
+    camera.engine_camera->set(next_position, {0,0,1}, {0,1,0}, camera.engine_camera->get_pose().fov);
+    focus.camera = {camera.camera_id, camera.name, camera.engine_camera->get_handle(), camera.engine_camera->get_pose().position,
+        camera.engine_camera->get_pose().forward, camera.engine_camera->get_pose().world_up, camera.engine_camera->get_pose().fov};
     return reply;
 }
 
@@ -2879,12 +2881,12 @@ ActorPropertiesSnapshot actor_properties_snapshot(const NativeEditorScene& scene
     ActorPropertiesSnapshot result;
     result.scene = scene.route; result.actor = actor.name; result.actor_guid = actor.actor_guid;
     result.actor_version = actor.actor_version; result.follow_camera = actor.follow_camera;
-    if (actor.optics) result.visible = actor.optics->get_visible();
+    if (actor.optics) result.visible = actor.optics->get_state().visible;
     if (actor.mechanics) {
-        const auto [lx, ly, lz] = actor.mechanics->get_linear_lock();
-        const auto [ax, ay, az] = actor.mechanics->get_angular_lock();
-        result.mechanics = ActorMechanicsSnapshot{actor.mechanics->get_mass(), actor.mechanics->get_restitution(),
-            actor.mechanics->get_damping(), actor.mechanics->get_body_type(), {lx, ly, lz}, {ax, ay, az}};
+        const auto mechanics_state = actor.mechanics->get_state();
+        result.mechanics = ActorMechanicsSnapshot{mechanics_state.mass, mechanics_state.restitution,
+            mechanics_state.damping, mechanics_state.body_type, mechanics_state.linear_lock,
+            mechanics_state.angular_lock};
     }
     result.camera_lock = {actor.camera_lock_enabled, actor.camera_lock_position_offset, actor.camera_lock_rotation_offset};
     return result;
@@ -2931,7 +2933,7 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
         position_offset = patch.camera_lock->position_offset.value_or(position_offset);
         rotation_offset = patch.camera_lock->rotation_offset.value_or(rotation_offset);
         if (patch.camera_lock->enabled && !patch.camera_lock->position_offset) {
-            const auto camera_position = camera->engine_camera->get_position();
+            const auto camera_position = camera->engine_camera->get_pose().position;
             const auto position = actor->geometry ? actor->geometry->get_position() : actor->position;
             for (size_t index = 0; index < 3; ++index) position_offset[index] = camera_position[index] - position[index];
             if (!std::all_of(position_offset.begin(), position_offset.end(), [](float value) { return std::isfinite(value); }))
@@ -4607,7 +4609,9 @@ CameraPropertiesSnapshot camera_properties_snapshot(const NativeEditorScene& sce
     const auto projection = engine.get_projection();
     result.archive_session = scene.archive_session; result.scene = scene.route;
     result.camera_id = camera.camera_id; result.name = camera.name; result.handle = engine.get_handle();
-    result.position = engine.get_position(); result.forward = engine.get_forward(); result.world_up = engine.get_world_up(); result.fov = engine.get_fov();
+    const auto pose = engine.get_pose();
+    result.position = pose.position; result.forward = pose.forward;
+    result.world_up = pose.world_up; result.fov = pose.fov;
     result.projection_x_sign = projection[0]; result.near_plane = projection[1]; result.far_plane = projection[2];
     result.width = camera.width; result.height = camera.height; result.move_speed = camera.move_speed;
     result.view_open = requested_camera_view_open(camera); result.view_x = camera.view_x; result.view_y = camera.view_y;
@@ -4640,7 +4644,7 @@ Corona::Ui::Cef::SceneTreeActorRow scene_tree_actor_row(const NativeEditorActor&
     row.actor_version = actor.actor_version;
     row.actor_type = actor.actor_type;
     row.handle = actor.engine_actor ? actor.engine_actor->get_handle() : 0;
-    row.visible = actor.optics ? actor.optics->get_visible() : true;
+    row.visible = actor.optics ? actor.optics->get_state().visible : true;
     row.gpu_build_state = actor.geometry ? actor.geometry->get_gpu_build_state() : "Ready";
     const bool pending = row.gpu_build_state == "PendingImport" || row.gpu_build_state == "PendingBuild";
     row.load_status = row.gpu_build_state == "Failed" ? "gpu_failed"
@@ -4673,7 +4677,7 @@ SceneReply apply_native_model_node(const SceneRequest& request) {
     if (request.method == SceneMethod::ReadModelNodes) {
         const auto& page_request = request.model_node_page;
         const auto nodes = actor->geometry->get_model_nodes();
-        const bool actor_visible = actor->optics ? actor->optics->get_visible() : actor->persisted_visible;
+        const bool actor_visible = actor->optics ? actor->optics->get_state().visible : actor->persisted_visible;
         auto& result = reply.model_nodes = SceneModelNodeService::project_page(nodes, page_request, actor_visible);
         result.archive_session = scene->archive_session; result.scene = scene->route; result.actor_guid = actor->actor_guid; result.actor = actor->name;
         result.actor_version = actor->actor_version;
@@ -4698,7 +4702,7 @@ SceneReply apply_native_model_node(const SceneRequest& request) {
     actor->persisted_model_node_overrides = ModelNodeConfig::merge(active, patch.node_index, state.node_path, patch_json); actor->model_node_resource = actor->model_node_current_resource; ++actor->actor_version;
     const auto updated = actor->geometry->get_model_nodes(); const auto it = std::find_if(updated.begin(), updated.end(), [&](const auto& node) { return node.node_index == patch.node_index; });
     const auto child_count = static_cast<std::size_t>(std::count_if(updated.begin(), updated.end(), [&](const auto& node) { return node.parent_index == static_cast<std::int32_t>(patch.node_index); }));
-    auto& result = reply.model_node; result.archive_session = scene->archive_session; result.scene = scene->route; result.actor_guid = actor->actor_guid; result.actor = actor->name; result.actor_version = actor->actor_version; result.parent_index = it->parent_index; result.status = "ready"; result.nodes.push_back(SceneModelNodeService::make_snapshot(*it, child_count, actor->optics ? actor->optics->get_visible() : actor->persisted_visible));
+    auto& result = reply.model_node; result.archive_session = scene->archive_session; result.scene = scene->route; result.actor_guid = actor->actor_guid; result.actor = actor->name; result.actor_version = actor->actor_version; result.parent_index = it->parent_index; result.status = "ready"; result.nodes.push_back(SceneModelNodeService::make_snapshot(*it, child_count, actor->optics ? actor->optics->get_state().visible : actor->persisted_visible));
     return reply;
 }
 
@@ -4748,9 +4752,11 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
         camera.name = *new_name;
         ++scene->tree_revision;
     }
-    if (patch.position || patch.forward || patch.world_up || patch.fov)
-        engine.set(patch.position.value_or(engine.get_position()), patch.forward.value_or(engine.get_forward()),
-            patch.world_up.value_or(engine.get_world_up()), patch.fov.value_or(engine.get_fov()));
+    if (patch.position || patch.forward || patch.world_up || patch.fov) {
+        const auto pose = engine.get_pose();
+        engine.set(patch.position.value_or(pose.position), patch.forward.value_or(pose.forward),
+            patch.world_up.value_or(pose.world_up), patch.fov.value_or(pose.fov));
+    }
     if (patch.projection_x_sign || patch.near_plane || patch.far_plane) engine.set_projection(sign, near_plane, far_plane);
     if (patch.width || patch.height) {
         camera.width = patch.width.value_or(camera.width); camera.height = patch.height.value_or(camera.height);
@@ -4770,9 +4776,8 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
                              camera.view_height, camera.move_speed});
         } else if (patch.move_speed) {
             // A speed-only update must not replay saved window geometry over the embedded viewport.
-            const auto view = engine.get_view_state();
-            engine.set_view({std::nullopt, static_cast<int>(view[1]), static_cast<int>(view[2]),
-                             static_cast<int>(view[3]), static_cast<int>(view[4]),
+            const auto view = engine.get_view();
+            engine.set_view({std::nullopt, view.x, view.y, view.width, view.height,
                              camera.move_speed});
         }
     }
@@ -5206,7 +5211,7 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         const auto preserved_position = actor->geometry ? actor->geometry->get_position() : actor->position;
         const auto preserved_rotation = actor->geometry ? actor->geometry->get_rotation() : actor->rotation;
         const auto preserved_scale = actor->geometry ? actor->geometry->get_scale() : actor->scale;
-        const auto preserved_body_type = actor->mechanics ? actor->mechanics->get_body_type() : actor->persisted_body_type;
+        const auto preserved_body_type = actor->mechanics ? actor->mechanics->get_state().body_type : actor->persisted_body_type;
         auto replacement_data = actor->persisted_snapshot;
         replacement_data["actor_guid"] = patch.actor_guid;
         replacement_data["name"] = actor->name;
@@ -5465,9 +5470,9 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         value.archive_session = scene->archive_session;
         value.actor_type = actor->actor_type; value.model = actor->route;
         value.body_type = actor->load_status == ActorLoadStatus::Loaded && actor->mechanics
-            ? actor->mechanics->get_body_type() : actor->persisted_body_type;
+            ? actor->mechanics->get_state().body_type : actor->persisted_body_type;
         value.properties.visible = actor->load_status == ActorLoadStatus::Loaded && actor->optics
-            ? actor->optics->get_visible() : actor->persisted_visible;
+            ? actor->optics->get_state().visible : actor->persisted_visible;
         if (value.properties.mechanics) value.properties.mechanics->body_type = value.body_type;
         value.load_status = actor_load_status_name(actor->load_status);
         if (actor->load_status != ActorLoadStatus::Loaded) {
@@ -5900,15 +5905,15 @@ std::string capture_editor_camera_view_from_python(const std::string& scene_name
         }
 
         const auto position = camera_data.contains("position")
-                                  ? json_float3_value(camera_data["position"]).value_or(camera->engine_camera->get_position())
-                                  : camera->engine_camera->get_position();
+                                  ? json_float3_value(camera_data["position"]).value_or(camera->engine_camera->get_pose().position)
+                                  : camera->engine_camera->get_pose().position;
         const auto forward = camera_data.contains("forward")
-                                 ? json_float3_value(camera_data["forward"]).value_or(camera->engine_camera->get_forward())
-                                 : camera->engine_camera->get_forward();
+                                 ? json_float3_value(camera_data["forward"]).value_or(camera->engine_camera->get_pose().forward)
+                                 : camera->engine_camera->get_pose().forward;
         const auto world_up = camera_data.contains("world_up")
-                                  ? json_float3_value(camera_data["world_up"]).value_or(camera->engine_camera->get_world_up())
-                                  : camera->engine_camera->get_world_up();
-        const auto fov = json_float_value(camera_data, "fov", camera->engine_camera->get_fov());
+                                  ? json_float3_value(camera_data["world_up"]).value_or(camera->engine_camera->get_pose().world_up)
+                                  : camera->engine_camera->get_pose().world_up;
+        const auto fov = json_float_value(camera_data, "fov", camera->engine_camera->get_pose().fov);
         camera->engine_camera->set(position, forward, world_up, fov);
         camera->width = std::max(json_int_value(camera_data, "width", camera->width), 1);
         camera->height = std::max(json_int_value(camera_data, "height", camera->height), 1);
@@ -7010,7 +7015,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 bool visibility_changed = false;
                 auto updated_node = model_node_to_json(state);
                 const auto updated = actor->geometry->get_model_nodes();
-                const bool actor_visible = actor->optics ? actor->optics->get_visible() : actor->persisted_visible;
+                const bool actor_visible = actor->optics ? actor->optics->get_state().visible : actor->persisted_visible;
                 for (std::size_t i = 0; i < updated.size(); ++i) {
                     const auto& node = updated[i];
                     if (node.node_index == index) {

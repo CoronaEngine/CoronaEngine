@@ -146,6 +146,18 @@ struct MechanicsProperties {
     std::optional<std::array<bool, 3>> angular_lock;
 };
 
+/// One mechanics read: every field from a single snapshot, so a caller reading several fields
+/// cannot observe a combination that never existed. Each point getter used to rebuild the whole
+/// snapshot+pending view, and the mechanics tick may apply a pending command between two of them.
+struct MechanicsState {
+    float mass{1.0f};
+    float restitution{0.8f};
+    float damping{0.99f};
+    std::string body_type{"dynamic"};
+    std::array<bool, 3> linear_lock{};
+    std::array<bool, 3> angular_lock{};
+};
+
 class Mechanics {
    public:
     explicit Mechanics(Geometry& geo);
@@ -153,18 +165,8 @@ class Mechanics {
 
     /// The single mechanics write entry point: one command carrying every field given.
     void set_properties(const MechanicsProperties& properties);
-    [[nodiscard]] float get_mass() const;
-    [[nodiscard]] float get_restitution() const;
-    [[nodiscard]] float get_damping() const;
-
-    // 物体类型：决定物体如何参与物理模拟（"dynamic"/"kinematic"/"static"）
-    [[nodiscard]] std::string get_body_type() const;
-
-    // 轴锁定：锁定指定轴上的线性运动（平移）
-    [[nodiscard]] std::tuple<bool, bool, bool> get_linear_lock() const;
-
-    // 轴锁定：锁定指定轴上的角度运动（旋转）
-    [[nodiscard]] std::tuple<bool, bool, bool> get_angular_lock() const;
+    /// The single mechanics read entry point: one consistent snapshot of every field.
+    [[nodiscard]] MechanicsState get_state() const;
 
     // 设置碰撞回调（参数为对方 actor 句柄、began(true=enter,false=exit)、法线、碰撞点）
     void set_collision_callback(std::function<void(EntityId, bool, const std::array<float, 3>&, const std::array<float, 3>&)> callback);
@@ -209,6 +211,28 @@ struct OpticsProperties {
     std::optional<float> shininess;
 };
 
+/// One optics read: every field from a single snapshot. actor_to_json read five of these fields
+/// in one expression, and each point getter rebuilt the snapshot+pending view, so the result could
+/// straddle a pending optics command being applied.
+struct OpticsState {
+    float metallic{0.0f};
+    float roughness{0.5f};
+    float subsurface{0.0f};
+    float specular{0.5f};
+    float specular_tint{0.0f};
+    float anisotropic{0.0f};
+    float sheen{0.0f};
+    float sheen_tint{0.5f};
+    float clearcoat{0.0f};
+    float clearcoat_gloss{1.0f};
+    bool visible{true};
+    bool lighting_enabled{true};
+    std::array<float, 3> ambient{0.2f, 0.2f, 0.2f};
+    std::array<float, 3> diffuse{0.8f, 0.8f, 0.8f};
+    std::array<float, 3> specular_color{1.0f, 1.0f, 1.0f};
+    float shininess{32.0f};
+};
+
 class Optics {
    public:
     explicit Optics(Geometry& geo);
@@ -216,25 +240,8 @@ class Optics {
 
     /// The single optics write entry point: one command carrying every field given.
     void set_properties(const OpticsProperties& properties);
-    [[nodiscard]] float get_metallic() const;
-    [[nodiscard]] float get_roughness() const;
-    [[nodiscard]] float get_subsurface() const;
-    [[nodiscard]] float get_specular() const;
-    [[nodiscard]] float get_specular_tint() const;
-    [[nodiscard]] float get_anisotropic() const;
-    [[nodiscard]] float get_sheen() const;
-    [[nodiscard]] float get_sheen_tint() const;
-    [[nodiscard]] float get_clearcoat() const;
-    [[nodiscard]] float get_clearcoat_gloss() const;
-    [[nodiscard]] bool get_visible() const;
-
-    // 光照影响开关：false 时物体不受灯光照射影响（仍渲染但不接收光照计算）
-    [[nodiscard]] bool get_lighting_enabled() const;
-
-    [[nodiscard]] std::array<float, 3> get_ambient() const;
-    [[nodiscard]] std::array<float, 3> get_diffuse() const;
-    [[nodiscard]] std::array<float, 3> get_specular_color() const;
-    [[nodiscard]] float get_shininess() const;
+    /// The single optics read entry point: one consistent snapshot of every field.
+    [[nodiscard]] OpticsState get_state() const;
 
    private:
     friend class Actor;
@@ -257,6 +264,13 @@ struct AcousticsProperties {
     std::optional<std::uint64_t> audio_resource;
 };
 
+/// One acoustics read: every field from a single snapshot.
+struct AcousticsState {
+    float volume{1.0f};
+    bool audio_enabled{true};
+    std::uint64_t audio_resource{0};
+};
+
 class Acoustics {
    public:
     explicit Acoustics(Geometry& geo);
@@ -264,11 +278,8 @@ class Acoustics {
 
     /// The single acoustics write entry point: one command carrying every field given.
     void set_properties(const AcousticsProperties& properties);
-    [[nodiscard]] float get_volume() const;
-    [[nodiscard]] bool get_audio_enabled() const;
-
-    /// 绑定要播放的音频资源 id（空间音频物体）
-    [[nodiscard]] std::uint64_t get_audio_resource() const;
+    /// The single acoustics read entry point: one consistent snapshot of every field.
+    [[nodiscard]] AcousticsState get_state() const;
     /// 在本组件（actor）的世界位置处播放绑定的音频
     void play(bool loop);
     /// 停止本组件的播放
@@ -343,6 +354,15 @@ struct CameraViewState {
     float move_speed{1.0f};
 };
 
+/// One camera pose read: every pose field from a single snapshot. The four point getters each
+/// rebuilt the snapshot+pending view, and several callers read all of them in one expression.
+struct CameraPose {
+    std::array<float, 3> position{0.0f, 0.0f, 0.0f};
+    std::array<float, 3> forward{0.0f, 0.0f, 1.0f};
+    std::array<float, 3> world_up{0.0f, 1.0f, 0.0f};
+    float fov{45.0f};
+};
+
 class Camera {
    public:
     Camera();
@@ -391,12 +411,11 @@ class Camera {
     [[nodiscard]] bool get_requested_vision_stable_planes() const;
     /// The single viewport entry point: one complete state, one command. See CameraViewState.
     void set_view(const CameraViewState& state);
-    [[nodiscard]] std::array<float, 6> get_view_state() const;
+    /// The single viewport read entry point. `open` is always present on the way out.
+    [[nodiscard]] CameraViewState get_view() const;
 
-    [[nodiscard]] std::array<float, 3> get_position() const;
-    [[nodiscard]] std::array<float, 3> get_forward() const;
-    [[nodiscard]] std::array<float, 3> get_world_up() const;
-    [[nodiscard]] float get_fov() const;
+    /// The single pose read entry point: one consistent snapshot of the pose.
+    [[nodiscard]] CameraPose get_pose() const;
     void set_projection(float x_sign, float near_plane, float far_plane);
     // x sign, near clip, far clip.
     // Return the accepted settings even before the render thread consumes them.
@@ -437,6 +456,19 @@ struct EnvironmentProperties {
     std::optional<float> fixed_dt;
 };
 
+/// One environment read: every field from a single snapshot. The eight point getters each rebuilt
+/// the snapshot+pending view, so a caller reading several fields could straddle a pending command.
+struct EnvironmentState {
+    std::array<float, 3> sun_direction{0.0f, 1.0f, 0.0f};
+    float sun_intensity{10.0f};
+    float sky_intensity{20.0f};
+    bool floor_grid{true};
+    std::array<float, 3> gravity{0.0f, -9.8f, 0.0f};
+    float floor_y{0.0f};
+    float floor_restitution{0.6f};
+    float fixed_dt{1.0f / 60.0f};
+};
+
 class Environment {
    public:
     Environment();
@@ -445,15 +477,8 @@ class Environment {
 
     /// The single environment write entry point: one command carrying every field given.
     void set_properties(const EnvironmentProperties& properties);
-    [[nodiscard]] std::array<float, 3> get_sun_direction() const;
-    [[nodiscard]] float get_sun_intensity() const;
-    [[nodiscard]] float get_sky_intensity() const;
-    [[nodiscard]] bool get_floor_grid() const;
-
-    [[nodiscard]] std::array<float, 3> get_gravity() const;
-    [[nodiscard]] float get_floor_y() const;
-    [[nodiscard]] float get_floor_restitution() const;
-    [[nodiscard]] float get_fixed_dt() const;
+    /// The single environment read entry point: one consistent snapshot of every field.
+    [[nodiscard]] EnvironmentState get_state() const;
 
    private:
     friend class Scene;

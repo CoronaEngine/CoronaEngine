@@ -1511,7 +1511,7 @@ def _camera_fov(camera, fallback=45.0):
     if camera is None or not hasattr(camera, 'get_fov'):
         return float(fallback)
     try:
-        return float(camera.get_fov())
+        return float(camera.get_pose()["fov"])
     except Exception:
         return float(fallback)
 

@@ -514,7 +514,7 @@ def test_camera_pose_uses_shared_native_commands_without_a_second_web_transport(
     hub = (root / 'include/corona/shared_data_hub.h').read_text(encoding='utf-8')
     assert 'Kernel::CommandBuffer<CameraMoveCommand, CameraMoveKey,' in hub
     api = (root / 'src/engine/engine_runtime_api.cpp').read_text(encoding='utf-8')
-    setter = api.split('void Corona::API::Camera::set(')[1].split('Corona::API::Camera::get_position')[0]
+    setter = api.split('void Corona::API::Camera::set(')[1].split('Corona::API::Camera::get_pose')[0]
     assert 'enqueue_camera_move(command)' in setter
     assert 'try_acquire_write' not in setter
     cef = (root / 'src/systems/ui/cef/cef_editor_native_api_handlers.cpp').read_text(encoding='utf-8')

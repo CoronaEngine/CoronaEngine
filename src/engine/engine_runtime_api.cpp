@@ -546,17 +546,22 @@ void Corona::API::Environment::set_properties(const EnvironmentProperties& prope
 }
 
 
-std::array<float, 3> Corona::API::Environment::get_sun_direction() const {
+Corona::API::EnvironmentState Corona::API::Environment::get_state() const {
+    // One view for every field: the point getters each rebuilt the snapshot+pending view.
     const auto view = Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{});
-    return {view.sun_direction.x, view.sun_direction.y, view.sun_direction.z};
+    return {{view.sun_direction.x, view.sun_direction.y, view.sun_direction.z},
+            view.sun_intensity,
+            view.sky_intensity,
+            view.floor_grid_enabled != 0,
+            {view.gravity.x, view.gravity.y, view.gravity.z},
+            view.floor_y,
+            view.floor_restitution,
+            view.fixed_dt};
 }
 
 
 
 
-float Corona::API::Environment::get_sun_intensity() const {
-    return Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{}).sun_intensity;
-}
 
 
 void Corona::API::Environment::set_authored_lighting(const std::string& description) {
@@ -614,16 +619,10 @@ void Corona::API::Environment::set_authored_lighting(const std::string& descript
 
 
 
-float Corona::API::Environment::get_sky_intensity() const {
-    return Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{}).sky_intensity;
-}
 
 
 
 
-bool Corona::API::Environment::get_floor_grid() const {
-    return Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{}).floor_grid_enabled != 0;
-}
 
 
 std::uintptr_t Corona::API::Environment::get_handle() const {
@@ -632,31 +631,18 @@ std::uintptr_t Corona::API::Environment::get_handle() const {
 
 
 
-std::array<float, 3> Corona::API::Environment::get_gravity() const {
-    const auto view = Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{});
-    return {view.gravity.x, view.gravity.y, view.gravity.z};
-}
 
 
 
 
-float Corona::API::Environment::get_floor_y() const {
-    return Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{}).floor_y;
-}
 
 
 
 
-float Corona::API::Environment::get_floor_restitution() const {
-    return Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{}).floor_restitution;
-}
 
 
 
 
-float Corona::API::Environment::get_fixed_dt() const {
-    return Corona::environment_view(handle_).value_or(Corona::EnvironmentSnapshotRow{}).fixed_dt;
-}
 
 
 // ########################
@@ -1180,15 +1166,9 @@ Corona::API::Geometry* Corona::API::Optics::get_geometry() const {
 }
 
 
-bool Corona::API::Optics::get_visible() const {
-    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).visible;
-}
 
 
 
-bool Corona::API::Optics::get_lighting_enabled() const {
-    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).enable_lighting;
-}
 
 
 void Corona::API::Optics::set_properties(const OpticsProperties& properties) {
@@ -1271,88 +1251,52 @@ void Corona::API::Optics::set_properties(const OpticsProperties& properties) {
     Corona::OpticsCommandChannel::instance().commands().push(command);
 }
 
-float Corona::API::Optics::get_metallic() const {
-    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
-    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).metallic;
-}
-
-
-float Corona::API::Optics::get_roughness() const {
-    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
-    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).roughness;
-}
-
-
-float Corona::API::Optics::get_subsurface() const {
-    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
-    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).subsurface;
-}
-
-
-float Corona::API::Optics::get_specular() const {
-    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
-    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).specular;
-}
-
-
-float Corona::API::Optics::get_specular_tint() const {
-    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
-    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).specular_tint;
-}
-
-
-float Corona::API::Optics::get_anisotropic() const {
-    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
-    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).anisotropic;
-}
-
-
-float Corona::API::Optics::get_sheen() const {
-    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
-    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).sheen;
-}
-
-
-float Corona::API::Optics::get_sheen_tint() const {
-    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
-    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).sheen_tint;
-}
-
-
-float Corona::API::Optics::get_clearcoat() const {
-    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
-    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).clearcoat;
-}
-
-
-float Corona::API::Optics::get_clearcoat_gloss() const {
-    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
-    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).clearcoat_gloss;
-}
-
-
-std::array<float, 3> Corona::API::Optics::get_ambient() const {
+Corona::API::OpticsState Corona::API::Optics::get_state() const {
+    // One view for every field: the point getters each rebuilt the snapshot+pending view.
     const auto view = Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{});
-    return {view.ambient.x, view.ambient.y, view.ambient.z};
+    return {view.metallic,
+            view.roughness,
+            view.subsurface,
+            view.specular,
+            view.specular_tint,
+            view.anisotropic,
+            view.sheen,
+            view.sheen_tint,
+            view.clearcoat,
+            view.clearcoat_gloss,
+            view.visible,
+            view.enable_lighting,
+            {view.ambient.x, view.ambient.y, view.ambient.z},
+            {view.diffuse.x, view.diffuse.y, view.diffuse.z},
+            {view.specular_color.x, view.specular_color.y, view.specular_color.z},
+            view.shininess};
 }
 
 
-std::array<float, 3> Corona::API::Optics::get_diffuse() const {
-    const auto view = Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{});
-    return {view.diffuse.x, view.diffuse.y, view.diffuse.z};
-}
 
 
-std::array<float, 3> Corona::API::Optics::get_specular_color() const {
-    const auto view = Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{});
-    return {view.specular_color.x, view.specular_color.y, view.specular_color.z};
-}
 
 
-float Corona::API::Optics::get_shininess() const {
-    // 读快照 ⊕ pending（P3）：外部线程不再拿 Optics 槽锁。
-    return Corona::optics_view(handle_).value_or(Corona::OpticsSnapshotRow{}).shininess;
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 // ########################
@@ -1477,64 +1421,43 @@ void Corona::API::Mechanics::set_properties(const MechanicsProperties& propertie
 }
 
 
-float Corona::API::Mechanics::get_mass() const {
-    if (handle_ == 0) return 1.0f;
-    if (const auto view = Corona::mechanics_view(handle_)) return view->mass;
-    return 1.0f;
+Corona::API::MechanicsState Corona::API::Mechanics::get_state() const {
+    MechanicsState state;
+    if (handle_ == 0) return state;
+    // One view for every field: the point getters each rebuilt the snapshot+pending view, so a
+    // caller reading several of them could straddle a pending command being applied.
+    const auto view = Corona::mechanics_view(handle_);
+    if (!view) return state;
+    state.mass = view->mass;
+    state.restitution = view->restitution;
+    state.damping = view->damping;
+    state.body_type = std::string(body_type_to_string(view->body_type));
+    const std::uint8_t linear = view->linear_lock_mask;
+    state.linear_lock = {(linear & 0b001) != 0, (linear & 0b010) != 0, (linear & 0b100) != 0};
+    const std::uint8_t angular = view->angular_lock_mask;
+    state.angular_lock = {(angular & 0b001) != 0, (angular & 0b010) != 0, (angular & 0b100) != 0};
+    return state;
 }
 
 
 
 
-float Corona::API::Mechanics::get_restitution() const {
-    if (handle_ == 0) return 0.8f;
-    if (const auto view = Corona::mechanics_view(handle_)) return view->restitution;
-    return 0.8f;
-}
 
 
 
 
-float Corona::API::Mechanics::get_damping() const {
-    if (handle_ == 0) return 0.99f;
-    if (const auto view = Corona::mechanics_view(handle_)) return view->damping;
-    return 0.99f;
-}
 
 
 
 
-std::string Corona::API::Mechanics::get_body_type() const {
-    if (handle_ == 0) return "dynamic";
-    if (const auto view = Corona::mechanics_view(handle_)) {
-        return std::string(body_type_to_string(view->body_type));
-    }
-    return "dynamic";
-}
 
 
 
 
-std::tuple<bool, bool, bool> Corona::API::Mechanics::get_linear_lock() const {
-    if (handle_ == 0) return {false, false, false};
-    if (const auto view = Corona::mechanics_view(handle_)) {
-        const std::uint8_t mask = view->linear_lock_mask;
-        return {(mask & 0b001) != 0, (mask & 0b010) != 0, (mask & 0b100) != 0};
-    }
-    return {false, false, false};
-}
 
 
 
 
-std::tuple<bool, bool, bool> Corona::API::Mechanics::get_angular_lock() const {
-    if (handle_ == 0) return {false, false, false};
-    if (const auto view = Corona::mechanics_view(handle_)) {
-        const std::uint8_t mask = view->angular_lock_mask;
-        return {(mask & 0b001) != 0, (mask & 0b010) != 0, (mask & 0b100) != 0};
-    }
-    return {false, false, false};
-}
 
 
 void Corona::API::Mechanics::set_collision_callback(
@@ -1629,27 +1552,20 @@ void Corona::API::Acoustics::set_properties(const AcousticsProperties& propertie
 }
 
 
-float Corona::API::Acoustics::get_volume() const {
-    if (handle_ == 0) return 0.0f;
-    return Corona::acoustics_view(handle_).value_or(Corona::AcousticsSnapshotRow{}).volume;
+Corona::API::AcousticsState Corona::API::Acoustics::get_state() const {
+    // Keeps the old per-getter defaults for an invalid handle: volume 0, enabled, no resource.
+    if (handle_ == 0) return AcousticsState{0.0f, true, 0};
+    const auto view = Corona::acoustics_view(handle_).value_or(Corona::AcousticsSnapshotRow{});
+    return {view.volume, view.audio_enabled, view.resource_id};
 }
 
 
 
 
-bool Corona::API::Acoustics::get_audio_enabled() const {
-    if (handle_ == 0) return true;
-    return Corona::acoustics_view(handle_).value_or(Corona::AcousticsSnapshotRow{}).audio_enabled;
-}
 
 
 
 
-std::uint64_t Corona::API::Acoustics::get_audio_resource() const {
-    if (handle_ == 0) return 0;
-    // 含 pending：刚 set_audio_resource 就 play() 也能读到。
-    return Corona::acoustics_view(handle_).value_or(Corona::AcousticsSnapshotRow{}).resource_id;
-}
 
 
 void Corona::API::Acoustics::play(bool loop) {
@@ -1657,7 +1573,7 @@ void Corona::API::Acoustics::play(bool loop) {
         CFW_LOG_WARNING("[Acoustics::play] Invalid acoustics handle");
         return;
     }
-    std::uint64_t rid = get_audio_resource();
+    std::uint64_t rid = get_state().audio_resource;
     if (rid == 0) {
         CFW_LOG_WARNING("[Acoustics::play] No audio resource bound to this component");
         return;
@@ -1675,7 +1591,7 @@ void Corona::API::Acoustics::stop() {
     if (handle_ == 0) {
         return;
     }
-    std::uint64_t rid = get_audio_resource();
+    std::uint64_t rid = get_state().audio_resource;
     auto* event_bus = Kernel::KernelContext::instance().event_bus();
     if (!event_bus) {
         CFW_LOG_ERROR("[Acoustics::stop] event_bus not available");
@@ -2051,49 +1967,28 @@ void Corona::API::Camera::set(const std::array<float, 3>& position, const std::a
     SharedDataHub::instance().enqueue_camera_move(command);
 }
 
-std::array<float, 3> Corona::API::Camera::get_position() const {
+Corona::API::CameraPose Corona::API::Camera::get_pose() const {
+    CameraPose pose;
     if (handle_ == 0) {
-        CFW_LOG_WARNING("[Camera::get_position] Invalid camera handle");
-        return {0.0f, 0.0f, 0.0f};
+        CFW_LOG_WARNING("[Camera::get_pose] Invalid camera handle");
+        return pose;
     }
 
-    // 读相机快照（已提交）+ 待处理命令（pending）：不拿相机槽锁，
-    // 且"写完立刻读"能读到刚提交的值。
+    // 读相机快照（已提交）+ 待处理命令（pending）：不拿相机槽锁，且"写完立刻读"能读到刚提交的值。
+    // One view for every pose field, so the four values cannot straddle a pending camera move.
     const auto view = SharedDataHub::instance().camera_view(handle_);
-    return {view.position.x, view.position.y, view.position.z};
+    pose.position = {view.position.x, view.position.y, view.position.z};
+    pose.forward = {view.forward.x, view.forward.y, view.forward.z};
+    pose.world_up = {view.world_up.x, view.world_up.y, view.world_up.z};
+    pose.fov = view.fov;
+    return pose;
 }
 
 
-std::array<float, 3> Corona::API::Camera::get_forward() const {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Camera::get_forward] Invalid camera handle");
-        return {0.0f, 0.0f, 1.0f};
-    }
-
-    const auto view = SharedDataHub::instance().camera_view(handle_);
-    return {view.forward.x, view.forward.y, view.forward.z};
-}
 
 
-std::array<float, 3> Corona::API::Camera::get_world_up() const {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Camera::get_world_up] Invalid camera handle");
-        return {0.0f, 1.0f, 0.0f};
-    }
-
-    const auto view = SharedDataHub::instance().camera_view(handle_);
-    return {view.world_up.x, view.world_up.y, view.world_up.z};
-}
 
 
-float Corona::API::Camera::get_fov() const {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Camera::get_fov] Invalid camera handle");
-        return 45.0f;
-    }
-
-    return SharedDataHub::instance().camera_view(handle_).fov;
-}
 
 
 std::uintptr_t Corona::API::Camera::get_handle() const {
@@ -2401,20 +2296,22 @@ void Corona::API::Camera::set_view(const Corona::API::CameraViewState& state) {
     SharedDataHub::instance().enqueue_camera_state_update(command);
 }
 
-std::array<float, 6> Corona::API::Camera::get_view_state() const {
+Corona::API::CameraViewState Corona::API::Camera::get_view() const {
+    Corona::API::CameraViewState state;
     if (handle_ == 0) {
-        return {0.0f, 120.0f, 120.0f, 960.0f, 540.0f, 1.0f};
+        // Same defaults the untyped tuple used to report for an invalid handle.
+        state.open = false;
+        return state;
     }
 
     const auto view = SharedDataHub::instance().camera_view(handle_);
-    return {
-        view.view_open ? 1.0f : 0.0f,
-        static_cast<float>(view.view_x),
-        static_cast<float>(view.view_y),
-        static_cast<float>(view.view_width),
-        static_cast<float>(view.view_height),
-        view.move_speed,
-    };
+    state.open = view.view_open;
+    state.x = view.view_x;
+    state.y = view.view_y;
+    state.width = view.view_width;
+    state.height = view.view_height;
+    state.move_speed = view.move_speed;
+    return state;
 }
 
 

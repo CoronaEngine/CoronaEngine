@@ -187,18 +187,19 @@ void BindAll(nanobind::module_& m) {
              "Set any of mass / restitution / damping / body_type / linear_lock / angular_lock in "
              "one write; body_type is \"dynamic\", \"kinematic\", \"static\" or \"phantom\" and the "
              "locks are three booleans")
-        .def("get_mass", &Mechanics::get_mass,
-             "Get object mass")
-        .def("get_restitution", &Mechanics::get_restitution,
-             "Get object restitution")
-        .def("get_damping", &Mechanics::get_damping,
-             "Get velocity damping factor")
-        .def("get_body_type", &Mechanics::get_body_type,
-             "Get body type string: \"dynamic\", \"kinematic\", \"static\", or \"phantom\"")
-        .def("get_linear_lock", &Mechanics::get_linear_lock,
-             "Get linear axis lock state as (lock_x, lock_y, lock_z) tuple")
-        .def("get_angular_lock", &Mechanics::get_angular_lock,
-             "Get angular axis lock state as (lock_x, lock_y, lock_z) tuple")
+        .def("get_state", [](const Mechanics& self) {
+                 const auto state = self.get_state();
+                 nb::dict out;
+                 out["mass"] = state.mass;
+                 out["restitution"] = state.restitution;
+                 out["damping"] = state.damping;
+                 out["body_type"] = state.body_type;
+                 out["linear_lock"] = state.linear_lock;
+                 out["angular_lock"] = state.angular_lock;
+                 return out;
+             },
+             "Every mechanics field from one snapshot: mass, restitution, damping, body_type, "
+             "linear_lock and angular_lock")
         .def("set_collision_callback",
              [](Mechanics& self, nb::object callback) {
                  using CallbackType = std::function<void(std::uintptr_t, bool, const std::array<float, 3>&, const std::array<float, 3>&)>;
@@ -299,24 +300,28 @@ void BindAll(nanobind::module_& m) {
              nb::arg("ambient") = nb::none(), nb::arg("diffuse") = nb::none(),
              nb::arg("specular_color") = nb::none(), nb::arg("shininess") = nb::none(),
              "Set any optics field in one write")
-        .def("get_visible", &Optics::get_visible,
-             "Get whether this model is rendered")
-        .def("get_lighting_enabled", &Optics::get_lighting_enabled,
-             "Get whether lighting influence is enabled for this object")
-        .def("get_metallic", &Optics::get_metallic)
-        .def("get_roughness", &Optics::get_roughness)
-        .def("get_subsurface", &Optics::get_subsurface)
-        .def("get_specular", &Optics::get_specular)
-        .def("get_specular_tint", &Optics::get_specular_tint)
-        .def("get_anisotropic", &Optics::get_anisotropic)
-        .def("get_sheen", &Optics::get_sheen)
-        .def("get_sheen_tint", &Optics::get_sheen_tint)
-        .def("get_clearcoat", &Optics::get_clearcoat)
-        .def("get_clearcoat_gloss", &Optics::get_clearcoat_gloss)
-        .def("get_ambient", &Optics::get_ambient)
-        .def("get_diffuse", &Optics::get_diffuse)
-        .def("get_specular_color", &Optics::get_specular_color)
-        .def("get_shininess", &Optics::get_shininess);
+        .def("get_state", [](const Optics& self) {
+                 const auto state = self.get_state();
+                 nb::dict out;
+                 out["metallic"] = state.metallic;
+                 out["roughness"] = state.roughness;
+                 out["subsurface"] = state.subsurface;
+                 out["specular"] = state.specular;
+                 out["specular_tint"] = state.specular_tint;
+                 out["anisotropic"] = state.anisotropic;
+                 out["sheen"] = state.sheen;
+                 out["sheen_tint"] = state.sheen_tint;
+                 out["clearcoat"] = state.clearcoat;
+                 out["clearcoat_gloss"] = state.clearcoat_gloss;
+                 out["visible"] = state.visible;
+                 out["lighting_enabled"] = state.lighting_enabled;
+                 out["ambient"] = state.ambient;
+                 out["diffuse"] = state.diffuse;
+                 out["specular_color"] = state.specular_color;
+                 out["shininess"] = state.shininess;
+                 return out;
+             },
+             "Every optics field from one snapshot");
 
     // ============================================================================
     // Acoustics: 声学组件
@@ -338,12 +343,15 @@ void BindAll(nanobind::module_& m) {
              nb::arg("volume") = nb::none(), nb::arg("audio_enabled") = nb::none(),
              nb::arg("audio_resource") = nb::none(),
              "Set volume, audio enable or the bound audio resource id in one write")
-        .def("get_volume", &Acoustics::get_volume,
-             "Get audio volume")
-        .def("get_audio_enabled", &Acoustics::get_audio_enabled,
-             "Get whether audio is enabled for this object")
-        .def("get_audio_resource", &Acoustics::get_audio_resource,
-             "Get the bound audio resource id")
+        .def("get_state", [](const Acoustics& self) {
+                 const auto state = self.get_state();
+                 nb::dict out;
+                 out["volume"] = state.volume;
+                 out["audio_enabled"] = state.audio_enabled;
+                 out["audio_resource"] = state.audio_resource;
+                 return out;
+             },
+             "Every acoustics field from one snapshot")
         .def("play", &Acoustics::play, nb::arg("loop") = false,
              "Play the bound audio at this object's world position (spatial)")
         .def("stop", &Acoustics::stop,
@@ -432,14 +440,31 @@ void BindAll(nanobind::module_& m) {
             nb::arg("move_speed") = 1.0f,
             "Set the viewport; pass open=True/False to also drive the window lifecycle, or None to "
             "change only the rectangle and speed")
-        .def("get_view_state", &Camera::get_view_state)
+        .def("get_view", [](const Camera& self) {
+                 const auto state = self.get_view();
+                 nb::dict out;
+                 out["open"] = state.open.value_or(false);
+                 out["x"] = state.x;
+                 out["y"] = state.y;
+                 out["width"] = state.width;
+                 out["height"] = state.height;
+                 out["move_speed"] = state.move_speed;
+                 return out;
+             },
+             "The viewport state: open, x, y, width, height and move speed")
         .def("set_surface", [](Camera& self, std::uintptr_t surface) { self.set_surface(reinterpret_cast<void*>(surface)); }, nb::arg("surface"), "Set render surface (pass window ID as integer)")
         .def("get_surface", [](const Camera& self) -> std::uintptr_t { return reinterpret_cast<std::uintptr_t>(self.get_surface()); }, "Get render surface handle as integer (0 if none)")
         .def("set_offscreen_capture_mode", &Camera::set_offscreen_capture_mode, nb::arg("enabled"), "Detach camera from the default surface for screenshot-only rendering")
-        .def("get_position", &Camera::get_position, "Get camera position [x, y, z]")
-        .def("get_forward", &Camera::get_forward, "Get camera forward direction [x, y, z]")
-        .def("get_world_up", &Camera::get_world_up, "Get camera world up vector [x, y, z]")
-        .def("get_fov", &Camera::get_fov, "Get field of view in degrees")
+        .def("get_pose", [](const Camera& self) {
+                 const auto pose = self.get_pose();
+                 nb::dict out;
+                 out["position"] = pose.position;
+                 out["forward"] = pose.forward;
+                 out["world_up"] = pose.world_up;
+                 out["fov"] = pose.fov;
+                 return out;
+             },
+             "Every camera pose field from one snapshot")
         .def("set_size", &Camera::set_size, nb::arg("width"), nb::arg("height"), "Set camera render dimensions")
         .def("get_size", &Camera::get_size, "Get camera render dimensions [width, height]")
         .def("pick_actor_at_pixel", &Camera::pick_actor_at_pixel, nb::arg("x"), nb::arg("y"), "Pick actor at pixel coordinates");
@@ -488,22 +513,20 @@ void BindAll(nanobind::module_& m) {
              nb::arg("floor_restitution") = nb::none(), nb::arg("fixed_dt") = nb::none(),
              "Set any environment field in one write: sun direction/intensity, sky intensity, "
              "floor grid, gravity, floor height/restitution and the physics step")
-        .def("get_sun_direction", &Environment::get_sun_direction,
-             "Get sun light direction [x, y, z]")
-        .def("get_sun_intensity", &Environment::get_sun_intensity,
-             "Get sun light intensity")
-        .def("get_sky_intensity", &Environment::get_sky_intensity,
-             "Get atmospheric sky intensity")
-        .def("get_floor_grid", &Environment::get_floor_grid,
-             "Get floor grid rendering state")
-        .def("get_gravity", &Environment::get_gravity,
-             "Get gravity vector [x, y, z]")
-        .def("get_floor_y", &Environment::get_floor_y,
-             "Get floor plane Y height")
-        .def("get_floor_restitution", &Environment::get_floor_restitution,
-             "Get floor restitution")
-        .def("get_fixed_dt", &Environment::get_fixed_dt,
-             "Get physics fixed time step");
+        .def("get_state", [](const Environment& self) {
+                 const auto state = self.get_state();
+                 nb::dict out;
+                 out["sun_direction"] = state.sun_direction;
+                 out["sun_intensity"] = state.sun_intensity;
+                 out["sky_intensity"] = state.sky_intensity;
+                 out["floor_grid"] = state.floor_grid;
+                 out["gravity"] = state.gravity;
+                 out["floor_y"] = state.floor_y;
+                 out["floor_restitution"] = state.floor_restitution;
+                 out["fixed_dt"] = state.fixed_dt;
+                 return out;
+             },
+             "Every environment field from one snapshot");
 
     // ============================================================================
     // Scene: 场景类
