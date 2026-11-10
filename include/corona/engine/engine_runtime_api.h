@@ -297,20 +297,25 @@ class Actor {
 };
 
 // ============================================================================
-// ImageEffects: 图像效果类
-// ============================================================================
-class ImageEffects {
-   public:
-    ImageEffects();
-    ~ImageEffects();
-
-   private:
-    EntityId handle_{};
-};
-
-// ============================================================================
 // Camera: 相机类（合并了原 Viewport 的功能）
 // ============================================================================
+
+/// Everything one viewport edit can change. `open` is optional on purpose: the two callers differ
+/// only in whether the edit also drives the window lifecycle. Omitting it changes the rectangle and
+/// speed and leaves the open state alone (this was set_view_settings); providing it opens or closes
+/// the view and carries the rectangle and speed with it (set_view_state).
+///
+/// set_view_state / set_view_settings / set_viewport_rect were three names for those two
+/// behaviours, and set_viewport_rect was an unimplemented stub that silently did nothing.
+struct CameraViewState {
+    std::optional<bool> open;
+    int x{120};
+    int y{120};
+    int width{960};
+    int height{540};
+    float move_speed{1.0f};
+};
+
 class Camera {
    public:
     Camera();
@@ -357,8 +362,8 @@ class Camera {
     void set_vision_stable_planes(bool enabled);
     [[nodiscard]] bool get_vision_stable_planes() const;
     [[nodiscard]] bool get_requested_vision_stable_planes() const;
-    void set_view_state(bool open, int x, int y, int width, int height, float move_speed);
-    void set_view_settings(int x, int y, int width, int height, float move_speed);
+    /// The single viewport entry point: one complete state, one command. See CameraViewState.
+    void set_view(const CameraViewState& state);
     [[nodiscard]] std::array<float, 6> get_view_state() const;
 
     [[nodiscard]] std::array<float, 3> get_position() const;
@@ -371,14 +376,8 @@ class Camera {
     [[nodiscard]] std::array<float, 3> get_projection() const;
 
     // ========== 原 Viewport 功能 ==========
-    void set_image_effects(ImageEffects* effects);
-    [[nodiscard]] ImageEffects* get_image_effects();
-    [[nodiscard]] bool has_image_effects() const;
-    void remove_image_effects();
-
     void set_size(int width, int height);
     [[nodiscard]] std::array<int, 2> get_size() const;
-    void set_viewport_rect(int x, int y, int width, int height);
     [[nodiscard]] EntityId pick_actor_at_pixel(int x, int y) const;
     [[nodiscard]] ModelNodePickResult pick_model_node_at_pixel(int x, int y) const;
 
@@ -386,7 +385,6 @@ class Camera {
     friend class Scene;
 
     EntityId handle_{};
-    ImageEffects* image_effects_{nullptr};
     int width_{1920};
     int height_{1080};
     std::array<float, 3> projection_{1.0f, 0.1f, 100.0f};

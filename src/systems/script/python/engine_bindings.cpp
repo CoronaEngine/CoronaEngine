@@ -353,8 +353,18 @@ void BindAll(nanobind::module_& m) {
         .def("set_vision_stable_planes", &Camera::set_vision_stable_planes, nb::arg("enabled"))
         .def("get_vision_stable_planes", &Camera::get_vision_stable_planes)
         .def("get_requested_vision_stable_planes", &Camera::get_requested_vision_stable_planes)
-        .def("set_view_state", &Camera::set_view_state, nb::arg("open"), nb::arg("x"),
-             nb::arg("y"), nb::arg("width"), nb::arg("height"), nb::arg("move_speed"))
+        .def("set_view", [](Camera& self, nb::object open, int x, int y, int width, int height,
+                            float move_speed) {
+                Corona::API::CameraViewState state;
+                // None leaves the open state untouched; a bool also drives the window lifecycle.
+                if (!open.is_none()) state.open = nb::cast<bool>(open);
+                state.x = x; state.y = y; state.width = width; state.height = height;
+                state.move_speed = move_speed;
+                self.set_view(state);
+            }, nb::arg("open"), nb::arg("x"), nb::arg("y"), nb::arg("width"), nb::arg("height"),
+            nb::arg("move_speed") = 1.0f,
+            "Set the viewport; pass open=True/False to also drive the window lifecycle, or None to "
+            "change only the rectangle and speed")
         .def("get_view_state", &Camera::get_view_state)
         .def("set_surface", [](Camera& self, std::uintptr_t surface) { self.set_surface(reinterpret_cast<void*>(surface)); }, nb::arg("surface"), "Set render surface (pass window ID as integer)")
         .def("get_surface", [](const Camera& self) -> std::uintptr_t { return reinterpret_cast<std::uintptr_t>(self.get_surface()); }, "Get render surface handle as integer (0 if none)")
@@ -363,20 +373,9 @@ void BindAll(nanobind::module_& m) {
         .def("get_forward", &Camera::get_forward, "Get camera forward direction [x, y, z]")
         .def("get_world_up", &Camera::get_world_up, "Get camera world up vector [x, y, z]")
         .def("get_fov", &Camera::get_fov, "Get field of view in degrees")
-        .def("set_image_effects", &Camera::set_image_effects, nb::arg("effects"), "Set image effects for this camera")
-        .def("get_image_effects", &Camera::get_image_effects, "Get image effects attached to this camera", nb::rv_policy::reference)
-        .def("has_image_effects", &Camera::has_image_effects, "Check if camera has image effects")
-        .def("remove_image_effects", &Camera::remove_image_effects, "Remove image effects from this camera")
         .def("set_size", &Camera::set_size, nb::arg("width"), nb::arg("height"), "Set camera render dimensions")
         .def("get_size", &Camera::get_size, "Get camera render dimensions [width, height]")
-        .def("set_viewport_rect", &Camera::set_viewport_rect, nb::arg("x"), nb::arg("y"), nb::arg("width"), nb::arg("height"), "Set viewport rectangle")
         .def("pick_actor_at_pixel", &Camera::pick_actor_at_pixel, nb::arg("x"), nb::arg("y"), "Pick actor at pixel coordinates");
-
-    // ============================================================================
-    // ImageEffects: 图像效果类
-    // ============================================================================
-    nb::class_<ImageEffects>(m, "ImageEffects")
-        .def(nb::init<>(), "Create an ImageEffects instance");
 
     // ============================================================================
     // Environment: 环境类

@@ -1301,8 +1301,8 @@ NativeEditorCamera materialize_camera_snapshot(NativeEditorScene& scene,
         json_bool_value(camera_data, "vision_accumulation", legacy_progressive_mode(vision_mode)));
     item.engine_camera->set_vision_stable_planes(
         json_bool_value(camera_data, "vision_stable_planes", true));
-    item.engine_camera->set_view_state(item.view_open, item.view_x, item.view_y,
-                                       item.view_width, item.view_height, item.move_speed);
+    item.engine_camera->set_view({item.view_open, item.view_x, item.view_y,
+                                  item.view_width, item.view_height, item.move_speed});
     if (index > 0) item.engine_camera->set_offscreen_capture_mode(true);
     return item;
 }
@@ -1986,8 +1986,8 @@ NativeEditorCamera& create_native_camera_view(NativeEditorScene& scene, const st
     item.engine_camera->set_output_mode("final_color");
     item.engine_camera->set_render_backend("native");
     item.engine_camera->set_vision_render_mode("path_tracing");
-    item.engine_camera->set_view_state(item.view_open, item.view_x, item.view_y,
-                                       item.view_width, item.view_height, item.move_speed);
+    item.engine_camera->set_view({item.view_open, item.view_x, item.view_y,
+                                  item.view_width, item.view_height, item.move_speed});
     item.engine_camera->set_offscreen_capture_mode(true);
     item.engine_camera->set_surface(0);
 
@@ -2304,8 +2304,8 @@ NativeEditorCamera* ensure_native_editor_camera(NativeEditorScene& scene,
         json_bool_value(camera_data, "vision_accumulation", legacy_progressive_mode(vision_mode)));
     item.engine_camera->set_vision_stable_planes(
         json_bool_value(camera_data, "vision_stable_planes", true));
-    item.engine_camera->set_view_state(false, item.view_x, item.view_y,
-                                       item.view_width, item.view_height, item.move_speed);
+    item.engine_camera->set_view({false, item.view_x, item.view_y,
+                                  item.view_width, item.view_height, item.move_speed});
     item.engine_camera->set_offscreen_capture_mode(true);
     item.engine_camera->set_surface(0);
 
@@ -4761,14 +4761,17 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
         camera.move_speed = patch.move_speed.value_or(camera.move_speed);
         if (!editor_input && patch.view_open) {
             camera.window_state->requested_open.store(camera.view_open ? 1 : 0);
-            engine.set_view_state(camera.view_open, camera.view_x, camera.view_y, camera.view_width, camera.view_height, camera.move_speed);
+            engine.set_view({camera.view_open, camera.view_x, camera.view_y, camera.view_width,
+                             camera.view_height, camera.move_speed});
         } else if (patch.view_x || patch.view_y || patch.view_width || patch.view_height) {
-            engine.set_view_settings(camera.view_x, camera.view_y, camera.view_width, camera.view_height, camera.move_speed);
+            engine.set_view({std::nullopt, camera.view_x, camera.view_y, camera.view_width,
+                             camera.view_height, camera.move_speed});
         } else if (patch.move_speed) {
             // A speed-only update must not replay saved window geometry over the embedded viewport.
             const auto view = engine.get_view_state();
-            engine.set_view_settings(static_cast<int>(view[1]), static_cast<int>(view[2]),
-                static_cast<int>(view[3]), static_cast<int>(view[4]), camera.move_speed);
+            engine.set_view({std::nullopt, static_cast<int>(view[1]), static_cast<int>(view[2]),
+                             static_cast<int>(view[3]), static_cast<int>(view[4]),
+                             camera.move_speed});
         }
     }
     reply.camera = camera_properties_snapshot(*scene, camera);
@@ -6853,9 +6856,9 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             }
             camera->view_open = false;
             camera->window_state->requested_open.store(0);
-            camera->engine_camera->set_view_state(false, camera->view_x, camera->view_y,
-                                                  camera->view_width, camera->view_height,
-                                                  camera->move_speed);
+            camera->engine_camera->set_view({false, camera->view_x, camera->view_y,
+                                             camera->view_width, camera->view_height,
+                                             camera->move_speed});
             camera->engine_camera->set_surface(0);
             return native_success({
                 {"status", "success"},
@@ -7528,9 +7531,9 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             }
             camera->view_open = true;
             camera->window_state->requested_open.store(1);
-            camera->engine_camera->set_view_state(true, camera->view_x, camera->view_y,
-                                                  camera->view_width, camera->view_height,
-                                                  camera->move_speed);
+            camera->engine_camera->set_view({true, camera->view_x, camera->view_y,
+                                             camera->view_width, camera->view_height,
+                                             camera->move_speed});
             return native_success({
                 {"status", "success"},
                 {"scene", scene->route},

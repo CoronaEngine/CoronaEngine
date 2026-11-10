@@ -2572,34 +2572,24 @@ bool Corona::API::Camera::get_requested_vision_stable_planes() const {
 
 
 
-void Corona::API::Camera::set_view_state(bool open, int x, int y, int width, int height, float move_speed) {
+void Corona::API::Camera::set_view(const Corona::API::CameraViewState& state) {
     if (handle_ == 0) {
-        CFW_LOG_WARNING("[Camera::set_view_state] Invalid camera handle");
+        CFW_LOG_WARNING("[Camera::set_view] Invalid camera handle");
         return;
     }
 
     CameraStateUpdateCommand command{};
     command.camera_handle = handle_;
-    command.fields = CameraStateUpdateField::ViewState;
-    command.view_open = open;
-    command.view_x = x;
-    command.view_y = y;
-    command.view_width = std::max(width, 1);
-    command.view_height = std::max(height, 1);
-    command.move_speed = std::max(move_speed, 0.01f);
-    SharedDataHub::instance().enqueue_camera_state_update(command);
-}
-
-void Corona::API::Camera::set_view_settings(int x, int y, int width, int height, float move_speed) {
-    if (handle_ == 0) return;
-    CameraStateUpdateCommand command{};
-    command.camera_handle = handle_;
-    command.fields = CameraStateUpdateField::ViewSettings;
-    command.view_x = x;
-    command.view_y = y;
-    command.view_width = std::max(width, 1);
-    command.view_height = std::max(height, 1);
-    command.move_speed = std::max(move_speed, 0.01f);
+    // ViewState also drives the window lifecycle; ViewSettings is the same rectangle and speed
+    // without touching it. The optional `open` is the only thing that distinguishes the two.
+    command.fields = state.open ? CameraStateUpdateField::ViewState
+                                : CameraStateUpdateField::ViewSettings;
+    if (state.open) command.view_open = *state.open;
+    command.view_x = state.x;
+    command.view_y = state.y;
+    command.view_width = std::max(state.width, 1);
+    command.view_height = std::max(state.height, 1);
+    command.move_speed = std::max(state.move_speed, 0.01f);
     SharedDataHub::instance().enqueue_camera_state_update(command);
 }
 
@@ -2619,41 +2609,6 @@ std::array<float, 6> Corona::API::Camera::get_view_state() const {
     };
 }
 
-
-// ########################
-//      ImageEffects
-// ########################
-Corona::API::ImageEffects::ImageEffects()
-    : handle_(0) {
-}
-
-Corona::API::ImageEffects::~ImageEffects() {
-    if (handle_ != 0) {
-        // Corona::SharedDataHub::instance().image_effects_storage().deallocate(handle_);
-        handle_ = 0;
-    }
-}
-
-// ########################
-//   Camera (原 Viewport 功能)
-// ########################
-void Corona::API::Camera::set_image_effects(ImageEffects* effects) {
-    image_effects_ = effects;
-    // TODO: 如果有 image_effects_storage，在此写入
-}
-
-Corona::API::ImageEffects* Corona::API::Camera::get_image_effects() {
-    return image_effects_;
-}
-
-bool Corona::API::Camera::has_image_effects() const {
-    return image_effects_ != nullptr;
-}
-
-void Corona::API::Camera::remove_image_effects() {
-    image_effects_ = nullptr;
-    // TODO: 如果有 image_effects_storage，在此清理
-}
 
 void Corona::API::Camera::set_size(int width, int height) {
     if (handle_ == 0) {
@@ -2710,11 +2665,6 @@ std::array<int, 2> Corona::API::Camera::get_size() const {
     };
 }
 
-
-void Corona::API::Camera::set_viewport_rect(int x, int y, int width, int height) {
-    // TODO: Implement viewport rectangle settings
-    CFW_LOG_WARNING("[Camera::set_viewport_rect] Not implemented yet");
-}
 
 std::uintptr_t Corona::API::Camera::pick_actor_at_pixel(int x, int y) const {
     return pick_model_node_at_pixel(x,y).actor_handle;
