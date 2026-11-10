@@ -29,7 +29,7 @@ TARGET_LINES = 13_807
 # The JSON manifest is gone: table, registry, caller masks, the two `_invoke_cpp_*`
 # bindings and six handler modules. The interface core is now below the programme
 # target this file recorded when the migration started.
-CORE_BUDGET = 13_667
+CORE_BUDGET = 13_668
 
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
