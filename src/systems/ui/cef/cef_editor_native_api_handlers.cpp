@@ -91,20 +91,6 @@ std::shared_ptr<Corona::Systems::NetworkSystem> get_network_system() {
         sys_mgr->get_system("Network"));
 }
 
-Corona::Systems::NetworkSystem::SessionRole parse_network_session_role(
-    const nlohmann::json& value) {
-    if (!value.is_string()) {
-        return Corona::Systems::NetworkSystem::SessionRole::Host;
-    }
-    const auto role = value.get<std::string>();
-    if (role == "client") {
-        return Corona::Systems::NetworkSystem::SessionRole::Client;
-    }
-    if (role == "none") {
-        return Corona::Systems::NetworkSystem::SessionRole::None;
-    }
-    return Corona::Systems::NetworkSystem::SessionRole::Host;
-}
 
 const char* editor_api_value_type_name(EditorApiValueType type) {
     switch (type) {
@@ -310,21 +296,7 @@ bool legacy_progressive_mode(std::string mode) {
 
 bool json_bool_value(const nlohmann::json& object, const char* key, bool fallback);
 
-int parse_int(const std::string& value, int fallback) {
-    try {
-        return std::stoi(trim_ascii(value));
-    } catch (...) {
-        return fallback;
-    }
-}
 
-float parse_float(const std::string& value, float fallback) {
-    try {
-        return std::stof(trim_ascii(value));
-    } catch (...) {
-        return fallback;
-    }
-}
 
 struct NativeEditorCamera {
     // First for move assignment: retire the overwritten identity before its
@@ -425,35 +397,7 @@ struct NativeEditorActor {
     std::unique_ptr<Corona::API::Actor> engine_actor;
 };
 
-nlohmann::json model_node_to_json(const Corona::API::ModelNodeState& node) {
-    return {{"node_index", node.node_index}, {"parent_index", node.parent_index},
-            {"name", node.name}, {"node_path", node.node_path},
-            {"position", node.position}, {"rotation", node.rotation}, {"scale", node.scale},
-            {"visible", node.visible}, {"effective_visible", node.effective_visible},
-            {"editable", node.editable}};
-}
 
-nlohmann::json native_model_node_page(const NativeEditorActor& actor, std::int64_t parent_index,
-                                      std::size_t offset, std::size_t limit) {
-    nlohmann::json items = nlohmann::json::array();
-    if (!actor.geometry) return {{"nodes", items}, {"total", 0}, {"next_offset", 0}, {"has_more", false}};
-    const auto nodes = actor.geometry->get_model_nodes();
-    const bool actor_visible = actor.optics ? actor.optics->get_state().visible : actor.persisted_visible;
-    ModelNodePageRequest request;
-    request.parent_index = parent_index;
-    request.offset = offset;
-    request.limit = limit;
-    const auto page = SceneModelNodeService::project_page(nodes, request, actor_visible);
-    for (const auto& snapshot : page.nodes) {
-        items.push_back({{"node_index", snapshot.node_index}, {"parent_index", snapshot.parent_index},
-            {"name", snapshot.name}, {"node_path", snapshot.node_path},
-            {"position", snapshot.position}, {"rotation", snapshot.rotation}, {"scale", snapshot.scale},
-            {"visible", snapshot.visible}, {"effective_visible", snapshot.effective_visible},
-            {"editable", snapshot.editable}, {"child_count", snapshot.child_count}});
-    }
-    return {{"nodes", std::move(items)}, {"total", page.total},
-            {"next_offset", page.next_offset}, {"has_more", page.has_more}};
-}
 
 std::vector<Corona::API::ModelNodeOverride> parse_native_model_node_overrides(const nlohmann::json& data) {
     std::vector<Corona::API::ModelNodeOverride> result;
@@ -688,14 +632,6 @@ std::filesystem::path resolve_native_actor_asset_path(const NativeEditorScene& s
     return path_from_utf8(read_actor_descriptor(scene, source).at("model").get<std::string>());
 }
 
-std::optional<std::string> optional_ini_string(const IniSection& section,
-                                               const std::string& key) {
-    const auto it = section.find(key);
-    if (it == section.end() || trim_ascii(it->second).empty()) {
-        return std::nullopt;
-    }
-    return it->second;
-}
 
 void apply_native_actor_optics_state(NativeEditorActor& item) {
     if (!item.optics) {
@@ -2198,26 +2134,6 @@ int json_int_value(const nlohmann::json& object, const char* key, int fallback) 
     return fallback;
 }
 
-float json_float_value(const nlohmann::json& object, const char* key, float fallback) {
-    if (!object.is_object()) {
-        return fallback;
-    }
-    const auto it = object.find(key);
-    if (it == object.end()) {
-        return fallback;
-    }
-    if (it->is_number()) {
-        return it->get<float>();
-    }
-    if (it->is_string()) {
-        try {
-            return std::stof(it->get<std::string>());
-        } catch (...) {
-            return fallback;
-        }
-    }
-    return fallback;
-}
 
 bool json_bool_value(const nlohmann::json& object, const char* key, bool fallback) {
     if (!object.is_object()) {
@@ -2239,76 +2155,6 @@ bool json_bool_value(const nlohmann::json& object, const char* key, bool fallbac
     return fallback;
 }
 
-NativeEditorCamera* ensure_native_editor_camera(NativeEditorScene& scene,
-                                                const std::string& requested_name,
-                                                const nlohmann::json& camera_data) {
-    const auto camera_name = trim_ascii(requested_name.empty()
-                                            ? json_string_value(camera_data, {"camera_name", "name"})
-                                            : requested_name);
-    auto* existing = find_native_camera(scene, camera_name);
-    if (existing) {
-        return existing;
-    }
-
-    const auto name = camera_name.empty() ? "vlm_review_camera" : camera_name;
-    NativeEditorCamera item;
-    item.name = name;
-    item.camera_id = json_string_value(camera_data, {"camera_id", "id"});
-    if (item.camera_id.empty()) {
-        item.camera_id = scene.route + "#" + name;
-    }
-    item.deletable = parse_bool(json_string_value(camera_data, {"deletable"}), false);
-    item.width = std::max(json_int_value(camera_data, "width", 512), 1);
-    item.height = std::max(json_int_value(camera_data, "height", 512), 1);
-    item.view_open = false;
-    item.view_width = item.width;
-    item.view_height = item.height;
-    item.move_speed = json_float_value(camera_data, "move_speed", 1.0f);
-
-    const auto position = camera_data.contains("position")
-                              ? json_float3_value(camera_data["position"]).value_or(std::array<float, 3>{0.0f, 0.0f, -5.0f})
-                              : std::array<float, 3>{0.0f, 0.0f, -5.0f};
-    const auto forward = camera_data.contains("forward")
-                             ? json_float3_value(camera_data["forward"]).value_or(std::array<float, 3>{0.0f, 0.0f, 1.0f})
-                             : std::array<float, 3>{0.0f, 0.0f, 1.0f};
-    const auto world_up = camera_data.contains("world_up")
-                              ? json_float3_value(camera_data["world_up"]).value_or(std::array<float, 3>{0.0f, 1.0f, 0.0f})
-                              : std::array<float, 3>{0.0f, 1.0f, 0.0f};
-    const auto fov = json_float_value(camera_data, "fov", 45.0f);
-
-    item.engine_camera = std::make_unique<Corona::API::Camera>(position, forward, world_up, fov);
-    item.engine_camera->set_size(item.width, item.height);
-    item.engine_camera->set_output_mode(json_string_value(camera_data, {"output_mode"}).empty()
-                                            ? "base_color"
-                                            : json_string_value(camera_data, {"output_mode"}));
-    item.engine_camera->set_render_backend(json_string_value(camera_data, {"render_backend"}).empty()
-                                               ? "native"
-                                               : json_string_value(camera_data, {"render_backend"}));
-    const auto vision_mode = json_string_value(camera_data, {"vision_render_mode"});
-    item.engine_camera->set_vision_render_mode(vision_mode.empty() ? "path_tracing" : vision_mode);
-    item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{legacy_svgf_mode(vision_mode) ? "svgf" : "reblur"}));
-    API::set_vision_settings(API::VisionSettingsFamily::Reblur, camera_data.value("vision_reblur_settings", nlohmann::json::object()), item.engine_camera->get_handle());
-    API::set_vision_settings(API::VisionSettingsFamily::Pt, camera_data.value("vision_pt_settings", nlohmann::json::object()), item.engine_camera->get_handle());
-    API::set_vision_settings(API::VisionSettingsFamily::Restir, camera_data.value("vision_restir_settings", nlohmann::json::object()), item.engine_camera->get_handle());
-    API::set_vision_settings(API::VisionSettingsFamily::Relax, camera_data.value("vision_relax_settings", nlohmann::json::object()), item.engine_camera->get_handle());
-    item.engine_camera->set_vision_denoise(
-        json_bool_value(camera_data, "vision_denoise", true));
-    item.engine_camera->set_vision_accumulation(
-        json_bool_value(camera_data, "vision_accumulation", legacy_progressive_mode(vision_mode)));
-    item.engine_camera->set_vision_stable_planes(
-        json_bool_value(camera_data, "vision_stable_planes", true));
-    item.engine_camera->set_view({false, item.view_x, item.view_y,
-                                  item.view_width, item.view_height, item.move_speed});
-    item.engine_camera->set_offscreen_capture_mode(true);
-    item.engine_camera->set_surface(0);
-
-    scene.cameras.push_back(std::move(item));
-    auto& camera = scene.cameras.back();
-    if (scene.engine_scene && camera.engine_camera) {
-        scene.engine_scene->add_camera(camera.engine_camera.get());
-    }
-    return &camera;
-}
 
 bool json_bool_at(const nlohmann::json& value, size_t index, bool fallback = false) {
     if (!value.is_array() || index >= value.size()) {
@@ -2352,22 +2198,6 @@ std::optional<bool> actor_data_bool(const nlohmann::json& actor_data,
     return std::nullopt;
 }
 
-float arg_float_value(const nlohmann::json& args, size_t index, float fallback = 0.0f) {
-    if (!args.is_array() || index >= args.size()) {
-        return fallback;
-    }
-    const auto& value = args[index];
-    try {
-        if (value.is_number()) {
-            return value.get<float>();
-        }
-        if (value.is_string()) {
-            return std::stof(value.get<std::string>());
-        }
-    } catch (...) {
-    }
-    return fallback;
-}
 
 
 
@@ -3721,11 +3551,6 @@ std::optional<std::filesystem::path> open_project_file_native() {
         L"打开 Corona 或外部场景");
 }
 
-std::optional<std::filesystem::path> browse_folder_native(
-    const std::filesystem::path& default_path,
-    const wchar_t* title) {
-    return show_native_path_dialog(true, default_path, title);
-}
 
 
 const std::vector<NativeFileDialogFilter>* resource_dialog_filters(
@@ -3982,29 +3807,7 @@ void add_recent_project_native(const std::filesystem::path& project_dir) {
     if (!result.success) throw std::runtime_error(result.error);
 }
 
-nlohmann::json make_native_main_init_payload(NativeEditorScene* scene) {
-    if (!scene) throw std::runtime_error("No active scene");
-    return {
-        {"status", "success"},
-        {"scene", {{"path", scene->route}, {"name", scene->name}}},
-        {"path", scene->route},
-        {"name", scene->name},
-        {"project_path", scene->read_only ? native_editor_state().project_path : path_to_utf8(scene->project_root)},
-        {"read_only", scene->read_only},
-    };
-}
 
-std::array<float, 3> json_float3_or(const nlohmann::json& value,
-                                    std::array<float, 3> fallback) {
-    if (!value.is_array() || value.size() < 3) {
-        return fallback;
-    }
-    return {
-        json_float_at(value, 0, fallback[0]),
-        json_float_at(value, 1, fallback[1]),
-        json_float_at(value, 2, fallback[2]),
-    };
-}
 
 NativeEditorActor* find_native_actor_by_guid(NativeEditorScene& scene,
                                             const std::string& actor_guid) {
@@ -4037,26 +3840,6 @@ nlohmann::json recent_projects_native() {
     return result;
 }
 
-nlohmann::json active_project_info_json() {
-    auto& state = native_editor_state();
-    if (state.scene && state.scene->read_only) {
-        return {{"name", state.scene->name}, {"mode", "creative"},
-                {"project_path", state.project_path}, {"read_only", true},
-                {"source_path", state.project_path}, {"archive_session", state.scene->archive_session}};
-    }
-    const auto project_path = normalize_route(
-        state.project_path.empty() ? resolve_active_project_path(nlohmann::json::array())
-                                   : state.project_path);
-    if (project_path.empty()) {
-        throw std::runtime_error("No active project path");
-    }
-
-    const auto project_root = path_from_utf8(project_path);
-    auto info = project_archive_call("project_info", {{"path", path_to_utf8(project_root)}});
-    if (!info.success || !info.data.contains("project_path")) throw std::runtime_error("Unable to read project settings");
-    info.data["archive_session"] = state.scene ? state.scene->archive_session : "";
-    return info.data;
-}
 
 std::string detect_hostname_ipv4() {
     char host_name[256] = {};
@@ -4226,52 +4009,9 @@ bool network_connect_to_peer(const std::string& ip, std::uint16_t port, const st
 
 
 /// 协作对象锁走"命令 + 有界等回执"，还原成调用方原本期望的结果类型。
-Corona::Network::CollaborationResult collaboration_lock(const std::string& object_id,
-                                                        const std::string& user_id,
-                                                        const std::string& operation,
-                                                        std::uint64_t now_ms) {
-    Corona::Network::NetworkCommand command{};
-    command.kind = Corona::Network::NetworkCommandKind::LockObject;
-    command.params = {object_id, user_id, operation, std::to_string(now_ms)};
-    const auto reply = Corona::Network::submit_and_wait(std::move(command));
-    Corona::Network::CollaborationResult result;
-    if (!reply) { result.error = "NETWORK_TIMEOUT"; return result; }
-    result.ok = reply->ok;
-    result.error = reply->error;
-    return result;
-}
 
-Corona::Network::CollaborationResult collaboration_unlock(const std::string& object_id,
-                                                          const std::string& user_id) {
-    Corona::Network::NetworkCommand command{};
-    command.kind = Corona::Network::NetworkCommandKind::UnlockObject;
-    command.params = {object_id, user_id};
-    const auto reply = Corona::Network::submit_and_wait(std::move(command));
-    Corona::Network::CollaborationResult result;
-    if (!reply) { result.error = "NETWORK_TIMEOUT"; return result; }
-    result.ok = reply->ok;
-    result.error = reply->error;
-    return result;
-}
 
-std::string collaboration_lock_owner(const std::string& object_id, std::uint64_t now_ms) {
-    Corona::Network::NetworkCommand command{};
-    command.kind = Corona::Network::NetworkCommandKind::LockedBy;
-    command.params = {object_id, std::to_string(now_ms)};
-    const auto reply = Corona::Network::submit_and_wait(std::move(command));
-    return reply ? reply->text : std::string{};
-}
 
-std::string collaboration_conflict(const std::string& user_id,
-                                   const std::array<float, 3>& position,
-                                   float delta, std::uint64_t now_ms) {
-    Corona::Network::NetworkCommand command{};
-    command.kind = Corona::Network::NetworkCommandKind::CheckPreviewCollision;
-    command.position = position;
-    command.params = {user_id, std::to_string(delta), std::to_string(now_ms)};
-    const auto reply = Corona::Network::submit_and_wait(std::move(command));
-    return reply ? reply->text : std::string{};
-}
 
 std::vector<NetworkPeerSnapshot> read_network_peers() {
     // 读快照：CEF 线程不再直接调用 NetworkSystem。
@@ -4340,9 +4080,6 @@ NativeResult dispatch_method(const std::string& module,
     }
 }
 
-NativeResult script_method(const NativeRequest& request, const NativeContext&) {
-    return invoke_python_script_service(request);
-}
 
 std::shared_ptr<Corona::Systems::NetworkSystem> require_network_system() {
     return get_network_system();
@@ -4548,10 +4285,6 @@ SceneReply capture_native_screenshot(const SceneRequest& request) {
     return reply;
 }
 
-uint64_t collaboration_now_ms() {
-    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
-}
 
 }  // namespace
 
@@ -5852,88 +5585,7 @@ std::string get_editor_scene_snapshot_from_python(const std::string& scene_name)
     }
 }
 
-std::string capture_editor_camera_view_from_python(const std::string& scene_name,
-                                                   const std::string& camera_name,
-                                                   const std::string& camera_data_json,
-                                                   const std::string& output_path) {
-    try {
-        nlohmann::json camera_data = nlohmann::json::object();
-        if (!camera_data_json.empty()) {
-            camera_data = nlohmann::json::parse(camera_data_json);
-            if (!camera_data.is_object()) {
-                camera_data = nlohmann::json::object();
-            }
-        }
 
-        auto* scene = ensure_native_editor_scene();
-        const auto scene_route = normalize_route(scene_name);
-        scene = resolve_native_editor_scene_request(scene, scene_route);
-
-        auto* camera = ensure_native_editor_camera(*scene, camera_name, camera_data);
-        if (!camera || !camera->engine_camera) {
-            return nlohmann::json{
-                {"status", "error"},
-                {"message", "Native editor camera unavailable"},
-            }.dump();
-        }
-
-        const auto position = camera_data.contains("position")
-                                  ? json_float3_value(camera_data["position"]).value_or(camera->engine_camera->get_pose().position)
-                                  : camera->engine_camera->get_pose().position;
-        const auto forward = camera_data.contains("forward")
-                                 ? json_float3_value(camera_data["forward"]).value_or(camera->engine_camera->get_pose().forward)
-                                 : camera->engine_camera->get_pose().forward;
-        const auto world_up = camera_data.contains("world_up")
-                                  ? json_float3_value(camera_data["world_up"]).value_or(camera->engine_camera->get_pose().world_up)
-                                  : camera->engine_camera->get_pose().world_up;
-        const auto fov = json_float_value(camera_data, "fov", camera->engine_camera->get_pose().fov);
-        camera->engine_camera->set(position, forward, world_up, fov);
-        camera->width = std::max(json_int_value(camera_data, "width", camera->width), 1);
-        camera->height = std::max(json_int_value(camera_data, "height", camera->height), 1);
-        camera->engine_camera->set_size(camera->width, camera->height);
-        const auto output_mode = json_string_value(camera_data, {"output_mode"});
-        const auto projection = camera->engine_camera->get_projection();
-        camera->engine_camera->set_projection(
-            camera_data.value("projection_x_sign", projection[0]),
-            camera_data.value("near_plane", projection[1]),
-            camera_data.value("far_plane", projection[2]));
-        camera->engine_camera->set_output_mode(output_mode.empty() ? "base_color" : output_mode);
-        camera->engine_camera->set_offscreen_capture_mode(true);
-        camera->engine_camera->set_surface(0);
-
-        const bool saved = save_native_camera_screenshot(*camera, output_path);
-        return nlohmann::json{
-            {"status", saved ? "success" : "error"},
-            {"ok", saved},
-            {"scene", scene->route},
-            {"path", output_path},
-            {"camera", camera_to_json(*camera)},
-            {"message", saved ? "" : "Screenshot save failed"},
-        }.dump();
-    } catch (const std::exception& e) {
-        return nlohmann::json{
-            {"status", "error"},
-            {"message", e.what()},
-        }.dump();
-    } catch (...) {
-        return nlohmann::json{
-            {"status", "error"},
-            {"message", "capture_editor_camera_view native handler error"},
-        }.dump();
-    }
-}
-
-std::optional<std::filesystem::path> resolve_file_manager_project_path() {
-    const auto raw_path = resolve_active_project_path(nlohmann::json::array());
-    if (raw_path.empty()) {
-        return std::nullopt;
-    }
-    const auto project_root = canonical_project_dir_for_settings(path_from_utf8(raw_path));
-    if (!is_valid_project_dir(project_root)) {
-        return std::nullopt;
-    }
-    return absolute_normalized_path(project_root);
-}
 
 std::optional<std::filesystem::path> resolve_file_manager_path(
     const std::filesystem::path& project_root, const std::string& raw_path,
@@ -5952,18 +5604,6 @@ std::optional<std::filesystem::path> resolve_file_manager_path(
 }
 
 namespace {
-NativeResult project_file_request(const std::string& operation, nlohmann::json args) {
-    const auto* scene = native_editor_state().scene.get();
-    if (!scene || scene->read_only) return native_failure("No writable project", 409);
-    if (!args.empty() && args.back().is_object()) {
-        if (!matches_archive_session(*scene, args.back())) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-        args.erase(args.size() - 1);
-    } else if (operation != "get_file_tree" && operation != "get_files") {
-        return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-    }
-    return project_archive_call("file_manager", {{"archive_session", scene->archive_session},
-        {"project_path", path_to_utf8(scene->project_root)}, {"op", operation}, {"args", args}});
-}
 
 NativeResult open_project_file(const std::filesystem::path& root, const std::string& path, const std::string& type) {
     const auto target = resolve_file_manager_path(root, path);
@@ -5998,29 +5638,6 @@ FilesReply execute_files_operation(const FilesRequest& request) {
     return reply;
 }
 
-void register_file_manager_api_handlers(NativeApiRegistry& registry) {
-    static const auto files = [](const NativeRequest& request, const NativeContext&) {
-        return project_file_request(request.function, request.args);
-    };
-    static const NativeMethodTable methods = {
-        {"get_project_info", [](const NativeRequest&, const NativeContext&) {
-            const auto* scene = native_editor_state().scene.get();
-            if (!scene || scene->read_only) return native_success({{"path", ""}, {"name", "未打开项目"}, {"exists", false}});
-            return native_success({{"path", path_to_utf8(scene->project_root)},
-                {"name", path_to_utf8(scene->project_root.filename())}, {"exists", true}, {"archive_session", scene->archive_session}});
-        }},
-        {"get_file_tree", files}, {"get_files", files}, {"create_folder", files}, {"create_file", files},
-        {"delete_item", files}, {"rename_item", files},
-        {"open_file", [](const NativeRequest& request, const NativeContext&) {
-            const auto project_root = resolve_file_manager_project_path();
-            if (!project_root) return native_failure("No active project", 404);
-            return open_project_file(*project_root, arg_string(request.args, 0), arg_string(request.args, 1));
-        }},
-    };
-    registry.register_module("FileManager", [](const NativeRequest& request, const NativeContext& context) {
-        return dispatch_method("FileManager", methods, request, context);
-    });
-}
 
 NativeResult create_launcher_project(const std::string& prompt, const std::string& role) {
     const bool multiplayer = !role.empty();
@@ -6203,322 +5820,10 @@ ProjectLauncherReply execute_project_launcher_operation(const ProjectLauncherReq
     return reply;
 }
 
-void register_project_launcher_api_handlers(NativeApiRegistry& registry) {
-    static const NativeMethodTable methods = {
-        {"browse_folder", [](const NativeRequest& request, const NativeContext&) {
-            auto default_path = path_from_utf8(arg_string(request.args, 0));
-            if (default_path.empty()) {
-                default_path = path_from_utf8(settings_value(
-                    "General",
-                    "default_path",
-                    path_to_utf8(runtime_data_dir())));
-            }
-            const auto selected = browse_folder_native(default_path, L"选择项目目录");
-            return native_success(selected ? path_to_utf8(*selected) : std::string{});
-        }},
-        {"get_default_project_path", [](const NativeRequest&, const NativeContext&) {
-            const auto value = settings_value("General", "default_path", path_to_utf8(runtime_data_dir()));
-            return native_success(value);
-        }},
-        {"get_app_version", [](const NativeRequest&, const NativeContext&) {
-            return native_success(settings_value("General", "version", "1.2.0"));
-        }},
-        {"get_recent_projects", [](const NativeRequest&, const NativeContext&) {
-            return native_success(recent_projects_native());
-        }},
-        {"get_project_load_status", [](const NativeRequest&, const NativeContext&) {
-            return native_success(project_resource_load_status());
-        }},
-        {"create_project", [](const NativeRequest& request, const NativeContext&) {
-            const auto data = arg_object(request.args, 0);
-            const auto name = data.value("name", std::string{"New_Corona_Project"});
-            const auto base_text = data.value(
-                "path",
-                settings_value("General", "default_path", path_to_utf8(runtime_data_dir())));
-            const auto base_dir = path_from_utf8(base_text);
-            const auto target = base_dir / path_from_utf8(name);
-            auto created = project_archive_call("create_project", {{"path", path_to_utf8(target)}, {"name", name}});
-            if (!created.success || !created.data.contains("path")) return native_failure("Project creation failed: " + created.error, 2);
-            update_editor_settings_section("General", {{"default_path", path_to_utf8(base_dir)}});
-            return native_success(path_to_utf8(target));
-        }},
-        {"create_world_project", [](const NativeRequest& request, const NativeContext&) {
-            return create_launcher_project(arg_object(request.args, 0).value("prompt", std::string{}), "");
-        }},
-        {"create_multiplayer_project", [](const NativeRequest& request, const NativeContext&) {
-            const auto data = arg_object(request.args, 0);
-            return create_launcher_project("", data.value("role", std::string{"guest"}) == "host" ? "host" : "guest");
-        }},
 
-        {"open_project", [](const NativeRequest& request, const NativeContext&) {
-            return open_launcher_project(arg_string(request.args, 0),
-                arg_object(request.args, 1).value("load_policy", std::string{"prompt"}));
-        }},
-        {"open_project_file", [](const NativeRequest&, const NativeContext&) {
-            const auto selected = open_project_file_native();
-            if (!selected) {
-                return native_success(nlohmann::json::object());
-            }
-            return native_success({
-                {"name", path_to_utf8(selected->stem())},
-                {"path", path_to_utf8(*selected)},
-            });
-        }},
-
-        {"validate_portable_scene", [](const NativeRequest& request, const NativeContext&) {
-            const auto data = arg_object(request.args, 0);
-            auto root_text = data.value("path", std::string{});
-            if (root_text.empty()) root_text = resolve_active_project_path(nlohmann::json::array());
-            const auto root = canonical_project_dir_for_settings(path_from_utf8(root_text));
-            return project_archive_call("validate_project", {{"path", path_to_utf8(root)}, {"verifyHashes", data.value("verifyHashes", true)}});
-        }},
-        {"import_portable_asset", [](const NativeRequest& request, const NativeContext&) {
-            const auto data = arg_object(request.args, 0);
-            const auto* scene = native_editor_state().scene.get();
-            if (!scene || !matches_archive_session(*scene, data) || scene->read_only ||
-                (data.contains("path") && !data.value("path", std::string{}).empty() &&
-                 absolute_normalized_path(path_from_utf8(data.at("path").get<std::string>())) != scene->project_root))
-                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-            const auto& root = scene->project_root;
-            if (!is_valid_project_dir(root)) {
-                return native_success({{"ok", false}, {"diagnostics", nlohmann::json::array({{
-                    {"code", "invalid_scene_format"}, {"message", "Expected a portable scene folder"},
-                    {"path", path_to_utf8(root)}, {"actor", ""}, {"field", ""}}})}});
-            }
-            auto source = path_from_utf8(
-                data.value("sourcePath", data.value("source_path", std::string{})));
-            if (source.is_relative()) source = root / source;
-            const auto category_text = data.value("category", std::string{});
-            const auto category_lower = to_lower_ascii(category_text);
-            static const std::map<std::string, std::string> categories{
-                {"images", "Images"}, {"audio", "Audio"}, {"scripts", "Scripts"},
-                {"terrain", "Terrain"}, {"vision", "Vision"}};
-            SceneAssetStore store(root);
-            SceneFolders::ImportResult imported;
-            if (category_lower == "model" || category_lower == "models") {
-                imported = store.import_model(source);
-            } else if (const auto category = categories.find(category_lower); category != categories.end()) {
-                imported = store.import_file(source, category->second);
-            } else {
-                imported.diagnostics.push_back(
-                    {"unsupported_category", "Unsupported portable asset category", source, {}, "category"});
-            }
-            nlohmann::json diagnostics = nlohmann::json::array();
-            for (const auto& item : imported.diagnostics) {
-                diagnostics.push_back({{"code", item.code}, {"message", item.message},
-                                       {"path", path_to_utf8(item.path)}, {"actor", item.actor},
-                                       {"field", item.field}});
-            }
-            return native_success({{"ok", imported.ok()}, {"path", imported.main_route},
-                                   {"type", imported.type}, {"bundleSha256", imported.bundle_sha256},
-                                   {"diagnostics", std::move(diagnostics)}});
-        }},
-        {"cleanup_portable_scene_assets", [](const NativeRequest& request, const NativeContext&) {
-            const auto data = arg_object(request.args, 0);
-            const auto* scene = native_editor_state().scene.get();
-            if (!scene || !matches_archive_session(*scene, data) || scene->read_only ||
-                (data.contains("path") && !data.value("path", std::string{}).empty() &&
-                 absolute_normalized_path(path_from_utf8(data.at("path").get<std::string>())) != scene->project_root))
-                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-            const auto& root = scene->project_root;
-            const bool dry_run = data.value("dryRun", true);
-            auto validation = project_archive_call("validate_project", {{"path", path_to_utf8(root)}});
-            if (!validation.success || !validation.data.value("ok", false)) {
-                if (!validation.success) return validation;
-                return native_success({{"ok", false}, {"dryRun", dry_run}, {"removedBundles", 0}, {"removedFiles", 0},
-                    {"reclaimedBytes", 0}, {"diagnostics", validation.data.value("diagnostics", nlohmann::json::array())}});
-            }
-            const auto cleaned = SceneFolders::cleanup_unreferenced_assets(root,
-                validation.data.at("references").get<std::set<std::string>>(), dry_run);
-            nlohmann::json diagnostics = nlohmann::json::array();
-            for (const auto& item : cleaned.diagnostics) {
-                diagnostics.push_back({{"code", item.code}, {"message", item.message},
-                                       {"path", path_to_utf8(item.path)}, {"actor", item.actor},
-                                       {"field", item.field}});
-            }
-            return native_success({{"ok", cleaned.ok()}, {"dryRun", dry_run},
-                                   {"removedBundles", cleaned.removed_bundles},
-                                   {"removedFiles", cleaned.removed_files},
-                                   {"reclaimedBytes", cleaned.reclaimed_bytes},
-                                   {"diagnostics", std::move(diagnostics)}});
-        }},
-
-
-    };
-
-    registry.register_module("ProjectLauncher", [](const NativeRequest& request,
-                                                   const NativeContext& context) {
-        const auto it = methods.find(request.function);
-        if (it == methods.end()) {
-            return native_unhandled();
-        }
-        try {
-            return it->second(request, context);
-        } catch (const std::exception& e) {
-            if (request.function == "open_project") {
-                CFW_LOG_ERROR("[ProjectLauncher] open_project failed: {}", e.what());
-            }
-            return native_failure(e.what(), 2);
-        } catch (...) {
-            if (request.function == "open_project") {
-                CFW_LOG_ERROR("[ProjectLauncher] open_project failed: unknown error");
-            }
-            return native_failure("ProjectLauncher native handler error", 2);
-        }
-    });
-}
-
-void register_main_view_api_handlers(NativeApiRegistry& registry) {
-    static const NativeMethodTable methods = {
-        {"import_resource_file", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto scene_name = arg_string(request.args, 0);
-            const auto file_type = arg_string(request.args, 1, "model");
-            if (scene_name.empty()) {
-                return native_success({{"status", "error"},
-                                       {"message", "scene_name is required"},
-                                       {"code", "scene_name_missing"}});
-            }
-            SceneRequest imported_request{SceneMethod::ImportResourceFile};
-            imported_request.read_scene = scene->route;
-            imported_request.archive_session = scene->archive_session;
-            imported_request.file_type = file_type;
-            const auto result = import_native_resource(imported_request);
-            if (!result.error_code.empty()) return native_failure(result.error_code, 409);
-            const auto& imported = result.resource_import;
-            if (imported.status != "success") {
-                nlohmann::json payload = {{"status", imported.status}, {"message", imported.message}};
-                if (!imported.code.empty()) payload["code"] = imported.code;
-                return native_success(std::move(payload));
-            }
-            if (file_type != "multimedia") return native_success({
-                {"status", "success"}, {"scene", scene_name}, {"path", imported.path},
-                {"file_path", imported.path}, {"actor_type", imported.actor_type},
-            });
-            return native_success({{"status", "success"}, {"media", {
-                {"name", imported.media_name}, {"path", imported.path}, {"type", imported.media_type},
-                {"resource_id", imported.resource_id}, {"duration", imported.duration}, {"codec", imported.codec},
-                {"width", imported.width}, {"height", imported.height}, {"fps", imported.fps},
-                {"sample_rate", imported.sample_rate}, {"channels", imported.channels},
-            }}});
-        }},
-        {"on_init", [](const NativeRequest& request, const NativeContext&) {
-            auto& state = native_editor_state();
-            const auto requested_path = normalize_route(arg_string(request.args, 0));
-            if (!requested_path.empty() && !(state.scene && state.scene->read_only &&
-                absolute_normalized_path(path_from_utf8(requested_path)) ==
-                absolute_normalized_path(path_from_utf8(state.project_path)))) {
-                const auto project_root = canonical_project_dir_for_settings(
-                    path_from_utf8(requested_path));
-                if (!is_valid_project_dir(project_root)) {
-                    return native_failure("Project path is invalid: " + requested_path, 2);
-                }
-                if (!state.scene || absolute_normalized_path(state.scene->project_root) !=
-                                      absolute_normalized_path(project_root)) {
-                    reload_native_editor_scene(path_to_utf8(project_root), "");
-                }
-            } else if (!state.scene) {
-                reload_native_editor_scene("", "");
-            }
-            if (!state.scene) {
-                return native_failure("No committed native editor scene; open a project first", 404);
-            }
-            return native_success(make_native_main_init_payload(state.scene.get()));
-        }},
-
-
-        {"scene_save", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            if (scene->read_only)
-                return native_success({{"ok", false}, {"status", "read_only"},
-                                       {"message", "External geometry scenes cannot be saved"}});
-            const auto scene_route = normalize_route(arg_string(request.args, 0));
-            scene = resolve_native_editor_scene_request(scene, scene_route);
-            const auto snapshot = arg_object(request.args, 1);
-            if (!matches_archive_session(*scene, snapshot))
-                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-            nlohmann::json metadata = nlohmann::json::object();
-            for (const char* key : {"name", "core_version"})
-                if (snapshot.contains(key) && snapshot[key].is_string()) metadata[key] = snapshot[key];
-            if (!snapshot.empty()) {
-                if (snapshot.contains("script_path") && snapshot["script_path"].is_string()) {
-                    scene->script_path = normalize_route(snapshot["script_path"].get<std::string>());
-                }
-                if (snapshot.contains("terrain") && snapshot["terrain"].is_object()) {
-                    const auto& terrain = snapshot["terrain"];
-                    scene->terrain_path = normalize_route(terrain.value("path", scene->terrain_path));
-                    scene->terrain_type = terrain.value("type", scene->terrain_type);
-                }
-
-
-            }
-            auto saved = save_editor_scene(*scene, false, metadata);
-            if (!saved.success || !saved.data.value("ok", false)) return saved;
-            if (metadata.contains("name")) scene->name = metadata["name"];
-            if (metadata.contains("core_version")) scene->core_version = metadata["core_version"];
-            nlohmann::json save_diagnostics = scene->load_diagnostics;
-            std::size_t unresolved_count = 0;
-            for (const auto& actor : scene->actors) {
-                if (actor.load_status == ActorLoadStatus::Loaded) continue;
-                ++unresolved_count;
-                const bool already_reported = std::any_of(
-                    save_diagnostics.begin(), save_diagnostics.end(),
-                    [&](const nlohmann::json& diagnostic) {
-                        return diagnostic.value("actor_guid", std::string{}) == actor.actor_guid &&
-                               diagnostic.value("code", std::string{}) == actor.load_error_code;
-                    });
-                if (!already_reported) {
-                    save_diagnostics.push_back({
-                        {"code", actor.load_error_code}, {"message", actor.load_error_message},
-                        {"actor_guid", actor.actor_guid}, {"actor_name", actor.name},
-                        {"resource_path", actor.route},
-                    });
-                }
-            }
-            return native_success({
-                {"ok", true},
-                {"status", "success"},
-                {"filepath", saved.data.at("filepath")},
-                {"format", "corona_scene"},
-                {"degraded", !save_diagnostics.empty()},
-                {"unresolved_actor_count", unresolved_count},
-                {"diagnostics", std::move(save_diagnostics)},
-            });
-        }},
-    };
-
-    registry.register_module("MainView", [](const NativeRequest& request,
-                                            const NativeContext& context) {
-        const auto it = methods.find(request.function);
-        if (it == methods.end()) {
-            return native_unhandled();
-        }
-        try {
-            return it->second(request, context);
-        } catch (const std::exception& e) {
-            return native_failure(e.what(), 2);
-        } catch (...) {
-            return native_failure("MainView native handler error", 2);
-        }
-    });
-}
 
 
 namespace {
-NativeResult project_document_request(const nlohmann::json& payload, bool commit) {
-    const auto* scene = native_editor_state().scene.get();
-    if (!scene) return native_success({{"success", false}, {"error", "PROJECT_CONTEXT_CHANGED"}});
-    const auto project_matches =
-        absolute_normalized_path(path_from_utf8(payload.value("project_path", std::string{}))) == scene->project_root;
-    if (const auto invalid = ProjectScriptService::validate_document_identity(
-            scene->archive_session, payload.value("archive_session", std::string{}), project_matches)) {
-        return native_success({{"success", false}, {"error", invalid.code}});
-    }
-    if (const auto invalid = ProjectScriptService::require_writable_project(scene->read_only)) {
-        return native_success({{"success", false}, {"error", invalid.code}});
-    }
-    return project_archive_call(commit ? "commit_document" : "read_document", payload);
-}
 
 NativeResult save_project_info(const nlohmann::json& settings) {
     auto* scene = native_editor_state().scene.get();
@@ -6568,40 +5873,6 @@ ProjectSettingsReply execute_project_settings_operation(const ProjectSettingsReq
     return reply;
 }
 
-void register_project_settings_api_handlers(NativeApiRegistry& registry) {
-    static const NativeMethodTable methods = {
-
-        {"read_project_document", [](const NativeRequest& request, const NativeContext&) {
-            return project_document_request(arg_object(request.args, 0), false);
-        }},
-        {"commit_project_document", [](const NativeRequest& request, const NativeContext&) {
-            return project_document_request(arg_object(request.args, 0), true);
-        }},
-
-        {"get_active_project_info", [](const NativeRequest&, const NativeContext&) {
-            return native_success(active_project_info_json());
-        }},
-        {"save_active_project_info", [](const NativeRequest& request, const NativeContext&) {
-            auto result = save_project_info(arg_object(request.args, 0));
-            return result.success ? native_success({{"message", "保存成功"}}) : result;
-        }},
-    };
-
-    registry.register_module("ProjectSettings", [](const NativeRequest& request,
-                                                   const NativeContext& context) {
-        const auto it = methods.find(request.function);
-        if (it == methods.end()) {
-            return native_unhandled();
-        }
-        try {
-            return it->second(request, context);
-        } catch (const std::exception& e) {
-            return native_failure(e.what(), 2);
-        } catch (...) {
-            return native_failure("ProjectSettings native handler error", 2);
-        }
-    });
-}
 
 // The engine main thread polls animation revisions, but editor state belongs to
 // the CEF UI thread. Use the same ownership handoff as API/collaborative mutations;
@@ -6640,42 +5911,7 @@ struct VisionToggleSpec {
     bool echo_in_snapshot;
 };
 
-const std::map<std::string, VisionToggleSpec>& vision_toggles() {
-    static const std::map<std::string, VisionToggleSpec> toggles{
-        {"vision_denoise", {&Corona::API::Camera::get_vision_denoise,
-                            &Corona::API::Camera::set_vision_denoise, true}},
-        {"vision_accumulation", {&Corona::API::Camera::get_vision_accumulation,
-                                 &Corona::API::Camera::set_vision_accumulation, false}},
-        {"vision_stable_planes", {&Corona::API::Camera::get_vision_stable_planes,
-                                  &Corona::API::Camera::set_vision_stable_planes, false}},
-    };
-    return toggles;
-}
 
-NativeResult vision_toggle_result(const NativeRequest& request, const std::string& toggle, bool write) {
-    auto* scene = ensure_native_editor_scene();
-    scene = resolve_native_editor_scene_request(scene, normalize_route(arg_string(request.args, 0)));
-    const auto camera_name = arg_string(request.args, 1);
-    auto* camera = find_native_camera(*scene, camera_name);
-    if (!camera || !camera->engine_camera) {
-        return native_failure("Camera not found: " + camera_name, 2);
-    }
-    const auto& spec = vision_toggles().at(toggle);
-    auto& engine_camera = *camera->engine_camera;
-    if (!write) {
-        return native_success({{"status", "success"},
-                               {"enabled", (engine_camera.*(spec.get))()},
-                               {"camera", camera_to_json(*camera)}});
-    }
-    const bool enabled = json_bool_at(request.args, 2, false);
-    (engine_camera.*(spec.set))(enabled);
-    auto snapshot = camera_to_json(*camera);
-    if (spec.echo_in_snapshot) snapshot[toggle] = enabled;
-    return native_success({{"status", "success"},
-                           {"pending", true},
-                           {"enabled", enabled},
-                           {"camera", std::move(snapshot)}});
-}
 
 void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
     static const NativeMethodTable methods = {
@@ -6759,24 +5995,6 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             return set_native_environment(request);
         }},
 
-        {"save_actor", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = scene_for_request_route(request);
-            const auto scope = arg_object(request.args, 2);
-            if (!matches_archive_session(*scene, scope))
-                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-            const auto actor_name = arg_string(request.args, 1);
-            if (!actor_name.empty() && !find_native_actor(*scene, actor_name)) {
-                return native_failure("Actor not found: " + actor_name, 2);
-            }
-            auto saved = save_editor_scene(*scene, true);
-            if (!saved.success || !saved.data.value("ok", false)) return saved;
-            return native_success({
-                {"status", "success"},
-                {"filepath", saved.data.at("filepath")},
-                {"scene", scene->route},
-                {"actor", actor_name},
-            });
-        }},
         {"set_actor_state", [](const NativeRequest& request, const NativeContext& context) {
             return set_native_actor_properties(request, context, ActorPropertyAdapter::State);
         }},
@@ -6802,279 +6020,13 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
         {"resume_actor_animation", [](const NativeRequest& request, const NativeContext&) {
             return set_native_actor_animation_paused(request, false);
         }},
-        {"set_actor_camera_lock", [](const NativeRequest& request, const NativeContext& context) {
-            return set_native_actor_properties(request, context, ActorPropertyAdapter::CameraLock);
-        }},
         {"set_actor_physics", [](const NativeRequest& request, const NativeContext& context) {
             return set_native_actor_properties(request, context, ActorPropertyAdapter::Mechanics);
-        }},
-        {"capture_viewport", [](const NativeRequest& request, const NativeContext&) {
-            try {
-                const auto raw = capture_editor_camera_view_from_python(
-                    arg_string(request.args, 0),
-                    arg_string(request.args, 1),
-                    arg_object(request.args, 2).dump(),
-                    arg_string(request.args, 3));
-                const auto data = nlohmann::json::parse(raw);
-                if (data.value("status", std::string{}) == "error") {
-                    return native_failure(data.value("message", std::string{"Viewport capture failed"}), 2);
-                }
-                return native_success(data);
-            } catch (const std::exception& e) {
-                return native_failure(e.what(), 2);
-            }
         }},
         {"set_camera_pose", [](const NativeRequest& request, const NativeContext&) {
             return apply_non_web_camera_properties(request, true);
         }},
-        {"close_camera_view", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = scene_for_request_route(request);
-            const auto camera_name = arg_string(request.args, 1);
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return camera_not_found_result(camera_name);
-            }
-            camera->view_open = false;
-            camera->window_state->requested_open.store(0);
-            camera->engine_camera->set_view({false, camera->view_x, camera->view_y,
-                                             camera->view_width, camera->view_height,
-                                             camera->move_speed});
-            camera->engine_camera->set_surface(0);
-            return native_success({
-                {"status", "success"},
-                {"scene", scene->route},
-                {"camera", camera_to_json(*camera)},
-            });
-        }},
-        {"create_camera_view", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = scene_for_request_route(request);
-            auto& camera = create_native_camera_view(*scene, arg_string(request.args, 1));
-            return native_success({
-                {"status", "success"},
-                {"scene", scene->route},
-                {"camera", camera_to_json(camera)},
-            });
-        }},
 
-        {"delete_camera", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = scene_for_request_route(request);
-            const auto camera_name = arg_string(request.args, 1);
-            if (scene->cameras.size() <= 1) {
-                return native_failure("A scene must keep at least one camera", 2);
-            }
-            const auto it = std::find_if(scene->cameras.begin(), scene->cameras.end(), [&](const NativeEditorCamera& camera) {
-                return camera.name == camera_name || camera.camera_id == camera_name ||
-                       (camera.engine_camera && std::to_string(camera.engine_camera->get_handle()) == camera_name);
-            });
-            if (it == scene->cameras.end()) {
-                return camera_not_found_result(camera_name);
-            }
-            if (!it->deletable) {
-                return native_failure("The main camera cannot be deleted", 2);
-            }
-            const auto removed_id = it->camera_id;
-            it->camera_window_lifetime.retire();
-            if (it->engine_camera) {
-                it->engine_camera->set_surface(0);
-                if (scene->engine_scene) {
-                    scene->engine_scene->remove_camera(it->engine_camera.get());
-                }
-            }
-            const auto removed_index = static_cast<size_t>(std::distance(scene->cameras.begin(), it));
-            ++scene->tree_revision;
-            scene->cameras.erase(it);
-            if (scene->active_camera_index >= scene->cameras.size()) {
-                scene->active_camera_index = scene->cameras.empty() ? 0 : scene->cameras.size() - 1;
-            } else if (removed_index < scene->active_camera_index) {
-                --scene->active_camera_index;
-            }
-            return native_success({
-                {"status", "success"},
-                {"scene", scene->route},
-                {"camera_id", removed_id},
-            });
-        }},
-        {"list_scene_tree", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = scene_for_request_route(request);
-            const auto query = arg_object(request.args, 1);
-            if (!query.empty() && !matches_archive_session(*scene, query))
-                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-            if (query.contains("known_revision") && query.at("known_revision") == scene->tree_revision)
-                return native_success({{"unchanged", true}, {"archive_session", scene->archive_session},
-                                       {"tree_revision", scene->tree_revision}});
-            CFW_LOG_INFO("[SceneTree] snapshot requested='{}' resolved='{}' actors={} cameras={}",
-                         arg_string(request.args, 0), scene->route,
-                         scene->actors.size(), scene->cameras.size());
-            nlohmann::json actors = nlohmann::json::array();
-            for (const auto& actor : scene->actors) {
-                actors.push_back(Corona::Ui::Cef::scene_tree_actor_to_json(scene_tree_actor_row(actor)));
-            }
-            nlohmann::json cameras = nlohmann::json::array();
-            for (const auto& camera : scene->cameras) {
-                cameras.push_back(camera_to_json(camera));
-            }
-            if (actors.empty() && cameras.empty()) {
-                CFW_LOG_WARNING("[SceneTree] empty snapshot requested='{}' resolved='{}'",
-                                arg_string(request.args, 0), scene->route);
-            }
-            nlohmann::json data = nlohmann::json::object();
-            data["archive_session"] = scene->archive_session;
-            data["tree_revision"] = scene->tree_revision;
-            data["actors"] = std::move(actors);
-            data["cameras"] = std::move(cameras);
-            return native_success(std::move(data));
-        }},
-        {"list_actor_tree", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = scene_for_request_route(request);
-            nlohmann::json actors = nlohmann::json::array();
-            for (const auto& actor : scene->actors) {
-                actors.push_back(actor_to_json(*scene, actor));
-            }
-            return native_success(actors);
-        }},
-        {"get_model_nodes", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = scene_for_request_route(request);
-            auto* actor = find_native_actor(*scene, arg_string(request.args, 1));
-            if (!actor || !actor->geometry) return native_failure("Model actor not found", 404);
-            try {
-                const auto parent_index = request.args.size() > 2 ? request.args.at(2).get<std::int64_t>() : -1;
-                const auto offset = request.args.size() > 3 ? request.args.at(3).get<std::size_t>() : 0;
-                const auto limit = request.args.size() > 4 ? request.args.at(4).get<std::size_t>() : 100;
-                if (parent_index < -1 || parent_index > std::numeric_limits<std::uint32_t>::max() ||
-                    limit == 0 || limit > 200) return native_failure("Invalid model node page request", 400);
-                auto response = native_model_node_page(*actor, parent_index, offset, limit);
-                response["actor_name"] = actor->name;
-                response["parent_index"] = parent_index;
-                response["status"] = response.at("nodes").empty()
-                    ? actor->geometry->get_gpu_build_state() : "ready";
-                return native_success(std::move(response));
-            } catch (const std::exception& error) {
-                return native_failure(error.what(), 400);
-            }
-        }},
-        {"set_model_node_state", [](const NativeRequest& request, const NativeContext&) {
-            try {
-                auto* scene = scene_for_request_route(request);
-                auto* actor = find_native_actor(*scene, arg_string(request.args, 1));
-                if (!actor || !actor->geometry) return native_failure("Model actor not found", 404);
-                if (request.args.size() < 4 || !request.args.at(3).is_object()) {
-                    return native_failure("Model node state must be an object", 400);
-                }
-                const auto checked = ModelNodeConfig::normalize(nlohmann::json::array({
-                    {{"node_index", request.args.at(2)}, {"node_path", "validate-index"}}}));
-                const auto index = checked.at(0).at("node_index").get<std::uint32_t>();
-                const auto patch = ModelNodeConfig::fields(request.args.at(3));
-                if (patch.empty()) return native_failure("Node state contains no supported fields", 400);
-                const auto nodes = actor->geometry->get_model_nodes();
-                const auto found = std::find_if(nodes.begin(), nodes.end(), [&](const auto& node) {
-                    return node.node_index == index;
-                });
-                if (found == nodes.end()) return native_failure("Model node is unavailable or not loaded", 409);
-                auto state = *found;
-                if (patch.contains("position")) state.position = patch.at("position").get<std::array<float, 3>>();
-                if (patch.contains("rotation")) state.rotation = patch.at("rotation").get<std::array<float, 3>>();
-                if (patch.contains("scale")) state.scale = patch.at("scale").get<std::array<float, 3>>();
-                if (patch.contains("visible")) state.visible = patch.at("visible").get<bool>();
-                if (!actor->geometry->set_model_node_state(index, state)) {
-                    return native_failure("Node edit rejected: animated or non-decomposable transform, or model not ready", 409);
-                }
-                auto [active, unmatched] = ModelNodeConfig::partition(actor->persisted_model_node_overrides,
-                    actor->model_node_resource, actor->model_node_current_resource,
-                    SceneModelNodeService::node_keys(nodes));
-                for (auto& group : unmatched) actor->model_node_unmatched.push_back(std::move(group));
-                actor->persisted_model_node_overrides = ModelNodeConfig::merge(active, index, state.node_path, patch);
-                actor->model_node_resource = actor->model_node_current_resource;
-                actor->actor_version = std::max(actor->actor_version + 1, 1);
-                bool visibility_changed = false;
-                auto updated_node = model_node_to_json(state);
-                const auto updated = actor->geometry->get_model_nodes();
-                const bool actor_visible = actor->optics ? actor->optics->get_state().visible : actor->persisted_visible;
-                for (std::size_t i = 0; i < updated.size(); ++i) {
-                    const auto& node = updated[i];
-                    if (node.node_index == index) {
-                        updated_node = model_node_to_json(node);
-                        updated_node["effective_visible"] = node.effective_visible && actor_visible;
-                    }
-                    if (i < nodes.size() && node.effective_visible != nodes[i].effective_visible) {
-                        visibility_changed = true;
-                    }
-                }
-                return native_success({{"status", "success"}, {"actor_name", actor->name},
-                    {"node", updated_node}, {"visibility_changed", visibility_changed}});
-            } catch (const std::exception& error) {
-                return native_failure(error.what(), 400);
-            }
-        }},
-        {"reload_scene", [](const NativeRequest& request, const NativeContext&) {
-            const auto scene_route = arg_string(request.args, 0);
-            const auto project_path = arg_string(request.args, 1);
-            auto* current = resolve_native_editor_scene_request(ensure_native_editor_scene(), scene_route);
-            if (!project_path.empty() && absolute_normalized_path(path_from_utf8(project_path)) !=
-                                         absolute_normalized_path(current->project_root) &&
-                !(current->read_only && absolute_normalized_path(path_from_utf8(project_path)) ==
-                    absolute_normalized_path(path_from_utf8(native_editor_state().project_path)))) {
-                return native_failure("Reload only accepts the current project or scene source", 2);
-            }
-            auto* scene = reload_native_editor_scene(path_to_utf8(current->project_root), current->route);
-            return native_success({
-                {"status", "success"},
-                {"scene", scene->route},
-                {"actor_count", scene->actors.size()},
-                {"camera_count", scene->cameras.size()},
-            });
-        }},
-        {"rebind_actor_resource", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = scene_for_request_route(request);
-            const auto scope = arg_object(request.args, 3);
-            if (!matches_archive_session(*scene, scope)) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-            SceneRequest typed{SceneMethod::RebindActorResource};
-            typed.archive_session = scope.value("archive_session", std::string{});
-            typed.actor_resource_rebind = {scene->route, arg_string(request.args, 1), arg_string(request.args, 2)};
-            const auto reply = execute_scene_operation(typed);
-            if (!reply.error_code.empty()) {
-                const int status = reply.error_code == "PROJECT_CONTEXT_CHANGED" ? 409
-                    : reply.error_code == "ACTOR_NOT_FOUND" ? 404
-                    : reply.error_code == "READ_ONLY" ? 2 : 400;
-                return native_failure(reply.error_message, status);
-            }
-            const auto& result = reply.actor_resource_rebind;
-            if (!result.ok) {
-                auto diagnostics = nlohmann::json::array();
-                for (const auto& diagnostic : result.diagnostics) {
-                    diagnostics.push_back({{"code", diagnostic.code}, {"recoverable", diagnostic.recoverable},
-                        {"actor_guid", result.actor_guid}, {"path", diagnostic.path}, {"message", diagnostic.message}});
-                }
-                return native_success({{"ok", false}, {"status", result.status}, {"diagnostics", std::move(diagnostics)}});
-            }
-            auto* rebound = find_native_actor_by_guid(*scene, result.actor_guid);
-            return native_success({{"ok", true}, {"status", result.status},
-                {"actor", rebound ? actor_to_json(*scene, *rebound) : nlohmann::json::object()}});
-        }},
-        {"sun_direction", [](const NativeRequest& request, const NativeContext&) {
-            SceneRequest write{SceneMethod::SetEnvironment};
-            write.environment.scene = arg_string(request.args, 0);
-            SceneRequest read{SceneMethod::GetEnvironment};
-            read.environment.scene = write.environment.scene;
-            const auto before = apply_native_environment(read);
-            if (!before.error_code.empty()) return native_failure(before.error_message, 2);
-            const auto direction = request.args.is_array() && request.args.size() > 2
-                ? request.args[2] : nlohmann::json::array();
-            write.environment.sun = EnvironmentSunPatch{arg_bool(request.args, 1, true), std::array<float, 3>{
-                json_float_at(direction, 0, before.environment.sun_direction[0]),
-                json_float_at(direction, 1, before.environment.sun_direction[1]),
-                json_float_at(direction, 2, before.environment.sun_direction[2])}};
-            auto result = native_environment_result(write);
-            if (!result.success) return result;
-            return native_success({{"status", "success"}, {"scene", result.data.at("scene")}, {"sun", result.data.at("sun")}});
-        }},
-        {"floor_grid", [](const NativeRequest& request, const NativeContext&) {
-            SceneRequest write{SceneMethod::SetEnvironment};
-            write.environment.scene = arg_string(request.args, 0);
-            write.environment.grid_enabled = arg_bool(request.args, 1, true);
-            auto result = native_environment_result(write);
-            if (!result.success) return result;
-            return native_success({{"status", "success"}, {"scene", result.data.at("scene")}, {"grid", result.data.at("grid")}});
-        }},
         {"create_actor", [](const NativeRequest& request, const NativeContext& context) {
             const auto scene_route = arg_string(request.args, 0);
             const auto source_path = arg_string(request.args, 1);
@@ -7087,691 +6039,13 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
                 return native_failure("PROJECT_CONTEXT_CHANGED", 409);
             return create_native_editor_actor(scene_route, source_path, actor_type, actor_data, script_runtime);
         }},
-        {"rename_actor", [](const NativeRequest& request, const NativeContext& context) {
-            auto* scene = scene_for_request_route(request);
-            const auto actor_name = arg_string(request.args, 1);
-            const auto new_name = trim_ascii(arg_string(request.args, 2));
-            if (new_name.empty()) {
-                return native_failure("Actor name cannot be empty", 2);
-            }
-            auto* actor = find_native_actor(*scene, actor_name);
-            if (!actor) {
-                return native_failure("Actor not found: " + actor_name, 2);
-            }
-            const auto duplicate = std::any_of(scene->actors.begin(), scene->actors.end(), [&](const NativeEditorActor& other) {
-                return &other != actor && other.name == new_name;
-            });
-            if (duplicate) {
-                return native_failure("Actor name already exists: " + new_name, 2);
-            }
-            const auto old_name = actor->name;
-            actor->name = new_name;
 
-            ++scene->tree_revision;
-            return native_success({
-                {"status", "success"},
-                {"scene", scene->route},
-                {"old_name", old_name},
-                {"new_name", actor->name},
-                {"actor", actor_to_json(*scene, *actor)},
-            });
-        }},
-        {"list_camera_views", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = scene_for_request_route(request);
-            nlohmann::json cameras = nlohmann::json::array();
-            for (const auto& camera : scene->cameras) {
-                cameras.push_back(camera_to_json(camera));
-            }
-            return native_success({{"cameras", cameras}});
-        }},
-        {"is_vision_available", [](const NativeRequest&, const NativeContext&) {
-            return native_success({{"available", Corona::API::is_vision_available()}});
-        }},
-
-        {"select_screenshot_path", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto selected = select_native_screenshot_path(scene->project_root);
-            if (!selected) {
-                return native_success({{"status", "canceled"}, {"path", ""}});
-            }
-            return native_success({
-                {"status", "success"},
-                {"path", path_to_utf8(absolute_normalized_path(*selected))},
-                {"camera_name", arg_string(request.args, 1)},
-            });
-        }},
-        {"save_screenshot", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto scene_route = normalize_route(arg_string(request.args, 0));
-            scene = resolve_native_editor_scene_request(scene, scene_route);
-
-            const auto output_path = arg_string(request.args, 1);
-            if (output_path.empty()) {
-                return native_failure("Screenshot path is required", 2);
-            }
-
-            const auto camera_name = arg_string(request.args, 2);
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return native_failure("Camera not found: " + camera_name, 2);
-            }
-
-            const bool saved = save_native_camera_screenshot(*camera, output_path);
-            if (!saved) {
-                return native_failure("Screenshot save failed", 2);
-            }
-
-            return native_success({
-                {"status", "success"},
-                {"ok", true},
-                {"scene", scene->route},
-                {"path", output_path},
-                {"camera", camera_to_json(*camera)},
-            });
-        }},
-        {"set_render_backend", [](const NativeRequest& request, const NativeContext&) {
-            const auto mode = arg_string(request.args, 0, "native");
-            auto* scene = ensure_native_editor_scene();
-            const auto scene_route = normalize_route(arg_string(request.args, 1));
-            scene = resolve_native_editor_scene_request(scene, scene_route);
-
-            const auto camera_name = arg_string(request.args, 2);
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return native_failure("Camera not found: " + camera_name, 2);
-            }
-
-            camera->engine_camera->set_render_backend(mode);
-            // The renderer consumes this command asynchronously. Acknowledge
-            // the accepted backend, not the camera's previous committed value.
-            const std::string actual = mode == "vision" && Corona::API::is_vision_available()
-                ? "vision" : "native";
-            return native_success({
-                {"status", "success"},
-                {"mode", actual},
-                {"fallback", mode == "vision" && actual != "vision"},
-                {"camera", camera_to_json(*camera)},
-            });
-        }},
-        {"get_render_backend", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto scene_route = normalize_route(arg_string(request.args, 0));
-            scene = resolve_native_editor_scene_request(scene, scene_route);
-
-            const auto camera_name = arg_string(request.args, 1);
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return native_failure("Camera not found: " + camera_name, 2);
-            }
-
-            return native_success({
-                {"status", "success"},
-                {"mode", camera->engine_camera->get_render_backend()},
-                {"camera", camera_to_json(*camera)},
-            });
-        }},
-        {"set_vision_render_mode", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto scene_route = normalize_route(arg_string(request.args, 0));
-            scene = resolve_native_editor_scene_request(scene, scene_route);
-
-            const auto camera_name = arg_string(request.args, 1);
-            const auto mode = arg_string(request.args, 2, "path_tracing");
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return native_failure("Camera not found: " + camera_name, 2);
-            }
-
-            camera->engine_camera->set_vision_render_mode(mode);
-            return native_success({
-                {"status", "success"},
-                {"pending", true},
-                {"mode", camera->engine_camera->get_vision_render_mode()},
-                {"camera", camera_to_json(*camera)},
-            });
-        }},
-        {"get_vision_render_mode", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto scene_route = normalize_route(arg_string(request.args, 0));
-            scene = resolve_native_editor_scene_request(scene, scene_route);
-
-            const auto camera_name = arg_string(request.args, 1);
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return native_failure("Camera not found: " + camera_name, 2);
-            }
-
-            return native_success({
-                {"status", "success"},
-                {"mode", camera->engine_camera->get_vision_render_mode()},
-                {"camera", camera_to_json(*camera)},
-            });
-        }},
-        {"set_vision_denoiser", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            scene = resolve_native_editor_scene_request(scene, normalize_route(arg_string(request.args, 0)));
-            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
-            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            const auto type = to_lower_ascii(arg_string(request.args, 2, "scene"));
-            if (type != "scene" && type != "svgf" && type != "reblur" && type != "relax") {
-                return native_failure("Unsupported denoiser: " + type, 2);
-            }
-            camera->engine_camera->set_vision_denoiser(type);
-            auto snapshot = camera_to_json(*camera);
-            snapshot["vision_denoiser"] = type;
-            return native_success({{"status", "success"}, {"pending", true},
-                {"type", type}, {"camera", std::move(snapshot)}});
-        }},
-        {"get_pt_settings", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
-            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
-            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            auto settings = API::get_effective_vision_settings(API::VisionSettingsFamily::Pt, camera->engine_camera->get_handle());
-            if (!settings.is_object()) settings = nlohmann::json::object();
-            const bool ready = settings.contains("max_depth") && settings.contains("min_depth") && settings.contains("rr_threshold");
-            auto adaptive = settings.value("adaptive", nlohmann::json::object());
-            settings.erase("adaptive");
-            const auto overrides = API::get_requested_vision_settings(API::VisionSettingsFamily::Pt, camera->engine_camera->get_handle());
-            if (overrides.is_object()) settings.update(overrides);
-            return native_success({{"settings", std::move(settings)}, {"adaptive", std::move(adaptive)}, {"ready", ready}});
-        }},
-        {"set_pt_settings", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
-            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
-            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            if (request.args.size() < 3 || !request.args[2].is_object()) return native_failure("Expected PT settings object", 2);
-            const auto& settings = request.args[2];
-            for (auto it = settings.begin(); it != settings.end(); ++it) {
-                const double maximum = it.key() == "max_depth" ? 128 : it.key() == "min_depth" ? 20 : 1;
-                if ((it.key() != "max_depth" && it.key() != "min_depth" && it.key() != "rr_threshold") || !it->is_number())
-                    return native_failure("Invalid PT parameter: " + it.key(), 2);
-                const double value = it->get<double>();
-                if (!std::isfinite(value) || value < 0 || value > maximum ||
-                    (it.key() != "rr_threshold" && value != std::floor(value)))
-                    return native_failure("PT parameter out of range: " + it.key(), 2);
-            }
-            API::set_vision_settings(API::VisionSettingsFamily::Pt, settings, camera->engine_camera->get_handle());
-            return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
-        }},
-        {"get_restir_settings", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
-            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
-            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            const auto overrides = API::get_requested_vision_settings(API::VisionSettingsFamily::Restir, camera->engine_camera->get_handle());
-            auto settings = nlohmann::json::object();
-            bool applied = false;
-            if (auto state = SharedDataHub::instance().camera_storage().acquire_read(camera->engine_camera->get_handle())) {
-                const auto effective = state->vision_restir_effective_settings;
-                if (effective.is_object()) settings = effective;
-                const auto applied_overrides = state->vision_restir_applied_settings;
-                applied = overrides.is_object() && applied_overrides.is_object() && overrides == applied_overrides;
-            }
-            const bool ready = applied && settings.contains("max_depth") && settings.contains("min_depth") &&
-                settings.contains("rr_threshold") && settings.contains("direct") && settings.contains("indirect");
-            return native_success({{"settings", std::move(settings)}, {"ready", ready}});
-        }},
-        {"set_restir_settings", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
-            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
-            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            if (request.args.size() < 3) return native_failure("Expected ReSTIR settings object", 2);
-            const auto& settings = request.args[2];
-            if (const auto error = Vision::validate_restir_settings(settings); !error.empty()) return native_failure(error, 2);
-            API::set_vision_settings(API::VisionSettingsFamily::Restir, settings, camera->engine_camera->get_handle());
-            return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
-        }},
-        {"get_reblur_settings", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
-            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
-            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            auto settings = API::get_effective_vision_settings(API::VisionSettingsFamily::Reblur, camera->engine_camera->get_handle());
-            if (!settings.is_object()) settings = nlohmann::json::object();
-            const auto overrides = API::get_requested_vision_settings(API::VisionSettingsFamily::Reblur, camera->engine_camera->get_handle());
-            if (overrides.is_object()) settings.update(overrides);
-            return native_success({{"settings", std::move(settings)}});
-        }},
-        {"set_reblur_settings", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
-            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
-            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            if (request.args.size() < 3 || !request.args[2].is_object()) return native_failure("Expected REBLUR settings object", 2);
-            const auto& settings = request.args[2];
-            static const std::map<std::string, std::pair<double, double>> ranges{
-                {"max_history", {1, 63}}, {"fast_history", {0, 63}}, {"history_fix_frames", {0, 63}},
-                {"history_fix_stride", {0, 100}}, {"diffuse_prepass", {0, 100}}, {"specular_prepass", {0, 100}},
-                {"min_radius", {0, 100}}, {"max_radius", {0, 100}}, {"lobe_fraction", {0, 1}},
-                {"roughness_fraction", {0, 1}}, {"plane_sensitivity", {0, 1}}, {"min_hit_weight", {0, 1}},
-                {"stabilization", {0, 1}}, {"antilag_sigma", {0, 10}}, {"antilag_sensitivity", {0, 10}},
-                {"reconstruction", {0, 2}}};
-            for (auto it = settings.begin(); it != settings.end(); ++it) {
-                if (it.key() == "anti_firefly") {
-                    if (!it->is_boolean()) return native_failure("anti_firefly must be boolean", 2);
-                    continue;
-                }
-                const auto range = ranges.find(it.key());
-                if (range == ranges.end() || !it->is_number()) return native_failure("Invalid REBLUR parameter: " + it.key(), 2);
-                const double value = it->get<double>();
-                if (!std::isfinite(value) || value < range->second.first || value > range->second.second ||
-                    (it.key() == "reconstruction" && value != std::floor(value)))
-                    return native_failure("REBLUR parameter out of range: " + it.key(), 2);
-            }
-            if (settings.contains("max_history") && settings.contains("fast_history") && settings["fast_history"] > settings["max_history"])
-                return native_failure("Fast history must not exceed maximum history", 2);
-            if (settings.contains("min_radius") && settings.contains("max_radius") && settings["min_radius"] > settings["max_radius"])
-                return native_failure("Minimum radius must not exceed maximum radius", 2);
-            API::set_vision_settings(API::VisionSettingsFamily::Reblur, settings, camera->engine_camera->get_handle());
-            return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
-        }},
-        {"get_relax_settings", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
-            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
-            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            auto settings = API::get_effective_vision_settings(API::VisionSettingsFamily::Relax, camera->engine_camera->get_handle());
-            if (!settings.is_object()) settings = nlohmann::json::object();
-            const auto overrides = API::get_requested_vision_settings(API::VisionSettingsFamily::Relax, camera->engine_camera->get_handle());
-            if (overrides.is_object()) settings.update(overrides);
-            return native_success({{"settings", std::move(settings)}});
-        }},
-        {"set_relax_settings", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
-            auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
-            if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
-            if (request.args.size() < 3 || !request.args[2].is_object()) return native_failure("Expected RELAX settings object", 2);
-            const auto& settings = request.args[2];
-            static const std::map<std::string, std::pair<double, double>> ranges{
-                {"diffuse_history", {1, 255}},
-                {"specular_history", {1, 255}},
-                {"diffuse_fast_history", {0, 255}},
-                {"specular_fast_history", {0, 255}},
-                {"history_fix_frames", {0, 255}},
-                {"history_fix_stride", {0, 100}},
-                {"history_fix_normal_power", {0, 128}},
-                {"variance_history_threshold", {0, 255}},
-                {"diffuse_prepass", {0, 100}},
-                {"specular_prepass", {0, 100}},
-                {"min_hit_weight", {0, 1}},
-                {"atrous_iterations", {2, 8}},
-                {"diffuse_phi", {0.01, 100}},
-                {"specular_phi", {0.01, 100}},
-                {"lobe_fraction", {0, 1}},
-                {"roughness_fraction", {0, 1}},
-                {"specular_variance_boost", {0, 10}},
-                {"specular_lobe_slack", {0, 1}},
-                {"color_box_sigma", {0, 10}},
-                {"depth_threshold", {0, 0.1}},
-                {"luminance_relaxation", {0, 1}},
-                {"normal_relaxation", {0, 1}},
-                {"roughness_relaxation", {0, 1}},
-                {"antilag_acceleration", {0, 1}},
-                {"antilag_spatial_sigma", {0, 10}},
-                {"antilag_temporal_sigma", {0, 10}},
-                {"antilag_reset", {0, 1}},
-                {"reconstruction", {0, 2}}};
-            for (auto it = settings.begin(); it != settings.end(); ++it) {
-                if (it.key() == "anti_firefly" || it.key() == "roughness_stopping") {
-                    if (!it->is_boolean()) return native_failure("RELAX flags must be boolean", 2);
-                    continue;
-                }
-                const auto range = ranges.find(it.key());
-                if (range == ranges.end() || !it->is_number()) return native_failure("Invalid RELAX parameter: " + it.key(), 2);
-                const double value = it->get<double>();
-                if (!std::isfinite(value) || value < range->second.first || value > range->second.second ||
-                    ((it.key() == "reconstruction" || it.key() == "atrous_iterations") && value != std::floor(value)))
-                    return native_failure("RELAX parameter out of range: " + it.key(), 2);
-            }
-            for (const auto channel : {"diffuse", "specular"}) {
-                const auto history = std::string(channel) + "_history";
-                const auto fast = std::string(channel) + "_fast_history";
-                if (settings.contains(history) && settings.contains(fast) && settings[fast] > settings[history])
-                    return native_failure("Fast history must not exceed maximum history", 2);
-            }
-            API::set_vision_settings(API::VisionSettingsFamily::Relax, settings, camera->engine_camera->get_handle());
-            return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
-        }},
-        {"set_vision_denoise", [](const NativeRequest& request, const NativeContext&) {
-            return vision_toggle_result(request, "vision_denoise", true);
-        }},
-        {"get_vision_denoise", [](const NativeRequest& request, const NativeContext&) {
-            return vision_toggle_result(request, "vision_denoise", false);
-        }},
-        {"set_vision_accumulation", [](const NativeRequest& request, const NativeContext&) {
-            return vision_toggle_result(request, "vision_accumulation", true);
-        }},
-        {"get_vision_accumulation", [](const NativeRequest& request, const NativeContext&) {
-            return vision_toggle_result(request, "vision_accumulation", false);
-        }},
-        {"set_vision_stable_planes", [](const NativeRequest& request, const NativeContext&) {
-            return vision_toggle_result(request, "vision_stable_planes", true);
-        }},
-        {"get_vision_stable_planes", [](const NativeRequest& request, const NativeContext&) {
-            return vision_toggle_result(request, "vision_stable_planes", false);
-        }},
-        {"set_output_mode", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto camera_name = arg_string(request.args, 1);
-            const auto mode = arg_string(request.args, 2, "final_color");
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return native_failure("Camera not found: " + camera_name, 2);
-            }
-            camera->engine_camera->set_output_mode(mode);
-            return native_success({{"status", "success"}, {"mode", camera->engine_camera->get_output_mode()}});
-        }},
-        {"set_physics_params", [](const NativeRequest& request, const NativeContext&) {
-            static constexpr std::array fields{"gravity", "floor_y", "floor_restitution", "fixed_dt"};
-            auto physics = nlohmann::json::object();
-            for (size_t i = 0; i < fields.size() && i + 1 < request.args.size(); ++i) {
-                if (!request.args[i + 1].is_null()) physics[fields[i]] = request.args[i + 1];
-            }
-            NativeRequest update{"SceneTools", "set_environment", {arg_string(request.args, 0), {{"physics", physics}}}};
-            auto result = set_native_environment(update);
-            if (!result.success) return result;
-            return native_success(result.data.at("physics"));
-        }},
-        {"get_output_mode", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto camera_name = arg_string(request.args, 1);
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return native_failure("Camera not found: " + camera_name, 2);
-            }
-            return native_success({{"status", "success"}, {"mode", camera->engine_camera->get_output_mode()}});
-        }},
-        {"get_physics_params", [](const NativeRequest& request, const NativeContext&) {
-            SceneRequest read{SceneMethod::GetEnvironment};
-            read.environment.scene = arg_string(request.args, 0);
-            auto result = native_environment_result(read);
-            if (!result.success) return result;
-            return native_success(result.data.at("physics"));
-        }},
-        {"select_actor", [](const NativeRequest& request, const NativeContext&) {
-            const auto scene_name = arg_string(request.args, 0);
-            const auto actor_type = arg_string(request.args, 1, "actor");
-            const auto actor_name = arg_string(request.args, 2);
-            const auto payload = make_actor_selection_event_payload(
-                scene_name, actor_type, actor_name, arg_object(request.args, 3));
-            ActorSelection selection{scene_name, actor_type, actor_name,
-                payload.at("source_viewport").get<std::string>(), payload.at("source_camera_id").get<std::string>()};
-            if (payload.contains("node_index")) selection.node_index = payload.at("node_index").get<std::uint32_t>();
-            const auto result = execute_scene_operation({SceneMethod::SelectActor, std::move(selection)});
-            if (!result.error_code.empty()) return native_failure(result.error_code, 409);
-            return native_success({
-                {"status", "success"},
-                {"scene", scene_name},
-                {"actor_type", actor_type},
-                {"actor", actor_name},
-            });
-        }},
-        {"open_camera_view", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = scene_for_request_route(request);
-            const auto camera_name = arg_string(request.args, 1);
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return camera_not_found_result(camera_name);
-            }
-            camera->view_open = true;
-            camera->window_state->requested_open.store(1);
-            camera->engine_camera->set_view({true, camera->view_x, camera->view_y,
-                                             camera->view_width, camera->view_height,
-                                             camera->move_speed});
-            return native_success({
-                {"status", "success"},
-                {"scene", scene->route},
-                {"camera", camera_to_json(*camera)},
-            });
-        }},
-        {"focus_actor", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            const auto* actor = find_native_actor(*scene, arg_string(request.args, 1));
-            const auto* camera = find_native_camera(*scene, arg_string(request.args, 2));
-            if (!actor) return native_failure("Actor not found", 2);
-            if (!camera) return native_failure("Camera not found", 2);
-            SceneRequest focus{SceneMethod::FocusActor};
-            focus.focus = {arg_string(request.args, 0), actor->actor_guid, camera->camera_id};
-            const auto reply = apply_native_actor_focus(focus);
-            if (!reply.error_code.empty()) return native_failure(reply.error_message,
-                reply.error_code == "PROJECT_CONTEXT_CHANGED" ? 409 : 2);
-            return native_success({{"status", "success"}, {"center", reply.focus.center},
-                {"distance", reply.focus.distance}, {"camera", camera_to_json(*camera)}});
-        }},
         {"remove_actor", [](const NativeRequest& request, const NativeContext&) {
             const auto scene_route = arg_string(request.args, 0);
             const auto actor_name = arg_string(request.args, 1);
             return remove_native_editor_actor(scene_route, actor_name);
         }},
-        {"rename_camera_view", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = scene_for_request_route(request);
-            const auto camera_name = arg_string(request.args, 1);
-            const auto new_name = trim_ascii(arg_string(request.args, 2));
-            if (new_name.empty()) {
-                return native_failure("Camera name cannot be empty", 2);
-            }
-            auto* camera = find_native_camera(*scene, camera_name);
-            if (!camera || !camera->engine_camera) {
-                return camera_not_found_result(camera_name);
-            }
-            const bool duplicate = std::any_of(scene->cameras.begin(), scene->cameras.end(), [&](const NativeEditorCamera& other) {
-                return &other != camera && other.name == new_name;
-            });
-            if (duplicate) {
-                return native_failure("Camera name already exists: " + new_name, 2);
-            }
-            ++scene->tree_revision;
-            camera->name = new_name;
-            return native_success({
-                {"status", "success"},
-                {"scene", scene->route},
-                {"camera", camera_to_json(*camera)},
-            });
-        }},
-        {"pick_actor_at_pixel", [](const NativeRequest& request, const NativeContext& context) {
-            auto* scene = ensure_native_editor_scene();
-            auto* camera = find_native_camera(*scene, {});
-            if (!camera || !camera->engine_camera) {
-                return native_failure("No active camera available", 2);
-            }
-            const float x = arg_float_value(request.args, 1);
-            const float y = arg_float_value(request.args, 2);
-            const float viewport_width = arg_float_value(request.args, 3, static_cast<float>(camera->width));
-            const float viewport_height = arg_float_value(request.args, 4, static_cast<float>(camera->height));
-            ViewportPickPoint point;
-            {
-                const auto native_camera = Corona::SharedDataHub::instance().camera_storage().try_acquire_read(camera->engine_camera->get_handle());
-                if (!native_camera) return native_failure("Camera is unavailable", 2);
-                point = map_viewport_pick_point(x, y, viewport_width, viewport_height, *native_camera);
-            }
-            if (!point.valid) {
-                return native_failure("Invalid viewport size", 2);
-            }
-            if (!point.inside) {
-                return native_success({{"status", "miss"}});
-            }
-            const auto picked = camera->engine_camera->pick_model_node_at_pixel(point.x, point.y);
-            const auto handle = picked.actor_handle;
-            if (handle == 0) {
-                return native_success({{"status", "pending"}});
-            }
-            auto* actor = find_native_actor(*scene, std::to_string(handle));
-            if (!actor) {
-                return native_success({{"status", "miss"}, {"handle", handle}});
-            }
-            ++scene->tree_revision;
-            return native_success({
-                {"status", "success"},
-                {"actor", actor_to_json(*scene, *actor)},
-                {"actor_name", actor->name},
-                {"node_index", picked.node_index == UINT32_MAX ? nlohmann::json(nullptr) : nlohmann::json(picked.node_index)},
-            });
-        }},
-        {"play_audio", [](const NativeRequest& request, const NativeContext&) {
-            const auto error = change_native_resource_audio(arg_uint64(request.args, 0), true,
-                arg_bool(request.args, 1, false));
-            return error.empty() ? native_success({{"ok", true}}) : native_failure(error, 2);
-        }},
-        {"stop_audio", [](const NativeRequest& request, const NativeContext&) {
-            const auto error = change_native_resource_audio(arg_uint64(request.args, 0), false);
-            return error.empty() ? native_success({{"ok", true}}) : native_failure(error, 2);
-        }},
-        {"actor_play_audio", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            auto* actor = find_native_actor(*scene, arg_string(request.args, 0));
-            if (!actor || !actor->acoustics)
-                return native_failure("actor not found or has no acoustics component", 2);
-            change_native_actor_audio(*actor, true, arg_bool(request.args, 1, false));
-            return native_success({{"ok", true}});
-        }},
-        {"actor_stop_audio", [](const NativeRequest& request, const NativeContext&) {
-            auto* scene = ensure_native_editor_scene();
-            auto* actor = find_native_actor(*scene, arg_string(request.args, 0));
-            if (!actor || !actor->acoustics)
-                return native_failure("actor not found or has no acoustics component", 2);
-            change_native_actor_audio(*actor, false);
-            return native_success({{"ok", true}});
-        }},
         // ---- Per-instance IK configuration and runtime inspection ----
-        {"get_actor_skeleton_leaves", [](const NativeRequest& request, const NativeContext&) {
-            try {
-                auto* scene = scene_for_request_route(request);
-                const auto actor_name = arg_string(request.args, 1);
-                auto* actor = find_native_actor(*scene, actor_name);
-                if (!actor) {
-                    return native_failure("actor not found: " + actor_name, 2);
-                }
-                if (!actor->geometry) {
-                    return native_failure("actor has no geometry (type=" + actor->actor_type + "): " + actor_name, 2);
-                }
-
-                // 直接从 Geometry 公开接口拿 model_id，无需经过 SharedDataHub 间接路径。
-                const std::uint64_t model_id = actor->geometry->get_model_id();
-                if (model_id == 0) {
-                    // 模型尚未导入完成（PendingImport 阶段）。
-                    // 返回明确错误而非静默，方便 Vue 侧展示提示。
-                    return native_failure(
-                        "model_id=0 for actor '" + actor_name +
-                        "' (model not yet imported, gpu_state=" +
-                        actor->geometry->get_gpu_build_state() + ")",
-                        2);
-                }
-                auto scene_read = read_resource_for_ui<Corona::Resource::Scene>(model_id);
-                if (!scene_read.valid()) {
-                    return native_failure(
-                        "ResourceManager cannot acquire Scene for model_id=" +
-                        std::to_string(model_id) + " actor='" + actor_name + "'",
-                        2);
-                }
-
-                const auto& sdata = scene_read->data;
-                if (!sdata.skeleton.has_value()) {
-                    // 非蒙皮模型：这是正常情况，返回 is_skinned=false。
-                    return native_success({{"is_skinned", false}, {"leaves", nlohmann::json::array()}});
-                }
-
-                nlohmann::json leaves = nlohmann::json::array();
-                nlohmann::json nodes = nlohmann::json::array();
-                const auto& skel = *sdata.skeleton;
-                for (std::size_t index = 0; index < skel.nodes.size(); ++index) {
-                    const auto& node = skel.nodes[index];
-                    nodes.push_back({{"name", node.name}, {"index", index},
-                                     {"parent", node.parent}, {"leaf", node.children.empty()}});
-                    if (node.children.empty()) {
-                        leaves.push_back(node.name);
-                    }
-                }
-                return native_success({
-                    {"is_skinned", true},
-                    {"leaves", leaves},
-                    {"nodes", nodes},
-                    {"node_count", static_cast<int>(skel.nodes.size())},
-                    {"bone_count", skel.bone_count},
-                });
-            } catch (const std::exception& e) {
-                return native_failure(std::string("get_actor_skeleton_leaves exception: ") + e.what(), 2);
-            }
-        }},
-        {"get_actor_ik_chains", [](const NativeRequest& request, const NativeContext&) {
-            try {
-                auto* scene = scene_for_request_route(request);
-                const auto actor_name = arg_string(request.args, 1);
-                auto* actor = find_native_actor(*scene, actor_name);
-                if (!actor || !actor->geometry) {
-                    return native_failure("actor not found: " + actor_name, 2);
-                }
-                const auto model_id = actor->geometry->get_model_id();
-                if (model_id == 0) return native_failure("IK model import is not ready: " + actor_name, 2);
-                auto resource = read_resource_for_ui<Corona::Resource::Scene>(model_id);
-                if (!resource.valid()) return native_failure("IK model resource is unavailable", 2);
-                auto geometry = Corona::SharedDataHub::instance().geometry_storage().try_acquire_read(
-                    actor->geometry->get_handle());
-                if (!geometry) return native_failure("IK geometry storage is unavailable", 2);
-                const auto* skeleton = resource->data.skeleton ? &*resource->data.skeleton : nullptr;
-                return native_success({
-                    {"ready", true}, {"is_skinned", skeleton != nullptr},
-                    {"revision", geometry->ik_chains_revision},
-                    {"chains", IkChainConfig::serialize(geometry->ik_chains, skeleton, true)},
-                });
-            } catch (const std::exception& e) {
-                return native_failure(e.what(), 2);
-            }
-        }},
-        {"set_actor_ik_chains", [](const NativeRequest& request, const NativeContext& context) {
-            try {
-                auto* scene = scene_for_request_route(request);
-                const auto actor_name = arg_string(request.args, 1);
-                auto* actor = find_native_actor(*scene, actor_name);
-                if (!actor || !actor->geometry) return native_failure("actor has no geometry: " + actor_name, 2);
-                if (!request.args.is_array() || request.args.size() < 3) {
-                    return native_failure("IK chains array is required", 2);
-                }
-                const auto model_id = actor->geometry->get_model_id();
-                if (model_id == 0) return native_failure("IK model import is not ready: " + actor_name, 2);
-                nlohmann::json payload;
-                nlohmann::json saved_config;
-                {
-                    auto resource = read_resource_for_ui<Corona::Resource::Scene>(model_id);
-                    if (!resource.valid() || !resource->data.skeleton) {
-                        return native_failure("Actor model has no skeleton: " + actor_name, 2);
-                    }
-                    const auto& skeleton = *resource->data.skeleton;
-                    auto chains = IkChainConfig::parse(request.args[2], &skeleton);
-                    std::optional<std::uint64_t> expected_revision;
-                    if (request.args.size() > 3 && !request.args[3].is_null()) {
-                        const auto& value = request.args[3];
-                        if (!value.is_number()) return native_failure("expected_revision must be an integer", 2);
-                        const auto number = value.get<double>();
-                        if (!std::isfinite(number) || number < 0 || number > 9007199254740991.0 || std::floor(number) != number) {
-                            return native_failure("expected_revision must be a non-negative safe integer", 2);
-                        }
-                        expected_revision = static_cast<std::uint64_t>(number);
-                    }
-                    auto geometry = Corona::SharedDataHub::instance().geometry_storage().try_acquire_write(
-                        actor->geometry->get_handle());
-                    if (!geometry) return native_failure("IK geometry storage is unavailable", 2);
-                    if (expected_revision && *expected_revision != geometry->ik_chains_revision) {
-                        return native_failure("IK configuration changed; reload before applying (revision " +
-                                              std::to_string(geometry->ik_chains_revision) + ")", 409);
-                    }
-                    IkChainConfig::preserve_runtime(chains, geometry->ik_chains);
-                    saved_config = IkChainConfig::serialize(chains, &skeleton);
-                    // Build the response before the atomic replacement so allocation
-                    // or validation failure cannot silently clear a running chain.
-                    payload = {{"ok", true}, {"ready", true}, {"is_skinned", true},
-                               {"applied_count", chains.size()},
-                               {"revision", geometry->ik_chains_revision + 1},
-                               {"chains", IkChainConfig::serialize(chains, &skeleton, true)}};
-                    geometry->ik_chains = std::move(chains);
-                    ++geometry->ik_chains_revision;
-                }
-                actor->persisted_ik_chains = std::move(saved_config);
-                actor->actor_version = std::max(actor->actor_version + 1, 1);
-                ++scene->tree_revision;
-                return native_success(payload);
-            } catch (const std::exception& e) {
-                return native_failure(e.what(), 2);
-            }
-        }},
-        {"update_camera_view", [](const NativeRequest& request, const NativeContext&) {
-            return apply_non_web_camera_properties(request, false);
-        }},
     };
 
     registry.register_module("SceneTools", [](const NativeRequest& request,
@@ -7835,21 +6109,6 @@ void register_python_script_api_handlers(NativeApiRegistry& registry) {
             return invoke_python_script_service({"FileScripts", "stop_file", request.args});
         }},
     };
-    static const NativeMethodTable corona_editor_methods = {
-        {"close_process", [](const NativeRequest&, const NativeContext&) {
-            if (!request_application_exit()) return native_failure("Unable to queue engine exit", 500);
-            return native_success(nullptr);
-        }},
-    };
-    static const NativeMethodTable resource_search_methods = {
-        {"fuzzy_search", script_method},
-        {"get_stats", script_method},
-        {"image_search", script_method},
-        {"list_types", script_method},
-        {"mark_index_dirty", script_method},
-        {"prepare_index", script_method},
-        {"rebuild_index", script_method},
-    };
 
     auto register_script_module = [&](const char* module, const NativeMethodTable& methods) {
         const auto* method_table = &methods;
@@ -7859,8 +6118,6 @@ void register_python_script_api_handlers(NativeApiRegistry& registry) {
         });
     };
 
-    register_script_module("CoronaEditor", corona_editor_methods);
-    register_script_module("ResourceSearch", resource_search_methods);
     register_script_module("Scripts", script_files);
 }
 
