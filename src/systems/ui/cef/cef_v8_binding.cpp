@@ -1507,46 +1507,29 @@ CefRefPtr<CefV8Value> skeleton_value(const ActorSkeletonSnapshot& snapshot) {
 }
 
 CefRefPtr<CefV8Value> ik_value(const ActorIkSnapshot& snapshot) {
-    auto result = CefV8Value::CreateObject(nullptr, nullptr); result->SetValue("archive_session", CefV8Value::CreateString(snapshot.archive_session), V8_PROPERTY_ATTRIBUTE_NONE); result->SetValue("scene", CefV8Value::CreateString(snapshot.scene), V8_PROPERTY_ATTRIBUTE_NONE); result->SetValue("actor", CefV8Value::CreateString(snapshot.actor), V8_PROPERTY_ATTRIBUTE_NONE); result->SetValue("ready", CefV8Value::CreateBool(snapshot.ready), V8_PROPERTY_ATTRIBUTE_NONE); result->SetValue("is_skinned", CefV8Value::CreateBool(snapshot.is_skinned), V8_PROPERTY_ATTRIBUTE_NONE); result->SetValue("revision", CefV8Value::CreateDouble(static_cast<double>(snapshot.revision)), V8_PROPERTY_ATTRIBUTE_NONE);
-    auto chains = CefV8Value::CreateArray(static_cast<int>(snapshot.chains.size()));
-    for (int i = 0; i < static_cast<int>(snapshot.chains.size()); ++i) {
-        const auto& chain = snapshot.chains[i]; auto item = CefV8Value::CreateObject(nullptr, nullptr);
-        item->SetValue("id", CefV8Value::CreateString(chain.id), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("bone_name", CefV8Value::CreateString(chain.bone_name), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("mode", CefV8Value::CreateString(chain.mode), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("chain_length", CefV8Value::CreateInt(chain.chain_length), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("max_iterations", CefV8Value::CreateInt(chain.max_iterations), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("weight", CefV8Value::CreateDouble(chain.weight), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("tolerance", CefV8Value::CreateDouble(chain.tolerance), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("damping", CefV8Value::CreateDouble(chain.damping), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("enabled", CefV8Value::CreateBool(chain.enabled), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("contact_weight_rise", CefV8Value::CreateDouble(chain.contact_weight_rise), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("contact_weight_decay", CefV8Value::CreateDouble(chain.contact_weight_decay), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("contact_normal_offset", CefV8Value::CreateDouble(chain.contact_normal_offset), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("probe_max_drop", CefV8Value::CreateDouble(chain.probe_max_drop), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("foot_height", CefV8Value::CreateDouble(chain.foot_height), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("plant_threshold", CefV8Value::CreateDouble(chain.plant_threshold), V8_PROPERTY_ATTRIBUTE_NONE);
-        auto target = CefV8Value::CreateArray(3);
-        for (int axis = 0; axis < 3; ++axis) target->SetValue(axis, CefV8Value::CreateDouble(chain.target[axis]));
-        item->SetValue("target", target, V8_PROPERTY_ATTRIBUTE_NONE);
+    // Built as JSON and converted once: the hand-written form was 42 lines of the same SetValue
+    // call repeated per field, with json_to_v8 already converting each value the same way.
+    nlohmann::json chains = nlohmann::json::array();
+    for (const auto& chain : snapshot.chains) {
+        nlohmann::json item{{"id", chain.id}, {"bone_name", chain.bone_name}, {"mode", chain.mode},
+            {"chain_length", chain.chain_length}, {"max_iterations", chain.max_iterations},
+            {"weight", chain.weight}, {"tolerance", chain.tolerance}, {"damping", chain.damping},
+            {"enabled", chain.enabled}, {"contact_weight_rise", chain.contact_weight_rise},
+            {"contact_weight_decay", chain.contact_weight_decay},
+            {"contact_normal_offset", chain.contact_normal_offset},
+            {"probe_max_drop", chain.probe_max_drop}, {"foot_height", chain.foot_height},
+            {"plant_threshold", chain.plant_threshold}, {"target", chain.target}};
         if (chain.runtime) {
-            auto runtime = CefV8Value::CreateObject(nullptr, nullptr);
-            runtime->SetValue("has_target", CefV8Value::CreateBool(chain.runtime->has_target), V8_PROPERTY_ATTRIBUTE_NONE);
-            runtime->SetValue("grounded", CefV8Value::CreateBool(chain.runtime->grounded), V8_PROPERTY_ATTRIBUTE_NONE);
-            runtime->SetValue("releasing", CefV8Value::CreateBool(chain.runtime->releasing), V8_PROPERTY_ATTRIBUTE_NONE);
-            runtime->SetValue("weight", CefV8Value::CreateDouble(chain.runtime->weight), V8_PROPERTY_ATTRIBUTE_NONE);
-            auto runtime_target = CefV8Value::CreateArray(3), normal = CefV8Value::CreateArray(3);
-            for (int axis = 0; axis < 3; ++axis) {
-                runtime_target->SetValue(axis, CefV8Value::CreateDouble(chain.runtime->target[axis]));
-                normal->SetValue(axis, CefV8Value::CreateDouble(chain.runtime->normal[axis]));
-            }
-            runtime->SetValue("target", runtime_target, V8_PROPERTY_ATTRIBUTE_NONE);
-            runtime->SetValue("normal", normal, V8_PROPERTY_ATTRIBUTE_NONE);
-            item->SetValue("runtime", runtime, V8_PROPERTY_ATTRIBUTE_NONE);
+            item["runtime"] = {{"has_target", chain.runtime->has_target},
+                {"grounded", chain.runtime->grounded}, {"releasing", chain.runtime->releasing},
+                {"weight", chain.runtime->weight}, {"target", chain.runtime->target},
+                {"normal", chain.runtime->normal}};
         }
-        chains->SetValue(i, item);
+        chains.push_back(std::move(item));
     }
-    result->SetValue("chains", chains, V8_PROPERTY_ATTRIBUTE_NONE); return result;
+    return json_to_v8({{"archive_session", snapshot.archive_session}, {"scene", snapshot.scene},
+        {"actor", snapshot.actor}, {"ready", snapshot.ready}, {"is_skinned", snapshot.is_skinned},
+        {"revision", snapshot.revision}, {"chains", std::move(chains)}});
 }
 
 CefRefPtr<CefV8Value> actor_read_value(const ActorReadSnapshot& snapshot) {
@@ -1580,21 +1563,13 @@ CefRefPtr<CefV8Value> actor_read_value(const ActorReadSnapshot& snapshot) {
 }
 
 CefRefPtr<CefV8Value> actor_index_value(const ActorIndexSnapshot& snapshot) {
-    auto result = CefV8Value::CreateObject(nullptr, nullptr);
-    result->SetValue("archive_session", CefV8Value::CreateString(snapshot.archive_session), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("scene", CefV8Value::CreateString(snapshot.scene), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("tree_revision", CefV8Value::CreateDouble(static_cast<double>(snapshot.tree_revision)), V8_PROPERTY_ATTRIBUTE_NONE);
-    auto actors = CefV8Value::CreateArray(static_cast<int>(snapshot.actors.size()));
-    for (std::size_t index = 0; index < snapshot.actors.size(); ++index) {
-        const auto& actor = snapshot.actors[index];
-        auto value = CefV8Value::CreateObject(nullptr, nullptr);
-        value->SetValue("actor_guid", CefV8Value::CreateString(actor.actor_guid), V8_PROPERTY_ATTRIBUTE_NONE);
-        value->SetValue("name", CefV8Value::CreateString(actor.name), V8_PROPERTY_ATTRIBUTE_NONE);
-        value->SetValue("type", CefV8Value::CreateString(actor.type), V8_PROPERTY_ATTRIBUTE_NONE);
-        actors->SetValue(static_cast<int>(index), value);
+    nlohmann::json actors = nlohmann::json::array();
+    for (const auto& actor : snapshot.actors) {
+        actors.push_back({{"actor_guid", actor.actor_guid}, {"name", actor.name},
+                          {"type", actor.type}});
     }
-    result->SetValue("actors", actors, V8_PROPERTY_ATTRIBUTE_NONE);
-    return result;
+    return json_to_v8({{"archive_session", snapshot.archive_session}, {"scene", snapshot.scene},
+        {"tree_revision", snapshot.tree_revision}, {"actors", std::move(actors)}});
 }
 
 CefRefPtr<CefV8Value> scene_query_value(const SceneReply& reply) {
@@ -1723,52 +1698,28 @@ bool read_transforms(const CefV8ValueList& arguments, SceneRequest& request) {
 }
 
 CefRefPtr<CefV8Value> transform_value(const ActorTransformSnapshot& snapshot) {
-    auto result = CefV8Value::CreateObject(nullptr, nullptr);
-    result->SetValue("status", CefV8Value::CreateString("success"), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("scene", CefV8Value::CreateString(snapshot.scene), V8_PROPERTY_ATTRIBUTE_NONE);
-    auto actor = CefV8Value::CreateObject(nullptr, nullptr);
-    actor->SetValue("name", CefV8Value::CreateString(snapshot.actor), V8_PROPERTY_ATTRIBUTE_NONE);
-    actor->SetValue("actor_guid", CefV8Value::CreateString(snapshot.actor_guid), V8_PROPERTY_ATTRIBUTE_NONE);
-    actor->SetValue("actor_version", CefV8Value::CreateInt(snapshot.actor_version), V8_PROPERTY_ATTRIBUTE_NONE);
-    auto geometry = CefV8Value::CreateObject(nullptr, nullptr);
-    const auto vector = [&](const char* key, const std::array<float, 3>& value) {
-        auto array = CefV8Value::CreateArray(3);
-        for (int index = 0; index < 3; ++index) array->SetValue(index, CefV8Value::CreateDouble(value[index]));
-        geometry->SetValue(key, array, V8_PROPERTY_ATTRIBUTE_NONE);
-    };
-    vector("position", snapshot.position);
-    vector("rotation", snapshot.rotation);
-    vector("scale", snapshot.scale);
-    actor->SetValue("geometry", geometry, V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("actor", actor, V8_PROPERTY_ATTRIBUTE_NONE);
-    return result;
+    // The same JSON-literal form as ik_value: one conversion instead of a SetValue per field.
+    return json_to_v8({{"status", "success"}, {"scene", snapshot.scene},
+        {"actor", {{"name", snapshot.actor}, {"actor_guid", snapshot.actor_guid},
+                   {"actor_version", snapshot.actor_version},
+                   {"geometry", {{"position", snapshot.position},
+                                 {"rotation", snapshot.rotation},
+                                 {"scale", snapshot.scale}}}}}});
 }
 
 CefRefPtr<CefV8Value> transforms_value(const std::vector<ActorTransformSnapshot>& snapshots,
                                        const std::string& archive_session) {
-    auto result = CefV8Value::CreateObject(nullptr, nullptr);
-    result->SetValue("archive_session", CefV8Value::CreateString(archive_session), V8_PROPERTY_ATTRIBUTE_NONE);
-    auto actors = CefV8Value::CreateArray(static_cast<int>(snapshots.size()));
-    for (size_t i = 0; i < snapshots.size(); ++i) {
-        const auto& snapshot = snapshots[i];
-        auto item = CefV8Value::CreateObject(nullptr, nullptr);
-        item->SetValue("scene", CefV8Value::CreateString(snapshot.scene), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("actor", CefV8Value::CreateString(snapshot.actor), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("actor_guid", CefV8Value::CreateString(snapshot.actor_guid), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("actor_version", CefV8Value::CreateInt(snapshot.actor_version), V8_PROPERTY_ATTRIBUTE_NONE);
-        const auto vector = [&](const char* key, const std::array<float, 3>& value) {
-            auto array = CefV8Value::CreateArray(3);
-            for (int axis = 0; axis < 3; ++axis) array->SetValue(axis, CefV8Value::CreateDouble(value[axis]));
-            item->SetValue(key, array, V8_PROPERTY_ATTRIBUTE_NONE);
-        };
-        vector("position", snapshot.position);
-        vector("rotation", snapshot.rotation);
-        vector("scale", snapshot.scale);
-        actors->SetValue(static_cast<int>(i), item);
+    nlohmann::json actors = nlohmann::json::array();
+    for (const auto& snapshot : snapshots) {
+        actors.push_back({{"scene", snapshot.scene}, {"actor", snapshot.actor},
+            {"actor_guid", snapshot.actor_guid}, {"actor_version", snapshot.actor_version},
+            {"position", snapshot.position}, {"rotation", snapshot.rotation},
+            {"scale", snapshot.scale}});
     }
-    result->SetValue("actors", actors, V8_PROPERTY_ATTRIBUTE_NONE);
-    return result;
+    return json_to_v8({{"archive_session", archive_session}, {"actors", std::move(actors)}});
 }
+
+
 
 bool read_selection(const CefV8ValueList& arguments, ActorSelection& selection) {
     if ((arguments.size() != 3 && arguments.size() != 4) ||
@@ -2003,116 +1954,87 @@ public:
         }, weak_from_this(), std::move(data))));
     }
 
-    CefRefPtr<CefV8Value> invoke(ProjectSettingsMethod method, const CefV8ValueList& arguments) {
+    // Every named binding repeated this skeleton: create a promise, check context ownership, decode
+    // the arguments, post the typed request to TID_UI, run the operation and settle the promise -
+    // with NATIVE_FAILURE on a throw and NATIVE_UNAVAILABLE when the post fails. It lives here once;
+    // each binding supplies only its reader, its operation and the four messages that are genuinely
+    // its own. The request type must expose `method`, which every dispatch DTO already does.
+    template <typename Method, typename Request, typename Reply, typename Reader, typename Operation>
+    CefRefPtr<CefV8Value> dispatch_async(const CefV8ValueList& arguments, Request request,
+                                         Reader&& reader, Operation operation,
+                                         const char* permission_message, const char* invalid_message,
+                                         const char* failure_message, const char* unavailable_message) {
         CEF_REQUIRE_RENDERER_THREAD();
         auto promise = CefV8Value::CreatePromise();
         if (!owns_current_context()) {
-            if (active() && context_ && context_->IsValid()) reject(context_, promise, "PERMISSION_DENIED", "Project file binding belongs to another context");
+            if (active() && context_ && context_->IsValid()) reject(context_, promise, "PERMISSION_DENIED", permission_message);
             else promise->RejectPromise("CONTEXT_CHANGED");
             return promise;
         }
-        ProjectSettingsRequest request{method};
-        if (!read_project_settings(method, arguments, request)) {
-            reject(context_, promise, "INVALID_ARGUMENT", "Expected scoped project document identity and structured values"); return promise;
+        if (!reader(arguments, request)) {
+            reject(context_, promise, "INVALID_ARGUMENT", invalid_message);
+            return promise;
         }
         const auto id = ++sequence_;
-        pending_.emplace(id, Pending{method, promise});
+        pending_.emplace(id, Pending{request.method, promise});
         const bool posted = CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
-            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id, ProjectSettingsRequest request) {
+            [](Operation operation, const char* failure_message, std::weak_ptr<CoronaV8Endpoint> weak,
+               std::uint64_t id, Request request) {
                 const auto endpoint = weak.lock();
                 if (!endpoint || !endpoint->active()) return;
-                ProjectSettingsReply reply;
-                try { reply = execute_project_settings_operation(request); }
+                Reply reply;
+                try { reply = operation(request); }
                 catch (const std::exception& error) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = error.what(); }
-                catch (...) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = "Project document operation failed"; }
+                catch (...) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = failure_message; }
                 endpoint->complete(id, std::move(reply));
-            }, weak_from_this(), id, std::move(request))));
-        if (!posted) { pending_.erase(id); reject(context_, promise, "NATIVE_UNAVAILABLE", "Project document owner unavailable"); }
+            }, operation, failure_message, weak_from_this(), id, std::move(request))));
+        if (!posted) { pending_.erase(id); reject(context_, promise, "NATIVE_UNAVAILABLE", unavailable_message); }
         return promise;
+    }
+
+    CefRefPtr<CefV8Value> invoke(ProjectSettingsMethod method, const CefV8ValueList& arguments) {
+        return dispatch_async<ProjectSettingsMethod, ProjectSettingsRequest, ProjectSettingsReply>(arguments,
+            ProjectSettingsRequest{method},
+            [](const CefV8ValueList& list, ProjectSettingsRequest& request) {
+                return read_project_settings(request.method, list, request);
+            },
+            execute_project_settings_operation,
+            "Project file binding belongs to another context",
+            "Expected scoped project document identity and structured values",
+            "Project document operation failed", "Project document owner unavailable");
     }
 
     CefRefPtr<CefV8Value> invoke(NetworkMethod method, const CefV8ValueList& arguments) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        auto promise = CefV8Value::CreatePromise();
-        if (!owns_current_context()) {
-            if (active() && context_ && context_->IsValid()) reject(context_, promise, "PERMISSION_DENIED", "Network binding belongs to another context");
-            else promise->RejectPromise("CONTEXT_CHANGED");
-            return promise;
-        }
-        NetworkRequest request{method};
-        if (!read_network(request, arguments)) {
-            reject(context_, promise, "INVALID_ARGUMENT", "Expected named network arguments"); return promise;
-        }
-        const auto id = ++sequence_;
-        pending_.emplace(id, Pending{method, promise});
-        const bool posted = CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
-            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id, NetworkRequest request) {
-                const auto endpoint = weak.lock();
-                if (!endpoint || !endpoint->active()) return;
-                NetworkReply reply;
-                try { reply = execute_network_operation(request); }
-                catch (const std::exception& error) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = error.what(); }
-                catch (...) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = "Network read failed"; }
-                endpoint->complete(id, std::move(reply));
-            }, weak_from_this(), id, std::move(request))));
-        if (!posted) { pending_.erase(id); reject(context_, promise, "NATIVE_UNAVAILABLE", "Network owner unavailable"); }
-        return promise;
+        return dispatch_async<NetworkMethod, NetworkRequest, NetworkReply>(arguments,
+            NetworkRequest{method},
+            [](const CefV8ValueList& list, NetworkRequest& request) {
+                return read_network(request, list);
+            },
+            execute_network_operation,
+            "Network binding belongs to another context", "Expected named network arguments",
+            "Network read failed", "Network owner unavailable");
     }
 
     CefRefPtr<CefV8Value> invoke(ProjectLauncherMethod method, const CefV8ValueList& arguments) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        auto promise = CefV8Value::CreatePromise();
-        if (!owns_current_context()) {
-            if (active() && context_ && context_->IsValid()) reject(context_, promise, "PERMISSION_DENIED", "Project launcher binding belongs to another context");
-            else promise->RejectPromise("CONTEXT_CHANGED");
-            return promise;
-        }
-        ProjectLauncherRequest request{method};
-        if (!read_project_launcher(request, arguments)) {
-            reject(context_, promise, "INVALID_ARGUMENT", "Expected named project launcher arguments"); return promise;
-        }
-        const auto id = ++sequence_;
-        pending_.emplace(id, Pending{method, promise});
-        const bool posted = CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
-            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id, ProjectLauncherRequest request) {
-                const auto endpoint = weak.lock();
-                if (!endpoint || !endpoint->active()) return;
-                ProjectLauncherReply reply;
-                try { reply = execute_project_launcher_operation(request); }
-                catch (const std::exception& error) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = error.what(); }
-                catch (...) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = "Project launcher read failed"; }
-                endpoint->complete(id, std::move(reply));
-            }, weak_from_this(), id, std::move(request))));
-        if (!posted) { pending_.erase(id); reject(context_, promise, "NATIVE_UNAVAILABLE", "Project launcher owner unavailable"); }
-        return promise;
+        return dispatch_async<ProjectLauncherMethod, ProjectLauncherRequest, ProjectLauncherReply>(arguments,
+            ProjectLauncherRequest{method},
+            [](const CefV8ValueList& list, ProjectLauncherRequest& request) {
+                return read_project_launcher(request, list);
+            },
+            execute_project_launcher_operation,
+            "Project launcher binding belongs to another context", "Expected named project launcher arguments",
+            "Project launcher read failed", "Project launcher owner unavailable");
     }
 
     CefRefPtr<CefV8Value> invoke(FilesMethod method, const CefV8ValueList& arguments) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        auto promise = CefV8Value::CreatePromise();
-        if (!owns_current_context()) {
-            if (active() && context_ && context_->IsValid()) reject(context_, promise, "PERMISSION_DENIED", "Project file binding belongs to another context");
-            else promise->RejectPromise("CONTEXT_CHANGED");
-            return promise;
-        }
-        FilesRequest request{method};
-        if (!read_files(method, arguments, request)) {
-            reject(context_, promise, "INVALID_ARGUMENT", "Expected scoped project file arguments"); return promise;
-        }
-        const auto id = ++sequence_;
-        pending_.emplace(id, Pending{method, promise});
-        const bool posted = CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
-            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id, FilesRequest request) {
-                const auto endpoint = weak.lock();
-                if (!endpoint || !endpoint->active()) return;
-                FilesReply reply;
-                try { reply = execute_files_operation(request); }
-                catch (const std::exception& error) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = error.what(); }
-                catch (...) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = "Project document operation failed"; }
-                endpoint->complete(id, std::move(reply));
-            }, weak_from_this(), id, std::move(request))));
-        if (!posted) { pending_.erase(id); reject(context_, promise, "NATIVE_UNAVAILABLE", "Project document owner unavailable"); }
-        return promise;
+        return dispatch_async<FilesMethod, FilesRequest, FilesReply>(arguments,
+            FilesRequest{method},
+            [](const CefV8ValueList& list, FilesRequest& request) {
+                return read_files(request.method, list, request);
+            },
+            execute_files_operation,
+            "Project file binding belongs to another context", "Expected scoped project file arguments",
+            "Project document operation failed", "Project document owner unavailable");
     }
 
     CefRefPtr<CefV8Value> invoke(ScriptInputMethod method, const CefV8ValueList& arguments) {
@@ -2484,7 +2406,11 @@ private:
         }, weak_from_this(), id, std::move(reply))));
     }
 
-    void resolve(std::uint64_t id, const ProjectSettingsReply& reply) {
+    // Ten reply types repeated this settlement sequence, differing only in how the reply becomes a
+    // V8 value. One template holds the sequence; each overload supplies its own shaper. The scene,
+    // script-input and gizmo replies keep their own bodies because they do real work here.
+    template <typename Reply, typename Shaper>
+    void resolve_with(std::uint64_t id, const Reply& reply, Shaper shape) {
         CEF_REQUIRE_RENDERER_THREAD();
         const auto entry = pending_.find(id);
         if (entry == pending_.end()) return;
@@ -2492,44 +2418,24 @@ private:
         pending_.erase(entry);
         if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
         if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
-        else promise->ResolvePromise(project_settings_value(reply));
+        else promise->ResolvePromise(shape(reply));
         context_->Exit();
+    }
+
+    void resolve(std::uint64_t id, const ProjectSettingsReply& reply) {
+        resolve_with(id, reply, [](const ProjectSettingsReply& value) { return project_settings_value(value); });
     }
 
     void resolve(std::uint64_t id, const NetworkReply& reply) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        const auto entry = pending_.find(id);
-        if (entry == pending_.end()) return;
-        const auto promise = entry->second.promise;
-        pending_.erase(entry);
-        if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
-        if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
-        else promise->ResolvePromise(network_value(reply));
-        context_->Exit();
+        resolve_with(id, reply, [](const NetworkReply& value) { return network_value(value); });
     }
 
     void resolve(std::uint64_t id, const ProjectLauncherReply& reply) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        const auto entry = pending_.find(id);
-        if (entry == pending_.end()) return;
-        const auto promise = entry->second.promise;
-        pending_.erase(entry);
-        if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
-        if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
-        else promise->ResolvePromise(project_launcher_value(reply));
-        context_->Exit();
+        resolve_with(id, reply, [](const ProjectLauncherReply& value) { return project_launcher_value(value); });
     }
 
     void resolve(std::uint64_t id, const FilesReply& reply) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        const auto entry = pending_.find(id);
-        if (entry == pending_.end()) return;
-        const auto promise = entry->second.promise;
-        pending_.erase(entry);
-        if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
-        if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
-        else promise->ResolvePromise(files_value(reply));
-        context_->Exit();
+        resolve_with(id, reply, [](const FilesReply& value) { return files_value(value); });
     }
 
     void resolve(std::uint64_t id, const ScriptInputReply& reply) {
@@ -2549,27 +2455,11 @@ private:
     }
 
     void resolve(std::uint64_t id, const ViewportPickReply& reply) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        const auto entry = pending_.find(id);
-        if (entry == pending_.end()) return;
-        const auto promise = entry->second.promise;
-        pending_.erase(entry);
-        if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
-        if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
-        else promise->ResolvePromise(viewport_pick_value(reply));
-        context_->Exit();
+        resolve_with(id, reply, [](const ViewportPickReply& value) { return viewport_pick_value(value); });
     }
 
     void resolve(std::uint64_t id, const BridgeReply& reply) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        const auto entry = pending_.find(id);
-        if (entry == pending_.end()) return;
-        const auto promise = entry->second.promise;
-        pending_.erase(entry);
-        if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
-        if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
-        else promise->ResolvePromise(CefV8Value::CreateString(reply.json));
-        context_->Exit();
+        resolve_with(id, reply, [](const BridgeReply& value) { return CefV8Value::CreateString(value.json); });
     }
 
     void resolve(std::uint64_t id, const ViewportGizmoReply& reply) {

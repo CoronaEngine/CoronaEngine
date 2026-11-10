@@ -17,7 +17,10 @@ def test_network_has_named_owned_contract_and_no_legacy_web_routes():
     for name in ['startSession', 'stopSession', 'getSessionInfo', 'getDiscoveredPeers',
                  'clearDiscoveredPeers', 'searchLan', 'connectToPeer', 'setProjectRoot']:
         assert f'network->SetValue("{name}"' in binding
-    assert 'execute_network_operation(request)' in binding
+    # The binding dispatches through the shared async skeleton and names this operation as the one
+    # to run; the skeleton itself lives in dispatch_async, so the wiring is spelled as an argument.
+    assert 'dispatch_async<NetworkMethod, NetworkRequest, NetworkReply>' in binding
+    assert 'execute_network_operation,' in binding
 
 
 def test_project_creation_has_one_native_owner_and_named_web_bindings():
@@ -49,7 +52,8 @@ def test_project_launcher_reads_use_named_v8_and_keep_non_web_manifest():
     binding = (root / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8')
     for name in ['getAppVersion', 'getRecentProjects', 'getProjectLoadStatus']:
         assert f'project->SetValue("{name}"' in binding
-    assert 'execute_project_launcher_operation(request)' in binding
+    assert 'dispatch_async<ProjectLauncherMethod, ProjectLauncherRequest, ProjectLauncherReply>' in binding
+    assert 'execute_project_launcher_operation,' in binding
 
 
 def test_unused_project_launch_methods_keep_non_web_contracts_only():
