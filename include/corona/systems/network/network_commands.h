@@ -10,8 +10,8 @@
 /// 数据面 `peek_pending_actor_*` / `ack_pending_actor_*` 一族不在这里：它本身就是
 /// NetworkSystem 内部 mutex 保护的"生产者 → 消费者"队列，不是直写共享状态。
 ///
-/// 注：LANChat 已在远端 `c22e74de refactor(network)!: remove LANChat` 中移除，
-/// 本文件不再承载任何 lanchat 命令。
+/// 注：旧的内置聊天子系统已在远端 `c22e74de refactor(network)!` 中移除，
+/// 本文件不再承载该子系统的任何命令。
 
 #include <corona/kernel/command/command_buffer.h>
 #include <corona/kernel/command/snapshot_channel.h>
@@ -83,7 +83,7 @@ enum class NetworkCommandKind : std::uint8_t {
     StartSession,                   ///< params: instance_name, project_id, port, role
     StartDiscovery,                 ///< params: instance_name, project_id
     ConnectToPeer,                  ///< params: ip, name; port 走 command.port
-    // ---- 协作对象锁（远端删除 LANChat 后的通用替代 API）----
+    // ---- 协作对象锁（聊天子系统移除后的通用替代 API）----
     BroadcastIntent,                ///< params: user_id, tooltip, status, now_ms; position 走 command.position
     LockObject,                     ///< params: object_id, user_id, operation, now_ms —— 需要回执
     UnlockObject,                   ///< params: object_id, user_id —— 需要回执

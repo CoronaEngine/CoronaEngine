@@ -6,6 +6,9 @@ It needs no engine, GPU, CEF, or writes to the running engine's build directory.
 """
 
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from toolchain import find_compiler  # noqa: E402
 import shutil
 import subprocess
 import tempfile
@@ -18,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 @pytest.fixture(scope="module")
 def camera_update_harness():
-    compiler = shutil.which("g++")
+    compiler = find_compiler()
     if not compiler:
         pytest.skip("Standalone CPU regression requires g++")
     headers = list((Path.home() / ".conan2/p").glob("nlohm*/p/include/nlohmann/json.hpp"))

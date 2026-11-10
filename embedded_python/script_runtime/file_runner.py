@@ -109,12 +109,27 @@ class FileScripts:
     def run_path(cls, request: dict) -> dict:
         return cls._run_file(request, verify_revision="revision" in request)
 
+    # The web layer used to reject unknown request fields before the request reached Python;
+    # the file run is the only consumer of this schema, so the check lives here now.
+    _RUN_FILE_FIELDS_ = frozenset({
+        "requestId", "archive_session", "project_path", "path", "revision",
+        "target_type", "scene_name", "actor_name",
+    })
+
     @classmethod
     def _run_file(cls, request: dict, *, verify_revision: bool) -> dict:
         """Compile the bytes read once from the active project's file."""
+        if not isinstance(request, dict):
+            return {"status": "error", "code": "INVALID_ARGUMENT",
+                    "message": "A script request object is required"}
+        unexpected = sorted(set(request) - cls._RUN_FILE_FIELDS_)
+        if unexpected:
+            return {"status": "error", "code": "INVALID_ARGUMENT",
+                    "message": f"Unexpected script request fields: {', '.join(unexpected)}"}
         request_id = request.get("requestId")
         if not isinstance(request_id, str) or not 0 < len(request_id) <= 128:
-            return {"status": "error", "message": "A script requestId is required"}
+            return {"status": "error", "code": "INVALID_ARGUMENT",
+                    "message": "A script requestId is required"}
         root, error = require_project_session(request)
         if error:
             return error

@@ -4,6 +4,9 @@ The fixture encodes branches using the real scatter_path expression, including
 its root sentinel. Host buffers reject forbidden reads and count valid accesses.
 """
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from toolchain import find_compiler  # noqa: E402
 import re
 import shutil
 import subprocess
@@ -143,7 +146,7 @@ int main(){
     program = program.replace("HELPER", helper).replace("BLOCK", block)
     program = program.replace("ENCODING", encoding).replace("SENTINEL", sentinel)
     program = program.replace("TRANSMISSION", transmission).replace("REFLECTION", reflection)
-    compiler = shutil.which("g++") or shutil.which("clang++")
+    compiler = find_compiler(("g++", "clang++"))
     if not compiler:
         raise SkipTest("Standalone CPU regression requires g++ or clang++")
     temporary_root = ROOT / ".workspace/tmp/restir-blackspots/prefix-gate-tests"

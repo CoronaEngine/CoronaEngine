@@ -1,5 +1,8 @@
 """Execute production pick mapping and its live V8 call without CEF/GPU."""
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from toolchain import find_compiler  # noqa: E402
 import shutil
 import subprocess
 
@@ -11,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 @pytest.fixture(scope="module")
 def pick_harness(tmp_path_factory):
-    compiler = shutil.which("g++")
+    compiler = find_compiler()
     if not compiler:
         pytest.skip("Standalone pick regression requires g++")
     source = (ROOT / "src/systems/ui/cef/cef_viewport_pick.cpp").read_text(encoding="utf-8")

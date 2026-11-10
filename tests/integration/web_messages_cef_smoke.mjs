@@ -153,6 +153,12 @@ try {
   await main.evaluate('window.__nativeJSON = { stringify: JSON.stringify, parse: JSON.parse }; true');
   // Every Web -> Python request goes through this one entry. The named JSON functions are put back
   // first because earlier sections replace them in global scope and never restore them.
+  const bridgeOn = (client, service, method, args) => client.evaluate(
+    `(() => { if (window.__nativeJSON) { Object.assign(JSON, window.__nativeJSON); } return 0; })()`)
+    .then(() => client.evaluate(
+      `corona.bridge.call(JSON.stringify({service:${JSON.stringify(service)},`
+      + `function:${JSON.stringify(method)},args:${JSON.stringify(args)}}))`
+      + `.then(raw => typeof raw === 'string' ? JSON.parse(raw) : raw)`));
   const bridgeCall = (service, method, args) => main.evaluate(
     `(() => { if (window.__nativeJSON) { Object.assign(JSON, window.__nativeJSON); } return 0; })()`)
     .then(() => main.evaluate(
@@ -1255,6 +1261,7 @@ try {
       routePath:'/SceneBar?uiWindow=camera-tools',width:320,height:240})`);
     const toolTarget = await waitFor(async () => (await targets()).find(item => item.url.includes('uiWindow=camera-tools')), 30_000);
     const toolClient = await connect(toolTarget);
+  await toolClient.evaluate('window.__nativeJSON = { stringify: JSON.stringify, parse: JSON.parse }; true');
     await waitFor(() => toolClient.evaluate('typeof corona?.window?.getCurrent === "function"'));
     await toolClient.evaluate(`JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); }; true`);
     const createCamera = value => main.evaluate(`corona.window.createCameraView(${JSON.stringify(value)})`);
@@ -1264,6 +1271,7 @@ try {
     assert.deepEqual(await createCamera(options), { tab_id: created.tab_id, existing: true });
     const cameraTarget = await waitFor(async () => (await targets()).find(item => item.url.includes('uiWindow=real-camera')), 30_000);
     const cameraClient = await connect(cameraTarget);
+  await cameraClient.evaluate('window.__nativeJSON = { stringify: JSON.stringify, parse: JSON.parse }; true');
     await waitFor(() => cameraClient.evaluate('typeof corona?.window?.getCurrent === "function"'));
     await cameraClient.evaluate(`JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); }; true`);
     const currentIndex = await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(indexScope)}),scene:'scene.ini',actors:'index'})`);
@@ -1346,6 +1354,7 @@ try {
     // when page teardown cannot send another Web request.
     await cameraClient.call('Page.reload', {});
     await waitFor(() => cameraClient.evaluate('typeof corona?.viewport?.configure === "function"'));
+    await cameraClient.evaluate('window.__nativeJSON = { stringify: JSON.stringify, parse: JSON.parse }; true');
     await cameraClient.evaluate(`JSON.stringify = JSON.parse = () => { throw Error('JSON transport is forbidden'); }; true`);
     await waitFor(async () => (await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d' }))).pointer.cursor === 'hidden');
     const afterReload = await viewportPatch(cameraClient, JSON.stringify({ ...cameraScope, pointer: pointerState }));
@@ -1457,6 +1466,7 @@ try {
       return true; })()`);
     await cameraClient.call('Page.reload', {});
     await waitFor(() => cameraClient.evaluate('!window.__oldPickContext && typeof corona?.viewport?.pick === "function"'));
+    await cameraClient.evaluate('window.__nativeJSON = { stringify: JSON.stringify, parse: JSON.parse }; true');
     await cameraClient.evaluate(`JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); }; true`);
     assert.equal((await pick(cameraClient)).actor_guid, actor.actor_guid);
 
@@ -1494,30 +1504,42 @@ try {
     const scriptRequest = { archive_session: camera.archive_session, project_path: cameraWorld,
       path: 'input_probe.py', revision: createHash('sha256').update(script).digest('hex'), requestId: `input-${Date.now()}`,
       target_type: 'actor', scene_name: 'scene.ini', actor_name: actor.name };
-    const scriptCall = (method, args = []) => cameraClient.evaluate(`corona.scripts.${method}(...${JSON.stringify(args)})`);
-    const started = await scriptCall('runFile', [scriptRequest]);
+    // Scripts are a Python domain reached through the bridge. FileScripts takes one request
+    // object per call, so the positional shapes this section uses are adapted here.
+    const scriptCall = (method, args = []) => {
+      if (method === 'get_run') return bridgeOn(cameraClient, 'FileScripts', 'get_file_run', [{ requestId: args[0] }]);
+      if (method === 'get_status') return bridgeOn(cameraClient, 'FileScripts', 'get_script_status', []);
+      if (method === 'stop') {
+        return bridgeOn(cameraClient, 'FileScripts', 'stop_file',
+          [{ runId: args[0], restore_state: args[1] === true, requestId: args[2] }]);
+      }
+      return bridgeOn(cameraClient, 'FileScripts', method, args);
+    };
+    const started = await scriptCall('run_file', [scriptRequest]);
     assert.ok(started.runId, JSON.stringify(started));
-    assert.equal((await scriptCall('runFile', [scriptRequest])).runId, started.runId, 'duplicate start must recover the same run');
-    assert.equal((await scriptCall('getRun', [scriptRequest.requestId])).runId, started.runId);
-    assert.equal((await scriptCall('runFile', [{ ...scriptRequest, actor_name: 'different-identity' }])).code, 'REQUEST_CONFLICT');
-    for (const method of ['run_file', 'get_run', 'stop', 'get_status']) {
-      const args = method === 'get_status' ? [] : [{}];
-
-    }
+    assert.equal((await scriptCall('run_file', [scriptRequest])).runId, started.runId, 'duplicate start must recover the same run');
+    assert.equal((await scriptCall('get_run', [scriptRequest.requestId])).runId, started.runId);
+    assert.equal((await scriptCall('run_file', [{ ...scriptRequest, actor_name: 'different-identity' }])).code, 'REQUEST_CONFLICT');
     const cancelled = { ...scriptRequest, requestId: `cancelled-${Date.now()}` };
-    assert.equal((await scriptCall('getRun', [cancelled.requestId])).status, 'unknown');
+    assert.equal((await scriptCall('get_run', [cancelled.requestId])).status, 'unknown');
     assert.equal((await scriptCall('stop', ['', true, cancelled.requestId])).status, 'stopped');
-    assert.equal((await scriptCall('runFile', [cancelled])).status, 'cancelled', 'a late start cannot revive a closed panel');
+    assert.equal((await scriptCall('run_file', [cancelled])).status, 'cancelled', 'a late start cannot revive a closed panel');
     assert.equal((await scriptCall('stop', ['foreign-run', false])).code, 'STALE_RUN');
-    assert.equal((await scriptCall('getRun', [scriptRequest.requestId])).runId, started.runId);
-    for (const bad of [{ ...scriptRequest, requestId: '' }, { ...scriptRequest, revision: 'invalid' },
-      { ...scriptRequest, unexpected: true }]) {
-      assert.equal(await cameraClient.evaluate(`corona.scripts.runFile(${JSON.stringify(bad)}).catch(error => error.code)`), 'INVALID_ARGUMENT');
+    assert.equal((await scriptCall('get_run', [scriptRequest.requestId])).runId, started.runId);
+    // Each case needs its own requestId: reusing the live one makes the identity check answer
+    // REQUEST_CONFLICT first, so the rule under test would never run.
+    for (const bad of [{ ...scriptRequest, requestId: '' },
+      { ...scriptRequest, requestId: `bad-revision-${Date.now()}`, revision: 'invalid' },
+      { ...scriptRequest, requestId: `bad-field-${Date.now()}`, unexpected: true }]) {
+      const refused = await bridgeOn(cameraClient, 'FileScripts', 'run_file', [bad]);
+      assert.equal(refused.status, 'error',
+        'a malformed run request must be refused: ' + JSON.stringify(refused));
     }
-    assert.equal(await cameraClient.evaluate(`corona.scripts.runFile(${JSON.stringify({ ...scriptRequest, archive_session: 'foreign' })}).catch(error => error.code)`), 'PROJECT_CONTEXT_CHANGED');
+    assert.equal((await bridgeOn(cameraClient, 'FileScripts', 'run_file',
+      [{ ...scriptRequest, archive_session: 'foreign' }])).code, 'PROJECT_CONTEXT_CHANGED');
 
     try {
-      await waitFor(async () => (await scriptCall('getStatus')).marker?.id === 'input-ready');
+      await waitFor(async () => (await scriptCall('get_status')).marker?.id === 'input-ready');
       assert.equal((await filesCall('getFileTree', { path: '' })).isDirectory, true);
       for (const [method, request] of [
         ['createFolder', { path: '', name: 'blocked-folder' }],

@@ -16,22 +16,9 @@ add_test(NAME EngineStartupConfigDeploymentTests
 set_tests_properties(EngineStartupConfigTests EngineStartupConfigDeploymentTests
     PROPERTIES TIMEOUT 20)
 
-add_executable(corona_ui_surface_removal_race_tests
-    ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp
-    ${PROJECT_SOURCE_DIR}/src/systems/ui/ui_surface_lifecycle.cpp
-)
-target_include_directories(corona_ui_surface_removal_race_tests
-    PRIVATE ${PROJECT_SOURCE_DIR}/include
-)
-target_link_libraries(corona_ui_surface_removal_race_tests
-    PRIVATE corona_display_system corona::resource::manager
-)
-if(COMMAND helicon_install_runtime_deps)
-    helicon_install_runtime_deps(corona_ui_surface_removal_race_tests)
-endif()
-add_test(NAME UiSurfaceRemovalRaceTests
-         COMMAND corona_ui_surface_removal_race_tests)
-set_tests_properties(UiSurfaceRemovalRaceTests PROPERTIES TIMEOUT 15)
+# UiSurfaceRemovalRaceTests was retired with DisplayCallbackGate (commit 462f0933 removed its
+# source) but the target kept being registered with only library sources, so it had no `main`
+# and could never link. Nothing references it any more.
 
 add_executable(corona_vision_reblur_tests test_vision_reblur.cpp)
 target_include_directories(corona_vision_reblur_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)

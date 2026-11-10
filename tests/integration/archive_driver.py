@@ -61,5 +61,11 @@ def run_native(args, **kwargs):
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, str(Path(sys.argv[2]) / "editor"))
+    # The archive services moved out of the CoronaEditor checkout into the engine's
+    # embedded_python tree (commit 938a1995). Resolve them from this file's own location: the
+    # driver used to rely on CORONA_EDITOR_SOURCE_DIR, which is not populated in the tests
+    # preset, and CoronaEditor/editor/plugins/ProjectArchive no longer holds main.py either.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "embedded_python"))
+    if len(sys.argv) > 2 and sys.argv[2]:
+        sys.path.insert(0, str(Path(sys.argv[2]) / "editor"))
     run_native([sys.argv[1], *sys.argv[3:]])

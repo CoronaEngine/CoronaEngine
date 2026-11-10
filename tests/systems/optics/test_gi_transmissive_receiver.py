@@ -4,6 +4,9 @@ Scalar/lobe host fixtures test the policy boundary, not GPU code generation,
 BSDF sampling or image quality. Temporary compiler outputs stay in .workspace.
 """
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from toolchain import find_compiler  # noqa: E402
 import re
 import shutil
 import subprocess
@@ -127,7 +130,7 @@ def test_transmissive_receiver_bypasses_both_reuse_stages():
     }
     '''
     cpp = cpp.replace("SPATIAL_SETUP", spatial_setup).replace("TEMPORAL_GUARD", guards["temporal"]).replace("SPATIAL_GUARD", guards["spatial"])
-    compiler = shutil.which("g++") or shutil.which("clang++")
+    compiler = find_compiler(("g++", "clang++"))
     if compiler is None:
         raise SkipTest("A C++20 host compiler is required for the production receiver-policy test")
     temporary_root = ROOT / ".workspace/tmp/restir-blackspots/receiver-gate-tests"

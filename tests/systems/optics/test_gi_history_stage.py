@@ -5,6 +5,9 @@ neighbor supplies a distinguishable sample, so the next frame can detect whether
 spatial output was fed back as temporal history. No renderer or GPU is used.
 """
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from toolchain import find_compiler  # noqa: E402
 import shutil
 import subprocess
 import tempfile
@@ -28,7 +31,7 @@ def extract_function(source, signature):
 
 @pytest.fixture(scope="module")
 def history_harness():
-    compiler = shutil.which("g++")
+    compiler = find_compiler()
     if not compiler:
         pytest.skip("Standalone GI history regression requires g++")
     source = (ROOT / "vision/src/render_core/integrator/ReSTIR/indirect.cpp").read_text(encoding="utf-8")

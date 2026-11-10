@@ -6,7 +6,9 @@ from archive_driver import run_native
 import sys
 import tempfile
 
-sys.path.insert(0, str(Path(sys.argv[2]) / "editor"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "embedded_python"))
+if len(sys.argv) > 2 and sys.argv[2]:
+    sys.path.insert(0, str(Path(sys.argv[2]) / "editor"))
 from runtime.archive.parser import parse_archive
 from plugins.ProjectArchive.main import ProjectArchive
 

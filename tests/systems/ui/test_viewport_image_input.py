@@ -1,5 +1,8 @@
 """Run native pointer mapping against the compositor's fitted image, without CEF/GPU."""
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from toolchain import find_compiler  # noqa: E402
 import shutil
 import subprocess
 
@@ -11,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 @pytest.fixture(scope="module")
 def pointer_harness(tmp_path_factory):
-    compiler = shutil.which("g++")
+    compiler = find_compiler()
     if not compiler:
         pytest.skip("Standalone pointer mapping regression requires g++")
     base = ROOT / "src/systems/ui/cef"
