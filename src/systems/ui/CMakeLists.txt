@@ -35,6 +35,7 @@ set(UI_SYSTEM_SOURCES
     editor_api/project_script_service.cpp
     cef/native_api_types.cpp
     cef/editor_paths.cpp
+    cef/editor_actor_projection.cpp
     cef/editor_network_state.cpp
     cef/editor_service_operations.cpp
     cef/cef_editor_native_api_handlers.cpp
@@ -68,6 +69,7 @@ set(UI_SYSTEM_SOURCES
     cef/cef_client.h
     cef/native_api_types.h
     cef/editor_paths.h
+    cef/editor_actor_projection.h
     cef/editor_network_state.h
     cef/editor_text_utils.h
     cef/native_editor_state.h
