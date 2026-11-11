@@ -1,5 +1,7 @@
 # Storage → EnTT 迁移：实施记录
 
+<!-- HISTORICAL-DOC: this page describes the tree as it was when it was written. The editor API handler has since been split; the scene service now lives in src/systems/ui/cef/editor_scene_service.cpp and the Python bridge in src/systems/ui/editor_api/python_service_bridge.{h,cpp}. -->
+
 > 本文记录**实际做了什么**。设计分析见 `entt-full-replacement-analysis.md`，
 > 跨线程读计划见 `s4-cross-thread-reads-plan.md`。
 

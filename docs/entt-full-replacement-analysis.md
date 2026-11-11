@@ -1,5 +1,7 @@
 # Engine 全量用 EnTT 替换 Storage：分析
 
+<!-- HISTORICAL-DOC: this page describes the tree as it was when it was written. The editor API handler has since been split; the scene service now lives in src/systems/ui/cef/editor_scene_service.cpp and the Python bridge in src/systems/ui/editor_api/python_service_bridge.{h,cpp}. -->
+
 > 只分析，不改代码。基线：`feat/systems-thread-dag` @ `ab989237`（已合并远端 13 提交）
 > 本文取代 `docs/ecs-entt-migration-analysis.md`（那份写在合并前）
 

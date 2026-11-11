@@ -1,5 +1,7 @@
 # 用 EnTT 替换 Storage 容器：可行性分析
 
+<!-- HISTORICAL-DOC: this page describes the tree as it was when it was written. The editor API handler has since been split; the scene service now lives in src/systems/ui/cef/editor_scene_service.cpp and the Python bridge in src/systems/ui/editor_api/python_service_bridge.{h,cpp}. -->
+
 > 本文只做分析，**不改任何代码**。
 > 结论：技术上可行，但不是"删掉 13 个 Storage"这么简单——有三个硬约束必须先解决，
 > 其中一个（容器在 Horizon 仓库）决定了这件事无法在 CoronaEngine 单仓库内完成。

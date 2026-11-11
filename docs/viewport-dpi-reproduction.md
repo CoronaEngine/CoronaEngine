@@ -137,7 +137,7 @@ finally:
 
 | 环节 | 排查位置 | 行为 |
 | --- | --- | --- |
-| API 入口 | `src/systems/ui/cef/cef_editor_native_api_handlers.cpp:7828` | 缺省 `view_*` 使用相机保存值；`7846–7849` 即使只传分辨率，仍调用 `set_size` 和 `set_view_state` |
+| API 入口 | `src/systems/ui/cef/editor_scene_service.cpp:7828` | 缺省 `view_*` 使用相机保存值；`7846–7849` 即使只传分辨率，仍调用 `set_size` 和 `set_view_state` |
 | 状态入队 | `src/engine/engine_runtime_api.cpp:2493` | `set_view_state` 打包完整 `CameraStateUpdateField::ViewState` |
 | 实时视口 | `src/systems/optics/optics_system.cpp:712` | 写入实时 `view_*`，设置 `viewport_rect_active=true` |
 | 旧状态覆盖 | 同文件 `828` | ViewState 再次写入同组 `view_*`，未清除上述激活状态 |

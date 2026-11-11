@@ -5,7 +5,7 @@
 | 语义 | C++ owner | Python 侧 | Vue 侧 |
 |---|---|---|---|
 | Web ↔ C++ | `src/systems/ui/cef/cef_v8_binding.cpp` 的 typed V8 具名绑定 | 不参与 | `src/api/editorApi.js` |
-| Web → Python 服务 | `src/systems/ui/cef/cef_python_bridge.cpp`（只做传输） | `runtime/editor_host.py` 的服务白名单 | `corona.bridge.call` |
+| Web → Python 服务 | `src/systems/ui/editor_api/python_service_bridge.cpp`（只做传输） | `runtime/editor_host.py` 的服务白名单 | `corona.bridge.call` |
 | 脚本 ↔ C++ | `src/systems/ui/cef/script_runtime_api.h` 的 16 条具名入口 | `script_runtime/native_scene_adapter.py` | 不参与 |
 
 ## 规则
