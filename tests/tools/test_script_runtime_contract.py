@@ -13,6 +13,7 @@ import re
 ROOT = Path(__file__).resolve().parents[2]
 HEADER = ROOT / "src/systems/ui/cef/script_runtime_api.h"
 BINDINGS = ROOT / "src/systems/ui/cef/cef_py_bind.cpp"
+SERVICE = ROOT / "src/systems/ui/cef/editor_scene_service.cpp"
 ADAPTER = ROOT / "embedded_python/script_runtime/native_scene_adapter.py"
 
 
@@ -104,3 +105,51 @@ def test_every_alias_is_used_by_a_call_site():
               re.findall(r'invoke_native_scene\(\s*"(\w+)",\s*\[(.*?)\]\s*\)', text, re.S)}
     unused = sorted(set(mapping) - called)
     assert not unused, f"aliases with no call site: {unused}"
+
+
+def _function_body(source: str, name: str):
+    """The brace-balanced body of `name`, or None when the file does not define it."""
+    match = re.search(r"^[^\n]*\b" + name + r"\([^;{]*\)\s*\{", source, re.M)
+    if not match:
+        return None
+    start = source.index("{", match.start())
+    depth = 0
+    for index in range(start, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:index + 1]
+    return None
+
+
+def test_no_binding_reads_past_the_documented_arguments():
+    """The body must not read a position the contract does not list.
+
+    Bodies either read `request.args` themselves or hand the request to a helper in the same
+    file, so one level of delegation is followed. Anything deeper is not a binding detail and
+    the test stays out of it.
+    """
+    source = SERVICE.read_text(encoding="utf-8-sig")
+    table = cpp_table()
+    problems = []
+    for name, (arity, arguments) in table.items():
+        body = _function_body(source, name)
+        if body is None:
+            problems.append(f"{name}: no definition found in {SERVICE.name}")
+            continue
+        indices = [int(i) for i in re.findall(r"arg_\w+\(request\.args,\s*(\d+)", body)]
+        for callee in set(re.findall(r"\b(\w+)\(\s*request\b", body)):
+            delegated = _function_body(source, callee)
+            if delegated:
+                indices += [int(i) for i in re.findall(r"arg_\w+\(request\.args,\s*(\d+)", delegated)]
+        if not indices:
+            if arity != 0:
+                problems.append(f"{name}: contract says {arity} argument(s) {arguments}, "
+                                f"but the body reads none")
+            continue
+        highest = max(indices) + 1
+        if highest > arity:
+            problems.append(f"{name}: reads argument {highest}, contract documents {arity} {arguments}")
+    assert not problems, "\n".join(problems)

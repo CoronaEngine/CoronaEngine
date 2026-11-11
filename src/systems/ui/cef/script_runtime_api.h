@@ -61,9 +61,11 @@ inline constexpr ScriptOperationSpec kScriptOperations[] = {
      "Patches the actor's body properties."},
     {"script_scene_set_camera_pose", "[scene, camera, {position?, forward?, up?, fov?, ...}]",
      "Writes a camera pose. The script channel may write pose; it may not retarget cameras."},
-    {"script_scene_create_actor", "[scene, source_path, actor_type, {archive_session?, ...}]",
-     "Creates an actor from an asset path; the script channel owns no assets, so it never "
-     "imports one."},
+    {"script_scene_create_actor", "[scene, source_path, actor_type, actor_snapshot]",
+     "Creates an actor from an asset path. ctor_snapshot is the same actor object the "
+     "archive stores (name, actor_guid, transform, visible, optics, mechanics, ik_chains, "
+     "model_node_overrides, animation_sources); rchive_session inside it is validated. "
+     "The script channel owns no assets, so it never imports one."},
     {"script_scene_remove_actor", "[scene, actor]",
      "Removes an actor and reports what was removed."},
 };
