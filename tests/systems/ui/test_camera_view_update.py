@@ -27,7 +27,7 @@ def camera_update_harness():
     headers = list((Path.home() / ".conan2/p").glob("nlohm*/p/include/nlohmann/json.hpp"))
     if not headers:
         pytest.skip("Standalone CPU regression requires the project's nlohmann header")
-    source = (ROOT / "src/systems/ui/cef/cef_editor_native_api_handlers.cpp").read_text(encoding="utf-8")
+    source = (ROOT / "src/systems/ui/cef/editor_scene_service.cpp").read_text(encoding="utf-8")
     start = source.index('{"update_camera_view", []')
     start = source.index("{", source.index("const NativeContext&)", start)) + 1
     end = source.index("\n        }},", start)

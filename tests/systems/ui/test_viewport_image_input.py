@@ -20,7 +20,7 @@ def pointer_harness(tmp_path_factory):
     base = ROOT / "src/systems/ui/cef"
     pick = (base / "cef_viewport_pick.cpp").read_text(encoding="utf-8")
     gizmo = (base / "cef_viewport_gizmo.cpp").read_text(encoding="utf-8")
-    native = (base / "cef_editor_native_api_handlers.cpp").read_text(encoding="utf-8")
+    native = (base / "editor_scene_service.cpp").read_text(encoding="utf-8")
     window = (base / "cef_window_operations.cpp").read_text(encoding="utf-8")
     header = (base / "cef_window_operations.h").read_text(encoding="utf-8")
     imgui = (ROOT / "src/systems/ui/imgui/imgui_ui.cpp").read_text(encoding="utf-8")

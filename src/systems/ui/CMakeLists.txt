@@ -44,7 +44,7 @@ set(UI_SYSTEM_SOURCES
     cef/editor_platform_dialogs.cpp
     cef/editor_network_state.cpp
     cef/editor_service_operations.cpp
-    cef/cef_editor_native_api_handlers.cpp
+    cef/editor_scene_service.cpp
     cef/scene_folder.cpp
     cef/scene_archive_rpc.cpp
     cef/cef_viewport_gizmo.cpp
@@ -70,7 +70,7 @@ set(UI_SYSTEM_SOURCES
     cef/cef_process.h
     cef/cef_viewport_pick.h
     cef/cef_viewport_gizmo.h
-    cef/cef_editor_native_api_handlers.h
+    cef/editor_scene_service.h
     cef/cef_script_input.h
     cef/cef_client.h
     cef/native_api_types.h

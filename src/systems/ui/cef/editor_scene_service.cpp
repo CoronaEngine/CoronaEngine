@@ -39,7 +39,7 @@
 #include "editor_api_services.h"
 #include "cef_process.h"
 #include "cef_viewport_pick.h"
-#include "cef_editor_native_api_handlers.h"
+#include "editor_scene_service.h"
 #include "editor_dispatch.h"
 #include <cef_task.h>
 #include "scene_folder.h"

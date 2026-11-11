@@ -6,7 +6,7 @@
 #include "cef_operations.h"
 #include "cef_viewport_pick.h"
 #include "cef_viewport_gizmo.h"
-#include "cef_editor_native_api_handlers.h"
+#include "editor_scene_service.h"
 #include "cef_script_input.h"
 #include "horizon/core/logging.h"
 

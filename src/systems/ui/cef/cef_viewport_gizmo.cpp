@@ -25,7 +25,7 @@
 #include <vector>
 
 #include "browser_manager.h"
-#include "cef_editor_native_api_handlers.h"
+#include "editor_scene_service.h"
 
 namespace Corona::Systems::UI {
 
