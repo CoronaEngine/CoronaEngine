@@ -1393,48 +1393,26 @@ def Z(actor_name=""):
 
 # ── Camera / FPS controls ──
 
+# The script surface has no native pointer capture: the renderer's mouse lock is
+# driven by the editor window, not by role scripts. These wrappers keep the runtime
+# state the blocks need and report that no native lock was taken.
+
 def lock_mouse():
-    """Lock the preview mouse when native support exists; always retain runtime state."""
+    """Retain the script-side locked state. No native pointer capture exists."""
     ctx = _current_context()
     ctx.mouse_locked = True
-    try:
-        from script_runtime.native_engine_adapter import get_script_runtime_adapter
-        runtime = get_script_runtime_adapter()
-        method = getattr(runtime, "set_mouse_locked", None) if runtime is not None else None
-        if callable(method):
-            result = method(True)
-            return result is not False
-    except Exception as exc:
-        _logger.warning("[ScratchWrapper] native lock_mouse failed; using runtime state: %s", exc)
     return False
 
 
 def unlock_mouse():
-    """Unlock the preview mouse when native support exists; always retain runtime state."""
+    """Clear the script-side locked state."""
     ctx = _current_context()
     ctx.mouse_locked = False
-    try:
-        from script_runtime.native_engine_adapter import get_script_runtime_adapter
-        runtime = get_script_runtime_adapter()
-        method = getattr(runtime, "set_mouse_locked", None) if runtime is not None else None
-        if callable(method):
-            result = method(False)
-            return result is not False
-    except Exception as exc:
-        _logger.warning("[ScratchWrapper] native unlock_mouse failed; using runtime state: %s", exc)
     return False
 
 
 def mouse_dx():
     """Return and consume horizontal pointer motion accumulated for the script."""
-    try:
-        from script_runtime.native_engine_adapter import get_script_runtime_adapter
-        runtime = get_script_runtime_adapter()
-        if runtime is not None and callable(getattr(runtime, "get_mouse_delta", None)):
-            dx, _dy = runtime.get_mouse_delta()
-            return float(dx)
-    except Exception:
-        pass
     ctx = _current_context()
     value = float(ctx.mouse_delta_x)
     ctx.mouse_delta_x = 0.0
@@ -1443,14 +1421,6 @@ def mouse_dx():
 
 def mouse_dy():
     """Return and consume vertical pointer motion accumulated for the script."""
-    try:
-        from script_runtime.native_engine_adapter import get_script_runtime_adapter
-        runtime = get_script_runtime_adapter()
-        if runtime is not None and callable(getattr(runtime, "get_mouse_delta", None)):
-            _dx, dy = runtime.get_mouse_delta()
-            return float(dy)
-    except Exception:
-        pass
     ctx = _current_context()
     value = float(ctx.mouse_delta_y)
     ctx.mouse_delta_y = 0.0
@@ -3018,33 +2988,13 @@ def _get_raycast_cache():
 
 
 def raycast_hit(origin, direction, max_dist=100.0):
-    """执行射线检测，返回是否命中。结果缓存供 raycast_distance 等查询。"""
-    cache = _get_raycast_cache()
-    try:
-        from script_runtime.native_engine_adapter import get_script_runtime_adapter
-        runtime = get_script_runtime_adapter()
-        if runtime is not None and callable(getattr(runtime, "ray_cast", None)):
-            result = runtime.ray_cast(origin, direction, float(max_dist))
-            if result is None:
-                raise RuntimeError("script runtime ray_cast is unavailable")
-            cache['hit'] = bool(result.hit)
-            if result.hit:
-                cache['distance'] = float(result.distance)
-                cache['object'] = str(getattr(result, 'handle', ''))
-                cache['point'] = (
-                    float(result.point[0]) if result.point else 0.0,
-                    float(result.point[1]) if result.point else 0.0,
-                    float(result.point[2]) if result.point else 0.0,
-                )
-            else:
-                cache['distance'] = float(max_dist)
-                cache['object'] = ''
-                cache['point'] = (0.0, 0.0, 0.0)
-            return cache['hit']
-    except Exception as exc:
-        _logger.debug("[ScratchWrapper] raycast engine fallback: %s", exc)
+    """执行射线检测，返回是否命中。结果缓存供 raycast_distance 等查询。
 
-    # Fallback: manually test all known actors, including Python virtual objects.
+    The engine exposes picking per camera (`corona.viewport.pick` for Web); the
+    ScriptRuntime contract has no ray query, so the test is done against the actor
+    AABBs this runtime already tracks.
+    """
+    cache = _get_raycast_cache()
     cache['hit'] = False
     cache['distance'] = float(max_dist)
     cache['object'] = ''
@@ -4573,97 +4523,58 @@ def _ensure_audio(name):
     for root in roots:
         for suffix in suffixes:
             candidates.append(root / f"{key}{suffix}")
-    try:
-        from script_runtime.native_engine_adapter import get_script_runtime_adapter
-        runtime = get_script_runtime_adapter()
-        importer = getattr(runtime, "import_media", None) if runtime is not None else None
-        if not callable(importer):
-            raise RuntimeError("script runtime media import is unavailable")
-        for path in candidates:
-            if path.is_file():
-                media = importer(str(path))
-                rid = media.resource_id
-                _audio_cache[key] = rid
-                return rid
-        # The engine may already know a resource id/string name.
-        _audio_cache[key] = key
-        return key
-    except Exception as exc:
-        _logger.warning("[ScratchWrapper] audio resolve failed for %s: %s", key, exc)
-        return None
+    # The ScriptRuntime contract has no media import: the Web imports through
+    # `corona.scene.importResourceFile` and the archive service owns resource ids.
+    # Resolve the key the runtime can address and let playback report the gap.
+    for path in candidates:
+        if path.is_file():
+            _audio_cache[key] = key
+            return key
+    _audio_cache[key] = key
+    return key
+
+
+def _report_audio_unavailable(operation):
+    """Say once per run that script audio has no native binding, not once per call."""
+    global _audio_unavailable_reported
+    if _audio_unavailable_reported:
+        return
+    _audio_unavailable_reported = True
+    _logger.warning(
+        "[ScratchWrapper] %s: the ScriptRuntime contract exposes no audio playback; "
+        "audio blocks are no-ops in role scripts", operation)
+
+
+_audio_unavailable_reported = False
 
 
 def play_sound(name):
     """播放音效（单次）"""
-    rid = _ensure_audio(name)
-    if rid is not None:
-        try:
-            from script_runtime.native_engine_adapter import get_script_runtime_adapter
-            runtime = get_script_runtime_adapter()
-            player = getattr(runtime, "play_audio", None) if runtime is not None else None
-            if not callable(player):
-                raise RuntimeError("script runtime audio playback is unavailable")
-            player(rid, loop=False)
-            return True
-        except Exception as exc:
-            _logger.warning("[ScratchWrapper] play_sound failed: %s", exc)
+    _ensure_audio(name)
+    _report_audio_unavailable("play_sound")
     return False
 
 
 def loop_sound(name):
     """循环播放音效（BGM 用）"""
-    rid = _ensure_audio(name)
-    if rid is not None:
-        try:
-            from script_runtime.native_engine_adapter import get_script_runtime_adapter
-            runtime = get_script_runtime_adapter()
-            player = getattr(runtime, "play_audio", None) if runtime is not None else None
-            if not callable(player):
-                raise RuntimeError("script runtime audio playback is unavailable")
-            player(rid, loop=True)
-            return True
-        except Exception as exc:
-            _logger.warning("[ScratchWrapper] loop_sound failed: %s", exc)
+    _ensure_audio(name)
+    _report_audio_unavailable("loop_sound")
     return False
 
 
 def stop_sound(name):
     """停止指定音效"""
-    rid = _audio_cache.get(name)
-    if rid is not None:
-        try:
-            from script_runtime.native_engine_adapter import get_script_runtime_adapter
-            runtime = get_script_runtime_adapter()
-            stopper = getattr(runtime, "stop_audio", None) if runtime is not None else None
-            if not callable(stopper):
-                raise RuntimeError("script runtime audio stop is unavailable")
-            stopper(rid)
-            return True
-        except Exception as exc:
-            _logger.warning("[ScratchWrapper] stop_sound failed: %s", exc)
+    if _audio_cache.get(name) is not None:
+        _report_audio_unavailable("stop_sound")
     return False
 
 
 def stop_all_sounds():
     """停止当前运行时已加载的全部音效。"""
-    stopped = 0
-    try:
-        from script_runtime.native_engine_adapter import get_script_runtime_adapter
-        runtime = get_script_runtime_adapter()
-        stopper = getattr(runtime, "stop_audio", None) if runtime is not None else None
-        if not callable(stopper):
-            return False
-    except Exception:
-        return False
-    for rid in list(_audio_cache.values()):
-        if rid is not None:
-            try:
-                stopper(rid)
-                stopped += 1
-            except Exception:
-                pass
+    if _audio_cache:
+        _report_audio_unavailable("stop_all_sounds")
     _audio_cache.clear()
-    return stopped > 0
+    return False
 
 
 def request_stop(context_id: str | None = None):
