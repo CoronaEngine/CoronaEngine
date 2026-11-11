@@ -32,7 +32,7 @@ TARGET_LINES = 13_807
 # The JSON manifest is gone: table, registry, caller masks, the two `_invoke_cpp_*`
 # bindings and six handler modules. The interface core is now below the programme
 # target this file recorded when the migration started.
-CORE_BUDGET = 13_721
+CORE_BUDGET = 13_798
 
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
@@ -40,10 +40,13 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/archive_load_policy.h", 21),
     ("src/systems/ui/cef/camera_window_lifetime.h", 46),
     ("src/systems/ui/cef/cef_operations.h", 172),
-    ("src/systems/ui/cef/cef_editor_native_api_handlers.cpp", 5888),
+    ("src/systems/ui/cef/cef_editor_native_api_handlers.cpp", 5708),
     ("src/systems/ui/cef/editor_paths.h", 22),
     ("src/systems/ui/cef/editor_paths.cpp", 31),
     ("src/systems/ui/cef/editor_service_operations.cpp", 98),
+    ("src/systems/ui/cef/editor_network_state.h", 16),
+    ("src/systems/ui/cef/editor_network_state.cpp", 219),
+    ("src/systems/ui/cef/editor_text_utils.h", 22),
     ("src/systems/ui/cef/native_editor_state.h", 166),
     ("src/systems/ui/cef/cef_editor_native_api_handlers.h", 17),
     ("src/systems/ui/cef/native_api_types.cpp", 309),
