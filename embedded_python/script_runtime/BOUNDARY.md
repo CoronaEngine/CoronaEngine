@@ -17,8 +17,10 @@
 `import_media` / `play_audio` / `stop_audio` 六个模块函数，C++ 侧一个都没绑定，所以它恒返回
 `None`——已删除。相应地：
 
-- **音频**：ScriptRuntime 契约里没有播放能力（Web 走 `corona.audio.*`）。`block_program.py`
-  的音频积木是明确的空操作，每次运行只警告一次。
+- **音频**：**Actor 自带的音频可以播**（`script_scene_play_actor_audio` /
+  `script_scene_stop_actor_audio`，与 Web 的 `corona.audio.playActor` 是同一个场景操作）。
+  缺的是**文件素材**：脚本侧没有资源导入，所以 `block_program.py` 按文件名播放的积木仍是
+  空操作，每次运行只警告一次。
 - **射线**：没有原生射线查询；`raycast_hit` 用运行时自己跟踪的 Actor AABB 求交。
 - **鼠标锁定/位移**：没有原生指针捕获；保留脚本侧状态，位移来自输入事件累积。
 

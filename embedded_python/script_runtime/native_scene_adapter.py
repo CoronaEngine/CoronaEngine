@@ -30,6 +30,8 @@ _OPERATIONS = {
     "set_camera_pose": "script_scene_set_camera_pose",
     "create_actor": "script_scene_create_actor",
     "remove_actor": "script_scene_remove_actor",
+    "play_actor_audio": "script_scene_play_actor_audio",
+    "stop_actor_audio": "script_scene_stop_actor_audio",
 }
 
 
@@ -117,6 +119,12 @@ class ScriptRuntimeSceneToolsAdapter:
 
     def set_actor_physics(self, scene_name, actor_name, physics):
         return invoke_native_scene("set_actor_physics", [scene_name, actor_name, physics])
+
+    def play_actor_audio(self, scene_name, actor_name, loop=False):
+        return invoke_native_scene("play_actor_audio", [scene_name, actor_name, {"loop": loop}])
+
+    def stop_actor_audio(self, scene_name, actor_name):
+        return invoke_native_scene("stop_actor_audio", [scene_name, actor_name, {}])
 
 
 class ScriptRuntimeViewportAdapter:

@@ -41,7 +41,7 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 
 ## ScriptRuntime 面
 
-16 条具名绑定。调用方传一个 JSON 数组的字符串；`arity` 是运行时强制的下限
+{len(specs)} 条具名绑定。调用方传一个 JSON 数组的字符串；`arity` 是运行时强制的下限
 （传少了直接 400，不会进到场景逻辑里）。
 
 | 绑定 | 参数 | arity | 说明 |
@@ -61,6 +61,8 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 | `set_actor_physics` | `[scene, actor, {archive_session?, mass?, body_type?, ...}]` | 3 | Patches the actor's body properties. |
 | `set_camera_pose` | `[scene, camera, {position?, forward?, up?, fov?, ...}]` | 3 | Writes a camera pose. The script channel may write pose; it may not retarget cameras. |
 | `create_actor` | `[scene, source_path, actor_type, actor_snapshot]` | 4 | Creates an actor from an asset path. ctor_snapshot is the same actor object the  archive stores (name, actor_guid, transform, visible, optics, mechanics, ik_chains,  model_node_overrides, animation_sources); rchive_session inside it is validated.  The script channel owns no assets, so it never imports one. |
+| `play_actor_audio` | `[scene, actor, {archive_session?, loop?}]` | 3 | Plays the audio attached to an actor; the engine owns the sound device. |
+| `stop_actor_audio` | `[scene, actor, {archive_session?}]` | 3 | Stops the audio attached to an actor. |
 | `remove_actor` | `[scene, actor]` | 2 | Removes an actor and reports what was removed. |
 
 **失败形状**：`{success: false, error, error_code, data}`。

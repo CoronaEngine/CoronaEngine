@@ -310,6 +310,38 @@ void actor_lifecycle_through_the_script_channel() {
     load_scene();
 }
 
+void actor_audio_reaches_the_scene_operation() {
+    load_scene();
+    // The fixture actor is an audio actor, so it carries an acoustics component: playing it is
+    // the one audio capability the script channel has, and it must answer with the scope it
+    // acted on rather than silently succeeding.
+    const auto played = call(UI::script_scene_play_actor_audio,
+                             Json::array({kScene, kActorName, Json::array({{{"loop", true}}})[0]}));
+    require(played.success || (played.error_code != 0 && !played.error.empty()),
+            "play_actor_audio answers with a result or a documented failure");
+    if (played.success) {
+        require(played.data.at("playing") == true && played.data.at("actor") == kActorGuid,
+                "play_actor_audio reports the actor it started and that it is playing");
+    }
+
+    const auto stopped = call(UI::script_scene_stop_actor_audio,
+                              Json::array({kScene, kActorName, Json::object()}));
+    require(stopped.success || (stopped.error_code != 0 && !stopped.error.empty()),
+            "stop_actor_audio answers with a result or a documented failure");
+
+    const auto unknown = call(UI::script_scene_play_actor_audio,
+                              Json::array({kScene, "no-such-actor", Json::object()}));
+    require(!unknown.success && unknown.data.at("code") == "ACTOR_AUDIO_UNAVAILABLE",
+            "play_actor_audio names ACTOR_AUDIO_UNAVAILABLE for an actor without acoustics");
+
+    auto stale = Json::object();
+    stale["archive_session"] = "retired";
+    const auto refused = call(UI::script_scene_play_actor_audio,
+                              Json::array({kScene, kActorName, stale}));
+    require(!refused.success && refused.error_code == 409,
+            "play_actor_audio rejects a retired archive");
+}
+
 void the_file_script_entries_keep_the_probe_envelope() {
     // The probe relays these envelopes verbatim, so the shape is part of the contract
     // even when the operation cannot run (no Python runtime here).
@@ -358,6 +390,7 @@ int main() {
     group("body_dependent", body_dependent_writes_report_their_contract);
     group("camera_pose", camera_pose_writes_reach_the_native_camera);
     group("lifecycle", actor_lifecycle_through_the_script_channel);
+    group("actor_audio", actor_audio_reaches_the_scene_operation);
     group("file_script", the_file_script_entries_keep_the_probe_envelope);
     kernel.shutdown();
     if (failures != 0) {

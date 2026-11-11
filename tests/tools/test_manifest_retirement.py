@@ -44,6 +44,8 @@ SCRIPT_RUNTIME_OPERATIONS = [
     "script_scene_set_actor_physics",
     "script_scene_set_camera_pose",
     "script_scene_create_actor",
+    "script_scene_play_actor_audio",
+    "script_scene_stop_actor_audio",
     "script_scene_remove_actor",
 ]
 

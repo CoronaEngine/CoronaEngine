@@ -79,7 +79,7 @@ def test_the_table_covers_every_binding():
 def test_python_passes_the_documented_argument_count():
     text = ADAPTER.read_text(encoding="utf-8-sig")
     mapping = dict(re.findall(r'"(\w+)":\s*"(script_scene_\w+)"', text))
-    assert len(mapping) == 16, f"expected sixteen operation aliases, found {len(mapping)}"
+    assert len(mapping) == 18, f"expected eighteen operation aliases, found {len(mapping)}"
 
     calls = re.findall(r'invoke_native_scene\(\s*"(\w+)",\s*\[(.*?)\]\s*\)', text, re.S)
     assert calls, "no invoke_native_scene call sites found - did the adapter change?"
@@ -158,7 +158,7 @@ def test_the_table_arity_matches_its_documented_shape():
     """The arity column is what the binding enforces; it must describe the same array."""
     text = HEADER.read_text(encoding="utf-8-sig")
     rows = re.findall(r'\{"(script_scene_\w+)",\s*"([^"]*)",\s*(\d+),', text)
-    assert len(rows) == 16, f"expected sixteen rows with an arity, found {len(rows)}"
+    assert len(rows) == 18, f"expected eighteen rows with an arity, found {len(rows)}"
     problems = []
     for name, arguments, arity in rows:
         inner = arguments.strip()[1:-1].strip()

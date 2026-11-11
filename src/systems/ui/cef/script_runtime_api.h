@@ -74,12 +74,16 @@ inline constexpr ScriptOperationSpec kScriptOperations[] = {
      "archive stores (name, actor_guid, transform, visible, optics, mechanics, ik_chains, "
      "model_node_overrides, animation_sources); rchive_session inside it is validated. "
      "The script channel owns no assets, so it never imports one."},
+    {"script_scene_play_actor_audio", "[scene, actor, {archive_session?, loop?}]", 3,
+     "Plays the audio attached to an actor; the engine owns the sound device."},
+    {"script_scene_stop_actor_audio", "[scene, actor, {archive_session?}]", 3,
+     "Stops the audio attached to an actor."},
     {"script_scene_remove_actor", "[scene, actor]", 2,
      "Removes an actor and reports what was removed."},
 };
 
-static_assert(std::size(kScriptOperations) == 16,
-              "the ScriptRuntime contract is exactly sixteen named operations");
+static_assert(std::size(kScriptOperations) == 18,
+              "the ScriptRuntime contract is exactly eighteen named operations");
 
 /// The contract row for a binding name, or nullptr when the name is not part of it.
 const ScriptOperationSpec* find_script_operation(const std::string& name);
@@ -108,6 +112,8 @@ NativeResult script_scene_resume_actor_animation(const NativeRequest& request);
 NativeResult script_scene_set_actor_physics(const NativeRequest& request);
 NativeResult script_scene_set_camera_pose(const NativeRequest& request);
 NativeResult script_scene_create_actor(const NativeRequest& request);
+NativeResult script_scene_play_actor_audio(const NativeRequest& request);
+NativeResult script_scene_stop_actor_audio(const NativeRequest& request);
 NativeResult script_scene_remove_actor(const NativeRequest& request);
 
 }  // namespace Corona::Systems::UI

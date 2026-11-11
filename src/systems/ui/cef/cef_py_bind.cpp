@@ -177,6 +177,8 @@ void BindCef(nanobind::module_& m) {
     bind_script_operation("script_scene_set_actor_physics", Corona::Systems::UI::script_scene_set_actor_physics);
     bind_script_operation("script_scene_set_camera_pose", Corona::Systems::UI::script_scene_set_camera_pose);
     bind_script_operation("script_scene_create_actor", Corona::Systems::UI::script_scene_create_actor);
+    bind_script_operation("script_scene_play_actor_audio", Corona::Systems::UI::script_scene_play_actor_audio);
+    bind_script_operation("script_scene_stop_actor_audio", Corona::Systems::UI::script_scene_stop_actor_audio);
     bind_script_operation("script_scene_remove_actor", Corona::Systems::UI::script_scene_remove_actor);
 
 }

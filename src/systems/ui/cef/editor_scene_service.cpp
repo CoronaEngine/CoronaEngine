@@ -4569,6 +4569,41 @@ NativeResult script_scene_create_actor(const NativeRequest& request) {
                                               /*transient_assets=*/true);
 }
 
+namespace {
+
+/// Shared by the two actor-audio entries: both need the same three scopes.
+NativeResult set_native_actor_audio(const NativeRequest& request, bool play) {
+    const auto scene_route = arg_string(request.args, 0);
+    const auto actor_name = arg_string(request.args, 1);
+    const auto payload = arg_object(request.args, 2);
+    SceneRequest write{play ? SceneMethod::PlayActorAudio : SceneMethod::StopActorAudio};
+    write.audio.scene = scene_route;
+    write.audio.actor = actor_name;
+    write.audio.loop = payload.value("loop", false);
+    if (payload.contains("archive_session") && payload.at("archive_session").is_string()) {
+        write.archive_session = payload.at("archive_session").get<std::string>();
+    } else if (const auto* active = native_editor_state().scene.get()) {
+        write.archive_session = active->archive_session;
+    }
+    const auto reply = execute_scene_operation(write);
+    if (!reply.error_code.empty()) return native_result_from_scene(reply);
+    return native_success({{"status", "success"},
+                           {"scene", reply.audio.scene},
+                           {"actor", reply.audio.actor},
+                           {"playing", reply.audio.playing},
+                           {"spatial", reply.audio.spatial}});
+}
+
+}  // namespace
+
+NativeResult script_scene_play_actor_audio(const NativeRequest& request) {
+    return set_native_actor_audio(request, true);
+}
+
+NativeResult script_scene_stop_actor_audio(const NativeRequest& request) {
+    return set_native_actor_audio(request, false);
+}
+
 NativeResult script_scene_remove_actor(const NativeRequest& request) {
             const auto scene_route = arg_string(request.args, 0);
             const auto actor_name = arg_string(request.args, 1);
