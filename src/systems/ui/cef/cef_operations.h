@@ -116,39 +116,16 @@ struct ProjectLauncherRequest {
     ProjectLauncherMethod method;
     std::string prompt, role = "guest", path, load_policy = "prompt";
 };
-struct CreatedProjectSnapshot { std::string name, path, role; };
-struct SelectedProjectSnapshot { std::string name, path; };
-struct ProjectOpenDiagnostic {
-    std::optional<std::string> severity, stage, code, message, path, actor_name, actor_guid,
-        shape_type, resource_path, field, camera_id;
-    std::optional<bool> recoverable, requires_confirmation;
-    std::optional<std::uint64_t> count;
-};
-struct OpenProjectSnapshot {
-    bool ok = false;
-    std::string status, path;
-    std::optional<std::string> message;
-    std::optional<bool> degraded;
-    std::optional<std::uint64_t> unresolved_actor_count;
-    std::optional<SelectedProjectSnapshot> scene;
-    std::optional<std::vector<ProjectOpenDiagnostic>> diagnostics;
-};
-struct ProjectLoadSnapshot {
-    bool active = false, loading = false, archive_service_ready = false;
-    std::string path, scene, archive_session;
-    std::uint64_t total = 0, ready = 0, failed = 0, pending = 0;
-    double progress = 0;
-};
+
 struct ProjectLauncherReply {
     ProjectLauncherMethod method = ProjectLauncherMethod::GetVersion;
     std::string error_code, error_message;
-    /// The reply for the methods whose value is entirely Python's: the version string and the
-    /// recent-project array. Carried as JSON so its shape is declared once, where it is produced.
+    /// The reply value, as JSON.
+    ///
+    /// Every method's value is produced as JSON already - by the archive service, by the load
+    /// status query, or here. Carrying it as JSON keeps one declaration of each shape instead of
+    /// a struct that mirrors it and a converter that rebuilds it.
     nlohmann::json value = nlohmann::json();
-    ProjectLoadSnapshot load;
-    CreatedProjectSnapshot created;
-    SelectedProjectSnapshot selected;
-    OpenProjectSnapshot opened;
 };
 
 ProjectLauncherReply execute_project_launcher_operation(const ProjectLauncherRequest& request);

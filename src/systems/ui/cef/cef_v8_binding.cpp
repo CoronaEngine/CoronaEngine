@@ -229,73 +229,9 @@ bool read_files(FilesMethod, const CefV8ValueList& arguments, FilesRequest& requ
     return true;
 }
 
-CefRefPtr<CefV8Value> project_open_diagnostic_value(const ProjectOpenDiagnostic& diagnostic) {
-    auto value = CefV8Value::CreateObject(nullptr, nullptr);
-    if (diagnostic.severity) value->SetValue("severity", CefV8Value::CreateString(*diagnostic.severity), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (diagnostic.stage) value->SetValue("stage", CefV8Value::CreateString(*diagnostic.stage), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (diagnostic.code) value->SetValue("code", CefV8Value::CreateString(*diagnostic.code), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (diagnostic.message) value->SetValue("message", CefV8Value::CreateString(*diagnostic.message), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (diagnostic.path) value->SetValue("path", CefV8Value::CreateString(*diagnostic.path), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (diagnostic.actor_name) value->SetValue("actor_name", CefV8Value::CreateString(*diagnostic.actor_name), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (diagnostic.actor_guid) value->SetValue("actor_guid", CefV8Value::CreateString(*diagnostic.actor_guid), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (diagnostic.shape_type) value->SetValue("shape_type", CefV8Value::CreateString(*diagnostic.shape_type), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (diagnostic.resource_path) value->SetValue("resource_path", CefV8Value::CreateString(*diagnostic.resource_path), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (diagnostic.field) value->SetValue("field", CefV8Value::CreateString(*diagnostic.field), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (diagnostic.camera_id) value->SetValue("camera_id", CefV8Value::CreateString(*diagnostic.camera_id), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (diagnostic.recoverable) value->SetValue("recoverable", CefV8Value::CreateBool(*diagnostic.recoverable), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (diagnostic.requires_confirmation) value->SetValue("requires_confirmation", CefV8Value::CreateBool(*diagnostic.requires_confirmation), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (diagnostic.count) value->SetValue("count", CefV8Value::CreateDouble(*diagnostic.count), V8_PROPERTY_ATTRIBUTE_NONE);
-    return value;
-}
-
 CefRefPtr<CefV8Value> project_launcher_value(const ProjectLauncherReply& reply) {
-    if (reply.method == ProjectLauncherMethod::Open) {
-        const auto& opened = reply.opened;
-        auto value = CefV8Value::CreateObject(nullptr, nullptr);
-        value->SetValue("ok", CefV8Value::CreateBool(opened.ok), V8_PROPERTY_ATTRIBUTE_NONE);
-        value->SetValue("status", CefV8Value::CreateString(opened.status), V8_PROPERTY_ATTRIBUTE_NONE);
-        value->SetValue("path", CefV8Value::CreateString(opened.path), V8_PROPERTY_ATTRIBUTE_NONE);
-        if (opened.message) value->SetValue("message", CefV8Value::CreateString(*opened.message), V8_PROPERTY_ATTRIBUTE_NONE);
-        if (opened.degraded) value->SetValue("degraded", CefV8Value::CreateBool(*opened.degraded), V8_PROPERTY_ATTRIBUTE_NONE);
-        if (opened.unresolved_actor_count) value->SetValue("unresolved_actor_count", CefV8Value::CreateDouble(*opened.unresolved_actor_count), V8_PROPERTY_ATTRIBUTE_NONE);
-        if (opened.scene) {
-            auto scene = CefV8Value::CreateObject(nullptr, nullptr);
-            scene->SetValue("name", CefV8Value::CreateString(opened.scene->name), V8_PROPERTY_ATTRIBUTE_NONE);
-            scene->SetValue("path", CefV8Value::CreateString(opened.scene->path), V8_PROPERTY_ATTRIBUTE_NONE);
-            value->SetValue("scene", scene, V8_PROPERTY_ATTRIBUTE_NONE);
-        }
-        if (opened.diagnostics) {
-            auto diagnostics = CefV8Value::CreateArray(static_cast<int>(opened.diagnostics->size()));
-            for (int index = 0; index < static_cast<int>(opened.diagnostics->size()); ++index)
-                diagnostics->SetValue(index, project_open_diagnostic_value(opened.diagnostics->at(index)));
-            value->SetValue("diagnostics", diagnostics, V8_PROPERTY_ATTRIBUTE_NONE);
-        }
-        return value;
-    }
-    if (reply.method == ProjectLauncherMethod::SelectFile) {
-        auto value = CefV8Value::CreateObject(nullptr, nullptr);
-        if (!reply.selected.path.empty()) {
-            value->SetValue("name", CefV8Value::CreateString(reply.selected.name), V8_PROPERTY_ATTRIBUTE_NONE);
-            value->SetValue("path", CefV8Value::CreateString(reply.selected.path), V8_PROPERTY_ATTRIBUTE_NONE);
-        }
-        return value;
-    }
-    if (reply.method == ProjectLauncherMethod::CreateWorld || reply.method == ProjectLauncherMethod::CreateMultiplayer) {
-        auto value = json_to_v8({{"name", reply.created.name}, {"path", reply.created.path}});
-        if (reply.method == ProjectLauncherMethod::CreateMultiplayer)
-            value->SetValue("role", CefV8Value::CreateString(reply.created.role), V8_PROPERTY_ATTRIBUTE_NONE);
-        return value;
-    }
-    if (reply.method == ProjectLauncherMethod::GetVersion ||
-        reply.method == ProjectLauncherMethod::GetRecent) {
-        // Produced by Python, shaped there; the binding forwards it rather than rebuilding it.
-        return json_to_v8(reply.value);
-    }
-    const auto& load = reply.load;
-    return json_to_v8({{"active", load.active}, {"loading", load.loading},
-        {"archive_service_ready", load.archive_service_ready}, {"archive_session", load.archive_session},
-        {"path", load.path}, {"scene", load.scene}, {"total", load.total}, {"ready", load.ready},
-        {"failed", load.failed}, {"pending", load.pending}, {"progress", load.progress}});
+    // The value was produced as JSON by the side that owns it; forward it instead of rebuilding.
+    return json_to_v8(reply.value);
 }
 
 CefRefPtr<CefV8Value> files_value(const FilesReply& reply) {

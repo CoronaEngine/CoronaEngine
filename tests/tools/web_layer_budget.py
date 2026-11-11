@@ -32,14 +32,14 @@ TARGET_LINES = 13_807
 # The JSON manifest is gone: table, registry, caller masks, the two `_invoke_cpp_*`
 # bindings and six handler modules. The interface core is now below the programme
 # target this file recorded when the migration started.
-CORE_BUDGET = 14_551  # +25: build-progress helper shared by the query and the tick
+CORE_BUDGET = 14_431  # -120: launcher replies carry one JSON value instead of five mirror structs
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
     ("src/systems/ui/cef/archive_load_policy.h", 21),
     ("src/systems/ui/cef/camera_window_lifetime.h", 46),
-    ("src/systems/ui/cef/cef_operations.h", 172),
-    ("src/systems/ui/cef/editor_scene_service.cpp", 4424),
+    ("src/systems/ui/cef/cef_operations.h", 133),
+    ("src/systems/ui/cef/editor_scene_service.cpp", 4391),
     ("src/systems/ui/cef/editor_paths.h", 22),
     ("src/systems/ui/cef/editor_paths.cpp", 31),
     ("src/systems/ui/cef/editor_service_operations.cpp", 98),
@@ -72,7 +72,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/cef_scene_operations.h", 428),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),
-    ("src/systems/ui/cef/cef_v8_binding.cpp", 2860),
+    ("src/systems/ui/cef/cef_v8_binding.cpp", 2796),
     ("src/systems/ui/cef/cef_process.h", 49),
     ("src/systems/ui/cef/cef_viewport_pick.cpp", 119),
     ("src/systems/ui/cef/cef_viewport_pick.h", 60),

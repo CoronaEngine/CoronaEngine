@@ -3981,42 +3981,15 @@ ProjectLauncherReply execute_project_launcher_operation(const ProjectLauncherReq
             reply.error_code = "PROJECT_OPEN_FAILED"; reply.error_message = result.error;
             return reply;
         }
-        const auto& value = result.data;
-        auto& opened = reply.opened;
-        opened.ok = value.at("ok").get<bool>();
-        opened.status = value.at("status").get<std::string>();
-        opened.path = value.at("path").get<std::string>();
-        if (value.contains("message")) opened.message = value.at("message").get<std::string>();
-        if (value.contains("degraded")) opened.degraded = value.at("degraded").get<bool>();
-        if (value.contains("unresolved_actor_count")) opened.unresolved_actor_count = value.at("unresolved_actor_count").get<std::uint64_t>();
-        if (value.contains("scene")) opened.scene = SelectedProjectSnapshot{
-            value.at("scene").at("name").get<std::string>(), value.at("scene").at("path").get<std::string>()};
-        if (value.contains("diagnostics")) {
-            opened.diagnostics.emplace();
-            for (const auto& item : value.at("diagnostics")) {
-                ProjectOpenDiagnostic diagnostic;
-                if (item.contains("severity")) diagnostic.severity = item.at("severity").get<std::string>();
-                if (item.contains("stage")) diagnostic.stage = item.at("stage").get<std::string>();
-                if (item.contains("code")) diagnostic.code = item.at("code").get<std::string>();
-                if (item.contains("message")) diagnostic.message = item.at("message").get<std::string>();
-                if (item.contains("path")) diagnostic.path = item.at("path").get<std::string>();
-                if (item.contains("actor_name")) diagnostic.actor_name = item.at("actor_name").get<std::string>();
-                if (item.contains("actor_guid")) diagnostic.actor_guid = item.at("actor_guid").get<std::string>();
-                if (item.contains("shape_type")) diagnostic.shape_type = item.at("shape_type").get<std::string>();
-                if (item.contains("resource_path")) diagnostic.resource_path = item.at("resource_path").get<std::string>();
-                if (item.contains("field")) diagnostic.field = item.at("field").get<std::string>();
-                if (item.contains("camera_id")) diagnostic.camera_id = item.at("camera_id").get<std::string>();
-                if (item.contains("recoverable")) diagnostic.recoverable = item.at("recoverable").get<bool>();
-                if (item.contains("requires_confirmation")) diagnostic.requires_confirmation = item.at("requires_confirmation").get<bool>();
-                if (item.contains("count")) diagnostic.count = item.at("count").get<std::uint64_t>();
-                opened.diagnostics->push_back(std::move(diagnostic));
-            }
-        }
+        // open_launcher_project already answers in the shape the launcher UI reads.
+        reply.value = result.data;
         return reply;
     }
     if (request.method == ProjectLauncherMethod::SelectFile) {
-        if (const auto selected = open_project_file_native())
-            reply.selected = {path_to_utf8(selected->stem()), path_to_utf8(*selected)};
+        reply.value = nlohmann::json::object();
+        if (const auto selected = open_project_file_native()) {
+            reply.value = {{"name", path_to_utf8(selected->stem())}, {"path", path_to_utf8(*selected)}};
+        }
         return reply;
     }
     if (request.method == ProjectLauncherMethod::CreateWorld || request.method == ProjectLauncherMethod::CreateMultiplayer) {
@@ -4024,9 +3997,12 @@ ProjectLauncherReply execute_project_launcher_operation(const ProjectLauncherReq
             request.method == ProjectLauncherMethod::CreateWorld ? "" : request.role);
         if (!result.success) {
             reply.error_code = "PROJECT_CREATION_FAILED"; reply.error_message = result.error;
-        } else {
-            reply.created = {result.data.value("name", std::string{}), result.data.value("path", std::string{}),
-                result.data.value("role", std::string{})};
+            return reply;
+        }
+        reply.value = {{"name", result.data.value("name", std::string{})},
+                       {"path", result.data.value("path", std::string{})}};
+        if (request.method == ProjectLauncherMethod::CreateMultiplayer) {
+            reply.value["role"] = result.data.value("role", std::string{});
         }
         return reply;
     }
@@ -4035,20 +4011,11 @@ ProjectLauncherReply execute_project_launcher_operation(const ProjectLauncherReq
     } else if (request.method == ProjectLauncherMethod::GetRecent) {
         reply.value = recent_projects_native();
     } else {
-        const auto value = project_resource_load_status();
-        auto& load = reply.load;
-        load.active = value.value("active", false);
-        load.loading = value.value("loading", false);
-        load.archive_service_ready = value.value("archive_service_ready", false);
-        load.path = value.value("path", std::string{});
-        load.scene = value.value("scene", std::string{});
+        reply.value = project_resource_load_status();
+        // The archive session is the one field the status query does not know: it belongs to the
+        // live scene, which only this side owns.
         const auto* scene = native_editor_state().scene.get();
-        load.archive_session = scene ? scene->archive_session : "";
-        load.total = value.value("total", std::uint64_t{});
-        load.ready = value.value("ready", std::uint64_t{});
-        load.failed = value.value("failed", std::uint64_t{});
-        load.pending = value.value("pending", std::uint64_t{});
-        load.progress = value.value("progress", 0.0);
+        reply.value["archive_session"] = scene ? scene->archive_session : std::string{};
     }
     return reply;
 }
