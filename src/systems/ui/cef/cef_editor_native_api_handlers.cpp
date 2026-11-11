@@ -401,8 +401,14 @@ struct NativeEditorState {
 };
 
 NativeEditorState& native_editor_state() {
-    static NativeEditorState state;
-    return state;
+    // Deliberately never destroyed. Tearing the scene down from the CRT's atexit table
+    // runs NativeEditorCamera::~NativeEditorCamera, whose Corona::API::Camera destructor
+    // enqueues a camera release through SharedDataHub. Destruction order between the two
+    // translation units' statics is unspecified, so the hub can already be gone and the
+    // process faults on exit (see the CameraWindowIdentityTests teardown crash). Leaking
+    // the state at process exit is the cheap way to keep the ordering question out of it.
+    static auto* state = new NativeEditorState{};
+    return *state;
 }
 
 bool is_valid_project_dir(const std::filesystem::path& project_dir);
