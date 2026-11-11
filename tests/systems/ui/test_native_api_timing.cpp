@@ -4,6 +4,7 @@
 #include <string>
 
 #include "cef/native_api_timing.h"
+#include "cef/cef_editor_native_api_registry.h"
 
 namespace {
 
@@ -12,8 +13,11 @@ using Corona::Systems::UI::is_slow_native_request;
 using Corona::Systems::UI::is_stuck_native_request;
 using Corona::Systems::UI::kSlowNativeRequestThresholdMs;
 using Corona::Systems::UI::kStuckNativeRequestThresholdMs;
+using Corona::Systems::UI::native_api_in_flight_for_test;
 using Corona::Systems::UI::NativeApiInFlight;
+using Corona::Systems::UI::NativeApiRequestScope;
 using Corona::Systems::UI::NativeApiTiming;
+using Corona::Systems::UI::NativeRequest;
 
 // Prints instead of throwing so a failure names itself in ctest output.
 void require(bool condition, const char* message) {
@@ -72,5 +76,22 @@ int main() {
 
     in_flight.active = false;
     require(!is_stuck_native_request(in_flight, 999999, 0), "completed request is not stuck");
+
+    // The scope is what marks a request in flight for the stuck report. Removing
+    // its only caller once left the report silently dead while every frame still
+    // polled it, so the wiring itself is asserted here.
+    require(!native_api_in_flight_for_test().active, "nothing in flight before a request runs");
+    {
+        NativeRequest request;
+        request.module = "ScriptRuntime";
+        request.function = "script_scene_read_actor";
+        NativeApiRequestScope scope(request);
+        const auto running = native_api_in_flight_for_test();
+        require(running.active, "a running request must be marked in flight");
+        require(running.module == "ScriptRuntime" && running.function == "script_scene_read_actor",
+                "the marked request must name the operation the stuck report will print");
+        require(running.sequence != 0, "a running request carries a sequence for the once-per-request report");
+    }
+    require(!native_api_in_flight_for_test().active, "a completed request must clear the in-flight mark");
     return 0;
 }

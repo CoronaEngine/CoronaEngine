@@ -65,7 +65,7 @@ void test_native_script_service_wait_does_not_hold_editor_state(bool queued_befo
             // A Native handler holding editor_state_mutex while waiting for this
             // consumer prevents the callback from completing until service timeout.
             auto callback = UI::script_scene_read_active_scene(
-                UI::NativeRequest{}, UI::NativeContext{UI::EditorApiCaller::ScriptRuntime});
+                UI::NativeRequest{});
             auto response = callback.success ? Python::PythonRuntimeResponse::success()
                                              : Python::PythonRuntimeResponse::failure(callback.error);
             response.service_result = std::make_shared<const Json>(
@@ -419,13 +419,12 @@ void test_one_native_transform_authority() {
     const auto read = UI::script_scene_read_actor(
         UI::NativeRequest{{}, {},
                           Json::array({Json{{"archive_session", "camera-test-archive"},
-                                            {"actor", "transform-probe"}}})},
-        UI::NativeContext{});
+                                            {"actor", "transform-probe"}}})});
     require(read.success && read.data["actor_version"] == 2 && read.data["geometry"]["position"] == Json({0,8,-3}),
             "unmigrated readers must observe the same geometry and version without any invalid write");
     const Json args = {"scene.ini","transform-probe",{{"archive_session","camera-test-archive"},{"rotation",{7,8,9}}}};
     const auto script = UI::script_scene_set_actor_transform(
-        UI::NativeRequest{{}, {}, args}, UI::NativeContext{UI::EditorApiCaller::ScriptRuntime});
+        UI::NativeRequest{{}, {}, args});
     require(script.success && script.data["actor"]["actor_version"] == 3 &&
             script.data["actor"]["geometry"]["position"] == Json({0,8,-3}) &&
             script.data["actor"]["geometry"]["rotation"] == Json({7,8,9}),

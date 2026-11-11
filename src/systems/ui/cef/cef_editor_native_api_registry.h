@@ -1,7 +1,8 @@
 #pragma once
 
-#include "editor_api_caller.h"
+#include "native_api_timing.h"
 
+#include <chrono>
 #include <cstdint>
 #include <string>
 
@@ -13,14 +14,6 @@ struct NativeRequest {
     std::string module;
     std::string function;
     nlohmann::json args = nlohmann::json::array();
-};
-
-// CEF-free by contract: no browser/frame handles cross this boundary. Callers
-// that need CEF behaviour carry an EditorApiCaller tag instead. Internal C++
-// orchestration defaults to Native; the editor dispatch layer overwrites the
-// tag from the request's caller before a handler runs.
-struct NativeContext {
-    EditorApiCaller caller = EditorApiCaller::Native;
 };
 
 struct NativeResult {
@@ -38,7 +31,30 @@ NativeResult native_success(nlohmann::json data = nlohmann::json::object(),
 NativeResult native_failure(std::string error,
                             int error_code = 1,
                             std::string route = "native-cpp");
-NativeResult native_unhandled();
+
+/// Marks one editor request as in flight for as long as it lives.
+///
+/// A request that never returns leaves the mark active, which is what
+/// `report_stuck_native_api_request()` observes from the engine main loop: the
+/// blocked CEF UI thread runs no completion, so nothing else can name it. Construct
+/// the scope on the thread that actually runs the operation (the editor owner
+/// thread), not on the caller that is merely waiting for it.
+class NativeApiRequestScope {
+   public:
+    explicit NativeApiRequestScope(const NativeRequest& request);
+    ~NativeApiRequestScope();
+    NativeApiRequestScope(const NativeApiRequestScope&) = delete;
+    NativeApiRequestScope& operator=(const NativeApiRequestScope&) = delete;
+
+    /// Logs the request when it occupied this thread longer than the slow threshold.
+    void report_if_slow(const NativeResult& result) const;
+
+   private:
+    std::uint64_t sequence_ = 0;
+    std::string module_;
+    std::string function_;
+    std::chrono::steady_clock::time_point started_{};
+};
 
 
 void tick_native_animation_updates();
@@ -49,6 +65,10 @@ void tick_native_animation_updates();
 /// still alive (the engine main loop); it is rate limited internally and reports
 /// each stuck request once.
 void report_stuck_native_api_request();
+
+/// Test seam: the request the editor owner thread is currently running, or an
+/// inactive record when nothing is in flight.
+NativeApiInFlight native_api_in_flight_for_test();
 
 std::string arg_string(const nlohmann::json& args, size_t index, std::string fallback = "");
 bool arg_bool(const nlohmann::json& args, size_t index, bool fallback = false);

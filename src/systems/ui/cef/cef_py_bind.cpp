@@ -58,7 +58,7 @@ void ensure_editor_dispatch_hooks() {
 /// same one the manifest used, so a busy editor still answers with a timeout.
 constexpr std::chrono::milliseconds kEditorDispatchTimeout{5000};
 
-using ScriptOperation = UI::NativeResult (*)(const UI::NativeRequest&, const UI::NativeContext&);
+using ScriptOperation = UI::NativeResult (*)(const UI::NativeRequest&);
 
 /// Runs one named ScriptRuntime operation and returns the JSON envelope the Python
 /// adapter already expects.
@@ -67,7 +67,8 @@ using ScriptOperation = UI::NativeResult (*)(const UI::NativeRequest&, const UI:
 /// the Python runtime (the scene snapshot comes back through the dispatcher), and the
 /// CEF UI thread that runs it can itself be waiting for Python.  Holding the GIL here
 /// turned that handshake into a 5 s timeout in the field.
-std::string invoke_script_operation(ScriptOperation operation, const std::string& args_json) {
+std::string invoke_script_operation(ScriptOperation operation, const char* operation_name,
+                                    const std::string& args_json) {
     auto args = nlohmann::json::parse(args_json.empty() ? "[]" : args_json, nullptr, false);
     if (args.is_discarded() || !args.is_array()) {
         return nlohmann::json{{"success", false},
@@ -78,9 +79,9 @@ std::string invoke_script_operation(ScriptOperation operation, const std::string
 
     ensure_editor_dispatch_hooks();
     UI::NativeRequest request;
+    request.module = "ScriptRuntime";
+    request.function = operation_name;
     request.args = std::move(args);
-    UI::NativeContext context;
-    context.caller = UI::EditorApiCaller::ScriptRuntime;
 
     const bool on_owner_thread = UI::Detail::on_editor_owner_thread();
     const auto route = UI::Detail::decide_editor_dispatch_route(
@@ -93,7 +94,15 @@ std::string invoke_script_operation(ScriptOperation operation, const std::string
     {
         nanobind::gil_scoped_release release;
         result = UI::Detail::call_editor_dispatch(
-            [operation, request, context] { return operation(request, context); },
+            [operation, request] {
+                // The in-flight mark has to live on the thread that runs the
+                // operation: the stuck report names whatever the editor owner
+                // thread was executing when it stopped completing requests.
+                UI::NativeApiRequestScope scope(request);
+                auto completed = operation(request);
+                scope.report_if_slow(completed);
+                return completed;
+            },
             route,
             kEditorDispatchTimeout,
             &report);
@@ -137,8 +146,8 @@ void BindCef(nanobind::module_& m) {
     // adapter below the interpreter decides which one to call, so C++ carries no name
     // table, no argument schema and no caller mask.
     const auto bind_script_operation = [&m](const char* name, ScriptOperation operation) {
-        m.def(name, [operation](const std::string& args_json) {
-            return invoke_script_operation(operation, args_json);
+        m.def(name, [name, operation](const std::string& args_json) {
+            return invoke_script_operation(operation, name, args_json);
         }, nb::arg("args_json"));
     };
     bind_script_operation("script_scene_get_environment", Corona::Systems::UI::script_scene_get_environment);

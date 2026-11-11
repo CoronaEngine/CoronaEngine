@@ -328,8 +328,10 @@ target_link_libraries(corona_scene_tree_actor_tests PRIVATE nlohmann_json::nlohm
 add_test(NAME SceneTreeActorTests COMMAND corona_scene_tree_actor_tests)
 
 # 慢原生请求判定：handler 与离屏绘制同线程，阈值边界就是"卡 UI"的判据。
+# 同时断言 NativeApiRequestScope 真的把请求标记成在飞——否则卡死看门狗虽每帧轮询却永远不报。
 add_executable(corona_native_api_timing_tests test_native_api_timing.cpp)
 target_include_directories(corona_native_api_timing_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui)
+target_link_libraries(corona_native_api_timing_tests PRIVATE corona_ui_system)
 add_test(NAME NativeApiTimingTests COMMAND corona_native_api_timing_tests)
 
 # 资源缓存"尽力而为读"契约：UI 线程读资源不得等待加载线程持有的条目锁。

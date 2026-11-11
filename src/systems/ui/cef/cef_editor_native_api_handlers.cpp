@@ -2708,18 +2708,17 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
 // Non-Web boundary adapters retain their own public argument shapes. All
 // component writes, version changes and camera side effects live above.
 enum class ActorPropertyAdapter { State, Mechanics, CameraLock };
-NativeResult set_native_actor_properties(const NativeRequest& request, const NativeContext& context, ActorPropertyAdapter kind) {
+NativeResult set_native_actor_properties(const NativeRequest& request, ActorPropertyAdapter kind) {
     try {
         const auto values = arg_object(request.args, 2);
-        const bool script_runtime = context.caller == EditorApiCaller::ScriptRuntime;
         SceneRequest write{SceneMethod::UpdateActor};
         auto& patch = write.properties;
         patch.scene = arg_string(request.args, 0); patch.actor = arg_string(request.args, 1);
-        patch.transient_assets = script_runtime;
+        // The script channel owns no assets: whatever it imports stays in memory and is
+        // never written back to the scene archive.
+        patch.transient_assets = true;
         if (values.contains("archive_session")) write.archive_session = values.at("archive_session").get<std::string>();
         if (kind == ActorPropertyAdapter::State) {
-            if (!script_runtime && values.contains("animation_sources") && !write.archive_session)
-                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
             patch.visible = actor_data_bool(values, {"visible"});
             patch.follow_camera = actor_data_bool(values, {"follow_camera"});
             if (values.contains("animation_sources")) patch.animation_sources = AnimationConfig::parse_sources(values.at("animation_sources"));
@@ -2810,15 +2809,13 @@ PendingNetworkActorApplyOutcome pending_actor_outcome(
 PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
     const std::string& actor_guid,
     const std::string& scene_name,
-    const nlohmann::json& actor_data,
-    const NativeContext& context);
+    const nlohmann::json& actor_data);
 
 PendingNetworkActorApplyOutcome apply_pending_network_actor_create(
     const std::string& actor_guid,
     const std::string& scene_name,
     const std::string& model_path,
-    nlohmann::json actor_data,
-    const NativeContext& context) {
+    nlohmann::json actor_data) {
     if (trim_ascii(actor_guid).empty() || !actor_data.is_object()) {
         return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
                                      "Remote actor create requires an object and stable GUID");
@@ -2871,7 +2868,7 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_create(
         actor_data["model"] = actor->route;
         actor_data["asset_path"] = actor->resolved_asset_path;
         return apply_pending_network_actor_state(
-            actor_guid, scene_name, actor_data, context);
+            actor_guid, scene_name, actor_data);
     } catch (const std::exception& error) {
         return pending_actor_outcome(PendingNetworkActorApplyResult::Retry, error.what());
     }
@@ -2880,8 +2877,7 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_create(
 PendingNetworkActorApplyOutcome apply_pending_network_actor_transform(
     const std::string& actor_guid,
     const std::string& scene_name,
-    const nlohmann::json& transform_data,
-    const NativeContext& context) {
+    const nlohmann::json& transform_data) {
     if (trim_ascii(actor_guid).empty() || !transform_data.is_object()) {
         return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
                                      "Remote actor transform is malformed");
@@ -2915,8 +2911,7 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_transform(
 PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
     const std::string& actor_guid,
     const std::string& scene_name,
-    const nlohmann::json& actor_data,
-    const NativeContext& context) {
+    const nlohmann::json& actor_data) {
     if (trim_ascii(actor_guid).empty() || !actor_data.is_object() || actor_data.empty()) {
         return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
                                      "Remote actor state requires an object and stable GUID");
@@ -5347,7 +5342,7 @@ CollaborativeEditorApplyOutcome apply_collaborative_actor_create(
     nlohmann::json actor_data) {
     auto outcome = run_collaborative_apply([&](PendingNetworkActorApplyOutcome& result) {
         result = apply_pending_network_actor_create(
-            actor_guid, scene_name, model_path, std::move(actor_data), NativeContext{});
+            actor_guid, scene_name, model_path, std::move(actor_data));
     });
     if (!outcome) {
         return {Corona::Systems::UI::CollaborativeEditorApplyResult::Retry,
@@ -5362,8 +5357,7 @@ CollaborativeEditorApplyOutcome apply_collaborative_actor_state(
     const std::string& scene_name,
     const nlohmann::json& actor_data) {
     auto outcome = run_collaborative_apply([&](PendingNetworkActorApplyOutcome& result) {
-        result = apply_pending_network_actor_state(actor_guid, scene_name, actor_data,
-                                                  NativeContext{});
+        result = apply_pending_network_actor_state(actor_guid, scene_name, actor_data);
     });
     if (!outcome) {
         return {Corona::Systems::UI::CollaborativeEditorApplyResult::Retry,
@@ -5378,8 +5372,7 @@ CollaborativeEditorApplyOutcome apply_collaborative_actor_transform(
     const std::string& scene_name,
     const nlohmann::json& transform_data) {
     auto outcome = run_collaborative_apply([&](PendingNetworkActorApplyOutcome& result) {
-        result = apply_pending_network_actor_transform(actor_guid, scene_name, transform_data,
-                                                      NativeContext{});
+        result = apply_pending_network_actor_transform(actor_guid, scene_name, transform_data);
     });
     if (!outcome) {
         return {Corona::Systems::UI::CollaborativeEditorApplyResult::Retry,
@@ -5808,13 +5801,13 @@ struct VisionToggleSpec {
 // while the JSON manifest is retired; once it is gone these functions are the whole
 // contract and the table, the registry and the api-name strings disappear with it.
 
-NativeResult script_scene_get_environment(const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_get_environment(const NativeRequest& request) {
             SceneRequest read{SceneMethod::GetEnvironment};
             read.environment.scene = arg_string(request.args, 0);
             return native_environment_result(read);
 }
 
-NativeResult script_scene_read_active_scene(const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_read_active_scene(const NativeRequest& request) {
             const auto state = execute_scene_operation({SceneMethod::ReadActive}).active;
             if (state.archive_session.empty()) return native_success({{"archive_session", ""}});
             auto selection = nlohmann::json::object();
@@ -5830,7 +5823,7 @@ NativeResult script_scene_read_active_scene(const NativeRequest& request, const 
                 {"tree_revision", state.tree_revision}, {"selection", std::move(selection)}});
 }
 
-NativeResult script_scene_read_actor(const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_read_actor(const NativeRequest& request) {
             auto* scene = native_editor_state().scene.get();
             const auto query = arg_object(request.args, 0);
             if (!scene || !matches_archive_session(*scene, query)) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
@@ -5840,7 +5833,7 @@ NativeResult script_scene_read_actor(const NativeRequest& request, const NativeC
             return native_success(actor_to_json(*scene, *actor));
 }
 
-NativeResult script_scene_read_transforms(const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_read_transforms(const NativeRequest& request) {
             const auto query = arg_object(request.args, 0);
             auto* scene = native_editor_state().scene.get();
             if (!scene || !matches_archive_session(*scene, query)) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
@@ -5856,14 +5849,14 @@ NativeResult script_scene_read_transforms(const NativeRequest& request, const Na
             return native_success({{"archive_session", scene->archive_session}, {"actors", std::move(values)}});
 }
 
-NativeResult script_scene_read_archive_scene(const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_read_archive_scene(const NativeRequest& request) {
             auto* scene = native_editor_state().scene.get();
             if (!scene || !matches_archive_session(*scene, arg_object(request.args, 0)))
                 return native_failure("PROJECT_CONTEXT_CHANGED", 409);
             return native_success({{"archive_session", scene->archive_session}, {"scene", archive_scene_values(*scene)}});
 }
 
-NativeResult script_scene_get_scene_snapshot(const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_get_scene_snapshot(const NativeRequest& request) {
             try {
                 const auto raw = get_editor_scene_snapshot_from_python(arg_string(request.args, 0));
                 const auto data = nlohmann::json::parse(raw);
@@ -5876,11 +5869,12 @@ NativeResult script_scene_get_scene_snapshot(const NativeRequest& request, const
             }
 }
 
-NativeResult script_scene_set_actor_transform(const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_set_actor_transform(const NativeRequest& request) {
             try {
                 const auto transform = arg_object(request.args, 2);
-                // Web callers always carry their archive; non-Web callers may omit it.
-                if ((context.caller == EditorApiCaller::Cef || transform.contains("archive_session")) &&
+                // The script channel may omit the archive; when it carries one it
+                // must name the archive the editor currently has open.
+                if (transform.contains("archive_session") &&
                     !matches_archive_session(*scene_for_request_route(request), transform))
                     return native_failure("PROJECT_CONTEXT_CHANGED", 409);
                 return set_native_editor_actor_transform(
@@ -5890,15 +5884,15 @@ NativeResult script_scene_set_actor_transform(const NativeRequest& request, cons
             }
 }
 
-NativeResult script_scene_set_environment(const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_set_environment(const NativeRequest& request) {
             return set_native_environment(request);
 }
 
-NativeResult script_scene_set_actor_state(const NativeRequest& request, const NativeContext& context) {
-            return set_native_actor_properties(request, context, ActorPropertyAdapter::State);
+NativeResult script_scene_set_actor_state(const NativeRequest& request) {
+            return set_native_actor_properties(request, ActorPropertyAdapter::State);
 }
 
-NativeResult script_scene_set_actor_animation(const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_set_actor_animation(const NativeRequest& request) {
             try {
                 auto* scene = scene_for_request_route(request);
                 auto* actor = find_native_actor(*scene, arg_string(request.args, 1));
@@ -5915,36 +5909,38 @@ NativeResult script_scene_set_actor_animation(const NativeRequest& request, cons
             } catch (const std::exception& error) { return native_failure(error.what(), 2); }
 }
 
-NativeResult script_scene_pause_actor_animation(const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_pause_actor_animation(const NativeRequest& request) {
             return set_native_actor_animation_paused(request, true);
 }
 
-NativeResult script_scene_resume_actor_animation(const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_resume_actor_animation(const NativeRequest& request) {
             return set_native_actor_animation_paused(request, false);
 }
 
-NativeResult script_scene_set_actor_physics(const NativeRequest& request, const NativeContext& context) {
-            return set_native_actor_properties(request, context, ActorPropertyAdapter::Mechanics);
+NativeResult script_scene_set_actor_physics(const NativeRequest& request) {
+            return set_native_actor_properties(request, ActorPropertyAdapter::Mechanics);
 }
 
-NativeResult script_scene_set_camera_pose(const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_set_camera_pose(const NativeRequest& request) {
             return apply_non_web_camera_properties(request, true);
 }
 
-NativeResult script_scene_create_actor(const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_create_actor(const NativeRequest& request) {
             const auto scene_route = arg_string(request.args, 0);
             const auto source_path = arg_string(request.args, 1);
             auto actor_type = normalize_route(arg_string(request.args, 2, "model"));
             const auto actor_data = arg_object(request.args, 3);
             const auto* scene = native_editor_state().scene.get();
-            const bool script_runtime = context.caller == EditorApiCaller::ScriptRuntime;
-            if ((!script_runtime || actor_data.contains("archive_session")) &&
+            // Only validate the archive the caller actually named: script code may
+            // import an actor into whatever world is open.
+            if (actor_data.contains("archive_session") &&
                 (!scene || !matches_archive_session(*scene, actor_data)))
                 return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-            return create_native_editor_actor(scene_route, source_path, actor_type, actor_data, script_runtime);
+            return create_native_editor_actor(scene_route, source_path, actor_type, actor_data,
+                                              /*transient_assets=*/true);
 }
 
-NativeResult script_scene_remove_actor(const NativeRequest& request, const NativeContext& context) {
+NativeResult script_scene_remove_actor(const NativeRequest& request) {
             const auto scene_route = arg_string(request.args, 0);
             const auto actor_name = arg_string(request.args, 1);
             return remove_native_editor_actor(scene_route, actor_name);

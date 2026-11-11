@@ -143,12 +143,30 @@ NativeResult native_failure(std::string error, int error_code, std::string route
     return result;
 }
 
-NativeResult native_unhandled() {
-    NativeResult result;
-    result.handled = false;
-    result.success = false;
-    result.route = "unhandled";
-    return result;
+NativeApiRequestScope::NativeApiRequestScope(const NativeRequest& request)
+    : sequence_(g_in_flight_sequence.fetch_add(1, std::memory_order_relaxed) + 1),
+      module_(request.module),
+      function_(request.function),
+      started_(std::chrono::steady_clock::now()) {
+    begin_native_request(request, sequence_);
+}
+
+NativeApiRequestScope::~NativeApiRequestScope() {
+    std::lock_guard<std::mutex> lock(g_in_flight_mutex);
+    if (g_in_flight.sequence == sequence_) {
+        g_in_flight.active = false;
+    }
+}
+
+void NativeApiRequestScope::report_if_slow(const NativeResult& result) const {
+    NativeRequest request;
+    request.module = module_;
+    request.function = function_;
+    report_slow_native_request(request, result, started_);
+}
+
+NativeApiInFlight native_api_in_flight_for_test() {
+    return in_flight_snapshot();
 }
 
 std::string arg_string(const nlohmann::json& args, size_t index, std::string fallback) {
