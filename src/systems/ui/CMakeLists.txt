@@ -41,6 +41,7 @@ set(UI_SYSTEM_SOURCES
     cef/editor_scene_access.cpp
     cef/editor_actor_properties.cpp
     cef/editor_request_values.cpp
+    cef/editor_platform_dialogs.cpp
     cef/editor_network_state.cpp
     cef/editor_service_operations.cpp
     cef/cef_editor_native_api_handlers.cpp
@@ -80,6 +81,7 @@ set(UI_SYSTEM_SOURCES
     cef/editor_scene_access.h
     cef/editor_actor_properties.h
     cef/editor_request_values.h
+    cef/editor_platform_dialogs.h
     cef/editor_network_state.h
     cef/editor_text_utils.h
     cef/native_editor_state.h
