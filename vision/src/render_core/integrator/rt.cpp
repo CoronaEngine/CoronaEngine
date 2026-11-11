@@ -92,7 +92,7 @@ private:
     Shader<void(uint, float, float, uint, uint)> combine_;
     Shader<void()> merge_dominant_;
     Shader<void()> compose_layers_;
-    Shader<void(uint, float, float)> prepare_denoiser_;
+    Shader<void(uint, float, float, uint)> prepare_denoiser_;
     Shader<void(uint, float)> compose_denoiser_;
     mutable float2 denoiser_factors_{make_float2(-1.f)};
     Shader<void(uint, Buffer<SurfaceData>)> path_tracing_;
@@ -326,7 +326,7 @@ public:
         };
         compose_layers_ = device().compile(compose, "StablePlanes-ComposeCoverage");
         if (denoiser_ && denoiser_->requires_lobe_signals()) {
-            Kernel pack_lobes = [&](Uint layered, Float di, Float gi) {
+            Kernel pack_lobes = [&](Uint layered, Float di, Float gi, Uint precise_di_only) {
                 Uint i = dispatch_id(), layer = 0u;
                 $if(layered != 0u) {
                     layer = frame_buffer().stable_dominant().read(i);
@@ -335,6 +335,15 @@ public:
                 Uint address = layer * (dispatch_dim().x * dispatch_dim().y) + i;
                 Float4 sd = frame_buffer().denoiser_di_specular().read(i);
                 Float4 sg = frame_buffer().denoiser_gi_specular().read(i);
+                Float3 direct = direct_->read_radiance(i).xyz();
+                $if(precise_di_only != 0u) {
+                    // Without GI's final pass, finish DI's FP32 staging here.
+                    direct = sd.xyz();
+                    sd = make_float4(sg.xyz(), sd.w);
+                    sg = make_float4(0.f);
+                    frame_buffer().denoiser_di_specular().write(i, sd);
+                    frame_buffer().denoiser_gi_specular().write(i, sg);
+                };
                 Float3 bypass = frame_buffer().denoiser_di_bypass().read(i).xyz();
                 Float4 old_d = make_float4(0.f), old_s = make_float4(0.f), old_b = make_float4(0.f);
                 $if(layered != 0u) {
@@ -342,7 +351,7 @@ public:
                     old_s = frame_buffer().denoiser_specular().read(address);
                     old_b = frame_buffer().denoiser_bypass().read(address);
                 };
-                auto merged = denoiser_signals::merge_restir_lobes(direct_->read_radiance(i).xyz(),
+                auto merged = denoiser_signals::merge_restir_lobes(direct,
                     indirect_->read_radiance(i).xyz(), sd, sg, bypass, di, gi, old_d, old_s, old_b);
                 frame_buffer().denoiser_diffuse().write(address, merged.diffuse);
                 frame_buffer().denoiser_specular().write(address, merged.specular);
@@ -539,15 +548,18 @@ public:
         reference_gi_was_active_ = use_reference_gi;
         submit(use_falcor ? falcor_di_->dispatch(frame_index_) : direct_->dispatch(frame_index_, precise_lobes),
                &cur_stage_profile_.restir_di_ms);
-        const bool direct_only = suffix_depth() == 0u && !denoiser_enabled && !stable_planes_enabled() &&
-            (!denoiser_ || !denoiser_->requires_lobe_signals()) && frame_buffer().impl_type() == "normal";
-        if (!gi_enabled && (use_falcor || direct_only)) {
+        if (!gi_enabled) {
+            indirect_->invalidate_history();
             if (indirect_->compact_radiance()) {
                 submit(rp->reset_buffer(indirect_->raw_radiance().view(), make_uint2(0u), "ReSTIR indirect clear"),
                        &cur_stage_profile_.restir_gi_ms);
             } else {
                 submit(rp->reset_buffer(indirect_->radiance()->view(), make_float4(0.f), "ReSTIR indirect clear"),
                        &cur_stage_profile_.restir_gi_ms);
+            }
+            if (!precise_lobes && denoiser_ && denoiser_->requires_lobe_signals()) {
+                submit(rp->reset_buffer(frame_buffer().denoiser_gi_specular().view(), make_float4(0.f),
+                                       "ReSTIR indirect specular clear"), &cur_stage_profile_.restir_gi_ms);
             }
         } else {
             submit(use_reference_gi ? reference_gi_->dispatch(frame_index_) :
@@ -649,8 +661,9 @@ public:
             if (denoiser && any(factors != denoiser_factors_)) {
                 denoiser_->set_enabled(false); denoiser_->set_enabled(true); denoiser_factors_ = factors;
             }
-            if (!precise_lobes)
-                submit(prepare_denoiser_(uint(stable_planes_enabled()), factors.x, factors.y).dispatch(pipeline()->resolution()),
+            if (!precise_lobes || !gi_enabled)
+                submit(prepare_denoiser_(uint(stable_planes_enabled()), factors.x, factors.y,
+                                        uint(precise_lobes && !gi_enabled)).dispatch(pipeline()->resolution()),
                        &cur_stage_profile_.combine_ms);
         }
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {

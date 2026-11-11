@@ -100,6 +100,7 @@ struct TriangleHitVar{};struct Interaction{};
 #define $break throw Stopped{}
 struct Stopped{};
 template<class A,class B>double min(A a,B b){return std::min(double(a),double(b));}
+Uint select(Bool condition,Uint yes,Uint no){return condition?yes:no;}
 double make_float3(double v){return v;}double make_float2(double v){return v;}
 void require(bool condition,const char*message){if(!condition)throw std::runtime_error(message);}
 __HIT_CONTEXT__;
@@ -137,6 +138,7 @@ struct Caller {
     Integrator*integrator(){return &recorder;}
     Result run(uint depth,uint total_depth,double throughput,Bool covered,uint bounce,double eta,double u){
         recorder={depth,total_depth,bounce,0,throughput,eta,u,lobes,covered};RayState ray;
+        const Float gi=1.f;
         __PRODUCER__
         require(recorder.calls==1,"Residual Li call count changed");
         return recorder.result;
@@ -179,15 +181,17 @@ int main(){
 def _roulette_block():
     source = (ROOT/'vision/src/base/integral/integrator.cpp').read_text(encoding='utf-8')
     start = source.index('        Uint rr_depth = bounces;')
-    guard = source.index('        $if(eta_scale * ', start)
-    return source[start:balanced(source, guard)]
+    native = source.index('        if (hc.rtxpt_sampling) {', start)
+    guard = source.index('$if(eta_scale * ', balanced(source, native))
+    return source[start:native] + source[guard:balanced(source, guard)]
 
 
 def test_gi_roulette_depth_scale_and_expectation():
     gi = (ROOT/'vision/src/render_core/integrator/ReSTIR/indirect.cpp').read_text(encoding='utf-8')
     start = gi.index('        Uint rr_depth_offset = prefix_depth + 1u;')
+    native = gi.index('        if (native_transport) {', start)
     end = gi.index('        Uint suffix_depth = ', start)
-    assignment = gi[start:end]
+    assignment = gi[start:native] + gi[balanced(gi, native):end]
     interaction = (ROOT/'vision/src/base/scattering/interaction.h').read_text(encoding='utf-8')
     hit = interaction[interaction.index('OC_STRUCT(vision,HitBSDF,'):]
     methods = {name: ''.join(body(hit, '[[nodiscard]] Float3 '+name+'()'))

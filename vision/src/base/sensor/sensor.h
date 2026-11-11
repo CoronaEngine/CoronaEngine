@@ -105,6 +105,9 @@ public:
     /// set device c2w GPU only
     void set_device_c2w(const Float4x4 &mat) noexcept;
     [[nodiscard]] Float linear_depth(const Float3 &world_pos) const noexcept;
+    [[nodiscard]] Float prev_linear_depth(const Float3 &world_pos) const noexcept {
+        return transform_point(*prev_w2s_, world_pos).z;
+    }
     void set_position(float3 pos) noexcept { position_ = pos; }
     void move(float3 delta) noexcept { position_ += delta; }
 

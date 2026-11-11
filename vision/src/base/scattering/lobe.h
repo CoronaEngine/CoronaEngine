@@ -256,6 +256,8 @@ public:
     void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
                         Float2 &roughness) const noexcept override;
     VS_MAKE_LOBE_ASSIGNMENT(DielectricLobe)
+    [[nodiscard]] Microfacet<D> *microfacet() noexcept { return microfacet_.get(); }
+    [[nodiscard]] const Microfacet<D> *microfacet() const noexcept { return microfacet_.get(); }
     [[nodiscard]] virtual bool compensate() const noexcept { return true; }
     static void prepare() noexcept;
     [[nodiscard]] Float valid_world_factor(const Float3 &wo, const Float3 &wi) const noexcept override;

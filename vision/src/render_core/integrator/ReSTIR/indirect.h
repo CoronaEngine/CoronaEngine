@@ -31,16 +31,22 @@ struct GIParam {
     float t_dot{};
     float t_depth{};
     float t_radius{};
+
+    uint rtxpt_bias_correction{1u}, rtxpt_final_visibility{1u}, rtxpt_final_mis{1u};
+    uint rtxpt_permutation{1u}, rtxpt_fallback{1u}, rtxpt_vary_age{1u}, rtxpt_boiling{1u};
+    float rtxpt_boiling_strength{0.2f};
 };
 }// namespace vision
 
 OC_PARAM_STRUCT(vision, GIParam, camera_jitter, precise_lobes, denoiser_layered, denoiser_di_active, denoiser_di_factor, denoiser_gi_factor, max_age, diff_factor, spatial, N,
                 s_dot, s_depth, s_radius, temporal, history_limit,
-                t_dot, t_depth, t_radius){};
+                t_dot, t_depth, t_radius, rtxpt_bias_correction, rtxpt_final_visibility, rtxpt_final_mis,
+                rtxpt_permutation, rtxpt_fallback, rtxpt_vary_age, rtxpt_boiling, rtxpt_boiling_strength){};
 
 namespace vision {
 
 class RayTracingIntegrator;
+class RtxptGI;
 
 // Cached secondary radiance is evaluated toward the source receiver. Preserve
 // that geometric side, including when both receivers view a two-sided back face.
@@ -52,7 +58,7 @@ template<typename T>
 
 class ReSTIRGI : public ReSTIR {
 private:
-    SP<ScreenBuffer> radiance_{make_shared<ScreenBuffer>("ReSTIRGI::radiance_ [gi-radiance-v1]")};
+    SP<ScreenBuffer> radiance_{make_shared<ScreenBuffer>("ReSTIRGI::radiance_ [gi-radiance-v2-rtxpt]")};
     RegistrableBuffer<float4> rt_buffer_;
     RegistrableBuffer<GIReservoirStorage> reservoirs_{pipeline()->bindless_array()};
     RegistrableBuffer<GISample> samples_{pipeline()->bindless_array()};
@@ -77,6 +83,8 @@ private:
     mutable RegistrableBuffer<uint2> raw_radiance_{pipeline()->bindless_array()};
     bool compact_radiance_{};
     bool radiance_prepared_{};
+    bool rtxpt_backend_{};
+    SP<RtxptGI> rtxpt_;
 
     // Internal pass-local receiver cache; no new virtual slots or stored state.
     [[nodiscard]] GIReservoirVar constant_combine_cached(const GIReservoirVar &canonical_rsv,
@@ -128,12 +136,9 @@ public:
                                                                const Interaction &source_it,
                                                                const GISampleVar &sample) const noexcept;
     HOTFIX_VIRTUAL void compile_spatial_shading() noexcept;
-    void compile() noexcept {
-        switch_profile::Scope profile{"ReSTIR.GI.compile", "compile"};
-        compile_initial_samples();
-        compile_temporal_reuse();
-        compile_spatial_shading();
-    }
+    void compile() noexcept;
+    [[nodiscard]] bool uses_rtxpt_backend() const noexcept { return rtxpt_backend_; }
+    [[nodiscard]] const RegistrableBuffer<GISample> &sample_buffer() const noexcept { return samples_; }
     void update_resolution(ocarina::uint2 res) noexcept override;
     [[nodiscard]] HOTFIX_VIRTUAL Float Jacobian_det(Float3 cur_pos, Float3 neighbor_pos, Var<SurfacePoint> sample_point) const noexcept;
     [[nodiscard]] HOTFIX_VIRTUAL GISampleVar init_sample(const Interaction &it, const SensorSample &ss,

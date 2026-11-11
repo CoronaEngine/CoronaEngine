@@ -551,12 +551,17 @@ void StablePlanes::compile() noexcept {
                 // compute_surface_interaction clips t_max to the hit distance.
                 // Li owns its traversal and must see that receiver again.
                 ray.ray.dir_max.w = ray_t_max;
-                Float3 total = integrator()->Li(ray, Float{1e16f}, total_depth - depth, throughput,
+                // GI off still needs the receiver's direct-light estimate and
+                // terminal emissive hit, but no indirect suffix bounces.
+                Uint remaining_depth = total_depth - depth;
+                Uint evaluation_depth = select(gi > 0.f, remaining_depth, min(remaining_depth, 1u));
+                Float3 total = integrator()->Li(ray, Float{1e16f}, evaluation_depth, throughput,
                     false, context, *this);
                 Uint address = owner * (dispatch_dim().x * dispatch_dim().y) + dispatch_id();
                 $if(raw_output != 0u) {
                     fb.stable_direct().write(address, fb.stable_direct().read(address) + make_float4(direct, 0.f));
-                    fb.stable_indirect().write(address, make_float4(total - direct, 1.f));
+                    fb.stable_indirect().write(address,
+                        make_float4(select(gi > 0.f, total - direct, make_float3(0.f)), 1.f));
                 };
                 if (lobes) {
                     Float3 weighted_specular = direct_specular * di + (specular - direct_specular) * gi;

@@ -31,9 +31,7 @@ def test_gi44_preserves_estimator_fields_and_history_slices():
     allocations=[]
     for signature in ('void ReSTIRGI::prepare(', 'void ReSTIRGI::update_resolution('):
         method=_function(implementation,signature)
-        start=method.index('    reservoirs_.super() =')
-        end=method.index('    samples_.super() =',start)
-        allocations.append(method[start:end])
+        allocations.append(_function(method, 'if (!rtxpt_backend_)'))
     oct_source=(ROOT/'Horizon/src/math/common_lib.inl.h').read_text(encoding='utf-8-sig')
     oct_decode=_function(oct_source,'[[nodiscard]]  inline auto octahedral_decode(float2 p)')
     program=r'''
@@ -117,6 +115,7 @@ struct RegisteredReservoirs {
 };
 struct Harness {
     RegisteredReservoirs reservoirs_;
+    bool rtxpt_backend_{};
     uint reservoir_base()const{return 0;}
     ACCESSORS
     void prepare(){Pipeline*rp=pipeline();PREPARE_ALLOCATION}
@@ -133,6 +132,12 @@ void exact(const GIReservoir&a,const GIReservoir&b){
     }
 }
 int main(){
+    Harness native;
+    native.rtxpt_backend_=true;
+    native.prepare();
+    require(native.reservoirs_.allocation.elements==0&&storage.empty(),"RTXPT prepare allocated legacy storage");
+    native.resize();
+    require(native.reservoirs_.allocation.elements==0&&storage.empty(),"RTXPT resize allocated legacy storage");
     Harness h;h.prepare();
     require(storage.size()==count*2&&h.reservoirs_.allocation.name==GIReservoirStorage::Name,"prepare allocation ABI changed");
     require(registered[0].offset==0&&registered[0].count==count&&registered[1].offset==count&&registered[1].count==count,"prepare registered slices changed");

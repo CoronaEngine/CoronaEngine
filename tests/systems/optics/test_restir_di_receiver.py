@@ -26,6 +26,7 @@ CPP = r'''
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string_view>
 #include <vector>
 using uint = unsigned;
 using Uint = unsigned;
@@ -35,14 +36,15 @@ using std::addressof;
 void require(bool ok, const char *message) { if (!ok) throw std::runtime_error(message); }
 struct Hit { double wi=0, f=0, pdf=-1; bool operator==(const Hit&) const = default; };
 struct State {
-    bool normal=false, dispersive=false, support=true, separate=false;
-    uint max_evaluator_frame=0, builds=0, checks=0, flag=0, light_count=0, bsdf_count=0;
+    bool normal=false, dispersive=false, support=true, separate=false, srgb=false;
+    uint max_evaluator_frame=0, builds=0, checks=0, flag=0, light_count=0, bsdf_count=0, outlines=0;
     std::uint64_t random=12345, draws=0;
     std::vector<double> values;
     Hit hit;
 };
 State *state;
-struct Interaction { mutable uint frame=0; double wo=1; uint material_id() const { return 0; } };
+struct Spectrum { std::string_view impl_type() const { return state->srgb ? "srgb" : "spectral"; } };
+struct Interaction { mutable uint shading=0; double wo=1; uint material_id() const { return 0; } };
 struct Sampler {
     double next_1d() { state->random=state->random*6364136223846793005ULL+1442695040888963407ULL;
         state->draws++; return double((state->random >> 32) & 65535) / 65536.; }
@@ -52,14 +54,15 @@ struct BSDFSample { Eval eval; double wi=0; };
 struct MaterialEvaluator;
 struct Wavelengths {
     mutable double secondary_pdf=1;
-    void check_dispersive(int, const MaterialEvaluator&) const {
+    void check_dispersive(const Spectrum *, const MaterialEvaluator&) const {
         state->checks++;
         if (state->dispersive) secondary_pdf=0;
     }
 };
 struct MaterialEvaluator {
     uint frame;
-    MaterialEvaluator(const Interaction& it,const Wavelengths&) : frame(it.frame) {}
+    MaterialEvaluator(const Interaction& it,const Wavelengths&) : frame(it.shading) {}
+    void update_frame(uint shading) { frame=shading; }
     uint flag() const { return 17; }
     Eval evaluate(double wo,double wi) const { return {double(frame+1)*(wo+wi),state->support ? .25 : 0}; }
     BSDFSample sample(double wo,Sampler& sampler) const {
@@ -69,11 +72,15 @@ struct MaterialEvaluator {
 };
 struct Material {
     MaterialEvaluator create_evaluator(const Interaction& it,const Wavelengths& swl) const {
-        state->builds++; if(state->normal) it.frame++; state->max_evaluator_frame=std::max(state->max_evaluator_frame,it.frame);
-        return MaterialEvaluator(it,swl);
+        MaterialEvaluator evaluator(it,swl);
+        build_evaluator(evaluator,it,swl);
+        evaluator.update_frame(it.shading);
+        return evaluator;
     }
-    void build_evaluator(MaterialEvaluator& bsdf,const Interaction& it,const Wavelengths& swl) const {
-        bsdf=create_evaluator(it,swl);
+    void build_evaluator(MaterialEvaluator&,const Interaction& it,const Wavelengths&) const {
+        state->builds++;
+        if(state->normal) it.shading++;
+        state->max_evaluator_frame=std::max(state->max_evaluator_frame,it.shading);
     }
 };
 struct Materials { template<class F> void dispatch(uint,F f) { Material m; f(&m); } };
@@ -81,10 +88,13 @@ struct Scene { Materials materials() { return {}; } };
 Scene scene() { return {}; }
 struct Integrator { bool separate() { return state->separate; } };
 Integrator *integrator() { static Integrator i; return &i; }
-template<class F> void outline(const char*,F f) { f(); }
+template<class F> void outline(std::string_view name,F f) {
+    if(name=="ReSTIRDI::RIS build evaluator") state->outlines++;
+    f();
+}
 double actual_light_dispatch(MaterialEvaluator *bsdf,const Interaction& it,const Wavelengths& swl,
                              double wi) {
-    int spectrum=0;
+    const Spectrum *spectrum=nullptr;
     double f=0;
     struct { struct { double L=2; } eval; } ls;
     Eval eval;
@@ -93,7 +103,7 @@ double actual_light_dispatch(MaterialEvaluator *bsdf,const Interaction& it,const
 }
 BSDFSample actual_bsdf_dispatch(MaterialEvaluator *bsdf,const Interaction& it,const Wavelengths& swl,
                                 Sampler& sampler,Uint *flag) {
-    int spectrum=0;
+    const Spectrum *spectrum=nullptr;
     BSDFSample result;
     BSDFSample *bs=&result;
     __BSDF_DISPATCH__
@@ -102,7 +112,7 @@ BSDFSample actual_bsdf_dispatch(MaterialEvaluator *bsdf,const Interaction& it,co
 struct Result { State s; uint frame; double secondary_pdf; };
 template<class F> Result run(F control,uint M_light,uint M_bsdf,bool hit,State input) {
     State storage=input; state=&storage;
-    Interaction it; Wavelengths swl; Sampler sampler; int spectrum=0;
+    Interaction it; Wavelengths swl; Sampler sampler; Spectrum spectrum;
     auto sample_light = [&](MaterialEvaluator *bsdf) {
         double wi=sampler.next_1d()+sampler.next_1d()+sampler.next_1d();
         storage.values.push_back(actual_light_dispatch(bsdf,it,swl,wi));
@@ -116,22 +126,24 @@ template<class F> Result run(F control,uint M_light,uint M_bsdf,bool hit,State i
         (void)sampler.next_1d();
         storage.bsdf_count++;
     };
-    control(hit,M_light,M_bsdf,M_light,M_bsdf,it,swl,spectrum,sample_light,sample_bsdf);
-    return {storage,it.frame,swl.secondary_pdf};
+    control(hit,M_light,M_bsdf,M_light,M_bsdf,it,swl,&spectrum,sample_light,sample_bsdf);
+    return {storage,it.shading,swl.secondary_pdf};
 }
 
 int main(){
  auto actual=[](bool hit,uint M_light,uint M_bsdf,uint M_light_,uint M_bsdf_,
-               const Interaction&it,const Wavelengths&swl,int spectrum,auto sample_light,auto sample_bsdf){
+               const Interaction&it,const Wavelengths&swl,const Spectrum *spectrum,auto sample_light,auto sample_bsdf){
   __CONTROL__
  };
  uint cases=0;
  for(uint ml:{0u,1u,2u,10u})for(uint mb:{0u,1u,3u})for(bool hit:{false,true})
- for(bool normal:{false,true})for(bool disp:{false,true})for(bool support:{false,true})for(bool separate:{false,true}){
-  State input;input.normal=normal;input.dispersive=disp;input.support=support;input.separate=separate;
+ for(bool normal:{false,true})for(bool disp:{false,true})for(bool support:{false,true})
+ for(bool separate:{false,true})for(bool srgb:{false,true}){
+  State input;input.normal=normal;input.dispersive=disp;input.support=support;input.separate=separate;input.srgb=srgb;
   auto now=run(actual,ml,mb,hit,input);
-  uint count=hit?ml+mb:0,builds=hit?(separate?1:ml+mb):0;
+  uint count=hit?ml+mb:0,builds=hit?(separate||srgb?1:ml+mb):0;
   require(now.s.builds==builds&&now.s.checks==builds,"Evaluator lifetime or dispersion-check count changed");
+  require(now.s.outlines==uint(hit&&separate),"Separated RIS must export the evaluator from its material case");
   require(now.frame==(normal&&hit&&separate?1u:0u),"Material normal mutation escaped its private Li receiver");
   require(now.s.max_evaluator_frame==(normal&&builds?1u:0u),"Repeated Li calls accumulate a normal map");
   require(now.secondary_pdf==(disp&&builds?0:1),"Wavelength dispersion state changed");

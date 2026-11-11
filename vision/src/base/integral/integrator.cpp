@@ -13,6 +13,14 @@
 namespace vision {
 using namespace ocarina;
 
+namespace {
+Float rtxpt_rr_probability(const Float3 &camera_beta, const Uint &surface_depth, const Uint &total_depth) {
+    Float terminate = saturate(0.85f - sqrt(max(luminance(camera_beta), 0.f)));
+    return saturate(terminate * terminate +
+        max((cast<float>(surface_depth) / cast<float>(total_depth) - 0.5f) * 1.2f, 0.f));
+}
+}// namespace
+
 double Integrator::cur_denoise_time() const noexcept { return denoise_timing_->elapsed_ms; }
 
 void Integrator::reset_denoise_timing() const noexcept {
@@ -86,7 +94,11 @@ IlluminationIntegrator::IlluminationIntegrator(const vision::IntegratorDesc &des
       rr_threshold_(desc["rr_threshold"].as_float(1.f)),
       mis_mode_(MISMode(desc["mis_mode"].as_int(0))),
       separate_(desc["separate"].as_bool(false)),
-      denoiser_(Node::create_shared<Denoiser>(desc.denoiser_desc)) {}
+      denoiser_(Node::create_shared<Denoiser>(desc.denoiser_desc)) {
+    const char *backend = std::getenv("VISION_RESTIR_GI_BACKEND");
+    if ((backend && string_view(backend) == "rtxpt") ||
+        desc.value("indirect")["backend"].as_string("legacy") == "rtxpt") separate_ = true;
+}
 
 DataWrap IlluminationIntegrator::illumination_settings() const {
     return {{"max_depth", max_depth_.hv()}, {"min_depth", min_depth_.hv()},
@@ -236,7 +248,7 @@ CommandBatch IlluminationIntegrator::denoise(RealTimeDenoiseInput &input) const 
 
 SampledSpectrum IlluminationIntegrator::evaluate_miss(RayState &rs, const Float3 &normal,
                                                       const Float &scatter_pdf, const Uint &bounces,
-                                                      const SampledWavelengths &swl) const noexcept {
+                                                      const SampledWavelengths &swl, uint light_samples) const noexcept {
     TLightSampler &light_sampler = renderer().light_sampler();
     SampledSpectrum ret = spectrum()->zero();
     const Geometry &geometry = pipeline()->geometry();
@@ -250,7 +262,8 @@ SampledSpectrum IlluminationIntegrator::evaluate_miss(RayState &rs, const Float3
             tr = geometry.Tr(scene(), renderer().sampler(), swl, rs);
         }
         LightEval eval = light_sampler->evaluate_miss_wi(p_ref, rs.direction(), swl);
-        Float weight = MIS_weight<D>(scatter_pdf, eval.pdf);
+        Float weight = MIS_weight_n<D>(1, scatter_pdf, int(light_samples), eval.pdf);
+        if (light_samples != 1u) weight = select(ocarina::isinf(scatter_pdf), 1.f, weight);
         weight = correct_bsdf_weight(weight, bounces);
         ret = eval.L * tr * weight;
     }
@@ -302,6 +315,8 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
     Bool delta_only = true;
     Bool continuation_ready = false;
     Uint continuation_depth = 0u;
+    Bool pending_rr_death = false;
+    Float pending_rr_boost = 1.f;
     auto mis_bsdf = [&](auto &bounces, bool inner) {
         hit = geometry.trace_closest(rs.ray);
         if (hc.lobe_hitdist) {
@@ -337,7 +352,8 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
 
         $if(hit->is_miss()) {
             $if(include_emission) {
-                SampledSpectrum d = evaluate_miss(rs, prev_surface_ng, scatter_pdf, bounces, swl) * throughput;
+                SampledSpectrum d = evaluate_miss(rs, prev_surface_ng, scatter_pdf, bounces, swl,
+                                                 hc.rtxpt_sampling ? 2u : 1u) * throughput;
                 Float3 lin = spectrum()->linear_srgb(d, swl);
                 ret += lin;
                 if (hc.restir_direct_split && hc.Ld) {
@@ -391,7 +407,9 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             p_ref.ng = prev_surface_ng;
             LightEval eval = light_sampler->evaluate_hit_wi(p_ref, it, swl);
             SampledSpectrum tr = geometry.Tr(scene(), renderer().sampler(), swl, rs);
-            Float weight = MIS_weight<D>(scatter_pdf, eval.pdf);
+            Float weight = hc.rtxpt_sampling
+                ? select(ocarina::isinf(scatter_pdf), 1.f, MIS_weight_n<D>(1, scatter_pdf, 2, eval.pdf))
+                : MIS_weight<D>(scatter_pdf, eval.pdf);
             weight = correct_bsdf_weight(weight, bounces);
             SampledSpectrum d = eval.L * throughput * weight * tr;
             Float3 lin = spectrum()->linear_srgb(d, swl);
@@ -409,19 +427,84 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
     $for(&bounces, 0, max_depth) {
         continuation_ready = false;
         mis_bsdf(bounces, true);
+        if (hc.rtxpt_sampling) {
+            // Native RR always visits the next emission/miss endpoint first.
+            $if(pending_rr_death) { $break; };
+            throughput *= pending_rr_boost;
+            pending_rr_boost = 1.f;
+        }
         Env::instance().set("bounces", bounces);
         comment("estimate direct lighting");
         comment("sample light");
-        LightSample light_sample = light_sampler->sample_wi(it, sampler, swl);
-        RayState shadow_ray;
-        Bool occluded = geometry.occluded(it, light_sample.p_light, &shadow_ray);
-        SampledSpectrum tr = geometry.Tr(scene(), renderer().sampler(), swl, shadow_ray);
+        LightSample light_sample{swl.dimension()};
+        Bool occluded = false;
+        SampledSpectrum tr = spectrum()->one();
+        if (!hc.rtxpt_sampling) {
+            light_sample = light_sampler->sample_wi(it, sampler, swl);
+            RayState shadow_ray;
+            occluded = geometry.occluded(it, light_sample.p_light, &shadow_ray);
+            tr = geometry.Tr(scene(), renderer().sampler(), swl, shadow_ray);
+        }
         comment("sample bsdf");
         BSDFSample bsdf_sample{swl};
         Bool delta_scatter = false;
         SampledSpectrum Ld = {swl.dimension(), 0.f};
 
         Float3 albedo = make_float3(0.f);
+
+        // Preserve the PT framework's proposals, BSDF, visibility and Tr while
+        // matching RTXPT's six candidates per each of two shadow samples.
+        auto sample_lighting = [&](const MaterialEvaluator &evaluator) {
+            if (hc.captured_secondary_normal) {
+                $if(bounces == 0u) { *hc.captured_secondary_normal = evaluator.shading_frame().normal(); };
+            }
+            if (!hc.rtxpt_sampling)
+                return direct_light_mis(it, evaluator, light_sample, occluded, sampler, swl, bsdf_sample);
+            bsdf_sample = evaluator.sample(it.wo, sampler);
+            if (mis_mode_ == MISMode::EBSDF) return spectrum()->zero();
+            SampledSpectrum lighting = spectrum()->zero();
+            $for(shadow_sample, 2u) {
+                LightSample selected{swl.dimension()};
+                Float total_weight = 0.f, selected_weight = 0.f;
+                $for(candidate_index, 6u) {
+                    LightSample candidate = light_sampler->sample_wi(it, sampler, swl);
+                    Float proposal_pdf = abs(candidate.eval.pdf);
+                    Float target = 0.f;
+                    $if(candidate.valid() && proposal_pdf > 0.f) {
+                        Float3 direction = normalize(candidate.p_light - it.pos);
+                        auto eval = evaluator.evaluate(it.wo, direction, MaterialEvalMode::PDF,
+                                                       BxDFFlag::All, TransportMode::Radiance);
+                        Float3 incoming = spectrum()->linear_srgb(candidate.eval.L, swl) / proposal_pdf;
+                        target = max(max(incoming.x, incoming.y), incoming.z) * eval.pdf();
+                        target = max(ocarina::zero_if_nan_inf(target), 0.f);
+                    };
+                    total_weight += target;
+                    $if(sampler->next_1d() * total_weight < target) {
+                        selected = candidate;
+                        selected_weight = target;
+                    };
+                };
+                $if(selected_weight > 0.f) {
+                    Float3 direction = normalize(selected.p_light - it.pos);
+                    auto eval = evaluator.evaluate(it.wo, direction, MaterialEvalMode::All,
+                                                   BxDFFlag::All, TransportMode::Radiance);
+                    $if(eval.valid()) {
+                        RayState selected_shadow;
+                        Bool blocked = geometry.occluded(it, selected.p_light, &selected_shadow);
+                        SampledSpectrum transmission = geometry.Tr(scene(), sampler, swl, selected_shadow);
+                        Float pdf = abs(selected.eval.pdf);
+                        Float mis = mis_mode_ == MISMode::ELight ? Float{1.f}
+                            : select(selected.eval.pdf < 0.f, 1.f, MIS_weight_n<D>(2, pdf, 1, eval.pdf()));
+                        Float ris_weight = total_weight / (6.f * selected_weight);
+                        $if(!blocked && pdf > 0.f) {
+                            lighting += selected.eval.L * eval.f * transmission * (ris_weight * mis / (2.f * pdf));
+                        };
+                    };
+                    light_sample = selected;
+                };
+            };
+            return lighting;
+        };
 
         auto sample_surface = [&]() {
             if (hc.aligned_lambert) {
@@ -450,11 +533,13 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             if (separate_) {
                 MaterialEvaluator evaluator(it, swl);
                 scene().materials().dispatch(it.material_id(), [&](const Material *material) {
-                    material->build_evaluator(evaluator, it, swl);
-                    swl.check_dispersive(spectrum(), evaluator);
+                    outline("PT build material evaluator", [&] {
+                        material->build_evaluator(evaluator, it, swl);
+                        evaluator.update_frame(it.shading);
+                        swl.check_dispersive(spectrum(), evaluator);
+                    });
                 });
-                Ld = direct_light_mis(it, evaluator, light_sample, occluded,
-                                      sampler, swl, bsdf_sample);
+                Ld = sample_lighting(evaluator);
                 if (hc.lobe_hitdist) delta_scatter = evaluator.flag() == SurfaceData::NearSpec || BxDFFlag::is_specular(evaluator.flag());
                 if (hc.split()) {
                     $if(bounces == 0u) {
@@ -469,8 +554,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             scene().materials().dispatch(it.material_id(), [&](const Material *material) {
                 MaterialEvaluator evaluator = material->create_evaluator(it, swl);
                 swl.check_dispersive(spectrum(), evaluator);
-                Ld = direct_light_mis(it, evaluator, light_sample, occluded,
-                                      sampler, swl, bsdf_sample);
+                Ld = sample_lighting(evaluator);
                 if (hc.lobe_hitdist) delta_scatter = evaluator.flag() == SurfaceData::NearSpec || BxDFFlag::is_specular(evaluator.flag());
                 albedo = spectrum()->linear_srgb(evaluator.albedo(it.wo), swl);
                 if (hc.split()) {
@@ -523,14 +607,25 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         if (hc.rr_depth_offset) { rr_depth += *hc.rr_depth_offset; }
         Float rr_lum = lum;
         if (hc.rr_survival_scale) { rr_lum *= *hc.rr_survival_scale; }
-        $if(eta_scale * rr_lum < *rr_threshold_ && rr_depth >= *min_depth_) {
-            Float q = min(0.95f, rr_lum);
-            Float rr = sampler->next_1d();
-            $if(q < rr) {
-                $break;
+        if (hc.rtxpt_sampling) {
+            Uint surface_depth = rr_depth + 1u;
+            Uint total_depth = max_depth;
+            if (hc.rr_depth_offset) total_depth += *hc.rr_depth_offset;
+            $if(surface_depth > *min_depth_ && surface_depth < total_depth) {
+                Float3 camera_beta = spectrum()->linear_srgb(throughput, swl);
+                if (hc.rr_camera_throughput) camera_beta *= *hc.rr_camera_throughput;
+                Float terminate = rtxpt_rr_probability(camera_beta, surface_depth, total_depth);
+                pending_rr_death = sampler->next_1d() < terminate;
+                $if(!pending_rr_death) { pending_rr_boost = 1.f / (1.f - terminate); };
             };
-            throughput /= q;
-        };
+        } else {
+            $if(eta_scale * rr_lum < *rr_threshold_ && rr_depth >= *min_depth_) {
+                Float q = min(0.95f, rr_lum);
+                Float rr = sampler->next_1d();
+                $if(q < rr) { $break; };
+                throughput /= q;
+            };
+        }
         scatter_pdf = bsdf_sample.eval.pdf();
         rs = it.spawn_ray_state(bsdf_sample.wi);
         continuation_ready = true;

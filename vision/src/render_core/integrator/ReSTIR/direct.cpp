@@ -261,8 +261,12 @@ DIReservoirVar ReSTIRDI::RIS(const Bool &hit, const Interaction &it, const Var<D
         } else if (integrator()->separate()) {
             MaterialEvaluator bsdf(it, swl);
             scene().materials().dispatch(it.material_id(), [&](const Material *material) {
-                material->build_evaluator(bsdf, it, swl);
-                swl.check_dispersive(spectrum, bsdf);
+                // Each case exports lobe state through the callable's output locals.
+                outline("ReSTIRDI::RIS build evaluator", [&] {
+                    material->build_evaluator(bsdf, it, swl);
+                    bsdf.update_frame(it.shading);
+                    swl.check_dispersive(spectrum, bsdf);
+                });
             });
             if (M_light_ > 0u) {
                 $for(i, M_light) {

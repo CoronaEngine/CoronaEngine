@@ -3,6 +3,7 @@
 //
 
 #include "indirect.h"
+#include "rtxpt_gi.h"
 #include "denoiser_signals.h"
 #include "base/integral/integrator.h"
 
@@ -14,9 +15,29 @@ ReSTIRGI::ReSTIRGI(IntegratorPtr integrator,
     sample_num_(desc["sample_num"].as_uint(1u)),
     ratio_(desc["ratio"].as_uint(2u)),
     debias_(desc["debias"].as_bool(true)) {
+    const char *override_backend = std::getenv("VISION_RESTIR_GI_BACKEND");
+    const string backend = override_backend && *override_backend ? override_backend : desc["backend"].as_string("legacy");
+    OC_ERROR_IF(backend != "legacy" && backend != "rtxpt", "GI backend must be legacy or rtxpt.");
+    rtxpt_backend_ = backend == "rtxpt";
     // Two GI neighbors balance reuse quality and the cost of support queries.
     spatial_.sample_num = spatial_.open ? desc["spatial"]["sample_num"].as_uint(2u) : 1u;
     spatial_.sampling_radius = desc["spatial"]["radius"].as_float(12.f);
+}
+
+void ReSTIRGI::compile() noexcept {
+    switch_profile::Scope profile{"ReSTIR.GI.compile", "compile"};
+    compile_initial_samples();
+    if (rtxpt_backend_) {
+        if (!rtxpt_) {
+            rtxpt_ = make_shared<RtxptGI>(*this);
+            rtxpt_->prepare();
+        }
+        rtxpt_->compile();
+        OC_INFO("RTXPT ReSTIR GI active: Ocarina DSL, packed32 reservoirs, native temporal/spatial/final MIS; Corona PT candidate suffix");
+    } else {
+        compile_temporal_reuse();
+        compile_spatial_shading();
+    }
 }
 
 namespace {
@@ -121,6 +142,8 @@ void ReSTIRGI::render_sub_UI(Widgets *widgets) noexcept {
 
 GISampleVar ReSTIRGI::init_sample(const Interaction &it, const SensorSample &ss,
                                   HitBSDFVar &hit_bsdf) noexcept {
+    const char *transport_override = std::getenv("VISION_RESTIR_GI_NATIVE_TRANSPORT");
+    const bool native_transport = rtxpt_backend_ && transport_override && string_view(transport_override) == "1";
     Uint2 pixel = dispatch_idx().xy();
     sampler()->set_seed(pixel, frame_index(), 3);
     GISampleVar sample;
@@ -132,8 +155,12 @@ GISampleVar ReSTIRGI::init_sample(const Interaction &it, const SensorSample &ss,
         const char *native = std::getenv("VISION_RESTIR_GI_NATIVE_ALIGNED_LAMBERT");
         const char *multibounce = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
         hit_context.aligned_lambert = native && native[0] == '1' && multibounce && multibounce[0] == '1';
+        Float3 captured_secondary_normal = make_float3(0.f);
+        if (rtxpt_backend_) hit_context.captured_secondary_normal = addressof(captured_secondary_normal);
         hit_context.suppress_initial_emission = true;
-        hit_context.complete_terminal_direct = true;
+        // Native transport hard-stops after terminal-surface NEE. Ordinary
+        // Corona transport retains its final BSDF emission/miss supplement.
+        hit_context.complete_terminal_direct = !native_transport;
         RayVar ray = it.spawn_ray(hit_bsdf.wi.as_vec3());
         RayState ray_state = RayState::create(ray);
         // Store radiance independent of the source receiver's BSDF/prefix.
@@ -145,14 +172,24 @@ GISampleVar ReSTIRGI::init_sample(const Interaction &it, const SensorSample &ss,
         hit_context.rr_depth_offset = addressof(rr_depth_offset);
         // Keep reusable Lo independent of the receiver, including zero channels.
         Float3 rr_throughput = hit_bsdf->safe_throughput();
+        if (native_transport) {
+            hit_context.rtxpt_sampling = true;
+            // Native GI defers the receiver F, including in roulette throughput.
+            rr_throughput = make_float3(1.f) / hit_bsdf.pdf;
+            $if(surface.is_replaced) {
+                rr_throughput *= cur_surface_extends().read(dispatch_id()).throughput.as_vec3();
+            };
+            hit_context.rr_camera_throughput = addressof(rr_throughput);
+        }
         Float rr_survival_scale = clamp(max(max(rr_throughput.x, rr_throughput.y), rr_throughput.z), 0.25f, 1.f);
         hit_context.rr_survival_scale = addressof(rr_survival_scale);
         Uint suffix_depth = integrator()->runtime_suffix_depth();
         Uint remaining = suffix_depth - min(prefix_depth, suffix_depth);
-        // complete_terminal_direct handles the runtime terminal budget itself.
+        // Runtime suffix depth already excludes the primary receiver.
         Float3 L = integrator()->Li(ray_state, hit_bsdf.pdf, remaining, spectrum()->one(),
             false, hit_context, *this);
         sample.sp->set(sp_it);
+        if (rtxpt_backend_) sample.sp->set_normal(captured_secondary_normal);
         sample.Lo.set(ocarina::zero_if_nan_inf(L));
     };
     return sample;
@@ -160,6 +197,14 @@ GISampleVar ReSTIRGI::init_sample(const Interaction &it, const SensorSample &ss,
 
 void ReSTIRGI::compile_initial_samples() noexcept {
     switch_profile::Scope profile{"GI.initial.compile", "compile"};
+    const char *transport_override = std::getenv("VISION_RESTIR_GI_NATIVE_TRANSPORT");
+    const bool native_transport = rtxpt_backend_ && transport_override && string_view(transport_override) == "1";
+    OC_INFO_FORMAT("ReSTIR GI candidate transport: backend={}, native_transport={}, candidates_per_pixel=1, NEE_candidates_per_shadow={}, NEE_shadow_samples={}, RR={}, max_surface_depth={}, suffix_depth={}, terminal_endpoint={}",
+        rtxpt_backend_ ? "rtxpt" : "legacy", native_transport,
+        native_transport ? 6u : 1u, native_transport ? 2u : 1u,
+        native_transport ? "native deferred" : "Corona immediate",
+        integrator()->suffix_depth() + 1u, integrator()->suffix_depth(),
+        native_transport ? "hard stop" : "Corona BSDF supplement");
     const char *native = std::getenv("VISION_RESTIR_GI_NATIVE_ALIGNED_LAMBERT");
     const char *multibounce = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
     if (native && native[0] == '1' && multibounce && multibounce[0] == '1')
@@ -692,8 +737,11 @@ CommandBatch ReSTIRGI::dispatch(uint frame_index, bool precise_lobes, bool denoi
     bool history_valid = history_.begin_frame(frame_index, param.camera_jitter);
     param.temporal = param.temporal && history_valid;
     ret << initial_samples_(frame_index).dispatch(rp->resolution());
-    ret << temporal_pass_(param, frame_index).dispatch(rp->resolution());
-    ret << spatial_shading_(param, frame_index).dispatch(rp->resolution());
+    if (rtxpt_backend_) ret << rtxpt_->dispatch(frame_index, param);
+    else {
+        ret << temporal_pass_(param, frame_index).dispatch(rp->resolution());
+        ret << spatial_shading_(param, frame_index).dispatch(rp->resolution());
+    }
     return ret;
 }
 
@@ -705,12 +753,16 @@ void ReSTIRGI::update_resolution(ocarina::uint2 res) noexcept {
         vector<uint2> zero(rp->pixel_num(), make_uint2(0u));
         raw_radiance_.upload_immediately(zero.data());
     }
+    if (!rtxpt_backend_) {
     reservoirs_.super() = device().create_buffer<GIReservoirStorage>(rp->pixel_num() * 2,
                                                                      GIReservoirStorage::Name);
     reservoirs_.register_self(0, rp->pixel_num());
     reservoirs_.register_view_index(1, rp->pixel_num(), rp->pixel_num());
     vector<GIReservoirStorage> host{rp->pixel_num() * 2, GIReservoirStorage{}};
     reservoirs_.upload_immediately(host.data());
+    }
+    if (rtxpt_) rtxpt_->update_resolution(res);
+
 
     samples_.super() = device().create_buffer<GISample>(rp->pixel_num(),
                                                         "ReSTIRGI::samples_");
@@ -720,6 +772,7 @@ void ReSTIRGI::update_resolution(ocarina::uint2 res) noexcept {
 }
 
 void ReSTIRGI::download_storage(vector<GISample> &samples, vector<GIReservoir> &reservoirs) const noexcept {
+    if (rtxpt_backend_) { rtxpt_->download_storage(samples, reservoirs); return; }
     samples.resize(pipeline()->pixel_num());
     reservoirs.resize(pipeline()->pixel_num() * 2u);
     vector<GIReservoirStorage> stored(reservoirs.size());
@@ -730,7 +783,7 @@ void ReSTIRGI::download_storage(vector<GISample> &samples, vector<GIReservoir> &
 
 void ReSTIRGI::restore(RuntimeObject *old_obj) noexcept {
     const auto *previous = dynamic_cast<ReSTIRGI *>(old_obj);
-    OC_ERROR_IF(!previous->radiance_->name().ends_with(" [gi-radiance-v1]"),
+    OC_ERROR_IF(!previous->radiance_->name().ends_with(" [gi-radiance-v2-rtxpt]"),
                 "GI radiance storage ABI changed; restart the engine before loading the new shaders.");
     if (previous->reservoirs_.has_registered()) {
         const auto &buffer = previous->reservoirs_;
@@ -743,12 +796,14 @@ void ReSTIRGI::restore(RuntimeObject *old_obj) noexcept {
     }
     ReSTIR::restore(old_obj);
     VS_HOTFIX_MOVE_ATTRS(radiance_, reservoirs_, samples_, sample_num_, ratio_, debias_,
-                       initial_samples_, temporal_pass_, spatial_shading_, raw_radiance_, compact_radiance_, radiance_prepared_)
+                       initial_samples_, temporal_pass_, spatial_shading_, raw_radiance_, compact_radiance_, radiance_prepared_,
+                       rtxpt_backend_, rtxpt_)
+    if (rtxpt_) rtxpt_->rebind_owner(*this);
 }
 
 void ReSTIRGI::set_compact_radiance(bool compact) noexcept {
     if (radiance_prepared_ && compact == compact_radiance_) return;
-    const string suffix = " [gi-radiance-v1]";
+    const string suffix = " [gi-radiance-v2-rtxpt]";
     if (!radiance_->name().ends_with(suffix)) radiance_->set_name(radiance_->name() + suffix);
     ByteBufferView empty{handle_ty{0u}, 0u};
     if (radiance_prepared_) {
@@ -794,12 +849,15 @@ void ReSTIRGI::prepare(bool compact_radiance) noexcept {
 
     set_compact_radiance(compact_radiance);
 
+    if (!rtxpt_backend_) {
     reservoirs_.super() = device().create_buffer<GIReservoirStorage>(rp->pixel_num() * 2,
                                                                      GIReservoirStorage::Name);
     reservoirs_.register_self(0, rp->pixel_num());
     reservoirs_.register_view(rp->pixel_num(), rp->pixel_num());
     vector<GIReservoirStorage> host{rp->pixel_num() * 2, GIReservoirStorage{}};
     reservoirs_.upload_immediately(host.data());
+    }
+
 
     samples_.super() = device().create_buffer<GISample>(rp->pixel_num(),
                                                         "ReSTIRGI::samples_");
