@@ -6,9 +6,30 @@
 #include "base/mgr/pipeline.h"
 #include "base/shader_graph/shader_node.h"
 #include "math/warp.h"
+#include <cmath>
+#include <cstdlib>
 
 namespace vision {
 using namespace ocarina;
+
+namespace {
+vector<float> aggregate_environment_importance(const vector<float> &weights, uint2 source, uint2 target) {
+    vector<float> result(size_t(target.x) * target.y, 0.f);
+    for (uint y = 0; y < target.y; ++y) for (uint x = 0; x < target.x; ++x) {
+        const double x0 = double(x) * source.x / target.x, x1 = double(x + 1u) * source.x / target.x;
+        const double y0 = double(y) * source.y / target.y, y1 = double(y + 1u) * source.y / target.y;
+        double sum = 0.;
+        for (uint sy = uint(y0); sy < uint(std::ceil(y1)); ++sy)
+            for (uint sx = uint(x0); sx < uint(std::ceil(x1)); ++sx) {
+                const double dx = std::min(x1, double(sx + 1u)) - std::max(x0, double(sx));
+                const double dy = std::min(y1, double(sy + 1u)) - std::max(y0, double(sy));
+                sum += weights[size_t(sy) * source.x + sx] * dx * dy;
+            }
+        result[size_t(y) * target.x + x] = float(sum);
+    }
+    return result;
+}
+}// namespace
 
 /**
  Example light JSON:
@@ -51,12 +72,16 @@ private:
     SP<Warper2D> warper_{};
     float yaw_{0};
     bool flip_u_{false};
+    uint importance_max_resolution_{0u};
 
 public:
     SphericalMap() : Environment(LightType::Infinite) {}
     explicit SphericalMap(const Desc &desc)
         : Environment(desc, LightType::Infinite),
-          flip_u_(desc["flip_u"].as_bool(false)) {
+          flip_u_(desc["flip_u"].as_bool(false)),
+          importance_max_resolution_(desc["importance_max_resolution"].as_uint(0u)) {
+        if (const char *value = std::getenv("VISION_ENV_IMPORTANCE_MAX_RESOLUTION"); value && *value)
+            importance_max_resolution_ = static_cast<uint>(std::strtoul(value, nullptr, 10));
         float4x4 o2w = desc.o2w.mat;
         float x = flip_u_ ? 1.f : -1.f;
         float4x4 rx = rotation_x<H>(-90) * transform::scale<H>(1.f, x, 1.f);
@@ -72,7 +97,7 @@ public:
         }
     }
     OC_ENCODABLE_FUNC(Environment, w2o_, *warper_)
-    VS_HOTFIX_MAKE_RESTORE(Environment, o2w_, w2o_, warper_, yaw_, flip_u_)
+    VS_HOTFIX_MAKE_RESTORE(Environment, o2w_, w2o_, warper_, yaw_, flip_u_, importance_max_resolution_)
     VS_MAKE_PLUGIN_NAME_FUNC
     [[nodiscard]] float3 power() const noexcept override {
         float world_radius = scene().world_diameter() / 2.f;
@@ -203,6 +228,13 @@ public:
                     f = luminance(val.xyz());
                     break;
                 }
+                case PixelStorage::HALF4: {
+                    const auto *val = reinterpret_cast<const uint16_t *>(pixel);
+                    float4 f4 = make_float4(half_to_float(val[0]), half_to_float(val[1]),
+                                           half_to_float(val[2]), 1.f);
+                    f = luminance(f4.xyz());
+                    break;
+                }
                 case PixelStorage::BYTE4: {
                     uchar4 val = *(reinterpret_cast<const uchar4 *>(pixel));
                     float4 f4 = make_float4(val) / 255.f;
@@ -228,6 +260,13 @@ public:
             weights.push_back(1.f);
         } else {
             weights = calculate_weights();
+        }
+        const uint longest = std::max(res.x, res.y);
+        if (importance_max_resolution_ != 0u && longest > importance_max_resolution_) {
+            uint2 coarse = make_uint2(std::max(1u, uint(uint64_t(res.x) * importance_max_resolution_ / longest)),
+                                      std::max(1u, uint(uint64_t(res.y) * importance_max_resolution_ / longest)));
+            weights = aggregate_environment_importance(weights, res, coarse);
+            res = coarse;
         }
         warper_->allocate(res);
         warper_->build(weights, res);
