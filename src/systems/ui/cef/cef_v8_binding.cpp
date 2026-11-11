@@ -1955,6 +1955,10 @@ public:
     // with NATIVE_FAILURE on a throw and NATIVE_UNAVAILABLE when the post fails. It lives here once;
     // each binding supplies only its reader, its operation and the four messages that are genuinely
     // its own. The request type must expose `method`, which every dispatch DTO already does.
+    //
+    // A rejected promise carries this file's five infrastructure codes (PERMISSION_DENIED,
+    // CONTEXT_CHANGED, INVALID_ARGUMENT, NATIVE_UNAVAILABLE, NATIVE_FAILURE) or the scene layer's
+    // PROJECT_CONTEXT_CHANGED; invented codes fail tests/tools/test_typed_native_surface.py.
     template <typename Method, typename Request, typename Reply, typename Reader, typename Operation>
     CefRefPtr<CefV8Value> dispatch_async(const CefV8ValueList& arguments, Request request,
                                          Reader&& reader, Operation operation,
