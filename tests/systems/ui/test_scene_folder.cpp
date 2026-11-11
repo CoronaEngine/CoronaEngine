@@ -1,6 +1,8 @@
 #include "../../integration/archive_fixture.h"
 #include "cef/archive_load_policy.h"
 
+#include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -67,11 +69,20 @@ void write_text(const fs::path& path, std::string_view value) {
     stream << value;
 }
 
+// One private directory per instance instead of a fixed path shared by every run,
+// every build tree and every concurrent instance. The fixed path made this suite
+// depend on whatever state a previous run (or a second build tree) had left behind
+// in %TEMP%: `remove_all` then `create_directories` on a directory another process
+// still owned surfaced as "create_directories: Access is denied".
 struct TempDir {
-    fs::path path = fs::temp_directory_path() / "corona_scene_folder_tests";
+    fs::path path = [] {
+        static std::atomic<unsigned long long> sequence{0};
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        return fs::temp_directory_path() /
+               ("corona_scene_folder_tests-" + std::to_string(stamp) + "-" +
+                std::to_string(sequence.fetch_add(1, std::memory_order_relaxed)));
+    }();
     TempDir() {
-        std::error_code ec;
-        fs::remove_all(path, ec);
         fs::create_directories(path);
     }
     ~TempDir() {
