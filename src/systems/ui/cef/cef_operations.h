@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <nlohmann/json.hpp>
+
 #include <vector>
 
 namespace Corona::Systems::UI {
@@ -131,10 +133,6 @@ struct OpenProjectSnapshot {
     std::optional<SelectedProjectSnapshot> scene;
     std::optional<std::vector<ProjectOpenDiagnostic>> diagnostics;
 };
-struct RecentProjectSnapshot {
-    std::string name, path, last_edited;
-    bool exists = false;
-};
 struct ProjectLoadSnapshot {
     bool active = false, loading = false, archive_service_ready = false;
     std::string path, scene, archive_session;
@@ -143,8 +141,10 @@ struct ProjectLoadSnapshot {
 };
 struct ProjectLauncherReply {
     ProjectLauncherMethod method = ProjectLauncherMethod::GetVersion;
-    std::string error_code, error_message, version;
-    std::vector<RecentProjectSnapshot> recent;
+    std::string error_code, error_message;
+    /// The reply for the methods whose value is entirely Python's: the version string and the
+    /// recent-project array. Carried as JSON so its shape is declared once, where it is produced.
+    nlohmann::json value = nlohmann::json();
     ProjectLoadSnapshot load;
     CreatedProjectSnapshot created;
     SelectedProjectSnapshot selected;

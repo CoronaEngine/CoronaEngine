@@ -280,21 +280,16 @@ CefRefPtr<CefV8Value> project_launcher_value(const ProjectLauncherReply& reply) 
         }
         return value;
     }
-    if (reply.method == ProjectLauncherMethod::GetVersion) return CefV8Value::CreateString(reply.version);
     if (reply.method == ProjectLauncherMethod::CreateWorld || reply.method == ProjectLauncherMethod::CreateMultiplayer) {
         auto value = json_to_v8({{"name", reply.created.name}, {"path", reply.created.path}});
         if (reply.method == ProjectLauncherMethod::CreateMultiplayer)
             value->SetValue("role", CefV8Value::CreateString(reply.created.role), V8_PROPERTY_ATTRIBUTE_NONE);
         return value;
     }
-    if (reply.method == ProjectLauncherMethod::GetRecent) {
-        auto value = CefV8Value::CreateArray(static_cast<int>(reply.recent.size()));
-        for (int index = 0; index < static_cast<int>(reply.recent.size()); ++index) {
-            const auto& project = reply.recent[index];
-            value->SetValue(index, json_to_v8({{"name", project.name}, {"path", project.path},
-                {"last_edited", project.last_edited}, {"if_exists", project.exists}}));
-        }
-        return value;
+    if (reply.method == ProjectLauncherMethod::GetVersion ||
+        reply.method == ProjectLauncherMethod::GetRecent) {
+        // Produced by Python, shaped there; the binding forwards it rather than rebuilding it.
+        return json_to_v8(reply.value);
     }
     const auto& load = reply.load;
     return json_to_v8({{"active", load.active}, {"loading", load.loading},

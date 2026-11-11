@@ -4007,12 +4007,9 @@ ProjectLauncherReply execute_project_launcher_operation(const ProjectLauncherReq
         return reply;
     }
     if (request.method == ProjectLauncherMethod::GetVersion) {
-        reply.version = settings_value("General", "version", "1.2.0");
+        reply.value = settings_value("General", "version", "1.2.0");
     } else if (request.method == ProjectLauncherMethod::GetRecent) {
-        for (const auto& value : recent_projects_native()) {
-            reply.recent.push_back({value.value("name", std::string{}), value.value("path", std::string{}),
-                value.value("last_edited", std::string{}), value.value("if_exists", false)});
-        }
+        reply.value = recent_projects_native();
     } else {
         const auto value = project_resource_load_status();
         auto& load = reply.load;
