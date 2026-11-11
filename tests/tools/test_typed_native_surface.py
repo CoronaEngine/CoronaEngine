@@ -6,6 +6,7 @@ single `bridge.call` entry to Python.  These guards pin that surface exactly, so
 a namespace cannot quietly grow a second transport or lose a method.
 """
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[2]
 V8 = ROOT / "src/systems/ui/cef/cef_v8_binding.cpp"
@@ -51,11 +52,21 @@ def _binding_source() -> str:
     return V8.read_text(encoding="utf-8-sig")
 
 
-def _installed_surface() -> dict[str, set[str]]:
-    import re
+def _table_names(source: str, table: str) -> set[str]:
+    """Names installed from a registration table instead of a SetValue pair."""
+    start = source.index(f"{table}[] = {{")
+    end = source.index("};", start)
+    return set(re.findall(r'\{"(\w+)", SceneMethod::', source[start:end]))
 
-    pairs = re.findall(r'(\w+)->SetValue\("([^"]+)", CefV8Value::CreateFunction', _binding_source())
+
+def _installed_surface() -> dict[str, set[str]]:
+    source = _binding_source()
     surface: dict[str, set[str]] = {}
+    # Namespaces whose methods come from a table: the name and the operation are declared
+    # together, and the install loop below them uses both.
+    for table, namespace in (("kSceneOperations", "scene"), ("kAudioOperations", "audio")):
+        surface.setdefault(namespace, set()).update(_table_names(source, table))
+    pairs = re.findall(r'(\w+)->SetValue\("([^"]+)", CefV8Value::CreateFunction', source)
     for namespace, name in pairs:
         surface.setdefault(namespace, set()).add(name)
     return surface

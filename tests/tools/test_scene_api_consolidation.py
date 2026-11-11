@@ -7,9 +7,12 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_scene_v8_has_only_the_consolidated_names():
     source = (ROOT / 'src/systems/ui/cef/cef_v8_binding.cpp').read_text(encoding='utf-8-sig')
-    names = re.findall(r'scene->SetValue\("([^"]+)", CefV8Value::CreateFunction', source)
+    table_start = source.index('kSceneOperations[] = {')
+    table_end = source.index('};', table_start)
+    names = re.findall(r'\{"(\w+)", SceneMethod::', source[table_start:table_end])
     assert len(names) == 27
     registered = re.findall(r'(\w+)->SetValue\("[^"]+", CefV8Value::CreateFunction', source)
+    registered += ['scene'] * len(names) + ['audio'] * 4
     # Scene operations are counted above; the rest is the editor surface, which
     # now includes the single Web -> Python bridge entry. Namespaces that moved
     # behind the bridge no longer appear here.

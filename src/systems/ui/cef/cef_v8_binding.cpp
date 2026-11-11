@@ -1820,6 +1820,95 @@ void reject(CefRefPtr<CefV8Context> context, CefRefPtr<CefV8Value> promise,
 
 }  // namespace
 
+// ---------------------------------------------------------------------------------------
+// The scene surface, declared once.
+//
+// Every row is a JS method name, the operation it dispatches to, and the reader that validates
+// its arguments. Registration installs the names, and invoke() looks the reader up by method -
+// so adding an operation is one row here plus the operation itself, instead of a SetValue pair
+// in one list, an entry in a 30-line `if` chain, and an entry in the reply chain.
+// ---------------------------------------------------------------------------------------
+struct SceneOperationSpec {
+    const char* name;
+    SceneMethod method;
+    bool (*read)(const CefV8ValueList&, SceneRequest&);
+};
+
+bool read_no_arguments(const CefV8ValueList& arguments, SceneRequest&) { return arguments.empty(); }
+bool read_requires_arguments(const CefV8ValueList& arguments, SceneRequest&) { return !arguments.empty(); }
+bool read_selection_request(const CefV8ValueList& arguments, SceneRequest& request) {
+    return read_selection(arguments, request.selection);
+}
+bool read_ik_read_method(const CefV8ValueList& arguments, SceneRequest& request) {
+    return read_ik_read(arguments, request, request.method);
+}
+bool read_render_settings_only(const CefV8ValueList& arguments, SceneRequest& request) {
+    return read_camera_render_settings(arguments, request, true);
+}
+bool read_render_settings(const CefV8ValueList& arguments, SceneRequest& request) {
+    return read_camera_render_settings(arguments, request);
+}
+bool read_audio_resource_looping(const CefV8ValueList& arguments, SceneRequest& request) {
+    return read_audio_resource(arguments, request, true);
+}
+bool read_audio_resource_once(const CefV8ValueList& arguments, SceneRequest& request) {
+    return read_audio_resource(arguments, request, false);
+}
+bool read_actor_audio_looping(const CefV8ValueList& arguments, SceneRequest& request) {
+    return read_actor_audio(arguments, request, true);
+}
+bool read_actor_audio_once(const CefV8ValueList& arguments, SceneRequest& request) {
+    return read_actor_audio(arguments, request, false);
+}
+
+inline const SceneOperationSpec kSceneOperations[] = {
+    {"readScene", SceneMethod::ReadScene, read_scene_query},
+    {"readActive", SceneMethod::ReadActive, read_no_arguments},
+    {"isVisionAvailable", SceneMethod::ReadVisionAvailability, read_no_arguments},
+    {"selectModelFile", SceneMethod::SelectModelFile, read_requires_arguments},
+    {"importResourceFile", SceneMethod::ImportResourceFile, read_requires_arguments},
+    {"readModelNodes", SceneMethod::ReadModelNodes, read_model_nodes},
+    {"setModelNodeState", SceneMethod::SetModelNodeState, read_model_node_state},
+    {"createActor", SceneMethod::CreateActor, read_actor_create},
+    {"readActorProperties", SceneMethod::ReadActorProperties, read_actor_properties},
+    {"readActorRig", SceneMethod::ReadActorRig, read_ik_read_method},
+    {"setActorIkChains", SceneMethod::SetActorIkChains, read_ik_write},
+    {"readTransforms", SceneMethod::ReadTransforms, read_transforms},
+    {"selectActor", SceneMethod::SelectActor, read_selection_request},
+    {"setActorTransform", SceneMethod::SetActorTransform, read_transform},
+    {"updateActor", SceneMethod::UpdateActor, read_properties},
+    {"deleteActor", SceneMethod::DeleteActor, read_actor_delete},
+    {"rebindActorResource", SceneMethod::RebindActorResource, read_actor_resource_rebind},
+    {"save", SceneMethod::Save, read_scene_save},
+    {"getEnvironment", SceneMethod::GetEnvironment, read_environment},
+    {"setEnvironment", SceneMethod::SetEnvironment, read_environment},
+    {"focusActor", SceneMethod::FocusActor, read_focus},
+    {"updateCamera", SceneMethod::UpdateCamera, read_camera_properties},
+    {"setCameraRenderSettings", SceneMethod::SetCameraRenderSettings, read_render_settings},
+    {"readCameraRenderSettings", SceneMethod::ReadCameraRenderSettings, read_render_settings_only},
+    {"createCamera", SceneMethod::CreateCamera, read_camera_create},
+    {"deleteCamera", SceneMethod::DeleteCamera, read_camera_delete},
+    {"captureScreenshot", SceneMethod::CaptureScreenshot, read_screenshot},
+};
+
+inline const SceneOperationSpec kAudioOperations[] = {
+    {"playResource", SceneMethod::PlayAudioResource, read_audio_resource_looping},
+    {"stopResource", SceneMethod::StopAudioResource, read_audio_resource_once},
+    {"playActor", SceneMethod::PlayActorAudio, read_actor_audio_looping},
+    {"stopActor", SceneMethod::StopActorAudio, read_actor_audio_once},
+};
+
+/// The reader for an operation, or nullptr when the method is not part of the tables.
+bool (*scene_operation_reader(SceneMethod method))(const CefV8ValueList&, SceneRequest&) {
+    for (const auto& spec : kSceneOperations) {
+        if (spec.method == method) return spec.read;
+    }
+    for (const auto& spec : kAudioOperations) {
+        if (spec.method == method) return spec.read;
+    }
+    return nullptr;
+}
+
 class CoronaV8Endpoint final : public std::enable_shared_from_this<CoronaV8Endpoint> {
 public:
     explicit CoronaV8Endpoint(CefRefPtr<CefV8Context> context)
@@ -2134,34 +2223,8 @@ public:
             return promise;
         }
         SceneRequest request{method};
-        if (((method == SceneMethod::ReadActive || method == SceneMethod::ReadVisionAvailability) && !arguments.empty()) ||
-            ((method == SceneMethod::SelectModelFile || method == SceneMethod::ImportResourceFile) && !read_select_model_file(arguments, request)) ||
-            (method == SceneMethod::PlayAudioResource && !read_audio_resource(arguments, request, true)) ||
-            (method == SceneMethod::StopAudioResource && !read_audio_resource(arguments, request, false)) ||
-            (method == SceneMethod::PlayActorAudio && !read_actor_audio(arguments, request, true)) ||
-            (method == SceneMethod::StopActorAudio && !read_actor_audio(arguments, request, false)) ||
-            (method == SceneMethod::ReadScene && !read_scene_query(arguments, request)) ||
-            (method == SceneMethod::ReadModelNodes && !read_model_nodes(arguments, request)) ||
-            (method == SceneMethod::SetModelNodeState && !read_model_node_state(arguments, request)) ||
-            (method == SceneMethod::ReadActorProperties && !read_actor_properties(arguments, request)) ||
-            (method == SceneMethod::ReadActorRig && !read_ik_read(arguments, request, method)) ||
-            (method == SceneMethod::SetActorIkChains && !read_ik_write(arguments, request)) ||
-            (method == SceneMethod::ReadTransforms && !read_transforms(arguments, request)) ||
-            (method == SceneMethod::SelectActor && !read_selection(arguments, request.selection)) ||
-            (method == SceneMethod::SetActorTransform && !read_transform(arguments, request)) ||
-            (method == SceneMethod::UpdateActor && !read_properties(arguments, request)) ||
-            (method == SceneMethod::CreateActor && !read_actor_create(arguments, request)) ||
-            (method == SceneMethod::DeleteActor && !read_actor_delete(arguments, request)) ||
-            (method == SceneMethod::RebindActorResource && !read_actor_resource_rebind(arguments, request)) ||
-            (method == SceneMethod::Save && !read_scene_save(arguments, request)) ||
-            (method == SceneMethod::FocusActor && !read_focus(arguments, request)) ||
-            (method == SceneMethod::CaptureScreenshot && !read_screenshot(arguments, request)) ||
-            (method == SceneMethod::UpdateCamera && !read_camera_properties(arguments, request)) ||
-            (method == SceneMethod::ReadCameraRenderSettings && !read_camera_render_settings(arguments, request, true)) ||
-            (method == SceneMethod::SetCameraRenderSettings && !read_camera_render_settings(arguments, request)) ||
-            (method == SceneMethod::CreateCamera && !read_camera_create(arguments, request)) ||
-            (method == SceneMethod::DeleteCamera && !read_camera_delete(arguments, request)) ||
-            ((method == SceneMethod::GetEnvironment || method == SceneMethod::SetEnvironment) && !read_environment(arguments, request))) {
+        const auto read = scene_operation_reader(method);
+        if (read == nullptr || !read(arguments, request)) {
             reject(context_, promise, "INVALID_ARGUMENT", "Invalid native scene operation arguments");
             return promise;
         }
@@ -2637,70 +2700,17 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     project_settings->SetValue("saveActiveProjectInfo", CefV8Value::CreateFunction("saveActiveProjectInfo", new NativeHandler(endpoint, ProjectSettingsMethod::SaveInfo)), V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("projectSettings", project_settings, V8_PROPERTY_ATTRIBUTE_READONLY);
     auto scene = CefV8Value::CreateObject(nullptr, nullptr);
-    scene->SetValue("readScene", CefV8Value::CreateFunction("readScene",
-        new NativeHandler(endpoint, SceneMethod::ReadScene)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("readActive", CefV8Value::CreateFunction("readActive",
-        new NativeHandler(endpoint, SceneMethod::ReadActive)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("isVisionAvailable", CefV8Value::CreateFunction("isVisionAvailable",
-        new NativeHandler(endpoint, SceneMethod::ReadVisionAvailability)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("selectModelFile", CefV8Value::CreateFunction("selectModelFile",
-        new NativeHandler(endpoint, SceneMethod::SelectModelFile)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("importResourceFile", CefV8Value::CreateFunction("importResourceFile",
-        new NativeHandler(endpoint, SceneMethod::ImportResourceFile)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("readModelNodes", CefV8Value::CreateFunction("readModelNodes",
-        new NativeHandler(endpoint, SceneMethod::ReadModelNodes)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("setModelNodeState", CefV8Value::CreateFunction("setModelNodeState",
-        new NativeHandler(endpoint, SceneMethod::SetModelNodeState)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("createActor", CefV8Value::CreateFunction("createActor",
-        new NativeHandler(endpoint, SceneMethod::CreateActor)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("readActorProperties", CefV8Value::CreateFunction("readActorProperties",
-        new NativeHandler(endpoint, SceneMethod::ReadActorProperties)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("readActorRig", CefV8Value::CreateFunction("readActorRig",
-        new NativeHandler(endpoint, SceneMethod::ReadActorRig)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("setActorIkChains", CefV8Value::CreateFunction("setActorIkChains",
-        new NativeHandler(endpoint, SceneMethod::SetActorIkChains)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("readTransforms", CefV8Value::CreateFunction("readTransforms",
-        new NativeHandler(endpoint, SceneMethod::ReadTransforms)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("selectActor", CefV8Value::CreateFunction("selectActor",
-        new NativeHandler(endpoint, SceneMethod::SelectActor)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("setActorTransform", CefV8Value::CreateFunction("setActorTransform",
-        new NativeHandler(endpoint, SceneMethod::SetActorTransform)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("updateActor", CefV8Value::CreateFunction("updateActor",
-        new NativeHandler(endpoint, SceneMethod::UpdateActor)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("deleteActor", CefV8Value::CreateFunction("deleteActor",
-        new NativeHandler(endpoint, SceneMethod::DeleteActor)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("rebindActorResource", CefV8Value::CreateFunction("rebindActorResource",
-        new NativeHandler(endpoint, SceneMethod::RebindActorResource)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("save", CefV8Value::CreateFunction("save",
-        new NativeHandler(endpoint, SceneMethod::Save)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("getEnvironment", CefV8Value::CreateFunction("getEnvironment",
-        new NativeHandler(endpoint, SceneMethod::GetEnvironment)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("focusActor", CefV8Value::CreateFunction("focusActor",
-        new NativeHandler(endpoint, SceneMethod::FocusActor)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("updateCamera", CefV8Value::CreateFunction("updateCamera",
-        new NativeHandler(endpoint, SceneMethod::UpdateCamera)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("setCameraRenderSettings", CefV8Value::CreateFunction("setCameraRenderSettings",
-        new NativeHandler(endpoint, SceneMethod::SetCameraRenderSettings)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("readCameraRenderSettings", CefV8Value::CreateFunction("readCameraRenderSettings",
-        new NativeHandler(endpoint, SceneMethod::ReadCameraRenderSettings)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("createCamera", CefV8Value::CreateFunction("createCamera",
-        new NativeHandler(endpoint, SceneMethod::CreateCamera)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("deleteCamera", CefV8Value::CreateFunction("deleteCamera",
-        new NativeHandler(endpoint, SceneMethod::DeleteCamera)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("captureScreenshot", CefV8Value::CreateFunction("captureScreenshot",
-        new NativeHandler(endpoint, SceneMethod::CaptureScreenshot)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    scene->SetValue("setEnvironment", CefV8Value::CreateFunction("setEnvironment",
-        new NativeHandler(endpoint, SceneMethod::SetEnvironment)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    // Installed from the table: the name and the operation are declared together, once.
+    for (const auto& spec : kSceneOperations) {
+        scene->SetValue(spec.name, CefV8Value::CreateFunction(spec.name, new NativeHandler(endpoint, spec.method)),
+                        V8_PROPERTY_ATTRIBUTE_READONLY);
+    }
     root->SetValue("scene", scene, V8_PROPERTY_ATTRIBUTE_READONLY);
     auto audio = CefV8Value::CreateObject(nullptr, nullptr);
-    audio->SetValue("playResource", CefV8Value::CreateFunction("playResource",
-        new NativeHandler(endpoint, SceneMethod::PlayAudioResource)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    audio->SetValue("stopResource", CefV8Value::CreateFunction("stopResource",
-        new NativeHandler(endpoint, SceneMethod::StopAudioResource)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    audio->SetValue("playActor", CefV8Value::CreateFunction("playActor",
-        new NativeHandler(endpoint, SceneMethod::PlayActorAudio)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    audio->SetValue("stopActor", CefV8Value::CreateFunction("stopActor",
-        new NativeHandler(endpoint, SceneMethod::StopActorAudio)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    for (const auto& spec : kAudioOperations) {
+        audio->SetValue(spec.name, CefV8Value::CreateFunction(spec.name, new NativeHandler(endpoint, spec.method)),
+                        V8_PROPERTY_ATTRIBUTE_READONLY);
+    }
     root->SetValue("audio", audio, V8_PROPERTY_ATTRIBUTE_READONLY);
     auto window = CefV8Value::CreateObject(nullptr, nullptr);
     window->SetValue("getCurrent", CefV8Value::CreateFunction("getCurrent",
