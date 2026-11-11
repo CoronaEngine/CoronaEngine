@@ -1,5 +1,5 @@
 #include "scene_folder.h"
-#include "editor_api/cef_editor_api.h"
+#include "editor_api/python_service_bridge.h"
 
 namespace Corona::Systems::UI::SceneFolders {
 

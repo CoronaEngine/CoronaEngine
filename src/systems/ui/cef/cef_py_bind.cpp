@@ -1,6 +1,6 @@
 #pragma once
 
-#include "cef_editor_api.h"
+#include "python_service_bridge.h"
 #include "script_runtime_api.h"
 
 #include "editor_dispatch.h"

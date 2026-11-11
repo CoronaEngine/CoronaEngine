@@ -21,7 +21,7 @@
 
 #include "cef/browser_manager.h"
 #include "cef/cef_client.h"
-#include "cef/cef_editor_native_api_registry.h"
+#include "cef/native_api_types.h"
 #include "collaborative_editor_runtime.h"
 
 namespace Corona::Systems {

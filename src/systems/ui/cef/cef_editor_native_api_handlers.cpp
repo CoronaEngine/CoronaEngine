@@ -20,8 +20,8 @@
 #include "../collaborative_editor_runtime.h"
 #include "cef_client.h"
 #include <corona/systems/ui/file_script_api.h>
-#include "cef_editor_api.h"
-#include "cef_editor_native_api_registry.h"
+#include "python_service_bridge.h"
+#include "native_api_types.h"
 #include "cef_editor_native_api_test_support.h"
 #include "cef_window_operations.h"
 #include "cef_scene_operations.h"

@@ -1,4 +1,4 @@
-#include "cef_editor_native_api_registry.h"
+#include "native_api_types.h"
 
 #include <horizon/core/logging.h>
 

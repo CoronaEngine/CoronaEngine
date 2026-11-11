@@ -9,7 +9,7 @@
 // the manifest's: handing a service request to the Python runtime and holding its
 // dispatcher registration.
 
-#include "cef_editor_native_api_registry.h"
+#include "native_api_types.h"
 
 #include <Python.h>
 

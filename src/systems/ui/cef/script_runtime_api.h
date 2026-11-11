@@ -4,7 +4,7 @@
 // Reached from Python through cef_py_bind.cpp; there is no name dispatch and no
 // caller mask because the module boundary is the permission boundary.
 
-#include "cef_editor_native_api_registry.h"
+#include "native_api_types.h"
 
 #include <nlohmann/json.hpp>
 

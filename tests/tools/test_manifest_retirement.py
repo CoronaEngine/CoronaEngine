@@ -66,10 +66,10 @@ def test_no_manifest_symbol_survives_in_cpp():
 def test_the_manifest_files_are_gone():
     # The registry translation unit survives as the value-type home (request/result
     # structs, argument readers, the in-flight watchdog) but carries no registry.
-    header = (ROOT / "src/systems/ui/cef/cef_editor_native_api_registry.h").read_text(encoding="utf-8-sig")
+    header = (ROOT / "src/systems/ui/cef/native_api_types.h").read_text(encoding="utf-8-sig")
     assert "class NativeApiRegistry" not in header
     assert "NativeHandlerFn" not in header
-    source = (ROOT / "src/systems/ui/cef/cef_editor_native_api_registry.cpp").read_text(encoding="utf-8-sig")
+    source = (ROOT / "src/systems/ui/cef/native_api_types.cpp").read_text(encoding="utf-8-sig")
     assert "NativeApiRegistry" not in source
     assert "register_module" not in source
     # the editor-side manifest unit is gone entirely

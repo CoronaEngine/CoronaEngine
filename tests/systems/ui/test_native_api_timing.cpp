@@ -4,7 +4,7 @@
 #include <string>
 
 #include "cef/native_api_timing.h"
-#include "cef/cef_editor_native_api_registry.h"
+#include "cef/native_api_types.h"
 
 namespace {
 

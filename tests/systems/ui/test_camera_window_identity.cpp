@@ -7,7 +7,7 @@
 #include <corona/systems/optics/optics_commands.h>
 #include <corona/systems/ui/camera_viewport_manager.h>
 #include <corona/systems/script/python_runtime_coordinator.h>
-#include "cef/cef_editor_native_api_registry.h"
+#include "cef/native_api_types.h"
 #include "cef/script_runtime_api.h"
 #include "cef/cef_editor_native_api_test_support.h"
 #include "cef/cef_window_operations.h"
@@ -17,7 +17,7 @@
 #include "cef/viewport_image_input.h"
 #include "cef/cef_script_input.h"
 #include "cef/browser_ui.h"
-#include "editor_api/cef_editor_api.h"
+#include "editor_api/python_service_bridge.h"
 #include "editor_api/editor_dispatch.h"
 #include "optics/camera_viewport_updates.h"
 

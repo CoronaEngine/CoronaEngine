@@ -24,7 +24,7 @@
 
 #include "browser_manager.h"
 #include "cef_process.h"
-#include "cef_editor_api.h"
+#include "python_service_bridge.h"
 #include "cef_osr_mode.h"
 #include "cef_shared_texture_probe.h"
 #include "cef_viewport_pick.h"

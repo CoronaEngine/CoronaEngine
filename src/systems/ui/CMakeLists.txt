@@ -24,7 +24,7 @@ set(UI_SYSTEM_SOURCES
     cef/browser_ui.cpp
     cef/cef_app.cpp
     cef/cef_client.cpp
-    editor_api/cef_editor_api.cpp
+    editor_api/python_service_bridge.cpp
     editor_api/scene_model_node_service.cpp
     editor_api/scene_environment_service.cpp
     editor_api/actor_properties_service.cpp
@@ -33,7 +33,7 @@ set(UI_SYSTEM_SOURCES
     editor_api/scene_projection_service.cpp
     editor_api/resource_import_service.cpp
     editor_api/project_script_service.cpp
-    cef/cef_editor_native_api_registry.cpp
+    cef/native_api_types.cpp
     cef/cef_editor_native_api_handlers.cpp
     cef/scene_folder.cpp
     cef/scene_archive_rpc.cpp
@@ -63,12 +63,12 @@ set(UI_SYSTEM_SOURCES
     cef/cef_editor_native_api_handlers.h
     cef/cef_script_input.h
     cef/cef_client.h
-    cef/cef_editor_native_api_registry.h
+    cef/native_api_types.h
     cef/cef_editor_native_api_test_support.h
     cef/cef_osr_mode.h
     cef/cef_shared_texture_probe.h
     cef/popup_overlay.h
-    editor_api/cef_editor_api.h
+    editor_api/python_service_bridge.h
     editor_api/editor_api_services.h
     cef/scene_folder.h
     sdl/sdl_utils.h

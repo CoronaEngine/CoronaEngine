@@ -1,6 +1,6 @@
 #include "cef_viewport_gizmo.h"
 #include <corona/utils/runtime_paths.h>
-#include "cef_editor_api.h"
+#include "python_service_bridge.h"
 #include "ui_resource_read.h"
 #include "viewport_image_input.h"
 

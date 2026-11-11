@@ -35,7 +35,7 @@
 /// 创建两次。
 ///
 /// 本头不依赖 CEF，便于单元测试；CEF 的实现（`CefCurrentlyOn`／`CefPostTask`）由
-/// `cef_editor_api.cpp` 在首次使用时安装。
+/// `python_service_bridge.cpp` 在首次使用时安装。
 #include <algorithm>
 #include <atomic>
 #include <chrono>
