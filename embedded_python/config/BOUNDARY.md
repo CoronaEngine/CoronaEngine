@@ -9,7 +9,7 @@
 | 文件 | canonical 职责 | 当前状态 | 删除/合并条件 |
 |---|---|---|---|
 | `paths_config.py` | 路径 owner：仓库、Frontend、生成脚本、项目 media/models/screenshots，以及旧项目复制 data 目录等路径模型和动态目录解析 | active | 统一路径模型完整吸收并通过启动/项目切换回归 |
-| `project_state.py` | 活动项目状态、仓库根 `CoronaEditor.ini`、最近项目、项目配置读写和版本信息 | active canonical owner | 由 native project/projectSettings 完整吸收后再评估 |
+| ~~`project_state.py`~~ | 已删除：没有被任何模块引用，且与真正在用的 ini 通道重复 | — | — |
 | `app_config.py` | 应用级 `AppConfig` 单例、配置文件和 `CORONA_*` 环境覆盖 | active | 应用 host 配置 owner 完整替代并通过启动/环境变量回归 |
 | `runtime_config.py` | 不可变运行时配置值对象和默认值 | active support | 被统一 app config schema 吸收后删除 |
 
@@ -17,8 +17,8 @@
 
 - `paths_config.py` 负责“路径是什么”，`settings.py` 负责“当前项目和项目配置是什么”，
   不应把两者重新合并成无边界的全局工具；
-- `CoronaEditor.ini` 的运行状态文件固定在仓库根目录；`editor/CoronaEditor.ini` 仅作为
-  初始化模板，不随进程 `cwd` 复制出第二份状态文件；
+- `CoronaEditor.ini` 只有**一条**访问通道：C++ 的 `editor_ini_path()` 决定路径，通过 `ProjectArchive.editor_settings` 交给 Python 读写；
+  Python 侧不得自己拼这个路径（`tests/tools/test_editor_settings_owner.py` 会检查）；
 - `PathsConfig.generated_script_dir` 是新生成脚本的 canonical 路径字段；
   `generated_script_dir` 是唯一生成脚本输出目录；不再提供 backend/script 历史路径属性；
 - 项目复制的 runtime data 目录由 C++ `project.*` handler 统一解析和管理；配置模块
