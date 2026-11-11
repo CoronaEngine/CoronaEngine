@@ -32,7 +32,8 @@ TARGET_LINES = 13_807
 # The JSON manifest is gone: table, registry, caller masks, the two `_invoke_cpp_*`
 # bindings and six handler modules. The interface core is now below the programme
 # target this file recorded when the migration started.
-CORE_BUDGET = 14_341  # +4 V8 rejection vocabulary; +2 the create_actor payload shape
+CORE_BUDGET = 14_369  # +4 V8 rejection vocabulary; +2 create_actor payload; +28 the
+                      # scene-reply translator and its documented failure shape
 
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
@@ -40,7 +41,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/archive_load_policy.h", 21),
     ("src/systems/ui/cef/camera_window_lifetime.h", 46),
     ("src/systems/ui/cef/cef_operations.h", 172),
-    ("src/systems/ui/cef/editor_scene_service.cpp", 4685),
+    ("src/systems/ui/cef/editor_scene_service.cpp", 4668),
     ("src/systems/ui/cef/editor_paths.h", 22),
     ("src/systems/ui/cef/editor_paths.cpp", 31),
     ("src/systems/ui/cef/editor_service_operations.cpp", 98),
@@ -52,8 +53,8 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/editor_scene_projection.cpp", 165),
     ("src/systems/ui/cef/editor_camera_views.h", 29),
     ("src/systems/ui/cef/editor_camera_views.cpp", 109),
-    ("src/systems/ui/cef/editor_scene_access.h", 49),
-    ("src/systems/ui/cef/editor_scene_access.cpp", 93),
+    ("src/systems/ui/cef/editor_scene_access.h", 64),
+    ("src/systems/ui/cef/editor_scene_access.cpp", 118),
     ("src/systems/ui/cef/editor_actor_properties.h", 32),
     ("src/systems/ui/cef/editor_actor_properties.cpp", 151),
     ("src/systems/ui/cef/editor_request_values.h", 41),
@@ -67,7 +68,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/native_api_types.h", 80),
     ("src/systems/ui/cef/cef_paths.h", 41),
     ("src/systems/ui/cef/cef_py_bind.cpp", 221),
-    ("src/systems/ui/cef/script_runtime_api.h", 93),
+    ("src/systems/ui/cef/script_runtime_api.h", 98),
     ("src/systems/ui/cef/cef_scene_operations.h", 428),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),

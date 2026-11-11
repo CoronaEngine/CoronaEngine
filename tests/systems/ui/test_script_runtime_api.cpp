@@ -96,8 +96,12 @@ void reads_report_the_loaded_scene() {
             "read_actor reports the authored transform");
 
     auto stale = actor_scope(); stale["archive_session"] = "retired";
-    require(call(UI::script_scene_read_actor, Json::array({stale})).error_code == 409,
-            "read_actor rejects an archive the editor no longer owns");
+    const auto rejected = call(UI::script_scene_read_actor, Json::array({stale}));
+    require(rejected.error_code == 409, "read_actor rejects an archive the editor no longer owns");
+    // The numeric class is what a caller branches on; the symbolic code rides along so the
+    // exact reason survives without matching on message text.
+    require(rejected.data.at("code") == "PROJECT_CONTEXT_CHANGED",
+            "a rejected request names its symbolic code in data.code");
     const auto missing = actor_scope("does-not-exist");
     require(call(UI::script_scene_read_actor, Json::array({missing})).error_code == 404,
             "read_actor reports a missing actor");

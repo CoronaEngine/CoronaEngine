@@ -1617,23 +1617,9 @@ SceneReply apply_native_environment(const SceneRequest& request) {
 
 /// Maps a scene-layer error code onto the number the non-Web channels answer with.
 ///
-/// The scene layer speaks symbols ("PROJECT_CONTEXT_CHANGED", "READ_ONLY", ...). The
-/// script channel used to collapse every one of them to 2, so a caller could not tell
-/// a stale archive (re-read the session) from an actor that is gone - while the
-/// environment path already answered 409 for exactly that case. One mapping, applied
-/// everywhere, so the three writers agree again.
-int native_scene_error_code(const std::string& scene_error_code) {
-    if (scene_error_code == "PROJECT_CONTEXT_CHANGED") return 409;
-    if (scene_error_code == "READ_ONLY") return 403;
-    if (scene_error_code == "ACTOR_NOT_FOUND") return 404;
-    if (scene_error_code == "INVALID_ARGUMENT") return 400;
-    return 2;
-}
-
 NativeResult native_environment_result(const SceneRequest& request) {
     const auto reply = apply_native_environment(request);
-    if (!reply.error_code.empty()) return native_failure(reply.error_message,
-        native_scene_error_code(reply.error_code));
+    if (!reply.error_code.empty()) return native_result_from_scene(reply);
     return native_success(native_scene_environment_payload(*native_editor_state().scene));
 }
 
@@ -1813,8 +1799,7 @@ NativeResult set_native_actor_properties(const NativeRequest& request, ActorProp
             patch.camera_lock = lock;
         }
         const auto reply = apply_native_actor_properties(write);
-        if (!reply.error_code.empty())
-        return native_failure(reply.error_message, native_scene_error_code(reply.error_code));
+        if (!reply.error_code.empty()) return native_result_from_scene(reply);
         auto* scene = native_editor_state().scene.get();
         return native_success({{"status", "success"}, {"scene", scene->route},
             {"actor", actor_to_json(*scene, *find_native_actor(*scene, reply.properties.actor_guid))}});
@@ -1833,8 +1818,7 @@ NativeResult set_native_editor_actor_transform(const std::string& scene_route_ar
         transform_float3_value(transform_data, "scale", "scl")};
     if (transform_data.contains("archive_session")) request.archive_session = transform_data.at("archive_session").get<std::string>();
     const auto reply = apply_native_actor_transform(request);
-    if (!reply.error_code.empty())
-        return native_failure(reply.error_message, native_scene_error_code(reply.error_code));
+    if (!reply.error_code.empty()) return native_result_from_scene(reply);
     auto* scene = native_editor_state().scene.get();
     const auto* actor = find_native_actor(*scene, reply.transform.actor_guid);
     return native_success({
@@ -3145,8 +3129,7 @@ NativeResult apply_non_web_camera_properties(const NativeRequest& request, bool 
     if (!patch.empty()) {
         // Caller permissions are enforced by the registry. Runtime scripts own pose input.
         const auto reply = apply_native_camera_properties(write, false);
-        if (!reply.error_code.empty())
-        return native_failure(reply.error_message, native_scene_error_code(reply.error_code));
+        if (!reply.error_code.empty()) return native_result_from_scene(reply);
     }
     return native_success({{"status", "success"}, {"scene", scene->route}, {"camera", camera_to_json(*camera)}});
 }
@@ -3204,7 +3187,7 @@ std::vector<IkChainSnapshot> typed_ik_chains(const std::vector<Corona::Resource:
 static NativeResult start_native_script_file(nlohmann::json payload, bool by_path) {
     const auto* scene = native_editor_state().scene.get();
     if (!scene || !matches_archive_session(*scene, payload)) {
-        return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+        return native_scene_failure("PROJECT_CONTEXT_CHANGED", "PROJECT_CONTEXT_CHANGED");
     }
     if (by_path && !payload.contains("project_path")) payload["project_path"] = path_to_utf8(scene->project_root);
     if (by_path && !payload.contains("target_type")) {
@@ -4449,7 +4432,7 @@ NativeResult script_scene_read_active_scene(const NativeRequest& request) {
 NativeResult script_scene_read_actor(const NativeRequest& request) {
             auto* scene = native_editor_state().scene.get();
             const auto query = arg_object(request.args, 0);
-            if (!scene || !matches_archive_session(*scene, query)) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            if (!scene || !matches_archive_session(*scene, query)) return native_scene_failure("PROJECT_CONTEXT_CHANGED", "PROJECT_CONTEXT_CHANGED");
             const auto id = query.value("actor", std::string{});
             auto* actor = find_native_actor(*scene, id);
             if (!actor) return native_failure("Actor not found: " + id, 404);
@@ -4459,7 +4442,7 @@ NativeResult script_scene_read_actor(const NativeRequest& request) {
 NativeResult script_scene_read_transforms(const NativeRequest& request) {
             const auto query = arg_object(request.args, 0);
             auto* scene = native_editor_state().scene.get();
-            if (!scene || !matches_archive_session(*scene, query)) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+            if (!scene || !matches_archive_session(*scene, query)) return native_scene_failure("PROJECT_CONTEXT_CHANGED", "PROJECT_CONTEXT_CHANGED");
             auto values = nlohmann::json::array();
             for (const auto& guid : query.at("actors").get<std::vector<std::string>>()) {
                 auto* actor = find_native_actor_by_guid(*scene, guid);
@@ -4475,7 +4458,7 @@ NativeResult script_scene_read_transforms(const NativeRequest& request) {
 NativeResult script_scene_read_archive_scene(const NativeRequest& request) {
             auto* scene = native_editor_state().scene.get();
             if (!scene || !matches_archive_session(*scene, arg_object(request.args, 0)))
-                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+                return native_scene_failure("PROJECT_CONTEXT_CHANGED", "PROJECT_CONTEXT_CHANGED");
             return native_success({{"archive_session", scene->archive_session}, {"scene", archive_scene_values(*scene)}});
 }
 
@@ -4499,7 +4482,7 @@ NativeResult script_scene_set_actor_transform(const NativeRequest& request) {
                 // must name the archive the editor currently has open.
                 if (transform.contains("archive_session") &&
                     !matches_archive_session(*scene_for_request_route(request), transform))
-                    return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+                    return native_scene_failure("PROJECT_CONTEXT_CHANGED", "PROJECT_CONTEXT_CHANGED");
                 return set_native_editor_actor_transform(
                     arg_string(request.args, 0), arg_string(request.args, 1), transform);
             } catch (const std::exception& e) {
@@ -4558,7 +4541,7 @@ NativeResult script_scene_create_actor(const NativeRequest& request) {
             // import an actor into whatever world is open.
             if (actor_data.contains("archive_session") &&
                 (!scene || !matches_archive_session(*scene, actor_data)))
-                return native_failure("PROJECT_CONTEXT_CHANGED", 409);
+                return native_scene_failure("PROJECT_CONTEXT_CHANGED", "PROJECT_CONTEXT_CHANGED");
             return create_native_editor_actor(scene_route, source_path, actor_type, actor_data,
                                               /*transient_assets=*/true);
 }

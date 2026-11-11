@@ -12,6 +12,11 @@
 // A request object that carries `archive_session` is validated against the scene the
 // editor currently owns; a mismatch answers 409 PROJECT_CONTEXT_CHANGED rather than
 // silently writing to the wrong project.
+//
+// Failures answer with a numeric class - 409 stale archive, 403 read-only, 404 missing actor,
+// 400 malformed argument, 2 everything else - plus the scene layer's symbolic code in
+// `data.code` ("PROJECT_CONTEXT_CHANGED", "ACTOR_NOT_READY", ...). Branch on the number;
+// quote the symbol when a log has to say exactly what happened.
 
 #include "native_api_types.h"
 

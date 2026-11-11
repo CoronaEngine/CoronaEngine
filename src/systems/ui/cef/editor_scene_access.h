@@ -46,4 +46,19 @@ NativeEditorActor* find_native_actor(NativeEditorScene& scene, const std::string
 NativeEditorActor* find_native_actor_by_guid(NativeEditorScene& scene,
                                              const std::string& actor_guid);
 
+/// A failure the contract names. The symbolic code goes in `data.code` as well as choosing the
+/// numeric class, so a caller can branch on the exact reason without matching message text.
+NativeResult native_scene_failure(const std::string& symbolic_code, std::string message);
+
+/// A scene reply as a contract result.
+///
+/// The scene layer answers with symbolic codes (ACTOR_NOT_READY, READ_ONLY, ...). A caller
+/// branches on the numeric class; the symbolic code is preserved in data.code so a script can
+/// name the exact failure in a log without parsing the message text.
+NativeResult native_result_from_scene(const SceneReply& reply);
+
+/// The numeric class a symbolic scene code maps to. 409 stale archive, 403 read-only,
+/// 404 missing actor, 400 malformed argument, everything else 2.
+int scene_error_class(const std::string& scene_error_code);
+
 }  // namespace Corona::Systems::UI

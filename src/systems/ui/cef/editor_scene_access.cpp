@@ -1,6 +1,8 @@
 #include "editor_scene_access.h"
 
 #include "editor_paths.h"
+
+#include <utility>
 #include "editor_text_utils.h"
 
 #include <algorithm>
@@ -89,5 +91,28 @@ NativeEditorActor* find_native_actor_by_guid(NativeEditorScene& scene,
     return nullptr;
 }
 
+}  // namespace Corona::Systems::UI
+
+namespace Corona::Systems::UI {
+
+int scene_error_class(const std::string& scene_error_code) {
+    if (scene_error_code == "PROJECT_CONTEXT_CHANGED") return 409;
+    if (scene_error_code == "READ_ONLY") return 403;
+    if (scene_error_code == "ACTOR_NOT_FOUND") return 404;
+    if (scene_error_code == "INVALID_ARGUMENT") return 400;
+    return 2;
 }
-  // namespace Corona::Systems::UI
+
+NativeResult native_scene_failure(const std::string& symbolic_code, std::string message) {
+    auto result = native_failure(std::move(message), scene_error_class(symbolic_code));
+    result.data["code"] = symbolic_code;
+    return result;
+}
+
+NativeResult native_result_from_scene(const SceneReply& reply) {
+    auto result = native_failure(reply.error_message, scene_error_class(reply.error_code));
+    result.data["code"] = reply.error_code;
+    return result;
+}
+
+}  // namespace Corona::Systems::UI
