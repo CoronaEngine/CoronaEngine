@@ -52,11 +52,12 @@ inline void register_appearance_image(const AppearanceJson& node, ocarina::Image
     // geometry refresh uploads descriptors, but does not upload image pixels.
     auto& texture=pipeline->image_pool().obtain_texture(descriptor,
         pipeline->geometry().bindless_array(),pipeline->device());
-    texture.upload_immediately();
+    if (!pipeline->image_pool().is_compressed_texture(descriptor.hash())) texture.upload_immediately();
 }
 
 inline AppearanceJson appearance_slot(const AppearanceJson& value, unsigned channels=3) {
-    auto slot=[&](AppearanceJson node) { return AppearanceJson{{"channels",channels==1 ? "x":"xyz"},{"node",std::move(node)}}; };
+    std::string output_channels=channels==1 ? "x":"xyz";
+    auto slot=[&](AppearanceJson node) { return AppearanceJson{{"channels",output_channels},{"node",std::move(node)}}; };
     auto constant=[&](AppearanceJson number) {
         if (number.is_number()) number=AppearanceJson::array({number});
         if (channels==3 && number.size()==1) number=AppearanceJson::array({number[0],number[0],number[0]});
@@ -73,6 +74,12 @@ inline AppearanceJson appearance_slot(const AppearanceJson& value, unsigned chan
         {"color",appearance_slot(value.at("a"),3)},{"gamma",.5}}}});
     AppearanceJson node={{"type","image"},{"param",{{"color_space","linear"}}}};
     if (kind=="image") {
+        if (value.contains("channel")) {
+            output_channels=value.at("channel").get<std::string>();
+            if (channels!=1 || (output_channels!="x" && output_channels!="y" &&
+                               output_channels!="z" && output_channels!="w"))
+                throw std::runtime_error("Image channel must be x, y, z or w in a scalar slot");
+        }
         const auto path=value.at("path").get<std::string>();
         node["param"]["fn"]=path;
         node["param"]["uv_transform"]=value.value("uv",AppearanceJson::array({1,0,0,0,1,0,0,0,1}));
@@ -80,6 +87,7 @@ inline AppearanceJson appearance_slot(const AppearanceJson& value, unsigned chan
         node["param"]["filter"]=value.value("filter","bilinear");
         // Include decoding in identity even though the supplied pixels are linear.
         node["param"]["source_encoding"]=value.value("encoding","srgb");
+        if (value.contains("gpu_source")) node["param"]["gpu_source"]=value.at("gpu_source");
         ::vision::ShaderNodeDesc desc; desc.init(::vision::ParameterSet{vision_json(node)});
         auto* pipeline=::vision::Global::instance().pipeline();
         if (!pipeline) throw std::runtime_error("Image material requires an active Vision pipeline");

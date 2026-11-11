@@ -8,6 +8,7 @@
 #include "base/import/node_desc.h"
 #include "core/image/image.h"
 #include "base/using.h"
+#include <set>
 
 namespace vision {
 class ImagePool {
@@ -18,6 +19,7 @@ public:
 
 private:
     map<uint64_t, RegistrableTexture3D> textures_;
+    std::set<uint64_t> compressed_textures_;
     SP<SourceCache> source_cache_;
     static ImagePool *s_image_pool;
     ImagePool(const ImagePool &) = delete;
@@ -40,6 +42,7 @@ public:
                                                        Device &device) noexcept;
     void prepare(Stream &stream) noexcept;
     [[nodiscard]] bool is_contain(uint64_t hash) const noexcept { return textures_.contains(hash); }
+    [[nodiscard]] bool is_compressed_texture(uint64_t hash) const noexcept { return compressed_textures_.contains(hash); }
     [[nodiscard]] size_t size() const noexcept { return textures_.size(); }
 };
 

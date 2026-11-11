@@ -88,6 +88,7 @@ public:
             ret.add_plain("scale", ParamType::Float);
             ret.add_plain("color_space", ParamType::String);
             ret.add_plain("source_encoding", ParamType::String);
+            ret.add_plain("gpu_source", ParamType::String);
             ret.add_plain("wrap", ParamType::String);
             ret.add_plain("filter", ParamType::String);
             ret.add_slot("uv_transform", Number, 9u, false);
@@ -109,6 +110,7 @@ public:
         fs::path path = texture_->host_tex().path();
         if (Widgets::open_file_dialog(path)) {
             desc_.set_value("fn", path.string());
+            desc_.set_value("gpu_source", string{});
             desc_.reset_hash();
             texture_ = &obtain_texture(desc_);
             texture_->upload_immediately();
