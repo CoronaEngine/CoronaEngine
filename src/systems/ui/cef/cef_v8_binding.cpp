@@ -2686,7 +2686,6 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     project->SetValue("openProjectFile", CefV8Value::CreateFunction("openProjectFile", new NativeHandler(endpoint, ProjectLauncherMethod::SelectFile)), V8_PROPERTY_ATTRIBUTE_READONLY);
     project->SetValue("createWorldProject", CefV8Value::CreateFunction("createWorldProject", new NativeHandler(endpoint, ProjectLauncherMethod::CreateWorld)), V8_PROPERTY_ATTRIBUTE_READONLY);
     project->SetValue("createMultiplayerProject", CefV8Value::CreateFunction("createMultiplayerProject", new NativeHandler(endpoint, ProjectLauncherMethod::CreateMultiplayer)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    project->SetValue("getAppVersion", CefV8Value::CreateFunction("getAppVersion", new NativeHandler(endpoint, ProjectLauncherMethod::GetVersion)), V8_PROPERTY_ATTRIBUTE_READONLY);
     project->SetValue("getRecentProjects", CefV8Value::CreateFunction("getRecentProjects", new NativeHandler(endpoint, ProjectLauncherMethod::GetRecent)), V8_PROPERTY_ATTRIBUTE_READONLY);
     project->SetValue("getProjectLoadStatus", CefV8Value::CreateFunction("getProjectLoadStatus", new NativeHandler(endpoint, ProjectLauncherMethod::GetLoadStatus)), V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("project", project, V8_PROPERTY_ATTRIBUTE_READONLY);

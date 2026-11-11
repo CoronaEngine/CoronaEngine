@@ -84,3 +84,14 @@ def test_every_web_method_is_listed():
             if f"`{method}`" not in documented:
                 missing.append(f"{namespace}.{method}")
     assert not missing, f"the document does not name these Web methods: {sorted(missing)}"
+
+
+def test_the_document_matches_the_generator():
+    """The checked-in document must be what the generator produces right now."""
+    import generate_interface_contract as generator
+
+    expected = generator.build()
+    actual = _doc()
+    assert actual == expected, (
+        "docs/interface-contract.md is stale; run "
+        "`python tests/tools/generate_interface_contract.py`")

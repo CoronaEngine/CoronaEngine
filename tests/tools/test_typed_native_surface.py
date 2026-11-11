@@ -24,7 +24,7 @@ EXPECTED_SURFACE = {
         "searchLan", "setProjectRoot", "startSession", "stopSession",
     },
     "project": {
-        "createMultiplayerProject", "createWorldProject", "getAppVersion",
+        "createMultiplayerProject", "createWorldProject",
         "getProjectLoadStatus", "getRecentProjects", "openProject", "openProjectFile",
     },
     "project_settings": {"saveActiveProjectInfo"},

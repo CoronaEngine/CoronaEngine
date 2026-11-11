@@ -1,6 +1,7 @@
 """Serialize launcher settings and recent-project updates to the host's ini file."""
 import configparser
 import json
+import sys
 from pathlib import Path
 from threading import RLock
 
@@ -8,9 +9,25 @@ from runtime.archive.portable import write_ini_sections
 
 _lock = RLock()
 
+def default_ini_path():
+    """Where the editor keeps CoronaEditor.ini.
+
+    The native rule is "the executable's directory"; an embedded interpreter can answer a
+    different sys.executable than a packaged one, so the file tree is checked as a fallback.
+    A caller that knows the path passes it in and none of this runs.
+    """
+    candidates = [
+        Path(sys.executable).parent / "CoronaEditor.ini",
+        Path(__file__).resolve().parents[3] / "CoronaEditor.ini",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0]
+
 
 def editor_settings(request):
-    path = Path(request["ini"])
+    path = Path(request["ini"]) if request.get("ini") else default_ini_path()
     with _lock:
         config = configparser.ConfigParser(interpolation=None, strict=False)
         config.read(path, encoding="utf-8-sig")

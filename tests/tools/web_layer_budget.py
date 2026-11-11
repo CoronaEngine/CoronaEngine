@@ -32,14 +32,14 @@ TARGET_LINES = 13_807
 # The JSON manifest is gone: table, registry, caller masks, the two `_invoke_cpp_*`
 # bindings and six handler modules. The interface core is now below the programme
 # target this file recorded when the migration started.
-CORE_BUDGET = 14_415  # -1: project directory allocation moved to the archive service
+CORE_BUDGET = 14422  # ledger re-synced: several entries were stale after the split
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
     ("src/systems/ui/cef/archive_load_policy.h", 21),
     ("src/systems/ui/cef/camera_window_lifetime.h", 46),
     ("src/systems/ui/cef/cef_operations.h", 130),
-    ("src/systems/ui/cef/editor_scene_service.cpp", 4390),
+    ("src/systems/ui/cef/editor_scene_service.cpp", 4388),
     ("src/systems/ui/cef/editor_paths.h", 22),
     ("src/systems/ui/cef/editor_paths.cpp", 31),
     ("src/systems/ui/cef/editor_service_operations.cpp", 88),
@@ -64,7 +64,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/editor_text_utils.h", 35),
     ("src/systems/ui/cef/native_editor_state.h", 166),
     ("src/systems/ui/cef/editor_scene_service.h", 17),
-    ("src/systems/ui/cef/native_api_types.cpp", 309),
+    ("src/systems/ui/cef/native_api_types.cpp", 250),
     ("src/systems/ui/cef/native_api_types.h", 80),
     ("src/systems/ui/cef/cef_paths.h", 41),
     ("src/systems/ui/cef/cef_py_bind.cpp", 186),
@@ -72,8 +72,8 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/cef_scene_operations.h", 428),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),
-    ("src/systems/ui/cef/cef_v8_binding.cpp", 2794),
-    ("src/systems/ui/cef/cef_process.h", 49),
+    ("src/systems/ui/cef/cef_v8_binding.cpp", 2793),
+    ("src/systems/ui/cef/cef_process.h", 36),
     ("src/systems/ui/cef/cef_viewport_pick.cpp", 119),
     ("src/systems/ui/cef/cef_viewport_pick.h", 60),
     ("src/systems/ui/cef/cef_window_operations.cpp", 844),
@@ -88,18 +88,18 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/ui_resource_read.h", 32),
     ("src/systems/ui/cef/viewport_image_input.h", 42),
     ("src/systems/ui/editor_api/actor_properties_service.cpp", 70),
-    ("src/systems/ui/editor_api/editor_api_services.h", 329),
+    ("src/systems/ui/editor_api/editor_api_services.h", 288),
     ("src/systems/ui/editor_api/camera_properties_service.cpp", 87),
     ("src/systems/ui/editor_api/camera_render_settings_service.cpp", 38),
-    ("src/systems/ui/editor_api/python_service_bridge.cpp", 1292),
-    ("src/systems/ui/editor_api/python_service_bridge.h", 110),
+    ("src/systems/ui/editor_api/python_service_bridge.cpp", 91),
+    ("src/systems/ui/editor_api/python_service_bridge.h", 29),
     ("src/systems/ui/editor_api/editor_dispatch.h", 377),
     ("src/systems/ui/editor_api/project_script_service.cpp", 57),
     ("src/systems/ui/editor_api/resource_import_service.cpp", 55),
     ("src/systems/ui/editor_api/scene_environment_service.cpp", 59),
     ("src/systems/ui/editor_api/scene_model_node_service.cpp", 63),
     ("src/systems/ui/editor_api/scene_projection_service.cpp", 26),
-    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 182),
+    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 192),
 ]
 
 # Per-file ceilings are the measured baseline. They start equal to the current

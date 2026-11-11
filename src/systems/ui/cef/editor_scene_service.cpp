@@ -4005,9 +4005,7 @@ ProjectLauncherReply execute_project_launcher_operation(const ProjectLauncherReq
         }
         return reply;
     }
-    if (request.method == ProjectLauncherMethod::GetVersion) {
-        reply.value = settings_value("General", "version", "1.2.0");
-    } else if (request.method == ProjectLauncherMethod::GetRecent) {
+    if (request.method == ProjectLauncherMethod::GetRecent) {
         reply.value = recent_projects_native();
     } else {
         reply.value = project_resource_load_status();

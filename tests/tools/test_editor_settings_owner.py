@@ -19,15 +19,20 @@ PY = ROOT / "embedded_python"
 CPP = ROOT / "src/systems/ui/cef/editor_scene_service.cpp"
 
 
-def test_python_never_derives_the_ini_path():
+def test_exactly_one_python_module_names_the_ini():
+    """The archive service resolves the ini for callers that cannot name it (the Web facade).
+
+    One module does it, and it mirrors the native rule: the executable's directory first, the
+    file tree as a fallback. A second module deriving it from a different directory is how the
+    old duplicate owner got in.
+    """
     offenders = []
     for path in PY.rglob("*.py"):
         text = path.read_text(encoding="utf-8-sig", errors="replace")
         if "CoronaEditor.ini" in text:
             offenders.append(path.relative_to(ROOT).as_posix())
-    assert not offenders, (
-        "Python must receive the ini path from C++ instead of rebuilding it; offenders: "
-        + ", ".join(offenders))
+    assert offenders == ["embedded_python/runtime/archive/editor_settings.py"], (
+        f"the ini path must be derived in editor_settings.py only; offenders: {offenders}")
 
 
 def test_the_cpp_side_names_the_ini_in_one_place():

@@ -108,14 +108,14 @@ NetworkReply execute_network_operation(const NetworkRequest& request);
 // ============================================================================
 // Project launcher: version, recent projects, load status and project creation.
 // ============================================================================
-enum class ProjectLauncherMethod { GetVersion, GetRecent, GetLoadStatus, CreateWorld, CreateMultiplayer, SelectFile, Open };
+enum class ProjectLauncherMethod { GetRecent, GetLoadStatus, CreateWorld, CreateMultiplayer, SelectFile, Open };
 struct ProjectLauncherRequest {
     ProjectLauncherMethod method;
     std::string prompt, role = "guest", path, load_policy = "prompt";
 };
 
 struct ProjectLauncherReply {
-    ProjectLauncherMethod method = ProjectLauncherMethod::GetVersion;
+    ProjectLauncherMethod method = ProjectLauncherMethod::GetLoadStatus;
     std::string error_code, error_message;
     /// The reply value, as JSON.
     ///
