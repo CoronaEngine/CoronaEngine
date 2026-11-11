@@ -32,14 +32,14 @@ TARGET_LINES = 13_807
 # The JSON manifest is gone: table, registry, caller masks, the two `_invoke_cpp_*`
 # bindings and six handler modules. The interface core is now below the programme
 # target this file recorded when the migration started.
-CORE_BUDGET = 14_462  # +43: actor-audio bindings (engine op already existed)
+CORE_BUDGET = 14_534  # +72: archive snapshot validation unit (moved, not added)
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
     ("src/systems/ui/cef/archive_load_policy.h", 21),
     ("src/systems/ui/cef/camera_window_lifetime.h", 46),
     ("src/systems/ui/cef/cef_operations.h", 172),
-    ("src/systems/ui/cef/editor_scene_service.cpp", 4726),
+    ("src/systems/ui/cef/editor_scene_service.cpp", 4402),
     ("src/systems/ui/cef/editor_paths.h", 22),
     ("src/systems/ui/cef/editor_paths.cpp", 31),
     ("src/systems/ui/cef/editor_service_operations.cpp", 98),
@@ -59,6 +59,8 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/editor_request_values.cpp", 149),
     ("src/systems/ui/cef/editor_platform_dialogs.h", 52),
     ("src/systems/ui/cef/editor_platform_dialogs.cpp", 229),
+    ("src/systems/ui/cef/editor_archive_snapshot.h", 35),
+    ("src/systems/ui/cef/editor_archive_snapshot.cpp", 361),
     ("src/systems/ui/cef/editor_text_utils.h", 35),
     ("src/systems/ui/cef/native_editor_state.h", 166),
     ("src/systems/ui/cef/editor_scene_service.h", 17),
