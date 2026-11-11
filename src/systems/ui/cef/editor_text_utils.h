@@ -19,4 +19,17 @@ inline std::string to_lower_ascii(std::string value) {
     return value;
 }
 
+inline std::string trim_ascii(std::string value) {
+    const auto begin = std::find_if_not(value.begin(), value.end(), [](unsigned char c) {
+        return std::isspace(c) != 0;
+    });
+    const auto end = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) {
+        return std::isspace(c) != 0;
+    }).base();
+    if (begin >= end) {
+        return {};
+    }
+    return std::string(begin, end);
+}
+
 }  // namespace Corona::Systems::UI
