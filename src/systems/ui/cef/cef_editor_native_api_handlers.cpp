@@ -5413,7 +5413,7 @@ void reset_native_editor_scene_for_test() {
     state.project_path.clear();
 }
 
-std::string get_editor_scene_snapshot_from_python(const std::string& scene_name) {
+std::string native_editor_scene_snapshot_json(const std::string& scene_name) {
     try {
         auto* scene = ensure_native_editor_scene();
         const auto scene_route = normalize_route(scene_name);
@@ -5858,7 +5858,7 @@ NativeResult script_scene_read_archive_scene(const NativeRequest& request) {
 
 NativeResult script_scene_get_scene_snapshot(const NativeRequest& request) {
             try {
-                const auto raw = get_editor_scene_snapshot_from_python(arg_string(request.args, 0));
+                const auto raw = native_editor_scene_snapshot_json(arg_string(request.args, 0));
                 const auto data = nlohmann::json::parse(raw);
                 if (data.value("status", std::string{}) == "error") {
                     return native_failure(data.value("message", std::string{"Scene snapshot failed"}), 2);
