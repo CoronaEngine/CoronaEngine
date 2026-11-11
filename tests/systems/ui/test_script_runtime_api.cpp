@@ -196,9 +196,16 @@ void actor_state_writes_apply() {
     require(written.data.at("actor").at("visible") == false,
             "set_actor_state echoes the applied visibility");
 
-    require(call(UI::script_scene_set_actor_state, Json::array({kScene, "no-such-actor", patch})).error_code == 404 ||
-                !call(UI::script_scene_set_actor_state, Json::array({kScene, "no-such-actor", patch})).success,
-            "set_actor_state fails for an unknown actor");
+    const auto unknown = call(UI::script_scene_set_actor_state,
+                              Json::array({kScene, "no-such-actor", patch}));
+    require(!unknown.success && unknown.error_code == 404,
+            "set_actor_state reports a missing actor with 404");
+
+    auto stale = patch; stale["archive_session"] = "retired";
+    const auto refused = call(UI::script_scene_set_actor_state,
+                              Json::array({kScene, kActorName, stale}));
+    require(!refused.success && refused.error_code == 409,
+            "set_actor_state answers the shared 409 for a retired archive");
 }
 
 void body_dependent_writes_report_their_contract() {
@@ -233,11 +240,12 @@ void body_dependent_writes_report_their_contract() {
     auto stale = body; stale["archive_session"] = "retired";
     const auto refused = call(UI::script_scene_set_actor_physics,
                               Json::array({kScene, kActorName, stale}));
-    // Note the code: the read and transform paths answer 409 PROJECT_CONTEXT_CHANGED,
-    // while the property-patch path answers 2 with a plain message. Pinned as-is; the
-    // two should be unified.
-    require(!refused.success && refused.error == "Properties do not identify the active scene",
-            "set_actor_physics rejects a retired archive");
+    // Every writer answers 409 for a stale archive - the scene layer's symbolic
+    // PROJECT_CONTEXT_CHANGED is mapped to the same number the read paths use, so a
+    // caller never has to match on message text to tell staleness from other failures.
+    require(!refused.success && refused.error_code == 409 &&
+                refused.error == "Properties do not identify the active scene",
+            "set_actor_physics rejects a retired archive with the shared 409 code");
 }
 
 void camera_pose_writes_reach_the_native_camera() {
