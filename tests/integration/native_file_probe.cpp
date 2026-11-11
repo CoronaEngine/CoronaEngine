@@ -14,6 +14,21 @@ namespace UI = Corona::Systems::UI;
 namespace fs = std::filesystem;
 using namespace std::chrono_literals;
 
+namespace {
+
+// The request/response protocol with the test controller stays name-based; the mapping
+// to the editor's named entry points lives here, in the probe, not in production code.
+nlohmann::json dispatch(const std::string& api, const nlohmann::json& args) {
+    if (api == "Scripts.run_file") return UI::run_project_script_file(args);
+    if (api == "Scripts.run_path") return UI::run_project_script_path(args);
+    if (api == "Scripts.get_status") return UI::project_script_status(args);
+    if (api == "Scripts.get_run") return UI::project_script_run(args);
+    if (api == "Scripts.stop") return UI::stop_project_script(args);
+    return {{"success", false}, {"code", 404}, {"error", api + " is not a file script route"}};
+}
+
+}  // namespace
+
 int main(int argc, char** argv) {
     if (auto exit = UI::execute_cef_subprocess_if_needed(argc, argv)) return *exit;
     const char* control = std::getenv("CORONA_NATIVE_FILE_PROBE");
@@ -33,7 +48,7 @@ int main(int argc, char** argv) {
             nlohmann::json reply;
             try {
                 const auto message = nlohmann::json::parse(input);
-                reply = UI::invoke_file_script_api(message.at("api").get<std::string>(), message.at("args"));
+                reply = dispatch(message.at("api").get<std::string>(), message.at("args"));
             } catch (const std::exception& error) {
                 reply = {{"success", false}, {"error", error.what()}};
             }

@@ -5937,26 +5937,36 @@ BridgeReply execute_bridge_operation(const std::string& envelope) {
     return reply;
 }
 
-nlohmann::json invoke_file_script_api(const std::string& api, const nlohmann::json& args) {
-    const auto envelope = [](const NativeResult& result) {
-        return nlohmann::json{{"success", result.success},
-                              {"code", result.success ? 0 : result.error_code},
-                              {"data", result.data},
-                              {"error", result.error}};
-    };
-    if (api == "Scripts.run_file" || api == "Scripts.run_path") {
-        return envelope(start_native_script_file(arg_object(args, 0), api == "Scripts.run_path"));
-    }
-    if (api == "Scripts.get_status") {
-        return envelope(invoke_python_script_service({"FileScripts", "get_script_status", args}));
-    }
-    if (api == "Scripts.get_run") {
-        return envelope(invoke_python_script_service({"FileScripts", "get_file_run", args}));
-    }
-    if (api == "Scripts.stop") {
-        return envelope(invoke_python_script_service({"FileScripts", "stop_file", args}));
-    }
-    return {{"success", false}, {"code", 404}, {"error", api + " is not a file script route"}};
+namespace {
+nlohmann::json file_script_envelope(const NativeResult& result) {
+    return nlohmann::json{{"success", result.success},
+                          {"code", result.success ? 0 : result.error_code},
+                          {"data", result.data},
+                          {"error", result.error}};
+}
+}  // namespace
+
+nlohmann::json run_project_script_file(const nlohmann::json& payload) {
+    return file_script_envelope(start_native_script_file(arg_object(payload, 0), false));
+}
+
+nlohmann::json run_project_script_path(const nlohmann::json& payload) {
+    return file_script_envelope(start_native_script_file(arg_object(payload, 0), true));
+}
+
+nlohmann::json project_script_status(const nlohmann::json& request) {
+    return file_script_envelope(
+        invoke_python_script_service({"FileScripts", "get_script_status", request}));
+}
+
+nlohmann::json project_script_run(const nlohmann::json& request) {
+    return file_script_envelope(
+        invoke_python_script_service({"FileScripts", "get_file_run", request}));
+}
+
+nlohmann::json stop_project_script(const nlohmann::json& request) {
+    return file_script_envelope(
+        invoke_python_script_service({"FileScripts", "stop_file", request}));
 }
 
 }  // namespace Corona::Systems::UI

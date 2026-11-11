@@ -1,16 +1,25 @@
 #pragma once
 
 #include <nlohmann/json.hpp>
-#include <string>
 
 namespace Corona::Systems::UI {
 
-// Uses the editor owner thread and the existing Python host. No renderer frame is needed.
-// Read SceneTools.read_active_scene first. For Scripts.run_path pass one object with
-// that archive_session, a project-relative .py path, a requestId and optionally an actor_name.
-// Scripts.run_file additionally verifies the supplied revision. Query or stop with Scripts.get_run,
-// Scripts.get_status and Scripts.stop. The result contains success, data, error and code.
-[[nodiscard]] nlohmann::json invoke_file_script_api(
-    const std::string& api, const nlohmann::json& args = nlohmann::json::array());
+// The project file-script routes, one named entry per operation.
+//
+// These used to be reachable through a single `invoke_file_script_api("Scripts.run_file",
+// args)` name switch - the last name dispatch in the editor surface. The only caller
+// is the native file-script probe (`tests/integration/native_file_probe.cpp`), which
+// keeps its own name-to-function mapping because that protocol is test-only.
+//
+// Every entry runs on the editor owner thread and through the existing Python host;
+// no renderer frame is needed. Read the active scene first. The payload shapes are
+// unchanged: run_file takes the published document revision, run_path a project-relative
+// .py path, both with the archive session and a requestId; query or stop with the run id.
+// The reply is the `{success, code, data, error}` envelope the probe relays verbatim.
+[[nodiscard]] nlohmann::json run_project_script_file(const nlohmann::json& payload);
+[[nodiscard]] nlohmann::json run_project_script_path(const nlohmann::json& payload);
+[[nodiscard]] nlohmann::json project_script_status(const nlohmann::json& request);
+[[nodiscard]] nlohmann::json project_script_run(const nlohmann::json& request);
+[[nodiscard]] nlohmann::json stop_project_script(const nlohmann::json& request);
 
 }  // namespace Corona::Systems::UI

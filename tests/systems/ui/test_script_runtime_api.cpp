@@ -286,16 +286,26 @@ void actor_lifecycle_through_the_script_channel() {
     load_scene();
 }
 
-void the_file_script_probe_entry_stays_a_switch() {
-    // `invoke_file_script_api` is the integration probe's entry: it accepts the five
-    // file-script names and rejects everything else without touching the archive.
-    const auto unknown = UI::invoke_file_script_api("SceneTools.read_actor", Json::array());
-    require(unknown.value("success", true) == false && unknown.value("code", 0) == 404,
-            "a non file-script name is rejected");
+void the_file_script_entries_keep_the_probe_envelope() {
+    // The probe relays these envelopes verbatim, so the shape is part of the contract
+    // even when the operation cannot run (no Python runtime here).
+    const auto status = UI::project_script_status(Json::array());
+    require(status.contains("success") && status.contains("code") && status.contains("error"),
+            "project_script_status answers with the probe envelope");
 
-    const auto status = UI::invoke_file_script_api("Scripts.get_status", Json::array());
-    require(status.contains("success") && status.contains("code"),
-            "Scripts.get_status answers with the probe envelope even with no Python runtime");
+    const auto run = UI::project_script_run(Json::array());
+    require(run.contains("success") && run.contains("code"),
+            "project_script_run answers with the probe envelope");
+
+    const auto stopped = UI::stop_project_script(Json::array());
+    require(stopped.contains("success") && stopped.contains("code"),
+            "stop_project_script answers with the probe envelope");
+
+    // Starting a file needs a published document; with none, the entry point must fail
+    // rather than pretend the script started.
+    const auto started = UI::run_project_script_file(Json::array());
+    require(started.value("success", true) == false && started.contains("error"),
+            "run_project_script_file fails without a published document");
 }
 
 }  // namespace
@@ -323,7 +333,7 @@ int main() {
     group("body_dependent", body_dependent_writes_report_their_contract);
     group("camera_pose", camera_pose_writes_reach_the_native_camera);
     group("lifecycle", actor_lifecycle_through_the_script_channel);
-    group("file_script", the_file_script_probe_entry_stays_a_switch);
+    group("file_script", the_file_script_entries_keep_the_probe_envelope);
     kernel.shutdown();
     if (failures != 0) {
         std::cerr << "ScriptRuntimeApiTests: " << failures << " group(s) failed\n";
