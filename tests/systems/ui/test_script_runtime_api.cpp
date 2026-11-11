@@ -131,6 +131,26 @@ void reads_report_the_loaded_scene() {
             "get_environment echoes the scene it read");
 }
 
+void a_short_call_is_rejected_before_it_reaches_the_scene() {
+    load_scene();
+    // read_actor needs its {archive_session, actor} object. Without it the operation would
+    // answer "Actor not found: " with 404 - technically true, useless to the caller.
+    const auto missing = UI::validate_script_arguments("script_scene_read_actor", Json::array());
+    require(missing.has_value(), "an empty argument array is rejected");
+    require(missing->error_code == 400 && missing->data.at("code") == "INVALID_ARGUMENT",
+            "the rejection names INVALID_ARGUMENT with the shared class");
+    require(missing->error.find("[{archive_session, actor}]") != std::string::npos,
+            "the rejection quotes the documented shape");
+
+    const auto enough = UI::validate_script_arguments(
+        "script_scene_read_actor", Json::array({{{"archive_session", kArchive}, {"actor", kActorGuid}}}));
+    require(!enough.has_value(), "a complete call passes validation");
+
+    const auto unknown = UI::validate_script_arguments("script_scene_not_a_real_op", Json::array());
+    require(unknown.has_value() && unknown->data.at("code") == "INVALID_ARGUMENT",
+            "an unknown operation name is rejected the same way");
+}
+
 void snapshot_is_built_from_native_state() {
     load_scene();
     // Despite the historical name of the helper behind it, the snapshot is built from
@@ -330,6 +350,7 @@ int main() {
         }
     };
     group("reads", reads_report_the_loaded_scene);
+    group("arguments", a_short_call_is_rejected_before_it_reaches_the_scene);
     group("snapshot", snapshot_is_built_from_native_state);
     group("transform", transform_writes_go_through_the_native_authority);
     group("environment", environment_writes_apply_and_echo);

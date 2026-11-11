@@ -40,6 +40,7 @@
 #include "cef_process.h"
 #include "cef_viewport_pick.h"
 #include "editor_scene_service.h"
+#include "script_runtime_api.h"
 #include "editor_dispatch.h"
 #include <cef_task.h>
 #include "scene_folder.h"
@@ -4406,6 +4407,28 @@ struct VisionToggleSpec {
 // Named entry points for the ScriptRuntime caller. The table below still forwards to them
 // while the JSON manifest is retired; once it is gone these functions are the whole
 // contract and the table, the registry and the api-name strings disappear with it.
+
+const ScriptOperationSpec* find_script_operation(const std::string& name) {
+    for (const auto& operation : kScriptOperations) {
+        if (name == operation.name) return &operation;
+    }
+    return nullptr;
+}
+
+std::optional<NativeResult> validate_script_arguments(const std::string& operation_name,
+                                                      const nlohmann::json& args) {
+    const auto* operation = find_script_operation(operation_name);
+    if (!operation) {
+        return native_scene_failure("INVALID_ARGUMENT",
+                                    "Unknown ScriptRuntime operation: " + operation_name);
+    }
+    const auto provided = args.is_array() ? args.size() : 0;
+    if (provided >= operation->arity) return std::nullopt;
+    return native_scene_failure(
+        "INVALID_ARGUMENT",
+        std::string(operation->name) + " expects " + std::to_string(operation->arity) +
+            " argument(s) " + operation->arguments + ", received " + std::to_string(provided));
+}
 
 NativeResult script_scene_get_environment(const NativeRequest& request) {
             SceneRequest read{SceneMethod::GetEnvironment};

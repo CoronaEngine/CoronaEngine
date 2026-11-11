@@ -77,6 +77,17 @@ std::string invoke_script_operation(ScriptOperation operation, const char* opera
             .dump();
     }
 
+    // The contract table says how many positions each binding takes; checking here means a
+    // caller that forgot an argument hears about the argument instead of a downstream
+    // "actor not found". The failure keeps its symbol in data.code.
+    if (const auto rejected = UI::validate_script_arguments(operation_name, args)) {
+        return nlohmann::json{{"success", false},
+                              {"error", rejected->error},
+                              {"error_code", rejected->error_code},
+                              {"data", rejected->data}}
+            .dump();
+    }
+
     ensure_editor_dispatch_hooks();
     UI::NativeRequest request;
     request.module = "ScriptRuntime";
@@ -121,9 +132,10 @@ std::string invoke_script_operation(ScriptOperation operation, const char* opera
         {"success", result->success},
         {"route", "script-runtime"},
     };
-    if (result->success) {
-        response["data"] = result->data;
-    } else {
+    // `data` rides along on failure too: it carries the symbolic code, which is what lets the
+    // adapter say "PROJECT_CONTEXT_CHANGED: ..." instead of parsing message text.
+    if (!result->data.empty()) response["data"] = result->data;
+    if (!result->success) {
         response["error"] = result->error;
         response["error_code"] = result->error_code;
     }

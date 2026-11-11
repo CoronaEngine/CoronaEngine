@@ -45,7 +45,11 @@ def invoke_native_scene(operation, args=None):
         raise RuntimeError(f"Script Runtime API channel is unavailable: {operation}")
     response = json.loads(function(json.dumps(args or [], ensure_ascii=False)))
     if not response.get("success", False):
-        raise RuntimeError(response.get("error") or f"Script Runtime API failed: {operation}")
+        message = response.get("error") or f"Script Runtime API failed: {operation}"
+        # The symbolic code rides in data.code; it is what lets a log say
+        # "PROJECT_CONTEXT_CHANGED" instead of repeating the message.
+        symbol = (response.get("data") or {}).get("code")
+        raise RuntimeError(f"{symbol}: {message}" if symbol else message)
     return response.get("data")
 
 

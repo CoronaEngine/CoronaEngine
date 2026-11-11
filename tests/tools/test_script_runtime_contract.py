@@ -153,3 +153,16 @@ def test_no_binding_reads_past_the_documented_arguments():
         if highest > arity:
             problems.append(f"{name}: reads argument {highest}, contract documents {arity} {arguments}")
     assert not problems, "\n".join(problems)
+
+def test_the_table_arity_matches_its_documented_shape():
+    """The arity column is what the binding enforces; it must describe the same array."""
+    text = HEADER.read_text(encoding="utf-8-sig")
+    rows = re.findall(r'\{"(script_scene_\w+)",\s*"([^"]*)",\s*(\d+),', text)
+    assert len(rows) == 16, f"expected sixteen rows with an arity, found {len(rows)}"
+    problems = []
+    for name, arguments, arity in rows:
+        inner = arguments.strip()[1:-1].strip()
+        expected = 0 if not inner else len(_split_top_level(inner))
+        if int(arity) != expected:
+            problems.append(f"{name}: arity {arity} but {arguments} lists {expected}")
+    assert not problems, "\n".join(problems)
