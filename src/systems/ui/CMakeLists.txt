@@ -64,6 +64,7 @@ set(UI_SYSTEM_SOURCES
     cef/cef_script_input.h
     cef/cef_client.h
     cef/native_api_types.h
+    cef/native_editor_state.h
     cef/cef_editor_native_api_test_support.h
     cef/cef_osr_mode.h
     cef/cef_shared_texture_probe.h
