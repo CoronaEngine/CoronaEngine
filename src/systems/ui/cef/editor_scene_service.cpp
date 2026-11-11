@@ -747,6 +747,76 @@ NativeEditorScene* reload_native_editor_scene(const std::string& project_path_ar
 
 
 
+namespace {
+
+/// How far the scene's actors are through their GPU build.
+struct SceneBuildProgress {
+    std::size_t ready = 0;
+    std::size_t failed = 0;
+    std::size_t pending = 0;
+};
+
+SceneBuildProgress scene_build_progress(const NativeEditorScene& scene) {
+    SceneBuildProgress progress;
+    for (const auto& actor : scene.actors) {
+        if (actor.load_status != ActorLoadStatus::Loaded) {
+            ++progress.failed;
+            continue;
+        }
+        if (actor.actor_type == "audio") {
+            ++progress.ready;
+            continue;
+        }
+        if (!actor.geometry) {
+            ++progress.failed;
+            continue;
+        }
+        const auto gpu_state = actor.geometry->get_gpu_build_state();
+        if (gpu_state == "Ready") {
+            ++progress.ready;
+        } else if (gpu_state == "Failed" || gpu_state == "Invalid") {
+            ++progress.failed;
+        } else {
+            ++progress.pending;
+        }
+    }
+    return progress;
+}
+
+/// Frames the scene once its actors are built.
+///
+/// This used to run inside the load-status query, which meant the camera only moved when a
+/// page happened to be polling for progress. It runs in the per-frame tick now, so framing is
+/// a property of the scene finishing, not of which UI is open.
+void frame_scene_when_ready(NativeEditorScene& scene) {
+    if (!scene.frame_when_ready) return;
+    if (scene.engine_scene == nullptr) return;
+    if (scene_build_progress(scene).pending != 0) return;
+
+    if (scene.actors.empty()) {
+        scene.frame_when_ready = false;
+        return;
+    }
+    if (scene.cameras.empty()) return;
+    const auto bounds = scene.engine_scene->get_aabb();
+    std::array<float, 3> center{};
+    float radius2 = 0;
+    for (int i = 0; i < 3; ++i) {
+        center[i] = (bounds[i] + bounds[i + 3]) * 0.5f;
+        const auto extent = (bounds[i + 3] - bounds[i]) * 0.5f;
+        radius2 += extent * extent;
+    }
+    const auto radius = std::sqrt(radius2);
+    if (!std::isfinite(radius) || radius <= 0) return;
+    scene.frame_when_ready = false;
+    auto position = center;
+    position[2] -= radius * 3.0f;
+    auto& camera = scene.cameras[std::min(scene.active_camera_index, scene.cameras.size() - 1)];
+    if (camera.engine_camera) camera.engine_camera->set(position, {0, 0, 1}, {0, 1, 0}, 45.0f);
+}
+
+}  // namespace
+
 nlohmann::json project_resource_load_status() {
     const auto& state = native_editor_state();
     if (!state.scene) {
@@ -762,71 +832,25 @@ nlohmann::json project_resource_load_status() {
         };
     }
 
-    std::size_t ready = 0;
-    std::size_t failed = 0;
-    std::size_t pending = 0;
-    for (const auto& actor : state.scene->actors) {
-        if (actor.load_status != ActorLoadStatus::Loaded) {
-            ++failed;
-            continue;
-        }
-        if (actor.actor_type == "audio") {
-            ++ready;
-            continue;
-        }
-        if (!actor.geometry) {
-            ++failed;
-            continue;
-        }
-        const auto gpu_state = actor.geometry->get_gpu_build_state();
-        if (gpu_state == "Ready") {
-            ++ready;
-        } else if (gpu_state == "Failed" || gpu_state == "Invalid") {
-            ++failed;
-        } else {
-            ++pending;
-        }
-    }
-    if (state.scene->frame_when_ready && pending == 0) {
-        if (ready == 0) state.scene->frame_when_ready = false;
-        if (ready > 0 && !state.scene->cameras.empty()) {
-            const auto bounds = state.scene->engine_scene->get_aabb();
-            std::array<float, 3> center{};
-            float radius2 = 0;
-            for (int i = 0; i < 3; ++i) {
-                center[i] = (bounds[i] + bounds[i+3]) * 0.5f;
-                const auto extent = (bounds[i+3] - bounds[i]) * 0.5f;
-                radius2 += extent * extent;
-            }
-            const auto radius = std::sqrt(radius2);
-            if (std::isfinite(radius) && radius > 0) {
-                state.scene->frame_when_ready = false;
-                auto position = center;
-                position[2] -= radius * 3.0f;
-                auto& camera = state.scene->cameras[state.scene->active_camera_index];
-                camera.engine_camera->set(position, {0,0,1}, {0,1,0}, 45.0f);
-            }
-        }
-    }
-    const auto total = ready + failed + pending;
-    const double progress = total == 0
-                                ? 100.0
-                                : 100.0 * static_cast<double>(ready + failed) /
-                                      static_cast<double>(total);
+    const auto progress = scene_build_progress(*state.scene);
+    const auto total = progress.ready + progress.failed + progress.pending;
+    const double percent = total == 0
+                               ? 100.0
+                               : 100.0 * static_cast<double>(progress.ready + progress.failed) /
+                                     static_cast<double>(total);
     return {
         {"active", true},
-        {"loading", pending > 0},
+        {"loading", progress.pending > 0},
         {"archive_service_ready", python_script_service_dispatcher_registered()},
         {"path", state.project_path},
         {"scene", state.scene->route},
         {"total", total},
-        {"ready", ready},
-        {"failed", failed},
-        {"pending", pending},
-        {"progress", progress},
+        {"ready", progress.ready},
+        {"failed", progress.failed},
+        {"pending", progress.pending},
+        {"progress", percent},
     };
 }
-
 
 
 
@@ -4060,6 +4084,7 @@ void tick_native_animation_updates() {
             }
             ++scene->tree_revision;
         }
+        frame_scene_when_ready(*scene);
         return true;
     }, route, kCollaborativeApplyDispatchTimeout);
 }
