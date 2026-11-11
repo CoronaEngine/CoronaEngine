@@ -55,19 +55,9 @@ ProjectSettingsReply execute_project_settings_operation(const ProjectSettingsReq
         reply.error_message = result.error;
         return reply;
     }
-    const auto& data = result.data;
-    ProjectInfoSnapshot info;
-    info.name = data.value("name", std::string{});
-    info.mode = data.value("mode", std::string{});
-    info.prompt = data.value("prompt", std::string{});
-    info.core_version = data.value("core_version", std::string{});
-    info.create_time = data.value("create_time", std::string{});
-    info.last_opened = data.value("last_opened", std::string{});
-    info.project_path = data.at("project_path").get<std::string>();
-    info.archive_session = data.at("archive_session").get<std::string>();
-    info.read_only = data.value("read_only", false);
-    info.source_path = data.value("source_path", std::string{});
-    reply.info = std::move(info);
+    // update_metadata answered with the project's metadata; forward it rather than copying
+    // every field into a struct and back.
+    reply.value = result.data;
     return reply;
 }
 

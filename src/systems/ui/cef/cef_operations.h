@@ -62,14 +62,11 @@ struct ProjectSettingsRequest {
     ProjectSettingsMethod method;
     std::string archive_session, project_path, name, core_version;
 };
-struct ProjectInfoSnapshot {
-    std::string name, mode, prompt, core_version, create_time, last_opened;
-    std::string project_path, archive_session, source_path;
-    bool read_only = false;
-};
 struct ProjectSettingsReply {
     std::string error_code, error_message;
-    std::optional<ProjectInfoSnapshot> info;
+    /// The saved project's metadata, as the archive service answered it. One declaration of the
+    /// shape - and it is the side that owns the file.
+    nlohmann::json value = nlohmann::json();
 };
 
 ProjectSettingsReply execute_project_settings_operation(const ProjectSettingsRequest& request);

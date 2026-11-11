@@ -257,19 +257,7 @@ bool read_project_settings(ProjectSettingsMethod, const CefV8ValueList& argument
 }
 
 CefRefPtr<CefV8Value> project_settings_value(const ProjectSettingsReply& reply) {
-    auto value = CefV8Value::CreateObject(nullptr, nullptr);
-    const auto text = [&](const char* key, const std::string& item) {
-        value->SetValue(key, CefV8Value::CreateString(item), V8_PROPERTY_ATTRIBUTE_NONE);
-    };
-    if (reply.info) {
-        const auto& info = *reply.info;
-        text("name", info.name); text("mode", info.mode); text("prompt", info.prompt);
-        text("core_version", info.core_version); text("create_time", info.create_time); text("last_opened", info.last_opened);
-        text("project_path", info.project_path); text("archive_session", info.archive_session);
-        value->SetValue("read_only", CefV8Value::CreateBool(info.read_only), V8_PROPERTY_ATTRIBUTE_NONE);
-        if (!info.source_path.empty()) text("source_path", info.source_path);
-    }
-    return value;
+    return json_to_v8(reply.value);
 }
 
 bool read_gizmo_request(GizmoMethod method, const CefV8ValueList& arguments,
