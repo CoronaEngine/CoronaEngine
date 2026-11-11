@@ -67,3 +67,20 @@ def test_every_guard_it_names_exists():
     text = _doc()
     for target in re.findall(r"\]\(\.\./([\w./-]+)\)", text):
         assert (ROOT / target).exists(), f"the document points at a missing guard: {target}"
+
+def _web_methods_in_source() -> dict[str, set[str]]:
+    text = SURFACE.read_text(encoding="utf-8-sig")
+    block = text[text.index("EXPECTED_SURFACE = {"):text.index("\n}\n", text.index("EXPECTED_SURFACE"))]
+    entries = re.findall(r'^\s{4}"(\w+)": \{(.*?)\},?$', block, re.M | re.S)
+    return {namespace: set(re.findall(r'"(\w+)"', body)) for namespace, body in entries}
+
+
+def test_every_web_method_is_listed():
+    """Namespaces alone are not an entry point: the reader wants the method names."""
+    documented = _doc()
+    missing = []
+    for namespace, methods in _web_methods_in_source().items():
+        for method in methods:
+            if f"`{method}`" not in documented:
+                missing.append(f"{namespace}.{method}")
+    assert not missing, f"the document does not name these Web methods: {sorted(missing)}"

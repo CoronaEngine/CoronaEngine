@@ -34,6 +34,25 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 | `viewport` | 视口配置与拾取 |
 | `window` | Dock、面板与相机窗口 |
 
+### window.corona 的完整方法清单
+
+共 73 个方法。这张表由 `tests/tools/test_typed_native_surface.py` 的`EXPECTED_SURFACE` 生成，逐条与 `cef_v8_binding.cpp` 的注册比对。
+
+| 命名空间 | 方法 |
+|---|---|
+| `app` | `closeProcess` |
+| `audio` | `playActor`、`playResource`、`stopActor`、`stopResource` |
+| `bridge` | `call` |
+| `files` | `openFile` |
+| `gizmo` | `pointer`、`setTarget` |
+| `input` | `dispatch` |
+| `network` | `clearDiscoveredPeers`、`connectToPeer`、`getDiscoveredPeers`、`getSessionInfo`、`searchLan`、`setProjectRoot`、`startSession`、`stopSession` |
+| `project` | `createMultiplayerProject`、`createWorldProject`、`getAppVersion`、`getProjectLoadStatus`、`getRecentProjects`、`openProject`、`openProjectFile` |
+| `project_settings` | `saveActiveProjectInfo` |
+| `scene` | `captureScreenshot`、`createActor`、`createCamera`、`deleteActor`、`deleteCamera`、`focusActor`、`getEnvironment`、`importResourceFile`、`isVisionAvailable`、`readActive`、`readActorProperties`、`readActorRig`、`readCameraRenderSettings`、`readModelNodes`、`readScene`、`readTransforms`、`rebindActorResource`、`save`、`selectActor`、`selectModelFile`、`setActorIkChains`、`setActorTransform`、`setCameraRenderSettings`、`setEnvironment`、`setModelNodeState`、`updateActor`、`updateCamera` |
+| `viewport` | `configure`、`pick` |
+| `window` | `close`、`closeCameraView`、`closeTab`、`createCameraView`、`createPanel`、`cycleCameraWindowMode`、`detachPanel`、`focusTab`、`getCurrent`、`onCloseRequested`、`onClosed`、`redockPanel`、`resizeCameraView`、`setDragRegions`、`suspendCameraViews`、`toggleCameraBorderless`、`toggleCameraMaximized`、`toggleMainBorderless` |
+
 **失败形状**：Promise 拒绝时携带本文件的五个基础设施码之一
 （`PERMISSION_DENIED`、`CONTEXT_CHANGED`、`INVALID_ARGUMENT`、`NATIVE_UNAVAILABLE`、
 `NATIVE_FAILURE`），或者场景层的符号码（如 `PROJECT_CONTEXT_CHANGED`）原样透传。
