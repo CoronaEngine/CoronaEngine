@@ -38,6 +38,7 @@ set(UI_SYSTEM_SOURCES
     cef/editor_actor_projection.cpp
     cef/editor_scene_projection.cpp
     cef/editor_camera_views.cpp
+    cef/editor_scene_access.cpp
     cef/editor_network_state.cpp
     cef/editor_service_operations.cpp
     cef/cef_editor_native_api_handlers.cpp
@@ -74,6 +75,7 @@ set(UI_SYSTEM_SOURCES
     cef/editor_actor_projection.h
     cef/editor_scene_projection.h
     cef/editor_camera_views.h
+    cef/editor_scene_access.h
     cef/editor_network_state.h
     cef/editor_text_utils.h
     cef/native_editor_state.h
