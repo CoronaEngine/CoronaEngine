@@ -34,6 +34,34 @@ def project_info(request):
             "project_path": str(root)}
 
 
+def create_project_in(request):
+    """Create a project in a fresh directory under a base directory.
+
+    The caller supplies where and what to call it; this side owns the directory naming, because
+    it also owns everything that goes inside. create_project() refuses an existing target and
+    stages its writes atomically, so this only has to pick a free name and retry when another
+    creator wins the race.
+    """
+    base = Path(request["base_dir"])
+    stem = request["dir_stem"]
+    display_base = request.get("display_base") or stem
+    base.mkdir(parents=True, exist_ok=True)
+    template = {key: value for key, value in request.items()
+                if key not in {"base_dir", "dir_stem", "display_base"}}
+    for index in range(1, 1000):
+        target = base / f"{stem}_{index}"
+        if target.exists():
+            continue
+        payload = {**template, "path": str(target), "name": f"{display_base}_{index}"}
+        try:
+            created = create_project(payload)
+        except FileExistsError:
+            continue
+        return {**created, "name": payload["name"], "project_path": str(target),
+                "base_dir": str(base)}
+    raise RuntimeError(f"could not allocate a project directory for {stem} under {base}")
+
+
 def create_project(request):
     target = Path(request["path"]).resolve()
     if target.exists():

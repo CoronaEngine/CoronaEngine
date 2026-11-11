@@ -3878,22 +3878,21 @@ FilesReply execute_files_operation(const FilesRequest& request) {
 NativeResult create_launcher_project(const std::string& prompt, const std::string& role) {
     const bool multiplayer = !role.empty();
     const std::string display_base = !multiplayer ? "创造世界" : role == "host" ? "联机房主" : "联机加入";
-    const std::string dir_base = !multiplayer ? "creative_world" : role == "host" ? "multiplayer_host" : "multiplayer_guest";
-    const auto base_dir = runtime_data_dir();
-    std::filesystem::create_directories(base_dir);
-    int index = 1;
-    std::filesystem::path target;
-    do {
-        target = base_dir / (dir_base + "_" + std::to_string(index++));
-    } while (std::filesystem::exists(target));
-    const auto display_name = display_base + "_" + std::to_string(index - 1);
-    nlohmann::json payload{{"path", path_to_utf8(target)}, {"name", display_name}};
+    const std::string dir_stem = !multiplayer ? "creative_world" : role == "host" ? "multiplayer_host" : "multiplayer_client";
+    // Directory allocation belongs to the archive service: it owns the project layout, and it
+    // already creates the directories it writes into.
+    nlohmann::json payload{{"base_dir", path_to_utf8(runtime_data_dir())},
+                           {"dir_stem", dir_stem}, {"display_base", display_base}};
     if (multiplayer) payload["multiplayer"] = {{"role", role}};
     else payload["world"] = {{"type", "creative"}, {"prompt", prompt}};
-    auto created = project_archive_call("create_project", payload);
-    if (!created.success || !created.data.contains("path")) return native_failure("Project creation failed: " + created.error, 2);
-    update_editor_settings_section("General", {{"default_path", path_to_utf8(base_dir)}});
-    nlohmann::json result{{"name", display_name}, {"path", path_to_utf8(target)}};
+    const auto created = project_archive_call("create_project_in", payload);
+    if (!created.success || !created.data.contains("path")) {
+        return native_failure("Project creation failed: " + created.error, 2);
+    }
+    update_editor_settings_section("General",
+        {{"default_path", created.data.value("base_dir", std::string{})}});
+    nlohmann::json result{{"name", created.data.value("name", std::string{})},
+                          {"path", created.data.value("path", std::string{})}};
     if (multiplayer) result["role"] = role;
     return native_success(std::move(result));
 }
