@@ -34,6 +34,8 @@ set(UI_SYSTEM_SOURCES
     editor_api/resource_import_service.cpp
     editor_api/project_script_service.cpp
     cef/native_api_types.cpp
+    cef/editor_paths.cpp
+    cef/editor_service_operations.cpp
     cef/cef_editor_native_api_handlers.cpp
     cef/scene_folder.cpp
     cef/scene_archive_rpc.cpp
@@ -64,6 +66,7 @@ set(UI_SYSTEM_SOURCES
     cef/cef_script_input.h
     cef/cef_client.h
     cef/native_api_types.h
+    cef/editor_paths.h
     cef/native_editor_state.h
     cef/cef_editor_native_api_test_support.h
     cef/cef_osr_mode.h

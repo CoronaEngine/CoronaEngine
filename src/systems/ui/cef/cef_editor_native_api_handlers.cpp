@@ -23,6 +23,7 @@
 #include "python_service_bridge.h"
 #include "native_api_types.h"
 #include "native_editor_state.h"
+#include "editor_paths.h"
 #include "cef_editor_native_api_test_support.h"
 #include "cef_window_operations.h"
 #include "cef_scene_operations.h"
@@ -126,15 +127,7 @@ std::string trim_ascii(std::string value) {
     return std::string(begin, end);
 }
 
-std::filesystem::path path_from_utf8(const std::string& value) {
-    return Corona::Utils::utf8_to_path(value);
-}
 
-std::string path_to_utf8(const std::filesystem::path& value) {
-    auto text = Corona::Utils::path_to_utf8(value);
-    std::replace(text.begin(), text.end(), '\\', '/');
-    return text;
-}
 
 std::string stem_utf8(const std::string& route) {
     return path_to_utf8(path_from_utf8(route).stem());
@@ -1165,7 +1158,6 @@ NativeEditorScene* ensure_native_editor_scene(const std::string& project_path_ar
     return state.scene.get();
 }
 
-std::filesystem::path absolute_normalized_path(const std::filesystem::path& path);
 bool is_path_within(const std::filesystem::path& root, const std::filesystem::path& candidate);
 
 std::optional<std::string> stop_before_scene_replacement(const NativeEditorState& state) {
@@ -1561,10 +1553,6 @@ nlohmann::json scene_to_json(const NativeEditorScene& scene) {
 }
 
 // Send current values only. ProjectArchive owns the on-disk schema and atomic commit.
-NativeResult project_archive_call(const char* method, nlohmann::json request) {
-    return invoke_python_script_service({"ProjectArchive", method, nlohmann::json::array({std::move(request)})},
-                                        "python-archive", std::chrono::seconds(300));
-}
 
 bool matches_archive_session(const NativeEditorScene& scene, const nlohmann::json& request) {
     return !scene.archive_session.empty() && request.value("archive_session", std::string{}) == scene.archive_session;
@@ -3497,16 +3485,6 @@ std::string compact_timestamp() {
     return out.str();
 }
 
-std::filesystem::path absolute_normalized_path(const std::filesystem::path& path) {
-    std::error_code ec;
-    auto absolute = path.is_absolute() ? path : std::filesystem::absolute(path, ec);
-    if (ec) {
-        absolute = path;
-        ec.clear();
-    }
-    const auto canonical = std::filesystem::weakly_canonical(absolute, ec);
-    return ec ? absolute : canonical;
-}
 
 bool is_path_within(const std::filesystem::path& root,
                     const std::filesystem::path& candidate) {
@@ -5602,53 +5580,8 @@ ProjectLauncherReply execute_project_launcher_operation(const ProjectLauncherReq
 
 namespace {
 
-NativeResult save_project_info(const nlohmann::json& settings) {
-    auto* scene = native_editor_state().scene.get();
-    if (!scene) return native_failure("PROJECT_CONTEXT_CHANGED", 409);
-    if (const auto invalid = ProjectScriptService::validate_document_identity(
-            scene->archive_session, settings.value("archive_session", std::string{}), true)) {
-        return native_failure(invalid.message, 409);
-    }
-    if (const auto invalid = ProjectScriptService::require_writable_project(scene->read_only)) {
-        return native_failure(invalid.message, 403);
-    }
-    auto result = project_archive_call("update_metadata", {{"path", path_to_utf8(scene->project_root)}, {"settings", settings}});
-    if (!result.success || !result.data.contains("name")) return native_failure("Project settings were not saved: " + result.error, 2);
-    scene->name = result.data.at("name");
-    scene->core_version = result.data.at("core_version");
-    result.data["archive_session"] = scene->archive_session;
-    return result;
-}
 }
 
-ProjectSettingsReply execute_project_settings_operation(const ProjectSettingsRequest& request) {
-    NativeResult result;
-    ProjectSettingsReply reply;
-    const auto* scene = native_editor_state().scene.get();
-    if (!scene || absolute_normalized_path(path_from_utf8(request.project_path)) != scene->project_root)
-        result = native_failure("PROJECT_CONTEXT_CHANGED", 409);
-    else result = save_project_info({{"archive_session", request.archive_session},
-        {"name", request.name}, {"core_version", request.core_version}});
-    if (!result.success) {
-        reply.error_code = ProjectScriptService::project_settings_error_code(result.error_code);
-        reply.error_message = result.error;
-        return reply;
-    }
-    const auto& data = result.data;
-    ProjectInfoSnapshot info;
-    info.name = data.value("name", std::string{});
-    info.mode = data.value("mode", std::string{});
-    info.prompt = data.value("prompt", std::string{});
-    info.core_version = data.value("core_version", std::string{});
-    info.create_time = data.value("create_time", std::string{});
-    info.last_opened = data.value("last_opened", std::string{});
-    info.project_path = data.at("project_path").get<std::string>();
-    info.archive_session = data.at("archive_session").get<std::string>();
-    info.read_only = data.value("read_only", false);
-    info.source_path = data.value("source_path", std::string{});
-    reply.info = std::move(info);
-    return reply;
-}
 
 
 // The engine main thread polls animation revisions, but editor state belongs to
@@ -5914,30 +5847,13 @@ NetworkReply execute_network_operation(const NetworkRequest& request) {
 // Transport only.  The envelope, its schema and the service allowlist belong to
 // the Python side; keeping this free of branches is what makes the editor
 // surface one function wide.
-BridgeReply execute_bridge_operation(const std::string& envelope) {
-    BridgeReply reply;
-    if (envelope.empty()) {
-        reply.error_code = "INVALID_ARGUMENT";
-        reply.error_message = "Bridge envelope is empty";
-        return reply;
-    }
-    const auto result = invoke_python_script_service(
-        {"EditorBridge", "call", nlohmann::json::array({envelope})},
-        "python-bridge",
-        std::chrono::seconds(300));
-    if (!result.success) {
-        reply.error_code = result.error_code == 504 ? "EDITOR_API_TIMEOUT"
-                           : result.error_code == 429 ? "SERVICE_BUSY"
-                           : result.error_code == 503 ? "SERVICE_UNAVAILABLE"
-                                                      : "SERVICE_FAILED";
-        reply.error_message = result.error;
-        return reply;
-    }
-    reply.json = result.data.is_string() ? result.data.get<std::string>() : result.data.dump();
-    return reply;
-}
 
 namespace {
+NativeResult project_archive_call(const char* method, nlohmann::json request) {
+    return invoke_python_script_service({"ProjectArchive", method, nlohmann::json::array({std::move(request)})},
+                                        "python-archive", std::chrono::seconds(300));
+}
+
 nlohmann::json file_script_envelope(const NativeResult& result) {
     return nlohmann::json{{"success", result.success},
                           {"code", result.success ? 0 : result.error_code},
