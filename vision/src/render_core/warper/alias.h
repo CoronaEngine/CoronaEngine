@@ -41,6 +41,7 @@ public:
     void upload_immediately() noexcept override;
     void build(vector<float> weights) noexcept override;
     void allocate(uint num) noexcept override;
+    [[nodiscard]] const vector<AliasEntry> &host_table() const noexcept { return table_.host_buffer(); }
     [[nodiscard]] Uint size() const noexcept override { return *func_.length(); }
     [[nodiscard]] Float PDF(const Uint &i) const noexcept override {
         return select(*integral() > 0, func_at(i) / *integral(), 0.f);

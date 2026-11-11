@@ -5,6 +5,7 @@
 #include "falcor_di/common.h"
 #include "falcor_di/candidates.h"
 #include "falcor_di/reuse.h"
+#include "render_core/warper/alias.h"
 #include <cmath>
 #include <stdexcept>
 #include <string>
@@ -12,13 +13,15 @@
 
 namespace vision {
 
-// Static RGB, pinhole, area-light ReSTIR DI experiment.
+// Static RGB, pinhole ReSTIR DI using the scene's area lights and environment.
 class FalcorDIExperiment final : private Toolkit {
     static constexpr uint has_history_bit = 1u;
     static constexpr uint same_geometry_bit = 2u;
     uint2 extent_{};
     FrameBuffer *frame_buffer_{};
     uint light_count_{};
+    uint area_light_count_{};
+    uint environment_index_{InvalidUI32};
     uint previous_frame_{InvalidUI32};
     WP<const GeometryGpuResource> previous_geometry_;
     uint64_t previous_geometry_revision_{};
@@ -34,6 +37,7 @@ class FalcorDIExperiment final : private Toolkit {
     Buffer<falcor_di::LightTriangleGeometry> light_geometry_;
     Buffer<float> probabilities_;
     Buffer<uint> light_bases_;
+    Buffer<uint2> light_alias_;
     Shader<void()> prepare_light_geometry_;
     Shader<void(uint)> prepare_surface_, presample_;
     Shader<void(uint, uint)> candidates_, shade_;
@@ -52,30 +56,39 @@ class FalcorDIExperiment final : private Toolkit {
         vector<uint4> primitives;
         vector<float> probabilities;
         const auto *environment = scene().light_manager().env_light();
-        if (environment && (environment->impl_type() != "spherical" || any(environment->average() != make_float3(0.f))))
-            throw std::runtime_error("Falcor DI experiment requires an unlit environment");
+        const bool has_environment = environment && any(environment->average() != make_float3(0.f));
         for (uint i = 0; i < instances.size(); ++i) {
             const auto &shape = instances[i];
             if (!shape->has_emission()) continue;
             const auto *light = shape->emission().get();
-            if (light->impl_type() != "area" || light->source_desc()["two_sided"].as_bool(false) || !light->color_ ||
-                (light->color_->impl_type() != "number" && light->color_->impl_type() != "constant"))
-                throw std::runtime_error("Falcor DI experiment requires constant one-sided area lights");
+            if (light->impl_type() != "area" || light->source_desc()["two_sided"].as_bool(false) || !light->color_)
+                throw std::runtime_error("Falcor DI requires one-sided area lights");
+            // Numeric and uniform graph radiance is spatially constant too.
+            // The geometry pass refreshes the cached value every frame.
+            const bool uniform = light->color_->is_uniform();
             const auto areas = shape->surface_areas();
             const auto emission_luminance = luminance(light->average());
             bases[i] = static_cast<uint>(probabilities.size());
             for (uint prim_id = 0; prim_id < areas.size(); ++prim_id) {
-                primitives.push_back(make_uint4(i, prim_id, shape->handle().light_id, 0u));
+                primitives.push_back(make_uint4(i, prim_id, shape->handle().light_id, uint(uniform)));
                 probabilities.push_back(areas[prim_id] * emission_luminance);
             }
         }
-        float power = 0.f;
-        for (const auto value : probabilities) power += value;
-        if (!(power > 0.f) || !std::isfinite(power))
-            throw std::runtime_error("Falcor DI experiment found no finite light power");
-        for (auto &value : probabilities) value /= power;
+        area_light_count_ = static_cast<uint>(primitives.size());
+        probabilities = falcor_di::light_selection_probabilities(probabilities, has_environment);
+        if (has_environment) {
+            environment_index_ = area_light_count_;
+            primitives.push_back(make_uint4(InvalidUI32));
+            // Reuse the framework's CPU alias builder; the uploaded snapshot owns
+            // its entries after this temporary builder is destroyed.
+            AliasTable alias(pipeline()->bindless_array());
+            alias.build(probabilities);
+            vector<uint2> entries;
+            for (const auto &entry : alias.host_table())
+                entries.push_back(make_uint2(bit_cast<uint>(entry.prob), entry.alias));
+            light_alias_ = uploaded(entries, "Falcor DI light selection alias");
+        }
         light_count_ = static_cast<uint>(probabilities.size());
-        if (light_count_ != 8u) throw std::runtime_error("Falcor DI experiment uses the eight-triangle Kitchen light PDF");
         light_primitives_ = uploaded(primitives, "Falcor DI emitter primitive IDs");
         light_geometry_ = device().create_buffer<falcor_di::LightTriangleGeometry>(
             light_count_, "Falcor DI emitter geometry cache");
@@ -132,6 +145,12 @@ class FalcorDIExperiment final : private Toolkit {
         auto &lights = renderer().light_sampler();
         Kernel prepare_light_geometry = [&] {
             const Uint index = dispatch_id();
+            if (environment_index_ != InvalidUI32) {
+                $if(index == environment_index_) {
+                    light_geometry_.write(index, falcor_di::LightTriangleGeometryVar{}, false);
+                    $return();
+                };
+            }
             const Uint4 primitive = light_primitives_.read(index, false);
             const auto p0 = geo.compute_light_eval_context(primitive.x, primitive.y, make_float2(1.f, 0.f));
             const auto p1 = geo.compute_light_eval_context(primitive.x, primitive.y, make_float2(0.f, 1.f));
@@ -143,15 +162,18 @@ class FalcorDIExperiment final : private Toolkit {
             triangle.ng.set(p0.ng);
             // The authored normal is interpolated by the framework. When the
             // corner hemispheres disagree, let it resolve the sampled point.
-            const Bool cacheable = p0.PDF_pos > 0.f && falcor_di::finite(p0.PDF_pos) &&
+            const Bool cacheable = primitive.w != 0u && p0.PDF_pos > 0.f && falcor_di::finite(p0.PDF_pos) &&
                                    all(p0.ng == p1.ng) && all(p0.ng == p2.ng);
             triangle.pdf_pos = select(cacheable, p0.PDF_pos, 0.f);
-            // This route accepts only constant one-sided emitters in RGB.
+            // Uniform emitters retain the cached fast path. Textured emitters
+            // resolve the sampled barycentric point/UV in load_light_point.
             const auto swl = spec->sample_wavelength(sampler);
             Float3 emission = make_float3(0.f);
             lights->dispatch_light(primitive.z, [&](const Light *light) {
                 if (!light->match(LightType::Area)) return;
-                emission = light->color_.eval_illumination_spectrum(p0.uv, swl).sample.vec3() * light->scale();
+                $if(primitive.w != 0u) {
+                    emission = light->color_.eval_illumination_spectrum(p0.uv, swl).sample.vec3() * light->scale();
+                };
             });
             triangle.emission.set(emission);
             light_geometry_.write(index, triangle, false);
@@ -199,9 +221,9 @@ class FalcorDIExperiment final : private Toolkit {
         prepare_surface_ = device().compile(prepare, "Falcor DI surface preparation");
 
         const auto context = [&](const Uint &frame, const Bool &has_history) {
-            return falcor_di::Context{extent_, frame, has_history, light_count_, surfaces0_, surface_normals_,
+            return falcor_di::Context{extent_, frame, has_history, light_count_, environment_index_, surfaces0_, surface_normals_,
                                      reservoirs_, neighbors_, light_primitives_, light_geometry_,
-                                     probabilities_, light_bases_, ris_};
+                                     probabilities_, light_bases_, ris_, light_alias_};
         };
         Kernel presample = [&](Uint frame) {
             sampler->load_data();
@@ -285,7 +307,8 @@ class FalcorDIExperiment final : private Toolkit {
                         ref.pos = primary.org_min.xyz();
                         value = light->evaluate_wi(ref, it, swl, LightEvalMode::L).L.vec3();
                     });
-                } $else {
+                };
+                {
                     const auto surface = falcor_di::load_surface(ctx, make_int2(pixel), false);
                     const auto reservoir = falcor_di::load_reservoir(ctx, pixel, slice);
                     $if(falcor_di::valid_surface(surface) && falcor_di::valid_reservoir(reservoir)) {
@@ -296,12 +319,20 @@ class FalcorDIExperiment final : private Toolkit {
                             $if(!geo.trace_occlusion(shadow)) {
                                 materials.dispatch(it.material_id(), [&](const Material *material) {
                                     auto bsdf = material->create_evaluator(it, swl);
-                                    value = bsdf.evaluate(it.wo, sample.direction).f.vec3() * weighted_radiance;
+                                    value += bsdf.evaluate(it.wo, sample.direction, MaterialEvalMode::F).f.vec3() * weighted_radiance;
                                 });
                             };
                         };
                     };
                 };
+            } $else {
+                if (environment_index_ != InvalidUI32) {
+                    const auto primary = fb.rays().read(i)->to_ray_state().ray;
+                    LightSampleContext ref;
+                    ref.pos = primary.org_min.xyz();
+                    ref.ng = primary.dir_max.xyz();
+                    value = lights->evaluate_miss_wi(ref, primary.dir_max.xyz(), swl, LightEvalMode::L).L.vec3();
+                }
             };
             direct.write_radiance(i, make_float4(value, 1.f));
         };
@@ -321,8 +352,9 @@ public:
         bind_screen_buffers();
         prepare_sampling_buffers();
         compile(direct, bias_mode);
-        OC_INFO_FORMAT("Falcor DI native route active: mode={}, {} triangles, {}x{}", mode,
-                       light_count_, extent_.x, extent_.y);
+        OC_INFO_FORMAT("Falcor DI native route active: mode={}, {} triangles, {}x{}, environment={}, NEE=10+1, env_pdf=uniform_sphere, actual_scene_radiance, selection={}", mode,
+                       area_light_count_, extent_.x, extent_.y, environment_index_ != InvalidUI32,
+                       environment_index_ != InvalidUI32 ? "framework alias, area/env mass .5/.5 (env-only1)" : "original area CDF");
     }
 
     [[nodiscard]] bool matches(uint2 extent, std::string_view mode, bool publish_gi) const noexcept {

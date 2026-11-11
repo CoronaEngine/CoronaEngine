@@ -10,22 +10,35 @@ inline constexpr uint initial_light_count = 10u;
 inline constexpr uint initial_candidate_count = initial_light_count + 1u;
 inline constexpr uint screen_tile_size = 16u;
 
+[[nodiscard]] inline Float initial_mixture_pdf(const Float &light_probability, const Float &bsdf_probability,
+                                               const Float &conditional_pdf) {
+    return (float(initial_light_count) * light_probability + max(0.f, bsdf_probability / conditional_pdf)) /
+        float(initial_candidate_count);
+}
+
 inline void presample_light(const Context &ctx, const Uint2 &position, TSampler &sampler) {
     sampler->set_seed(position, ctx.frame, Dimension::FalcorDI_presample);
     const Float u = sampler->next_1d();
     Float cumulative = 0.f;
     Uint selected = InvalidUI32;
     Float selected_probability = 0.f;
-    $for(light, ctx.light_count) {
-        const Float probability = ctx.probabilities.read(light, false);
-        $if(!(probability > 0.f)) { $continue; };
-
-        // Keep the last positive entry if the FP32 CDF ends below one.
-        selected = light;
-        selected_probability = probability;
-        cumulative += probability;
-        $if(u < cumulative) { $break; };
-    };
+    if (ctx.environment_index != InvalidUI32) {
+        const Float scaled = u * float(ctx.light_count);
+        const Uint slot = min(cast<uint>(scaled), ctx.light_count - 1u);
+        const Uint2 entry = ctx.light_alias.read(slot, false);
+        selected = select(scaled - cast<float>(slot) < as<float>(entry.x), slot, entry.y);
+        selected_probability = ctx.probabilities.read(selected, false);
+    } else {
+        $for(light, ctx.light_count) {
+            const Float probability = ctx.probabilities.read(light, false);
+            $if(!(probability > 0.f)) { $continue; };
+            // Preserve the original area-only CDF and random-number mapping.
+            selected = light;
+            selected_probability = probability;
+            cumulative += probability;
+            $if(u < cumulative) { $break; };
+        };
+    }
     ctx.ris.write(position.y * tile_size + position.x, make_uint2(selected, as<uint>(selected_probability)), false);
 }
 
@@ -56,8 +69,7 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
                         };
                     }
                     // Convert the solid-angle density to the same triangle measure as the light proposal.
-                    const Float mixture_pdf = (float(initial_light_count) * light_probability +
-                        max(0.f, bsdf_probability / light.pdf)) / float(initial_candidate_count);
+                    const Float mixture_pdf = initial_mixture_pdf(light_probability, bsdf_probability, light.pdf);
                     $if(mixture_pdf > 0.f && finite(mixture_pdf)) {
                         const Float candidate_weight = target / mixture_pdf;
                         $if(finite(candidate_weight)) {
@@ -100,8 +112,8 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
         $if(eligible_for_di && pdf > 0.f && finite(pdf) && dot(surface.normal, sample.wi) > 0.f) {
             const Float3 origin = Interaction::custom_offset_ray_origin(surface.position, surface.geometric_normal,
                                                                         sample.wi);
-            const Uint4 hit = trace_light(ctx, origin, sample.wi, ray_epsilon, 3.402823466e38f);
-            $if(hit.y != InvalidUI32 && hit.x != InvalidUI32) {
+            const Uint4 hit = trace_light(ctx, origin, sample.wi, ray_epsilon, environment_ray_distance);
+            $if(hit.x != InvalidUI32) {
                 // The folded-square sampler accepts the native triangle hit weights.
                 offer_candidate(hit.x, make_float2(as<float>(hit.z), as<float>(hit.w)),
                                 ctx.probabilities.read(hit.x, false), bsdf_replacement, &pdf);

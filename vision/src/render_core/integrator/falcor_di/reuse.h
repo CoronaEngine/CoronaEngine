@@ -54,9 +54,10 @@ struct ReceiverTargets {
 }
 
 [[nodiscard]] inline Float history_target(const Context &ctx, const Float3 &emission, const LightEvalContext &point,
-                                          const HistoryInput &history, const SampledWavelengths &swl, const Bool &trace) {
+                                          const Uint &light_index, const HistoryInput &history,
+                                          const SampledWavelengths &swl, const Bool &trace) {
     return outline("Falcor DI history target", [&] {
-        const TriangleSample sample = evaluate_light_point(emission, point, history.surface);
+        const TriangleSample sample = evaluate_light_point(ctx, light_index, emission, point, history.surface);
         Float target = 0.f;
         $if(sample.pdf > 0.f) {
             const auto hit = Toolkit::frame_buffer().prev_visibility_buffer_var(ctx.frame).read(history.pixel_index);
@@ -108,15 +109,16 @@ struct ReceiverTargets {
         // Re-evaluate the winner on each admitted history receiver to normalize against its support.
         const LightTriangleGeometryVar triangle = ctx.light_geometry.read(output.light_index, false);
         const LightEvalContext point = load_light_point(ctx, output.light_index, triangle, output->uv());
+        const Float3 emission = light_emission(ctx, output.light_index, triangle, point);
         Float numerator = output.target;
         Float denominator = current.count * output.target;
         $if(temporal.reservoir.count > 0.f) {
-            const Float target = history_target(ctx, triangle.emission.as_vec3(), point, temporal, swl, Bool{trace});
+            const Float target = history_target(ctx, emission, point, output.light_index, temporal, swl, Bool{trace});
             numerator = select(selected_source == 1u, target, numerator);
             denominator += temporal.reservoir.count * target;
         };
         $if(spatial.reservoir.count > 0.f) {
-            const Float target = history_target(ctx, triangle.emission.as_vec3(), point, spatial, swl, Bool{trace});
+            const Float target = history_target(ctx, emission, point, output.light_index, spatial, swl, Bool{trace});
             numerator = select(selected_source == 2u, target, numerator);
             denominator += spatial.reservoir.count * target;
         };
@@ -139,9 +141,10 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
         Float target_current_at_neighbor = 0.f;
         $if(valid_reservoir(canonical)) {
             const LightTriangleGeometryVar triangle = ctx.light_geometry.read(canonical.light_index, false);
+            const auto point = load_light_point(ctx, canonical.light_index, triangle, canonical_uv);
             // The canonical sample was checked against this frame's acceleration structure.
             target_current_at_neighbor = history_target(
-                ctx, triangle.emission.as_vec3(), load_light_point(ctx, canonical.light_index, triangle, canonical_uv),
+                ctx, light_emission(ctx, canonical.light_index, triangle, point), point, canonical.light_index,
                 history, swl, !same_shadow_receiver(receiver, history.surface));
         };
         const Float neighbor_confidence = pair_count * neighbor.count;
