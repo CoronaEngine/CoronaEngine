@@ -39,9 +39,8 @@ EXPECTED_SURFACE = {
     },
     "viewport": {"configure", "pick"},
     "window": {
-        "close", "createPanel", "focusTab", "getCurrent",
-        "onCloseRequested", "onClosed", "resizeCameraView", "setWindowPresentation",
-        "suspendCameraViews",
+        "close", "createPanel", "focus", "getCurrent",
+        "onCloseRequested", "onClosed", "setWindowPresentation",
     },
 }
 

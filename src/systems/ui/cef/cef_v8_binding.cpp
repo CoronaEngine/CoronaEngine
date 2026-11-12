@@ -1761,20 +1761,33 @@ bool read_panel_options(const CefV8ValueList& arguments, WindowRequest& request)
 // is the one state-free request: it advances the window one step, which is all a
 // button without window state can honestly ask for.
 bool read_window_presentation(const CefV8ValueList& arguments, WindowRequest& request) {
-    if (arguments.size() != 1 || !arguments[0]->IsObject() || arguments[0]->IsArray() || arguments[0]->IsFunction()) return false;
+    if (arguments.size() != 1 || !object_keys(arguments[0],
+        std::initializer_list<const char*>{"target", "mode", "sceneId", "cameraId", "width", "height"})) return false;
     const auto object = arguments[0];
     std::string target = "camera";
+    if (!option_string(object, "target", target)) return false;
     std::string mode;
-    if (!option_string(object, "target", target) || !option_string(object, "mode", mode, true)) return false;
-    if (mode == "windowed") request.presentation = WindowPresentation::Windowed;
-    else if (mode == "maximized") request.presentation = WindowPresentation::Maximized;
-    else if (mode == "borderless") request.presentation = WindowPresentation::Borderless;
-    else if (mode == "toggle") request.presentation = WindowPresentation::Toggle;
-    else return false;
+    const bool has_mode = object->HasValue("mode");
+    const bool has_size = object->HasValue("width") || object->HasValue("height");
+    if (has_mode == has_size) return false; // exactly one state: a mode or a size
+    if (has_mode) {
+        if (!option_string(object, "mode", mode, true)) return false;
+        if (mode == "windowed") request.presentation = WindowPresentation::Windowed;
+        else if (mode == "maximized") request.presentation = WindowPresentation::Maximized;
+        else if (mode == "borderless") request.presentation = WindowPresentation::Borderless;
+        else if (mode == "toggle") request.presentation = WindowPresentation::Toggle;
+        else return false;
+    } else {
+        // A size is a presentation too: the caller states how big the surface should be.
+        if (!option_integer(object, "width", request.width, 1) ||
+            !option_integer(object, "height", request.height, 1)) return false;
+        if (request.width <= 0 || request.height <= 0) return false;
+    }
     if (target == "main") {
-        // The main window owns an OS window, not a camera surface: two states only.
+        // The main window owns an OS window, not a camera surface: a mode, never a size.
+        if (has_size) return false;
         if (request.presentation == WindowPresentation::Maximized) return false;
-        if (object->HasValue("sceneId") || object->HasValue("cameraId") || object->HasValue("tabId")) return false;
+        if (object->HasValue("sceneId") || object->HasValue("cameraId")) return false;
         request.main_window_target = true;
         return true;
     }
@@ -1784,8 +1797,9 @@ bool read_window_presentation(const CefV8ValueList& arguments, WindowRequest& re
     return request.scene_id.empty() == request.camera_id.empty();
 }
 
-// close() names at most one identity: a panel's stable id, or a camera surface. No
-// argument means "the caller". An empty object is not an identity, it is a typo.
+// close() names at most one identity: a panel's stable id, one camera surface, or a
+// whole scene's camera views. No argument means "the caller". An empty object is not an
+// identity, it is a typo.
 bool read_close_request(const CefV8ValueList& arguments, WindowRequest& request) {
     if (arguments.empty()) return true;
     if (arguments.size() != 1 || !object_keys(arguments[0],
@@ -1794,12 +1808,22 @@ bool read_close_request(const CefV8ValueList& arguments, WindowRequest& request)
     const bool has_panel = object->HasValue("panelId");
     const bool has_scene = object->HasValue("sceneId");
     const bool has_camera = object->HasValue("cameraId");
-    if (has_scene != has_camera) return false;
-    if (has_panel && has_scene) return false;
+    if (has_panel && (has_scene || has_camera)) return false;
     if (has_panel) return option_string(object, "panelId", request.panel_id, true);
     if (!has_scene) return false;
-    return option_string(object, "sceneId", request.scene_id, true) &&
-           option_string(object, "cameraId", request.camera_id, true);
+    if (!option_string(object, "sceneId", request.scene_id)) return false;
+    if (has_camera) return option_string(object, "cameraId", request.camera_id, true);
+    // Plural form. An empty scene closes nothing but still fences, which the window
+    // session relies on when it retires a world.
+    request.close_scene_views = true;
+    return true;
+}
+
+// focus({panelId}) — the same stable identity close uses.
+bool read_focus_request(const CefV8ValueList& arguments, WindowRequest& request) {
+    if (arguments.size() != 1 || !object_keys(arguments[0],
+        std::initializer_list<const char*>{"panelId"})) return false;
+    return option_string(arguments[0], "panelId", request.panel_id, true);
 }
 
 CefRefPtr<CefV8Value> snapshot_value(const WindowSnapshot& snapshot, int browser_id,
@@ -2280,32 +2304,21 @@ public:
         }
         WindowRequest request{method, browser_id_};
         request.context_id = context_id_;
+        // Every window operation takes at most one object: the identity or the state it
+        // names. Nothing travels positionally any more.
         const bool panel_operation = method == WindowMethod::CreatePanel;
         const bool presentation = method == WindowMethod::SetWindowPresentation;
         const bool close_operation = method == WindowMethod::Close;
-        const bool targeted = method == WindowMethod::FocusTab;
-        const bool resize = method == WindowMethod::ResizeCameraView;
-        const bool camera_operation = method == WindowMethod::SuspendCameraViews || resize;
-        const std::size_t offset = resize ? 2u : 0u;
-        if ((camera_operation && (arguments.size() != offset + 1u || !arguments[offset]->IsString())) ||
-            (resize && (!arguments[0]->IsInt() || arguments[0]->GetIntValue() <= 0 ||
-                        !arguments[1]->IsInt() || arguments[1]->GetIntValue() <= 0)) ||
-            (panel_operation && !read_panel_options(arguments, request)) ||
+        const bool focus_operation = method == WindowMethod::Focus;
+        if ((panel_operation && !read_panel_options(arguments, request)) ||
             (presentation && !read_window_presentation(arguments, request)) ||
-            (method == WindowMethod::ConfigureViewport && !read_viewport_configuration(arguments, request)) ||
             (close_operation && !read_close_request(arguments, request)) ||
-            ((method == WindowMethod::GetCurrent || method == WindowMethod::CloseProcess) && !arguments.empty()) ||
-            (targeted && (arguments.size() != 1 || !arguments[0]->IsInt() || arguments[0]->GetIntValue() < 0))) {
+            (focus_operation && !read_focus_request(arguments, request)) ||
+            (method == WindowMethod::ConfigureViewport && !read_viewport_configuration(arguments, request)) ||
+            ((method == WindowMethod::GetCurrent || method == WindowMethod::CloseProcess) && !arguments.empty())) {
             reject(context_, promise, "INVALID_ARGUMENT", "Invalid native window operation arguments");
             return promise;
         }
-        if (targeted) request.tab_id = arguments[0]->GetIntValue();
-        if (camera_operation) request.scene_id = arguments[offset]->GetStringValue().ToString();
-        if (resize && request.scene_id.empty() != request.camera_id.empty()) {
-            reject(context_, promise, "INVALID_ARGUMENT", "Scene and camera identity must be supplied together");
-            return promise;
-        }
-        if (resize) { request.width = arguments[0]->GetIntValue(); request.height = arguments[1]->GetIntValue(); }
         if (request.method == WindowMethod::CreatePanel || request.method == WindowMethod::CreateCameraView) {
             request.base_url = context_->GetFrame()->GetURL().ToString();
             if (const auto hash = request.base_url.find('#'); hash != std::string::npos) request.base_url.erase(hash);
@@ -2344,7 +2357,7 @@ private:
                 try { reply = execute_window_operation(request); }
                 catch (const std::exception& error) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = error.what(); }
                 catch (...) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = "Native window operation failed"; }
-                if (request.method == WindowMethod::SuspendCameraViews && reply.error_code.empty()) {
+                if (request.method == WindowMethod::Close && request.close_scene_views && reply.error_code.empty()) {
                     // Preserve the lifecycle fence: retirement executes in this turn;
                     // acknowledgment is a separate queued main-thread turn.
                     BrowserManager::instance().enqueue_main_thread_task([weak, id, reply = std::move(reply)] {
@@ -2576,7 +2589,7 @@ private:
             created->SetValue("panel_id", CefV8Value::CreateString(reply.snapshot.panel_id), V8_PROPERTY_ATTRIBUTE_NONE);
             created->SetValue("existing", CefV8Value::CreateBool(reply.existing), V8_PROPERTY_ATTRIBUTE_NONE);
             promise->ResolvePromise(created);
-        } else if (method == WindowMethod::SuspendCameraViews) {
+        } else if (method == WindowMethod::Close) {
             auto value = CefV8Value::CreateObject(nullptr, nullptr);
             value->SetValue("closed", CefV8Value::CreateInt(reply.closed_count), V8_PROPERTY_ATTRIBUTE_NONE);
             promise->ResolvePromise(value);
@@ -2728,14 +2741,11 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     // One verb for "close a window"; the identity decides which. See read_close_request.
     window->SetValue("close", CefV8Value::CreateFunction("close",
         new NativeHandler(endpoint, WindowMethod::Close)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    window->SetValue("focusTab", CefV8Value::CreateFunction("focusTab",
-        new NativeHandler(endpoint, WindowMethod::FocusTab)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    // focus({panelId}) targets the same stable identity close does.
+    window->SetValue("focus", CefV8Value::CreateFunction("focus",
+        new NativeHandler(endpoint, WindowMethod::Focus)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("createPanel", CefV8Value::CreateFunction("createPanel",
         new NativeHandler(endpoint, WindowMethod::CreatePanel)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    window->SetValue("suspendCameraViews", CefV8Value::CreateFunction("suspendCameraViews",
-        new NativeHandler(endpoint, WindowMethod::SuspendCameraViews)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    window->SetValue("resizeCameraView", CefV8Value::CreateFunction("resizeCameraView",
-        new NativeHandler(endpoint, WindowMethod::ResizeCameraView)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("setWindowPresentation", CefV8Value::CreateFunction("setWindowPresentation",
         new NativeHandler(endpoint, WindowMethod::SetWindowPresentation)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("onClosed", CefV8Value::CreateFunction("onClosed",

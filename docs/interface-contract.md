@@ -19,7 +19,7 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 
 ## Web 面
 
-共 12 个命名空间 / 63 个方法。清单由
+共 12 个命名空间 / 61 个方法。清单由
 `tests/tools/test_typed_native_surface.py` 精确钉死（多一个、少一个都会失败）：
 
 | 命名空间 | 说明 |
@@ -52,7 +52,7 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 | `project_settings` | `saveActiveProjectInfo` |
 | `scene` | `captureScreenshot`、`createActor`、`createCamera`、`deleteActor`、`deleteCamera`、`focusActor`、`getEnvironment`、`importResourceFile`、`isVisionAvailable`、`readActive`、`readActorProperties`、`readActorRig`、`readCameraRenderSettings`、`readModelNodes`、`readScene`、`readTransforms`、`rebindActorResource`、`save`、`selectActor`、`selectModelFile`、`setActorIkChains`、`setActorTransform`、`setCameraRenderSettings`、`setEnvironment`、`setModelNodeState`、`updateActor`、`updateCamera` |
 | `viewport` | `configure`、`pick` |
-| `window` | `close`、`createPanel`、`focusTab`、`getCurrent`、`onCloseRequested`、`onClosed`、`resizeCameraView`、`setWindowPresentation`、`suspendCameraViews` |
+| `window` | `close`、`createPanel`、`focus`、`getCurrent`、`onCloseRequested`、`onClosed`、`setWindowPresentation` |
 
 ### 面板与窗口：三个合并后的入口
 
@@ -63,8 +63,9 @@ ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web �
 | 方法 | 请求 | 说明 |
 |---|---|---|
 | `createPanel` | `{kind?: 'panel' \| 'camera', width?, height?, x?, y?, panelId?, routePath?, title?}` | `kind` 缺省为 `panel`。相机窗口要求 `archiveSession`/`sceneId`/`cameraId` 同时非空；`cameraHandle` 一律拒绝，相机身份由原生解析。 |
-| `close` | 无参数 / `{panelId}` / `{sceneId, cameraId}` | 无参数关自己；`panelId` 是 `createPanel` 的稳定面板身份（只有主窗口能关别人，主窗口不能被当作面板关）；`sceneId`+`cameraId` 关相机窗口（主窗口可关任意，相机窗口只能关自己）。返回布尔，`false` 表示没有该窗口（幂等清理）。 |
-| `setWindowPresentation` | `{target?: 'camera' \| 'main', mode, sceneId?, cameraId?}` | `mode` 是 `windowed`/`maximized`/`borderless`/`toggle`；主窗口只有 `windowed`/`borderless`/`toggle`。相机窗口可用 `sceneId`+`cameraId` 指定，缺省为自己。 |
+| `close` | 无参数 / `{panelId}` / `{sceneId, cameraId}` / `{sceneId}` | 无参数关自己；`panelId` 是 `createPanel` 的稳定面板身份（只有主窗口能关别人，主窗口不能被当作面板关）；`sceneId`+`cameraId` 关一个相机窗口（主窗口可关任意，相机窗口只能关自己）；只给 `sceneId` 是复数形式，关掉该场景全部相机窗口。返回 `{closed: n}`，`0` 表示没有匹配窗口（幂等清理）。空 `sceneId` 不关任何窗口，但仍在下一次主线程调度里应答——窗口会话用它作退休栅栏。 |
+| `focus` | `{panelId}` | 聚焦该面板（只有主窗口能聚焦别人）。 |
+| `setWindowPresentation` | `{target?: 'camera' \| 'main', mode, sceneId?, cameraId?, width?, height?}` | 请求要么给 `mode`（`windowed`/`maximized`/`borderless`/`toggle`），要么给 `width`+`height`（相机窗口改尺寸），不能同时给；主窗口只有 `windowed`/`borderless`/`toggle` 且没有尺寸请求。相机窗口可用 `sceneId`+`cameraId` 指定，缺省为自己。 |
 
 `mode` 描述**窗口要处于的状态**，不是要执行的开关；`toggle` 是唯一不带状态值的请求，
 表示“往前走一步”（相机窗口：无边框 → 窗口化，窗口化 ⇄ 最大化）。

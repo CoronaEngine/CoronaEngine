@@ -279,7 +279,7 @@ try {
     for (const doc of docs) {
       assert.equal(await doc.client.evaluate('typeof corona.window.onClosed'), 'function', 'native close events require direct V8 callbacks');
       assert.equal(await doc.client.evaluate('typeof corona.window.onCloseRequested'), 'function');
-      for (const method of ['close', 'focusTab', 'createPanel', 'setWindowPresentation']) {
+      for (const method of ['close', 'focus', 'createPanel', 'setWindowPresentation']) {
         assert.equal(await doc.client.evaluate(`typeof corona.window.${method}`), 'function', `${method} requires a direct native V8 operation`);
       }
       await doc.client.evaluate(`(() => {
@@ -340,13 +340,13 @@ try {
       assert.equal(await docs[index].client.evaluate('corona.window.getCurrent().then(x=>x.tabId)'), createdPanels[index - 1].tab_id);
     }
     stage = 'typed panel validation and docking intents';
-    assert.deepEqual(await main.evaluate('corona.window.suspendCameraViews("")'), {closed:0});
-    assert.deepEqual(await docs[1].client.evaluate('corona.window.suspendCameraViews("")'), {closed:0});
+    assert.deepEqual(await main.evaluate('corona.window.close({sceneId:""})'), {closed:0});
+    assert.deepEqual(await docs[1].client.evaluate('corona.window.close({sceneId:""})'), {closed:0});
     const barrierOrder = await main.evaluate(`(async () => {
       const order = [];
       await Promise.all([
         corona.window.getCurrent().then(() => order.push('before')),
-        corona.window.suspendCameraViews('').then(() => order.push('barrier')),
+        corona.window.close({sceneId:''}).then(() => order.push('barrier')),
         corona.window.getCurrent().then(() => order.push('after')),
       ]);
       return order;
@@ -358,13 +358,13 @@ try {
       assert.equal(await docs[1].client.evaluate(`corona.window.setWindowPresentation({mode:'${mode}'})`), false, 'non-camera panels must be unchanged');
     }
     for (const options of ['', 'null', '1', '"scene"', '[]', '{}', '{mode:1}', '{mode:"docked"}',
-      '{sceneId:"s"}', '{cameraId:"c",mode:"toggle"}', '{sceneId:"s",cameraId:"c",mode:"maximized",flag:1}']) {
+      '{cameraId:"c",mode:"toggle"}', '{sceneId:"s",cameraId:"c",mode:"maximized",flag:1}',
+      '{sceneId:"s",cameraId:"c",width:800}', '{sceneId:"s",cameraId:"c",width:0,height:600}',
+      '{target:"main",width:800,height:600}',
+      '{sceneId:"s",cameraId:"c",mode:"windowed",width:800,height:600}']) {
       assert.equal(await main.evaluate(`corona.window.setWindowPresentation(${options}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
-    assert.equal(await main.evaluate('corona.window.resizeCameraView(800,600,"missing-scene","missing-camera")'), false);
-    for (const args of ['', '0,600,"",""', '800,NaN,"",""', '800.5,600,"",""', '800,600,null,null', '800,600,"","",1']) {
-      assert.equal(await main.evaluate(`corona.window.resizeCameraView(${args}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
-    }
+    assert.equal(await main.evaluate('corona.window.setWindowPresentation({sceneId:"missing-scene",cameraId:"missing-camera",width:800,height:600})'), false);
     assert.equal(await docs[1].client.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle"}).catch(e=>e.code)'), 'PERMISSION_DENIED');
     assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle",tabId:1}).catch(e=>e.code)'), 'INVALID_ARGUMENT');
     assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"maximized"}).catch(e=>e.code)'), 'INVALID_ARGUMENT');
@@ -373,13 +373,13 @@ try {
     evidence[0].cameraWindowControls = 'passed validation, missing camera and non-camera isolation; positive lifecycle recorded under real-camera below';
     evidence[0].mainBorderless = 'passed toggle and restore with JSON disabled';
     assert.equal(await main.evaluate('corona.window.close({sceneId:"missing-scene",cameraId:"missing-camera"})'), false);
-    for (const args of ['', 'null', '1', '"scene"', '{}', '{sceneId:"s"}', '{cameraId:"c"}',
-      '{panelId:"Object",sceneId:"s",cameraId:"c"}', '{panelId:""}', '{panelId:1}']) {
+    for (const args of ['', 'null', '1', '"scene"', '{}', '{cameraId:"c"}',
+      '{panelId:"Object",sceneId:"s",cameraId:"c"}', '{panelId:""}', '{panelId:1}', '{sceneId:1}',
+      '{sceneId:"s",cameraId:""}']) {
       assert.equal(await main.evaluate(`corona.window.close(${args}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
-    for (const args of ['', 'null', '1', '"",1', '{}']) {
-      assert.equal(await main.evaluate(`corona.window.suspendCameraViews(${args}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
-    }
+    // Plural close: a scene that has no open camera view closes nothing.
+    assert.deepEqual(await main.evaluate('corona.window.close({sceneId:"missing-scene"})'), {closed:0});
     for (const options of ['null', '[]', '{width:0}', '{height:-1}', '{width:1.5}', '{x:Infinity}',
       '{panelId:4}', '{width:2147483648}', '{dockingPos:"main"}', '{nativeDocked:"true"}',
       '{detached:true}', '{kind:"Inspector"}']) {
@@ -412,8 +412,8 @@ try {
     stage = 'actual native window removal event';
     const closedTab = await docs[2].client.evaluate('corona.window.getCurrent()');
     const mainTab = await main.evaluate('corona.window.getCurrent()');
-    assert.equal(await main.evaluate(`corona.window.focusTab(${closedTab.tabId})`), true);
-    assert.equal(await main.evaluate('corona.window.focusTab(2147483647)'), false);
+    assert.deepEqual(await main.evaluate(`corona.window.focus({panelId:${JSON.stringify(closedTab.panelId)}})`), true);
+    assert.deepEqual(await main.evaluate('corona.window.focus({panelId:"NoSuchPanel"})'), false);
     assert.equal(await main.evaluate('corona.window.close().catch(e=>e.code)'), 'PERMISSION_DENIED');
     assert.equal(await docs[1].client.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panelId)}}).catch(e=>e.code)`), 'PERMISSION_DENIED');
     assert.equal(await main.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panelId)}})`), true);
@@ -1594,7 +1594,7 @@ try {
     }).then(value=>({id:value.id,bytes:Array.from(value.bytes),typed:value.bytes instanceof Uint8Array}))`),
     { id: '18446744073709551615', bytes: [7, 255], typed: true });
     assert.deepEqual(await main.evaluate(`window.__smoke.request('real-camera','echo',new Uint8Array([3,9])).then(value=>Array.from(value))`), [3, 9]);
-    await main.evaluate('corona.window.suspendCameraViews("")');
+    await main.evaluate('corona.window.close({sceneId:""})');
     const cameraWindow = await cameraClient.evaluate('corona.window.getCurrent()');
     assert.equal(cameraWindow.tabId, created.tab_id);
     assert.equal(cameraWindow.dockState, 'detached');
@@ -1603,16 +1603,16 @@ try {
     for (const mode of ['maximized', 'toggle', 'windowed', 'borderless', 'toggle']) {
       assert.equal(await main.evaluate(`corona.window.setWindowPresentation({sceneId:"scene.ini",cameraId:"smoke-camera",mode:'${mode}'})`), true);
     }
-    assert.equal(await main.evaluate('corona.window.resizeCameraView(400,300,"scene.ini","smoke-camera")'), true);
+    assert.equal(await main.evaluate('corona.window.setWindowPresentation({sceneId:"scene.ini",cameraId:"smoke-camera",width:400,height:300})'), true);
     assert.equal((await viewportPatch(cameraClient, JSON.stringify({ ...cameraScope, mode: 'stereo3d', pointer: pointerState }))).systemCursorHidden, true);
     assert.equal(await main.evaluate('corona.window.close({sceneId:"scene.ini",cameraId:"smoke-camera"})'), true);
     assert.equal((await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d' }))).pointer.cursor, 'hidden',
       'native window removal must release the pointer even before renderer cleanup');
-    await main.evaluate('corona.window.suspendCameraViews("")');
+    await main.evaluate('corona.window.close({sceneId:""})');
     const recreated = await createCamera({ ...options, routePath: '/CameraView?uiWindow=retiring-camera' });
     assert.notEqual(recreated.tab_id, created.tab_id);
     assert.equal(recreated.existing, false);
-    assert.deepEqual(await main.evaluate('corona.window.suspendCameraViews("scene.ini")'), { closed: 1 });
+    assert.deepEqual(await main.evaluate('corona.window.close({sceneId:"scene.ini"})'), { closed: 1 });
     assert.equal((await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d', pointer: pointerState }))).systemCursorHidden, true);
     const reloaded = await main.evaluate(`corona.project.openProject(${JSON.stringify(cameraWorld)})`);
     assert.equal(reloaded.ok, true);

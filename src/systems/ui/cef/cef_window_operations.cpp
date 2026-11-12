@@ -620,13 +620,15 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         result.error_message = "Native window is no longer available";
         return result;
     }
-    if (request.method == WindowMethod::SetWindowPresentation && request.presentation == WindowPresentation::None) {
+    const bool presentation = request.method == WindowMethod::SetWindowPresentation;
+    const bool resize = presentation && request.presentation == WindowPresentation::None;
+    if (presentation && request.presentation == WindowPresentation::None &&
+        (request.width <= 0 || request.height <= 0)) {
         result.error_code = "INVALID_ARGUMENT";
         result.error_message = "A window presentation request must name the state it wants";
         return result;
     }
-    const bool camera_control = request.method == WindowMethod::ResizeCameraView ||
-        (request.method == WindowMethod::SetWindowPresentation && !request.main_window_target);
+    const bool camera_control = presentation && !request.main_window_target;
     if (camera_control) {
         // Explicit scene/camera identity is authoritative. Never guess from a URL
         // substring or apply a missing camera's command to the caller instead.
@@ -643,31 +645,37 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         }
         const auto* window = camera_tab->platform_window_id ? SDL_GetWindowFromID(camera_tab->platform_window_id) : nullptr;
         if (!window && !camera_tab->platform_handle_raw) return result;
-        switch (request.method) {
-        case WindowMethod::ResizeCameraView:
-            resize_camera_view(camera_tab->tab_id, std::max(64, request.width), std::max(64, request.height));
-            break;
-        case WindowMethod::SetWindowPresentation:
-            apply_camera_presentation(camera_tab->tab_id, request.presentation);
-            break;
-        default: break;
-        }
+        // A presentation names one state: a size (resize) or a mode. The reader rejects
+        // requests that try to be both.
+        if (resize) resize_camera_view(camera_tab->tab_id, std::max(64, request.width), std::max(64, request.height));
+        else apply_camera_presentation(camera_tab->tab_id, request.presentation);
         result.accepted = true;
         return result;
     }
-    const bool targeted = request.method == WindowMethod::FocusTab;
-    auto* target = targeted ? manager.get_tab(request.tab_id) : source;
-    if (targeted && !source->main_workspace) {
-        result.error_code = "PERMISSION_DENIED";
-        result.error_message = "Only the main window can manage other panels";
-        return result;
-    }
-    // Focusing an already removed tab is an idempotent cleanup, not a retry.
-    if (!target || !target->open) return result;
+    // Closing or focusing an already removed panel is an idempotent cleanup, not a retry.
+    if (!source->open) return result;
     switch (request.method) {
     case WindowMethod::Close: {
         // One verb, three identities: the caller's own window, a panel's stable id, or a
         // camera surface. Resolving each here keeps the self-close fence in one place.
+        if (request.close_scene_views) {
+            // Close every camera view of the scene. An empty scene closes nothing, but it
+            // still answers in the next main-thread turn: that is the session's fence.
+            const auto ids = CameraViewportManager::instance().tabs_for_scene(request.scene_id);
+            if (!source->main_workspace && std::any_of(ids.begin(), ids.end(), [&](int id) { return id != source->tab_id; })) {
+                result.error_code = "PERMISSION_DENIED";
+                result.error_message = "Only the main window can close another camera view";
+                break;
+            }
+            for (const int id : ids) {
+                if (auto* tab = manager.get_tab(id)) tab->preserve_camera_open_on_close = true;
+                if (id == source->tab_id) result.close_self_tab_id = id;
+                else manager.remove_tab(id);
+            }
+            result.closed_count = static_cast<int>(ids.size());
+            result.accepted = true;
+            break;
+        }
         BrowserTab* closing = nullptr;
         if (!request.panel_id.empty()) {
             closing = manager.find_tab_by_panel_id(request.panel_id);
@@ -699,6 +707,7 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         // The binding settles this context's Promise before queuing retirement.
         if (closing->tab_id == source->tab_id) result.close_self_tab_id = source->tab_id;
         else manager.remove_tab(closing->tab_id);
+        result.closed_count = 1;
         result.accepted = true;
         break;
     }
@@ -713,7 +722,10 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         return apply_viewport_configuration(request, *source);
     case WindowMethod::SetWindowPresentation: {
         if (!request.main_window_target) break; // the camera path handled it above
-        if (!source->main_workspace) {
+        if (request.presentation == WindowPresentation::None) {
+            result.error_code = "INVALID_ARGUMENT";
+            result.error_message = "The main window has no size request; name a mode instead";
+        } else if (!source->main_workspace) {
             result.error_code = "PERMISSION_DENIED";
             result.error_message = "Only the main window can change its window mode";
         } else if (request.presentation == WindowPresentation::Maximized) {
@@ -726,23 +738,6 @@ WindowReply execute_window_operation(const WindowRequest& request) {
                                       : request.presentation == WindowPresentation::Borderless);
             result.accepted = true;
         }
-        break;
-    }
-    case WindowMethod::ResizeCameraView:
-        break; // Handled above with exact camera identity and native permissions.
-    case WindowMethod::SuspendCameraViews: {
-        const auto ids = CameraViewportManager::instance().tabs_for_scene(request.scene_id);
-        if (!source->main_workspace && std::any_of(ids.begin(), ids.end(), [&](int id) { return id != source->tab_id; })) {
-            result.error_code = "PERMISSION_DENIED";
-            result.error_message = "Only the main window can suspend other camera views";
-            break;
-        }
-        for (const int id : ids) {
-            if (auto* tab = manager.get_tab(id)) tab->preserve_camera_open_on_close = true;
-            if (id == source->tab_id) result.close_self_tab_id = id;
-            else manager.remove_tab(id);
-        }
-        result.closed_count = static_cast<int>(ids.size());
         break;
     }
     case WindowMethod::CreateCameraView: {
@@ -812,11 +807,19 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         result.snapshot.panel_id = tab->panel_id;
         break;
     }
-    case WindowMethod::FocusTab:
+    case WindowMethod::Focus: {
+        auto* target = manager.find_tab_by_panel_id(request.panel_id);
+        if (!target || !target->open) break;
+        if (!source->main_workspace && target->tab_id != source->tab_id) {
+            result.error_code = "PERMISSION_DENIED";
+            result.error_message = "Only the main window can focus another panel";
+            break;
+        }
         target->minimized = false;
         target->native_focus_requested = true;
         result.accepted = true;
         break;
+    }
     case WindowMethod::GetCurrent: {
         auto& snapshot = result.snapshot;
         snapshot.tab_id = source->tab_id;
