@@ -60,9 +60,10 @@
 
 ## 5. 失败形状
 
-拒绝码的**唯一声明处**是 `tests/tools/rejection_codes.py`（基础设施 5 个、窗口 2 个、场景/归档 22 个、
-bridge 4 个，共 33 个），守卫 `tests/tools/test_rejection_vocabulary.py` 保证源码只发这些码，契约文档的失败码表
-由它生成。
+拒绝码的**唯一声明处**是 `tests/tools/rejection_codes.py`（基础设施 5 个、窗口 2 个、场景/归档 29 个、
+bridge 4 个，共 40 个），守卫 `tests/tools/test_rejection_vocabulary.py` 保证源码只发这些码，契约文档的失败码表
+由它生成。扫描器覆盖 `error_code = "…"`、`fail("…")`、`reject(…, "…")`、`RejectPromise("…")` 等写法；
+`fail("…")` 这条是补上的——它漏掉了 `ACTOR_VERSION_CONFLICT` 和另外 6 个场景码。
 
 Python 服务的失败分成两类，分界是"谁的问题"：
 
@@ -73,13 +74,16 @@ Python 服务的失败分成两类，分界是"谁的问题"：
 - **传输/服务失败**（信封坏、服务没启动、Python 抛未预期异常）才拒绝，码是
   `SERVICE_UNAVAILABLE` / `SERVICE_FAILED`，原因在 message。
 
-**两个层级**：`STABLE`（19 个）是调用方可以据此分支的码——重试、刷新、禁用控件；其余是
+**两个层级**：`STABLE`（20 个）是调用方可以据此分支的码——重试、刷新、禁用控件；其余是
 **细节码**，照常拒绝，但只应进日志，可能随实现改名或合并。`tests/tools/test_rejection_vocabulary.py`
 还会扫描前端，禁止它按细节码分支。
 
 **回复版本**：分页读（`readModelNodes`）与写（`setModelNodeState`）的回复都带 `actor_version`。
-消费方以它为围栏：比已应用版本旧的回复丢弃，写入成功后作废在途的读。这是"整页替换 + 异步读"
-唯一不会丢编辑的顺序规则，也是 model-node 面板不再需要重试点击的原因。
+消费方以它为围栏：比已应用版本旧的回复与已确认的编辑合并（确认值优先），而不是整页替换掉编辑；
+这是"整页替换 + 异步读"不丢编辑的顺序规则，也是 model-node 面板不再需要重试点击的原因。
+
+写入被 `ACTOR_VERSION_CONFLICT`（或 `CONFLICT`）拒绝时，消费方重读该页拿到当前版本、**重试一次**；
+再失败就重读展示权威状态。所以这两个码进了稳定码表：它们对应一个明确的动作（重读+重试）。
 
 **上下文释放时的挂起调用**：`CoronaV8Endpoint::release()` 直接丢弃未完成的请求，不做
 `RejectPromise`。尝试过在释放回调里拒绝，但那会在单进程 CEF 里调用已释放的 V8 上下文而崩溃

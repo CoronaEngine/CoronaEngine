@@ -37,6 +37,7 @@ SCENE = {
     "READ_ONLY",                # the scene is read-only
     "READ_ONLY_PROJECT",        # the project is read-only
     "CONFLICT",                 # a concurrent edit won
+    "ACTOR_VERSION_CONFLICT",   # the Actor moved on; reload its state and retry once
     "LAST_CAMERA",              # a scene keeps at least one camera
     "CAMERA_NOT_DELETABLE",     # the camera cannot be removed
     "CAMERA_NOT_FOUND",
@@ -53,6 +54,12 @@ SCENE = {
     "PROJECT_OPEN_FAILED",
     "PROJECT_CREATION_FAILED",
     "SAVE_FAILED",            # the scene could not be written
+    "CAMERA_UNAVAILABLE",     # the camera has no engine handle yet
+    "CAPTURE_FAILED",         # the screenshot could not be taken
+    "COMPONENT_NOT_FOUND",    # the imported model has no such component
+    "INVALID_BOUNDS",         # the requested rectangle is degenerate
+    "NODE_EDIT_REJECTED",     # the geometry owner refused the node write
+    "NODE_NOT_FOUND",         # the model node index is unknown
     "PICK_FAILED",            # the viewport pick had no answer
     "PICK_TIMEOUT",
 }
@@ -89,6 +96,7 @@ STABLE = frozenset({
     "READ_ONLY",
     "READ_ONLY_PROJECT",
     "CONFLICT",               # another writer won; reload then retry
+    "ACTOR_VERSION_CONFLICT",  # the Actor moved on; reload then retry once
     "CAMERA_NOT_FOUND",
     "ACTOR_NOT_FOUND",
     "RESOURCE_NOT_FOUND",
@@ -109,6 +117,7 @@ DETAIL = ALL - STABLE
 PATTERNS = (
     re.compile(r'error_code\s*=\s*"([A-Z][A-Z_]+)"'),
     re.compile(r'native_failure\("([A-Z][A-Z_]+)"'),
+    re.compile(r'fail\("([A-Z][A-Z_]+)"'),
     re.compile(r'reject\([^;]*?"([A-Z][A-Z_]+)"'),
     re.compile(r'RejectPromise\(\s*"([A-Z][A-Z_]+)"'),
     re.compile(r'[?:]\s*"([A-Z][A-Z_]+)"'),
