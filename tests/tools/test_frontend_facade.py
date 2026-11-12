@@ -15,8 +15,13 @@ import shutil
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import test_typed_native_surface as surface
 
 ROOT = Path(__file__).resolve().parents[2]
 EDITOR = ROOT / "CoronaEditor" / "editor" / "Frontend"
@@ -54,6 +59,26 @@ def test_the_facade_loads_without_a_browser():
     facade = load_facade()
     assert {"window", "scene", "project", "bridge"} <= set(facade), sorted(facade)
     assert "close" in facade["window"] and "createPanel" in facade["window"]
+
+
+def test_the_facade_wraps_every_native_method():
+    """Each method in the pinned surface has exactly one wrapper.
+
+    The facade is the mapping table between the native names and the names the
+    app uses. A native method without a wrapper is unreachable; a wrapper for a
+    method that does not exist fails at runtime.
+    """
+    for reason in _skip_reasons():
+        pytest.skip(reason)
+    text = FACADE.read_text(encoding="utf-8", errors="replace")
+    unwrapped = [f"{namespace}.{method}"
+                 for namespace, methods in surface.EXPECTED_SURFACE.items()
+                 for method in methods if f"corona.{namespace}.{method}" not in text]
+    assert not unwrapped, f"these native methods have no facade wrapper: {unwrapped}"
+    referenced = set(re.findall(r"corona\.(\w+)\.(\w+)", text))
+    unknown = sorted(f"{namespace}.{method}" for namespace, method in referenced
+                     if namespace != "bridge" and method not in surface.EXPECTED_SURFACE.get(namespace, set()))
+    assert not unknown, f"the facade calls methods outside the pinned surface: {unknown}"
 
 
 def test_only_the_facade_reaches_the_native_object():
