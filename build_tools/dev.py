@@ -9,7 +9,8 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from build_tools.git_workspace import ensure_workspace, inspect_workspace, remote_version_advice, sync_workspace
+from build_tools.git_workspace import (ensure_workspace, head_on_remote, inspect_workspace,
+                                      remote_version_advice, sync_workspace)
 from build_tools.git_tool import ensure_git
 from build_tools.ninja_tool import ensure_ninja
 from build_tools.paths import LOCAL_RECIPES, REPO_ROOT
@@ -54,6 +55,8 @@ def pin_workspaces(repo_root: Path, keys: list[str]) -> None:
             print(f"[WARN] {workspace.name} has uncommitted changes; the pin will point at HEAD anyway")
         if status.detached:
             print(f"[WARN] {workspace.name} is on a detached HEAD, so the commit belongs to no branch")
+        if head_on_remote(directory) is False:
+            print(f"[WARN] {workspace.name} HEAD is on no remote branch; push it before pinning")
         if status.branch and status.branch != workspace.ref:
             print(f"[WARN] {workspace.name} is on {status.branch}, not the pinned {workspace.ref}")
         if head == workspace.commit:

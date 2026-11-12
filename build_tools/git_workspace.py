@@ -202,6 +202,22 @@ def current_commit(worktree: Path) -> str:
     return _git(worktree, "rev-parse", "HEAD", capture=True, quiet=True).lower()
 
 
+def head_on_remote(worktree: Path) -> bool | None:
+    """Whether HEAD is contained in a remote-tracking branch.
+
+    A pinned commit must be reachable from the remote, so the pin command asks
+    this before writing it. ``None`` means the checkout cannot answer: it has no
+    remotes, or Git refused the query.
+    """
+    remotes = _git_probe(worktree, "remote")
+    if remotes.returncode != 0 or not remotes.stdout.strip():
+        return None
+    contains = _git_probe(worktree, "branch", "-r", "--contains", "HEAD")
+    if contains.returncode != 0:
+        return None
+    return bool(contains.stdout.strip())
+
+
 def _normalized_url(value: str) -> str:
     return value.rstrip("/").removesuffix(".git").lower()
 
