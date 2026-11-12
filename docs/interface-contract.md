@@ -66,6 +66,19 @@ ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web �
 表示“往前走一步”（相机窗口：无边框 → 窗口化，窗口化 ⇄ 最大化）。
 `createPanel` 返回 `{tab_id, panel_id, existing}`，其余窗口方法返回布尔。
 
+**权限**：窗口操作按调用者身份授权，规则集中在 `cef_window_operations.cpp` 的每个 case，
+这里列全，接入方不必读源码：
+
+| 调用者 \ 操作 | 关自己 | `close({panelId})` | `close({sceneId, cameraId})` | `close({sceneId})` | `focus({panelId})` | `setWindowPresentation({target:'main'})` |
+|---|---|---|---|---|---|---|
+| 主工作区 | ✗（主窗口不是面板） | ✓ 除主窗口外的任意面板 | ✓ 任意相机 | ✓ 该场景的全部相机窗口 | ✓ 任意面板 | ✓ |
+| 面板 | ✓ | ✗ | ✗ | ✗ | ✓ 只有自己 | ✗ |
+| 相机窗口 | ✓ | ✗ | ✓ 只有自己 | ✓ 仅当该场景只剩自己 | ✓ 只有自己 | ✗ |
+
+`createPanel` 不限调用者；`createCameraView` 也不限主窗口——它由相机租约（场景身份 + 
+`camera_authority` 是否仍 active）授权，因为 SceneTools 自己就在一个原生 Dock 上下文里。
+越权一律 `PERMISSION_DENIED`，不会静默忽略。
+
 **失败形状**：Promise 拒绝时携带下表的码，原样透传给 Web。`rejection_codes.py`
 声明全集，`test_rejection_vocabulary.py` 保证源码只发这些码。
 
