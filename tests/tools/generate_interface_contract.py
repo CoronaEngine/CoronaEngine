@@ -46,6 +46,7 @@ GUARDS = [
     ("test_integration_surface.py", "集成冒烟只调用仍然存在的原生命中"),
     ("test_rejection_vocabulary.py", "拒绝码词表：源码只发已声明的码"),
     ("test_source_pins.py", "工作区 pin 的改写是幂等的文本编辑"),
+    ("test_frontend_facade.py", "前端只调用 facade 上存在的方法"),
     ("web_layer_budget.py", "接口核心行数 ratchet"),
 ]
 
