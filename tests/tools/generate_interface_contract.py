@@ -232,6 +232,8 @@ def build() -> str:
         "  依赖 `CefV8Value`，单测需要真实 V8 上下文；`tests/tools` 的守卫只钉方法名、拒绝码和集成调用。",
         "- `getCurrent()` 目前唯一的消费者是测试用的 `appService.getCurrentWindow`。保留它是因为它是",
         "  窗口自省的唯一入口；若确认永远不需要，删掉它会让 window 面从 7 个方法降到 6 个。",
+        "- `SceneReply` 的 30 个字段每一个都被 `cef_v8_binding.cpp` 读取，所以没有拆成 `std::variant`：",
+        "  变体只会改变回复形状，不会减少任何载荷。",
         "",
     ]
     return "\n".join(lines)
