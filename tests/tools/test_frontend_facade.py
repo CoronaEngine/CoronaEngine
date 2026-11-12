@@ -56,6 +56,32 @@ def test_the_facade_loads_without_a_browser():
     assert "close" in facade["window"] and "createPanel" in facade["window"]
 
 
+def test_only_the_facade_reaches_the_native_object():
+    """`window.corona` is the native surface; one module owns it.
+
+    Every other module goes through `editorApi`, which is what makes the facade
+    guard meaningful and what lets the surface move without a codebase-wide
+    search. A second door would quietly reintroduce the coupling this layer
+    spent the campaign removing.
+    """
+    for reason in _skip_reasons():
+        pytest.skip(reason)
+    facade_path = FACADE.resolve()
+    offenders: dict[str, list[int]] = {}
+    for path in sorted(SOURCE.rglob("*")):
+        if path.suffix not in {".js", ".vue"} or not path.is_file():
+            continue
+        if path.resolve() == facade_path:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        lines = [number for number, line in enumerate(text.splitlines(), 1) if "window.corona" in line]
+        if lines:
+            offenders[path.relative_to(EDITOR).as_posix()] = lines
+    assert not offenders, (
+        "these modules touch the native object directly; go through editorApi instead: "
+        f"{offenders}")
+
+
 def test_no_module_calls_a_missing_facade_method():
     facade = load_facade()
     stale: dict[str, set[str]] = {}

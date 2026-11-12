@@ -151,7 +151,7 @@ Python 服务自己返回的错误码（如 `DOCUMENT_CONFLICT`、`RUN_ACTIVE`�
 | [`test_integration_surface.py`](../tests/tools/test_integration_surface.py) | 集成冒烟只调用仍然存在的原生命中 |
 | [`test_rejection_vocabulary.py`](../tests/tools/test_rejection_vocabulary.py) | 拒绝码词表：源码只发已声明的码 |
 | [`test_source_pins.py`](../tests/tools/test_source_pins.py) | pin 改写幂等；只有已推送到远程的提交才算可 pin |
-| [`test_frontend_facade.py`](../tests/tools/test_frontend_facade.py) | 前端只调用 facade 上存在的方法 |
+| [`test_frontend_facade.py`](../tests/tools/test_frontend_facade.py) | 前端只经 facade 触达原生对象，且只调存在的方法 |
 | [`web_layer_budget.py`](../tests/tools/web_layer_budget.py) | 接口核心行数 ratchet |
 
 ## 已知缺口
