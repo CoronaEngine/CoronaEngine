@@ -47,7 +47,10 @@ TARGET_LINES = 13_807
 # title-bar rectangles that nothing read. Both removals bring the ratchet down.
 # The close merge then traded two methods for one identity reader: three names
 # collapsed into close(identity?), and two duplicate self-close paths into one.
-CORE_BUDGET = 14410
+# Folding resize/focus/scene-suspension into close() and setWindowPresentation()
+# cost a few reader lines and removed three registrations and two dispatch
+# branches, so this ratchet moved up by eleven lines net.
+CORE_BUDGET = 14421
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -87,12 +90,12 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/cef_scene_operations.h", 428),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),
-    ("src/systems/ui/cef/cef_v8_binding.cpp", 2787),
+    ("src/systems/ui/cef/cef_v8_binding.cpp", 2797),
     ("src/systems/ui/cef/cef_process.h", 36),
     ("src/systems/ui/cef/cef_viewport_pick.cpp", 119),
     ("src/systems/ui/cef/cef_viewport_pick.h", 60),
-    ("src/systems/ui/cef/cef_window_operations.cpp", 837),
-    ("src/systems/ui/cef/cef_window_operations.h", 109),
+    ("src/systems/ui/cef/cef_window_operations.cpp", 840),
+    ("src/systems/ui/cef/cef_window_operations.h", 110),
     ("src/systems/ui/cef/ik_chain_config.h", 209),
     ("src/systems/ui/cef/model_node_config.h", 52),
     ("src/systems/ui/cef/model_node_page.h", 37),
