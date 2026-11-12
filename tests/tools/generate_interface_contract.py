@@ -43,7 +43,7 @@ GUARDS = [
     ("test_docs_reference_live_files.py", "文档不指向已删除的文件"),
     ("test_editor_settings_owner.py", "编辑器 ini 只有一个 Python 所有者"),
     ("test_reply_shapes.py", "Python 产出的回复透传，引擎产出保留类型"),
-    ("test_integration_surface.py", "集成冒烟只调用仍然存在的原生命中"),
+    ("test_integration_surface.py", "集成冒烟只调用、只断言仍然存在的原生命中"),
     ("test_rejection_vocabulary.py", "拒绝码词表：源码只发已声明的码"),
     ("test_source_pins.py", "pin 改写幂等；只有已推送到远程的提交才算可 pin"),
     ("test_frontend_facade.py", "原生方法↔facade 一一对应；前端只经 facade 触达原生对象"),

@@ -31,6 +31,9 @@ RETIRED_PRE_BRIDGE: set[str] = set()
 
 # A direct call (`corona.scene.readScene(`) and the string form the `v8()` helpers use
 # (`v8("corona.scene.readScene", ...)`).
+# `typeof corona.ns.method` followed by an assertion that it is a function.
+TYPEOF_FUNCTION = re.compile(r"typeof corona\.(\w+)\??\.(\w+)[^;\n]{0,80}?'function'")
+
 CALL_PATTERNS = (
     re.compile(r"corona\.(\w+)\.(\w+)\s*\("),
     re.compile(r"""["']corona\.(\w+)\.(\w+)["']"""),
@@ -51,6 +54,27 @@ def stale_calls() -> dict[str, set[str]]:
                 if method not in surface.EXPECTED_SURFACE.get(namespace, set()):
                     stale.setdefault(path.name, set()).add(f"{namespace}.{method}")
     return stale
+
+
+def test_typeof_assertions_only_describe_live_methods():
+    """`typeof corona.ns.method === 'function'` is a claim the method exists.
+
+    The mirror claim (`=== 'undefined'`) is how a retired method stays retired,
+    so only the positive form is checked. A stale positive assertion passes the
+    call scan, because `typeof` is not a call.
+    """
+    stale: dict[str, set[str]] = {}
+    for path in sorted(INTEGRATION.rglob("*.mjs")):
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+        for match in TYPEOF_FUNCTION.finditer(text):
+            namespace, method = match.group(1), match.group(2)
+            if namespace in NON_RPC_ROOTS:
+                continue
+            if method not in surface.EXPECTED_SURFACE.get(namespace, set()):
+                stale.setdefault(path.name, set()).add(f"{namespace}.{method}")
+    assert not stale, (
+        "these scripts assert a function that the surface does not have: "
+        f"{ {{name: sorted(methods) for name, methods in stale.items()}} }")
 
 
 def test_integration_scripts_only_call_the_live_surface():
