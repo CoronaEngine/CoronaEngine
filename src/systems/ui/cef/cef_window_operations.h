@@ -52,7 +52,7 @@ struct PanelOptions {
 
 // Thread-boundary DTOs. No V8 handles or legacy JSON requests belong here.
 struct WindowSnapshot {
-    int tab_id = -1;
+    int window_token = -1;
     std::string panel_id;
 };
 

@@ -49,10 +49,14 @@
 | 名字 | 稳定性 | 用途 |
 |---|---|---|
 | `panelId` | 稳定 | 打开、关闭、聚焦、广播都用它 |
-| `tabId` | 随窗口生灭 | 传输身份：`createPanel` 返回值与 `onClosed` 负载对齐 |
+| `windowToken` | 随这一次创建生灭 | 同一次创建的令牌：`createPanel` 返回值与 `onClosed` 负载对齐；重开后不同 |
 | `sceneId` + `cameraId` | 稳定 | 相机窗口的身份 |
 
 主工作区不是面板：它不能 `close` 自己，也不能被当作面板关闭；它可以关/聚焦任何面板。
+
+原始的 CEF `tab_id` 不再出现在 Web 接口上：它是浏览器层的内部编号，暴露出去让调用方
+把它当身份用。`windowToken` 是每次创建时分配的递增令牌，只服务"我开的那扇窗还在吗"这个问题；
+需要"是哪块面板"时一律用 `panelId`。
 
 ## 5. 失败形状
 
@@ -68,6 +72,15 @@ Python 服务的失败分成两类，分界是"谁的问题"：
   原因只剩 message 里的字符串——2026-11 改成了和其它两个服务同形的返回。
 - **传输/服务失败**（信封坏、服务没启动、Python 抛未预期异常）才拒绝，码是
   `SERVICE_UNAVAILABLE` / `SERVICE_FAILED`，原因在 message。
+
+**两个层级**：`STABLE`（19 个）是调用方可以据此分支的码——重试、刷新、禁用控件；其余是
+**细节码**，照常拒绝，但只应进日志，可能随实现改名或合并。`tests/tools/test_rejection_vocabulary.py`
+还会扫描前端，禁止它按细节码分支。
+
+**上下文释放时的挂起调用**：`CoronaV8Endpoint::release()` 直接丢弃未完成的请求，不做
+`RejectPromise`。尝试过在释放回调里拒绝，但那会在单进程 CEF 里调用已释放的 V8 上下文而崩溃
+（冒烟在 pick 阶段丢掉 CDP 连接）。等待这些 Promise 的页面正是被销毁的那个，丢弃是安全的
+settlement；C++ 侧的所有者另走 `cancel_context` 取消工作。
 
 前端 facade 负责把话说到 Web 程序员的语言：`editorApi.files.*` 收到 `{status:'error'}` 就抛出
 带 `error.code` 的 `Error`（`fileOp` 一处），调用方的 `try/catch` 统一处理，不必各自解析回复字段。

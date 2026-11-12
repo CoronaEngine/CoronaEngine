@@ -53,7 +53,7 @@ def run(port, root):
         else:
             result = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'LightFieldCalibration',"
                                    "routePath:'/LightFieldCalibration',width:600,height:600}))")
-            assert result.get('tab_id'), result
+            assert result.get('window_token'), result
         target = wait(lambda: next((p for p in targets() if (menu or p['id'] not in before)
                                    and '#/LightFieldCalibration?' in p['url']), None), bool, 'new calibration document')
         client = Frontend(port, target_id=target['id'])
@@ -87,7 +87,7 @@ def run(port, root):
         # so a still-initializing flat viewport cannot legitimately close it.
         result = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'EditorSettings',"
                                "routePath:'/SetUp',width:600,height:800}))")
-        assert result.get('tab_id'), result
+        assert result.get('window_token'), result
         settings_window = None
         target = wait(lambda: next((p for p in targets() if '#/SetUp?' in p['url']), None), bool, 'settings document')
         settings_window = target['id']

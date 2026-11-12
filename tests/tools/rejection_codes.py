@@ -66,6 +66,44 @@ BRIDGE = {
 
 ALL = INFRASTRUCTURE | WINDOW | SCENE | BRIDGE
 
+# The two tiers a Web caller should treat differently.
+#
+# STABLE codes name a decision the caller can act on (retry, reload the page, show a
+# message, stop writing). Their pairing with a scenario is part of the contract. Every
+# other code is a detail: it still rejects, but it goes to the log, not to a branch -
+# details may be renamed, merged, or moved under another code between releases.
+#
+# Adding to STABLE is a contract change: say in docs/interface-decisions.md what
+# decision the caller is supposed to make.
+STABLE = frozenset({
+    # infrastructure
+    "CONTEXT_CHANGED",        # retry after the page's context is replaced
+    "PERMISSION_DENIED",      # this caller may not do it; disable the control
+    "INVALID_ARGUMENT",       # a caller bug; fix the request, do not retry
+    "NATIVE_UNAVAILABLE",     # the owner thread did not take it; retry later
+    # window
+    "WINDOW_CLOSED",          # the surface is gone; stop addressing it
+    "CREATE_FAILED",          # the native host could not make it; report
+    # scene / archive
+    "PROJECT_CONTEXT_CHANGED",  # the scene/archive changed under the caller
+    "READ_ONLY",
+    "READ_ONLY_PROJECT",
+    "CONFLICT",               # another writer won; reload then retry
+    "CAMERA_NOT_FOUND",
+    "ACTOR_NOT_FOUND",
+    "RESOURCE_NOT_FOUND",
+    "FILE_NOT_FOUND",
+    "PICK_TIMEOUT",           # the frame had not rendered yet; retry
+    # bridge
+    "EDITOR_API_TIMEOUT",
+    "SERVICE_BUSY",
+    "SERVICE_UNAVAILABLE",
+    "SERVICE_FAILED",
+})
+
+DETAIL = ALL - STABLE
+
+
 # A code is written directly, as an argument to the failure helper, as the reject
 # argument, or as one branch of a status-to-code mapping. All four spellings reach Web.
 PATTERNS = (

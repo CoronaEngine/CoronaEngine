@@ -36,6 +36,7 @@ int BrowserManager::create_tab(const std::string& url, const std::string& path, 
     const auto thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
 
     tab->tab_id = id;
+    tab->window_token = next_window_token_++;
     tab->main_workspace = kind == TabKind::MainWorkspace;
     tab->camera_view = kind == TabKind::CameraView;
     tab->open = true;  // 新标签页默认显示
@@ -191,7 +192,7 @@ void BrowserManager::remove_tab(int tab_id) {
     }
 
     destroy_tab_texture(tab);
-    notify_corona_window_closed(tab_id, tab->panel_id);
+    notify_corona_window_closed(tab->window_token, tab->panel_id);
     // `removed` releases the tab here, once every reference above is dropped.
 }
 

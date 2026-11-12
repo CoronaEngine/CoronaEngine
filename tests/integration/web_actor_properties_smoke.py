@@ -91,7 +91,7 @@ def run(port, root):
                     and 'standalone=1' not in target['url']]
     assert len(main_targets) == 1, main_targets
     main = Frontend(port, target_id=main_targets[0]['id'])
-    panel, tab_id = None, None
+    panel, window_token = None, None
     service = """(async()=>{const m=await import(document.querySelector('script[type=module]').src);
       return Object.values(m).find(v=>typeof v?.openNativePanel==='function');})()"""
     try:
@@ -108,7 +108,7 @@ def run(port, root):
         initial = read()
         main.evaluate(f'corona.scene.selectActor({json.dumps(scene)},"scene","")')
         opened = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'Object',routePath:'/Object',width:600,height:900}}))")
-        tab_id = opened['tab_id']
+        window_token = opened['window_token']
         target = wait(lambda: next((target for target in targets() if '#/Object?' in target['url']
                                    and 'standalone=1' in target['url']), None), bool, 'Object Dock document')
         panel = Frontend(port, target_id=target['id'])

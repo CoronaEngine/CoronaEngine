@@ -109,7 +109,7 @@ def run(port, root, engine_pid):
         return main.evaluate("(async()=>{const s=await corona.scene.readActive();return "
                              "(await corona.scene.readScene({scene:s.scene,archive_session:s.archive_session,cameras:true})).cameras;})()")
     panel = camera_view = None
-    tab_id = None
+    window_token = None
     try:
         main.evaluate("localStorage.setItem('corona.activeProjectPath'," + json.dumps(str(root)) + ");location.hash='/'")
         wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-pick-surface]')"), bool, 'MainPage mount')
@@ -118,7 +118,7 @@ def run(port, root, engine_pid):
         wait(lambda: main.evaluate(f'{service}.then(s=>s.readEditorUiPolicy())'),
              lambda value: value and value.get('enabled'), 'Web owner ready')
         opened = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'SceneTools',routePath:'/SceneBar',width:700,height:800}}))")
-        tab_id = opened['tab_id']
+        window_token = opened['window_token']
         target = wait(lambda: next((target for target in targets() if '#/SceneBar?' in target['url']), None), bool, 'SceneBar document')
         panel = Frontend(port, target_id=target['id'])
         wait(lambda: panel.evaluate("!!document.querySelector('[data-actor-name=Probe]')"), bool, 'SceneBar ready')
@@ -171,7 +171,7 @@ def run(port, root, engine_pid):
         if camera_view:
             main.evaluate("corona.window.close({sceneId:'scene.ini',cameraId:'focus-camera'})")
             camera_view.socket.close()
-        if tab_id is not None:
+        if window_token is not None:
             main.evaluate("corona.window.close({panelId:'SceneTools'})")
         if panel:
             panel.socket.close()

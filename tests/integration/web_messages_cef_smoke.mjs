@@ -198,7 +198,7 @@ try {
       JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); };
       return corona.window.createPanel(${JSON.stringify(options)});
     })()`);
-    assert.equal(Number.isInteger(created.tab_id), true);
+    assert.equal(Number.isInteger(created.window_token), true);
     assert.equal(created.panel_id, options.panelId);
     createdPanels.push(created);
     const target = await waitFor(async () => (await targets()).find(item => item.url.includes(`uiWindow=${label}`)), 30_000);
@@ -335,8 +335,8 @@ try {
         dragBinding: 'undefined', identity: 'undefined' });
       evidence.find(item => item.document === doc.label).nativeBindings = 'passed';
     }
-    const tabIds = createdPanels.map(panel => panel.tab_id);
-    assert.equal(new Set(tabIds).size, tabIds.length, 'every created panel owns a distinct native tab');
+    const windowTokens = createdPanels.map(panel => panel.window_token);
+    assert.equal(new Set(windowTokens).size, windowTokens.length, 'every created panel owns a distinct window');
     stage = 'typed panel validation and docking intents';
     assert.deepEqual(await main.evaluate('corona.window.close({sceneId:""})'), {closed:0});
     assert.deepEqual(await docs[1].client.evaluate('corona.window.close({sceneId:""})'), {closed:0});
@@ -366,7 +366,7 @@ try {
     }
     assert.equal(await main.evaluate('corona.window.setWindowPresentation({sceneId:"missing-scene",cameraId:"missing-camera",width:800,height:600})'), false);
     assert.equal(await docs[1].client.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle"}).catch(e=>e.code)'), 'PERMISSION_DENIED');
-    assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle",tabId:1}).catch(e=>e.code)'), 'INVALID_ARGUMENT');
+    assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle",unknownKey:1}).catch(e=>e.code)'), 'INVALID_ARGUMENT');
     assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"maximized"}).catch(e=>e.code)'), 'INVALID_ARGUMENT');
     assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle"})'), true);
     assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle"})'), true);
@@ -427,7 +427,7 @@ try {
       const events = await main.evaluate('({closed:window.__nativeClosed,unsubscribed:window.__unsubscribedEvents})');
       return events.closed.length ? events : null;
     }, 10_000);
-    assert.deepEqual(completion.closed, [{tabId:closedTab.tab_id, panelId:'smoke-panel-b'}]);
+    assert.deepEqual(completion.closed, [{windowToken:closedTab.window_token, panelId:'smoke-panel-b'}]);
     assert.deepEqual(completion.unsubscribed, []);
     assert.deepEqual(await main.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panel_id)}})`), {closed:0});
     stage = 'self close settles its V8 promise before retiring the context';
@@ -1250,9 +1250,9 @@ try {
     await toolClient.evaluate(`JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); }; true`);
     const createCamera = value => main.evaluate(`corona.window.createPanel({...${JSON.stringify(value)},kind:'camera'})`);
     const created = await toolClient.evaluate(`corona.window.createPanel({...${JSON.stringify(options)},kind:'camera'})`);
-    assert.equal(Number.isInteger(created.tab_id), true);
+    assert.equal(Number.isInteger(created.window_token), true);
     assert.equal(created.existing, false);
-    assert.deepEqual(await createCamera(options), { tab_id: created.tab_id, panel_id: '', existing: true });
+    assert.deepEqual(await createCamera(options), { window_token: created.window_token, panel_id: '', existing: true });
     const cameraTarget = await waitFor(async () => (await targets()).find(item => item.url.includes('uiWindow=real-camera')), 30_000);
     const cameraClient = await connect(cameraTarget);
   await cameraClient.evaluate('window.__nativeJSON = { stringify: JSON.stringify, parse: JSON.parse }; true');
@@ -1619,7 +1619,7 @@ try {
     assert.deepEqual(await main.evaluate(`window.__smoke.request('real-camera','echo',new Uint8Array([3,9])).then(value=>Array.from(value))`), [3, 9]);
     await main.evaluate('corona.window.close({sceneId:""})');
     assert.deepEqual(await cameraClient.evaluate(`corona.window.createPanel({...${JSON.stringify(options)},kind:'camera'})`),
-      { tab_id: created.tab_id, panel_id: '', existing: true });
+      { window_token: created.window_token, panel_id: '', existing: true });
     for (const mode of ['maximized', 'toggle', 'windowed', 'borderless', 'toggle']) {
       assert.equal(await main.evaluate(`corona.window.setWindowPresentation({sceneId:"scene.ini",cameraId:"smoke-camera",mode:'${mode}'})`), true);
     }
@@ -1630,7 +1630,7 @@ try {
       'native window removal must release the pointer even before renderer cleanup');
     await main.evaluate('corona.window.close({sceneId:""})');
     const recreated = await createCamera({ ...options, routePath: '/CameraView?uiWindow=retiring-camera' });
-    assert.notEqual(recreated.tab_id, created.tab_id);
+    assert.notEqual(recreated.window_token, created.window_token);
     assert.equal(recreated.existing, false);
     assert.deepEqual(await main.evaluate('corona.window.close({sceneId:"scene.ini"})'), { closed: 1 });
     assert.equal((await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d', pointer: pointerState }))).systemCursorHidden, true);

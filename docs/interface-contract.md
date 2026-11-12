@@ -64,11 +64,12 @@ ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web �
 
 `mode` 描述**窗口要处于的状态**，不是要执行的开关；`toggle` 是唯一不带状态值的请求，
 表示“往前走一步”（相机窗口：无边框 → 窗口化，窗口化 ⇄ 最大化）。
-`createPanel` 返回 `{tab_id, panel_id, existing}`，其余窗口方法返回布尔。
+`createPanel` 返回 `{window_token, panel_id, existing}`，其余窗口方法返回布尔。
 
-`tabId` 是**传输身份**：它随窗口生灭，用来把 `onClosed` 负载、`createPanel` 的返回值对齐；
-`panelId` 是**稳定面板身份**，开/关/聚焦都用它，两者不要混用。窗口不查询自身状态：
-身份来自 `createPanel` 的返回值和打开时带在 URL 上的参数。
+`panelId` 是**稳定面板身份**，开/关/聚焦都用它。`windowToken` 是**这一次创建**的
+不透明令牌：同一个 `panelId` 重开后令牌不同，用来把 `onClosed` 的负载和当初那次创建的
+返回值对齐（原始 tab id 不再暴露）。窗口不查询自身状态：身份来自 `createPanel` 的返回值
+和打开时带在 URL 上的参数。
 
 **权限**：窗口操作按调用者身份授权，规则集中在 `cef_window_operations.cpp` 的每个 case，
 这里列全，接入方不必读源码：
@@ -92,6 +93,11 @@ ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web �
 | 窗口 | 原生窗口宿主（窗口消失、建不出来） | `CREATE_FAILED`、`WINDOW_CLOSED` |
 | 场景/归档 | 场景与归档层（对象不存在、只读、冲突…） | `ACTOR_AUDIO_UNAVAILABLE`、`ACTOR_CREATE_FAILED`、`ACTOR_NOT_FOUND`、`ACTOR_NOT_READY`、`CAMERA_NOT_DELETABLE`、`CAMERA_NOT_FOUND`、`CONFLICT`、`FILE_NOT_FOUND`、`FILE_OPERATION_FAILED`、`INVALID_PROJECT_PATH`、`LAST_CAMERA`、`MODEL_DECODE_FAILED`、`PICK_FAILED`、`PICK_TIMEOUT`、`PROJECT_CONTEXT_CHANGED`、`PROJECT_CREATION_FAILED`、`PROJECT_OPEN_FAILED`、`READ_ONLY`、`READ_ONLY_PROJECT`、`RESOURCE_NOT_FOUND`、`SAVE_FAILED`、`UNSUPPORTED_RESOURCE_TYPE` |
 | Web → Python | bridge 传输与 Python 服务 | `EDITOR_API_TIMEOUT`、`SERVICE_BUSY`、`SERVICE_FAILED`、`SERVICE_UNAVAILABLE` |
+
+**可分支的稳定码**：`ACTOR_NOT_FOUND`、`CAMERA_NOT_FOUND`、`CONFLICT`、`CONTEXT_CHANGED`、`CREATE_FAILED`、`EDITOR_API_TIMEOUT`、`FILE_NOT_FOUND`、`INVALID_ARGUMENT`、`NATIVE_UNAVAILABLE`、`PERMISSION_DENIED`、`PICK_TIMEOUT`、`PROJECT_CONTEXT_CHANGED`、`READ_ONLY`、`READ_ONLY_PROJECT`、`RESOURCE_NOT_FOUND`、`SERVICE_BUSY`、`SERVICE_FAILED`、`SERVICE_UNAVAILABLE`、`WINDOW_CLOSED`。
+Web 可以按这些码决定重试、禁用控件或提示；其余是**细节码**，照常拒绝，但只应进日志——
+细节码会随实现改名或合并。稳定码的每一次增删都是契约变更，需要写进
+`docs/interface-decisions.md`。
 
 Python 服务的**业务拒绝**是数据，不是异常：`ProjectArchive`、`ProjectFiles`、
 `FileScripts` 都用 `{status:'error', code, message}` 回答（如 `DOCUMENT_CONFLICT`、
@@ -152,7 +158,8 @@ Python 服务的**业务拒绝**是数据，不是异常：`ProjectArchive`、`P
 | [`test_editor_settings_owner.py`](../tests/tools/test_editor_settings_owner.py) | 编辑器 ini 只有一个 Python 所有者 |
 | [`test_reply_shapes.py`](../tests/tools/test_reply_shapes.py) | Python 产出的回复透传，引擎产出保留类型 |
 | [`test_integration_surface.py`](../tests/tools/test_integration_surface.py) | 集成冒烟只调用、只断言仍然存在的原生命中 |
-| [`test_rejection_vocabulary.py`](../tests/tools/test_rejection_vocabulary.py) | 拒绝码词表：源码只发已声明的码 |
+| [`test_rejection_vocabulary.py`](../tests/tools/test_rejection_vocabulary.py) | 拒绝码词表：源码只发已声明的码；稳定码可分支、细节码只进日志 |
+| [`test_window_permission_matrix.py`](../tests/tools/test_window_permission_matrix.py) | 每个窗口方法都带调用者检查，例外必须逐条说明 |
 | [`test_source_pins.py`](../tests/tools/test_source_pins.py) | pin 改写幂等；只有已推送到远程的提交才算可 pin |
 | [`test_frontend_facade.py`](../tests/tools/test_frontend_facade.py) | 原生方法↔facade 一一对应；前端只经 facade 触达原生对象 |
 | [`test_frontend_regressions.py`](../tests/tools/test_frontend_regressions.py) | 逐个跑前端窗口/音频/facade 回归文件（带超时） |

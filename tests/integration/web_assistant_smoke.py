@@ -190,7 +190,7 @@ def run(port, root):
         route = {'CabbageChatPanel': '/CabbageChat', 'NodeGraphPanel': '/NodeGraph'}.get(panel, '/' + panel)
         result = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:{json.dumps(panel)},"
                                f"routePath:{json.dumps(route)},width:600,height:750}}))")
-        assert result.get('tab_id'), result
+        assert result.get('window_token'), result
         opened.append(panel)
         target = wait(lambda: next((p for p in targets() if p['id'] not in before
                                    and f'#{route}?' in p['url']), None), bool, f'{panel} document')

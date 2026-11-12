@@ -24,7 +24,7 @@ def run(port, root, engine_pid):
     main = Frontend(port, target_id=main_targets[0]['id'])
     panel = None
     camera_view = None
-    tab_id = None
+    window_token = None
     try:
         main.evaluate("localStorage.setItem('corona.nativeViewportCursor.enabled','1');localStorage.setItem('corona.activeProjectPath',"
                       + json.dumps(str(root)) + ");location.hash='/'")
@@ -46,7 +46,7 @@ def run(port, root, engine_pid):
         wait(lambda: main.evaluate(f'{service}.then(s=>s.readEditorUiPolicy())'),
              lambda value: value and value.get('enabled'), 'Web owner ready')
         opened = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'SceneTools',routePath:'/SceneBar',width:700,height:800}}))")
-        tab_id = opened['tab_id']
+        window_token = opened['window_token']
         target = wait(lambda: next((target for target in targets() if '#/SceneBar?' in target['url']
                                    and 'standalone=1' in target['url']), None), bool, 'SceneTools document')
         panel = Frontend(port, target_id=target['id'])
@@ -308,7 +308,7 @@ def run(port, root, engine_pid):
         failed = sys.exc_info()[0] is not None
         cleanup_errors = []
         for expression in (["corona.window.close({sceneId:'scene.ini',cameraId:'focus-camera'})"] if camera_view else []) + (
-                ["corona.window.close({panelId:'SceneTools'})"] if tab_id is not None else []):
+                ["corona.window.close({panelId:'SceneTools'})"] if window_token is not None else []):
             try:
                 main.evaluate(expression)
             except Exception as error:

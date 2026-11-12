@@ -254,7 +254,7 @@ def run(port, root):
     monitor = """(()=>{if(typeof corona.editor!=='undefined')throw Error('Generic native dispatch remains');return true;})()"""
     def open_panel(panel_id, route, selector):
         result = main.evaluate(f"{service}.then(service=>service.openNativePanel({{panelId:{json.dumps(panel_id)},routePath:{json.dumps(route)},width:600,height:800}}))")
-        assert result.get('tab_id'), result
+        assert result.get('window_token'), result
         opened.append(panel_id)
         target = wait(lambda: next((p for p in targets() if 'standalone=1' in p['url'] and f'#/{route.lstrip("/")}?' in p['url']), None), bool, panel_id)
         panel_targets.append(target['id'])

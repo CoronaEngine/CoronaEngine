@@ -43,6 +43,34 @@ def test_the_groups_do_not_overlap():
             seen[code] = name
 
 
+def test_stable_codes_are_declared_and_documented():
+    assert rejection_codes.STABLE, "the stable tier must not be empty"
+    assert rejection_codes.STABLE <= rejection_codes.ALL
+    assert rejection_codes.STABLE | rejection_codes.DETAIL == rejection_codes.ALL
+    assert not rejection_codes.STABLE & rejection_codes.DETAIL
+    document = (rejection_codes.ROOT / "docs" / "interface-contract.md").read_text(encoding="utf-8")
+    for code in rejection_codes.STABLE:
+        assert f"`{code}`" in document, f"the contract does not name the stable code {code}"
+
+
+def test_the_frontend_only_branches_on_stable_codes():
+    # Codes the frontend compares against must be stable: a detail code may be renamed
+    # or merged, and a branch on it would silently stop matching. Codes outside the
+    # native vocabulary (the AI service's own lowercase codes, KeyEvent codes) are not
+    # this layer's contract and are ignored.
+    import re
+
+    frontend = rejection_codes.ROOT / "CoronaEditor" / "editor" / "Frontend" / "src"
+    assert frontend.is_dir(), "the editor checkout is missing; run dev.py editor-sync"
+    pattern = re.compile(r"\.code\s*===\s*['\"]([A-Z][A-Z0-9_]*)['\"]")
+    branched = set()
+    for path in list(frontend.rglob("*.js")) + list(frontend.rglob("*.vue")):
+        for match in pattern.finditer(path.read_text(encoding="utf-8", errors="replace")):
+            branched.add(match.group(1))
+    unstable = sorted((branched & rejection_codes.ALL) - rejection_codes.STABLE)
+    assert not unstable, f"the frontend branches on detail codes: {unstable}"
+
+
 def test_infrastructure_codes_are_the_five_the_binding_owns():
     # These five are this binding's own inventions; the frontend switches on them.
     assert rejection_codes.INFRASTRUCTURE == {

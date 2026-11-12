@@ -712,6 +712,13 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         break;
     }
     case WindowMethod::CloseProcess:
+        // Quitting the application is the main window's decision (the launcher names it);
+        // a panel that reaches this method is a bug, not an operator.
+        if (!source->main_workspace) {
+            result.error_code = "PERMISSION_DENIED";
+            result.error_message = "Only the main window can close the process";
+            break;
+        }
         result.accepted = request_application_exit();
         if (!result.accepted) {
             result.error_code = "NATIVE_FAILURE";
@@ -760,7 +767,7 @@ WindowReply execute_window_operation(const WindowRequest& request) {
                 result.error_message = "Previous camera surface has not finished retiring";
                 break;
             }
-            result.snapshot.tab_id = existing->tab_id;
+            result.snapshot.window_token = tab->window_token;
             result.existing = true;
             break;
         }
@@ -783,7 +790,7 @@ WindowReply execute_window_operation(const WindowRequest& request) {
             break;
         }
         tab->name = "Camera " + request.camera_id;
-        result.snapshot.tab_id = id;
+        result.snapshot.window_token = tab->window_token;
         break;
     }
     case WindowMethod::CreatePanel: {
@@ -803,7 +810,7 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         }
         tab->panel_id = options.panel_id;
         tab->panel_title = options.title;
-        result.snapshot.tab_id = id;
+        result.snapshot.window_token = tab->window_token;
         result.snapshot.panel_id = tab->panel_id;
         break;
     }

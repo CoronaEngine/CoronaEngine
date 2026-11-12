@@ -41,6 +41,49 @@ def open_initial_test_world(client, world):
         'initial archive service readiness')
 
 
+SUITES = ['focus', 'environment', 'graph', 'properties', 'panels', 'creation', 'picker',
+          'calibration', 'assistant', 'join', 'launcher', 'lifetime']
+
+
+def run_all_isolated(runtime, output):
+    """Run every suite in its own engine process.
+
+    A shared engine let earlier suites leave windows open (focus and environment both keep
+    SceneTools), and the panels suite's "the same document was reused" assertions then saw
+    extra targets. Re-invoking this script per suite gives each one a fresh engine and a
+    fresh world, so `--suite all` is a real acceptance run.
+    """
+    output.mkdir(parents=True, exist_ok=True)
+    evidence = dict(started_utc=datetime.now(timezone.utc).isoformat(), passed=False,
+                    runtime=str(runtime), suite='all', results={})
+    for name in SUITES:
+        suite_output = output / name
+        suite_output.mkdir(parents=True, exist_ok=True)
+        print(f'packaged Vue {name}', flush=True)
+        code = subprocess.call([sys.executable, str(Path(__file__).resolve()),
+                                str(runtime), '--output', str(suite_output), '--suite', name])
+        runs = sorted(suite_output.glob('run-*'), key=lambda path: path.stat().st_mtime)
+        result = None
+        if runs:
+            try:
+                result = json.loads((runs[-1] / 'result.json').read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                result = None
+        evidence['results'][name] = dict(
+            passed=bool(result and result.get('passed')), output=str(suite_output),
+            failed_stage=(result or {}).get('failed_stage'),
+            error=(result or {}).get('error'))
+        if code != 0 or not (result and result.get('passed')):
+            evidence['failed_stage'] = f'packaged Vue {name}'
+            break
+    else:
+        evidence['passed'] = True
+    evidence['suites'] = len(evidence['results'])
+    (output / 'result.json').write_text(json.dumps(evidence, ensure_ascii=False, indent=2), encoding='utf-8')
+    print(json.dumps(dict(output=str(output), **evidence), ensure_ascii=False, indent=2), flush=True)
+    return 0 if evidence['passed'] else 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('runtime', type=Path)
@@ -51,6 +94,8 @@ def main():
     executable = runtime / 'corona_engine.exe'
     if not executable.is_file():
         parser.error(f'Engine executable missing: {executable}')
+    if args.suite == 'all':
+        return run_all_isolated(runtime, args.output)
     args.output.mkdir(parents=True, exist_ok=True)
     output = Path(tempfile.mkdtemp(prefix='run-', dir=args.output.resolve()))
     world = output / 'world'

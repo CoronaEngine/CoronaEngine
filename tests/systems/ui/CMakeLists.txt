@@ -11,6 +11,14 @@ target_include_directories(corona_model_node_config_tests
 target_link_libraries(corona_model_node_config_tests PRIVATE nlohmann_json::nlohmann_json)
 add_test(NAME ModelNodeConfigTests COMMAND corona_model_node_config_tests)
 
+# 窗口/呈现请求的读取规则：V8 适配器负责取值，这里只验证哪些形状合法（无需 CEF 上下文）。
+add_executable(corona_request_rules_tests
+    test_request_rules.cpp
+)
+target_include_directories(corona_request_rules_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui)
+add_test(NAME RequestRulesTests COMMAND corona_request_rules_tests)
+
 # 模型节点领域服务（WNC-012）：纯引擎节点数据 + JSON，无 CEF/V8/JS 路由依赖，
 # 验证领域逻辑可以脱离浏览器与 JS 边界单独测试。
 add_executable(corona_scene_model_node_service_tests

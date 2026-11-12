@@ -1,6 +1,7 @@
 #include "cef_process.h"
 
 #include "browser_manager.h"
+#include "cef_request_rules.h"
 #include "cef_window_operations.h"
 #include "cef_scene_operations.h"
 #include "cef_operations.h"
@@ -294,14 +295,14 @@ bool read_gizmo_request(GizmoMethod method, const CefV8ValueList& arguments,
 enum class NativeEventKind { Closed, CloseRequested };
 struct WindowEventData {
     NativeEventKind type;
-    int tab_id = -1;
+    int window_token = -1;
     std::string panel_id;
 };
 
 NativeEventKind native_event_kind(const WindowEventData& data) { return data.type; }
 CefRefPtr<CefV8Value> native_event_value(const WindowEventData& data) {
     auto value = CefV8Value::CreateObject(nullptr, nullptr);
-    value->SetValue("tabId", CefV8Value::CreateInt(data.tab_id), V8_PROPERTY_ATTRIBUTE_NONE);
+    value->SetValue("windowToken", CefV8Value::CreateInt(data.window_token), V8_PROPERTY_ATTRIBUTE_NONE);
     value->SetValue("panelId", CefV8Value::CreateString(data.panel_id), V8_PROPERTY_ATTRIBUTE_NONE);
     return value;
 }
@@ -1730,8 +1731,9 @@ bool read_window_presentation(const CefV8ValueList& arguments, WindowRequest& re
     std::string mode;
     const bool has_mode = object->HasValue("mode");
     const bool has_size = object->HasValue("width") || object->HasValue("height");
-    if (has_mode == has_size) return false; // exactly one state: a mode or a size
-    if (has_mode) {
+    const auto kind = RequestRules::presentation_kind(has_mode, has_size, target == "main");
+    if (kind == RequestRules::PresentationKind::None) return false;
+    if (kind == RequestRules::PresentationKind::Mode) {
         if (!option_string(object, "mode", mode, true)) return false;
         if (mode == "windowed") request.presentation = WindowPresentation::Windowed;
         else if (mode == "maximized") request.presentation = WindowPresentation::Maximized;
@@ -1745,9 +1747,8 @@ bool read_window_presentation(const CefV8ValueList& arguments, WindowRequest& re
         if (request.width <= 0 || request.height <= 0) return false;
     }
     if (target == "main") {
-        // The main window owns an OS window, not a camera surface: a mode, never a size.
-        if (has_size) return false;
-        if (request.presentation == WindowPresentation::Maximized) return false;
+        if (!RequestRules::main_accepts_mode(request.presentation == WindowPresentation::Maximized))
+            return false;
         if (object->HasValue("sceneId") || object->HasValue("cameraId")) return false;
         request.main_window_target = true;
         return true;
@@ -1766,14 +1767,14 @@ bool read_close_request(const CefV8ValueList& arguments, WindowRequest& request)
     if (arguments.size() != 1 || !object_keys(arguments[0],
         std::initializer_list<const char*>{"panelId", "sceneId", "cameraId"})) return false;
     const auto object = arguments[0];
-    const bool has_panel = object->HasValue("panelId");
-    const bool has_scene = object->HasValue("sceneId");
-    const bool has_camera = object->HasValue("cameraId");
-    if (has_panel && (has_scene || has_camera)) return false;
-    if (has_panel) return option_string(object, "panelId", request.panel_id, true);
-    if (!has_scene) return false;
+    const auto identity = RequestRules::close_identity(
+        object->HasValue("panelId"), object->HasValue("sceneId"), object->HasValue("cameraId"));
+    if (identity == RequestRules::CloseIdentity::None) return false;
+    if (identity == RequestRules::CloseIdentity::Panel)
+        return option_string(object, "panelId", request.panel_id, true);
     if (!option_string(object, "sceneId", request.scene_id)) return false;
-    if (has_camera) return option_string(object, "cameraId", request.camera_id, true);
+    if (identity == RequestRules::CloseIdentity::Camera)
+        return option_string(object, "cameraId", request.camera_id, true);
     // Plural form. An empty scene closes nothing but still fences, which the window
     // session relies on when it retires a world.
     request.close_scene_views = true;
@@ -1952,6 +1953,11 @@ public:
             release_viewport_pointer_context(browser_id, context_id);
             viewport_pick_requests().cancel_context(context_id);
         });
+        // The page that is going away is the only one that could observe these promises,
+        // and OnContextReleased is not a place to call into V8: rejecting them here crashed
+        // the single-process renderer (the CDP socket dropped during the pick stage).
+        // Dropping the map is the safe settlement; C++ owners cancel the work separately
+        // through cancel_context below.
         pending_.clear();
         subscribers_.clear();
         context_ = nullptr;
@@ -2569,7 +2575,7 @@ private:
             // One reply for every panel kind: identity plus whether the native host
             // reused an existing surface instead of creating a new one.
             auto created = CefV8Value::CreateObject(nullptr, nullptr);
-            created->SetValue("tab_id", CefV8Value::CreateInt(reply.snapshot.tab_id), V8_PROPERTY_ATTRIBUTE_NONE);
+            created->SetValue("window_token", CefV8Value::CreateInt(reply.snapshot.window_token), V8_PROPERTY_ATTRIBUTE_NONE);
             created->SetValue("panel_id", CefV8Value::CreateString(reply.snapshot.panel_id), V8_PROPERTY_ATTRIBUTE_NONE);
             created->SetValue("existing", CefV8Value::CreateBool(reply.existing), V8_PROPERTY_ATTRIBUTE_NONE);
             promise->ResolvePromise(created);
@@ -2762,8 +2768,8 @@ void release_corona_v8_binding(const std::shared_ptr<CoronaV8Endpoint>& endpoint
     if (endpoint) endpoint->release();
 }
 
-void notify_corona_window_closed(int tab_id, const std::string& panel_id) {
-    publish_native_event(WindowEventData{NativeEventKind::Closed, tab_id, panel_id});
+void notify_corona_window_closed(int window_token, const std::string& panel_id) {
+    publish_native_event(WindowEventData{NativeEventKind::Closed, window_token, panel_id});
 }
 
 void request_corona_window_close(int browser_id) {

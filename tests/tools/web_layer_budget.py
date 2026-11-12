@@ -64,8 +64,10 @@ TARGET_LINES = 13_807
 # fields their services validate, so they now share one (fifteen lines). The model node
 # reply stopped re-reading geometry after queuing the write; answering with the derived
 # state cost five lines and made the edit visible to the UI. The facade's file operations
-# now raise refusals with the service code (editorApi.js +14, core +14).
-CORE_BUDGET = 14398
+# now raise refusals with the service code (editorApi.js +14, core +14). Reading rules moved
+# to cef_request_rules.h so a plain test covers them (+9 in the binding), and closeProcess got
+# its main-window check (+7 in the window operations).
+CORE_BUDGET = 14414
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -105,11 +107,11 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/cef_scene_operations.h", 428),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),
-    ("src/systems/ui/cef/cef_v8_binding.cpp", 2774),
+    ("src/systems/ui/cef/cef_v8_binding.cpp", 2783),
     ("src/systems/ui/cef/cef_process.h", 36),
     ("src/systems/ui/cef/cef_viewport_pick.cpp", 119),
     ("src/systems/ui/cef/cef_viewport_pick.h", 60),
-    ("src/systems/ui/cef/cef_window_operations.cpp", 826),
+    ("src/systems/ui/cef/cef_window_operations.cpp", 833),
     ("src/systems/ui/cef/cef_window_operations.h", 105),
     ("src/systems/ui/cef/ik_chain_config.h", 209),
     ("src/systems/ui/cef/model_node_config.h", 52),

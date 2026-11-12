@@ -94,9 +94,14 @@ python tests/integration/web_packaged_ui_smoke.py <runtime> --suite panels
 回复还在路上，点击结果会被覆盖。这属于 UI 的小毛病（再点一次即可），冒烟因此对切换最多重试
 三次（`toggle_attempts` 记录在第几次成功），而不是把一次丢失的点击判为失败。
 
-`--suite all` 会在**同一个引擎进程**里依次跑所有套件，而前面的套件会留下打开的窗口（`focus`、
-`environment` 都留下 `SceneTools`）。`panels` 里有"重开后仍是同一个文档"的断言，看到这些遗留
-目标就会失败。因此**排查与验收请逐个套件运行**；`--suite all` 只适合快速冒烟到第一个失败点。
+`--suite all` 现在为**每个套件启动独立的引擎进程和独立世界**：前面的套件会留下打开的窗口
+（`focus`、`environment` 都留下 `SceneTools`），共享引擎时 `panels` 的"重开后仍是同一个文档"
+断言会看到遗留目标。逐套件的 `result.json` 聚合在顶层 `result.json` 的 `results` 里，第一个失败
+处停止。单套件运行的耗时不变，`all` 约等于 12 次启动。
+
+窗口/呈现请求的形状规则（`close` 的身份组合、`setWindowPresentation` 的 mode/size 互斥与主窗口
+限制）由 `RequestRulesTests` 单独覆盖（`tests/systems/ui/test_request_rules.cpp`），不需要 CEF
+上下文；V8 适配器本身仍由 CEF 冒烟覆盖。
 
 需要单独排查时，`web_panel_lifecycle_smoke.py` 的 model-node 段有一个 opt-in 诊断：设
 `CORONA_MODEL_NODE_DEBUG=1` 会记录 `setModelNodeState` 的实际参数、回复字段与页面标题，

@@ -44,6 +44,9 @@ inline bool is_valid_texture_id(const UiTextureId texture_id) {
 
 struct BrowserTab {
     int tab_id = -1;
+    // Opaque per-creation token exposed to Web as window_token. It distinguishes two
+    // incarnations of the same panel id (reopen) without leaking the internal tab id.
+    int window_token = 0;
     std::string name;
     std::string url;
     std::string panel_id; // Stable ImGui identity, independent of the current browser id.
@@ -200,6 +203,7 @@ class BrowserManager {
     std::vector<DeferredTextureDestroy> deferred_texture_destroys_;
     uint64_t frame_index_ = 0;
     int tab_counter_ = 0;
+    int next_window_token_ = 1;
 
 };
 
