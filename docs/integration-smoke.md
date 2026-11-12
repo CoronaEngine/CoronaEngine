@@ -88,7 +88,11 @@ python tests/integration/web_packaged_ui_smoke.py <runtime> --suite panels
 
 `panels` 的 `model_node_retirement` 曾经超时（重挂载后可见性按钮标题不翻转）：原因是
 `setModelNodeState` 把写入排给 Geometry 线程后**立刻回读**，回复里带的是编辑前快照，UI 于是
-应用了旧状态。现在回复直接用本次请求推导出的状态，测试恢复稳定（连续三次通过）。
+应用了旧状态。现在回复直接用本次请求推导出的状态，测试恢复稳定（连续多次通过）。
+
+它仍有一个**重挂载竞态**：面板重新挂载会重读模型节点页，而组件只保留最后收到的页；若点击时该
+回复还在路上，点击结果会被覆盖。这属于 UI 的小毛病（再点一次即可），冒烟因此对切换最多重试
+三次（`toggle_attempts` 记录在第几次成功），而不是把一次丢失的点击判为失败。
 
 `--suite all` 会在**同一个引擎进程**里依次跑所有套件，而前面的套件会留下打开的窗口（`focus`、
 `environment` 都留下 `SceneTools`）。`panels` 里有"重开后仍是同一个文档"的断言，看到这些遗留
