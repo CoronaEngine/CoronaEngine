@@ -815,7 +815,6 @@ WindowReply execute_window_operation(const WindowRequest& request) {
             result.error_message = "Only the main window can focus another panel";
             break;
         }
-        target->minimized = false;
         target->native_focus_requested = true;
         result.accepted = true;
         break;
@@ -825,7 +824,6 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         snapshot.tab_id = source->tab_id;
         snapshot.width = source->width;
         snapshot.height = source->height;
-        snapshot.minimized = source->minimized;
         // ImGui gives a window its own OS viewport when it is not docked: that is the only
         // thing "detached" still means here.
         snapshot.detached = source->host_surface != nullptr;

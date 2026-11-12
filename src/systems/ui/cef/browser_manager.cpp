@@ -23,43 +23,6 @@ BrowserManager& BrowserManager::instance() {
     return instance;
 }
 
-bool BrowserManager::hide_tab(int tab_id, bool if_close) {
-    auto it = tabs_.find(tab_id);
-    if (it == tabs_.end()) {
-        CFW_LOG_WARNING("Attempted to hide non-existent tab: ID={}", tab_id);
-        return false;
-    }
-
-    BrowserTab* tab = it->second.get();
-    tab->minimized = true;
-    if (if_close) {
-        tab->open = true;
-    }
-
-    CFW_LOG_INFO("Browser tab hidden: ID={}", tab_id);
-    return true;
-}
-
-bool BrowserManager::show_tab(int tab_id) {
-    auto it = tabs_.find(tab_id);
-    if (it == tabs_.end()) {
-        CFW_LOG_WARNING("Attempted to show non-existent tab: ID={}", tab_id);
-        return false;
-    }
-
-    BrowserTab* tab = it->second.get();
-
-    tab->minimized = false;
-
-    // 触发重绘
-    if (tab->client && tab->client->GetBrowser()) {
-        tab->client->GetBrowser()->GetHost()->WasResized();
-    }
-
-    CFW_LOG_INFO("Browser tab shown: ID={}", tab_id);
-    return true;
-}
-
 // 修改主 create_tab 方法
 int BrowserManager::create_tab(const std::string& url, const std::string& path, TabKind kind,
                                int width, int height, int initial_x, int initial_y) {
@@ -75,7 +38,6 @@ int BrowserManager::create_tab(const std::string& url, const std::string& path, 
     tab->tab_id = id;
     tab->main_workspace = kind == TabKind::MainWorkspace;
     tab->camera_view = kind == TabKind::CameraView;
-    tab->minimized = false;
     tab->open = true;  // 新标签页默认显示
     tab->initial_x = initial_x;
     tab->initial_y = initial_y;

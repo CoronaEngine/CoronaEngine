@@ -1802,7 +1802,6 @@ CefRefPtr<CefV8Value> snapshot_value(const WindowSnapshot& snapshot, int browser
     value->SetValue("panelId", CefV8Value::CreateString(snapshot.panel_id), V8_PROPERTY_ATTRIBUTE_NONE);
     value->SetValue("width", CefV8Value::CreateInt(snapshot.width), V8_PROPERTY_ATTRIBUTE_NONE);
     value->SetValue("height", CefV8Value::CreateInt(snapshot.height), V8_PROPERTY_ATTRIBUTE_NONE);
-    value->SetValue("minimized", CefV8Value::CreateBool(snapshot.minimized), V8_PROPERTY_ATTRIBUTE_NONE);
     value->SetValue("detached", CefV8Value::CreateBool(snapshot.detached), V8_PROPERTY_ATTRIBUTE_NONE);
     value->SetValue("dockState", CefV8Value::CreateString(snapshot.dock_state), V8_PROPERTY_ATTRIBUTE_NONE);
     return value;

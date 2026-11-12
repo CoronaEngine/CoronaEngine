@@ -84,7 +84,6 @@ struct BrowserTab {
     bool laid_out = false;
 
     bool open = true;
-    bool minimized = false;  // 新增：是否最小化
     bool buffer_dirty = false;
     // Dimensions of the buffer currently sitting in `pixel_buffer`, as delivered by CEF's
     // OnPaint. They are NOT always width/height: a paint issued before a resize can still arrive
@@ -144,11 +143,6 @@ class BrowserManager {
     [[nodiscard]] const Horizon::HardwareImage* get_texture_image(UiTextureId texture_id) const;
     [[nodiscard]] Horizon::SubmitReceipt get_texture_upload_receipt(UiTextureId texture_id) const;
     void wait_for_texture_upload(UiTextureId texture_id);
-
-    // 隐藏标签页（最小化）
-    bool hide_tab(int tab_id, bool if_close = false);
-    // 显示标签页（恢复）
-    bool show_tab(int tab_id);
 
     // void set_vulkan_backend(VulkanBackend* backend);
     // VulkanBackend* get_vulkan_backend() const;

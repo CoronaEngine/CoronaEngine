@@ -101,7 +101,7 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
     std::sort(snapshot.begin(), snapshot.end(), [](auto a, auto b) { return a.tab_id < b.tab_id; });
     std::vector<ContentRect> contents;
     for (auto [tab_id, tab] : snapshot) {
-        if (!tab || !tab->open || tab->minimized) {
+        if (!tab || !tab->open) {
             if (tab) set_visible(*tab, false);
             continue;
         }
