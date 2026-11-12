@@ -21,7 +21,6 @@ def run(port, root):
     clients = [main]
     calibration_clients = []
     opened = []
-    tab_targets = {}
     settings_tab = None
     service = """(async()=>{const m=await import(document.querySelector('script[type=module]').src);
       return Object.values(m).find(v=>typeof v?.openNativePanel==='function');})()"""
@@ -55,17 +54,15 @@ def run(port, root):
             result = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'LightFieldCalibration',"
                                    "routePath:'/LightFieldCalibration',width:600,height:600}))")
             assert result.get('tab_id'), result
-            opened.append('LightFieldCalibration')
         target = wait(lambda: next((p for p in targets() if (menu or p['id'] not in before)
                                    and '#/LightFieldCalibration?' in p['url']), None), bool, 'new calibration document')
         client = Frontend(port, target_id=target['id'])
         client.panel_id = 'LightFieldCalibration'
+        client.target_id = target['id']
         clients.append(client)
         calibration_clients.append(client)
         wait(lambda: values(client), lambda v: len(v) == 4, 'calibration inputs mounted')
-        if menu:
-            opened.append('LightFieldCalibration')
-        tab_targets[opened[-1]] = target['id']
+        opened.append((client.panel_id, client.target_id))
         client.evaluate(guard)
         return client
 
@@ -90,9 +87,10 @@ def run(port, root):
         # so a still-initializing flat viewport cannot legitimately close it.
         result = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'EditorSettings',"
                                "routePath:'/SetUp',width:600,height:800}))")
-        settings_tab = result['tab_id']
+        assert result.get('tab_id'), result
+        settings_window = None
         target = wait(lambda: next((p for p in targets() if '#/SetUp?' in p['url']), None), bool, 'settings document')
-        tab_targets[settings_tab] = target['id']
+        settings_window = target['id']
         settings = Frontend(port, target_id=target['id'])
         clients.append(settings)
         wait(lambda: settings.evaluate("!!document.querySelector('[data-guidance=settings-viewport-ui] button:not(:disabled)')"),
@@ -122,7 +120,7 @@ def run(port, root):
         # Route-unmount the actual MainPage while low-level detached replicas
         # remain alive. The registered menu panel follows NativeDockLayout's
         # existing lifecycle; the two replicas exercise the surviving documents.
-        identities = [client.panel_id for client in (second, third)]
+        identities = [client.target_id for client in (second, third)]
         marker = main.evaluate('window.__calibrationRemount=crypto.randomUUID()')
         main.evaluate("location.hash='/SceneBar';true")
         wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-viewport-pick-surface]')"),
@@ -136,7 +134,7 @@ def run(port, root):
         remounted = [24, .25, 15, 18]
         for client in (third, fourth):
             wait(lambda: values(client), lambda v: v == remounted, 'surviving Dock accepts remounted owner updates')
-        assert [client.panel_id for client in (second, third)] == identities
+        assert [client.target_id for client in (second, third)] == identities
         return dict(mainReloadStartupSeed=seed, liveValues=expected, documents=len(clients),
                     bidirectionalVueEdits=True, lateDockHydration=True,
                     rejectedOwnerStorageWrites=writes, peerStorageAccess=peers,
@@ -161,15 +159,15 @@ def run(port, root):
             # activity snapshot; a departing peer correctly invalidates one.
             if opened:
                 wait(lambda: {p['id'] for p in targets()},
-                     lambda ids: tab_targets[opened[0]] not in ids, 'menu calibration retired')
-            for tab in opened[1:]:
-                main.evaluate(f'{service}.then(s=>s.closePanelTab({tab}))')
+                     lambda ids: opened[0][1] not in ids, 'menu calibration retired')
+            for panel, window in opened[1:]:
+                main.evaluate(f'{service}.then(s=>s.closePanelTab({json.dumps(panel)}))')
                 wait(lambda: {p['id'] for p in targets()},
-                     lambda ids: tab_targets[tab] not in ids, 'calibration replica retired')
-            if settings_tab is not None:
-                main.evaluate(f'{service}.then(s=>s.closePanelTab({settings_tab}))')
+                     lambda ids: window not in ids, 'calibration replica retired')
+            if settings_window is not None:
+                main.evaluate(f'{service}.then(s=>s.closePanelTab("EditorSettings"))')
                 wait(lambda: {p['id'] for p in targets()},
-                     lambda ids: tab_targets[settings_tab] not in ids, 'settings document retired')
+                     lambda ids: settings_window not in ids, 'settings document retired')
         finally:
             for client in clients:
                 client.socket.close()

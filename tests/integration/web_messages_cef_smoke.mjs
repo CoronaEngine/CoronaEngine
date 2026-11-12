@@ -239,7 +239,7 @@ try {
       window.__graphCalls = 0; window.__graphSucceeded = true;
       window.__graphSaves = createNodeGraphSaves({messages:window.__smoke});
       window.__graphRegistration = window.__graphSaves.register({
-        getSession:()=>${JSON.stringify(doc.label === 'detached' ? 'other-archive' : 'old-archive')},
+        getSession:()=>${JSON.stringify(doc.label === 'panel-b' ? 'other-archive' : 'old-archive')},
         flush:async ()=>{ window.__graphCalls++; return window.__graphSucceeded; },
       });
       return true;
@@ -342,10 +342,12 @@ try {
     assert.deepEqual(await docs[1].client.evaluate('corona.window.close({sceneId:""})'), {closed:0});
     const barrierOrder = await main.evaluate(`(async () => {
       const order = [];
+      // A normal window operation answers in this turn; the plural close answers in the
+      // next one. focus() on a missing panel is the cheapest normal operation available.
       await Promise.all([
-        corona.window.close({sceneId:'missing-scene'}).then(() => order.push('before')),
+        corona.window.focus({panelId:'NoSuchPanel'}).then(() => order.push('before')),
         corona.window.close({sceneId:''}).then(() => order.push('barrier')),
-        corona.window.close({sceneId:'missing-scene'}).then(() => order.push('after')),
+        corona.window.focus({panelId:'NoSuchPanel'}).then(() => order.push('after')),
       ]);
       return order;
     })()`);
@@ -370,8 +372,10 @@ try {
     assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle"})'), true);
     evidence[0].cameraWindowControls = 'passed validation, missing camera and non-camera isolation; positive lifecycle recorded under real-camera below';
     evidence[0].mainBorderless = 'passed toggle and restore with JSON disabled';
-    assert.equal(await main.evaluate('corona.window.close({sceneId:"missing-scene",cameraId:"missing-camera"})'), false);
-    for (const args of ['', 'null', '1', '"scene"', '{}', '{cameraId:"c"}',
+    assert.deepEqual(await main.evaluate('corona.window.close({sceneId:"missing-scene",cameraId:"missing-camera"})'), {closed:0});
+    // No argument is a legal self-close (rejected for the main window as a permission
+    // error), so the invalid list starts with real invalid identities.
+    for (const args of ['null', '1', '"scene"', '{}', '{cameraId:"c"}',
       '{panelId:"Object",sceneId:"s",cameraId:"c"}', '{panelId:""}', '{panelId:1}', '{sceneId:1}',
       '{sceneId:"s",cameraId:""}']) {
       assert.equal(await main.evaluate(`corona.window.close(${args}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
@@ -412,20 +416,20 @@ try {
     evidence[1].refreshWithPendingReads = 'passed';
     stage = 'actual native window removal event';
     const closedTab = createdPanels[1];
-    assert.deepEqual(await main.evaluate(`corona.window.focus({panelId:${JSON.stringify(closedTab.panelId)}})`), true);
+    assert.deepEqual(await main.evaluate(`corona.window.focus({panelId:${JSON.stringify(closedTab.panel_id)}})`), true);
     assert.deepEqual(await main.evaluate('corona.window.focus({panelId:"NoSuchPanel"})'), false);
     assert.equal(await main.evaluate('corona.window.close().catch(e=>e.code)'), 'PERMISSION_DENIED');
-    assert.equal(await docs[1].client.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panelId)}}).catch(e=>e.code)`), 'PERMISSION_DENIED');
-    assert.equal(await main.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panelId)}})`), true);
+    assert.equal(await docs[1].client.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panel_id)}}).catch(e=>e.code)`), 'PERMISSION_DENIED');
+    assert.deepEqual(await main.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panel_id)}})`), {closed:1});
     stage = 'receiving actual native window removal event';
     console.log(`CEF smoke: ${stage}`);
     const completion = await waitFor(async () => {
       const events = await main.evaluate('({closed:window.__nativeClosed,unsubscribed:window.__unsubscribedEvents})');
       return events.closed.length ? events : null;
     }, 10_000);
-    assert.deepEqual(completion.closed, [{tabId:closedTab.tabId, panelId:'smoke-panel-b'}]);
+    assert.deepEqual(completion.closed, [{tabId:closedTab.tab_id, panelId:'smoke-panel-b'}]);
     assert.deepEqual(completion.unsubscribed, []);
-    assert.equal(await main.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panelId)}})`), false);
+    assert.deepEqual(await main.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panel_id)}})`), {closed:0});
     stage = 'self close settles its V8 promise before retiring the context';
     await main.evaluate(`window.__selfCloseSettled = []; window.__smoke.on('self-close-settled', value => window.__selfCloseSettled.push(value)); true`);
     await docs[1].client.evaluate(`(() => { ${source}
@@ -436,7 +440,7 @@ try {
     })()`);
     // The peer's close promise publishes through the Web module before teardown.
     await waitFor(async () => (await main.evaluate('window.__nativeClosed.length')) === 2, 10_000);
-    assert.deepEqual(await main.evaluate('window.__selfCloseSettled'), [true]);
+    assert.deepEqual(await main.evaluate('window.__selfCloseSettled'), [{closed:1}]);
     evidence[1].selfCloseBeforeContextRelease = 'passed with JSON disabled';
     evidence[2].nativeClosedEvent = 'passed (actual tab identity, throwing callback isolated, unsubscribe idempotent)';
     stage = 'native camera window with a real scene identity';
@@ -1612,7 +1616,7 @@ try {
     }
     assert.equal(await main.evaluate('corona.window.setWindowPresentation({sceneId:"scene.ini",cameraId:"smoke-camera",width:400,height:300})'), true);
     assert.equal((await viewportPatch(cameraClient, JSON.stringify({ ...cameraScope, mode: 'stereo3d', pointer: pointerState }))).systemCursorHidden, true);
-    assert.equal(await main.evaluate('corona.window.close({sceneId:"scene.ini",cameraId:"smoke-camera"})'), true);
+    assert.deepEqual(await main.evaluate('corona.window.close({sceneId:"scene.ini",cameraId:"smoke-camera"})'), {closed:1});
     assert.equal((await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d' }))).pointer.cursor, 'hidden',
       'native window removal must release the pointer even before renderer cleanup');
     await main.evaluate('corona.window.close({sceneId:""})');
@@ -1661,11 +1665,11 @@ try {
     await createCamera({ ...options, archiveSession: activeAgain.archive_session, cameraId: object.camera.camera_id,
       routePath: '/CameraView?uiWindow=typed-camera' });
     assert.equal((await stateOfCreated()).view_open, true);
-    assert.equal(await main.evaluate(`corona.window.close({sceneId:'scene.ini',cameraId:${JSON.stringify(object.camera.camera_id)}})`), true);
+    assert.deepEqual(await main.evaluate(`corona.window.close({sceneId:'scene.ini',cameraId:${JSON.stringify(object.camera.camera_id)}})`), {closed:1});
     assert.equal((await stateOfCreated()).view_open, false);
-    assert.equal(await main.evaluate(`corona.window.close({sceneId:'scene.ini',cameraId:${JSON.stringify(object.camera.camera_id)}})`), false);
+    assert.deepEqual(await main.evaluate(`corona.window.close({sceneId:'scene.ini',cameraId:${JSON.stringify(object.camera.camera_id)}})`), {closed:0});
     evidence[0].cameraCreation = 'typed archive-scoped camera object creation with JSON disabled; no window until one window operation, owner-published open/close state, idempotent close, retired CEF toggles rejected';
-    assert.equal(await main.evaluate('corona.window.close({panelId:"SceneTools"})'), true);
+    assert.deepEqual(await main.evaluate('corona.window.close({panelId:"SceneTools"})'), {closed:1});
     evidence.push({ document: 'real-camera', roundtrip: 'bidirectional structured-clone typed arrays with JSON disabled', nativeCameraLifecycle: 'passed with JSON disabled: create/existing, identity, permissions, geometry, close, recreate, suspend, archive replacement',
       fixtureScene: cameraWorld });
   }

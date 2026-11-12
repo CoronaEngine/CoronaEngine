@@ -42,7 +42,7 @@ def run(port, root, runtime):
         assert ({path.resolve() for path in data.iterdir()} if data.exists() else set()) == before_invalid
         for method, request, prefix in [('createWorldProject', {'prompt': '测试星空世界'}, 'creative_world_'),
                                         ('createMultiplayerProject', {'role': 'host'}, 'multiplayer_host_'),
-                                        ('createMultiplayerProject', {'role': 'guest'}, 'multiplayer_guest_')]:
+                                        ('createMultiplayerProject', {'role': 'guest'}, 'multiplayer_client_')]:
             result = main.evaluate(f'corona.project.{method}({json.dumps(request, ensure_ascii=False)})')
             # Restore only the settings bytes produced by these test-owned calls.
             owned_ini = ini.read_bytes() if ini.exists() else None

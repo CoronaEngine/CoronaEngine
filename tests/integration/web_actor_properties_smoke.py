@@ -154,8 +154,8 @@ def run(port, root):
                 'bodyTypes': ['kinematic', 'dynamic'], 'reloadedMass': 3.5, 'opaqueHandle': True,
                 'alias_lifetime': alias_lifetime, 'property_lifetime': property_lifetime}
     finally:
-        if tab_id is not None:
-            main.evaluate(f'{service}.then(s=>s.closePanelTab({tab_id},"Object"))')
+        if panel is not None:
+            main.evaluate(f'{service}.then(s=>s.closePanelTab("Object"))')
         if panel:
             panel.socket.close()
         main.socket.close()

@@ -47,10 +47,11 @@ def verify_close_during_save(main, panel, panel_id, target_id, service, targets,
         for(const item of probe.pending.splice(0))item.reject(Error('Probe cleanup'));};
       return true;})()""")
     main.evaluate(service + """.then(s=>{const original=s.closePanelTab;window.__originalGraphClose=original;
-      s.closePanelTab=(id,panelId)=>{if(panelId!=='NodeGraphPanel')return original(id,panelId);
-        window.__graphClose={status:'pending',tabId:id};return original(id,panelId).then(
-          result=>{window.__graphClose={status:'closed',tabId:id};return result;},
-          error=>{window.__graphClose={status:'failed',code:error.code,message:error.message,tabId:id};throw error;});};
+      // The facade takes one stable panel id now; the probe keys on that same value.
+      s.closePanelTab=(panelId)=>{if(panelId!=='NodeGraphPanel')return original(panelId);
+        window.__graphClose={status:'pending',panelId};return original(panelId).then(
+          result=>{window.__graphClose={status:'closed',panelId};return result;},
+          error=>{window.__graphClose={status:'failed',code:error.code,message:error.message,panelId};throw error;});};
       return true;})""")
 
     def drag_node(delta):
