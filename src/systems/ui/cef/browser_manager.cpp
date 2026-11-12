@@ -180,6 +180,15 @@ BrowserTab* BrowserManager::get_tab(int tab_id) {
     return it != tabs_.end() ? it->second.get() : nullptr;
 }
 
+BrowserTab* BrowserManager::find_tab_by_panel_id(const std::string& panel_id) {
+    if (panel_id.empty()) return nullptr;
+    std::lock_guard lock(tabs_mutex_);
+    for (const auto& [tab_id, tab] : tabs_) {
+        if (tab && tab->open && tab->panel_id == panel_id) return tab.get();
+    }
+    return nullptr;
+}
+
 std::vector<BrowserManager::TabSnapshotEntry> BrowserManager::tabs_snapshot() const {
     std::lock_guard lock(tabs_mutex_);
     std::vector<TabSnapshotEntry> snapshot;

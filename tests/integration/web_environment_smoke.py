@@ -253,9 +253,9 @@ def run(port, root):
       return Object.values(module).find(value=>typeof value?.openNativePanel==='function');})()"""
     monitor = """(()=>{if(typeof corona.editor!=='undefined')throw Error('Generic native dispatch remains');return true;})()"""
     def open_panel(panel_id, route, selector):
-        result = main.evaluate(f"{service}.then(service=>service.openNativePanel({{detached:true,panelId:{json.dumps(panel_id)},routePath:{json.dumps(route)},width:600,height:800}}))")
+        result = main.evaluate(f"{service}.then(service=>service.openNativePanel({{panelId:{json.dumps(panel_id)},routePath:{json.dumps(route)},width:600,height:800}}))")
         assert result.get('tab_id'), result
-        opened.append(result['tab_id'])
+        opened.append(panel_id)
         target = wait(lambda: next((p for p in targets() if 'standalone=1' in p['url'] and f'#/{route.lstrip("/")}?' in p['url']), None), bool, panel_id)
         panel_targets.append(target['id'])
         client = Frontend(port, target_id=target['id'])
@@ -322,7 +322,7 @@ def run(port, root):
                 'samePhysicsGravity': True, 'saveReopenFloorY': environment()['physics']['floor_y'],
                 'oldScopeRejected': rejected, 'retiredEnvironmentRequests': 0}
     finally:
-        for tab_id in opened:
-            main.evaluate(f'corona.window.closeTab({tab_id})')
+        for panel_id in opened:
+            main.evaluate(f'corona.window.close({{panelId:{json.dumps(panel_id)}}})')
         for client in clients:
             client.socket.close()

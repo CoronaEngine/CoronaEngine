@@ -45,7 +45,7 @@ def run(port, root, engine_pid):
           return Object.values(m).find(v=>typeof v?.openNativePanel==='function');})()"""
         wait(lambda: main.evaluate(f'{service}.then(s=>s.readEditorUiPolicy())'),
              lambda value: value and value.get('enabled'), 'Web owner ready')
-        opened = main.evaluate(f"{service}.then(s=>s.openNativePanel({{detached:true,panelId:'SceneTools',routePath:'/SceneBar',width:700,height:800}}))")
+        opened = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'SceneTools',routePath:'/SceneBar',width:700,height:800}}))")
         tab_id = opened['tab_id']
         target = wait(lambda: next((target for target in targets() if '#/SceneBar?' in target['url']
                                    and 'standalone=1' in target['url']), None), bool, 'SceneTools document')
@@ -307,8 +307,8 @@ def run(port, root, engine_pid):
         # owning runner still retires this launch's complete process tree.
         failed = sys.exc_info()[0] is not None
         cleanup_errors = []
-        for expression in (["corona.window.closeCameraView('scene.ini','focus-camera')"] if camera_view else []) + (
-                [f'corona.window.closeTab({tab_id})'] if tab_id is not None else []):
+        for expression in (["corona.window.close({sceneId:'scene.ini',cameraId:'focus-camera'})"] if camera_view else []) + (
+                ["corona.window.close({panelId:'SceneTools'})"] if tab_id is not None else []):
             try:
                 main.evaluate(expression)
             except Exception as error:

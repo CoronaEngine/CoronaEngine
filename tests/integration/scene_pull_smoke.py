@@ -134,7 +134,7 @@ def run(port, root, control):
     })()"""
     wait(lambda: main.evaluate(f"{service_lookup}.then(service=>service.readEditorUiPolicy())"),
          lambda p: p and p.get("enabled"), "main window policy")
-    main.evaluate(f"{service_lookup}.then(service=>service.openNativePanel({{detached:true, "
+    main.evaluate(f"{service_lookup}.then(service=>service.openNativePanel({{ "
                   "panelId:'Object', routePath:'/Object', width:560, height:600, x:100, y:80}))")
     second_target = wait(lambda: [p for p in targets() if p["id"] != main_id and "/Object" in p["url"]],
                          bool, "detached Object window")[0]

@@ -184,9 +184,9 @@ def run(port, root):
         before = {p['id'] for p in targets()}
         route = {'CabbageChatPanel': '/CabbageChat', 'NodeGraphPanel': '/NodeGraph'}.get(panel, '/' + panel)
         result = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:{json.dumps(panel)},"
-                               f"routePath:{json.dumps(route)},detached:true,width:600,height:750}}))")
+                               f"routePath:{json.dumps(route)},width:600,height:750}}))")
         assert result.get('tab_id'), result
-        opened.append(result['tab_id'])
+        opened.append(panel)
         target = wait(lambda: next((p for p in targets() if p['id'] not in before
                                    and f'#{route}?' in p['url']), None), bool, f'{panel} document')
         client = Frontend(port, target_id=target['id'])
@@ -199,9 +199,9 @@ def run(port, root):
                         + json.dumps(key) + ";s.dispatchEvent(new Event('change',{bubbles:true}));return true;})()")
 
     def close_panel(client):
-        tab = client.evaluate('corona.window.getCurrent()')['tabId']
-        main.evaluate(f'{service}.then(s=>s.closePanelTab({tab}))')
-        opened.remove(tab)
+        panel = client.evaluate('corona.window.getCurrent()')['panelId']
+        main.evaluate(f'{service}.then(s=>s.closePanelTab({json.dumps(panel)}))')
+        opened.remove(panel)
         clients.remove(client)
         client.socket.close()
 
@@ -286,8 +286,8 @@ def run(port, root):
                     client.evaluate('window.__assistantStorage?.restore();true')
                 except Exception:
                     pass
-            for tab in opened:
-                main.evaluate(f'corona.window.closeTab({tab})')
+            for panel in opened:
+                main.evaluate(f'corona.window.close({{panelId:{json.dumps(panel)}}})')
         finally:
             for client in clients:
                 client.socket.close()

@@ -53,7 +53,7 @@ def run(port, root):
             main.evaluate(f"{store}.openPanel('LightFieldCalibration')")
         else:
             result = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'LightFieldCalibration',"
-                                   "routePath:'/LightFieldCalibration',detached:true,width:600,height:600}))")
+                                   "routePath:'/LightFieldCalibration',width:600,height:600}))")
             assert result.get('tab_id'), result
             opened.append(result['tab_id'])
         target = wait(lambda: next((p for p in targets() if (menu or p['id'] not in before)
@@ -88,7 +88,7 @@ def run(port, root):
         # Calibration is a stereo UI panel; use the production settings action
         # so a still-initializing flat viewport cannot legitimately close it.
         result = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'EditorSettings',"
-                               "routePath:'/SetUp',detached:true,width:600,height:800}))")
+                               "routePath:'/SetUp',width:600,height:800}))")
         settings_tab = result['tab_id']
         target = wait(lambda: next((p for p in targets() if '#/SetUp?' in p['url']), None), bool, 'settings document')
         tab_targets[settings_tab] = target['id']

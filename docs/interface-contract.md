@@ -19,7 +19,7 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 
 ## Web 面
 
-共 12 个命名空间 / 65 个方法。清单由
+共 12 个命名空间 / 63 个方法。清单由
 `tests/tools/test_typed_native_surface.py` 精确钉死（多一个、少一个都会失败）：
 
 | 命名空间 | 说明 |
@@ -52,17 +52,18 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 | `project_settings` | `saveActiveProjectInfo` |
 | `scene` | `captureScreenshot`、`createActor`、`createCamera`、`deleteActor`、`deleteCamera`、`focusActor`、`getEnvironment`、`importResourceFile`、`isVisionAvailable`、`readActive`、`readActorProperties`、`readActorRig`、`readCameraRenderSettings`、`readModelNodes`、`readScene`、`readTransforms`、`rebindActorResource`、`save`、`selectActor`、`selectModelFile`、`setActorIkChains`、`setActorTransform`、`setCameraRenderSettings`、`setEnvironment`、`setModelNodeState`、`updateActor`、`updateCamera` |
 | `viewport` | `configure`、`pick` |
-| `window` | `close`、`closeCameraView`、`closeTab`、`createPanel`、`focusTab`、`getCurrent`、`onCloseRequested`、`onClosed`、`resizeCameraView`、`setWindowPresentation`、`suspendCameraViews` |
+| `window` | `close`、`createPanel`、`focusTab`、`getCurrent`、`onCloseRequested`、`onClosed`、`resizeCameraView`、`setWindowPresentation`、`suspendCameraViews` |
 
-### 面板与窗口：两个合并后的入口
+### 面板与窗口：三个合并后的入口
 
-同一件事（打开一个面板、改变窗口呈现）以前按“哪个面板 / 哪个开关”拆成多个方法。
-现在各留一个，差异用参数表达。**面板停靠由 ImGui 负责**：面板打开后就是一个 ImGui
-窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web 层不再发送停靠位置或分离/停靠请求。
+同一件事（打开一个面板、关闭一个窗口、改变窗口呈现）以前按“哪个面板 / 哪个开关”拆成
+多个方法。现在各留一个，差异用参数表达。**面板停靠由 ImGui 负责**：面板打开后就是一个
+ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web 层不再发送停靠位置。
 
 | 方法 | 请求 | 说明 |
 |---|---|---|
 | `createPanel` | `{kind?: 'panel' \| 'camera', width?, height?, x?, y?, panelId?, routePath?, title?}` | `kind` 缺省为 `panel`。相机窗口要求 `archiveSession`/`sceneId`/`cameraId` 同时非空；`cameraHandle` 一律拒绝，相机身份由原生解析。 |
+| `close` | 无参数 / `{panelId}` / `{sceneId, cameraId}` | 无参数关自己；`panelId` 是 `createPanel` 的稳定面板身份（只有主窗口能关别人，主窗口不能被当作面板关）；`sceneId`+`cameraId` 关相机窗口（主窗口可关任意，相机窗口只能关自己）。返回布尔，`false` 表示没有该窗口（幂等清理）。 |
 | `setWindowPresentation` | `{target?: 'camera' \| 'main', mode, sceneId?, cameraId?}` | `mode` 是 `windowed`/`maximized`/`borderless`/`toggle`；主窗口只有 `windowed`/`borderless`/`toggle`。相机窗口可用 `sceneId`+`cameraId` 指定，缺省为自己。 |
 
 `mode` 描述**窗口要处于的状态**，不是要执行的开关；`toggle` 是唯一不带状态值的请求，

@@ -655,18 +655,53 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         result.accepted = true;
         return result;
     }
-    const bool targeted = request.method == WindowMethod::CloseTab || request.method == WindowMethod::FocusTab;
+    const bool targeted = request.method == WindowMethod::FocusTab;
     auto* target = targeted ? manager.get_tab(request.tab_id) : source;
-    if ((targeted && !source->main_workspace) ||
-        ((request.method == WindowMethod::Close || request.method == WindowMethod::CloseTab) &&
-         target && target->main_workspace)) {
+    if (targeted && !source->main_workspace) {
         result.error_code = "PERMISSION_DENIED";
-        result.error_message = "Only the main window can manage other panels; the main window cannot be closed as a panel";
+        result.error_message = "Only the main window can manage other panels";
         return result;
     }
-    // Closing an already removed tab is an idempotent cleanup, not a retry.
+    // Focusing an already removed tab is an idempotent cleanup, not a retry.
     if (!target || !target->open) return result;
     switch (request.method) {
+    case WindowMethod::Close: {
+        // One verb, three identities: the caller's own window, a panel's stable id, or a
+        // camera surface. Resolving each here keeps the self-close fence in one place.
+        BrowserTab* closing = nullptr;
+        if (!request.panel_id.empty()) {
+            closing = manager.find_tab_by_panel_id(request.panel_id);
+            if (!closing) break; // already gone: idempotent cleanup
+            if (!source->main_workspace || closing->main_workspace) {
+                result.error_code = "PERMISSION_DENIED";
+                result.error_message = "Only the main window can close another panel; the main window cannot be closed as a panel";
+                break;
+            }
+        } else if (!request.scene_id.empty()) {
+            const auto camera = CameraViewportManager::instance().find_by_camera(request.scene_id, request.camera_id);
+            if (!camera) break;
+            closing = manager.get_tab(camera->tab_id);
+            if (!closing || !closing->open) break;
+            if (!source->main_workspace && closing->tab_id != source->tab_id) {
+                result.error_code = "PERMISSION_DENIED";
+                result.error_message = "Only the main window can close another camera view";
+                break;
+            }
+        } else {
+            // No identity: close the caller. The main workspace is the application, not a panel.
+            closing = source;
+            if (closing->main_workspace) {
+                result.error_code = "PERMISSION_DENIED";
+                result.error_message = "The main window cannot be closed as a panel";
+                break;
+            }
+        }
+        // The binding settles this context's Promise before queuing retirement.
+        if (closing->tab_id == source->tab_id) result.close_self_tab_id = source->tab_id;
+        else manager.remove_tab(closing->tab_id);
+        result.accepted = true;
+        break;
+    }
     case WindowMethod::CloseProcess:
         result.accepted = request_application_exit();
         if (!result.accepted) {
@@ -695,19 +730,6 @@ WindowReply execute_window_operation(const WindowRequest& request) {
     }
     case WindowMethod::ResizeCameraView:
         break; // Handled above with exact camera identity and native permissions.
-    case WindowMethod::CloseCameraView: {
-        const auto camera = CameraViewportManager::instance().find_by_camera(request.scene_id, request.camera_id);
-        if (!camera) break;
-        if (!source->main_workspace && camera->tab_id != source->tab_id) {
-            result.error_code = "PERMISSION_DENIED";
-            result.error_message = "Only the main window can close another camera view";
-            break;
-        }
-        if (camera->tab_id == source->tab_id) result.close_self_tab_id = source->tab_id;
-        else manager.remove_tab(camera->tab_id);
-        result.accepted = true;
-        break;
-    }
     case WindowMethod::SuspendCameraViews: {
         const auto ids = CameraViewportManager::instance().tabs_for_scene(request.scene_id);
         if (!source->main_workspace && std::any_of(ids.begin(), ids.end(), [&](int id) { return id != source->tab_id; })) {
@@ -790,15 +812,6 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         result.snapshot.panel_id = tab->panel_id;
         break;
     }
-    case WindowMethod::Close:
-        // The binding settles this context's Promise before queuing retirement.
-        result.close_self_tab_id = source->tab_id;
-        result.accepted = true;
-        break;
-    case WindowMethod::CloseTab:
-        target->open = false;
-        result.accepted = true;
-        break;
     case WindowMethod::FocusTab:
         target->minimized = false;
         target->native_focus_requested = true;

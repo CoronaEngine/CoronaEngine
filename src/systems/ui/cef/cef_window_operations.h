@@ -7,10 +7,11 @@
 
 namespace Corona::Systems::UI {
 
-// Web names the surface it wants (CreatePanel + kind, SetWindowPresentation); the native
-// host keeps the specialised transitions behind those names.
-enum class WindowMethod { GetCurrent, Close, CloseTab, FocusTab, CreatePanel, CreateCameraView,
-                          SuspendCameraViews, CloseCameraView, ResizeCameraView, SetWindowPresentation,
+// Web names the surface it wants and the identity it means (CreatePanel + kind,
+// Close + identity, SetWindowPresentation); the native host keeps the specialised
+// transitions behind those names.
+enum class WindowMethod { GetCurrent, Close, FocusTab, CreatePanel, CreateCameraView,
+                          SuspendCameraViews, ResizeCameraView, SetWindowPresentation,
                           ConfigureViewport, CloseProcess };
 
 /// A window presentation is a state, not a toggle: the caller names the state it
@@ -67,6 +68,7 @@ struct WindowRequest {
     int tab_id = -1;
     std::optional<PanelOptions> panel;
     std::string base_url;
+    std::string panel_id; // Stable panel identity for Close; never a tab id.
     std::string scene_id;
     std::string camera_id;
     std::string archive_session;

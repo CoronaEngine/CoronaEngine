@@ -136,6 +136,8 @@ class BrowserManager {
                    TabKind kind = TabKind::Panel, int width = 0, int height = 0,
                    int initial_x = 120, int initial_y = 120);
     BrowserTab* get_tab(int tab_id);
+    /// Stable panel identity (the id createPanel was given), not the transient tab id.
+    BrowserTab* find_tab_by_panel_id(const std::string& panel_id);
     void remove_tab(int tab_id);
     void update_texture(int tab_id);
     void resize_tab(int tab_id, int width, int height);

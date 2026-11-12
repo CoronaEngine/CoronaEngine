@@ -117,7 +117,7 @@ def run(port, root, engine_pid):
           return Object.values(m).find(v=>typeof v?.openNativePanel==='function');})()"""
         wait(lambda: main.evaluate(f'{service}.then(s=>s.readEditorUiPolicy())'),
              lambda value: value and value.get('enabled'), 'Web owner ready')
-        opened = main.evaluate(f"{service}.then(s=>s.openNativePanel({{detached:true,panelId:'SceneTools',routePath:'/SceneBar',width:700,height:800}}))")
+        opened = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'SceneTools',routePath:'/SceneBar',width:700,height:800}}))")
         tab_id = opened['tab_id']
         target = wait(lambda: next((target for target in targets() if '#/SceneBar?' in target['url']), None), bool, 'SceneBar document')
         panel = Frontend(port, target_id=target['id'])
@@ -169,10 +169,10 @@ def run(port, root, engine_pid):
         for dialog in dialogs():
             dismiss(dialog)
         if camera_view:
-            main.evaluate("corona.window.closeCameraView('scene.ini','focus-camera')")
+            main.evaluate("corona.window.close({sceneId:'scene.ini',cameraId:'focus-camera'})")
             camera_view.socket.close()
         if tab_id is not None:
-            main.evaluate(f'corona.window.closeTab({tab_id})')
+            main.evaluate("corona.window.close({panelId:'SceneTools'})")
         if panel:
             panel.socket.close()
         main.socket.close()

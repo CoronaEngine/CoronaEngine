@@ -279,7 +279,7 @@ try {
     for (const doc of docs) {
       assert.equal(await doc.client.evaluate('typeof corona.window.onClosed'), 'function', 'native close events require direct V8 callbacks');
       assert.equal(await doc.client.evaluate('typeof corona.window.onCloseRequested'), 'function');
-      for (const method of ['close', 'closeTab', 'focusTab', 'createPanel', 'setWindowPresentation']) {
+      for (const method of ['close', 'focusTab', 'createPanel', 'setWindowPresentation']) {
         assert.equal(await doc.client.evaluate(`typeof corona.window.${method}`), 'function', `${method} requires a direct native V8 operation`);
       }
       await doc.client.evaluate(`(() => {
@@ -372,9 +372,10 @@ try {
     assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle"})'), true);
     evidence[0].cameraWindowControls = 'passed validation, missing camera and non-camera isolation; positive lifecycle recorded under real-camera below';
     evidence[0].mainBorderless = 'passed toggle and restore with JSON disabled';
-    assert.deepEqual(await main.evaluate('corona.window.closeCameraView("missing-scene","missing-camera")'), {closed:false});
-    for (const args of ['', 'null', '1', '"scene"', '"scene",null', '"scene","camera",1']) {
-      assert.equal(await main.evaluate(`corona.window.closeCameraView(${args}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    assert.equal(await main.evaluate('corona.window.close({sceneId:"missing-scene",cameraId:"missing-camera"})'), false);
+    for (const args of ['', 'null', '1', '"scene"', '{}', '{sceneId:"s"}', '{cameraId:"c"}',
+      '{panelId:"Object",sceneId:"s",cameraId:"c"}', '{panelId:""}', '{panelId:1}']) {
+      assert.equal(await main.evaluate(`corona.window.close(${args}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
     for (const args of ['', 'null', '1', '"",1', '{}']) {
       assert.equal(await main.evaluate(`corona.window.suspendCameraViews(${args}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
@@ -413,13 +414,9 @@ try {
     const mainTab = await main.evaluate('corona.window.getCurrent()');
     assert.equal(await main.evaluate(`corona.window.focusTab(${closedTab.tabId})`), true);
     assert.equal(await main.evaluate('corona.window.focusTab(2147483647)'), false);
-    assert.equal(await main.evaluate(`corona.window.closeTab(${mainTab.tabId}).catch(e=>e.code)`), 'PERMISSION_DENIED');
     assert.equal(await main.evaluate('corona.window.close().catch(e=>e.code)'), 'PERMISSION_DENIED');
-    assert.equal(await docs[1].client.evaluate(`corona.window.closeTab(${closedTab.tabId}).catch(e=>e.code)`), 'PERMISSION_DENIED');
-    for (const args of ['null', '-1', '1.5', '"3"', 'Infinity', '1,2']) {
-      assert.equal(await main.evaluate(`corona.window.closeTab(${args}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
-    }
-    assert.equal(await main.evaluate(`corona.window.closeTab(${closedTab.tabId})`), true);
+    assert.equal(await docs[1].client.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panelId)}}).catch(e=>e.code)`), 'PERMISSION_DENIED');
+    assert.equal(await main.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panelId)}})`), true);
     stage = 'receiving actual native window removal event';
     console.log(`CEF smoke: ${stage}`);
     const completion = await waitFor(async () => {
@@ -428,7 +425,7 @@ try {
     }, 10_000);
     assert.deepEqual(completion.closed, [{tabId:closedTab.tabId, panelId:'smoke-panel-b'}]);
     assert.deepEqual(completion.unsubscribed, []);
-    assert.equal(await main.evaluate(`corona.window.closeTab(${closedTab.tabId})`), false);
+    assert.equal(await main.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panelId)}})`), false);
     stage = 'self close settles its V8 promise before retiring the context';
     await main.evaluate(`window.__selfCloseSettled = []; window.__smoke.on('self-close-settled', value => window.__selfCloseSettled.push(value)); true`);
     await docs[1].client.evaluate(`(() => { ${source}
@@ -1608,7 +1605,7 @@ try {
     }
     assert.equal(await main.evaluate('corona.window.resizeCameraView(400,300,"scene.ini","smoke-camera")'), true);
     assert.equal((await viewportPatch(cameraClient, JSON.stringify({ ...cameraScope, mode: 'stereo3d', pointer: pointerState }))).systemCursorHidden, true);
-    assert.deepEqual(await main.evaluate('corona.window.closeCameraView("scene.ini","smoke-camera")'), { closed: true });
+    assert.equal(await main.evaluate('corona.window.close({sceneId:"scene.ini",cameraId:"smoke-camera"})'), true);
     assert.equal((await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d' }))).pointer.cursor, 'hidden',
       'native window removal must release the pointer even before renderer cleanup');
     await main.evaluate('corona.window.suspendCameraViews("")');
@@ -1657,11 +1654,11 @@ try {
     await createCamera({ ...options, archiveSession: activeAgain.archive_session, cameraId: object.camera.camera_id,
       routePath: '/CameraView?uiWindow=typed-camera' });
     assert.equal((await stateOfCreated()).view_open, true);
-    assert.deepEqual(await main.evaluate(`corona.window.closeCameraView('scene.ini',${JSON.stringify(object.camera.camera_id)})`), { closed: true });
+    assert.equal(await main.evaluate(`corona.window.close({sceneId:'scene.ini',cameraId:${JSON.stringify(object.camera.camera_id)}})`), true);
     assert.equal((await stateOfCreated()).view_open, false);
-    assert.deepEqual(await main.evaluate(`corona.window.closeCameraView('scene.ini',${JSON.stringify(object.camera.camera_id)})`), { closed: false });
+    assert.equal(await main.evaluate(`corona.window.close({sceneId:'scene.ini',cameraId:${JSON.stringify(object.camera.camera_id)}})`), false);
     evidence[0].cameraCreation = 'typed archive-scoped camera object creation with JSON disabled; no window until one window operation, owner-published open/close state, idempotent close, retired CEF toggles rejected';
-    assert.equal(await main.evaluate(`corona.window.closeTab(${toolPanel.tab_id})`), true);
+    assert.equal(await main.evaluate('corona.window.close({panelId:"SceneTools"})'), true);
     evidence.push({ document: 'real-camera', roundtrip: 'bidirectional structured-clone typed arrays with JSON disabled', nativeCameraLifecycle: 'passed with JSON disabled: create/existing, identity, permissions, geometry, close, recreate, suspend, archive replacement',
       fixtureScene: cameraWorld });
   }

@@ -1784,6 +1784,24 @@ bool read_window_presentation(const CefV8ValueList& arguments, WindowRequest& re
     return request.scene_id.empty() == request.camera_id.empty();
 }
 
+// close() names at most one identity: a panel's stable id, or a camera surface. No
+// argument means "the caller". An empty object is not an identity, it is a typo.
+bool read_close_request(const CefV8ValueList& arguments, WindowRequest& request) {
+    if (arguments.empty()) return true;
+    if (arguments.size() != 1 || !object_keys(arguments[0],
+        std::initializer_list<const char*>{"panelId", "sceneId", "cameraId"})) return false;
+    const auto object = arguments[0];
+    const bool has_panel = object->HasValue("panelId");
+    const bool has_scene = object->HasValue("sceneId");
+    const bool has_camera = object->HasValue("cameraId");
+    if (has_scene != has_camera) return false;
+    if (has_panel && has_scene) return false;
+    if (has_panel) return option_string(object, "panelId", request.panel_id, true);
+    if (!has_scene) return false;
+    return option_string(object, "sceneId", request.scene_id, true) &&
+           option_string(object, "cameraId", request.camera_id, true);
+}
+
 CefRefPtr<CefV8Value> snapshot_value(const WindowSnapshot& snapshot, int browser_id,
                                   const std::string& frame_id) {
     auto value = CefV8Value::CreateObject(nullptr, nullptr);
@@ -2264,28 +2282,25 @@ public:
         request.context_id = context_id_;
         const bool panel_operation = method == WindowMethod::CreatePanel;
         const bool presentation = method == WindowMethod::SetWindowPresentation;
-        const bool targeted = method == WindowMethod::CloseTab || method == WindowMethod::FocusTab;
+        const bool close_operation = method == WindowMethod::Close;
+        const bool targeted = method == WindowMethod::FocusTab;
         const bool resize = method == WindowMethod::ResizeCameraView;
-        const bool camera_operation = method == WindowMethod::SuspendCameraViews ||
-            method == WindowMethod::CloseCameraView || resize;
-        const bool pair = method == WindowMethod::CloseCameraView;
+        const bool camera_operation = method == WindowMethod::SuspendCameraViews || resize;
         const std::size_t offset = resize ? 2u : 0u;
-        if ((camera_operation && (arguments.size() != offset + (pair ? 2u : 1u) ||
-              !arguments[offset]->IsString() || (pair && !arguments[offset + 1]->IsString()))) ||
+        if ((camera_operation && (arguments.size() != offset + 1u || !arguments[offset]->IsString())) ||
             (resize && (!arguments[0]->IsInt() || arguments[0]->GetIntValue() <= 0 ||
                         !arguments[1]->IsInt() || arguments[1]->GetIntValue() <= 0)) ||
             (panel_operation && !read_panel_options(arguments, request)) ||
             (presentation && !read_window_presentation(arguments, request)) ||
             (method == WindowMethod::ConfigureViewport && !read_viewport_configuration(arguments, request)) ||
-            ((method == WindowMethod::GetCurrent || method == WindowMethod::Close ||
-              method == WindowMethod::CloseProcess) && !arguments.empty()) ||
+            (close_operation && !read_close_request(arguments, request)) ||
+            ((method == WindowMethod::GetCurrent || method == WindowMethod::CloseProcess) && !arguments.empty()) ||
             (targeted && (arguments.size() != 1 || !arguments[0]->IsInt() || arguments[0]->GetIntValue() < 0))) {
             reject(context_, promise, "INVALID_ARGUMENT", "Invalid native window operation arguments");
             return promise;
         }
         if (targeted) request.tab_id = arguments[0]->GetIntValue();
         if (camera_operation) request.scene_id = arguments[offset]->GetStringValue().ToString();
-        if (pair) request.camera_id = arguments[offset + 1]->GetStringValue().ToString();
         if (resize && request.scene_id.empty() != request.camera_id.empty()) {
             reject(context_, promise, "INVALID_ARGUMENT", "Scene and camera identity must be supplied together");
             return promise;
@@ -2561,10 +2576,9 @@ private:
             created->SetValue("panel_id", CefV8Value::CreateString(reply.snapshot.panel_id), V8_PROPERTY_ATTRIBUTE_NONE);
             created->SetValue("existing", CefV8Value::CreateBool(reply.existing), V8_PROPERTY_ATTRIBUTE_NONE);
             promise->ResolvePromise(created);
-        } else if (method == WindowMethod::SuspendCameraViews || method == WindowMethod::CloseCameraView) {
+        } else if (method == WindowMethod::SuspendCameraViews) {
             auto value = CefV8Value::CreateObject(nullptr, nullptr);
-            value->SetValue("closed", method == WindowMethod::SuspendCameraViews ?
-                CefV8Value::CreateInt(reply.closed_count) : CefV8Value::CreateBool(reply.accepted), V8_PROPERTY_ATTRIBUTE_NONE);
+            value->SetValue("closed", CefV8Value::CreateInt(reply.closed_count), V8_PROPERTY_ATTRIBUTE_NONE);
             promise->ResolvePromise(value);
         } else promise->ResolvePromise(CefV8Value::CreateBool(reply.accepted));
         context_->Exit();
@@ -2711,18 +2725,15 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     auto window = CefV8Value::CreateObject(nullptr, nullptr);
     window->SetValue("getCurrent", CefV8Value::CreateFunction("getCurrent",
         new NativeHandler(endpoint, WindowMethod::GetCurrent)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    // One verb for "close a window"; the identity decides which. See read_close_request.
     window->SetValue("close", CefV8Value::CreateFunction("close",
         new NativeHandler(endpoint, WindowMethod::Close)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    window->SetValue("closeTab", CefV8Value::CreateFunction("closeTab",
-        new NativeHandler(endpoint, WindowMethod::CloseTab)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("focusTab", CefV8Value::CreateFunction("focusTab",
         new NativeHandler(endpoint, WindowMethod::FocusTab)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("createPanel", CefV8Value::CreateFunction("createPanel",
         new NativeHandler(endpoint, WindowMethod::CreatePanel)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("suspendCameraViews", CefV8Value::CreateFunction("suspendCameraViews",
         new NativeHandler(endpoint, WindowMethod::SuspendCameraViews)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    window->SetValue("closeCameraView", CefV8Value::CreateFunction("closeCameraView",
-        new NativeHandler(endpoint, WindowMethod::CloseCameraView)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("resizeCameraView", CefV8Value::CreateFunction("resizeCameraView",
         new NativeHandler(endpoint, WindowMethod::ResizeCameraView)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("setWindowPresentation", CefV8Value::CreateFunction("setWindowPresentation",
