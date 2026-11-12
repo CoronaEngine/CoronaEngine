@@ -77,6 +77,10 @@ Python 服务的失败分成两类，分界是"谁的问题"：
 **细节码**，照常拒绝，但只应进日志，可能随实现改名或合并。`tests/tools/test_rejection_vocabulary.py`
 还会扫描前端，禁止它按细节码分支。
 
+**回复版本**：分页读（`readModelNodes`）与写（`setModelNodeState`）的回复都带 `actor_version`。
+消费方以它为围栏：比已应用版本旧的回复丢弃，写入成功后作废在途的读。这是"整页替换 + 异步读"
+唯一不会丢编辑的顺序规则，也是 model-node 面板不再需要重试点击的原因。
+
 **上下文释放时的挂起调用**：`CoronaV8Endpoint::release()` 直接丢弃未完成的请求，不做
 `RejectPromise`。尝试过在释放回调里拒绝，但那会在单进程 CEF 里调用已释放的 V8 上下文而崩溃
 （冒烟在 pick 阶段丢掉 CDP 连接）。等待这些 Promise 的页面正是被销毁的那个，丢弃是安全的

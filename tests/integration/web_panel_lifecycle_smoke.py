@@ -116,31 +116,26 @@ def model_node_retirement(child):
             window.__mnDebug.calls.push({identity:args[0],patch:args[1],reply:{visible:r.nodes?.[0]?.visible,version:r.actor_version,status:r.status}});
             return r; } catch (e) { window.__mnDebug.calls.push({identity:args[0],patch:args[1],error:String(e)}); throw e; } };
           return true;})()""")
-    # A remount refetches the model-node page, and the component keeps the last page it
-    # receives. A click that lands while that reply is still in flight can therefore be
-    # overwritten; retry the toggle like a user would instead of failing the first click.
-    for attempt in range(1, 4):
-        initial_title = wait(lambda: child.evaluate(
-            f'(()=>{{const button=document.querySelector({json.dumps(button)});'
-            'if(!button||button.disabled)return null;const title=button.title;button.click();return title;})()'),
-            bool, 'click model node remounted row and capture its initial visibility')
-        try:
-            wait(lambda: child.evaluate(f'document.querySelector({json.dumps(button)})?.title'),
-                 lambda value: value and value != initial_title,
-                 'live model visibility edit after remount', seconds=6)
-            return dict(late_mutation_field_reads=reads, normal_remount=True,
-                        live_visibility_edit=True, toggle_attempts=attempt)
-        except AssertionError:
-            if attempt < 3:
-                continue
-            if os.environ.get("CORONA_MODEL_NODE_DEBUG"):
-                print("MN debug initial_title:", repr(initial_title), flush=True)
-                print("MN debug state:", child.evaluate("""(() => {
-                  const buttons=[...document.querySelectorAll('.model-node-list button[title]')];
-                  return {titles:buttons.map(b=>b.title), disabled:buttons.map(b=>b.disabled),
-                          list:(document.querySelector('.model-node-list')||{}).innerText,
-                          debug:window.__mnDebug};})()"""), flush=True)
-            raise
+    # A remount refetches the model-node page. The component fences replies against the
+    # actor version and retires reads that started before an edit, so one click is enough.
+    initial_title = wait(lambda: child.evaluate(
+        f'(()=>{{const button=document.querySelector({json.dumps(button)});'
+        'if(!button||button.disabled)return null;const title=button.title;button.click();return title;})()'),
+        bool, 'click model node remounted row and capture its initial visibility')
+    try:
+        wait(lambda: child.evaluate(f'document.querySelector({json.dumps(button)})?.title'),
+             lambda value: value and value != initial_title,
+             'live model visibility edit after remount', seconds=10)
+    except AssertionError:
+        if os.environ.get("CORONA_MODEL_NODE_DEBUG"):
+            print("MN debug initial_title:", repr(initial_title), flush=True)
+            print("MN debug state:", child.evaluate("""(() => {
+              const buttons=[...document.querySelectorAll('.model-node-list button[title]')];
+              return {titles:buttons.map(b=>b.title), disabled:buttons.map(b=>b.disabled),
+                      list:(document.querySelector('.model-node-list')||{}).innerText,
+                      debug:window.__mnDebug};})()"""), flush=True)
+        raise
+    return dict(late_mutation_field_reads=reads, normal_remount=True, live_visibility_edit=True)
 
 
 def editor_settings_retirement(child):
