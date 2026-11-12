@@ -100,7 +100,7 @@ try {
 
   await waitFor(() => main.evaluate('typeof window.corona?.window?.getCurrent === "function"'));
   assert.equal(await main.evaluate('typeof corona.viewport?.pick'), 'function');
-  assert.equal(await main.evaluate('typeof corona.input?.dispatch'), 'function');
+  assert.equal(await main.evaluate('typeof corona.scene?.dispatchInput'), 'function');
   assert.equal(await main.evaluate('typeof corona.app?.closeProcess'), 'function');
   assert.equal(await main.evaluate('corona.app.closeProcess(null).catch(error=>error.code)'), 'INVALID_ARGUMENT');
   // Use a file-origin fixture in the real BrowserManager windows. The editor
@@ -117,7 +117,8 @@ try {
   // The bridge migration moved the file, project-file and script domains behind one
   // Web -> Python entry, so only operations that must run on the CEF UI thread keep a named
   // binding. Assert the surface that exists now instead of the retired one.
-  assert.equal(await main.evaluate('typeof corona.files?.openFile'), 'function', 'files.openFile stays a direct V8 binding');
+  assert.equal(await main.evaluate('typeof corona.project?.openDocument'), 'function', 'project.openDocument stays a direct V8 binding');
+  assert.equal(await main.evaluate('typeof corona.files?.openFile'), 'undefined', 'the files namespace no longer holds a native method');
   for (const retired of ['getFileTree', 'createFolder', 'createActorTemplate', 'renameItem', 'deleteItem']) {
     assert.equal(await main.evaluate(`typeof corona.files?.${retired}`), 'undefined',
       `files.${retired} must not survive the bridge migration`);
@@ -125,12 +126,10 @@ try {
   for (const method of ['getAppVersion', 'getRecentProjects', 'getProjectLoadStatus', 'openProject', 'openProjectFile', 'createWorldProject', 'createMultiplayerProject']) {
     assert.equal(await main.evaluate(`typeof corona.project?.${method}`), 'function', `project.${method} requires a direct V8 binding`);
   }
-  assert.equal(await main.evaluate('typeof corona.projectSettings?.saveActiveProjectInfo'), 'function',
-    'projectSettings.saveActiveProjectInfo refreshes the native scene cache and stays in C++');
-  for (const retired of ['readProjectDocument', 'commitProjectDocument', 'getActiveProjectInfo']) {
-    assert.equal(await main.evaluate(`typeof corona.projectSettings?.${retired}`), 'undefined',
-      `projectSettings.${retired} must not survive the bridge migration`);
-  }
+  assert.equal(await main.evaluate('typeof corona.project?.saveActiveProjectInfo'), 'function',
+    'project.saveActiveProjectInfo refreshes the native scene cache and stays in C++');
+  assert.equal(await main.evaluate('typeof corona.projectSettings'), 'undefined',
+    'project metadata and project documents live under project now');
   assert.equal(await main.evaluate('typeof corona.bridge?.call'), 'function',
     'the Web -> Python surface must stay one function wide');
   for (const retired of ['projectFiles', 'scripts']) {
@@ -624,15 +623,15 @@ try {
 
     evidence[0].resourceImportValidation = 'JSON disabled: typed import rejects malformed arguments and inactive scope before prompting; unsupported type result retains scope; old Web route denied';
     stage = 'typed audio validation';
-    for (const name of ['playResource', 'stopResource', 'playActor', 'stopActor'])
+    for (const name of ['play', 'stop'])
       assert.equal(await main.evaluate(`typeof corona.audio.${name}`), 'function');
-    for (const id of [0, 1, 1.5, null, '', '0', '-1', '18446744073709551616', '12suffix']) {
-      assert.equal(await main.evaluate(`corona.audio.playResource(${JSON.stringify(id)},false).catch(e=>e.code)`), 'INVALID_ARGUMENT');
-      assert.equal(await main.evaluate(`corona.audio.stopResource(${JSON.stringify(id)}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    for (const id of [0, 1.5, null, '', '0', '-1', '18446744073709551616', '12suffix']) {
+      assert.equal(await main.evaluate(`corona.audio.play({resource:${JSON.stringify(id)}},{loop:false}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+      assert.equal(await main.evaluate(`corona.audio.stop({resource:${JSON.stringify(id)}}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
-    for (const name of ['playActor', 'stopActor']) {
+    for (const [name, extra] of [['play', ',loop:false'], ['stop', '']]) {
       for (const [scene, session] of [['other.ini', sceneRead.archive_session], ['scene.ini', 'retired']])
-        assert.equal(await main.evaluate(`corona.audio.${name}(${JSON.stringify(scene)},'missing-actor',${JSON.stringify({ archive_session: session, ...(name === 'playActor' ? { loop: false } : {}) })}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
+        assert.equal(await main.evaluate(`corona.audio.${name}({scene:${JSON.stringify(scene)},actor:'missing-actor',archive_session:${JSON.stringify(session)}${extra}}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
     }
     for (const method of ['play_audio', 'stop_audio', 'actor_play_audio', 'actor_stop_audio'])
 
@@ -672,7 +671,7 @@ try {
     // use - {success, revision, content} or {success: false, error} - is unchanged.
     const documentCall = (method, request) =>
       bridgeCall('ProjectArchive', method, [{ ...request, revision_only: true }]);
-    const settingsCall = (method, request) => main.evaluate(`corona.projectSettings.${method}(${request === undefined ? '' : JSON.stringify(request)})`);
+    const settingsCall = (method, request) => main.evaluate(`corona.project.saveActiveProjectInfo(${request === undefined ? '' : JSON.stringify(request)})`);
     const numericDocument = await documentCall('read_document', documentScope);
     assert.equal(numericDocument.success, true);
     assert.deepEqual(numericDocument.content, integerValues);
@@ -727,9 +726,9 @@ try {
     assert.equal(updated.core_version, updateInfo.core_version);
     assert.equal((await activeProjectInfo()).name, updateInfo.name);
     for (const badScope of [{ archive_session: 'retired' }, { project_path: cameraWorld + '-other' }]) {
-      assert.equal(await main.evaluate(`corona.projectSettings.saveActiveProjectInfo(${JSON.stringify({ ...updateInfo, ...badScope })}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
+      assert.equal(await main.evaluate(`corona.project.saveActiveProjectInfo(${JSON.stringify({ ...updateInfo, ...badScope })}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
     }
-    assert.equal(await main.evaluate(`corona.projectSettings.saveActiveProjectInfo(${JSON.stringify({ ...updateInfo, mode: 'story' })}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    assert.equal(await main.evaluate(`corona.project.saveActiveProjectInfo(${JSON.stringify({ ...updateInfo, mode: 'story' })}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     await settingsCall('saveActiveProjectInfo', { ...updateInfo, name: metadata.name, core_version: metadata.core_version });
 
     evidence[0].projectSettings = 'named V8 metadata and document operations with JSON disabled; digest CAS, structured numeric/unicode values, strict arguments, stale scope, path fences and retired CEF routes';
@@ -750,7 +749,7 @@ try {
         case 'createActorTemplate': return manager('create_file', [scope.path, scope.name, 'actor']);
         case 'renameItem': return manager('rename_item', [scope.path, scope.name]);
         case 'deleteItem': return manager('delete_item', [scope.path]);
-        case 'openFile': return main.evaluate(`corona.files.openFile(${JSON.stringify(scope)})`);
+        case 'openFile': return main.evaluate(`corona.project.openDocument(${JSON.stringify(scope)})`);
         default: throw new Error(`unsupported project file method ${method}`);
       }
     };
@@ -794,8 +793,8 @@ try {
         assert.equal(refused, true, 'a stale project scope must not succeed');
       }
     }
-    assert.equal(await main.evaluate(`corona.files.openFile(${JSON.stringify({ ...filesScope, path: '../escape.actor', file_type: 'actor' })}).catch(e=>e.code)`), 'INVALID_PROJECT_PATH');
-    assert.equal(await main.evaluate(`corona.files.openFile(${JSON.stringify({ ...filesScope, path: '文件测试/missing.actor', file_type: 'actor' })}).catch(e=>e.code)`), 'FILE_NOT_FOUND');
+    assert.equal(await main.evaluate(`corona.project.openDocument(${JSON.stringify({ ...filesScope, path: '../escape.actor', file_type: 'actor' })}).catch(e=>e.code)`), 'INVALID_PROJECT_PATH');
+    assert.equal(await main.evaluate(`corona.project.openDocument(${JSON.stringify({ ...filesScope, path: '文件测试/missing.actor', file_type: 'actor' })}).catch(e=>e.code)`), 'FILE_NOT_FOUND');
     assert.equal(await filesCall('deleteItem', { path: '文件测试/改名.actor' }), true);
     assert.equal(await filesCall('deleteItem', { path: '文件测试' }), true);
     assert.equal((await filesCall('getFileTree', { path: '' })).children.some(entry => entry.name === '文件测试'), false);
@@ -1446,12 +1445,12 @@ try {
     const mouseInput = { ...cameraScope, type: 'mouse', event: 'click', button: 'LeftButton',
       x: 90, y: 80, viewport_x: 5, viewport_y: 6, viewport_width: 320, viewport_height: 240, picked_actor: actor.name };
     const dispatchInput = (client, event, id = 'smoke-camera', scene = 'scene.ini') => client.evaluate(
-      `corona.input.dispatch(${JSON.stringify(scene)},${JSON.stringify(id)},${JSON.stringify(event)})`);
+      `corona.scene.dispatchInput(${JSON.stringify(scene)},${JSON.stringify(id)},${JSON.stringify(event)})`);
     for (const input of ['null', '[]', '{}', '{type:"keyDown"}',
       `{...${JSON.stringify(keyInput)},extra:true}`, `{...${JSON.stringify(keyInput)},code:1}`,
       `{...${JSON.stringify(mouseInput)},x:NaN}`, `{...${JSON.stringify(mouseInput)},viewport_width:0}`,
       `{...${JSON.stringify(mouseInput)},event:'unknown'}`, `{...${JSON.stringify(mouseInput)},button:'unknown'}`]) {
-      assert.equal(await main.evaluate(`corona.input.dispatch('scene.ini','smoke-camera',${input}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
+      assert.equal(await main.evaluate(`corona.scene.dispatchInput('scene.ini','smoke-camera',${input}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
     }
     for (const [client, scene, cameraId, event, code] of [
       [toolClient, 'scene.ini', 'smoke-camera', keyInput, 'PERMISSION_DENIED'],
@@ -1460,7 +1459,7 @@ try {
       [main, 'scene.ini', 'smoke-camera', { ...keyInput, archive_session: 'retired' }, 'PROJECT_CONTEXT_CHANGED'],
       [main, 'scene.ini', camera.opaque_handle, keyInput, 'CAMERA_NOT_FOUND'],
     ]) {
-      assert.equal(await client.evaluate(`corona.input.dispatch(${JSON.stringify(scene)},${JSON.stringify(cameraId)},${JSON.stringify(event)}).catch(error=>error.code)`), code);
+      assert.equal(await client.evaluate(`corona.scene.dispatchInput(${JSON.stringify(scene)},${JSON.stringify(cameraId)},${JSON.stringify(event)}).catch(error=>error.code)`), code);
     }
 
     const tracePath = path.join(output, 'script-input.jsonl');

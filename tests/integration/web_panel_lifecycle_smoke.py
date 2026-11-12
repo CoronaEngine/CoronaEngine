@@ -314,7 +314,7 @@ def run(port, root, engine_pid):
                                "input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('button').click();})()")
                 wait(lambda: child.evaluate("document.querySelector('input')?.value"),
                      lambda value: value == name, 'settings UI reset')
-                child.evaluate('corona.projectSettings.saveActiveProjectInfo(' + json.dumps({
+                child.evaluate('corona.project.saveActiveProjectInfo(' + json.dumps({
                     'archive_session': original['archive_session'], 'project_path': original['project_path'],
                     'name': original['name'], 'core_version': original['core_version']}) + ')')
                 settings_saved = True

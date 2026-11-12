@@ -17,9 +17,12 @@
 manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里没有任何按名字分发
 的桥。名字都是**具名函数**。
 
+命名空间按职责划分，不再是「一个方法一个命名空间」：项目文档与项目元数据在 `project`，
+gizmo 叠加层在 `viewport`，脚本输入派发在 `scene`，音频按身份分 `play`/`stop`。
+
 ## Web 面
 
-共 12 个命名空间 / 61 个方法。清单由
+共 8 个命名空间 / 59 个方法。清单由
 `tests/tools/test_typed_native_surface.py` 精确钉死（多一个、少一个都会失败）：
 
 | 命名空间 | 说明 |
@@ -27,12 +30,8 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 | `app` | 进程级操作（关闭） |
 | `audio` | Audio 资源与 Actor 播放 |
 | `bridge` | 唯一的 Web → Python 入口，一函数宽 |
-| `files` | 文件管理器打开（其余文件操作已走 bridge） |
-| `gizmo` | 视口 gizmo 指针与目标 |
-| `input` | 输入事件派发 |
 | `network` | 协作会话与发现 |
 | `project` | 项目新建/打开/最近列表 |
-| `project_settings` | 当前项目元数据保存 |
 | `scene` | 场景读、写、Actor 与相机 |
 | `viewport` | 视口配置与拾取 |
 | `window` | Dock、面板与相机窗口 |
@@ -42,16 +41,12 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 | 命名空间 | 方法 |
 |---|---|
 | `app` | `closeProcess` |
-| `audio` | `playActor`、`playResource`、`stopActor`、`stopResource` |
+| `audio` | `play`、`stop` |
 | `bridge` | `call` |
-| `files` | `openFile` |
-| `gizmo` | `pointer`、`setTarget` |
-| `input` | `dispatch` |
 | `network` | `clearDiscoveredPeers`、`connectToPeer`、`getDiscoveredPeers`、`getSessionInfo`、`searchLan`、`setProjectRoot`、`startSession`、`stopSession` |
-| `project` | `createMultiplayerProject`、`createWorldProject`、`getProjectLoadStatus`、`getRecentProjects`、`openProject`、`openProjectFile` |
-| `project_settings` | `saveActiveProjectInfo` |
-| `scene` | `captureScreenshot`、`createActor`、`createCamera`、`deleteActor`、`deleteCamera`、`focusActor`、`getEnvironment`、`importResourceFile`、`isVisionAvailable`、`readActive`、`readActorProperties`、`readActorRig`、`readCameraRenderSettings`、`readModelNodes`、`readScene`、`readTransforms`、`rebindActorResource`、`save`、`selectActor`、`selectModelFile`、`setActorIkChains`、`setActorTransform`、`setCameraRenderSettings`、`setEnvironment`、`setModelNodeState`、`updateActor`、`updateCamera` |
-| `viewport` | `configure`、`pick` |
+| `project` | `createMultiplayerProject`、`createWorldProject`、`getProjectLoadStatus`、`getRecentProjects`、`openDocument`、`openProject`、`openProjectFile`、`saveActiveProjectInfo` |
+| `scene` | `captureScreenshot`、`createActor`、`createCamera`、`deleteActor`、`deleteCamera`、`dispatchInput`、`focusActor`、`getEnvironment`、`importResourceFile`、`isVisionAvailable`、`readActive`、`readActorProperties`、`readActorRig`、`readCameraRenderSettings`、`readModelNodes`、`readScene`、`readTransforms`、`rebindActorResource`、`save`、`selectActor`、`selectModelFile`、`setActorIkChains`、`setActorTransform`、`setCameraRenderSettings`、`setEnvironment`、`setModelNodeState`、`updateActor`、`updateCamera` |
+| `viewport` | `configure`、`pick`、`setGizmoPointer`、`setGizmoTarget` |
 | `window` | `close`、`createPanel`、`focus`、`getCurrent`、`onCloseRequested`、`onClosed`、`setWindowPresentation` |
 
 ### 面板与窗口：三个合并后的入口

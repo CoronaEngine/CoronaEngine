@@ -271,7 +271,7 @@ def run():
         moved = [initial[0] + 2, *initial[1:]]
         assert panels[1].evaluate(f"corona.scene.setActorTransform({json.dumps(state['scene'])},{json.dumps(guid)},{json.dumps({**scope, 'position': moved})})")["status"] == "success"
         metadata = panels[0].evaluate('corona.projectSettings.getActiveProjectInfo()')
-        panels[0].evaluate('corona.projectSettings.saveActiveProjectInfo(' + json.dumps({
+        panels[0].evaluate('corona.project.saveActiveProjectInfo(' + json.dumps({
             **scope, 'project_path': metadata['project_path'], 'name': new_name,
             'core_version': metadata['core_version']}) + ')')
         assert v8(panels[1], "corona.scene.save", state["scene"], scope)["status"] == "saved"

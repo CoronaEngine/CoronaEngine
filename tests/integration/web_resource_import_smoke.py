@@ -176,11 +176,11 @@ def run(port, root, engine_pid, repo):
             return float(np.max(np.abs(2 * np.mean(samples * carrier[:, None], axis=0))))
         with loopback.recorder(samplerate=48000) as recorder:
             baseline = amplitude(recorder.record(numframes=24000))
-            played = v8('corona.audio.playActor', scene, audio['actor_guid'], {**scope, 'loop': True})
+            played = v8('corona.audio.play', {'scene': scene, 'actor': audio['actor_guid'], **scope, 'loop': True})
             try:
                 playing = amplitude(recorder.record(numframes=96000))
             finally:
-                stopped = v8('corona.audio.stopActor', scene, audio['actor_guid'], scope)
+                stopped = v8('corona.audio.stop', {'scene': scene, 'actor': audio['actor_guid'], **scope})
             recorder.record(numframes=48000)  # discard the queued playback tail
             silence = amplitude(recorder.record(numframes=24000))
         levels = dict(frequency_hz=997, baseline_amplitude=baseline, playing_amplitude=playing,

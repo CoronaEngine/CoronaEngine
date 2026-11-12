@@ -14,30 +14,28 @@ FRONTEND_SRC = ROOT / "CoronaEditor/editor/Frontend/src"
 
 EXPECTED_SURFACE = {
     "app": {"closeProcess"},
-    "audio": {"playActor", "playResource", "stopActor", "stopResource"},
+    # One verb per action; the identity names a resource or an actor of a scene.
+    "audio": {"play", "stop"},
     "bridge": {"call"},
-    "files": {"openFile"},
-    "gizmo": {"pointer", "setTarget"},
-    "input": {"dispatch"},
     "network": {
         "clearDiscoveredPeers", "connectToPeer", "getDiscoveredPeers", "getSessionInfo",
         "searchLan", "setProjectRoot", "startSession", "stopSession",
     },
     "project": {
         "createMultiplayerProject", "createWorldProject",
-        "getProjectLoadStatus", "getRecentProjects", "openProject", "openProjectFile",
+        "getProjectLoadStatus", "getRecentProjects", "openDocument", "openProject",
+        "openProjectFile", "saveActiveProjectInfo",
     },
-    "project_settings": {"saveActiveProjectInfo"},
     "scene": {
         "captureScreenshot", "createActor", "createCamera", "deleteActor", "deleteCamera",
-        "focusActor", "getEnvironment", "importResourceFile", "isVisionAvailable",
+        "dispatchInput", "focusActor", "getEnvironment", "importResourceFile", "isVisionAvailable",
         "readActive", "readActorProperties", "readActorRig", "readCameraRenderSettings",
         "readModelNodes", "readScene", "readTransforms", "rebindActorResource", "save",
         "selectActor", "selectModelFile", "setActorIkChains", "setActorTransform",
         "setCameraRenderSettings", "setEnvironment", "setModelNodeState", "updateActor",
         "updateCamera",
     },
-    "viewport": {"configure", "pick"},
+    "viewport": {"configure", "pick", "setGizmoPointer", "setGizmoTarget"},
     "window": {
         "close", "createPanel", "focus", "getCurrent",
         "onCloseRequested", "onClosed", "setWindowPresentation",

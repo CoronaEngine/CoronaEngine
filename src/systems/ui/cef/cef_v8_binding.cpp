@@ -1217,39 +1217,6 @@ bool read_select_model_file(const CefV8ValueList& arguments, SceneRequest& reque
     return true;
 }
 
-bool read_audio_resource(const CefV8ValueList& arguments, SceneRequest& request, bool loop) {
-    if (arguments.size() != (loop ? 2u : 1u)) return false;
-    const auto value = arguments[0];
-    if (!value || !value->IsString()) return false;
-    const auto id = value->GetStringValue().ToString();
-    const auto parsed = std::from_chars(id.data(), id.data() + id.size(), request.audio.resource_id);
-    if (parsed.ec != std::errc{} || parsed.ptr != id.data() + id.size() || request.audio.resource_id == 0) return false;
-    if (loop) {
-        if (!arguments[1] || !arguments[1]->IsBool()) return false;
-        request.audio.loop = arguments[1]->GetBoolValue();
-    }
-    return true;
-}
-
-bool read_actor_audio(const CefV8ValueList& arguments, SceneRequest& request, bool loop) {
-    if (arguments.size() != 3 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty() ||
-        !arguments[1]->IsString() || arguments[1]->GetStringValue().empty() ||
-        !object_keys(arguments[2], loop ? std::initializer_list<const char*> {"archive_session", "loop"}
-                                      : std::initializer_list<const char*> {"archive_session"})) return false;
-    const auto scope = arguments[2];
-    const auto session = scope->GetValue("archive_session");
-    if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
-    request.archive_session = session->GetStringValue().ToString();
-    request.audio.scene = arguments[0]->GetStringValue().ToString();
-    request.audio.actor = arguments[1]->GetStringValue().ToString();
-    if (loop) {
-        const auto value = scope->GetValue("loop");
-        if (!value || !value->IsBool()) return false;
-        request.audio.loop = value->GetBoolValue();
-    }
-    return true;
-}
-
 CefRefPtr<CefV8Value> audio_value(const AudioSnapshot& snapshot) {
     auto result = CefV8Value::CreateObject(nullptr, nullptr);
     result->SetValue("status", CefV8Value::CreateString(snapshot.status), V8_PROPERTY_ATTRIBUTE_NONE);
@@ -1888,17 +1855,42 @@ bool read_render_settings_only(const CefV8ValueList& arguments, SceneRequest& re
 bool read_render_settings(const CefV8ValueList& arguments, SceneRequest& request) {
     return read_camera_render_settings(arguments, request);
 }
-bool read_audio_resource_looping(const CefV8ValueList& arguments, SceneRequest& request) {
-    return read_audio_resource(arguments, request, true);
+// audio.play / audio.stop name one identity: a resource, or an actor of a scene. The
+// readers were four (play/stop x resource/actor); the identity decides which operation runs.
+bool read_audio_control(const CefV8ValueList& arguments, SceneRequest& request, bool play) {
+    if (arguments.size() != 1 || !object_keys(arguments[0], play
+        ? std::initializer_list<const char*>{"resource", "scene", "actor", "archive_session", "loop"}
+        : std::initializer_list<const char*>{"resource", "scene", "actor", "archive_session"})) return false;
+    const auto object = arguments[0];
+    const bool has_resource = object->HasValue("resource");
+    const bool has_scene = object->HasValue("scene");
+    const bool has_actor = object->HasValue("actor");
+    if (has_scene != has_actor) return false;
+    if (has_resource == has_scene) return false; // exactly one identity
+    if (play && object->HasValue("loop")) {
+        const auto value = object->GetValue("loop");
+        if (!value || !value->IsBool()) return false;
+        request.audio.loop = value->GetBoolValue();
+    }
+    if (has_resource) {
+        std::string id;
+        if (!option_string(object, "resource", id, true)) return false;
+        const auto parsed = std::from_chars(id.data(), id.data() + id.size(), request.audio.resource_id);
+        return parsed.ec == std::errc{} && parsed.ptr == id.data() + id.size() && request.audio.resource_id != 0;
+    }
+    std::string session;
+    if (!option_string(object, "scene", request.audio.scene, true) ||
+        !option_string(object, "actor", request.audio.actor, true) ||
+        !option_string(object, "archive_session", session, true)) return false;
+    request.archive_session = std::move(session);
+    request.method = play ? SceneMethod::PlayActorAudio : SceneMethod::StopActorAudio;
+    return true;
 }
-bool read_audio_resource_once(const CefV8ValueList& arguments, SceneRequest& request) {
-    return read_audio_resource(arguments, request, false);
+bool read_audio_play(const CefV8ValueList& arguments, SceneRequest& request) {
+    return read_audio_control(arguments, request, true);
 }
-bool read_actor_audio_looping(const CefV8ValueList& arguments, SceneRequest& request) {
-    return read_actor_audio(arguments, request, true);
-}
-bool read_actor_audio_once(const CefV8ValueList& arguments, SceneRequest& request) {
-    return read_actor_audio(arguments, request, false);
+bool read_audio_stop(const CefV8ValueList& arguments, SceneRequest& request) {
+    return read_audio_control(arguments, request, false);
 }
 
 inline const SceneOperationSpec kSceneOperations[] = {
@@ -1932,10 +1924,8 @@ inline const SceneOperationSpec kSceneOperations[] = {
 };
 
 inline const SceneOperationSpec kAudioOperations[] = {
-    {"playResource", SceneMethod::PlayAudioResource, read_audio_resource_looping},
-    {"stopResource", SceneMethod::StopAudioResource, read_audio_resource_once},
-    {"playActor", SceneMethod::PlayActorAudio, read_actor_audio_looping},
-    {"stopActor", SceneMethod::StopActorAudio, read_actor_audio_once},
+    {"play", SceneMethod::PlayAudioResource, read_audio_play},
+    {"stop", SceneMethod::StopAudioResource, read_audio_stop},
 };
 
 /// The reader for an operation, or nullptr when the method is not part of the tables.
@@ -2712,22 +2702,20 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     project->SetValue("createMultiplayerProject", CefV8Value::CreateFunction("createMultiplayerProject", new NativeHandler(endpoint, ProjectLauncherMethod::CreateMultiplayer)), V8_PROPERTY_ATTRIBUTE_READONLY);
     project->SetValue("getRecentProjects", CefV8Value::CreateFunction("getRecentProjects", new NativeHandler(endpoint, ProjectLauncherMethod::GetRecent)), V8_PROPERTY_ATTRIBUTE_READONLY);
     project->SetValue("getProjectLoadStatus", CefV8Value::CreateFunction("getProjectLoadStatus", new NativeHandler(endpoint, ProjectLauncherMethod::GetLoadStatus)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("project", project, V8_PROPERTY_ATTRIBUTE_READONLY);
-
-    auto files = CefV8Value::CreateObject(nullptr, nullptr);
-    // Opening a file may reload the native scene; every other project file
+    // Opening a project document may reload the native scene; every other project file
     // operation runs through the Web -> Python bridge.
-    files->SetValue("openFile", CefV8Value::CreateFunction("openFile", new NativeHandler(endpoint, FilesMethod::Open)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("files", files, V8_PROPERTY_ATTRIBUTE_READONLY);
-    auto project_settings = CefV8Value::CreateObject(nullptr, nullptr);
-    project_settings->SetValue("saveActiveProjectInfo", CefV8Value::CreateFunction("saveActiveProjectInfo", new NativeHandler(endpoint, ProjectSettingsMethod::SaveInfo)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("projectSettings", project_settings, V8_PROPERTY_ATTRIBUTE_READONLY);
+    project->SetValue("openDocument", CefV8Value::CreateFunction("openDocument", new NativeHandler(endpoint, FilesMethod::Open)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    project->SetValue("saveActiveProjectInfo", CefV8Value::CreateFunction("saveActiveProjectInfo", new NativeHandler(endpoint, ProjectSettingsMethod::SaveInfo)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    root->SetValue("project", project, V8_PROPERTY_ATTRIBUTE_READONLY);
     auto scene = CefV8Value::CreateObject(nullptr, nullptr);
     // Installed from the table: the name and the operation are declared together, once.
     for (const auto& spec : kSceneOperations) {
         scene->SetValue(spec.name, CefV8Value::CreateFunction(spec.name, new NativeHandler(endpoint, spec.method)),
                         V8_PROPERTY_ATTRIBUTE_READONLY);
     }
+    // Input belongs to the scene's camera surface, so it rides the scene namespace.
+    scene->SetValue("dispatchInput", CefV8Value::CreateFunction("dispatchInput",
+        new NativeHandler(endpoint, ScriptInputMethod::Dispatch)), V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("scene", scene, V8_PROPERTY_ATTRIBUTE_READONLY);
     auto audio = CefV8Value::CreateObject(nullptr, nullptr);
     for (const auto& spec : kAudioOperations) {
@@ -2753,13 +2741,11 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     window->SetValue("onCloseRequested", CefV8Value::CreateFunction("onCloseRequested",
         new NativeEventHandler(endpoint, NativeEventKind::CloseRequested)), V8_PROPERTY_ATTRIBUTE_READONLY);
     auto viewport = CefV8Value::CreateObject(nullptr, nullptr);
-    auto gizmo = CefV8Value::CreateObject(nullptr, nullptr);
-    gizmo->SetValue("setTarget", CefV8Value::CreateFunction("setTarget", new NativeHandler(endpoint, GizmoMethod::SetTarget)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    gizmo->SetValue("pointer", CefV8Value::CreateFunction("pointer", new NativeHandler(endpoint, GizmoMethod::Pointer)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    auto input = CefV8Value::CreateObject(nullptr, nullptr);
-    input->SetValue("dispatch", CefV8Value::CreateFunction("dispatch",
-        new NativeHandler(endpoint, ScriptInputMethod::Dispatch)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("input", input, V8_PROPERTY_ATTRIBUTE_READONLY);
+    // The gizmo is a viewport overlay: it rides the viewport namespace.
+    viewport->SetValue("setGizmoTarget", CefV8Value::CreateFunction("setGizmoTarget",
+        new NativeHandler(endpoint, GizmoMethod::SetTarget)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    viewport->SetValue("setGizmoPointer", CefV8Value::CreateFunction("setGizmoPointer",
+        new NativeHandler(endpoint, GizmoMethod::Pointer)), V8_PROPERTY_ATTRIBUTE_READONLY);
     auto app = CefV8Value::CreateObject(nullptr, nullptr);
     app->SetValue("closeProcess", CefV8Value::CreateFunction("closeProcess",
         new NativeHandler(endpoint, WindowMethod::CloseProcess)), V8_PROPERTY_ATTRIBUTE_READONLY);
@@ -2769,7 +2755,6 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     viewport->SetValue("configure", CefV8Value::CreateFunction("configure",
         new NativeHandler(endpoint, WindowMethod::ConfigureViewport)), V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("viewport", viewport, V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("gizmo", gizmo, V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("window", window, V8_PROPERTY_ATTRIBUTE_READONLY);
     // One function for every Web -> Python request.  JS builds the envelope and
     // Python interprets it; no schema or business branch lives on this side.
