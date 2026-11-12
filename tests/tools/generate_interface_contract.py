@@ -47,6 +47,7 @@ GUARDS = [
     ("test_rejection_vocabulary.py", "拒绝码词表：源码只发已声明的码"),
     ("test_source_pins.py", "pin 改写幂等；只有已推送到远程的提交才算可 pin"),
     ("test_frontend_facade.py", "原生方法↔facade 一一对应；前端只经 facade 触达原生对象"),
+    ("test_frontend_regressions.py", "逐个跑前端窗口/音频/facade 回归文件（带超时）"),
     ("web_layer_budget.py", "接口核心行数 ratchet"),
 ]
 
