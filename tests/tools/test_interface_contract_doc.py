@@ -95,3 +95,17 @@ def test_the_document_matches_the_generator():
     assert actual == expected, (
         "docs/interface-contract.md is stale; run "
         "`python tests/tools/generate_interface_contract.py`")
+
+def test_every_guard_file_is_registered_in_the_table():
+    """A guard that is not in the table is a guard nobody reading the doc knows about.
+
+    The table is generated from ``GUARDS`` in the generator, so this compares the
+    directory with that list: adding a test file means registering it (or moving it
+    somewhere that is not a guard).
+    """
+    generator = (ROOT / "tests/tools/generate_interface_contract.py").read_text(encoding="utf-8")
+    registered = set(re.findall(r'\("(test_\w+\.py)"', generator))
+    present = {path.name for path in (ROOT / "tests/tools").glob("test_*.py")}
+    assert present == registered, (
+        f"guards missing from the contract table: {sorted(present - registered)}; "
+        f"registered but absent: {sorted(registered - present)}")
