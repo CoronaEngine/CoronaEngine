@@ -56,8 +56,9 @@ TARGET_LINES = 13_807
 # Two uncalled helpers followed: browser_ui's clamp_float and the
 # read_select_model_file reader no table entry used. Refusing a panel position cost
 # three lines and removed a silently ignored option. Rejecting a camera identity on a
-# panel costs four more; both close the same hole.
-CORE_BUDGET = 14397
+# panel costs four more; both close the same hole. Merging the two facade probes
+# removed one method and made the survivor check both halves, +2 lines in the facade.
+CORE_BUDGET = 14399
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -124,7 +125,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/editor_api/scene_environment_service.cpp", 59),
     ("src/systems/ui/editor_api/scene_model_node_service.cpp", 63),
     ("src/systems/ui/editor_api/scene_projection_service.cpp", 26),
-    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 181),
+    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 183),
 ]
 
 # Per-file ceilings are the measured baseline. They start equal to the current
