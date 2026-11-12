@@ -6,7 +6,6 @@
 #include <corona/kernel/core/kernel_context.h>
 #include <corona/kernel/event/i_event_bus.h>
 
-#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <future>
@@ -109,16 +108,6 @@ void SdlWindowManager::forget_platform_window(SDL_WindowID id) {
     if (id != main_window_id_) windows_.erase(id);
 }
 
-SDL_Window* SdlWindowManager::window_for_id(SDL_WindowID window_id) const {
-    const auto it = windows_.find(window_id);
-    return it != windows_.end() ? it->second.window : nullptr;
-}
-
-const ManagedWindow* SdlWindowManager::find_by_id(SDL_WindowID window_id) const {
-    const auto it = windows_.find(window_id);
-    return it != windows_.end() ? &it->second : nullptr;
-}
-
 const ManagedWindow* SdlWindowManager::find_by_surface(void* surface) const {
     if (surface == nullptr) {
         return nullptr;
@@ -131,26 +120,6 @@ const ManagedWindow* SdlWindowManager::find_by_surface(void* surface) const {
     return nullptr;
 }
 
-WindowClientRect SdlWindowManager::client_rect(SDL_Window* window) const {
-    if (window == nullptr) {
-        return {};
-    }
-
-    int width = 0;
-    int height = 0;
-    if (SDL_GetWindowSizeInPixels(window, &width, &height) && width > 0 && height > 0) {
-        return {width, height};
-    }
-
-    width = 0;
-    height = 0;
-    if (SDL_GetWindowSize(window, &width, &height) && width > 0 && height > 0) {
-        return {width, height};
-    }
-
-    return {};
-}
-
 void SdlWindowManager::for_each_window(const std::function<void(const ManagedWindow&)>& fn) const {
     if (!fn) {
         return;
@@ -158,75 +127,6 @@ void SdlWindowManager::for_each_window(const std::function<void(const ManagedWin
     for (const auto& [id, managed] : windows_) {
         fn(managed);
     }
-}
-
-// --- Secondary windows (Phase 7: detach / re-dock). ---
-
-void* SdlWindowManager::create_secondary_window(int x, int y, int width, int height) {
-    const int safe_w = std::max(width, 1);
-    const int safe_h = std::max(height, 1);
-
-    // Created HIDDEN; revealed by reveal_pending_window() after the first frame is published.
-    // BORDERLESS: no OS title bar/border — Vue draws its own title bar, and SDL_SetWindowHitTest
-    // (registered at detach time) makes the Vue title-bar region draggable and the window edges
-    // resizable. RESIZABLE is kept so the RESIZE_* hit-test results take effect.
-    SDL_Window* window = SDL_CreateWindow("Corona Panel", safe_w, safe_h,
-                                          SDL_WINDOW_RESIZABLE | SDL_WINDOW_BORDERLESS | SDL_WINDOW_HIDDEN);
-    if (window == nullptr) {
-        CFW_LOG_ERROR("SdlWindowManager: failed to create secondary window: {}", SDL_GetError());
-        return nullptr;
-    }
-
-    SDL_SetWindowPosition(window, x, y);
-    SDL_StartTextInput(window);
-
-    void* surface = native_surface_from_sdl_window(window);
-    if (surface == nullptr) {
-        CFW_LOG_ERROR("SdlWindowManager: failed to resolve native surface for secondary window");
-        SDL_DestroyWindow(window);
-        return nullptr;
-    }
-
-    const SDL_WindowID window_id = SDL_GetWindowID(window);
-    ManagedWindow managed;
-    managed.window = window;
-    managed.window_id = window_id;
-    managed.surface = surface;
-    managed.is_main = false;
-    managed.pending_show = true;
-    windows_[window_id] = managed;
-
-    // Register the surface so DisplaySystem creates the per-surface HardwareDisplayer that
-    // owns this window's swapchain (UI composited over transparent optics).
-    if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
-        Events::DisplaySurfaceChangedEvent changed;
-        changed.surface = surface;
-        changed.registration_ticket = Corona::Systems::UI::SurfaceCompletionTicket{};
-        Corona::DisplaySurfaceCommand surface_command{};
-        surface_command.kind = Corona::DisplaySurfaceCommand::Kind::Changed;
-        surface_command.surface = changed.surface;
-        surface_command.registration_ticket = changed.registration_ticket;
-        Corona::DisplaySurfaceCommandChannel::instance().commands().push(std::move(surface_command));
-        if (!changed.registration_ticket->wait_until(
-                Corona::Systems::UI::SurfaceCompletionTicket::Clock::now() +
-                    std::chrono::seconds(5))) {
-            CFW_LOG_ERROR("SdlWindowManager: registration timed out for surface {}", surface);
-            SDL_HideWindow(window);
-            windows_[window_id].removal_failed = true;
-            return nullptr;
-        }
-        const auto registration = changed.registration_ticket->result();
-        if (!registration || registration->status != DisplaySurfaceResult::Status::Succeeded) {
-            CFW_LOG_ERROR("SdlWindowManager: registration failed for surface {}", surface);
-            SDL_HideWindow(window);
-            windows_[window_id].removal_failed = true;
-            return nullptr;
-        }
-    }
-
-    CFW_LOG_INFO("SdlWindowManager: secondary window created (id={}, surface={})",
-                 window_id, surface);
-    return surface;
 }
 
 bool SdlWindowManager::request_remove_surface(void* surface, std::chrono::milliseconds timeout) {
@@ -268,7 +168,6 @@ bool SdlWindowManager::request_remove_surface(void* surface, std::chrono::millis
                 "SdlWindowManager: surface {} teardown timed out; keeping window hidden",
                 surface);
             SDL_HideWindow(window);
-            windows_[window_id].removal_failed = true;
             return false;
         }
     }
@@ -310,19 +209,6 @@ bool SdlWindowManager::destroy_secondary_window(void* surface) {
     CFW_LOG_INFO("SdlWindowManager: secondary window destroyed (id={}, surface={})",
                  window_id, surface);
     return true;
-}
-
-void SdlWindowManager::destroy_all_secondary() {
-    // Collect first (destroy_secondary_window mutates windows_).
-    std::vector<void*> surfaces;
-    for (const auto& [id, managed] : windows_) {
-        if (!managed.is_main) {
-            surfaces.push_back(managed.surface);
-        }
-    }
-    for (void* surface : surfaces) {
-        destroy_secondary_window(surface);
-    }
 }
 
 void SdlWindowManager::reveal_pending_window(void* surface) {
