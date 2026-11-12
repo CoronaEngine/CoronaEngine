@@ -61,3 +61,46 @@ set(CEF_BIN_DIR "${CEF_ROOT}/${CEF_CFG_DIR}")
 set(CEF_LIBCEF_DEBUG "${CEF_ROOT}/Debug/libcef.lib")
 set(CEF_LIBCEF_RELEASE "${CEF_ROOT}/Release/libcef.lib")
 set(CEF_SANDBOX_LIB "${CEF_BIN_DIR}/cef_sandbox.lib")
+
+# An executable that calls CefInitialize needs the CEF payload next to it: CefSettings
+# points resources_dir_path and locales_dir_path at the executable's directory, and
+# libcef.dll resolves from there. The Conan package keeps the binaries per configuration
+# and the resources in Resources/, so both parts are copied here instead of relying on
+# whoever runs the build to do it by hand.
+#
+# vulkan-1.dll is deliberately not taken from CEF: the engine already deploys the Vulkan
+# loader it was built against, and replacing it with CEF's copy would change that.
+function(corona_install_cef_runtime target_name)
+    if(NOT TARGET ${target_name})
+        message(FATAL_ERROR "corona_install_cef_runtime: target '${target_name}' does not exist")
+    endif()
+    if(NOT CORONA_ENABLE_CEF OR NOT CEF_AVAILABLE)
+        return()
+    endif()
+
+    set(_cef_config_root "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug,${CEF_ROOT}/Release>")
+    set(_cef_files
+        "${_cef_config_root}/libcef.dll"
+        "${_cef_config_root}/chrome_elf.dll"
+        "${_cef_config_root}/d3dcompiler_47.dll"
+        "${_cef_config_root}/dxcompiler.dll"
+        "${_cef_config_root}/dxil.dll"
+        "${_cef_config_root}/libEGL.dll"
+        "${_cef_config_root}/libGLESv2.dll"
+        "${_cef_config_root}/v8_context_snapshot.bin"
+        "${_cef_config_root}/vk_swiftshader.dll"
+        "${_cef_config_root}/vk_swiftshader_icd.json")
+
+    add_custom_command(
+        TARGET ${target_name}
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${_cef_files}
+            "$<TARGET_FILE_DIR:${target_name}>"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CEF_RES_DIR}"
+            "$<TARGET_FILE_DIR:${target_name}>"
+        COMMENT "[Corona:CEF] Deploy CEF runtime -> ${target_name}"
+        VERBATIM)
+endfunction()

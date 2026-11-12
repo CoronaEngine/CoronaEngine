@@ -53,7 +53,7 @@ def _should_ignore(name: str) -> bool:
         # Documentation
         "README.md", "docs",
         # Dependencies manifests (dev-only lock files)
-        "requirements.txt", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+        "requirements.txt", "yarn.lock", "pnpm-lock.yaml",
         # Test files and engine-only python development assets
         "tests", "test", "frontend_assets",
         # Temporary and log files
@@ -284,11 +284,16 @@ def maybe_run_npm(frontend_dir: Path, node_dir: Path) -> int:
     if tmp_dir is not None:
         for key in ("TMP", "TEMP", "TMPDIR"):
             env[key] = str(tmp_dir)
+    # The deployed tree carries package-lock.json so the bundle is reproducible: `npm
+    # install` resolves semver ranges and can pick newer Vue/Vite than the checkout used,
+    # which changes what the packaged editor renders. `npm ci` installs the lock exactly.
+    lockfile = frontend_dir / "package-lock.json"
+    install = ["ci"] if lockfile.is_file() else ["install"]
     try:
-        echo("[npm-build] Installing dependencies...")
-        rc = stream_run([str(npm_cmd), "install"], cwd=frontend_dir, env=env)
+        echo(f"[npm-build] Installing dependencies ({' '.join(install)})...")
+        rc = stream_run([str(npm_cmd), *install], cwd=frontend_dir, env=env)
         if rc != 0:
-            print(f"[npm-build] ERROR: 'npm install' failed (exit code {rc}).", flush=True)
+            print(f"[npm-build] ERROR: 'npm {' '.join(install)}' failed (exit code {rc}).", flush=True)
             return rc
         echo("[npm-build] Building frontend...")
         rc = stream_run([str(npm_cmd), "run", "build"], cwd=frontend_dir, env=env)

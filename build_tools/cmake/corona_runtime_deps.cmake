@@ -195,6 +195,31 @@ endfunction()
 # ------------------------------------------------------------------------------
 # Function: collect runtime dependencies during configuration
 # ------------------------------------------------------------------------------
+# Copy the shared libraries this executable actually links, including imported SHARED
+# targets that arrive through a private link chain (TBB, FFmpeg, the Vulkan loader).
+# corona_install_runtime_deps copies the engine-owned dependency list, which does not
+# include every Conan-provided DLL; this closes that gap without hard-coded paths.
+function(corona_copy_target_runtime_dlls target_name)
+    if(NOT WIN32)
+        return()
+    endif()
+    if(NOT TARGET ${target_name})
+        message(FATAL_ERROR "corona_copy_target_runtime_dlls: target '${target_name}' does not exist")
+    endif()
+
+    add_custom_command(
+        TARGET ${target_name}
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_RUNTIME_DLLS:${target_name}>"
+            "$<TARGET_FILE_DIR:${target_name}>"
+        COMMAND_EXPAND_LISTS
+        COMMENT "[Corona:RuntimeDeps] Copy shared runtime DLLs -> ${target_name}"
+        VERBATIM)
+endfunction()
+
+
 function(corona_configure_runtime_deps target_name)
     if(NOT TARGET ${target_name})
         message(WARNING "[Corona:RuntimeDeps] Target ${target_name} does not exist; cannot configure runtime dependencies.")

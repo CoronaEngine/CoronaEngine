@@ -69,6 +69,7 @@ bridge 4 个，共 33 个），守卫 `tests/tools/test_rejection_vocabulary.py`
 5. 前端：改 facade → 推送 CoronaEditor → `python build_tools/dev.py pin editor <sha>` →
    `python build_tools/dev.py editor-sync`。
 6. `python -m pytest tests/tools` 与 `ctest`。
+7. 真机验证：按 [integration-smoke.md](integration-smoke.md) 构建 examples 运行时并跑冒烟套件与 CEF 冒烟。
 
 ## 7. 现在的守卫
 
