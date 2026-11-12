@@ -325,14 +325,8 @@ def run(port, root, engine_pid):
             assert [value['id'] for value in matches] == [target['id']], matches
             assert child.evaluate('corona.window.getCurrent()')['tabId'] == opened['tab_id']
             assert main.evaluate('corona.scene.readActive()')['archive_session'] == archive
-            # Exercise the existing native state machine, with the same CEF
-            # document remaining mounted throughout the surface transitions.
-            main.evaluate(f'{service}.then(s=>s.redockPanel({{tabId:{opened["tab_id"]}}}))')
-            wait(lambda: child.evaluate('corona.window.getCurrent()'),
-                 lambda value: value['dockState'] == 'docked', f'{panel_id} docked')
-            main.evaluate(f'{service}.then(s=>s.detachPanel({{tabId:{opened["tab_id"]},x:120,y:120,width:900,height:800}}))')
-            wait(lambda: child.evaluate('corona.window.getCurrent()'),
-                 lambda value: value['dockState'] == 'detached', f'{panel_id} detached')
+            # ImGui owns placement, so the panel keeps the same CEF document through open,
+            # focus and close; there is no native detach transition left to exercise.
             assert child.evaluate(f'!!document.querySelector({json.dumps(selectors[panel_id])})')
             restored = minimize_restore(engine_pid, main, child, targets, service) if panel_id == 'FileManager' else None
             exceptions = [event['params'] for event in child.events if event.get('method') == 'Runtime.exceptionThrown']
@@ -341,7 +335,7 @@ def run(port, root, engine_pid):
             wait(lambda: any(value['id'] == target['id'] for value in targets()),
                  lambda value: not value, f'{panel_id} document closed')
             results.append(dict(panel=panel_id, route=route, tab_id=opened['tab_id'], mounted=True,
-                                reused=True, docked=True, detached=True, closed=True, settings_save_reset=settings_saved,
+                                reused=True, closed=True, settings_save_reset=settings_saved,
                                 file_crud=file_crud, minimize_restore=restored))
             results[-1]['editor_settings_lifetime'] = settings_lifetime
             results[-1]['model_node_lifetime'] = model_lifetime

@@ -270,7 +270,6 @@ void BrowserManager::resize_tab(int tab_id, int width, int height) {
 
     const int previous_width = tab->width;
     const int previous_height = tab->height;
-    const bool was_floating = tab->floating;
     const bool was_camera_view = tab->camera_view;
     const auto resize_started = std::chrono::steady_clock::now();
 
@@ -300,9 +299,9 @@ void BrowserManager::resize_tab(int tab_id, int width, int height) {
     const double resize_ms = std::chrono::duration<double, std::milli>(
                                  std::chrono::steady_clock::now() - resize_started)
                                  .count();
-    CFW_LOG_INFO("[CEF/Resize] tab={} {}x{} -> {}x{} floating={} camera_view={} cost={:.2f}ms "
+    CFW_LOG_INFO("[CEF/Resize] tab={} {}x{} -> {}x{} camera_view={} cost={:.2f}ms "
                  "(texture rebuild deferred to the matching paint)",
-                 tab_id, previous_width, previous_height, tab->width, tab->height, was_floating,
+                 tab_id, previous_width, previous_height, tab->width, tab->height,
                  was_camera_view, resize_ms);
 }
 }  // namespace Corona::Systems::UI

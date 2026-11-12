@@ -62,7 +62,7 @@ bool should_preserve_alpha(BrowserTab* tab, CefRefPtr<CefBrowser> browser) {
     if (tab->camera_view) {
         return true;
     }
-    if (tab->docking_pos != "main") {
+    if (!tab->main_workspace) {
         return tab->transparent_overlay;
     }
 

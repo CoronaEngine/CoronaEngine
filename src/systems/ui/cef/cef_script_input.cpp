@@ -36,7 +36,7 @@ ScriptInputReply dispatch_script_input(ScriptInputRequest request, std::function
     if (!source) return {"WINDOW_CLOSED", "Input window has closed"};
     const auto record = source->camera_view ? CameraViewportManager::instance().find_by_tab(source->tab_id) : std::nullopt;
     if ((source->camera_view && (!record || record->camera_handle != camera.camera_handle)) ||
-        (!source->camera_view && (source->docking_pos != "main" || source->web_camera_handle != camera.camera_handle)))
+        (!source->camera_view && (!source->main_workspace || source->web_camera_handle != camera.camera_handle)))
         return {"PERMISSION_DENIED", "Input must belong to this window's viewport"};
     const auto authority = camera.camera_authority;
     if (!authority) return {"PROJECT_CONTEXT_CHANGED", "Input archive is no longer active"};

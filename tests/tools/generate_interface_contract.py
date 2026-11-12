@@ -109,17 +109,17 @@ def build() -> str:
 
     lines += [
         "",
-        "### 面板与窗口：三个合并后的入口",
+        "### 面板与窗口：两个合并后的入口",
         "",
-        "同一件事（打开一个面板、移动一个面板、改变窗口呈现）以前按“哪个面板 / 哪个方向 /",
-        "哪个开关”拆成多个方法。现在各留一个，差异用参数表达：",
+        "同一件事（打开一个面板、改变窗口呈现）以前按“哪个面板 / 哪个开关”拆成多个方法。",
+        "现在各留一个，差异用参数表达。**面板停靠由 ImGui 负责**：面板打开后就是一个 ImGui",
+        "窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web 层不再发送停靠位置或分离/停靠请求。",
         "",
         "| 方法 | 请求 | 说明 |",
         "|---|---|---|",
-        "| `createPanel` | `{kind?: 'panel' \\| 'camera', …}` | `kind` 缺省为 `panel`。相机窗口要求"
-        " `archiveSession`/`sceneId`/`cameraId` 同时非空；`cameraHandle` 一律拒绝，相机身份由原生解析。 |",
-        "| `setPanelPlacement` | `{detached, tabId?, x?, y?, width?, height?, maximized?}` |"
-        " `detached: true` 分离、`false` 停靠；`tabId` 缺省为调用者自己。 |",
+        "| `createPanel` | `{kind?: 'panel' \\| 'camera', width?, height?, x?, y?, panelId?, routePath?, title?}` |"
+        " `kind` 缺省为 `panel`。相机窗口要求 `archiveSession`/`sceneId`/`cameraId` 同时非空；"
+        "`cameraHandle` 一律拒绝，相机身份由原生解析。 |",
         "| `setWindowPresentation` | `{target?: 'camera' \\| 'main', mode, sceneId?, cameraId?}` |"
         " `mode` 是 `windowed`/`maximized`/`borderless`/`toggle`；主窗口只有 "
         "`windowed`/`borderless`/`toggle`。相机窗口可用 `sceneId`+`cameraId` 指定，缺省为自己。 |",

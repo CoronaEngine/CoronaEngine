@@ -10,7 +10,6 @@ set(UI_SYSTEM_SOURCES
     imgui/imgui_ui.cpp
     ui_surface_lifecycle.cpp
     camera_viewport_manager.cpp
-    panel_layout.cpp
     panel_resize_policy.cpp
     collaborative_editor_runtime.cpp
     collaborative_editor_runtime.h
@@ -63,7 +62,6 @@ set(UI_SYSTEM_SOURCES
 
     sdl/sdl_utils.cpp
     sdl/sdl_window_manager.cpp
-    sdl/sdl_input_router.cpp
 
     # Internal headers (listed for IDE visibility, matching other systems).
     cef/browser_manager.h

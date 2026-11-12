@@ -61,19 +61,8 @@ bool BrowserManager::show_tab(int tab_id) {
 }
 
 // 修改主 create_tab 方法
-int BrowserManager::create_tab(const std::string& url, const std::string& path,
-                               const std::string& docking_pos,
-                               int dock_width, int dock_height,
-                               bool dock_fixed) {
-    return create_tab(url, path, docking_pos, dock_width, dock_height,
-                      dock_fixed, false, 120, 120);
-}
-
-int BrowserManager::create_tab(const std::string& url, const std::string& path,
-                               const std::string& docking_pos,
-                               int dock_width, int dock_height,
-                               bool dock_fixed, bool camera_view,
-                               int initial_x, int initial_y) {
+int BrowserManager::create_tab(const std::string& url, const std::string& path, TabKind kind,
+                               int width, int height, int initial_x, int initial_y) {
     auto tab = std::make_unique<BrowserTab>();
 
     int id = 0;
@@ -83,23 +72,17 @@ int BrowserManager::create_tab(const std::string& url, const std::string& path,
     }
     const auto thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
 
-    // 设置 docking 属性
     tab->tab_id = id;
-    tab->docking_pos = docking_pos;
-    tab->dock_width = dock_width;
-    tab->dock_height = dock_height;
-    tab->dock_fixed = dock_fixed;
-    tab->dock_initialized = false;
+    tab->main_workspace = kind == TabKind::MainWorkspace;
+    tab->camera_view = kind == TabKind::CameraView;
     tab->minimized = false;
     tab->open = true;  // 新标签页默认显示
-    tab->camera_view = camera_view;
     tab->initial_x = initial_x;
     tab->initial_y = initial_y;
 
-    // 如果有指定的dock大小，使用它，否则使用默认大小
-    if (dock_width > 0 && dock_height > 0) {
-        tab->width = dock_width;
-        tab->height = dock_height;
+    if (width > 0 && height > 0) {
+        tab->width = width;
+        tab->height = height;
     } else {
         tab->width = 1600;
         tab->height = 900;
@@ -107,7 +90,7 @@ int BrowserManager::create_tab(const std::string& url, const std::string& path,
 
     tab->name = "Browser " + path;
 
-    CFW_LOG_INFO("create_tab: id={}, camera_view={}, thread={}, path={}", id, camera_view,
+    CFW_LOG_INFO("create_tab: id={}, camera_view={}, thread={}, path={}", id, tab->camera_view,
                  thread_id, path);
 
     // URL Processing
@@ -163,13 +146,9 @@ int BrowserManager::create_tab(const std::string& url, const std::string& path,
     browser_settings.javascript = STATE_ENABLED;
     browser_settings.local_storage = STATE_ENABLED;
     browser_settings.webgl = STATE_ENABLED;
-    const bool transparent_overlay =
-        camera_view ||
-        docking_pos == "main" ||
-        docking_pos == "right_top" ||
-        docking_pos == "right_bottom" ||
-        docking_pos == "left_bottom" ||
-        docking_pos == "center";
+    // The camera surface carries the 3D scene, and the editor chrome floats over it: both need
+    // a transparent page background. Everything else paints its own panel background.
+    const bool transparent_overlay = tab->camera_view || tab->main_workspace;
     tab->transparent_overlay = transparent_overlay;
     browser_settings.background_color =
         CefColorSetARGB(transparent_overlay ? 0 : 255, 16, 19, 16);
@@ -190,7 +169,7 @@ int BrowserManager::create_tab(const std::string& url, const std::string& path,
     if (!browser_created) {
         registered_tab->cef_creation_failed = true;
         registered_tab->client->MarkBrowserCreationFailed();
-        CFW_LOG_ERROR("Failed to create browser tab: ID={}, camera_view={}", id, camera_view);
+        CFW_LOG_ERROR("Failed to create browser tab: ID={}, camera_view={}", id, tab->camera_view);
     }
     return id;
 }
@@ -227,8 +206,8 @@ void BrowserManager::remove_tab(int tab_id) {
     if (!tab) return;
     release_viewport_pointer(*tab, tab->viewport_pointer_owner);
 
-    CFW_LOG_INFO("[CEF/Tab] remove_tab id={} camera_view={} floating={} open={}", tab_id,
-                 tab->camera_view, tab->floating, tab->open);
+    CFW_LOG_INFO("[CEF/Tab] remove_tab id={} camera_view={} open={}", tab_id,
+                 tab->camera_view, tab->open);
     if (tab->camera_view) {
         CameraViewportManager::instance().unregister_view(
             tab_id, tab->preserve_camera_open_on_close);

@@ -39,11 +39,7 @@ static std::unordered_map<int, CameraWindowModeState> s_camera_window_modes;
 void request_camera_window_rect(int tab_id, BrowserTab* tab, int x, int y, int width, int height) {
     tab->initial_x = x;
     tab->initial_y = y;
-    tab->dock_width = std::max(width, 64);
-    tab->dock_height = std::max(height, 64);
-    tab->needs_reposition = true;
-    tab->needs_resize = true;
-    BrowserManager::instance().resize_tab(tab_id, tab->dock_width, tab->dock_height);
+    BrowserManager::instance().resize_tab(tab_id, std::max(width, 64), std::max(height, 64));
 }
 
 #ifdef _WIN32
@@ -165,8 +161,8 @@ void cycle_camera_window_mode(int tab_id) {
         if (state.mode == 0 && !state.saved) {
             SDL_GetWindowPosition(window, &state.x, &state.y);
             SDL_GetWindowSize(window, &state.width, &state.height);
-            state.width = std::max(state.width, tab->dock_width);
-            state.height = std::max(state.height, tab->dock_height);
+            state.width = std::max(state.width, tab->width);
+            state.height = std::max(state.height, tab->height);
             state.saved = true;
             state.saved_maximized = false;
         }
@@ -221,7 +217,7 @@ void cycle_camera_window_mode(int tab_id) {
             ShowWindow(hwnd, SW_RESTORE);
         }
         request_camera_window_rect(tab_id, tab, tab->initial_x, tab->initial_y,
-                                   tab->dock_width, tab->dock_height);
+                                   tab->width, tab->height);
         s_camera_window_modes[tab_id].mode = 0;
         return;
     }
@@ -231,8 +227,8 @@ void cycle_camera_window_mode(int tab_id) {
     state.saved = true;
     state.x = tab->initial_x;
     state.y = tab->initial_y;
-    state.width = tab->dock_width;
-    state.height = tab->dock_height;
+    state.width = tab->width;
+    state.height = tab->height;
     CFW_LOG_DEBUG("Maximizing camera viewport HWND fallback: tab_id={}, hwnd={}",
                   tab_id, tab->platform_handle_raw);
     save_windowed_placement(hwnd);
@@ -271,8 +267,8 @@ void toggle_camera_borderless(int tab_id) {
 
         SDL_GetWindowPosition(window, &state.x, &state.y);
         SDL_GetWindowSize(window, &state.width, &state.height);
-        state.width = std::max(state.width, tab->dock_width);
-        state.height = std::max(state.height, tab->dock_height);
+        state.width = std::max(state.width, tab->width);
+        state.height = std::max(state.height, tab->height);
         state.saved = true;
         state.saved_maximized = (SDL_GetWindowFlags(window) & SDL_WINDOW_MAXIMIZED) != 0;
 
@@ -320,8 +316,8 @@ void toggle_camera_borderless(int tab_id) {
     if (GetWindowRect(hwnd, &rect)) {
         state.x = rect.left;
         state.y = rect.top;
-        state.width = std::max(static_cast<int>(rect.right - rect.left), tab->dock_width);
-        state.height = std::max(static_cast<int>(rect.bottom - rect.top), tab->dock_height);
+        state.width = std::max(static_cast<int>(rect.right - rect.left), tab->width);
+        state.height = std::max(static_cast<int>(rect.bottom - rect.top), tab->height);
         state.saved = true;
     }
     state.saved_maximized = IsZoomed(hwnd);
@@ -428,9 +424,6 @@ void resize_camera_view(int tab_id, int width, int height) {
                             tab_id, tab->platform_window_id);
             return;
         }
-        tab->dock_width = width;
-        tab->dock_height = height;
-        tab->needs_resize = true;
         BrowserManager::instance().resize_tab(tab_id, width, height);
         CFW_LOG_DEBUG("Resizing camera viewport HWND: tab_id={}, hwnd={}, size={}x{}",
                       tab_id, tab->platform_handle_raw, width, height);
@@ -440,9 +433,6 @@ void resize_camera_view(int tab_id, int width, int height) {
     }
     CFW_LOG_DEBUG("Resizing camera viewport window: tab_id={}, window_id={}, size={}x{}",
                   tab_id, tab->platform_window_id, width, height);
-    tab->dock_width = width;
-    tab->dock_height = height;
-    tab->needs_resize = true;
     BrowserManager::instance().resize_tab(tab_id, width, height);
     SDL_SetWindowSize(window, width, height);
 }
@@ -546,7 +536,7 @@ WindowReply apply_viewport_configuration(const WindowRequest& request, BrowserTa
         if (!request.context_id || !cursor || !std::isfinite(pointer.x) || !std::isfinite(pointer.y) ||
             pointer.x < 0 || pointer.y < 0 || pointer.x > std::numeric_limits<float>::max() || pointer.y > std::numeric_limits<float>::max())
             return fail("INVALID_ARGUMENT", "Invalid viewport pointer state");
-        if (!source.camera_view && (source.docking_pos != "main" || (!patch.bounds && source.web_camera_handle != request.camera_handle)))
+        if (!source.camera_view && (!source.main_workspace || (!patch.bounds && source.web_camera_handle != request.camera_handle)))
             return fail("PERMISSION_DENIED", "Pointer requires the caller's bound camera surface");
     }
     std::optional<InputDetail::ImagePoint> pointer_point;
@@ -646,7 +636,7 @@ WindowReply execute_window_operation(const WindowRequest& request) {
             camera_tab = camera ? manager.get_tab(camera->tab_id) : nullptr;
         }
         if (!camera_tab || !camera_tab->open || !camera_tab->camera_view) return result;
-        if (source->docking_pos != "main" && camera_tab != source) {
+        if (!source->main_workspace && camera_tab != source) {
             result.error_code = "PERMISSION_DENIED";
             result.error_message = "Only the main window can control another camera window";
             return result;
@@ -665,13 +655,11 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         result.accepted = true;
         return result;
     }
-    const bool panel_transition = request.method == WindowMethod::DetachPanel || request.method == WindowMethod::RedockPanel;
-    const bool targeted = request.method == WindowMethod::CloseTab || request.method == WindowMethod::FocusTab ||
-                          (panel_transition && request.tab_id >= 0);
+    const bool targeted = request.method == WindowMethod::CloseTab || request.method == WindowMethod::FocusTab;
     auto* target = targeted ? manager.get_tab(request.tab_id) : source;
-    if ((targeted && source->docking_pos != "main" && (!panel_transition || target != source)) ||
-        ((request.method == WindowMethod::Close || request.method == WindowMethod::CloseTab || panel_transition) &&
-         target && target->docking_pos == "main")) {
+    if ((targeted && !source->main_workspace) ||
+        ((request.method == WindowMethod::Close || request.method == WindowMethod::CloseTab) &&
+         target && target->main_workspace)) {
         result.error_code = "PERMISSION_DENIED";
         result.error_message = "Only the main window can manage other panels; the main window cannot be closed as a panel";
         return result;
@@ -690,7 +678,7 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         return apply_viewport_configuration(request, *source);
     case WindowMethod::SetWindowPresentation: {
         if (!request.main_window_target) break; // the camera path handled it above
-        if (source->docking_pos != "main") {
+        if (!source->main_workspace) {
             result.error_code = "PERMISSION_DENIED";
             result.error_message = "Only the main window can change its window mode";
         } else if (request.presentation == WindowPresentation::Maximized) {
@@ -710,7 +698,7 @@ WindowReply execute_window_operation(const WindowRequest& request) {
     case WindowMethod::CloseCameraView: {
         const auto camera = CameraViewportManager::instance().find_by_camera(request.scene_id, request.camera_id);
         if (!camera) break;
-        if (source->docking_pos != "main" && camera->tab_id != source->tab_id) {
+        if (!source->main_workspace && camera->tab_id != source->tab_id) {
             result.error_code = "PERMISSION_DENIED";
             result.error_message = "Only the main window can close another camera view";
             break;
@@ -722,7 +710,7 @@ WindowReply execute_window_operation(const WindowRequest& request) {
     }
     case WindowMethod::SuspendCameraViews: {
         const auto ids = CameraViewportManager::instance().tabs_for_scene(request.scene_id);
-        if (source->docking_pos != "main" && std::any_of(ids.begin(), ids.end(), [&](int id) { return id != source->tab_id; })) {
+        if (!source->main_workspace && std::any_of(ids.begin(), ids.end(), [&](int id) { return id != source->tab_id; })) {
             result.error_code = "PERMISSION_DENIED";
             result.error_message = "Only the main window can suspend other camera views";
             break;
@@ -763,19 +751,14 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         auto route = options.route;
         if (route.starts_with('#')) route.erase(0, 1);
         route += route.find('?') == std::string::npos ? "?standalone=1" : "&standalone=1";
-        const int id = manager.create_tab(request.base_url, route, "camera", options.width, options.height,
-                                          false, true, options.x, options.y);
+        const int id = manager.create_tab(request.base_url, route, TabKind::CameraView,
+                                          options.width, options.height, options.x, options.y);
         auto* tab = manager.get_tab(id);
         if (!tab) {
             result.error_code = "CREATE_FAILED";
             result.error_message = "Native camera window could not be created";
             break;
         }
-        tab->detach_x = options.x;
-        tab->detach_y = options.y;
-        tab->detach_w = options.width;
-        tab->detach_h = options.height;
-        tab->detach_state = BrowserTab::DetachState::Detaching;
         if (!cameras.register_view(request.scene_id, request.camera_id, request.camera_handle, id, request.camera_state, request.camera_authority)) {
             manager.remove_tab(id);
             result.error_code = "CREATE_FAILED";
@@ -791,8 +774,10 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         auto route = options.route;
         if (route.starts_with('#')) route.erase(0, 1);
         route += route.find('?') == std::string::npos ? "?standalone=1&nativeHost=1" : "&standalone=1&nativeHost=1";
-        const auto docking_pos = options.detached ? std::string("right_top") : options.docking_pos;
-        const int id = manager.create_tab(request.base_url, route, docking_pos, options.width, options.height, false);
+        // ImGui owns the panel's placement: it opens as a window and the layout (imgui.ini)
+        // decides where it sits, so native only carries identity and the requested size.
+        const int id = manager.create_tab(request.base_url, route, TabKind::Panel,
+                                          options.width, options.height, options.x, options.y);
         auto* tab = manager.get_tab(id);
         if (!tab) {
             result.error_code = "CREATE_FAILED";
@@ -801,46 +786,10 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         }
         tab->panel_id = options.panel_id;
         tab->panel_title = options.title;
-        if (options.detached) {
-            // Preserve the existing same-frame desired-state transition.
-            tab->detach_x = options.x;
-            tab->detach_y = options.y;
-            tab->detach_w = options.width;
-            tab->detach_h = options.height;
-            tab->detach_state = BrowserTab::DetachState::Detaching;
-        } else {
-            tab->native_docked = options.native_docked;
-            tab->floating = true;
-            tab->z_priority = options.z_priority;
-            tab->initial_x = 80;
-            tab->initial_y = 80;
-            if (docking_pos == "right_top") { tab->initial_x = 1100; tab->initial_y = 80; }
-            else if (docking_pos == "right_bottom") { tab->initial_x = 1100; tab->initial_y = 560; }
-            else if (docking_pos == "left_bottom") { tab->initial_x = 80; tab->initial_y = 560; }
-            else if (docking_pos == "center") { tab->initial_x = 600; tab->initial_y = 300; }
-        }
         result.snapshot.tab_id = id;
         result.snapshot.panel_id = tab->panel_id;
         break;
     }
-    case WindowMethod::DetachPanel: {
-        if (target->detach_state != BrowserTab::DetachState::Docked) break;
-        const auto& options = *request.panel;
-        target->detach_x = options.x;
-        target->detach_y = options.y;
-        target->detach_w = options.width > 0 ? options.width : std::max(1, target->width);
-        target->detach_h = options.height > 0 ? options.height : std::max(1, target->height);
-        target->detach_maximized = options.maximized;
-        target->detach_state = BrowserTab::DetachState::Detaching;
-        result.accepted = true;
-        break;
-    }
-    case WindowMethod::RedockPanel:
-        if (target->detach_state == BrowserTab::DetachState::Detached) {
-            target->detach_state = BrowserTab::DetachState::Redocking;
-            result.accepted = true;
-        }
-        break;
     case WindowMethod::Close:
         // The binding settles this context's Promise before queuing retirement.
         result.close_self_tab_id = source->tab_id;
@@ -863,13 +812,10 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         snapshot.width = source->width;
         snapshot.height = source->height;
         snapshot.minimized = source->minimized;
-        snapshot.detached = source->detach_state == BrowserTab::DetachState::Detached;
-        switch (source->detach_state) {
-        case BrowserTab::DetachState::Docked: snapshot.dock_state = "docked"; break;
-        case BrowserTab::DetachState::Detaching: snapshot.dock_state = "detaching"; break;
-        case BrowserTab::DetachState::Detached: snapshot.dock_state = "detached"; break;
-        case BrowserTab::DetachState::Redocking: snapshot.dock_state = "redocking"; break;
-        }
+        // ImGui gives a window its own OS viewport when it is not docked: that is the only
+        // thing "detached" still means here.
+        snapshot.detached = source->host_surface != nullptr;
+        snapshot.dock_state = snapshot.detached ? "detached" : "docked";
         snapshot.panel_id = source->panel_id;
         { std::lock_guard lock(source->drag_mutex); snapshot.drag_regions = source->drag_regions; }
         break;

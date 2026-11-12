@@ -1736,14 +1736,6 @@ bool option_string(const CefRefPtr<CefV8Value>& object, const char* name, std::s
     return !required || !output.empty();
 }
 
-bool option_boolean(const CefRefPtr<CefV8Value>& object, const char* name, bool& output) {
-    if (!object->HasValue(name)) return true;
-    const auto value = object->GetValue(name);
-    if (!value || !value->IsBool()) return false;
-    output = value->GetBoolValue();
-    return true;
-}
-
 bool option_integer(const CefRefPtr<CefV8Value>& object, const char* name, int& output, int minimum) {
     if (!object->HasValue(name)) return true;
     const auto value = object->GetValue(name);
@@ -1752,38 +1744,27 @@ bool option_integer(const CefRefPtr<CefV8Value>& object, const char* name, int& 
     return true;
 }
 
-// The panel entry points open and move panels. Both name the surface and the
-// placement; the native host kind and the transition that reaches it are resolved
-// here, once, so Web never learns the specialised native verbs.
+// createPanel names the surface and the kind; the native host kind is resolved here,
+// once, so Web never learns the specialised native verb. Placement belongs to ImGui.
 bool read_panel_options(const CefV8ValueList& arguments, WindowRequest& request) {
-    if (arguments.size() != 1 || !arguments[0]->IsObject() || arguments[0]->IsArray() || arguments[0]->IsFunction()) return false;
+    if (arguments.size() != 1 || !object_keys(arguments[0],
+        std::initializer_list<const char*>{"kind", "width", "height", "x", "y", "panelId", "routePath", "title",
+                                           "archiveSession", "sceneId", "cameraId"})) return false;
     const auto object = arguments[0];
-    if (request.method == WindowMethod::CreatePanel) {
-        std::string kind = "panel";
-        if (!option_string(object, "kind", kind)) return false;
-        if (kind == "camera") request.method = WindowMethod::CreateCameraView;
-        else if (kind != "panel") return false;
-    } else if (request.method == WindowMethod::SetPanelPlacement) {
-        bool detached = false;
-        if (!object->HasValue("detached") || !option_boolean(object, "detached", detached)) return false;
-        request.method = detached ? WindowMethod::DetachPanel : WindowMethod::RedockPanel;
-    }
+    std::string kind = "panel";
+    if (!option_string(object, "kind", kind)) return false;
+    if (kind == "camera") request.method = WindowMethod::CreateCameraView;
+    else if (kind != "panel") return false;
     const bool camera = request.method == WindowMethod::CreateCameraView;
-    const bool create = request.method == WindowMethod::CreatePanel || camera;
     PanelOptions options;
-    if (create) { options.width = camera ? 960 : 400; options.height = camera ? 540 : 600; }
-    if (!option_integer(object, "width", options.width, create ? 1 : 0) ||
-        !option_integer(object, "height", options.height, create ? 1 : 0) ||
+    options.width = camera ? 960 : 400;
+    options.height = camera ? 540 : 600;
+    if (!option_integer(object, "width", options.width, 1) ||
+        !option_integer(object, "height", options.height, 1) ||
         !option_integer(object, "x", options.x, std::numeric_limits<int>::min()) ||
         !option_integer(object, "y", options.y, std::numeric_limits<int>::min()) ||
-        !option_integer(object, "zPriority", options.z_priority, std::numeric_limits<int>::min()) ||
-        !option_integer(object, "tabId", request.tab_id, 0) ||
-        !option_boolean(object, "nativeDocked", options.native_docked) ||
-        !option_boolean(object, "detached", options.detached) ||
-        !option_boolean(object, "maximized", options.maximized) ||
         !option_string(object, "panelId", options.panel_id) ||
-        !option_string(object, "routePath", options.route) ||
-        !option_string(object, "dockingPos", options.docking_pos)) return false;
+        !option_string(object, "routePath", options.route)) return false;
     options.title = options.panel_id;
     if (!option_string(object, "title", options.title)) return false;
     if (camera && (object->HasValue("cameraHandle") || object->HasValue("handle") ||
@@ -1791,9 +1772,6 @@ bool read_panel_options(const CefV8ValueList& arguments, WindowRequest& request)
         !option_string(object, "sceneId", request.scene_id, true) ||
         !option_string(object, "cameraId", request.camera_id, true) ||
         request.camera_id == "undefined" || request.camera_id == "null")) return false;
-    if (options.docking_pos != "left" && options.docking_pos != "right" && options.docking_pos != "bottom" &&
-        options.docking_pos != "right_top" && options.docking_pos != "right_bottom" &&
-        options.docking_pos != "left_bottom" && options.docking_pos != "center") return false;
     request.panel = std::move(options);
     return true;
 }
@@ -2314,7 +2292,7 @@ public:
         }
         WindowRequest request{method, browser_id_};
         request.context_id = context_id_;
-        const bool panel_operation = method == WindowMethod::CreatePanel || method == WindowMethod::SetPanelPlacement;
+        const bool panel_operation = method == WindowMethod::CreatePanel;
         const bool presentation = method == WindowMethod::SetWindowPresentation;
         const bool targeted = method == WindowMethod::CloseTab || method == WindowMethod::FocusTab;
         const bool resize = method == WindowMethod::ResizeCameraView;
@@ -2775,8 +2753,6 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
         new NativeHandler(endpoint, WindowMethod::FocusTab)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("createPanel", CefV8Value::CreateFunction("createPanel",
         new NativeHandler(endpoint, WindowMethod::CreatePanel)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    window->SetValue("setPanelPlacement", CefV8Value::CreateFunction("setPanelPlacement",
-        new NativeHandler(endpoint, WindowMethod::SetPanelPlacement)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("suspendCameraViews", CefV8Value::CreateFunction("suspendCameraViews",
         new NativeHandler(endpoint, WindowMethod::SuspendCameraViews)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("closeCameraView", CefV8Value::CreateFunction("closeCameraView",

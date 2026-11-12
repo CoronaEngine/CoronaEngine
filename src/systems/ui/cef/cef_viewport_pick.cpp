@@ -88,7 +88,7 @@ void begin_viewport_pick(ViewportPickRequest request, ViewportPickRequests::Comp
     if (!source) { finish("window_closed"); return; }
     const auto record = source->camera_view ? CameraViewportManager::instance().find_by_tab(source->tab_id) : std::nullopt;
     if ((source->camera_view && (!record || record->camera_handle != camera.camera_handle)) ||
-        (!source->camera_view && (source->docking_pos != "main" || source->web_camera_handle != camera.camera_handle))) {
+        (!source->camera_view && (!source->main_workspace || source->web_camera_handle != camera.camera_handle))) {
         finish("permission_denied"); return;
     }
     const auto authority = camera.camera_authority;

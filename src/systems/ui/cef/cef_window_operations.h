@@ -7,10 +7,9 @@
 
 namespace Corona::Systems::UI {
 
-// Web names the surface it wants (CreatePanel + kind, SetPanelPlacement, SetWindowPresentation);
-// the native host keeps the specialised transitions behind those names.
+// Web names the surface it wants (CreatePanel + kind, SetWindowPresentation); the native
+// host keeps the specialised transitions behind those names.
 enum class WindowMethod { GetCurrent, SetDragRegions, Close, CloseTab, FocusTab, CreatePanel, CreateCameraView,
-                          SetPanelPlacement, DetachPanel, RedockPanel,
                           SuspendCameraViews, CloseCameraView, ResizeCameraView, SetWindowPresentation,
                           ConfigureViewport, CloseProcess };
 
@@ -42,13 +41,13 @@ struct ViewportConfigurationSnapshot {
     bool system_cursor_hidden = false;
 };
 
+// A panel open request. ImGui owns placement, so this carries only identity and size: the
+// panel becomes an ImGui window and the user's layout decides where it sits.
 struct PanelOptions {
     std::string panel_id;
     std::string title;
     std::string route;
-    std::string docking_pos = "right_top";
-    int width = 0, height = 0, x = 120, y = 120, z_priority = 0;
-    bool native_docked = false, detached = false, maximized = false;
+    int width = 0, height = 0, x = 120, y = 120;
 };
 
 // Thread-boundary DTOs. No V8 handles or legacy JSON requests belong here.

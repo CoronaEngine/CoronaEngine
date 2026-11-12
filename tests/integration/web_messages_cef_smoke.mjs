@@ -186,13 +186,10 @@ try {
   // Launcher routes survive without opening/mutating a user world. World routes
   // correctly close stale standalone documents and are not valid smoke fixtures.
   const createdPanels = [];
-  for (const [label, detached, route] of [
-    ['docked', false, '/StartScreen'],
-    ['detached', true, '/StartScreen'],
-  ]) {
+  for (const [label, route] of [['panel-a', '/StartScreen'], ['panel-b', '/StartScreen']]) {
     stage = `creating ${label}`;
     console.log(`CEF smoke: ${stage}`);
-    const options = { detached, panelId: `smoke-${label}`, title: label, nativeDocked: true,
+    const options = { panelId: `smoke-${label}`, title: label,
       routePath: `${route}?uiOwner=${scope}&uiSession=smoke&uiWindow=${label}`, width: 320, height: 240,
     };
     const created = await main.evaluate(`(async () => {
@@ -391,35 +388,17 @@ try {
     for (const args of ['', 'null', '1', '"",1', '{}']) {
       assert.equal(await main.evaluate(`corona.window.suspendCameraViews(${args}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
-    for (const options of ['null', '[]', '{width:0}', '{height:-1}', '{width:1.5}', '{detached:1}', '{x:Infinity}',
-      '{panelId:4}', '{dockingPos:"main"}', '{nativeDocked:"true"}', '{width:2147483648}']) {
+    for (const options of ['null', '[]', '{width:0}', '{height:-1}', '{width:1.5}', '{x:Infinity}',
+      '{panelId:4}', '{width:2147483648}', '{dockingPos:"main"}', '{nativeDocked:"true"}',
+      '{detached:true}', '{kind:"Inspector"}']) {
       assert.equal(await main.evaluate(`corona.window.createPanel(${options}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
-    const mainId = await main.evaluate('corona.window.getCurrent().then(x=>x.tabId)');
-    assert.equal(await main.evaluate('corona.window.setPanelPlacement(null).catch(e=>e.code)'), 'INVALID_ARGUMENT');
-    assert.equal(await main.evaluate('corona.window.setPanelPlacement({tabId:1}).catch(e=>e.code)'), 'INVALID_ARGUMENT');
-    assert.equal(await main.evaluate(`corona.window.setPanelPlacement({tabId:${mainId},detached:true}).catch(e=>e.code)`), 'PERMISSION_DENIED');
-    assert.equal(await docs[1].client.evaluate(`corona.window.setPanelPlacement({tabId:${createdPanels[1].tab_id},detached:true}).catch(e=>e.code)`), 'PERMISSION_DENIED');
-    assert.equal(await main.evaluate('corona.window.setPanelPlacement({tabId:2147483647,detached:true})'), false);
-    assert.equal(await main.evaluate('corona.window.setPanelPlacement({tabId:2147483647,detached:false})'), false);
+    // ImGui owns placement: there is no positioning request to call.
+    assert.equal(await main.evaluate('typeof corona.window.setPanelPlacement'), 'undefined');
+    assert.equal(await main.evaluate('typeof corona.window.detachPanel'), 'undefined');
     const initialDock = await docs[1].client.evaluate('corona.window.getCurrent()');
-    assert.ok(['docked', 'detaching', 'detached', 'redocking'].includes(initialDock.dockState), 'native snapshot must expose actual Dock state');
-    // The existing frame runner may have restored a floating viewport from its
-    // layout. Establish Docked through the real redock operation before detach.
-    await main.evaluate(`corona.window.setPanelPlacement({tabId:${createdPanels[0].tab_id},detached:false})`);
-    await main.evaluate('corona.window.suspendCameraViews("")');
-    assert.equal(await docs[1].client.evaluate('corona.window.getCurrent().then(x=>x.dockState)'), 'docked');
-    assert.equal(await main.evaluate(`corona.window.setPanelPlacement({tabId:${createdPanels[0].tab_id},x:120,y:120,width:320,height:240,detached:true})`), true);
-    await main.evaluate('corona.window.suspendCameraViews("")');
-    const detachedState = await docs[1].client.evaluate('corona.window.getCurrent()');
-    assert.equal(detachedState.dockState, 'detached');
-    assert.equal(detachedState.detached, true);
-    assert.equal(await main.evaluate(`corona.window.setPanelPlacement({tabId:${createdPanels[0].tab_id},detached:true})`), false, 'double detach must be rejected');
-    assert.equal(await main.evaluate(`corona.window.setPanelPlacement({tabId:${createdPanels[0].tab_id},detached:false})`), true);
-    for (const options of ['{tabId:-1}', '{tabId:"3"}', '{width:-1}', '{maximized:1}', '{x:1.5}']) {
-      assert.equal(await main.evaluate(`corona.window.setPanelPlacement({...${options},detached:true}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
-    }
-    evidence[0].panelCreationAndDocking = 'passed with JSON disabled; existing native Dock state machine retained';
+    assert.ok(['docked', 'detached'].includes(initialDock.dockState), 'native snapshot must expose the ImGui viewport state');
+    evidence[0].panelCreationAndDocking = 'passed with JSON disabled; placement is ImGui-owned';
     await docs[1].client.evaluate('corona.window.setDragRegions([])');
     assert.deepEqual(await main.evaluate('corona.window.getCurrent().then(x=>x.dragRegions)'), [{ x: 2, y: 3, w: 40, h: 12 }]);
 
@@ -460,7 +439,7 @@ try {
       const events = await main.evaluate('({closed:window.__nativeClosed,unsubscribed:window.__unsubscribedEvents})');
       return events.closed.length ? events : null;
     }, 10_000);
-    assert.deepEqual(completion.closed, [{tabId:closedTab.tabId, panelId:'smoke-detached'}]);
+    assert.deepEqual(completion.closed, [{tabId:closedTab.tabId, panelId:'smoke-panel-b'}]);
     assert.deepEqual(completion.unsubscribed, []);
     assert.equal(await main.evaluate(`corona.window.closeTab(${closedTab.tabId})`), false);
     stage = 'self close settles its V8 promise before retiring the context';
@@ -1260,7 +1239,7 @@ try {
     const options = { archiveSession: camera.archive_session, sceneId: opened.scene.path,
       cameraId: camera.camera_id, width: 320, height: 240, x: 160, y: 160,
       routePath: '/CameraView?uiWindow=real-camera&scene=scene.ini&camera=smoke-camera' };
-    const toolPanel = await main.evaluate(`corona.window.createPanel({panelId:'SceneTools',nativeDocked:true,
+    const toolPanel = await main.evaluate(`corona.window.createPanel({panelId:'SceneTools',
       routePath:'/SceneBar?uiWindow=camera-tools',width:320,height:240})`);
     const toolTarget = await waitFor(async () => (await targets()).find(item => item.url.includes('uiWindow=camera-tools')), 30_000);
     const toolClient = await connect(toolTarget);

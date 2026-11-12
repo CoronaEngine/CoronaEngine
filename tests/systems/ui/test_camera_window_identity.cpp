@@ -222,7 +222,7 @@ void test_cached_web_viewport_binding_retires_with_its_camera() {
     UI::CameraWindowLifetime lifetime;
     request.camera_authority = lifetime.token();
     request.viewport.emplace(); request.viewport->bounds = UI::ViewportBounds{10,20,400,300,800,600};
-    UI::BrowserTab tab; tab.open = true; tab.docking_pos = "main";
+    UI::BrowserTab tab; tab.open = true; tab.main_workspace = true;
     require(UI::apply_viewport_configuration(request, tab).error_code.empty() &&
         tab.web_camera_authority == request.camera_authority, "cached bounds retain their original scene authority");
     UI::refresh_viewport_state(tab);
@@ -486,7 +486,7 @@ void test_pointer_configuration_owns_one_state_and_retires_with_its_context() {
     request.viewport.emplace(); request.viewport->mode = "stereo3d";
     request.viewport->bounds = UI::ViewportBounds{0, 0, 800, 600, 800, 600};
     request.viewport->pointer = UI::ViewportPointer{400, 300, "grab"};
-    UI::BrowserTab tab; tab.open = true; tab.docking_pos = "main";
+    UI::BrowserTab tab; tab.open = true; tab.main_workspace = true;
     auto& hub = Corona::SharedDataHub::instance();
     std::optional<UI::InputDetail::ImagePoint> image_point;
     {
@@ -516,7 +516,7 @@ void test_pointer_configuration_owns_one_state_and_retires_with_its_context() {
     UI::release_viewport_pointer(tab, 101);
     require(tab.hide_system_cursor.load() && hub.viewport_ui_state(request.camera_handle).pointer.owner_context == 202,
         "late old-context cleanup cannot clear a newer pointer in the same tab");
-    UI::BrowserTab peer; peer.open = true; peer.docking_pos = "main";
+    UI::BrowserTab peer; peer.open = true; peer.main_workspace = true;
     auto other = replacement; other.context_id = 303;
     require(UI::apply_viewport_configuration(other, peer).error_code.empty(), "second surface takes its own pointer ownership");
     UI::refresh_viewport_state(tab);

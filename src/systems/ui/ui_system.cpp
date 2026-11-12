@@ -45,7 +45,7 @@ void create_initial_frontend_tab() {
     }
 
     const int tab_id = UI::BrowserManager::instance().create_tab(
-        Utils::path_to_utf8(frontend_index), "/StartScreen", "main", 1920, 1080, true);
+        Utils::path_to_utf8(frontend_index), "/StartScreen", UI::TabKind::MainWorkspace, 1920, 1080);
     CFW_LOG_INFO("UiSystem: Initial Vue/CEF tab created: ID={}", tab_id);
 }
 

@@ -41,7 +41,7 @@ EXPECTED_SURFACE = {
     "window": {
         "close", "closeCameraView", "closeTab", "createPanel", "focusTab", "getCurrent",
         "onCloseRequested", "onClosed", "resizeCameraView", "setDragRegions",
-        "setPanelPlacement", "setWindowPresentation", "suspendCameraViews",
+        "setWindowPresentation", "suspendCameraViews",
     },
 }
 

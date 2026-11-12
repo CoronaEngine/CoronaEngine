@@ -58,9 +58,6 @@ struct BrowserTab {
     std::string url;
     std::string panel_id; // Stable ImGui identity, independent of the current browser id.
     std::string panel_title;
-    bool native_docked = false;
-    bool native_force_viewport = false;
-    bool native_focus_requested = false;
     bool cef_visible = true;
     // Published on the UI thread, read under mutex by CEF callbacks. CEF renders
     // at logical resolution; screen coordinates are physical desktop pixels.
@@ -82,23 +79,22 @@ struct BrowserTab {
     int width = 800;
     int height = 600;
 
-    // Docking 相关属性
-    std::string docking_pos;        // 位置: "left", "right", "top", "bottom", "center"
-    int dock_width = 0;             // 指定宽度，0 表示自动
-    int dock_height = 0;            // 指定高度，0 表示自动
-    bool dock_fixed = false;        // 是否固定位置
-    bool dock_initialized = false;  // 是否已初始化 docking
-    // Phase 10: in-main-window floating panel (popped-out). Positioned by initial_x/y and
-    // draggable by its title bar within the main window. Distinct from host_surface detach
-    // (own OS window), which is disabled pending the multi-surface fix.
-    bool floating = false;
-    // Higher values are composed and hit-tested above ordinary floating panels.
-    int z_priority = 0;
+    // ImGui owns placement: a panel is one ImGui window, the dockspace remembers where it
+    // sits, and the user docks it. Native keeps only what ImGui cannot know:
+    //   main_workspace ⇒ the whole-window editor surface (never a dockable panel)
+    //   camera_view    ⇒ a camera surface in its own OS window (never merged into a dock)
+    //   initial_x/y    ⇒ first-use position for a window that opens floating
+    bool main_workspace = false;
+    bool camera_view = false;
+    // Set by FocusTab, consumed by the next ImGui frame.
+    bool native_focus_requested = false;
+    int initial_x = 120;
+    int initial_y = 120;
+    // First-use size/layout already applied once.
+    bool laid_out = false;
 
     bool open = true;
     bool minimized = false;  // 新增：是否最小化
-    bool needs_resize = false;
-    bool needs_reposition = false;
     bool buffer_dirty = false;
     // Dimensions of the buffer currently sitting in `pixel_buffer`, as delivered by CEF's
     // OnPaint. They are NOT always width/height: a paint issued before a resize can still arrive
@@ -108,7 +104,6 @@ struct BrowserTab {
     int paint_width = 0;
     int paint_height = 0;
     bool has_focus = false;
-    bool camera_view = false;
     bool cef_creation_failed = false;
     bool transparent_overlay = false;
     std::atomic_bool hide_system_cursor{false};
@@ -118,26 +113,12 @@ struct BrowserTab {
     bool preserve_camera_open_on_close = false;
     SDL_WindowID platform_window_id = 0;
     void* platform_handle_raw = nullptr;
-    int initial_x = 120;
-    int initial_y = 120;
 
-    // Phase 7 (detach / re-dock): the surface this tab is rendered into.
-    //   nullptr  ⇒ docked in the main window (composed into the main layout)
-    //   non-null ⇒ detached, rendered full-bleed into its own secondary OS window (this is
-    //             that window's native surface handle / DisplaySystem key).
-    // host_surface is owned/driven by the UI thread only (frame runner + native window tasks).
+    // The surface ImGui renders this tab into:
+    //   nullptr  ⇒ docked in the main window (composed into the main viewport)
+    //   non-null ⇒ its own OS window (a camera surface, or a panel the user undocked)
+    // host_surface is owned/driven by the UI thread only.
     void* host_surface = nullptr;
-    // Detach lifecycle state. Only the UI thread mutates it; guards against double-detach and
-    // detach-during-teardown (ABA). Docked is the initial/redocked state.
-    enum class DetachState { Docked, Detaching, Detached, Redocking };
-    DetachState detach_state = DetachState::Docked;
-    // Desired secondary-window geometry (logical px), filled by setPanelPlacement and consumed
-    // by the frame runner's reconcile step when it creates the OS window.
-    int detach_x = 120;
-    int detach_y = 120;
-    int detach_w = 640;
-    int detach_h = 480;
-    bool detach_maximized = false;
 
     char url_buffer[1024] = "";
     // Last uncomposited PET_VIEW. Retained after upload so popup-only updates
@@ -157,17 +138,19 @@ struct BrowserTab {
 // 浏览器标签管理器
 // ============================================================================
 
+// What a tab is for. ImGui decides placement; this only tells the compositor which kind of
+// surface it is.
+enum class TabKind { Panel, CameraView, MainWorkspace };
+
 class BrowserManager {
    public:
     static BrowserManager& instance();
 
+    /// Creates one CEF document. Panels open as ImGui windows the user docks; camera views
+    /// and the main workspace are the two surfaces native has to place itself.
     int create_tab(const std::string& url, const std::string& path = "",
-                   const std::string& docking_pos = "",
-                   int dock_width = 0, int dock_height = 0,
-                   bool dock_fixed = false);
-    int create_tab(const std::string& url, const std::string& path,
-                   const std::string& docking_pos, int dock_width, int dock_height,
-                   bool dock_fixed, bool camera_view, int initial_x, int initial_y);
+                   TabKind kind = TabKind::Panel, int width = 0, int height = 0,
+                   int initial_x = 120, int initial_y = 120);
     BrowserTab* get_tab(int tab_id);
     void remove_tab(int tab_id);
     void update_texture(int tab_id);

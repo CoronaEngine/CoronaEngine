@@ -40,7 +40,11 @@ TARGET_LINES = 13_807
 # explicit, so this ratchet moved up by that decoder's 39 lines only. The editor
 # pin then moved to the facade commit that calls those entries, and the pinned
 # editorApi.js is measured here, so its 43 bridge lines are in this total too.
-CORE_BUDGET = 14504
+# ImGui owns the dock, so the placement request went away as well: the window
+# namespace lost setPanelPlacement, the detach state machine left BrowserTab, and
+# the dead pre-ImGui layout solver and input router were deleted. That is what
+# brings the ratchet back down.
+CORE_BUDGET = 14425
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -80,12 +84,12 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/cef_scene_operations.h", 428),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),
-    ("src/systems/ui/cef/cef_v8_binding.cpp", 2834),
+    ("src/systems/ui/cef/cef_v8_binding.cpp", 2810),
     ("src/systems/ui/cef/cef_process.h", 36),
     ("src/systems/ui/cef/cef_viewport_pick.cpp", 119),
     ("src/systems/ui/cef/cef_viewport_pick.h", 60),
-    ("src/systems/ui/cef/cef_window_operations.cpp", 881),
-    ("src/systems/ui/cef/cef_window_operations.h", 110),
+    ("src/systems/ui/cef/cef_window_operations.cpp", 827),
+    ("src/systems/ui/cef/cef_window_operations.h", 109),
     ("src/systems/ui/cef/ik_chain_config.h", 209),
     ("src/systems/ui/cef/model_node_config.h", 52),
     ("src/systems/ui/cef/model_node_page.h", 37),

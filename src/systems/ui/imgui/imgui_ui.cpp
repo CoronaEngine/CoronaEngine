@@ -28,7 +28,7 @@ struct ContentRect {
     bool hovered;
 };
 std::string window_name(const BrowserTab& tab) {
-    if (tab.docking_pos == "main") return kMainWorkspaceName;
+    if (tab.main_workspace) return kMainWorkspaceName;
     return (tab.panel_title.empty() ? tab.name : tab.panel_title) + "###Corona.Panel." +
         (tab.panel_id.empty() ? std::to_string(tab.tab_id) : tab.panel_id);
 }
@@ -86,13 +86,14 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
     auto* main_viewport = ImGui::GetMainViewport();
     dockspace_ = ImGui::GetID("Corona.Editor.Dockspace");
     if (!ImGui::DockBuilderGetNode(dockspace_)) {
+        // The first-run skeleton: side and bottom zones the user can drop panels into.
+        // Which panel lands where is the user's layout, remembered by ImGui.
         ImGui::DockBuilderAddNode(dockspace_, ImGuiDockNodeFlags_DockSpace);
         ImGui::DockBuilderSetNodeSize(dockspace_, main_viewport->WorkSize);
         auto center = dockspace_;
-        default_docks_["left"] = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.22f, nullptr, &center);
-        default_docks_["right"] = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.28f, nullptr, &center);
-        default_docks_["bottom"] = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.28f, nullptr, &center);
-        default_docks_["center"] = center;
+        ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.22f, nullptr, &center);
+        ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.28f, nullptr, &center);
+        ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.28f, nullptr, &center);
         ImGui::DockBuilderFinish(dockspace_);
     }
     draw_editor_dockspace(dockspace_, main_viewport);
@@ -104,9 +105,7 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             if (tab) set_visible(*tab, false);
             continue;
         }
-        const bool main = tab->docking_pos == "main";
-        if (tab->detach_state == BrowserTab::DetachState::Detaching) tab->native_force_viewport = true;
-        if (tab->detach_state == BrowserTab::DetachState::Redocking) tab->native_force_viewport = false;
+        const bool main = tab->main_workspace;
         const auto name = window_name(*tab);
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoScrollWithMouse;
@@ -116,33 +115,20 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             flags |= ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBackground;
         }
         ImGuiWindowClass window_class;
-        if (tab->camera_view || tab->native_force_viewport)
-            window_class.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+        if (tab->camera_view) window_class.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
         ImGui::SetNextWindowClass(&window_class);
-        if (!main && !tab->dock_initialized) {
-            ImGui::SetNextWindowSize(ImVec2(static_cast<float>(std::max(tab->dock_width, 320)),
-                static_cast<float>(std::max(tab->dock_height, 240))), ImGuiCond_FirstUseEver);
-            if (tab->native_docked && !ImGui::FindWindowSettingsByID(ImHashStr(name.c_str()))) {
-                const std::string& zone = tab->docking_pos;
-                const auto it = default_docks_.find(zone);
-                const auto target = it != default_docks_.end() && ImGui::DockBuilderGetNode(it->second)
-                    ? it->second : resolve_default_panel_dock(dockspace_, zone);
-                ImGui::SetNextWindowDockID(target, ImGuiCond_FirstUseEver);
-            } else if (tab->detach_state != BrowserTab::DetachState::Detaching) {
+        if (!main && !tab->laid_out) {
+            ImGui::SetNextWindowSize(ImVec2(static_cast<float>(std::max(tab->width, 320)),
+                static_cast<float>(std::max(tab->height, 240))), ImGuiCond_FirstUseEver);
+            if (tab->camera_view) {
+                // A camera surface always opens in its own window at the rect the camera saved.
+                ImGui::SetNextWindowDockID(0);
                 ImGui::SetNextWindowPos(ImVec2(main_viewport->Pos.x + tab->initial_x,
                     main_viewport->Pos.y + tab->initial_y), ImGuiCond_FirstUseEver);
             }
-            tab->dock_initialized = true;
-        }
-        if (!main && tab->detach_state == BrowserTab::DetachState::Detaching) {
-            ImGui::SetNextWindowDockID(0);
-            ImGui::SetNextWindowPos(ImVec2(static_cast<float>(tab->detach_x), static_cast<float>(tab->detach_y)));
-            ImGui::SetNextWindowSize(ImVec2(static_cast<float>(std::max(tab->detach_w, 240)),
-                static_cast<float>(std::max(tab->detach_h, 180))));
-            tab->detach_state = BrowserTab::DetachState::Docked;
-        } else if (!main && tab->detach_state == BrowserTab::DetachState::Redocking) {
-            ImGui::SetNextWindowDockID(dockspace_);
-            tab->detach_state = BrowserTab::DetachState::Docked;
+            // Everything else stays wherever ImGui put it: a new window opens floating and
+            // the layout saved in imgui.ini is what keeps it there.
+            tab->laid_out = true;
         }
         bool open = true;
         bool visible;
@@ -158,7 +144,6 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
             visible = ImGui::Begin(name.c_str(), &open, flags);
         }
-        if (ImGui::IsWindowDocked()) tab->native_force_viewport = false;
         const auto origin = ImGui::GetCursorScreenPos();
         auto size = ImGui::GetContentRegionAvail();
         const bool usable = visible && size.x > 0 && size.y > 0;
@@ -233,7 +218,6 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
         tab->platform_window_id = id;
         tab->platform_handle_raw = surface;
         tab->host_surface = viewport == main_viewport ? nullptr : surface;
-        tab->detach_state = viewport == main_viewport ? BrowserTab::DetachState::Docked : BrowserTab::DetachState::Detached;
         int logical_w = 1, logical_h = 1, pixel_w = 1, pixel_h = 1;
         SDL_GetWindowSize(window, &logical_w, &logical_h);
         SDL_GetWindowSizeInPixels(window, &pixel_w, &pixel_h);
