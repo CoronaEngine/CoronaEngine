@@ -41,6 +41,8 @@
 #include GLSL(shaders/optics_ui_warp.comp.glsl)
 #include GLSL(shaders/optics_composite.comp.glsl)
 #include GLSL(shaders/vision_resolve.comp.glsl)
+#include GLSL(shaders/vision_auto_exposure.comp.glsl)
+#include GLSL(shaders/vision_bloom.comp.glsl)
 // clang-format on
 
 // ============================================================================
@@ -153,6 +155,10 @@ struct Hardware {
     std::uint64_t uiInstanceInfoCapacity = 0;
     std::uint64_t uiMaterialTableCapacity = 0;
     Corona::Horizon::HardwareBuffer skyIrradianceSHBuffer;  // 9 vec3 SH coeffs (sky-driven ambient)
+    Corona::Horizon::HardwareBuffer visionAutoExposureBuffer;
+    Corona::Horizon::HardwareBuffer visionBloomHalf;
+    Corona::Horizon::HardwareBuffer visionBloomQuarter;
+    Corona::Horizon::HardwareBuffer visionBloomBlur;
     Corona::Horizon::HardwareBuffer shadowInfoBuffer;
 
     // === Per-submission buffer 池（消除 V-buffer 共享 buffer 跨帧/跨相机覆盖竞争）===
@@ -190,6 +196,8 @@ struct Hardware {
     std::optional<Corona::Horizon::ComputePipeline<optics_ui_warp_comp_glsl_t>> opticsUiWarpPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_composite_comp_glsl_t>> opticsCompositePipeline;
     std::optional<Corona::Horizon::ComputePipeline<vision_resolve_comp_glsl_t>> visionResolvePipeline;
+    std::optional<Corona::Horizon::ComputePipeline<vision_auto_exposure_comp_glsl_t>> visionAutoExposurePipeline;
+    std::optional<Corona::Horizon::ComputePipeline<vision_bloom_comp_glsl_t>> visionBloomPipeline;
 
     // === CPU-side uniform data ===
     struct UniformBufferObject {

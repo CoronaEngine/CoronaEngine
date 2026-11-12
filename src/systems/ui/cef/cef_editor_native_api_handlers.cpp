@@ -1458,6 +1458,15 @@ NativeEditorScene& materialize_scene_snapshot_into_state(
         scene.engine_scene = std::make_unique<Corona::API::Scene>();
         scene.environment = std::make_unique<Corona::API::Environment>();
         apply_native_scene_environment(scene);
+        if (const auto display = environment.find("vision_display"); display != environment.end()) {
+            if (display->at("profile").get<std::string>() != "rtxpt") {
+                throw std::invalid_argument("Unsupported Vision display profile");
+            }
+            scene.environment->set_vision_rtxpt_display(
+                display->at("auto_exposure").get<bool>(), display->at("exposure_compensation").get<float>(),
+                display->at("exposure_value").get<float>(), display->at("min_ev").get<float>(),
+                display->at("max_ev").get<float>(), display->value("bloom_intensity", 0.f));
+        }
         const auto physics = environment.value("physics", nlohmann::json::object());
         if (physics.contains("gravity")) scene.environment->set_gravity(physics["gravity"].get<std::array<float, 3>>());
         if (physics.contains("floor_y")) scene.environment->set_floor_y(physics["floor_y"].get<float>());

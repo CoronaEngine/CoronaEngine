@@ -1,23 +1,11 @@
 #version 460
 #extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_GOOGLE_include_directive : require
 
 // Zero-copy Vision resolve pass.
-// Reads Vision's PRE-tonemap linear HDR color (float32 RGBA, row-major
-// y*width+x) from a Vulkan buffer imported into Vulkan, applies Vision's exposure
-// + ACES tone map, and writes the engine's RGBA16F display image. The float32 ->
-// half16 narrowing happens implicitly on imageStore into the rgba16 target, so
-// no CPU readback / conversion is needed.
-//
-// The source is Vision's accumulation_buffer_/rt_buffer_ (the input to
-// FrameBuffer::tone_mapping_), NOT view_texture_: that final-color texture is a
-// cuArray whose memory cannot be exported. So we tone map here instead, and this
-// MUST match the Native tonemap (tonemap.comp) exactly or Vision<->Native
-// switching shifts color. Both do:
-//     exposed = Vision exposure curve (1 - exp(-color * E))  // NOT engine c*E
-//     ldr     = ACES(exposed)
-//     out     = linearToSrgb(ldr)   // sRGB encode for the UNORM swapchain
-// The swapchain is R8G8B8A8_UNORM (SRGB_NONLINEAR colorspace) and the present
-// blit does NOT auto-encode, so the sRGB OETF must be applied here in-shader.
+// Read Vision's linear float32 RGBA display source and write the RGBA16F
+// display image. Apply the scene's display transform and encode sRGB here
+// because the UNORM swapchain blit preserves the stored values.
 
 layout (local_size_x = 8, local_size_y = 8) in;
 
@@ -31,9 +19,16 @@ layout(push_constant) uniform PushConsts
     uvec2 gbufferSize;
     uint  srcBufferIndex;   // imported Vision pre-tonemap buffer (float4 per pixel)
     uint  outputImage;      // engine finalOutputImage (RGBA16F)
-    float exposure;         // Vision FrameBuffer exposure (default 1.0)
+    float exposure;         // Legacy exposure or Hable exposure multiplier.
     uint diagnostic;        // Geometry AOVs already contain display values.
+    uint displayProfile;    // 0 = legacy, 1 = Hable manual, 2 = Hable auto.
+    uint exposureBufferIndex;
+    uint bloomBufferIndex;
+    uvec2 bloomSize;
+    float bloomIntensity;
 } pushConsts;
+
+#include "vision_bloom_sampling.glsl"
 
 vec3 acesFilmicToneMapCurve(vec3 x)
 {
@@ -43,6 +38,17 @@ vec3 acesFilmicToneMapCurve(vec3 x)
     float d = 0.59f;
     float e = 0.14f;
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+vec3 hableUc2Curve(vec3 x)
+{
+    const float a = 0.22;
+    const float b = 0.30;
+    const float c = 0.10;
+    const float d = 0.20;
+    const float e = 0.01;
+    const float f = 0.30;
+    return ((x * (a * x + c * b) + d * e) / (x * (a * x + b) + d * f)) - e / f;
 }
 
 // 标准 sRGB OETF，必须与 Native tonemap.comp 的 linearToSrgb 完全一致。
@@ -71,9 +77,24 @@ void main()
         uintBitsToFloat(ssbos[srcIdx].data[base + 1u]),
         uintBitsToFloat(ssbos[srcIdx].data[base + 2u]));
 
-    // Vision exposure curve, then ACES, then sRGB encode (matches Native tonemap).
-    vec3 exposed = vec3(1.0) - exp(-hdr * pushConsts.exposure);
-    vec3 ldr = pushConsts.diagnostic != 0u ? hdr : linearToSrgb(acesFilmicToneMapCurve(exposed));
+    vec3 ldr = hdr;
+    if (pushConsts.diagnostic == 0u) {
+        if (pushConsts.displayProfile == 0u) {
+            vec3 exposed = vec3(1.0) - exp(-hdr * pushConsts.exposure);
+            ldr = linearToSrgb(acesFilmicToneMapCurve(exposed));
+        } else {
+            if (pushConsts.bloomIntensity > 0.0) {
+                hdr = compositeVisionBloom(hdr, uvec2(pixel), pushConsts.gbufferSize,
+                                           pushConsts.bloomBufferIndex, pushConsts.bloomSize, pushConsts.bloomIntensity);
+            }
+            float gain = pushConsts.exposure;
+            if (pushConsts.displayProfile == 2u) {
+                uint index = nonuniformEXT(pushConsts.exposureBufferIndex);
+                gain *= uintBitsToFloat(ssbos[index].data[0]);
+            }
+            ldr = linearToSrgb(hableUc2Curve(hdr * gain * 2.0) / hableUc2Curve(vec3(11.2)));
+        }
+    }
 
     imageStore(imagesRGBA16[nonuniformEXT(pushConsts.outputImage)], pixel, vec4(ldr, 1.0));
 }

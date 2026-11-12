@@ -1233,6 +1233,46 @@ template <typename T>
     return Corona::Horizon::HardwareBuffer(desc);
 }
 
+struct VisionBloomResult {
+    Corona::Horizon::HardwareBuffer buffer;
+    ktm::uvec2 extent{0u, 0u};
+};
+
+[[nodiscard]] VisionBloomResult record_vision_bloom(
+    Hardware& hardware, Corona::Horizon::HardwareStream& stream,
+    const Corona::Horizon::HardwareBuffer& hdr, ktm::uvec2 extent) {
+    using Corona::Systems::RenderDetail::bind_storage_buffer;
+    using Corona::Systems::RenderDetail::IndirectDispatch;
+    const ktm::uvec2 half{(extent.x + 1u) / 2u, (extent.y + 1u) / 2u};
+    const ktm::uvec2 quarter{(half.x + 1u) / 2u, (half.y + 1u) / 2u};
+    const auto ensure = [](auto& buffer, ktm::uvec2 size, std::string_view name) {
+        const uint64_t pixels = uint64_t(size.x) * size.y;
+        if (!buffer || buffer.get_element_count() < pixels) {
+            buffer = make_storage_buffer<uint64_t>(pixels, name, Corona::Horizon::CpuAccessMode::None);
+        }
+    };
+    ensure(hardware.visionBloomHalf, half, "optics.vision_bloom_half");
+    ensure(hardware.visionBloomQuarter, quarter, "optics.vision_bloom_quarter");
+    ensure(hardware.visionBloomBlur, quarter, "optics.vision_bloom_blur");
+
+    auto& bloom = *hardware.visionBloomPipeline;
+    const auto dispatch = [&](const auto& source, const auto& destination, ktm::uvec2 input_size,
+                              ktm::uvec2 output_size, uint32_t operation) {
+        bloom.pushConsts.inputSize = upload_value(input_size);
+        bloom.pushConsts.outputSize = upload_value(output_size);
+        bloom.pushConsts.srcBufferIndex = source.store_descriptor();
+        bloom.pushConsts.operation = operation;
+        bind_storage_buffer(bloom, bloom.pushConsts.outputBufferIndex, destination);
+        bloom.dispatch_extent(output_size.x, output_size.y);
+        stream << IndirectDispatch{&bloom, {source}, {}, {}};
+    };
+    dispatch(hdr, hardware.visionBloomHalf, extent, half, 0u);
+    dispatch(hardware.visionBloomHalf, hardware.visionBloomQuarter, half, quarter, 1u);
+    dispatch(hardware.visionBloomQuarter, hardware.visionBloomBlur, quarter, quarter, 2u);
+    dispatch(hardware.visionBloomBlur, hardware.visionBloomQuarter, quarter, quarter, 3u);
+    return {hardware.visionBloomQuarter, quarter};
+}
+
 [[nodiscard]] std::uint64_t grow_table_capacity(std::uint64_t current,
                                                 std::uint64_t required) {
     std::uint64_t next = current == 0 ? 1 : current;
@@ -2584,6 +2624,8 @@ bool OpticsSystem::initialize_hardware_resources() {
         // sky_sh_project.comp each environment change, read by lighting.comp.
         hardware_->skyIrradianceSHBuffer =
             make_storage_buffer<float>(27, "optics.sky_irradiance_sh");
+        hardware_->visionAutoExposureBuffer =
+            make_storage_buffer<float>(1, "optics.vision_auto_exposure", Horizon::CpuAccessMode::None);
 
         // finalOutputImage �����ڴ˴�����ÿ�� surface �����������
         // acquire_surface_target() ���贴��������1: per-surface �������
@@ -2614,6 +2656,8 @@ bool OpticsSystem::initialize_render_pipelines() {
         hardware_->opticsUiWarpPipeline.emplace(optics_ui_warp_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->opticsCompositePipeline.emplace(optics_composite_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->visionResolvePipeline.emplace(vision_resolve_comp_glsl, ktm::uvec3(8, 8, 1));
+        hardware_->visionAutoExposurePipeline.emplace(vision_auto_exposure_comp_glsl, ktm::uvec3(64, 1, 1));
+        hardware_->visionBloomPipeline.emplace(vision_bloom_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->shaderHasInit = true;
     } catch (const std::exception& e) {
         CFW_LOG_CRITICAL("OpticsSystem: Failed to initialize typed pipelines: {}", e.what());
@@ -6330,11 +6374,54 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                         target.final_output.store_descriptor();
                     visionResolve.pushConsts.exposure = environment.exposure;
                     visionResolve.pushConsts.diagnostic = diagnostic ? 1u : 0u;
+                    visionResolve.pushConsts.displayProfile = 0u;
+                    visionResolve.pushConsts.exposureBufferIndex = 0u;
+
+                    const auto& display = environment.vision_display_profile;
+                    const bool use_rtxpt_display = !diagnostic && display.has_value();
+                    const bool auto_exposure = use_rtxpt_display && display->auto_exposure;
+                    const float bloom_intensity = use_rtxpt_display ? display->bloom_intensity : 0.f;
+                    const auto bloom = bloom_intensity > 0.f
+                        ? record_vision_bloom(*hardware_, stream, bridge->imported(), {w, h})
+                        : VisionBloomResult{};
+                    const auto bloom_index = bloom.buffer ? bloom.buffer.store_descriptor() : 0u;
+                    const auto set_bloom = [&](auto& pass) {
+                        pass.pushConsts.bloomSize = upload_value(bloom.extent);
+                        pass.pushConsts.bloomBufferIndex = bloom_index;
+                        pass.pushConsts.bloomIntensity = bloom_intensity;
+                    };
+                    set_bloom(visionResolve);
+                    std::vector<Horizon::HardwareBuffer> resolve_inputs;
+                    if (bloom.buffer) resolve_inputs.push_back(bloom.buffer);
+                    if (use_rtxpt_display) {
+                        visionResolve.pushConsts.displayProfile = auto_exposure ? 2u : 1u;
+                        visionResolve.pushConsts.exposure = display->exposure_gain;
+                    }
+                    if (auto_exposure) {
+                        auto& meter = *hardware_->visionAutoExposurePipeline;
+                        meter.pushConsts.gbufferSize = upload_value(hardware_->gbufferSize);
+                        meter.pushConsts.srcBufferIndex = vision_src_descriptor;
+                        meter.pushConsts.minimumGain = display->minimum_auto_gain;
+                        meter.pushConsts.maximumGain = display->maximum_auto_gain;
+                        set_bloom(meter);
+                        bind_storage_buffer(meter, meter.pushConsts.outputBufferIndex, hardware_->visionAutoExposureBuffer);
+                        meter.groups(1, 1, 1);
+                        std::vector<Horizon::HardwareBuffer> meter_inputs{bridge->imported()};
+                        if (bloom.buffer) meter_inputs.push_back(bloom.buffer);
+                        stream << RenderDetail::IndirectDispatch{&meter, std::move(meter_inputs), {}, {}};
+                        visionResolve.pushConsts.exposureBufferIndex = hardware_->visionAutoExposureBuffer.store_descriptor();
+                        resolve_inputs.push_back(hardware_->visionAutoExposureBuffer);
+                    }
 
                     // dispatch_extent replaces dispatch_groups
                     // ���ڴ� commit��UI overlay pass �������� final_output ��Ϊ������
                     // ��֡��ͬһ executor �ϰ��������¼��ĩβͳһ�ύһ�Ρ�
-                    stream << visionResolve.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
+                    if (!resolve_inputs.empty()) {
+                        visionResolve.dispatch_extent(w, h);
+                        stream << RenderDetail::IndirectDispatch{&visionResolve, std::move(resolve_inputs), {}, {}};
+                    } else {
+                        stream << visionResolve.dispatch_extent(w, h);
+                    }
                 }
 
                 // �� Native ���õ� UI overlay �㣺gbufferSize �����Ϸ���Ϊ {w,h}��

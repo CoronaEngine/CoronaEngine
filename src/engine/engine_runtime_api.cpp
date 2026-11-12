@@ -623,6 +623,25 @@ float Corona::API::Environment::get_sun_intensity() const {
     return 10.0f;
 }
 
+void Corona::API::Environment::set_vision_rtxpt_display(
+    bool auto_exposure, float exposure_compensation, float exposure_value, float min_ev, float max_ev,
+    float bloom_intensity) {
+    const float exposure_gain = std::exp2(exposure_compensation - (auto_exposure ? 0.f : exposure_value));
+    const float minimum_auto_gain = std::exp2(min_ev);
+    const float maximum_auto_gain = std::exp2(max_ev);
+    if (!std::isfinite(exposure_value) || !std::isfinite(exposure_gain * maximum_auto_gain) ||
+        exposure_gain <= 0.f || minimum_auto_gain <= 0.f || !(minimum_auto_gain <= maximum_auto_gain)) {
+        throw std::invalid_argument("Invalid RTXPT display exposure settings");
+    }
+    if (!std::isfinite(bloom_intensity) || bloom_intensity < 0.f || bloom_intensity > 1.f) {
+        throw std::invalid_argument("Invalid RTXPT display bloom intensity");
+    }
+    if (auto write = SharedDataHub::instance().environment_storage().acquire_write(handle_)) {
+        write->vision_display_profile = VisionDisplayProfile{
+            exposure_gain, minimum_auto_gain, maximum_auto_gain, bloom_intensity, auto_exposure};
+    }
+}
+
 void Corona::API::Environment::set_authored_lighting(const std::string& description) {
     if (description.empty()) {
         if (auto write=SharedDataHub::instance().environment_storage().acquire_write(handle_)) {

@@ -621,6 +621,14 @@ struct ViewportGizmoState {
     std::uint64_t sequence{};
 };
 
+struct VisionDisplayProfile {
+    float exposure_gain;
+    float minimum_auto_gain;
+    float maximum_auto_gain;
+    float bloom_intensity;
+    bool auto_exposure;
+};
+
 struct EnvironmentDevice {
     std::shared_ptr<const nlohmann::json> authored_lighting;
     std::size_t authored_lighting_revision{};
@@ -632,6 +640,7 @@ struct EnvironmentDevice {
     float sun_intensity{10.0f};                  // 太阳直射辐照度
     float sky_intensity{20.0f};                  // 大气散射功率
     float exposure{1.0f};                        // 全局曝光
+    std::optional<VisionDisplayProfile> vision_display_profile;
 
     // 物理场景参数
     ktm::fvec3 gravity{0.0f, -9.8f, 0.0f};
