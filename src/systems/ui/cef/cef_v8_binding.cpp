@@ -1862,6 +1862,8 @@ bool read_audio_control(const CefV8ValueList& arguments, SceneRequest& request, 
         request.audio.loop = value->GetBoolValue();
     }
     if (has_resource) {
+        // A resource plays globally; an archive scope would be accepted and then unused.
+        if (object->HasValue("archive_session")) return false;
         std::string id;
         if (!option_string(object, "resource", id, true)) return false;
         const auto parsed = std::from_chars(id.data(), id.data() + id.size(), request.audio.resource_id);

@@ -641,6 +641,13 @@ try {
       assert.equal(await main.evaluate(`corona.audio.play({resource:${JSON.stringify(id)}},{loop:false}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
       assert.equal(await main.evaluate(`corona.audio.stop({resource:${JSON.stringify(id)}}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
+    // A resource identity plays globally, so an archive scope is rejected instead of ignored.
+    for (const name of ['play', 'stop']) {
+      const extra = name === 'play' ? ',loop:false' : '';
+      assert.equal(await main.evaluate(
+        `corona.audio.${name}({resource:'1',archive_session:'scope'${extra}}).catch(e=>e.code)`),
+        'INVALID_ARGUMENT');
+    }
     for (const [name, extra] of [['play', ',loop:false'], ['stop', '']]) {
       for (const [scene, session] of [['other.ini', sceneRead.archive_session], ['scene.ini', 'retired']])
         assert.equal(await main.evaluate(`corona.audio.${name}({scene:${JSON.stringify(scene)},actor:'missing-actor',archive_session:${JSON.stringify(session)}${extra}}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
