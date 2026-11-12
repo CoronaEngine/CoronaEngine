@@ -1204,19 +1204,6 @@ bool read_scene_scope(const CefV8ValueList& arguments, SceneRequest& request) {
     return true;
 }
 
-bool read_select_model_file(const CefV8ValueList& arguments, SceneRequest& request) {
-    if (arguments.size() != 2 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty() ||
-        !object_keys(arguments[1], {"archive_session", "file_type"})) return false;
-    const auto session = arguments[1]->GetValue("archive_session");
-    const auto file_type = arguments[1]->GetValue("file_type");
-    if (!session || !session->IsString() || session->GetStringValue().empty() ||
-        !file_type || !file_type->IsString() || file_type->GetStringValue().empty()) return false;
-    request.read_scene = arguments[0]->GetStringValue().ToString();
-    request.archive_session = session->GetStringValue().ToString();
-    request.file_type = file_type->GetStringValue().ToString();
-    return true;
-}
-
 CefRefPtr<CefV8Value> audio_value(const AudioSnapshot& snapshot) {
     auto result = CefV8Value::CreateObject(nullptr, nullptr);
     result->SetValue("status", CefV8Value::CreateString(snapshot.status), V8_PROPERTY_ATTRIBUTE_NONE);

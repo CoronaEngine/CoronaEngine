@@ -22,13 +22,6 @@
 namespace Corona::Systems::UI {
 
 namespace {
-float clamp_float(float value, float min_value, float max_value) {
-    if (max_value < min_value) {
-        return min_value;
-    }
-    return std::clamp(value, min_value, max_value);
-}
-
 
 struct ScratchKeyNames {
     std::string code;
