@@ -9,6 +9,11 @@ produces, so the document cannot drift from the code it describes.
 """
 from pathlib import Path
 import re
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import rejection_codes
 
 ROOT = Path(__file__).resolve().parents[2]
 HEADER = ROOT / "src/systems/ui/cef/script_runtime_api.h"
@@ -39,6 +44,7 @@ GUARDS = [
     ("test_editor_settings_owner.py", "编辑器 ini 只有一个 Python 所有者"),
     ("test_reply_shapes.py", "Python 产出的回复透传，引擎产出保留类型"),
     ("test_integration_surface.py", "集成冒烟只调用仍然存在的原生命中"),
+    ("test_rejection_vocabulary.py", "拒绝码词表：源码只发已声明的码"),
     ("web_layer_budget.py", "接口核心行数 ratchet"),
 ]
 
@@ -139,10 +145,22 @@ def build() -> str:
         "表示“往前走一步”（相机窗口：无边框 → 窗口化，窗口化 ⇄ 最大化）。",
         "`createPanel` 返回 `{tab_id, panel_id, existing}`，其余窗口方法返回布尔。",
         "",
-        "**失败形状**：Promise 拒绝时携带本文件的五个基础设施码之一",
-        "（`PERMISSION_DENIED`、`CONTEXT_CHANGED`、`INVALID_ARGUMENT`、`NATIVE_UNAVAILABLE`、",
-        "`NATIVE_FAILURE`），或者场景层的符号码（如 `PROJECT_CONTEXT_CHANGED`）原样透传。",
-        "同步方法**永不拒绝**：返回值，找不到时返回文档化的空值。",
+        "**失败形状**：Promise 拒绝时携带下表的码，原样透传给 Web。`rejection_codes.py`",
+        "声明全集，`test_rejection_vocabulary.py` 保证源码只发这些码。",
+        "",
+        "| 分组 | 谁给出 | 码 |",
+        "|---|---|---|",
+        "| 基础设施 | V8 绑定本体，原生工作开始前 | "
+        + "、".join(f"`{code}`" for code in sorted(rejection_codes.INFRASTRUCTURE)) + " |",
+        "| 窗口 | 原生窗口宿主（窗口消失、建不出来） | "
+        + "、".join(f"`{code}`" for code in sorted(rejection_codes.WINDOW)) + " |",
+        "| 场景/归档 | 场景与归档层（对象不存在、只读、冲突…） | "
+        + "、".join(f"`{code}`" for code in sorted(rejection_codes.SCENE)) + " |",
+        "| Web → Python | bridge 传输与 Python 服务 | "
+        + "、".join(f"`{code}`" for code in sorted(rejection_codes.BRIDGE)) + " |",
+        "",
+        "Python 服务自己返回的错误码（如 `DOCUMENT_CONFLICT`、`RUN_ACTIVE`）经 bridge 原样透传，",
+        "不在 C++ 侧扫描范围内。同步方法**永不拒绝**：返回值，找不到时返回文档化的空值。",
         "",
         "## ScriptRuntime 面",
         "",
