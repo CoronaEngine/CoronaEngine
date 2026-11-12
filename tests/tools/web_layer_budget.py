@@ -49,8 +49,10 @@ TARGET_LINES = 13_807
 # collapsed into close(identity?), and two duplicate self-close paths into one.
 # Folding resize/focus/scene-suspension into close() and setWindowPresentation()
 # cost a few reader lines and removed three registrations and two dispatch
-# branches, so this ratchet moved up by eleven lines net.
-CORE_BUDGET = 14421
+# branches, so this ratchet moved up by eleven lines net. Collapsing the four
+# single-method namespaces and the four audio verbs paid that back: four readers
+# and eight registrations became two readers and two registrations.
+CORE_BUDGET = 14405
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -90,7 +92,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/cef_scene_operations.h", 428),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),
-    ("src/systems/ui/cef/cef_v8_binding.cpp", 2797),
+    ("src/systems/ui/cef/cef_v8_binding.cpp", 2782),
     ("src/systems/ui/cef/cef_process.h", 36),
     ("src/systems/ui/cef/cef_viewport_pick.cpp", 119),
     ("src/systems/ui/cef/cef_viewport_pick.h", 60),
@@ -117,7 +119,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/editor_api/scene_environment_service.cpp", 59),
     ("src/systems/ui/editor_api/scene_model_node_service.cpp", 63),
     ("src/systems/ui/editor_api/scene_projection_service.cpp", 26),
-    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 185),
+    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 181),
 ]
 
 # Per-file ceilings are the measured baseline. They start equal to the current
