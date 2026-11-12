@@ -159,3 +159,11 @@ Python 服务自己返回的错误码（如 `DOCUMENT_CONFLICT`、`RUN_ACTIVE`�
 `embedded_python/script_runtime/BOUNDARY.md` 记录了脚本侧**有意保留**的能力缺口：
 文件音频播放（Actor 自带音频已支持）、原生射线查询、指针捕获。补的时候要先在
 `script_runtime_api.h` 加具名入口，而不是恢复"探测一个不存在的函数再静默降级"的写法。
+
+接口侧的覆盖缺口（记录在此，避免被当成已完成）：
+
+- 窗口/音频/面板请求的**参数校验**只有手动 CEF 冒烟覆盖（`web_messages_cef_smoke.mjs`）。
+  读者（`read_close_request`、`read_window_presentation`、`read_audio_control`、`read_panel_options`）
+  依赖 `CefV8Value`，单测需要真实 V8 上下文；`tests/tools` 的守卫只钉方法名、拒绝码和集成调用。
+- `getCurrent()` 目前唯一的消费者是测试用的 `appService.getCurrentWindow`。保留它是因为它是
+  窗口自省的唯一入口；若确认永远不需要，删掉它会让 window 面从 7 个方法降到 6 个。
