@@ -1233,46 +1233,6 @@ template <typename T>
     return Corona::Horizon::HardwareBuffer(desc);
 }
 
-struct VisionBloomResult {
-    Corona::Horizon::HardwareBuffer buffer;
-    ktm::uvec2 extent{0u, 0u};
-};
-
-[[nodiscard]] VisionBloomResult record_vision_bloom(
-    Hardware& hardware, Corona::Horizon::HardwareStream& stream,
-    const Corona::Horizon::HardwareBuffer& hdr, ktm::uvec2 extent) {
-    using Corona::Systems::RenderDetail::bind_storage_buffer;
-    using Corona::Systems::RenderDetail::IndirectDispatch;
-    const ktm::uvec2 half{(extent.x + 1u) / 2u, (extent.y + 1u) / 2u};
-    const ktm::uvec2 quarter{(half.x + 1u) / 2u, (half.y + 1u) / 2u};
-    const auto ensure = [](auto& buffer, ktm::uvec2 size, std::string_view name) {
-        const uint64_t pixels = uint64_t(size.x) * size.y;
-        if (!buffer || buffer.get_element_count() < pixels) {
-            buffer = make_storage_buffer<uint64_t>(pixels, name, Corona::Horizon::CpuAccessMode::None);
-        }
-    };
-    ensure(hardware.visionBloomHalf, half, "optics.vision_bloom_half");
-    ensure(hardware.visionBloomQuarter, quarter, "optics.vision_bloom_quarter");
-    ensure(hardware.visionBloomBlur, quarter, "optics.vision_bloom_blur");
-
-    auto& bloom = *hardware.visionBloomPipeline;
-    const auto dispatch = [&](const auto& source, const auto& destination, ktm::uvec2 input_size,
-                              ktm::uvec2 output_size, uint32_t operation) {
-        bloom.pushConsts.inputSize = upload_value(input_size);
-        bloom.pushConsts.outputSize = upload_value(output_size);
-        bloom.pushConsts.srcBufferIndex = source.store_descriptor();
-        bloom.pushConsts.operation = operation;
-        bind_storage_buffer(bloom, bloom.pushConsts.outputBufferIndex, destination);
-        bloom.dispatch_extent(output_size.x, output_size.y);
-        stream << IndirectDispatch{&bloom, {source}, {}, {}};
-    };
-    dispatch(hdr, hardware.visionBloomHalf, extent, half, 0u);
-    dispatch(hardware.visionBloomHalf, hardware.visionBloomQuarter, half, quarter, 1u);
-    dispatch(hardware.visionBloomQuarter, hardware.visionBloomBlur, quarter, quarter, 2u);
-    dispatch(hardware.visionBloomBlur, hardware.visionBloomQuarter, quarter, quarter, 3u);
-    return {hardware.visionBloomQuarter, quarter};
-}
-
 [[nodiscard]] std::uint64_t grow_table_capacity(std::uint64_t current,
                                                 std::uint64_t required) {
     std::uint64_t next = current == 0 ? 1 : current;
@@ -2122,8 +2082,7 @@ struct OpticsSystem::VisionPipelineRuntime {
     std::optional<Vision::VisionLightingState> engine_lighting;
     std::chrono::steady_clock::time_point next_geometry_retry{};
 
-    // Zero-copy path: shares Vision's pre-tonemap linear color buffer with Vulkan
-    // and resolves it via the vision_resolve compute pass.
+    // Per-view shared buffers carry Vision's resolved display pixels to Vulkan.
     std::unordered_map<std::uintptr_t, std::unique_ptr<Vision::VisionZeroCopyBridge>> bridges;
     std::unordered_map<std::uintptr_t, std::unique_ptr<Vision::VisionDiagnosticAdapter>> diagnostics;
     std::unordered_set<std::uintptr_t> retained_contexts;
@@ -2624,8 +2583,6 @@ bool OpticsSystem::initialize_hardware_resources() {
         // sky_sh_project.comp each environment change, read by lighting.comp.
         hardware_->skyIrradianceSHBuffer =
             make_storage_buffer<float>(27, "optics.sky_irradiance_sh");
-        hardware_->visionAutoExposureBuffer =
-            make_storage_buffer<float>(1, "optics.vision_auto_exposure", Horizon::CpuAccessMode::None);
 
         // finalOutputImage �����ڴ˴�����ÿ�� surface �����������
         // acquire_surface_target() ���贴��������1: per-surface �������
@@ -2655,9 +2612,31 @@ bool OpticsSystem::initialize_render_pipelines() {
         hardware_->opticsCursorPipeline.emplace(optics_cursor_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->opticsUiWarpPipeline.emplace(optics_ui_warp_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->opticsCompositePipeline.emplace(optics_composite_comp_glsl, ktm::uvec3(8, 8, 1));
-        hardware_->visionResolvePipeline.emplace(vision_resolve_comp_glsl, ktm::uvec3(8, 8, 1));
-        hardware_->visionAutoExposurePipeline.emplace(vision_auto_exposure_comp_glsl, ktm::uvec3(64, 1, 1));
-        hardware_->visionBloomPipeline.emplace(vision_bloom_comp_glsl, ktm::uvec3(8, 8, 1));
+        hardware_->visionDisplayExtent.as_push_constant();
+        const auto write_display_image = [&] {
+            using namespace EmbeddedShader;
+            Uint2 pixel;
+            pixel = dispatchThreadID()->xy();
+            auto& extent = hardware_->visionDisplayExtent;
+            $IF(pixel->x < extent->x && pixel->y < extent->y) {
+                const Uint index = pixel->y * extent->x + pixel->x;
+                hardware_->visionDisplayImage[pixel] = hardware_->visionDisplayPixels[index];
+            }
+        };
+        const ktm::uvec3 threads(8, 8, 1);
+        EmbeddedShader::CompilerOption compiler;
+        compiler.compileHLSL = false;
+        Horizon::ComputePipelineShaders shaders;
+        shaders.object = std::make_shared<EmbeddedShader::ComputePipelineObject>(
+            EmbeddedShader::ComputePipelineObject::compile(write_display_image, threads, compiler));
+        shaders.compute = shaders.object->compute->getShaderCode(EmbeddedShader::ShaderLanguage::SpirV, true);
+        shaders.auto_bind_entries = shaders.object->autoBindEntries;
+        // Bindless resources use distinct push-constant offsets. Keep those
+        // same identities in the command recorder for the buffer and image.
+        for (auto& entry : shaders.auto_bind_entries) {
+            if (entry.boundResourceRef) entry.location = static_cast<uint32_t>(entry.byteOffset);
+        }
+        hardware_->visionDisplayPipeline.emplace(Horizon::ComputePipelineDesc{threads}, std::move(shaders));
         hardware_->shaderHasInit = true;
     } catch (const std::exception& e) {
         CFW_LOG_CRITICAL("OpticsSystem: Failed to initialize typed pipelines: {}", e.what());
@@ -6093,7 +6072,7 @@ bool OpticsSystem::init_vision_lazy() {
 
 void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                                    const std::vector<RenderView>& views) {
-    if (views.empty() || !hardware_->visionResolvePipeline) return;
+    if (views.empty() || !hardware_->visionDisplayPipeline) return;
     Corona::Diagnostics::PhaseScope vision_phase{"Optics", "vision:scene_sync"};
     (void)frame_count;
 
@@ -6336,20 +6315,20 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                 const uint32_t w = res.x;
                 const uint32_t h = res.y;
 
-                // The preceding resolve must finish before Vision reuses or
+                // The preceding image-store pass must finish before Vision reuses or
                 // reallocates its shared buffer. Frame pixels never visit the CPU.
                 vision_phase.set("vision:interop");
                 const auto reuse_start = profile_now();
                 runtime.wait_for_interop_submission(cam_handle, "shared buffer reuse", false);
                 const auto reuse_end = profile_now();
+                const auto& display = environment.vision_display_profile;
                 if (!bridge->ensure(*pipeline, w, h) ||
-                    !bridge->copy_from_framebuffer(*pipeline)) {
-                    // The bridge logs and latches the failure. Do not resolve an
-                    // invalid descriptor or publish stale pixels as a new frame.
+                    !bridge->render_display(*pipeline, environment.exposure,
+                                            display ? &*display : nullptr, diagnostic)) {
+                    // The bridge logs and latches failures before this frame is published.
                     return;
                 }
-                const auto copy_end = profile_now();
-                const uint32_t vision_src_descriptor = bridge->imported().store_descriptor();
+                const auto display_end = profile_now();
 
                 void* surface = camera.surface;
                 hardware_->gbufferSize = ktm::uvec2{w, h};
@@ -6366,63 +6345,11 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
 
                 const auto target_end = profile_now();
                 auto stream = hardware_->executor.stream();
-                {
-                    auto& visionResolve = *hardware_->visionResolvePipeline;
-                    visionResolve.pushConsts.gbufferSize = upload_value(hardware_->gbufferSize);
-                    visionResolve.pushConsts.srcBufferIndex = vision_src_descriptor;
-                    visionResolve.pushConsts.outputImage =
-                        target.final_output.store_descriptor();
-                    visionResolve.pushConsts.exposure = environment.exposure;
-                    visionResolve.pushConsts.diagnostic = diagnostic ? 1u : 0u;
-                    visionResolve.pushConsts.displayProfile = 0u;
-                    visionResolve.pushConsts.exposureBufferIndex = 0u;
-
-                    const auto& display = environment.vision_display_profile;
-                    const bool use_rtxpt_display = !diagnostic && display.has_value();
-                    const bool auto_exposure = use_rtxpt_display && display->auto_exposure;
-                    const float bloom_intensity = use_rtxpt_display ? display->bloom_intensity : 0.f;
-                    const auto bloom = bloom_intensity > 0.f
-                        ? record_vision_bloom(*hardware_, stream, bridge->imported(), {w, h})
-                        : VisionBloomResult{};
-                    const auto bloom_index = bloom.buffer ? bloom.buffer.store_descriptor() : 0u;
-                    const auto set_bloom = [&](auto& pass) {
-                        pass.pushConsts.bloomSize = upload_value(bloom.extent);
-                        pass.pushConsts.bloomBufferIndex = bloom_index;
-                        pass.pushConsts.bloomIntensity = bloom_intensity;
-                    };
-                    set_bloom(visionResolve);
-                    std::vector<Horizon::HardwareBuffer> resolve_inputs;
-                    if (bloom.buffer) resolve_inputs.push_back(bloom.buffer);
-                    if (use_rtxpt_display) {
-                        visionResolve.pushConsts.displayProfile = auto_exposure ? 2u : 1u;
-                        visionResolve.pushConsts.exposure = display->exposure_gain;
-                    }
-                    if (auto_exposure) {
-                        auto& meter = *hardware_->visionAutoExposurePipeline;
-                        meter.pushConsts.gbufferSize = upload_value(hardware_->gbufferSize);
-                        meter.pushConsts.srcBufferIndex = vision_src_descriptor;
-                        meter.pushConsts.minimumGain = display->minimum_auto_gain;
-                        meter.pushConsts.maximumGain = display->maximum_auto_gain;
-                        set_bloom(meter);
-                        bind_storage_buffer(meter, meter.pushConsts.outputBufferIndex, hardware_->visionAutoExposureBuffer);
-                        meter.groups(1, 1, 1);
-                        std::vector<Horizon::HardwareBuffer> meter_inputs{bridge->imported()};
-                        if (bloom.buffer) meter_inputs.push_back(bloom.buffer);
-                        stream << RenderDetail::IndirectDispatch{&meter, std::move(meter_inputs), {}, {}};
-                        visionResolve.pushConsts.exposureBufferIndex = hardware_->visionAutoExposureBuffer.store_descriptor();
-                        resolve_inputs.push_back(hardware_->visionAutoExposureBuffer);
-                    }
-
-                    // dispatch_extent replaces dispatch_groups
-                    // ���ڴ� commit��UI overlay pass �������� final_output ��Ϊ������
-                    // ��֡��ͬһ executor �ϰ��������¼��ĩβͳһ�ύһ�Ρ�
-                    if (!resolve_inputs.empty()) {
-                        visionResolve.dispatch_extent(w, h);
-                        stream << RenderDetail::IndirectDispatch{&visionResolve, std::move(resolve_inputs), {}, {}};
-                    } else {
-                        stream << visionResolve.dispatch_extent(w, h);
-                    }
-                }
+                // Keep the display image in GENERAL for the overlay and compositor.
+                hardware_->visionDisplayPixels = bridge->imported();
+                hardware_->visionDisplayImage = target.final_output;
+                hardware_->visionDisplayExtent = hardware_->gbufferSize;
+                stream << hardware_->visionDisplayPipeline->dispatch_extent(w, h);
 
                 // �� Native ���õ� UI overlay �㣺gbufferSize �����Ϸ���Ϊ {w,h}��
 
@@ -6495,11 +6422,11 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                     const auto end = profile_now();
                     // Wall times at existing boundaries only: do not add GPU waits
                     // or decompose the renderer's fixed-cost algorithms.
-                    CFW_LOG_INFO("VisionFrameProfile frame={} camera={} extent={}x{} prepare_ms={} render_ms={} bookkeeping_ms={} reuse_wait_ms={} copy_sync_ms={} target_ms={} overlay_record_ms={} submit_ms={} publish_ms={} total_ms={}",
+                    CFW_LOG_INFO("VisionFrameProfile frame={} camera={} extent={}x{} prepare_ms={} render_ms={} bookkeeping_ms={} reuse_wait_ms={} display_sync_ms={} target_ms={} overlay_record_ms={} submit_ms={} publish_ms={} total_ms={}",
                         frame_index, cam_handle, w, h,
                         profile_ms(profile_start, render_start), profile_ms(render_start, render_end),
                         profile_ms(render_end, reuse_start), profile_ms(reuse_start, reuse_end),
-                        profile_ms(reuse_end, copy_end), profile_ms(copy_end, target_end),
+                        profile_ms(reuse_end, display_end), profile_ms(display_end, target_end),
                         profile_ms(target_end, submit_start), profile_ms(submit_start, submit_end),
                         profile_ms(submit_end, end), profile_ms(profile_start, end));
                 }

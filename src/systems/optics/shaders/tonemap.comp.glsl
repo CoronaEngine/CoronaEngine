@@ -27,7 +27,7 @@ vec3 acesFilmicToneMapCurve(vec3 x)
 
 // 标准 sRGB OETF（与 _SRGB framebuffer 的硬件行为一致）。swapchain 为
 // R8G8B8A8_UNORM + SRGB_NONLINEAR，blit 到 UNORM 不会自动编码，必须在此手动编码，
-// 否则线性 LDR 直送 sRGB 显示器会整体偏暗。Vision 路径 (vision_resolve.comp) 必须
+// 否则线性 LDR 直送 sRGB 显示器会整体偏暗。Vision 的 DSL 显示路径必须
 // 使用完全相同的曲线，否则 Native<->Vision 切换会出现色差。
 vec3 linearToSrgb(vec3 c)
 {
