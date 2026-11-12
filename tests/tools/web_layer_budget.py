@@ -61,15 +61,17 @@ TARGET_LINES = 13_807
 # Retiring the window self-identity query then removed the operation, its reply builder,
 # the width/height/dock-state snapshot fields and the host_surface probe behind them.
 # Running the smoke found that selectModelFile/importResourceFile had no reader filling the
-# fields their services validate, so they now share one (fifteen lines).
-CORE_BUDGET = 14379
+# fields their services validate, so they now share one (fifteen lines). The model node
+# reply stopped re-reading geometry after queuing the write; answering with the derived
+# state cost five lines and made the edit visible to the UI.
+CORE_BUDGET = 14384
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
     ("src/systems/ui/cef/archive_load_policy.h", 21),
     ("src/systems/ui/cef/camera_window_lifetime.h", 46),
     ("src/systems/ui/cef/cef_operations.h", 130),
-    ("src/systems/ui/cef/editor_scene_service.cpp", 4388),
+    ("src/systems/ui/cef/editor_scene_service.cpp", 4393),
     ("src/systems/ui/cef/editor_paths.h", 22),
     ("src/systems/ui/cef/editor_paths.cpp", 31),
     ("src/systems/ui/cef/editor_service_operations.cpp", 88),

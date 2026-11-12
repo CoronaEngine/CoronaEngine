@@ -2644,9 +2644,14 @@ SceneReply apply_native_model_node(const SceneRequest& request) {
     if (patch.scale) patch_json["scale"] = *patch.scale;
     if (patch.visible) patch_json["visible"] = *patch.visible;
     actor->persisted_model_node_overrides = ModelNodeConfig::merge(active, patch.node_index, state.node_path, patch_json); actor->model_node_resource = actor->model_node_current_resource; ++actor->actor_version;
-    const auto updated = actor->geometry->get_model_nodes(); const auto it = std::find_if(updated.begin(), updated.end(), [&](const auto& node) { return node.node_index == patch.node_index; });
+    // set_model_node_state() queues the write to the geometry owner, so reading geometry
+    // back here still returns the pre-edit snapshot: the reply described the old node and
+    // the UI never saw its own edit. Answer with the state this request derived - the index
+    // and version are validated, and the queued command applies exactly this state.
+    const auto updated = actor->geometry->get_model_nodes();
     const auto child_count = static_cast<std::size_t>(std::count_if(updated.begin(), updated.end(), [&](const auto& node) { return node.parent_index == static_cast<std::int32_t>(patch.node_index); }));
-    auto& result = reply.model_node; result.archive_session = scene->archive_session; result.scene = scene->route; result.actor_guid = actor->actor_guid; result.actor = actor->name; result.actor_version = actor->actor_version; result.parent_index = it->parent_index; result.status = "ready"; result.nodes.push_back(SceneModelNodeService::make_snapshot(*it, child_count, actor->optics ? actor->optics->get_state().visible : actor->persisted_visible));
+    const bool actor_visible = actor->optics ? actor->optics->get_state().visible : actor->persisted_visible;
+    auto& result = reply.model_node; result.archive_session = scene->archive_session; result.scene = scene->route; result.actor_guid = actor->actor_guid; result.actor = actor->name; result.actor_version = actor->actor_version; result.parent_index = state.parent_index; result.status = "ready"; result.nodes.push_back(SceneModelNodeService::make_snapshot(state, child_count, actor_visible));
     return reply;
 }
 

@@ -84,9 +84,15 @@ python tests/integration/web_packaged_ui_smoke.py <runtime> --suite panels
 
 ## 7. 已知失败
 
-`panels` 套件的 `model_node_retirement` 在重挂载后等待可见性按钮标题翻转时超时（标题停在
-"隐藏"）。该测试段与 `ModelNodeHierarchy.vue` 都早于接口收敛战役，属既有问题；其余套件与
-CEF 冒烟在 2026-11-12 的真机运行中通过。
+截至 2026-11-12，12 个套件与 CEF 冒烟在真机上全部通过。
+
+`panels` 的 `model_node_retirement` 曾经超时（重挂载后可见性按钮标题不翻转）：原因是
+`setModelNodeState` 把写入排给 Geometry 线程后**立刻回读**，回复里带的是编辑前快照，UI 于是
+应用了旧状态。现在回复直接用本次请求推导出的状态，测试恢复稳定。
+
+需要单独排查时，`web_panel_lifecycle_smoke.py` 的 model-node 段有一个 opt-in 诊断：设
+`CORONA_MODEL_NODE_DEBUG=1` 会记录 `setModelNodeState` 的实际参数、回复字段与页面标题，
+失败时打印。
 
 ## 8. 常见故障
 

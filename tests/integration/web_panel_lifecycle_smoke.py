@@ -2,6 +2,7 @@
 import ctypes
 from ctypes import wintypes
 import json
+import os
 from pathlib import Path
 import re
 from urllib.request import urlopen
@@ -105,12 +106,32 @@ def model_node_retirement(child):
         child.evaluate("(()=>{const p=window.__modelLifetime;p.api.scene.setModelNodeState=p.write;p.release?.();location.hash=p.route;})()")
     wait(lambda: child.evaluate(f'!!document.querySelector({json.dumps(tag)})'), bool, 'model node normal remount')
     child.evaluate(f'document.querySelector({json.dumps(tag)}).click()')
+    if os.environ.get("CORONA_MODEL_NODE_DEBUG"):
+        child.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
+          const api=Object.values(m).find(v=>typeof v?.scene?.setModelNodeState==='function');
+          const original=api.scene.setModelNodeState;
+          window.__mnDebug={calls:[],errors:[]};
+          window.addEventListener('unhandledrejection', e=>window.__mnDebug.errors.push(String(e.reason)));
+          api.scene.setModelNodeState=async (...args)=>{ try { const r=await original(...args);
+            window.__mnDebug.calls.push({identity:args[0],patch:args[1],reply:{visible:r.nodes?.[0]?.visible,version:r.actor_version,status:r.status}});
+            return r; } catch (e) { window.__mnDebug.calls.push({identity:args[0],patch:args[1],error:String(e)}); throw e; } };
+          return true;})()""")
     initial_title = wait(lambda: child.evaluate(
         f'(()=>{{const button=document.querySelector({json.dumps(button)});'
         'if(!button||button.disabled)return null;const title=button.title;button.click();return title;})()'),
         bool, 'click model node remounted row and capture its initial visibility')
-    wait(lambda: child.evaluate(f'document.querySelector({json.dumps(button)})?.title'),
-         lambda value: value and value != initial_title, 'live model visibility edit after remount')
+    try:
+        wait(lambda: child.evaluate(f'document.querySelector({json.dumps(button)})?.title'),
+             lambda value: value and value != initial_title, 'live model visibility edit after remount')
+    except AssertionError:
+        if os.environ.get("CORONA_MODEL_NODE_DEBUG"):
+            print("MN debug initial_title:", repr(initial_title), flush=True)
+            print("MN debug state:", child.evaluate("""(() => {
+              const buttons=[...document.querySelectorAll('.model-node-list button[title]')];
+              return {titles:buttons.map(b=>b.title), disabled:buttons.map(b=>b.disabled),
+                      list:(document.querySelector('.model-node-list')||{}).innerText,
+                      debug:window.__mnDebug};})()"""), flush=True)
+        raise
     return dict(late_mutation_field_reads=reads, normal_remount=True, live_visibility_edit=True)
 
 
@@ -311,9 +332,12 @@ def run(port, root, engine_pid):
                                "input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('button').click();})()")
                 wait(lambda: child.evaluate("document.querySelector('input')?.value"),
                      lambda value: value == name, 'settings UI reset')
+                envelope = json.dumps({'service': 'ProjectArchive', 'function': 'project_info',
+                                       'args': [{'path': original['project_path']}]})
+                info = json.loads(child.evaluate('corona.bridge.call(' + json.dumps(envelope) + ')'))
                 child.evaluate('corona.project.saveActiveProjectInfo(' + json.dumps({
                     'archive_session': original['archive_session'], 'project_path': original['project_path'],
-                    'name': original['name'], 'core_version': original['core_version']}) + ')')
+                    'name': original['name'], 'core_version': info['core_version']}) + ')')
                 settings_saved = True
             main.evaluate(f'{store}.openPanel({json.dumps(panel_id)})')
             # Wait for Vue's watcher/microtask flush before checking identity.
