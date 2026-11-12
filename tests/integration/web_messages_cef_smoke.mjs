@@ -390,7 +390,8 @@ try {
     // A panel has no position: ImGui decides where a docked panel goes, so asking for
     // one is an invalid argument rather than a silently ignored option.
     for (const options of ['{panelId:"Positioned",x:10}', '{panelId:"Positioned",y:10}',
-      '{panelId:"Positioned",x:10,y:10}']) {
+      '{panelId:"Positioned",x:10,y:10}', '{panelId:"Positioned",sceneId:"scene.ini"}',
+      '{panelId:"Positioned",cameraId:"camera"}', '{panelId:"Positioned",archiveSession:"s"}']) {
       assert.equal(await main.evaluate(`corona.window.createPanel(${options}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
     // ImGui owns placement: there is no positioning request to call.

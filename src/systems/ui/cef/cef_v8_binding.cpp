@@ -1705,6 +1705,10 @@ bool read_panel_options(const CefV8ValueList& arguments, WindowRequest& request)
         !option_string(object, "routePath", options.route)) return false;
     options.title = options.panel_id;
     if (!option_string(object, "title", options.title)) return false;
+    // Camera identity only means something to a camera surface; a panel that names one would
+    // have it accepted and dropped.
+    if (!camera && (object->HasValue("archiveSession") || object->HasValue("sceneId") ||
+                    object->HasValue("cameraId"))) return false;
     if (camera && (object->HasValue("cameraHandle") || object->HasValue("handle") ||
         !option_string(object, "archiveSession", request.archive_session, true) ||
         !option_string(object, "sceneId", request.scene_id, true) ||

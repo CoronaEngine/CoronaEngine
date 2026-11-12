@@ -55,8 +55,9 @@ TARGET_LINES = 13_807
 # `minimized` snapshot field also removed hide_tab/show_tab, which nothing called.
 # Two uncalled helpers followed: browser_ui's clamp_float and the
 # read_select_model_file reader no table entry used. Refusing a panel position cost
-# three lines and removed a silently ignored option.
-CORE_BUDGET = 14393
+# three lines and removed a silently ignored option. Rejecting a camera identity on a
+# panel costs four more; both close the same hole.
+CORE_BUDGET = 14397
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -96,7 +97,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/cef_scene_operations.h", 428),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),
-    ("src/systems/ui/cef/cef_v8_binding.cpp", 2773),
+    ("src/systems/ui/cef/cef_v8_binding.cpp", 2777),
     ("src/systems/ui/cef/cef_process.h", 36),
     ("src/systems/ui/cef/cef_viewport_pick.cpp", 119),
     ("src/systems/ui/cef/cef_viewport_pick.h", 60),
