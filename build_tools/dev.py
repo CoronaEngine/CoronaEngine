@@ -13,7 +13,7 @@ from build_tools.git_workspace import ensure_workspace, inspect_workspace, remot
 from build_tools.git_tool import ensure_git
 from build_tools.ninja_tool import ensure_ninja
 from build_tools.paths import LOCAL_RECIPES, REPO_ROOT
-from build_tools.source_workspaces import WORKSPACES
+from build_tools.source_workspaces import WORKSPACES, find_workspace, rewrite_pin
 from build_tools.workflow import (
     CONFIGURATIONS,
     DEFAULT_CONFIGURATION,
@@ -33,6 +33,35 @@ from build_tools.workflow import (
 
 DEFAULT_TARGET = "corona_engine"
 WORKSPACE_COMMANDS = {f"{workspace.key}-sync": workspace for workspace in WORKSPACES}
+
+
+def pin_workspaces(repo_root: Path, keys: list[str]) -> None:
+    """Point the pinned commits at the checkouts' current HEAD.
+
+    A pinned commit must already be on the remote branch, so a checkout that is
+    dirty, detached or on another branch is reported before the file changes.
+    """
+    for key in keys:
+        workspace = find_workspace(key)
+        directory = repo_root / workspace.directory
+        status = inspect_workspace(repo_root, workspace)
+        if not status.cloned:
+            raise RuntimeError(f"{workspace.name} is not cloned at {directory}")
+        head = status.head.lower()
+        if not head:
+            raise RuntimeError(f"{workspace.name} HEAD could not be read")
+        if status.dirty:
+            print(f"[WARN] {workspace.name} has uncommitted changes; the pin will point at HEAD anyway")
+        if status.detached:
+            print(f"[WARN] {workspace.name} is on a detached HEAD, so the commit belongs to no branch")
+        if status.branch and status.branch != workspace.ref:
+            print(f"[WARN] {workspace.name} is on {status.branch}, not the pinned {workspace.ref}")
+        if head == workspace.commit:
+            print(f"{workspace.name}: already pinned at {head}")
+            continue
+        rewrite_pin(key, head)
+        print(f"{workspace.name}: {workspace.commit[:12]} -> {head[:12]}")
+        print(f"  next: python build_tools/dev.py {workspace.key}-sync")
 
 
 def materialize_editor_frontend_assets(repo_root: Path) -> None:
@@ -182,6 +211,8 @@ def execute(args: argparse.Namespace) -> None:
         sync_workspace(REPO_ROOT, workspace)
         if workspace.key == "editor":
             materialize_editor_frontend_assets(REPO_ROOT)
+    elif args.command == "pin":
+        pin_workspaces(REPO_ROOT, args.targets or [workspace.key for workspace in WORKSPACES])
     elif args.command == "clean":
         clean_repo(REPO_ROOT)
     else:
@@ -196,7 +227,9 @@ def create_parser() -> argparse.ArgumentParser:
             "Builds align local HEAD to build_tools/source_workspaces.py, preserving "
             "nonconflicting edits. Differences from the latest remote branch only warn. "
             "horizon-sync and editor-sync also synchronize submodules explicitly. "
-            "update additionally refreshes Conan dependencies."
+            "update additionally refreshes Conan dependencies. "
+            "pin writes the checkouts' current HEAD into source_workspaces.py "
+            "(optionally for one workspace: pin editor)."
         ),
     )
     parser.add_argument(
@@ -204,7 +237,7 @@ def create_parser() -> argparse.ArgumentParser:
         choices=(
             "status", "install", "configure", "build", "build-fast", "rebuild", "update",
             *WORKSPACE_COMMANDS,
-            "clean", "_bootstrap",
+            "pin", "clean", "_bootstrap",
         ),
     )
     parser.add_argument("targets", nargs="*")

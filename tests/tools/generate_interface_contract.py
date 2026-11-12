@@ -45,6 +45,7 @@ GUARDS = [
     ("test_reply_shapes.py", "Python 产出的回复透传，引擎产出保留类型"),
     ("test_integration_surface.py", "集成冒烟只调用仍然存在的原生命中"),
     ("test_rejection_vocabulary.py", "拒绝码词表：源码只发已声明的码"),
+    ("test_source_pins.py", "工作区 pin 的改写是幂等的文本编辑"),
     ("web_layer_budget.py", "接口核心行数 ratchet"),
 ]
 
