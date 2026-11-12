@@ -82,13 +82,17 @@ python tests/integration/web_packaged_ui_smoke.py <runtime> --suite panels
 | `python_archive_smoke.py` | `port project peer`（一个 peer 项目用于归档会话切换） |
 | `blockly_actor_file_smoke.py` | 内部 `verify(port, root, switch_root)`，需要两个世界 |
 
-## 7. 已知失败
+## 7. 已知失败与隔离
 
-截至 2026-11-12，12 个套件与 CEF 冒烟在真机上全部通过。
+截至 2026-11-12，12 个套件（逐个运行）与 CEF 冒烟在真机上全部通过。
 
 `panels` 的 `model_node_retirement` 曾经超时（重挂载后可见性按钮标题不翻转）：原因是
 `setModelNodeState` 把写入排给 Geometry 线程后**立刻回读**，回复里带的是编辑前快照，UI 于是
-应用了旧状态。现在回复直接用本次请求推导出的状态，测试恢复稳定。
+应用了旧状态。现在回复直接用本次请求推导出的状态，测试恢复稳定（连续三次通过）。
+
+`--suite all` 会在**同一个引擎进程**里依次跑所有套件，而前面的套件会留下打开的窗口（`focus`、
+`environment` 都留下 `SceneTools`）。`panels` 里有"重开后仍是同一个文档"的断言，看到这些遗留
+目标就会失败。因此**排查与验收请逐个套件运行**；`--suite all` 只适合快速冒烟到第一个失败点。
 
 需要单独排查时，`web_panel_lifecycle_smoke.py` 的 model-node 段有一个 opt-in 诊断：设
 `CORONA_MODEL_NODE_DEBUG=1` 会记录 `setModelNodeState` 的实际参数、回复字段与页面标题，
