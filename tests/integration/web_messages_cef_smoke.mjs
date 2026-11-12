@@ -925,6 +925,31 @@ try {
       assert.equal(committed.mechanics.body_type, 'static');
       assert.equal(committed.body_type, 'static');
     }
+    stage = 'model node version conflict through scoped typed V8';
+    console.log(`CEF smoke: ${stage}`);
+    const modelScope = { archive_session: camera.archive_session };
+    const modelIdentity = `{...(${JSON.stringify(modelScope)}),scene:'scene.ini',actor_guid:${JSON.stringify(actor.actor_guid)},`;
+    const modelPage = await waitFor(async () => {
+      const page = await main.evaluate(`corona.scene.readModelNodes('scene.ini',{...(${JSON.stringify(modelScope)}),actor_guid:${JSON.stringify(actor.actor_guid)},parent_index:-1,offset:0,limit:100})`);
+      return page.status === 'ready' && page.nodes?.some(node => node.editable) ? page : false;
+    });
+    assert.equal(Number.isInteger(modelPage.actor_version), true, JSON.stringify(modelPage));
+    const modelNode = modelPage.nodes.find(node => node.editable);
+    const nodeIndex = Number(modelNode.node_index);
+    // A stale version is refused with the code the packaged editor branches on to reload
+    // and retry; the editor's own retry is covered by modelNodeLifetime.test.mjs.
+    assert.equal(await main.evaluate(`corona.scene.setModelNodeState(${modelIdentity}node_index:${nodeIndex},expected_actor_version:${modelPage.actor_version + 1}},{visible:${!modelNode.visible}}).catch(error=>error.code)`),
+      'ACTOR_VERSION_CONFLICT');
+    const modelPatched = await main.evaluate(`corona.scene.setModelNodeState(${modelIdentity}node_index:${nodeIndex},expected_actor_version:${modelPage.actor_version}},{visible:${!modelNode.visible}})`);
+    assert.equal(modelPatched.nodes[0].node_index, nodeIndex);
+    assert.equal(modelPatched.nodes[0].visible, !modelNode.visible, 'the reply carries the state the request derived');
+    assert.equal(modelPatched.actor_version, modelPage.actor_version + 1);
+    assert.equal(await main.evaluate(`corona.scene.setModelNodeState(${modelIdentity}node_index:999,expected_actor_version:${modelPatched.actor_version}},{visible:true}).catch(error=>error.code)`),
+      'NODE_NOT_FOUND');
+    const reread = await main.evaluate(`corona.scene.readModelNodes('scene.ini',{...(${JSON.stringify(modelScope)}),actor_guid:${JSON.stringify(actor.actor_guid)},parent_index:-1,offset:0,limit:100})`);
+    assert.equal(reread.nodes.find(node => Number(node.node_index) === nodeIndex).visible, !modelNode.visible);
+    evidence[0].modelNodeConflict = 'stale version -> ACTOR_VERSION_CONFLICT, unknown node -> NODE_NOT_FOUND, derived reply echoed and visible on the next read';
+
     const beforeInvalidCreation = await readTree();
     for (const [scene, options, expected] of [
       ['scene.ini', {}, 'INVALID_ARGUMENT'],

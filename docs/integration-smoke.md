@@ -60,7 +60,9 @@ python tests/integration/web_packaged_ui_smoke.py <runtime> --suite panels
 
 `--native-bindings` 才会跑窗口/面板/相机的生命周期部分。它验证：结构化克隆（JSON 被禁用）、
 512 次原生调用的队列突发、两个主线程回合的退休栅栏、`close` 的身份与权限、面板/相机窗口创建、
-项目文档与文件 CRUD、资源导入、环境、Actor/相机属性、viewport pick、脚本输入、截图、Actor 删除。
+项目文档与文件 CRUD、资源导入、环境、Actor/相机属性、viewport pick、脚本输入、截图、Actor 删除，
+以及**模型节点写入**：过期 `expected_actor_version` 得到 `ACTOR_VERSION_CONFLICT`、未知节点得到
+`NODE_NOT_FOUND`、写入回复与下一次读取都反映请求推导出的状态。
 
 ## 5. 读取结果
 
