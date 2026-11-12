@@ -99,7 +99,7 @@ def build() -> str:
 
     lines += [
         "",
-        "### window.corona 的完整方法清单",
+        "### 全部方法清单",
         "",
         "| 命名空间 | 方法 |",
         "|---|---|",
@@ -108,6 +108,25 @@ def build() -> str:
         lines.append(f"| `{ns}` | " + "、".join(f"`{n}`" for n in names) + " |")
 
     lines += [
+        "",
+        "### 面板与窗口：三个合并后的入口",
+        "",
+        "同一件事（打开一个面板、移动一个面板、改变窗口呈现）以前按“哪个面板 / 哪个方向 /",
+        "哪个开关”拆成多个方法。现在各留一个，差异用参数表达：",
+        "",
+        "| 方法 | 请求 | 说明 |",
+        "|---|---|---|",
+        "| `createPanel` | `{kind?: 'panel' \\| 'camera', …}` | `kind` 缺省为 `panel`。相机窗口要求"
+        " `archiveSession`/`sceneId`/`cameraId` 同时非空；`cameraHandle` 一律拒绝，相机身份由原生解析。 |",
+        "| `setPanelPlacement` | `{detached, tabId?, x?, y?, width?, height?, maximized?}` |"
+        " `detached: true` 分离、`false` 停靠；`tabId` 缺省为调用者自己。 |",
+        "| `setWindowPresentation` | `{target?: 'camera' \\| 'main', mode, sceneId?, cameraId?}` |"
+        " `mode` 是 `windowed`/`maximized`/`borderless`/`toggle`；主窗口只有 "
+        "`windowed`/`borderless`/`toggle`。相机窗口可用 `sceneId`+`cameraId` 指定，缺省为自己。 |",
+        "",
+        "`mode` 描述**窗口要处于的状态**，不是要执行的开关；`toggle` 是唯一不带状态值的请求，",
+        "表示“往前走一步”（相机窗口：无边框 → 窗口化，窗口化 ⇄ 最大化）。",
+        "`createPanel` 返回 `{tab_id, panel_id, existing}`，其余窗口方法返回布尔。",
         "",
         "**失败形状**：Promise 拒绝时携带本文件的五个基础设施码之一",
         "（`PERMISSION_DENIED`、`CONTEXT_CHANGED`、`INVALID_ARGUMENT`、`NATIVE_UNAVAILABLE`、",

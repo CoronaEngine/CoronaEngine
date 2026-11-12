@@ -131,8 +131,8 @@ struct BrowserTab {
     // detach-during-teardown (ABA). Docked is the initial/redocked state.
     enum class DetachState { Docked, Detaching, Detached, Redocking };
     DetachState detach_state = DetachState::Docked;
-    // Desired secondary-window geometry (logical px), filled by detachPanel and consumed by
-    // the frame runner's reconcile step when it creates the OS window.
+    // Desired secondary-window geometry (logical px), filled by setPanelPlacement and consumed
+    // by the frame runner's reconcile step when it creates the OS window.
     int detach_x = 120;
     int detach_y = 120;
     int detach_w = 640;

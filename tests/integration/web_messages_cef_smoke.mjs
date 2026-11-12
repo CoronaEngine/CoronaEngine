@@ -282,7 +282,7 @@ try {
     for (const doc of docs) {
       assert.equal(await doc.client.evaluate('typeof corona.window.onClosed'), 'function', 'native close events require direct V8 callbacks');
       assert.equal(await doc.client.evaluate('typeof corona.window.onCloseRequested'), 'function');
-      for (const method of ['close', 'closeTab', 'focusTab', 'createPanel', 'detachPanel', 'redockPanel']) {
+      for (const method of ['close', 'closeTab', 'focusTab', 'createPanel', 'setPanelPlacement', 'setWindowPresentation']) {
         assert.equal(await doc.client.evaluate(`typeof corona.window.${method}`), 'function', `${method} requires a direct native V8 operation`);
       }
       await doc.client.evaluate(`(() => {
@@ -300,18 +300,19 @@ try {
     stage = 'removed legacy Dock transport and typed camera creation';
     assert.equal(await main.evaluate('typeof window.coronaBridge?.dockCommand'), 'undefined');
     assert.equal(await main.evaluate('typeof window.__dockCallback'), 'undefined');
-    assert.equal(await main.evaluate('typeof corona.window.createCameraView'), 'function');
-    const cameraOptions = {archiveSession:'missing-archive',sceneId:'scene.ini',cameraId:'camera-main',routePath:'/StartScreen'};
+    assert.equal(await main.evaluate('typeof corona.window.createPanel'), 'function');
+    const cameraOptions = {kind:'camera',archiveSession:'missing-archive',sceneId:'scene.ini',cameraId:'camera-main',routePath:'/StartScreen'};
     const cameraResult = await main.evaluate(`(async () => {
       JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); };
-      try { await corona.window.createCameraView(${JSON.stringify(cameraOptions)}); }
+      try { await corona.window.createPanel(${JSON.stringify(cameraOptions)}); }
       catch(error) { return error.code; }
     })()`);
     assert.equal(cameraResult, 'PROJECT_CONTEXT_CHANGED');
-    for (const options of ['null', '[]', '{}', '{archiveSession:1}',
-      '{archiveSession:"a",sceneId:"s",cameraId:"c",cameraHandle:1}',
-      '{archiveSession:"a",sceneId:"s",cameraId:"c",width:0}']) {
-      assert.equal(await main.evaluate(`corona.window.createCameraView(${options}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    for (const options of ['null', '[]', '{kind:"camera"}', '{kind:"camera",archiveSession:1}',
+      '{kind:"camera",archiveSession:"a",sceneId:"s",cameraId:"c",cameraHandle:1}',
+      '{kind:"camera",archiveSession:"a",sceneId:"s",cameraId:"c",width:0}',
+      '{kind:"Inspector"}', '{kind:4}']) {
+      assert.equal(await main.evaluate(`corona.window.createPanel(${options}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
     for (const doc of docs) {
       stage = `direct V8 binding in ${doc.label}`;
@@ -364,21 +365,23 @@ try {
     })()`);
     assert.deepEqual(barrierOrder, ['before', 'after', 'barrier'], 'barrier acknowledgment must occupy a second main-thread turn');
     evidence[0].twoTurnNativeBarrier = barrierOrder;
-    for (const method of ['toggleCameraMaximized', 'cycleCameraWindowMode', 'toggleCameraBorderless']) {
-      assert.equal(await main.evaluate(`corona.window.${method}('missing-scene','missing-camera')`), false);
-      assert.equal(await docs[1].client.evaluate(`corona.window.${method}('','')`), false, 'non-camera panels must be unchanged');
-      for (const args of ['', 'null', '1', '"scene"', '"","",1', '"scene",""']) {
-        assert.equal(await main.evaluate(`corona.window.${method}(${args}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
-      }
+    for (const mode of ['toggle', 'borderless', 'maximized', 'windowed']) {
+      assert.equal(await main.evaluate(`corona.window.setWindowPresentation({sceneId:'missing-scene',cameraId:'missing-camera',mode:'${mode}'})`), false);
+      assert.equal(await docs[1].client.evaluate(`corona.window.setWindowPresentation({mode:'${mode}'})`), false, 'non-camera panels must be unchanged');
+    }
+    for (const options of ['', 'null', '1', '"scene"', '[]', '{}', '{mode:1}', '{mode:"docked"}',
+      '{sceneId:"s"}', '{cameraId:"c",mode:"toggle"}', '{sceneId:"s",cameraId:"c",mode:"maximized",flag:1}']) {
+      assert.equal(await main.evaluate(`corona.window.setWindowPresentation(${options}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
     assert.equal(await main.evaluate('corona.window.resizeCameraView(800,600,"missing-scene","missing-camera")'), false);
     for (const args of ['', '0,600,"",""', '800,NaN,"",""', '800.5,600,"",""', '800,600,null,null', '800,600,"","",1']) {
       assert.equal(await main.evaluate(`corona.window.resizeCameraView(${args}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
-    assert.equal(await docs[1].client.evaluate('corona.window.toggleMainBorderless().catch(e=>e.code)'), 'PERMISSION_DENIED');
-    assert.equal(await main.evaluate('corona.window.toggleMainBorderless(null).catch(e=>e.code)'), 'INVALID_ARGUMENT');
-    assert.equal(await main.evaluate('corona.window.toggleMainBorderless()'), true);
-    assert.equal(await main.evaluate('corona.window.toggleMainBorderless()'), true);
+    assert.equal(await docs[1].client.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle"}).catch(e=>e.code)'), 'PERMISSION_DENIED');
+    assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle",tabId:1}).catch(e=>e.code)'), 'INVALID_ARGUMENT');
+    assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"maximized"}).catch(e=>e.code)'), 'INVALID_ARGUMENT');
+    assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle"})'), true);
+    assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle"})'), true);
     evidence[0].cameraWindowControls = 'passed validation, missing camera and non-camera isolation; positive lifecycle recorded under real-camera below';
     evidence[0].mainBorderless = 'passed toggle and restore with JSON disabled';
     assert.deepEqual(await main.evaluate('corona.window.closeCameraView("missing-scene","missing-camera")'), {closed:false});
@@ -393,28 +396,28 @@ try {
       assert.equal(await main.evaluate(`corona.window.createPanel(${options}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
     const mainId = await main.evaluate('corona.window.getCurrent().then(x=>x.tabId)');
-    assert.equal(await main.evaluate(`corona.window.detachPanel({tabId:${mainId}}).catch(e=>e.code)`), 'PERMISSION_DENIED');
-    assert.equal(await docs[1].client.evaluate(`corona.window.detachPanel({tabId:${createdPanels[1].tab_id}}).catch(e=>e.code)`), 'PERMISSION_DENIED');
-    assert.equal(await main.evaluate('corona.window.detachPanel({tabId:2147483647})'), false);
-    assert.equal(await main.evaluate('corona.window.redockPanel({tabId:2147483647})'), false);
+    assert.equal(await main.evaluate('corona.window.setPanelPlacement(null).catch(e=>e.code)'), 'INVALID_ARGUMENT');
+    assert.equal(await main.evaluate('corona.window.setPanelPlacement({tabId:1}).catch(e=>e.code)'), 'INVALID_ARGUMENT');
+    assert.equal(await main.evaluate(`corona.window.setPanelPlacement({tabId:${mainId},detached:true}).catch(e=>e.code)`), 'PERMISSION_DENIED');
+    assert.equal(await docs[1].client.evaluate(`corona.window.setPanelPlacement({tabId:${createdPanels[1].tab_id},detached:true}).catch(e=>e.code)`), 'PERMISSION_DENIED');
+    assert.equal(await main.evaluate('corona.window.setPanelPlacement({tabId:2147483647,detached:true})'), false);
+    assert.equal(await main.evaluate('corona.window.setPanelPlacement({tabId:2147483647,detached:false})'), false);
     const initialDock = await docs[1].client.evaluate('corona.window.getCurrent()');
     assert.ok(['docked', 'detaching', 'detached', 'redocking'].includes(initialDock.dockState), 'native snapshot must expose actual Dock state');
     // The existing frame runner may have restored a floating viewport from its
     // layout. Establish Docked through the real redock operation before detach.
-    await main.evaluate(`corona.window.redockPanel({tabId:${createdPanels[0].tab_id}})`);
+    await main.evaluate(`corona.window.setPanelPlacement({tabId:${createdPanels[0].tab_id},detached:false})`);
     await main.evaluate('corona.window.suspendCameraViews("")');
     assert.equal(await docs[1].client.evaluate('corona.window.getCurrent().then(x=>x.dockState)'), 'docked');
-    assert.equal(await main.evaluate(`corona.window.detachPanel({tabId:${createdPanels[0].tab_id},x:120,y:120,width:320,height:240})`), true);
+    assert.equal(await main.evaluate(`corona.window.setPanelPlacement({tabId:${createdPanels[0].tab_id},x:120,y:120,width:320,height:240,detached:true})`), true);
     await main.evaluate('corona.window.suspendCameraViews("")');
     const detachedState = await docs[1].client.evaluate('corona.window.getCurrent()');
     assert.equal(detachedState.dockState, 'detached');
     assert.equal(detachedState.detached, true);
-    assert.equal(await main.evaluate(`corona.window.detachPanel({tabId:${createdPanels[0].tab_id}})`), false, 'double detach must be rejected');
-    assert.equal(await main.evaluate(`corona.window.redockPanel({tabId:${createdPanels[0].tab_id}})`), true);
-    for (const method of ['detachPanel', 'redockPanel']) {
-      for (const options of ['null', '[]', '{tabId:-1}', '{tabId:"3"}', '{width:-1}', '{maximized:1}', '{x:1.5}']) {
-        assert.equal(await main.evaluate(`corona.window.${method}(${options}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
-      }
+    assert.equal(await main.evaluate(`corona.window.setPanelPlacement({tabId:${createdPanels[0].tab_id},detached:true})`), false, 'double detach must be rejected');
+    assert.equal(await main.evaluate(`corona.window.setPanelPlacement({tabId:${createdPanels[0].tab_id},detached:false})`), true);
+    for (const options of ['{tabId:-1}', '{tabId:"3"}', '{width:-1}', '{maximized:1}', '{x:1.5}']) {
+      assert.equal(await main.evaluate(`corona.window.setPanelPlacement({...${options},detached:true}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
     evidence[0].panelCreationAndDocking = 'passed with JSON disabled; existing native Dock state machine retained';
     await docs[1].client.evaluate('corona.window.setDragRegions([])');
@@ -1264,11 +1267,11 @@ try {
   await toolClient.evaluate('window.__nativeJSON = { stringify: JSON.stringify, parse: JSON.parse }; true');
     await waitFor(() => toolClient.evaluate('typeof corona?.window?.getCurrent === "function"'));
     await toolClient.evaluate(`JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); }; true`);
-    const createCamera = value => main.evaluate(`corona.window.createCameraView(${JSON.stringify(value)})`);
-    const created = await toolClient.evaluate(`corona.window.createCameraView(${JSON.stringify(options)})`);
+    const createCamera = value => main.evaluate(`corona.window.createPanel({...${JSON.stringify(value)},kind:'camera'})`);
+    const created = await toolClient.evaluate(`corona.window.createPanel({...${JSON.stringify(options)},kind:'camera'})`);
     assert.equal(Number.isInteger(created.tab_id), true);
     assert.equal(created.existing, false);
-    assert.deepEqual(await createCamera(options), { tab_id: created.tab_id, existing: true });
+    assert.deepEqual(await createCamera(options), { tab_id: created.tab_id, panel_id: '', existing: true });
     const cameraTarget = await waitFor(async () => (await targets()).find(item => item.url.includes('uiWindow=real-camera')), 30_000);
     const cameraClient = await connect(cameraTarget);
   await cameraClient.evaluate('window.__nativeJSON = { stringify: JSON.stringify, parse: JSON.parse }; true');
@@ -1632,10 +1635,10 @@ try {
     const cameraWindow = await cameraClient.evaluate('corona.window.getCurrent()');
     assert.equal(cameraWindow.tabId, created.tab_id);
     assert.equal(cameraWindow.dockState, 'detached');
-    assert.deepEqual(await cameraClient.evaluate(`corona.window.createCameraView(${JSON.stringify(options)})`),
-      { tab_id: created.tab_id, existing: true });
-    for (const method of ['toggleCameraMaximized', 'cycleCameraWindowMode', 'toggleCameraBorderless']) {
-      assert.equal(await main.evaluate(`corona.window.${method}("scene.ini","smoke-camera")`), true);
+    assert.deepEqual(await cameraClient.evaluate(`corona.window.createPanel({...${JSON.stringify(options)},kind:'camera'})`),
+      { tab_id: created.tab_id, panel_id: '', existing: true });
+    for (const mode of ['maximized', 'toggle', 'windowed', 'borderless', 'toggle']) {
+      assert.equal(await main.evaluate(`corona.window.setWindowPresentation({sceneId:"scene.ini",cameraId:"smoke-camera",mode:'${mode}'})`), true);
     }
     assert.equal(await main.evaluate('corona.window.resizeCameraView(400,300,"scene.ini","smoke-camera")'), true);
     assert.equal((await viewportPatch(cameraClient, JSON.stringify({ ...cameraScope, mode: 'stereo3d', pointer: pointerState }))).systemCursorHidden, true);
@@ -1650,7 +1653,7 @@ try {
     assert.equal((await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d', pointer: pointerState }))).systemCursorHidden, true);
     const reloaded = await main.evaluate(`corona.project.openProject(${JSON.stringify(cameraWorld)})`);
     assert.equal(reloaded.ok, true);
-    assert.equal(await main.evaluate(`corona.window.createCameraView(${JSON.stringify(options)}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
+    assert.equal(await main.evaluate(`corona.window.createPanel({...${JSON.stringify(options)},kind:'camera'}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.equal(await main.evaluate(`corona.scene.selectActor('scene.ini','scene','').catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.equal(await main.evaluate(`corona.scene.setActorTransform('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(patch)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
     const activeAgain = await main.evaluate('corona.scene.readActive()');

@@ -106,18 +106,20 @@ void toggle_camera_maximized(int tab_id) {
                             tab_id, tab->platform_window_id);
             return;
         }
-    if (IsZoomed(hwnd)) {
-        CFW_LOG_DEBUG("Restoring camera viewport HWND: tab_id={}, hwnd={}",
-                      tab_id, tab->platform_handle_raw);
-        if (!restore_windowed_placement(hwnd)) {
-            ShowWindow(hwnd, SW_RESTORE);
+        if (IsZoomed(hwnd)) {
+            CFW_LOG_DEBUG("Restoring camera viewport HWND: tab_id={}, hwnd={}",
+                          tab_id, tab->platform_handle_raw);
+            if (!restore_windowed_placement(hwnd)) {
+                ShowWindow(hwnd, SW_RESTORE);
+            }
+        } else {
+            CFW_LOG_DEBUG("Maximizing camera viewport HWND: tab_id={}, hwnd={}",
+                          tab_id, tab->platform_handle_raw);
+            save_windowed_placement(hwnd);
+            ShowWindow(hwnd, SW_MAXIMIZE);
         }
-    } else {
-        CFW_LOG_DEBUG("Maximizing camera viewport HWND: tab_id={}, hwnd={}",
-                      tab_id, tab->platform_handle_raw);
-        save_windowed_placement(hwnd);
-        ShowWindow(hwnd, SW_MAXIMIZE);
-    }
+        // Keep the mode shadow faithful so a presentation setter can compare with it.
+        s_camera_window_modes[tab_id].mode = IsZoomed(hwnd) ? 1 : 0;
         return;
     }
     const auto flags = SDL_GetWindowFlags(window);
@@ -125,10 +127,12 @@ void toggle_camera_maximized(int tab_id) {
         CFW_LOG_DEBUG("Restoring camera viewport window: tab_id={}, window_id={}",
                       tab_id, tab->platform_window_id);
         SDL_RestoreWindow(window);
+        s_camera_window_modes[tab_id].mode = 0;
     } else {
         CFW_LOG_DEBUG("Maximizing camera viewport window: tab_id={}, window_id={}",
                       tab_id, tab->platform_window_id);
         SDL_MaximizeWindow(window);
+        s_camera_window_modes[tab_id].mode = 1;
     }
 }
 
@@ -343,16 +347,40 @@ void toggle_camera_borderless(int tab_id) {
     state.mode = 2;
 }
 
-void toggle_main_borderless() {
-    SDL_Window* window = BrowserManager::instance().main_window();
-    if (!window) {
-        CFW_LOG_WARNING("toggleMainWindowBorderless skipped: no main window");
+/// Drives one camera window to a named presentation. The toggles remain the only
+/// transitions; this function only decides which of them reaches the wanted mode.
+void apply_camera_presentation(int tab_id, WindowPresentation wanted) {
+    if (wanted == WindowPresentation::None) return;
+    if (wanted == WindowPresentation::Toggle) {
+        cycle_camera_window_mode(tab_id);
         return;
     }
-    static bool s_main_borderless = false;
+    const int mode = wanted == WindowPresentation::Borderless ? 2
+                   : wanted == WindowPresentation::Maximized  ? 1 : 0;
+    auto& state = s_camera_window_modes[tab_id];
+    if (state.mode == mode) return;
+    // Borderless only toggles back to the placement it saved, so leave it first.
+    if (state.mode == 2) toggle_camera_borderless(tab_id);
+    if (state.mode == mode) return;
+    if (mode == 2) toggle_camera_borderless(tab_id);
+    else toggle_camera_maximized(tab_id);
+}
+
+/// Remembers what was saved before the main window went borderless.
+static bool s_main_borderless = false;
+
+void apply_main_borderless(bool borderless) {
+    SDL_Window* window = BrowserManager::instance().main_window();
+    if (!window) {
+        CFW_LOG_WARNING("setMainWindowBorderless skipped: no main window");
+        return;
+    }
+    // The flag only remembers what was saved; SDL owns the window's real state.
     static int s_saved_x = 0, s_saved_y = 0, s_saved_w = 0, s_saved_h = 0;
     static bool s_saved_maximized = false;
-    if (s_main_borderless) {
+    if (s_main_borderless == borderless) return;
+    s_main_borderless = borderless;
+    if (!borderless) {
         CFW_LOG_DEBUG("Restoring main window from borderless fullscreen");
         SDL_SetWindowFullscreen(window, false);
         SDL_SetWindowBordered(window, true);
@@ -362,7 +390,6 @@ void toggle_main_borderless() {
         if (s_saved_maximized) {
             SDL_MaximizeWindow(window);
         }
-        s_main_borderless = false;
     } else {
         SDL_GetWindowPosition(window, &s_saved_x, &s_saved_y);
         SDL_GetWindowSize(window, &s_saved_w, &s_saved_h);
@@ -380,7 +407,6 @@ void toggle_main_borderless() {
         SDL_SetWindowPosition(window, bounds.x, bounds.y);
         SDL_SetWindowSize(window, bounds.w, bounds.h);
         SDL_RaiseWindow(window);
-        s_main_borderless = true;
     }
 }
 
@@ -604,9 +630,13 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         result.error_message = "Native window is no longer available";
         return result;
     }
-    const bool camera_control = request.method == WindowMethod::ToggleCameraMaximized ||
-        request.method == WindowMethod::CycleCameraWindowMode || request.method == WindowMethod::ToggleCameraBorderless ||
-        request.method == WindowMethod::ResizeCameraView;
+    if (request.method == WindowMethod::SetWindowPresentation && request.presentation == WindowPresentation::None) {
+        result.error_code = "INVALID_ARGUMENT";
+        result.error_message = "A window presentation request must name the state it wants";
+        return result;
+    }
+    const bool camera_control = request.method == WindowMethod::ResizeCameraView ||
+        (request.method == WindowMethod::SetWindowPresentation && !request.main_window_target);
     if (camera_control) {
         // Explicit scene/camera identity is authoritative. Never guess from a URL
         // substring or apply a missing camera's command to the caller instead.
@@ -624,10 +654,12 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         const auto* window = camera_tab->platform_window_id ? SDL_GetWindowFromID(camera_tab->platform_window_id) : nullptr;
         if (!window && !camera_tab->platform_handle_raw) return result;
         switch (request.method) {
-        case WindowMethod::ToggleCameraMaximized: toggle_camera_maximized(camera_tab->tab_id); break;
-        case WindowMethod::CycleCameraWindowMode: cycle_camera_window_mode(camera_tab->tab_id); break;
-        case WindowMethod::ToggleCameraBorderless: toggle_camera_borderless(camera_tab->tab_id); break;
-        case WindowMethod::ResizeCameraView: resize_camera_view(camera_tab->tab_id, std::max(64, request.width), std::max(64, request.height)); break;
+        case WindowMethod::ResizeCameraView:
+            resize_camera_view(camera_tab->tab_id, std::max(64, request.width), std::max(64, request.height));
+            break;
+        case WindowMethod::SetWindowPresentation:
+            apply_camera_presentation(camera_tab->tab_id, request.presentation);
+            break;
         default: break;
         }
         result.accepted = true;
@@ -656,18 +688,23 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         break;
     case WindowMethod::ConfigureViewport:
         return apply_viewport_configuration(request, *source);
-    case WindowMethod::ToggleMainBorderless:
+    case WindowMethod::SetWindowPresentation: {
+        if (!request.main_window_target) break; // the camera path handled it above
         if (source->docking_pos != "main") {
             result.error_code = "PERMISSION_DENIED";
             result.error_message = "Only the main window can change its window mode";
+        } else if (request.presentation == WindowPresentation::Maximized) {
+            result.error_code = "INVALID_ARGUMENT";
+            result.error_message = "The main window has only windowed and borderless presentations";
         } else if (manager.main_window()) {
-            toggle_main_borderless();
+            // The main window owns an OS window, not a camera surface: two states.
+            apply_main_borderless(request.presentation == WindowPresentation::Toggle
+                                      ? !s_main_borderless
+                                      : request.presentation == WindowPresentation::Borderless);
             result.accepted = true;
         }
         break;
-    case WindowMethod::ToggleCameraMaximized:
-    case WindowMethod::CycleCameraWindowMode:
-    case WindowMethod::ToggleCameraBorderless:
+    }
     case WindowMethod::ResizeCameraView:
         break; // Handled above with exact camera identity and native permissions.
     case WindowMethod::CloseCameraView: {

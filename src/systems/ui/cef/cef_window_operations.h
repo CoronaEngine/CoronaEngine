@@ -7,10 +7,16 @@
 
 namespace Corona::Systems::UI {
 
-enum class WindowMethod { GetCurrent, SetDragRegions, Close, CloseTab, FocusTab, CreatePanel, DetachPanel, RedockPanel,
-                          SuspendCameraViews, CloseCameraView, ToggleCameraMaximized, CycleCameraWindowMode,
-                          ToggleCameraBorderless, ResizeCameraView, ToggleMainBorderless, CreateCameraView, ConfigureViewport,
-                          CloseProcess };
+// Web names the surface it wants (CreatePanel + kind, SetPanelPlacement, SetWindowPresentation);
+// the native host keeps the specialised transitions behind those names.
+enum class WindowMethod { GetCurrent, SetDragRegions, Close, CloseTab, FocusTab, CreatePanel, CreateCameraView,
+                          SetPanelPlacement, DetachPanel, RedockPanel,
+                          SuspendCameraViews, CloseCameraView, ResizeCameraView, SetWindowPresentation,
+                          ConfigureViewport, CloseProcess };
+
+/// A window presentation is a state, not a toggle: the caller names the state it
+/// wants and the native host runs whichever transition reaches it.
+enum class WindowPresentation { None, Windowed, Maximized, Borderless, Toggle };
 
 struct ViewportBounds {
     int x = 0, y = 0, width = 0, height = 0, render_width = 0, render_height = 0;
@@ -70,6 +76,9 @@ struct WindowRequest {
     EntityId camera_handle = 0; // Resolved by the native scene owner, never supplied by Web.
     std::shared_ptr<CameraWindowAuthority> camera_authority;
     std::shared_ptr<CameraWindowState> camera_state;
+    /// Presentation request: the caller names the states it wants, not the toggles to run.
+    WindowPresentation presentation = WindowPresentation::None;
+    bool main_window_target = false;
     int width = 0, height = 0;
     std::optional<ViewportConfiguration> viewport;
     std::uint64_t context_id = 0; // Native endpoint identity; never supplied by Web.

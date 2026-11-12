@@ -39,11 +39,9 @@ EXPECTED_SURFACE = {
     },
     "viewport": {"configure", "pick"},
     "window": {
-        "close", "closeCameraView", "closeTab", "createCameraView", "createPanel",
-        "cycleCameraWindowMode", "detachPanel", "focusTab", "getCurrent",
-        "onCloseRequested", "onClosed", "redockPanel", "resizeCameraView",
-        "setDragRegions", "suspendCameraViews", "toggleCameraBorderless",
-        "toggleCameraMaximized", "toggleMainBorderless",
+        "close", "closeCameraView", "closeTab", "createPanel", "focusTab", "getCurrent",
+        "onCloseRequested", "onClosed", "resizeCameraView", "setDragRegions",
+        "setPanelPlacement", "setWindowPresentation", "suspendCameraViews",
     },
 }
 
