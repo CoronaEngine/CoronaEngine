@@ -60,6 +60,18 @@
 bridge 4 个，共 33 个），守卫 `tests/tools/test_rejection_vocabulary.py` 保证源码只发这些码，契约文档的失败码表
 由它生成。
 
+Python 服务的失败分成两类，分界是"谁的问题"：
+
+- **业务拒绝**（会话过期、只读、路径越界、目标已存在）是**数据**，服务返回
+  `{status:'error', code, message}`，不抛异常。这样 Web 能拿到码去分支，而不是去匹配译文。
+  `ProjectArchive.file_manager` 曾经抛 `ValueError`，于是 bridge 把它压成 `SERVICE_FAILED`，
+  原因只剩 message 里的字符串——2026-11 改成了和其它两个服务同形的返回。
+- **传输/服务失败**（信封坏、服务没启动、Python 抛未预期异常）才拒绝，码是
+  `SERVICE_UNAVAILABLE` / `SERVICE_FAILED`，原因在 message。
+
+前端 facade 负责把话说到 Web 程序员的语言：`editorApi.files.*` 收到 `{status:'error'}` 就抛出
+带 `error.code` 的 `Error`（`fileOp` 一处），调用方的 `try/catch` 统一处理，不必各自解析回复字段。
+
 ## 6. 改动一个接口的固定流程
 
 1. 改 `src/systems/ui/cef/`：读者、注册、执行三处。

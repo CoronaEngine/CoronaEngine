@@ -752,8 +752,8 @@ try {
     const filesScope = { project_path: metadata.project_path, archive_session: metadata.archive_session };
     // The file browser is owned by the Python archive service. runtime/archive/project_files.py
     // returns a tree entry for get_file_tree, {status,path,name,file_type} for create_file, bare
-    // True for create_folder/rename_item/delete_item, and raises ValueError for every refusal -
-    // so the scalar success assertions compare against true and refusals surface as rejections.
+    // True for create_folder/rename_item/delete_item, and {status:'error', code, message} for a
+    // refusal - so callers compare scalars on success and read the code instead of matching text.
     const filesCall = (method, request) => {
       const scope = { ...filesScope, ...request };
       const manager = (op, args) => bridgeCall('ProjectArchive', 'file_manager',
@@ -785,14 +785,17 @@ try {
     assert.equal(await filesCall('renameItem', { path: template.path, name: '改名.actor' }), true);
     assert.equal((await filesCall('openFile', { path: '文件测试/改名.actor', file_type: 'actor' })).ok, true);
     const sceneBytes = await readFile(path.join(cameraWorld, 'scene.ini'));
-    for (const [method, request] of [
-      ['renameItem', { path: 'scene.ini', name: 'moved.ini' }],
-      ['deleteItem', { path: 'scene.ini' }], ['deleteItem', { path: '.' }],
-      ['renameItem', { path: '文件测试/改名.actor', name: '单位_1.actor' }],
-      ['createFolder', { path: '../escape', name: 'no' }],
-      ['createActorTemplate', { path: '文件测试', name: '../escape' }],
+    for (const [method, request, code] of [
+      ['renameItem', { path: 'scene.ini', name: 'moved.ini' }, 'PERMISSION_DENIED'],
+      ['deleteItem', { path: 'scene.ini' }, 'PERMISSION_DENIED'],
+      ['deleteItem', { path: '.' }, 'PERMISSION_DENIED'],
+      ['renameItem', { path: '文件测试/改名.actor', name: '单位_1.actor' }, 'CONFLICT'],
+      ['createFolder', { path: '../escape', name: 'no' }, 'INVALID_ARGUMENT'],
+      ['createActorTemplate', { path: '文件测试', name: '../escape' }, 'INVALID_ARGUMENT'],
     ]) {
-      await assert.rejects(filesCall(method, request), /Cannot change|Target already exists|outside current project|Invalid file name/);
+      const refused = await filesCall(method, request);
+      assert.equal(refused.status, 'error', `${method}: ${JSON.stringify(refused)}`);
+      assert.equal(refused.code, code, `${method}: ${refused.code}`);
     }
     assert.deepEqual(await readFile(path.join(cameraWorld, 'scene.ini')), sceneBytes);
     // A stale archive or project path is refused by the owning service. Unknown extra keys are no
@@ -804,8 +807,9 @@ try {
     ]) {
       for (const badScope of [{ archive_session: 'retired' }, { project_path: cameraWorld + '-other' }]) {
         const refused = await filesCall(method, { path: template.path, ...extra, ...badScope })
-          .then(() => false, () => true);
-        assert.equal(refused, true, 'a stale project scope must not succeed');
+          .then(reply => reply, error => ({ status: 'error', code: error.code || 'SERVICE_FAILED' }));
+        assert.equal(refused?.status, 'error', `a stale project scope must not succeed: ${method}`);
+        assert.equal(refused.code, 'PROJECT_CONTEXT_CHANGED', `${method}: ${refused.code}`);
       }
     }
     assert.equal(await main.evaluate(`corona.project.openDocument(${JSON.stringify({ ...filesScope, path: '../escape.actor', file_type: 'actor' })}).catch(e=>e.code)`), 'INVALID_PROJECT_PATH');
@@ -1526,7 +1530,12 @@ try {
         ['createActorTemplate', { path: '', name: 'blocked-template' }],
         ['renameItem', { path: 'integer-boundaries.json', name: 'blocked.json' }],
         ['deleteItem', { path: 'integer-boundaries.json' }],
-      ]) await assert.rejects(filesCall(method, request), /Stop and restore the file run/);
+      ]) {
+        const refused = await filesCall(method, request);
+        assert.equal(refused?.status, 'error', `${method}: ${JSON.stringify(refused)}`);
+        assert.equal(refused.code, 'CONFLICT', `${method}: ${refused.code}`);
+        assert.match(refused.message, /Stop and restore the file run/);
+      }
       assert.deepEqual(await dispatchInput(main, keyInput), { status: 'queued' });
       assert.deepEqual(await dispatchInput(cameraClient, { ...cameraScope, type: 'keyUp', code: 'KeyJ', key: 'd' }), { status: 'queued' });
       assert.deepEqual(await dispatchInput(main, mouseInput), { status: 'queued' });

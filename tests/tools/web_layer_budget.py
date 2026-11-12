@@ -63,8 +63,9 @@ TARGET_LINES = 13_807
 # Running the smoke found that selectModelFile/importResourceFile had no reader filling the
 # fields their services validate, so they now share one (fifteen lines). The model node
 # reply stopped re-reading geometry after queuing the write; answering with the derived
-# state cost five lines and made the edit visible to the UI.
-CORE_BUDGET = 14384
+# state cost five lines and made the edit visible to the UI. The facade's file operations
+# now raise refusals with the service code (editorApi.js +14, core +14).
+CORE_BUDGET = 14398
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -131,7 +132,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/editor_api/scene_environment_service.cpp", 59),
     ("src/systems/ui/editor_api/scene_model_node_service.cpp", 63),
     ("src/systems/ui/editor_api/scene_projection_service.cpp", 26),
-    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 182),
+    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 196),
 ]
 
 # Per-file ceilings are the measured baseline. They start equal to the current

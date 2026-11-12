@@ -93,8 +93,12 @@ ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web �
 | 场景/归档 | 场景与归档层（对象不存在、只读、冲突…） | `ACTOR_AUDIO_UNAVAILABLE`、`ACTOR_CREATE_FAILED`、`ACTOR_NOT_FOUND`、`ACTOR_NOT_READY`、`CAMERA_NOT_DELETABLE`、`CAMERA_NOT_FOUND`、`CONFLICT`、`FILE_NOT_FOUND`、`FILE_OPERATION_FAILED`、`INVALID_PROJECT_PATH`、`LAST_CAMERA`、`MODEL_DECODE_FAILED`、`PICK_FAILED`、`PICK_TIMEOUT`、`PROJECT_CONTEXT_CHANGED`、`PROJECT_CREATION_FAILED`、`PROJECT_OPEN_FAILED`、`READ_ONLY`、`READ_ONLY_PROJECT`、`RESOURCE_NOT_FOUND`、`SAVE_FAILED`、`UNSUPPORTED_RESOURCE_TYPE` |
 | Web → Python | bridge 传输与 Python 服务 | `EDITOR_API_TIMEOUT`、`SERVICE_BUSY`、`SERVICE_FAILED`、`SERVICE_UNAVAILABLE` |
 
-Python 服务自己返回的错误码（如 `DOCUMENT_CONFLICT`、`RUN_ACTIVE`）经 bridge 原样透传，
-不在 C++ 侧扫描范围内。同步方法**永不拒绝**：返回值，找不到时返回文档化的空值。
+Python 服务的**业务拒绝**是数据，不是异常：`ProjectArchive`、`ProjectFiles`、
+`FileScripts` 都用 `{status:'error', code, message}` 回答（如 `DOCUMENT_CONFLICT`、
+`RUN_ACTIVE`、`PERMISSION_DENIED`、`CONFLICT`），经 bridge 原样透传，不在 C++ 侧扫描
+范围内；前端 facade 把这种回复转成带 `error.code` 的拒绝。只有传输或服务本身失败
+（信封解析、服务未启动、Python 抛异常）才变成 `SERVICE_FAILED`，原因只在 message 里。
+同步方法**永不拒绝**：返回值，找不到时返回文档化的空值。
 
 ## ScriptRuntime 面
 

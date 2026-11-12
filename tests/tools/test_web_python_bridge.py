@@ -69,6 +69,20 @@ def test_bridge_surfaces_service_failures(monkeypatch):
         WebBridgeService.call(json.dumps({"service": "ProjectArchive", "function": "open_scene"}))
 
 
+def test_bridge_passes_a_structured_refusal_through_unchanged(monkeypatch):
+    # A service that refuses (stale archive, read-only project, bad path) answers with
+    # {status:'error', code} instead of raising, so Web can branch on the code. Only a
+    # dispatcher-level failure becomes SERVICE_FAILED on the C++ side.
+    calls = []
+    refusal = {"status": "error", "code": "PROJECT_CONTEXT_CHANGED",
+               "message": "Project session is stale"}
+    _record(monkeypatch, calls, {"success": True, "data": refusal})
+    result = WebBridgeService.call(json.dumps({
+        "service": "ProjectArchive", "function": "file_manager",
+        "args": [{"archive_session": "old", "project_path": "P:/w", "op": "delete_item", "args": [""]}]}))
+    assert result == refusal
+
+
 def test_register_script_dispatcher_exposes_the_bridge():
     CoronaEditor.module_list.pop("EditorBridge", None)
     CoronaEditor.register_script_dispatcher()

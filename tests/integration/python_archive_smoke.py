@@ -76,7 +76,7 @@ def verify(port, project, peer):
     stale_file = bridge("ProjectArchive", "file_manager",
                         {"archive_session": scope["archive_session"], "project_path": str(project),
                          "op": "create_file", "args": ["", "stale", "actor"]})
-    assert not stale_file["success"] and "PROJECT_CONTEXT_CHANGED" in stale_file["error"], stale_file
+    assert stale_file["status"] == "error" and stale_file["code"] == "PROJECT_CONTEXT_CHANGED", stale_file
     for name, args in (
         ("corona.scene.importResourceFile", ["scene.ini", {"archive_session": scope["archive_session"], "file_type": "model"}]),
         ("corona.scene.createActor", ["scene.ini", original["model"], {"archive_session": scope["archive_session"], "actor_type": "model"}]),
