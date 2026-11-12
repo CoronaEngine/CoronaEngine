@@ -37,8 +37,10 @@ TARGET_LINES = 13_807
 # toggleMainBorderless) for one translation table: `kind`, `detached` and `mode`
 # are decoded once in the V8 reader, and the native host keeps one presentation
 # setter instead of four toggles. The surface shrank; the reader that names it is
-# explicit, so this ratchet moved up by that decoder's 39 lines only.
-CORE_BUDGET = 14461
+# explicit, so this ratchet moved up by that decoder's 39 lines only. The editor
+# pin then moved to the facade commit that calls those entries, and the pinned
+# editorApi.js is measured here, so its 43 bridge lines are in this total too.
+CORE_BUDGET = 14504
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -105,7 +107,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/editor_api/scene_environment_service.cpp", 59),
     ("src/systems/ui/editor_api/scene_model_node_service.cpp", 63),
     ("src/systems/ui/editor_api/scene_projection_service.cpp", 26),
-    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 144),
+    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 187),
 ]
 
 # Per-file ceilings are the measured baseline. They start equal to the current
