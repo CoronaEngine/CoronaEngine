@@ -31,6 +31,11 @@ build/conan/examples/relwithdebinfo/examples/engine/RelWithDebInfo
 - 目标自身链接的共享库：TBB、FFmpeg、Vulkan 加载器等
 - vision 插件、slang 运行时、`CabbageEditor/` 编辑器资源（含构建好的 `Frontend/dist`）
 
+前端依赖用项目自己的锁文件安装：`CabbageEditor/Frontend/pnpm-lock.yaml` 随编辑器资源一起部署，
+构建阶段执行 `pnpm install --frozen-lockfile` 再 `pnpm run build`（pnpm 通过 npm 缓存获取）。
+不要退回 `npm install`：它按 semver 重新解析依赖，同一份源码两次构建可能得到不同的 Vue/Vite，
+打包页面会因此改变行为——曾导致 `focus` 套件的 viewport 点击不再触发 pick。
+
 `vulkan-1.dll` 取引擎构建时使用的那一份，不取 CEF 自带的副本。
 
 ## 3. 打包 UI 套件（12 个）
