@@ -1691,6 +1691,9 @@ bool read_panel_options(const CefV8ValueList& arguments, WindowRequest& request)
     if (kind == "camera") request.method = WindowMethod::CreateCameraView;
     else if (kind != "panel") return false;
     const bool camera = request.method == WindowMethod::CreateCameraView;
+    // x/y place a floating camera surface; ImGui decides where a docked panel goes, so
+    // accepting a panel position would promise placement this side cannot deliver.
+    if (!camera && (object->HasValue("x") || object->HasValue("y"))) return false;
     PanelOptions options;
     options.width = camera ? 960 : 400;
     options.height = camera ? 540 : 600;

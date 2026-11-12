@@ -131,7 +131,8 @@ def build() -> str:
         "|---|---|---|",
         "| `createPanel` | `{kind?: 'panel' \\| 'camera', width?, height?, x?, y?, panelId?, routePath?, title?}` |"
         " `kind` 缺省为 `panel`。相机窗口要求 `archiveSession`/`sceneId`/`cameraId` 同时非空；"
-        "`cameraHandle` 一律拒绝，相机身份由原生解析。 |",
+        "`cameraHandle` 一律拒绝，相机身份由原生解析。`x`/`y` 只给相机窗口——停靠面板的位置由 "
+        "ImGui 决定，面板带 `x`/`y` 会被拒绝而不是静默忽略。 |",
         "| `close` | 无参数 / `{panelId}` / `{sceneId, cameraId}` / `{sceneId}` |"
         " 无参数关自己；`panelId` 是 `createPanel` 的稳定面板身份（只有主窗口能关别人，主窗口不能被当作面板关）；"
         "`sceneId`+`cameraId` 关一个相机窗口（主窗口可关任意，相机窗口只能关自己）；只给 `sceneId` 是复数形式，"

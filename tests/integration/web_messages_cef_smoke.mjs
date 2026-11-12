@@ -387,6 +387,12 @@ try {
       '{detached:true}', '{kind:"Inspector"}']) {
       assert.equal(await main.evaluate(`corona.window.createPanel(${options}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
+    // A panel has no position: ImGui decides where a docked panel goes, so asking for
+    // one is an invalid argument rather than a silently ignored option.
+    for (const options of ['{panelId:"Positioned",x:10}', '{panelId:"Positioned",y:10}',
+      '{panelId:"Positioned",x:10,y:10}']) {
+      assert.equal(await main.evaluate(`corona.window.createPanel(${options}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+    }
     // ImGui owns placement: there is no positioning request to call.
     assert.equal(await main.evaluate('typeof corona.window.setPanelPlacement'), 'undefined');
     assert.equal(await main.evaluate('typeof corona.window.detachPanel'), 'undefined');
