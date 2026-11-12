@@ -42,9 +42,10 @@ TARGET_LINES = 13_807
 # editorApi.js is measured here, so its 43 bridge lines are in this total too.
 # ImGui owns the dock, so the placement request went away as well: the window
 # namespace lost setPanelPlacement, the detach state machine left BrowserTab, and
-# the dead pre-ImGui layout solver and input router were deleted. That is what
-# brings the ratchet back down.
-CORE_BUDGET = 14424
+# the dead pre-ImGui layout solver and input router were deleted. The drag-region
+# declaration followed: its SDL hit test had no installer, so pages declared
+# title-bar rectangles that nothing read. Both removals bring the ratchet down.
+CORE_BUDGET = 14384
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -84,12 +85,12 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/cef_scene_operations.h", 428),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),
-    ("src/systems/ui/cef/cef_v8_binding.cpp", 2810),
+    ("src/systems/ui/cef/cef_v8_binding.cpp", 2776),
     ("src/systems/ui/cef/cef_process.h", 36),
     ("src/systems/ui/cef/cef_viewport_pick.cpp", 119),
     ("src/systems/ui/cef/cef_viewport_pick.h", 60),
-    ("src/systems/ui/cef/cef_window_operations.cpp", 827),
-    ("src/systems/ui/cef/cef_window_operations.h", 109),
+    ("src/systems/ui/cef/cef_window_operations.cpp", 824),
+    ("src/systems/ui/cef/cef_window_operations.h", 107),
     ("src/systems/ui/cef/ik_chain_config.h", 209),
     ("src/systems/ui/cef/model_node_config.h", 52),
     ("src/systems/ui/cef/model_node_page.h", 37),
@@ -111,7 +112,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/editor_api/scene_environment_service.cpp", 59),
     ("src/systems/ui/editor_api/scene_model_node_service.cpp", 63),
     ("src/systems/ui/editor_api/scene_projection_service.cpp", 26),
-    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 186),
+    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 185),
 ]
 
 # Per-file ceilings are the measured baseline. They start equal to the current
