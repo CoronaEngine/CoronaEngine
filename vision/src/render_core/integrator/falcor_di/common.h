@@ -131,6 +131,8 @@ struct Context {
     const Buffer<uint> &light_bases;
     Buffer<uint2> &ris;
     const Buffer<uint2> &light_alias;
+    Buffer<float4> &ris_points;
+    bool precompute_light_points;
 };
 
 struct Surface {

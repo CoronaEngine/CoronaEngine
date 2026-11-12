@@ -32,6 +32,7 @@ class FalcorDIExperiment final : private Toolkit {
     Buffer<uint2> surface_normals_;
     Buffer<falcor_di::Reservoir> reservoirs_;
     Buffer<uint2> ris_;
+    Buffer<float4> ris_points_;
     Buffer<float2> neighbors_;
     Buffer<uint4> light_primitives_;
     Buffer<falcor_di::LightTriangleGeometry> light_geometry_;
@@ -109,6 +110,10 @@ class FalcorDIExperiment final : private Toolkit {
 
     void prepare_sampling_buffers() {
         ris_ = device().create_buffer<uint2>(falcor_di::tile_count * falcor_di::tile_size, "Falcor DI RIS tiles");
+        if (!publish_gi_ && environment_index_ != InvalidUI32) {
+            ris_points_ = device().create_buffer<float4>(falcor_di::tile_count * falcor_di::tile_size *
+                                                            falcor_di::ris_point_words, "Falcor DI RIS light points");
+        }
         vector<float2> offsets;
         offsets.reserve(falcor_di::neighbor_count);
         constexpr float step = 1.f / 1.3247179572447f;
@@ -223,7 +228,8 @@ class FalcorDIExperiment final : private Toolkit {
         const auto context = [&](const Uint &frame, const Bool &has_history) {
             return falcor_di::Context{extent_, frame, has_history, light_count_, environment_index_, surfaces0_, surface_normals_,
                                      reservoirs_, neighbors_, light_primitives_, light_geometry_,
-                                     probabilities_, light_bases_, ris_, light_alias_};
+                                     probabilities_, light_bases_, ris_, light_alias_, ris_points_,
+                                     !publish_gi_ && environment_index_ != InvalidUI32};
         };
         Kernel presample = [&](Uint frame) {
             sampler->load_data();
@@ -256,7 +262,8 @@ class FalcorDIExperiment final : private Toolkit {
             falcor_di::store_reservoir(ctx, pixel, slice, reservoir);
             if (publish_gi_) fb.hit_bsdfs().write(dispatch_id(), gi_proposal);
         };
-        candidates.function()->set_block_dim(16u, 16u);
+        const uint candidate_block_size = !publish_gi_ && environment_index_ != InvalidUI32 ? 8u : 16u;
+        candidates.function()->set_block_dim(candidate_block_size, candidate_block_size);
         candidates_ = device().compile(candidates, "Falcor DI initial candidates");
 
         const auto reuse_settings = direct.settings();
