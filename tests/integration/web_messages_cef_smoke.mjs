@@ -98,7 +98,7 @@ try {
   const mainTarget = await waitFor(async () => (await targets()).find(target => target.type === 'page' && target.url.includes('index.html')));
   const main = await connect(mainTarget);
 
-  await waitFor(() => main.evaluate('typeof window.corona?.window?.getCurrent === "function"'));
+  await waitFor(() => main.evaluate('typeof window.corona?.window?.close === "function"'));
   assert.equal(await main.evaluate('typeof corona.viewport?.pick'), 'function');
   assert.equal(await main.evaluate('typeof corona.scene?.dispatchInput'), 'function');
   assert.equal(await main.evaluate('typeof corona.app?.closeProcess'), 'function');
@@ -109,7 +109,7 @@ try {
   const fixture = path.join(output, 'index.html');
   await writeFile(fixture, '<!doctype html><meta charset="utf-8"><title>CEF Web messages smoke</title>');
   await main.call('Page.navigate', { url: pathToFileURL(fixture).href });
-  await waitFor(() => main.evaluate('document.title === "CEF Web messages smoke" && typeof window.corona?.window?.getCurrent === "function"'));
+  await waitFor(() => main.evaluate('document.title === "CEF Web messages smoke" && typeof window.corona?.window?.close === "function"'));
   assert.equal(await main.evaluate('typeof corona.editor'), 'undefined', 'generic native dispatch is retired');
 
   const scope = `smoke-${Date.now()}`;
@@ -270,12 +270,12 @@ try {
       let timer;
       try {
         return await Promise.race([
-          Promise.all(Array.from({length: 512}, () => corona.window.getCurrent())),
+          Promise.all(Array.from({length: 512}, () => corona.window.close({sceneId:''}))),
           new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Native task queue starved')), 5000); }),
-        ]).then(values => ({count: values.length, sameTab: values.every(value => value.tabId === values[0].tabId)}));
+        ]).then(values => ({count: values.length, closedNothing: values.every(value => value.closed === 0)}));
       } finally { clearTimeout(timer); }
     })()`);
-    assert.deepEqual(burst, {count: 512, sameTab: true});
+    assert.deepEqual(burst, {count: 512, closedNothing: true});
     evidence[0].nativeTaskBurst = '512 queued native operations complete without frame-per-request starvation';
     stage = 'native window event subscriptions';
     for (const doc of docs) {
@@ -320,36 +320,32 @@ try {
       assert.equal(await doc.client.evaluate('typeof window.coronaBridge?.computeActorFocusPose'), 'undefined');
       assert.equal(await doc.client.evaluate('typeof window.coronaBridge?.cameraMove'), 'undefined');
       console.log(`CEF smoke: ${stage}`);
-      assert.equal(await doc.client.evaluate('typeof window.corona?.window?.getCurrent'), 'function', 'direct V8 binding is required');
+      assert.equal(await doc.client.evaluate('typeof window.corona?.window?.close'), 'function', 'direct V8 binding is required');
       const result = await doc.client.evaluate(`(async () => {
         JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); };
-        const before = await corona.window.getCurrent();
-        const after = await corona.window.getCurrent();
+        const before = await corona.window.close({sceneId:''});
+        const after = await corona.window.close({sceneId:''});
         let errorCode;
-        try { await corona.window.getCurrent(null); } catch(error) { errorCode=error.code; }
-        return {same:before.browserId === after.browserId, idType:typeof after.browserId,
-          frameType:typeof after.frameId, dockState:after.dockState, errorCode,
-          dragBinding: typeof corona.window.setDragRegions};
+        try { await corona.window.close(null); } catch(error) { errorCode=error.code; }
+        return {same: before.closed === after.closed, closed: before.closed, errorCode,
+          dragBinding: typeof corona.window.setDragRegions,
+          identity: typeof corona.window.getCurrent};
       })()`);
-      assert.deepEqual(result, { same: true, idType: 'string', frameType: 'string',
-        dockState: result.dockState, errorCode: 'INVALID_ARGUMENT', dragBinding: 'undefined' });
-      assert.ok(['docked', 'detached'].includes(result.dockState));
+      assert.deepEqual(result, { same: true, closed: 0, errorCode: 'INVALID_ARGUMENT',
+        dragBinding: 'undefined', identity: 'undefined' });
       evidence.find(item => item.document === doc.label).nativeBindings = 'passed';
     }
-    const identities = await Promise.all(docs.map(doc => doc.client.evaluate('corona.window.getCurrent().then(x=>x.browserId)')));
-    assert.equal(new Set(identities).size, docs.length, 'native contexts must identify different windows');
-    for (let index = 1; index < docs.length; index++) {
-      assert.equal(await docs[index].client.evaluate('corona.window.getCurrent().then(x=>x.tabId)'), createdPanels[index - 1].tab_id);
-    }
+    const tabIds = createdPanels.map(panel => panel.tab_id);
+    assert.equal(new Set(tabIds).size, tabIds.length, 'every created panel owns a distinct native tab');
     stage = 'typed panel validation and docking intents';
     assert.deepEqual(await main.evaluate('corona.window.close({sceneId:""})'), {closed:0});
     assert.deepEqual(await docs[1].client.evaluate('corona.window.close({sceneId:""})'), {closed:0});
     const barrierOrder = await main.evaluate(`(async () => {
       const order = [];
       await Promise.all([
-        corona.window.getCurrent().then(() => order.push('before')),
+        corona.window.close({sceneId:'missing-scene'}).then(() => order.push('before')),
         corona.window.close({sceneId:''}).then(() => order.push('barrier')),
-        corona.window.getCurrent().then(() => order.push('after')),
+        corona.window.close({sceneId:'missing-scene'}).then(() => order.push('after')),
       ]);
       return order;
     })()`);
@@ -397,8 +393,8 @@ try {
     // ImGui owns placement: there is no positioning request to call.
     assert.equal(await main.evaluate('typeof corona.window.setPanelPlacement'), 'undefined');
     assert.equal(await main.evaluate('typeof corona.window.detachPanel'), 'undefined');
-    const initialDock = await docs[1].client.evaluate('corona.window.getCurrent()');
-    assert.ok(['docked', 'detached'].includes(initialDock.dockState), 'native snapshot must expose the ImGui viewport state');
+    assert.equal(await docs[1].client.evaluate('typeof corona.window.getCurrent'), 'undefined',
+      'the self-identity query is retired');
     evidence[0].panelCreationAndDocking = 'passed with JSON disabled; placement is ImGui-owned';
 
   }
@@ -408,19 +404,14 @@ try {
   if (testNativeBindings) {
     stage = 'refresh with pending native reads';
     const dock = docs[1].client;
-    const before = await dock.evaluate('corona.window.getCurrent()');
     await dock.evaluate(`(() => { window.__oldNativeContext = true;
-      for(let i=0;i<8;i++) corona.window.getCurrent().catch(()=>{});
+      for(let i=0;i<8;i++) corona.window.close({sceneId:''}).catch(()=>{});
       return true; })()`);
     await dock.call('Page.reload', {});
-    await waitFor(() => dock.evaluate('!window.__oldNativeContext && typeof window.corona?.window?.getCurrent === "function"'));
-    const after = await dock.evaluate('corona.window.getCurrent()');
-    assert.equal(after.browserId, before.browserId);
-    assert.equal(typeof after.frameId, 'string');
+    await waitFor(() => dock.evaluate('!window.__oldNativeContext && typeof window.corona?.window?.close === "function"'));
     evidence[1].refreshWithPendingReads = 'passed';
     stage = 'actual native window removal event';
-    const closedTab = await docs[2].client.evaluate('corona.window.getCurrent()');
-    const mainTab = await main.evaluate('corona.window.getCurrent()');
+    const closedTab = createdPanels[1];
     assert.deepEqual(await main.evaluate(`corona.window.focus({panelId:${JSON.stringify(closedTab.panelId)}})`), true);
     assert.deepEqual(await main.evaluate('corona.window.focus({panelId:"NoSuchPanel"})'), false);
     assert.equal(await main.evaluate('corona.window.close().catch(e=>e.code)'), 'PERMISSION_DENIED');
@@ -1247,7 +1238,7 @@ try {
     const toolTarget = await waitFor(async () => (await targets()).find(item => item.url.includes('uiWindow=camera-tools')), 30_000);
     const toolClient = await connect(toolTarget);
   await toolClient.evaluate('window.__nativeJSON = { stringify: JSON.stringify, parse: JSON.parse }; true');
-    await waitFor(() => toolClient.evaluate('typeof corona?.window?.getCurrent === "function"'));
+    await waitFor(() => toolClient.evaluate('typeof corona?.window?.close === "function"'));
     await toolClient.evaluate(`JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); }; true`);
     const createCamera = value => main.evaluate(`corona.window.createPanel({...${JSON.stringify(value)},kind:'camera'})`);
     const created = await toolClient.evaluate(`corona.window.createPanel({...${JSON.stringify(options)},kind:'camera'})`);
@@ -1257,7 +1248,7 @@ try {
     const cameraTarget = await waitFor(async () => (await targets()).find(item => item.url.includes('uiWindow=real-camera')), 30_000);
     const cameraClient = await connect(cameraTarget);
   await cameraClient.evaluate('window.__nativeJSON = { stringify: JSON.stringify, parse: JSON.parse }; true');
-    await waitFor(() => cameraClient.evaluate('typeof corona?.window?.getCurrent === "function"'));
+    await waitFor(() => cameraClient.evaluate('typeof corona?.window?.close === "function"'));
     await cameraClient.evaluate(`JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); }; true`);
     const currentIndex = await main.evaluate(`corona.scene.readScene({...(${JSON.stringify(indexScope)}),scene:'scene.ini',actors:'index'})`);
     assert.deepEqual(await cameraClient.evaluate(`corona.scene.readScene({...(${JSON.stringify(indexScope)}),scene:'scene.ini',actors:'index'})`), currentIndex);
@@ -1614,9 +1605,6 @@ try {
     { id: '18446744073709551615', bytes: [7, 255], typed: true });
     assert.deepEqual(await main.evaluate(`window.__smoke.request('real-camera','echo',new Uint8Array([3,9])).then(value=>Array.from(value))`), [3, 9]);
     await main.evaluate('corona.window.close({sceneId:""})');
-    const cameraWindow = await cameraClient.evaluate('corona.window.getCurrent()');
-    assert.equal(cameraWindow.tabId, created.tab_id);
-    assert.equal(cameraWindow.dockState, 'detached');
     assert.deepEqual(await cameraClient.evaluate(`corona.window.createPanel({...${JSON.stringify(options)},kind:'camera'})`),
       { tab_id: created.tab_id, panel_id: '', existing: true });
     for (const mode of ['maximized', 'toggle', 'windowed', 'borderless', 'toggle']) {

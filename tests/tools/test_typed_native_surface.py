@@ -37,7 +37,7 @@ EXPECTED_SURFACE = {
     },
     "viewport": {"configure", "pick", "setGizmoPointer", "setGizmoTarget"},
     "window": {
-        "close", "createPanel", "focus", "getCurrent",
+        "close", "createPanel", "focus",
         "onCloseRequested", "onClosed", "setWindowPresentation",
     },
 }

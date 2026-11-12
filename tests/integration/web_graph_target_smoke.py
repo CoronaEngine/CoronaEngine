@@ -27,11 +27,10 @@ def open_graph(main, port, targets, description):
     target = wait(lambda: next((target for target in targets() if '#/NodeGraph?' in target['url']
                                and 'uiOwner=' in target['url']), None), bool, description)
     panel = Frontend(port, target_id=target['id'])
-    identity = panel.evaluate('corona.window.getCurrent()')
-    return panel, identity['tabId'], target
+    return panel, target
 
 
-def verify_close_during_save(main, panel, tab_id, target_id, service, targets, scope):
+def verify_close_during_save(main, panel, panel_id, target_id, service, targets, scope):
     """Delay/fail a facade save while real Vue edits and native Dock closure run."""
     panel.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
       const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
@@ -83,7 +82,6 @@ def verify_close_during_save(main, panel, tab_id, target_id, service, targets, s
     failed = wait(lambda: main.evaluate('window.__graphClose'),
                   lambda value: value['status'] != 'pending', 'graph save failure rejects close')
     assert failed['status'] == 'failed' and failed['code'] == 'GRAPH_SAVE_FAILED', failed
-    assert failed['tabId'] == tab_id, failed
     time.sleep(.5)
     assert panel.evaluate('window.__closeSave.requests.length') == 1, 'failed saves must wait for explicit retry'
     assert panel.evaluate("parseFloat(document.querySelector('.ng-node[data-node-id=packaged-start]').style.left)") == expected_x
@@ -123,7 +121,7 @@ def run(port, root):
                     and 'standalone=1' not in target['url']]
     assert len(main_targets) == 1, main_targets
     main = Frontend(port, target_id=main_targets[0]['id'])
-    panel, tab_id = None, None
+    panel = None
     service = """(async()=>{const m=await import(document.querySelector('script[type=module]').src);
       return Object.values(m).find(v=>typeof v?.openNativePanel==='function');})()"""
     selector = 'select[aria-label="运行目标"]'
@@ -143,7 +141,7 @@ def run(port, root):
                                   runnable=True, validation_errors=[]), workspace=workspace))
         seeded = bridge(main, 'ProjectFiles', 'save', seed)
         assert seeded['status'] == 'saved', seeded
-        panel, tab_id, target = open_graph(main, port, targets, 'node graph document')
+        panel, target = open_graph(main, port, targets, 'node graph document')
         wait(lambda: panel.evaluate("!!document.querySelector('select[aria-label=运行目标] option[value=Probe]')"),
              bool, 'node graph Actor options')
         panel.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
@@ -190,8 +188,7 @@ def run(port, root):
         file_calls = panel.evaluate('window.__projectFiles')
         assert any(call['name'] == 'save' and call['status'] == 'saved' for call in file_calls), file_calls
         assert all(not call['legacyKey'] and len(call['identity']) == 4 for call in file_calls), file_calls
-        main.evaluate(f'{service}.then(s=>s.closePanelTab({tab_id},"NodeGraphPanel"))')
-        tab_id = None
+        main.evaluate(f'{service}.then(s=>s.closePanelTab("NodeGraphPanel"))')
         stopped = wait(lambda: bridge(main, 'FileScripts', 'get_script_status'),
                        lambda value: value.get('status') == 'stopped' and not value.get('threadAlive')
                        and not value.get('snapshotCaptured') and not value.get('inputLocked'),
@@ -199,14 +196,13 @@ def run(port, root):
         assert stopped.get('restoreStatus') == 'restored' and not stopped.get('restoreError'), stopped
         panel.socket.close()
         panel = None
-        panel, tab_id, target = open_graph(main, port, targets, 'reopened graph document')
+        panel, target = open_graph(main, port, targets, 'reopened graph document')
         wait(lambda: panel.evaluate("!!document.querySelector('.ng-node[data-node-id=packaged-start]')"),
              bool, 'saved graph survives panel closure and reopening')
-        close_save = verify_close_during_save(main, panel, tab_id, target['id'], service, targets, scope)
-        tab_id = None
+        close_save = verify_close_during_save(main, panel, 'NodeGraphPanel', target['id'], service, targets, scope)
         panel.socket.close()
         panel = None
-        panel, tab_id, target = open_graph(main, port, targets, 'graph reopened after pending save')
+        panel, target = open_graph(main, port, targets, 'graph reopened after pending save')
         wait(lambda: panel.evaluate("parseFloat(document.querySelector('.ng-node[data-node-id=packaged-start]')?.style.left)"),
              lambda value: value == close_save['latestNodeX'], 'latest dirty edit survives native close and reopen')
         close_save['reopenedLatestEdit'] = True
@@ -223,8 +219,8 @@ def run(port, root):
             except Exception:
                 pass  # The native document may already be retired.
         main.evaluate(service + '.then(s=>{if(window.__originalGraphClose)s.closePanelTab=window.__originalGraphClose;return true;})')
-        if tab_id is not None:
-            main.evaluate(f'{service}.then(s=>s.closePanelTab({tab_id},"NodeGraphPanel"))')
+        if panel is not None:
+            main.evaluate(f'{service}.then(s=>s.closePanelTab("NodeGraphPanel"))')
         if panel:
             panel.socket.close()
         main.socket.close()

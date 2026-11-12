@@ -217,7 +217,6 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
         const auto surface = native_surface_from_sdl_window(window);
         tab->platform_window_id = id;
         tab->platform_handle_raw = surface;
-        tab->host_surface = viewport == main_viewport ? nullptr : surface;
         int logical_w = 1, logical_h = 1, pixel_w = 1, pixel_h = 1;
         SDL_GetWindowSize(window, &logical_w, &logical_h);
         SDL_GetWindowSizeInPixels(window, &pixel_w, &pixel_h);

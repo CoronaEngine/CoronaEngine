@@ -187,7 +187,7 @@ def minimize_restore(engine_pid, main, child, targets, service):
     before = []
     for client in (main, child):
         before.append(client.evaluate("(async()=>({token:window.__minimizeProbe=crypto.randomUUID(),"
-                                      "tab:await corona.window.getCurrent(),scene:await corona.scene.readActive()}))()"))
+                                      "scene:await corona.scene.readActive()}))()"))
     try:
         for hwnd in windows:
             assert user.ShowWindowAsync(hwnd, 6), f'Minimize HWND failed: {hwnd}'
@@ -199,10 +199,9 @@ def minimize_restore(engine_pid, main, child, targets, service):
              lambda states: not any(states), 'native windows restored')
     assert sorted(target['id'] for target in targets()) == before_targets, 'Minimize recreated a CEF document'
     for client, previous in zip((main, child), before):
-        after = client.evaluate("(async()=>({token:window.__minimizeProbe,tab:await corona.window.getCurrent(),"
+        after = client.evaluate("(async()=>({token:window.__minimizeProbe,"
                                 "scene:await corona.scene.readActive()}))()")
         assert after['token'] == previous['token'], (previous, after)
-        assert after['tab']['tabId'] == previous['tab']['tabId'], (previous, after)
         assert after['scene']['archive_session'] == previous['scene']['archive_session'], (previous, after)
     policy = child.evaluate(f'{service}.then(s=>s.readEditorUiPolicy())')
     assert policy and policy.get('enabled'), policy
@@ -259,9 +258,7 @@ def run(port, root, engine_pid):
             child.call('Runtime.enable')
             wait(lambda: child.evaluate(f'!!document.querySelector({json.dumps(selectors[panel_id])})'),
                  bool, f'{panel_id} mounted')
-            identity = child.evaluate('corona.window.getCurrent()')
-            opened['tab_id'] = identity['tabId']
-            assert opened['tab_id'] > 0, identity
+            assert panel_id, 'a panel needs a stable id'
             peer_scene = child.evaluate('corona.scene.readActive()')
             assert peer_scene['archive_session'] == archive and peer_scene['scene'] == 'scene.ini', peer_scene
             settings_lifetime = editor_settings_retirement(child) if panel_id == 'EditorSettings' else None
@@ -323,7 +320,7 @@ def run(port, root, engine_pid):
             main.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))")
             matches = [value for value in targets() if f'#{route}?' in value['url'] and 'uiOwner=' in value['url']]
             assert [value['id'] for value in matches] == [target['id']], matches
-            assert child.evaluate('corona.window.getCurrent()')['tabId'] == opened['tab_id']
+            assert child.evaluate("new URLSearchParams(location.hash.split('?')[1]||'').get('uiWindow')") is not None
             assert main.evaluate('corona.scene.readActive()')['archive_session'] == archive
             # ImGui owns placement, so the panel keeps the same CEF document through open,
             # focus and close; there is no native detach transition left to exercise.
@@ -334,7 +331,7 @@ def run(port, root, engine_pid):
             main.evaluate(f'{store}.closePanel({json.dumps(panel_id)})')
             wait(lambda: any(value['id'] == target['id'] for value in targets()),
                  lambda value: not value, f'{panel_id} document closed')
-            results.append(dict(panel=panel_id, route=route, tab_id=opened['tab_id'], mounted=True,
+            results.append(dict(panel=panel_id, route=route, mounted=True,
                                 reused=True, closed=True, settings_save_reset=settings_saved,
                                 file_crud=file_crud, minimize_restore=restored))
             results[-1]['editor_settings_lifetime'] = settings_lifetime

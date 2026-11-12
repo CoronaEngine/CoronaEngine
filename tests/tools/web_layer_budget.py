@@ -58,7 +58,9 @@ TARGET_LINES = 13_807
 # three lines and removed a silently ignored option. Rejecting a camera identity on a
 # panel costs four more; both close the same hole. Merging the two facade probes
 # removed one method and made the survivor check both halves, +2 lines in the facade.
-CORE_BUDGET = 14399
+# Retiring the window self-identity query then removed the operation, its reply builder,
+# the width/height/dock-state snapshot fields and the host_surface probe behind them.
+CORE_BUDGET = 14364
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -98,12 +100,12 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/cef_scene_operations.h", 428),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),
-    ("src/systems/ui/cef/cef_v8_binding.cpp", 2777),
+    ("src/systems/ui/cef/cef_v8_binding.cpp", 2759),
     ("src/systems/ui/cef/cef_process.h", 36),
     ("src/systems/ui/cef/cef_viewport_pick.cpp", 119),
     ("src/systems/ui/cef/cef_viewport_pick.h", 60),
-    ("src/systems/ui/cef/cef_window_operations.cpp", 838),
-    ("src/systems/ui/cef/cef_window_operations.h", 110),
+    ("src/systems/ui/cef/cef_window_operations.cpp", 826),
+    ("src/systems/ui/cef/cef_window_operations.h", 105),
     ("src/systems/ui/cef/ik_chain_config.h", 209),
     ("src/systems/ui/cef/model_node_config.h", 52),
     ("src/systems/ui/cef/model_node_page.h", 37),
@@ -125,7 +127,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/editor_api/scene_environment_service.cpp", 59),
     ("src/systems/ui/editor_api/scene_model_node_service.cpp", 63),
     ("src/systems/ui/editor_api/scene_projection_service.cpp", 26),
-    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 183),
+    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 182),
 ]
 
 # Per-file ceilings are the measured baseline. They start equal to the current

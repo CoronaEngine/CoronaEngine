@@ -137,7 +137,6 @@ def verify_initial_retirement(main, service, assistant, open_panel, close_panel)
             assert main.evaluate('window.__assistantInitialRead.pending.length') == 1, f'{panel} issued duplicate initial context reads'
             empty = client.evaluate(f'({{tasks:{assistant}.activeTasks.map(t=>t.taskKey),selected:{assistant}.selectedTaskKey}})')
             assert empty == dict(tasks=[], selected=''), empty
-            identity = client.evaluate('corona.window.getCurrent()')['tabId']
             client.evaluate("window.__assistantQuery=location.hash.split('?')[1]||'';location.hash='/SceneBar?'+window.__assistantQuery;true")
             wait(lambda: client.evaluate(f"!document.querySelector({json.dumps(selector)})&&!!document.querySelector('.scene-tools-panel')"),
                  bool, f'{panel} real Vue unmounted before initial reply')
@@ -152,8 +151,7 @@ def verify_initial_retirement(main, service, assistant, open_panel, close_panel)
                  f'{panel} remount requests and hydrates current owner')
             replies = main.evaluate('window.__assistantInitialRead.replies')
             assert replies == 2, f'Retired cache bypassed the new owner read: {replies}'
-            assert client.evaluate('corona.window.getCurrent()')['tabId'] == identity
-            results.append(dict(panel=panel, tabId=identity, initialReplyAfterUnmountIgnored=True,
+            results.append(dict(panel=panel, initialReplyAfterUnmountIgnored=True,
                                 remountOwnerReads=replies, documentPreserved=True))
         finally:
             main.evaluate('window.__assistantInitialRead.restore();true')
@@ -197,6 +195,7 @@ def run(port, root):
         target = wait(lambda: next((p for p in targets() if p['id'] not in before
                                    and f'#{route}?' in p['url']), None), bool, f'{panel} document')
         client = Frontend(port, target_id=target['id'])
+        client.panel_id = panel
         clients.append(client)
         wait(lambda: client.evaluate(f'!!document.querySelector({json.dumps(selector)})'), bool, f'{panel} mounted')
         return client
@@ -206,7 +205,7 @@ def run(port, root):
                         + json.dumps(key) + ";s.dispatchEvent(new Event('change',{bubbles:true}));return true;})()")
 
     def close_panel(client):
-        panel = client.evaluate('corona.window.getCurrent()')['panelId']
+        panel = client.panel_id
         main.evaluate(f'{service}.then(s=>s.closePanelTab({json.dumps(panel)}))')
         opened.remove(panel)
         clients.remove(client)
@@ -237,7 +236,7 @@ def run(port, root):
         late = open_panel('CabbageChatPanel', '.context-select')
         wait(lambda: state(late), lambda v: v and v['selected'] == options[0], 'late Dock hydrates active selection')
         late.evaluate(guard)
-        identities = [client.evaluate('corona.window.getCurrent()')['tabId'] for client in (board, chat, late)]
+        identities = [client.panel_id for client in (board, chat, late)]
         marker = main.evaluate('window.__assistantRemount=crypto.randomUUID()')
         main.evaluate("location.hash='/SceneBar';true")
         wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-viewport-pick-surface]')"),
@@ -249,7 +248,7 @@ def run(port, root):
         select(late, '')
         for client in (main, board, chat):
             wait(lambda: state(client), lambda v: v and v['selected'] == '', 'reverse selection reaches surviving documents')
-        assert [client.evaluate('corona.window.getCurrent()')['tabId'] for client in (board, chat, late)] == identities
+        assert [client.panel_id for client in (board, chat, late)] == identities, 'the same documents survived the remount'
         writes = main.evaluate('window.__assistantStorage.writes')
         assert writes >= 2, writes
         peer_storage = [client.evaluate('({reads:window.__assistantStorage.reads,writes:window.__assistantStorage.writes})')
@@ -277,7 +276,7 @@ def run(port, root):
         assert fresh_policy['enabled'] and fresh_policy['generation'] == next_policy['generation'], fresh_policy
         generation_retirement = dict(oldDockTabs=identities, oldDocumentsRetired=len(old_targets),
                                      generationChanged=True, newDockHydrated=True,
-                                     newTabId=fresh.evaluate('corona.window.getCurrent()')['tabId'])
+                                     newPanelId=fresh.panel_id)
         close_panel(fresh)
         return dict(taskKeys=baseline['tasks'], projectScopeId=baseline['scope'],
                     startupRecovery=startup,

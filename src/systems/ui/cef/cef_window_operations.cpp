@@ -819,18 +819,6 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         result.accepted = true;
         break;
     }
-    case WindowMethod::GetCurrent: {
-        auto& snapshot = result.snapshot;
-        snapshot.tab_id = source->tab_id;
-        snapshot.width = source->width;
-        snapshot.height = source->height;
-        // ImGui gives a window its own OS viewport when it is not docked: that is the only
-        // thing "detached" still means here.
-        snapshot.detached = source->host_surface != nullptr;
-        snapshot.dock_state = snapshot.detached ? "detached" : "docked";
-        snapshot.panel_id = source->panel_id;
-        break;
-    }
     }
     return result;
 }

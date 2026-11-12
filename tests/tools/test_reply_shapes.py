@@ -49,7 +49,7 @@ def test_the_forwarders_are_one_line():
 def test_engine_produced_converters_stay_typed():
     """The other direction: a shape that only C++ produces must not become a JSON blob."""
     text = BINDING.read_text(encoding="utf-8-sig")
-    for converter in ("cameras_value", "tree_actors_value", "snapshot_value"):
+    for converter in ("cameras_value", "tree_actors_value"):
         start = text.index(f"CefRefPtr<CefV8Value> {converter}(")
         end = text.index("\n}", start)
         assert "SetValue(" in text[start:end], (

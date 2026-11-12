@@ -10,7 +10,7 @@ namespace Corona::Systems::UI {
 // Web names the surface it wants and the identity it means (CreatePanel + kind,
 // Close + identity, SetWindowPresentation); the native host keeps the specialised
 // transitions behind those names.
-enum class WindowMethod { GetCurrent, Close, Focus, CreatePanel, CreateCameraView,
+enum class WindowMethod { Close, Focus, CreatePanel, CreateCameraView,
                           SetWindowPresentation, ConfigureViewport, CloseProcess };
 
 /// A window presentation is a state, not a toggle: the caller names the state it
@@ -53,10 +53,6 @@ struct PanelOptions {
 // Thread-boundary DTOs. No V8 handles or legacy JSON requests belong here.
 struct WindowSnapshot {
     int tab_id = -1;
-    int width = 0;
-    int height = 0;
-    bool detached = false;
-    std::string dock_state;
     std::string panel_id;
 };
 

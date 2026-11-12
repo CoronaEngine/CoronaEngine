@@ -106,8 +106,6 @@ struct BrowserTab {
     // The surface ImGui renders this tab into:
     //   nullptr  ⇒ docked in the main window (composed into the main viewport)
     //   non-null ⇒ its own OS window (a camera surface, or a panel the user undocked)
-    // host_surface is owned/driven by the UI thread only.
-    void* host_surface = nullptr;
 
     char url_buffer[1024] = "";
     // Last uncomposited PET_VIEW. Retained after upload so popup-only updates

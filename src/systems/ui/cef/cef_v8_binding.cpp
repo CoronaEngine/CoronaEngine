@@ -1787,20 +1787,6 @@ bool read_focus_request(const CefV8ValueList& arguments, WindowRequest& request)
     return option_string(arguments[0], "panelId", request.panel_id, true);
 }
 
-CefRefPtr<CefV8Value> snapshot_value(const WindowSnapshot& snapshot, int browser_id,
-                                  const std::string& frame_id) {
-    auto value = CefV8Value::CreateObject(nullptr, nullptr);
-    value->SetValue("browserId", CefV8Value::CreateString(std::to_string(browser_id)), V8_PROPERTY_ATTRIBUTE_NONE);
-    value->SetValue("frameId", CefV8Value::CreateString(frame_id), V8_PROPERTY_ATTRIBUTE_NONE);
-    value->SetValue("tabId", CefV8Value::CreateInt(snapshot.tab_id), V8_PROPERTY_ATTRIBUTE_NONE);
-    value->SetValue("panelId", CefV8Value::CreateString(snapshot.panel_id), V8_PROPERTY_ATTRIBUTE_NONE);
-    value->SetValue("width", CefV8Value::CreateInt(snapshot.width), V8_PROPERTY_ATTRIBUTE_NONE);
-    value->SetValue("height", CefV8Value::CreateInt(snapshot.height), V8_PROPERTY_ATTRIBUTE_NONE);
-    value->SetValue("detached", CefV8Value::CreateBool(snapshot.detached), V8_PROPERTY_ATTRIBUTE_NONE);
-    value->SetValue("dockState", CefV8Value::CreateString(snapshot.dock_state), V8_PROPERTY_ATTRIBUTE_NONE);
-    return value;
-}
-
 // CEF's RejectPromise only accepts a string. Adopt Promise.reject(Error) to
 // preserve a real Error with code, without evaluating or injecting script data.
 void reject(CefRefPtr<CefV8Context> context, CefRefPtr<CefV8Value> promise,
@@ -2300,7 +2286,7 @@ public:
             (close_operation && !read_close_request(arguments, request)) ||
             (focus_operation && !read_focus_request(arguments, request)) ||
             (method == WindowMethod::ConfigureViewport && !read_viewport_configuration(arguments, request)) ||
-            ((method == WindowMethod::GetCurrent || method == WindowMethod::CloseProcess) && !arguments.empty())) {
+            (method == WindowMethod::CloseProcess && !arguments.empty())) {
             reject(context_, promise, "INVALID_ARGUMENT", "Invalid native window operation arguments");
             return promise;
         }
@@ -2562,8 +2548,6 @@ private:
         if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
         else if (method == WindowMethod::ConfigureViewport && reply.viewport)
             promise->ResolvePromise(viewport_configuration_value(*reply.viewport));
-        else if (method == WindowMethod::GetCurrent)
-            promise->ResolvePromise(snapshot_value(reply.snapshot, browser_id_, frame_id_));
         else if (method == WindowMethod::CloseProcess)
             promise->ResolvePromise(CefV8Value::CreateNull());
         else if (method == WindowMethod::CreatePanel) {
@@ -2719,8 +2703,6 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     }
     root->SetValue("audio", audio, V8_PROPERTY_ATTRIBUTE_READONLY);
     auto window = CefV8Value::CreateObject(nullptr, nullptr);
-    window->SetValue("getCurrent", CefV8Value::CreateFunction("getCurrent",
-        new NativeHandler(endpoint, WindowMethod::GetCurrent)), V8_PROPERTY_ATTRIBUTE_READONLY);
     // One verb for "close a window"; the identity decides which. See read_close_request.
     window->SetValue("close", CefV8Value::CreateFunction("close",
         new NativeHandler(endpoint, WindowMethod::Close)), V8_PROPERTY_ATTRIBUTE_READONLY);

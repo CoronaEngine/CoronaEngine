@@ -6,7 +6,6 @@ from web_environment_smoke import wait
 
 def run_camera(panel):
     """Deliver a real settings reply only after the production view unmounts."""
-    identity = panel.evaluate('corona.window.getCurrent()')
     panel.evaluate("""(async()=>{
       const m=await import(document.querySelector('script[type=module]').src);
       const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
@@ -45,7 +44,6 @@ def run_camera(panel):
         'expression': "Boolean(document.querySelector('.camera-overlay')&&getEventListeners(window).keydown?.some(e=>e.listener.toString().includes('KeyW')))",
         'includeCommandLineAPI': True, 'returnByValue': True,
     })['result'].get('value'), bool, 'camera remount installs input normally')
-    assert panel.evaluate('corona.window.getCurrent()')['tabId'] == identity['tabId']
     initialization = run_camera_initialization(panel)
     return dict(initialization=initialization, settingsReplyRetired=True, nativeResizeAfterRetirement=0, normalRemount=True,
                 nativeDocumentPreserved=True)
@@ -118,7 +116,6 @@ def run_camera_initialization(panel):
 
 
 def run_node_graph(panel):
-    identity = panel.evaluate('corona.window.getCurrent()')
     panel.evaluate("window.__lifetimeQuery=location.hash.split('?')[1]||'';location.hash='/SceneBar?'+window.__lifetimeQuery;true")
     wait(lambda: panel.evaluate("!!document.querySelector('.scene-tools-panel')"), bool, 'lifecycle baseline route')
     panel.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
@@ -189,6 +186,5 @@ def run_node_graph(panel):
     panel.evaluate("location.hash='/NodeGraph?'+window.__lifetimeQuery;true")
     wait(lambda: panel.evaluate("!!document.querySelector('.ng-node[data-node-id=packaged-start]')"),
          bool, 'graph remounts normally after lifecycle races')
-    assert panel.evaluate('corona.window.getCurrent()')['tabId'] == identity['tabId']
     return dict(cycles=results, normalRemount=True, nativeDocumentPreserved=True,
                 scope='real Vue route unmount in one live CEF Dock; deferred facade replies')

@@ -16,7 +16,7 @@ def test_scene_v8_has_only_the_consolidated_names():
     # Scene operations are counted above; the rest is the editor surface, which
     # now includes the single Web -> Python bridge entry. Namespaces that moved
     # behind the bridge no longer appear here.
-    assert len(registered) == 59
+    assert len(registered) == 58
     assert len(set(registered)) == 8
     assert re.findall(r'bridge->SetValue\("([^"]+)"', source) == ['call'], (
         "the Web -> Python surface must stay one function wide"

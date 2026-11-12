@@ -22,7 +22,7 @@ gizmo 叠加层在 `viewport`，脚本输入派发在 `scene`，音频按身份�
 
 ## Web 面
 
-共 8 个命名空间 / 59 个方法。清单由
+共 8 个命名空间 / 58 个方法。清单由
 `tests/tools/test_typed_native_surface.py` 精确钉死（多一个、少一个都会失败）：
 
 | 命名空间 | 说明 |
@@ -47,7 +47,7 @@ gizmo 叠加层在 `viewport`，脚本输入派发在 `scene`，音频按身份�
 | `project` | `createMultiplayerProject`、`createWorldProject`、`getProjectLoadStatus`、`getRecentProjects`、`openDocument`、`openProject`、`openProjectFile`、`saveActiveProjectInfo` |
 | `scene` | `captureScreenshot`、`createActor`、`createCamera`、`deleteActor`、`deleteCamera`、`dispatchInput`、`focusActor`、`getEnvironment`、`importResourceFile`、`isVisionAvailable`、`readActive`、`readActorProperties`、`readActorRig`、`readCameraRenderSettings`、`readModelNodes`、`readScene`、`readTransforms`、`rebindActorResource`、`save`、`selectActor`、`selectModelFile`、`setActorIkChains`、`setActorTransform`、`setCameraRenderSettings`、`setEnvironment`、`setModelNodeState`、`updateActor`、`updateCamera` |
 | `viewport` | `configure`、`pick`、`setGizmoPointer`、`setGizmoTarget` |
-| `window` | `close`、`createPanel`、`focus`、`getCurrent`、`onCloseRequested`、`onClosed`、`setWindowPresentation` |
+| `window` | `close`、`createPanel`、`focus`、`onCloseRequested`、`onClosed`、`setWindowPresentation` |
 
 ### 面板与窗口：三个合并后的入口
 
@@ -67,9 +67,8 @@ ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web �
 `createPanel` 返回 `{tab_id, panel_id, existing}`，其余窗口方法返回布尔。
 
 `tabId` 是**传输身份**：它随窗口生灭，用来把 `onClosed` 负载、`createPanel` 的返回值对齐；
-`panelId` 是**稳定面板身份**，开/关/聚焦都用它，两者不要混用。`getCurrent()` 还给出
-`width`/`height`（当前表面尺寸）与 `detached`/`dockState`（ImGui 是否给该窗口独立 OS 视口），
-后两者是诊断字段。
+`panelId` 是**稳定面板身份**，开/关/聚焦都用它，两者不要混用。窗口不查询自身状态：
+身份来自 `createPanel` 的返回值和打开时带在 URL 上的参数。
 
 **权限**：窗口操作按调用者身份授权，规则集中在 `cef_window_operations.cpp` 的每个 case，
 这里列全，接入方不必读源码：
@@ -171,7 +170,7 @@ Python 服务自己返回的错误码（如 `DOCUMENT_CONFLICT`、`RUN_ACTIVE`�
 - 窗口/音频/面板请求的**参数校验**只有手动 CEF 冒烟覆盖（`web_messages_cef_smoke.mjs`）。
   读者（`read_close_request`、`read_window_presentation`、`read_audio_control`、`read_panel_options`）
   依赖 `CefV8Value`，单测需要真实 V8 上下文；`tests/tools` 的守卫只钉方法名、拒绝码和集成调用。
-- `getCurrent()` 目前唯一的消费者是测试用的 `appService.getCurrentWindow`。保留它是因为它是
-  窗口自省的唯一入口；若确认永远不需要，删掉它会让 window 面从 7 个方法降到 6 个。
+- 窗口不再有 `getCurrent()`：它唯一的产品消费者是测试包装，身份改由 `createPanel` 的返回值和
+  URL 参数提供。需要「问问自己是谁」的新页面应走同样的两条路，而不是恢复这个查询。
 - `SceneReply` 的 30 个字段每一个都被 `cef_v8_binding.cpp` 读取，所以没有拆成 `std::variant`：
   变体只会改变回复形状，不会减少任何载荷。

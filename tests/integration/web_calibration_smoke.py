@@ -55,15 +55,16 @@ def run(port, root):
             result = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'LightFieldCalibration',"
                                    "routePath:'/LightFieldCalibration',width:600,height:600}))")
             assert result.get('tab_id'), result
-            opened.append(result['tab_id'])
+            opened.append('LightFieldCalibration')
         target = wait(lambda: next((p for p in targets() if (menu or p['id'] not in before)
                                    and '#/LightFieldCalibration?' in p['url']), None), bool, 'new calibration document')
         client = Frontend(port, target_id=target['id'])
+        client.panel_id = 'LightFieldCalibration'
         clients.append(client)
         calibration_clients.append(client)
         wait(lambda: values(client), lambda v: len(v) == 4, 'calibration inputs mounted')
         if menu:
-            opened.append(client.evaluate('corona.window.getCurrent()')['tabId'])
+            opened.append('LightFieldCalibration')
         tab_targets[opened[-1]] = target['id']
         client.evaluate(guard)
         return client
@@ -121,7 +122,7 @@ def run(port, root):
         # Route-unmount the actual MainPage while low-level detached replicas
         # remain alive. The registered menu panel follows NativeDockLayout's
         # existing lifecycle; the two replicas exercise the surviving documents.
-        identities = [client.evaluate('corona.window.getCurrent()')['tabId'] for client in (second, third)]
+        identities = [client.panel_id for client in (second, third)]
         marker = main.evaluate('window.__calibrationRemount=crypto.randomUUID()')
         main.evaluate("location.hash='/SceneBar';true")
         wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-viewport-pick-surface]')"),
@@ -135,11 +136,11 @@ def run(port, root):
         remounted = [24, .25, 15, 18]
         for client in (third, fourth):
             wait(lambda: values(client), lambda v: v == remounted, 'surviving Dock accepts remounted owner updates')
-        assert [client.evaluate('corona.window.getCurrent()')['tabId'] for client in (second, third)] == identities
+        assert [client.panel_id for client in (second, third)] == identities
         return dict(mainReloadStartupSeed=seed, liveValues=expected, documents=len(clients),
                     bidirectionalVueEdits=True, lateDockHydration=True,
                     rejectedOwnerStorageWrites=writes, peerStorageAccess=peers,
-                    mainViewRemount=dict(liveValues=remounted, survivingTabIds=identities,
+                    mainViewRemount=dict(liveValues=remounted, survivingPanels=identities,
                                          documentPreserved=True, newDockHydration=True),
                     scope='isolated CEF cache; startup page reload before peers; live MainPage route remount with surviving peers')
     except Exception:
