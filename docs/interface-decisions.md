@@ -1,0 +1,79 @@
+# Web 接口层的决定记录
+
+契约本身是生成的，见 [interface-contract.md](interface-contract.md)：8 个命名空间、58 个方法，
+以及三个边界和失败码表。这份文档只记**为什么**它长成这样——哪些看似能合并的东西合并了，哪些
+被明确否决并保留。
+
+## 1. 三条边界
+
+| 边界 | 形态 | 规模 |
+|---|---|---|
+| Web → C++ | `window.corona.<ns>.<method>`，typed V8 | 8 命名空间 / 58 方法 |
+| Web → Python | `corona.bridge.call(信封)`，JSON | 3 个服务 + bridge |
+| C++ → Python | `python_service_bridge` | 18 个 `script_scene_*` |
+
+所有名字都是具名函数；没有任何"按名字分发"的通用入口（见第 3 节）。
+
+## 2. 演进记录
+
+| 变化 | 理由 |
+|---|---|
+| 窗口动词 18 → 13：`createPanel({kind})` 收掉三种面板创建，加 `setWindowPresentation` | 同一个动作，只是宿主种类不同 |
+| 删 `setPanelPlacement` / `dockingPos` / `nativeDocked` | ImGui 接管停靠，这些请求没有落地点 |
+| 删 `setDragRegions` | 无边框拖动声明，SDL 命中测试早已没有安装者 |
+| `close` + `closeTab` + `closeCameraView` → `close(identity?)` | 三种身份，一个动作；回复统一为 `{closed: n}` |
+| `resizeCameraView` → `setWindowPresentation({width,height})` | 尺寸就是一种呈现状态 |
+| `suspendCameraViews` → `close({sceneId})` | 复数关闭是 `close` 的第二种身份 |
+| `focusTab(tabId)` → `focus({panelId})` | 和 `close` 用同一个稳定身份 |
+| `files` / `gizmo` / `input` / `projectSettings` 折叠进 `project` / `viewport` / `scene` | 一个方法一个命名空间没有意义 |
+| `audio.playResource|playActor|stopResource|stopActor` → `audio.play|stop` | 两个动作，按身份区分资源或 Actor |
+| 删 `getCurrent` | 没有产品消费者；身份来自 `createPanel` 返回值和 URL 参数 |
+| 删 `minimized` 等死字段与死函数 | 没有写入路径或没有读取方 |
+
+结果：**65 → 58 个方法**，窗口面从 18 降到 6。
+
+## 3. 明确否决并保留
+
+| 提议 | 为什么不做 |
+|---|---|
+| 通用 `command({...})` 总入口 | 就是已经删除的 manifest 模式：名字变成数据，守卫和类型都失效 |
+| `scene.*` 全部改成单对象请求 | 20 多个方法的迁移成本大于一致性收益；位置参数在热路径上更紧凑 |
+| `SceneReply` 改 `std::variant` | 30 个字段每一个都被绑定读取；变体只改变形状，不减任何载荷 |
+| `createActor` / `deleteActor` / `updateActor` 与相机同名方法合并 | 两者的载荷结构不同，`kind` 只会把类型清晰度换成字符串分支 |
+| 保留 `getCurrent` | 新页面应当用 `createPanel` 的返回值和打开时带在 URL 上的 `panelId` |
+| 面板接受 `x` / `y` 或相机身份 | 接受却静默丢弃是陷阱；现在是 `INVALID_ARGUMENT` |
+| 资源音频接受 `archive_session` | 资源播放是全局的；现在是 `INVALID_ARGUMENT` |
+
+## 4. 身份词汇
+
+| 名字 | 稳定性 | 用途 |
+|---|---|---|
+| `panelId` | 稳定 | 打开、关闭、聚焦、广播都用它 |
+| `tabId` | 随窗口生灭 | 传输身份：`createPanel` 返回值与 `onClosed` 负载对齐 |
+| `sceneId` + `cameraId` | 稳定 | 相机窗口的身份 |
+
+主工作区不是面板：它不能 `close` 自己，也不能被当作面板关闭；它可以关/聚焦任何面板。
+
+## 5. 失败形状
+
+拒绝码的**唯一声明处**是 `tests/tools/rejection_codes.py`（基础设施 5 个、窗口 2 个、场景/归档 22 个、
+bridge 4 个，共 33 个），守卫 `tests/tools/test_rejection_vocabulary.py` 保证源码只发这些码，契约文档的失败码表
+由它生成。
+
+## 6. 改动一个接口的固定流程
+
+1. 改 `src/systems/ui/cef/`：读者、注册、执行三处。
+2. 更新 `tests/tools/test_typed_native_surface.py` 的 `EXPECTED_SURFACE`。
+3. `python tests/tools/generate_interface_contract.py` 重新生成契约。
+4. 改 `tests/integration/web_messages_cef_smoke.mjs`（调用与 `typeof` 断言都会被守卫检查）。
+5. 前端：改 facade → 推送 CoronaEditor → `python build_tools/dev.py pin editor <sha>` →
+   `python build_tools/dev.py editor-sync`。
+6. `python -m pytest tests/tools` 与 `ctest`。
+
+## 7. 现在的守卫
+
+全部列在契约文档的守卫表里，并由 `tests/tools/test_interface_contract_doc.py` 保证表与
+`tests/tools/*.py` 一致：新增一个守卫必须登记，否则失败。
+
+覆盖重点：方法名表、文档一致性、拒绝码词表、集成脚本（调用与 `typeof` 断言）、前端 facade
+（存在性、唯一入口、一一映射）、前端回归文件、行数 ratchet、pin 工具。
