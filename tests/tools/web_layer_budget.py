@@ -60,7 +60,9 @@ TARGET_LINES = 13_807
 # removed one method and made the survivor check both halves, +2 lines in the facade.
 # Retiring the window self-identity query then removed the operation, its reply builder,
 # the width/height/dock-state snapshot fields and the host_surface probe behind them.
-CORE_BUDGET = 14364
+# Running the smoke found that selectModelFile/importResourceFile had no reader filling the
+# fields their services validate, so they now share one (fifteen lines).
+CORE_BUDGET = 14379
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -100,7 +102,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/cef_scene_operations.h", 428),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),
-    ("src/systems/ui/cef/cef_v8_binding.cpp", 2759),
+    ("src/systems/ui/cef/cef_v8_binding.cpp", 2774),
     ("src/systems/ui/cef/cef_process.h", 36),
     ("src/systems/ui/cef/cef_viewport_pick.cpp", 119),
     ("src/systems/ui/cef/cef_viewport_pick.h", 60),

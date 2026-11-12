@@ -1822,6 +1822,21 @@ struct SceneOperationSpec {
 
 bool read_no_arguments(const CefV8ValueList& arguments, SceneRequest&) { return arguments.empty(); }
 bool read_requires_arguments(const CefV8ValueList& arguments, SceneRequest&) { return !arguments.empty(); }
+// selectModelFile / importResourceFile: (scene, {archive_session, file_type}). The services
+// validate these three fields, so a reader that only checked arity left them empty and every
+// request was rejected as "Resource import requires scene scope and file type".
+bool read_scene_file_request(const CefV8ValueList& arguments, SceneRequest& request) {
+    if (arguments.size() != 2 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty() ||
+        !object_keys(arguments[1], {"archive_session", "file_type"})) return false;
+    const auto session = arguments[1]->GetValue("archive_session");
+    const auto file_type = arguments[1]->GetValue("file_type");
+    if (!session || !session->IsString() || session->GetStringValue().empty() ||
+        !file_type || !file_type->IsString() || file_type->GetStringValue().empty()) return false;
+    request.read_scene = arguments[0]->GetStringValue().ToString();
+    request.archive_session = session->GetStringValue().ToString();
+    request.file_type = file_type->GetStringValue().ToString();
+    return true;
+}
 bool read_selection_request(const CefV8ValueList& arguments, SceneRequest& request) {
     return read_selection(arguments, request.selection);
 }
@@ -1878,8 +1893,8 @@ inline const SceneOperationSpec kSceneOperations[] = {
     {"readScene", SceneMethod::ReadScene, read_scene_query},
     {"readActive", SceneMethod::ReadActive, read_no_arguments},
     {"isVisionAvailable", SceneMethod::ReadVisionAvailability, read_no_arguments},
-    {"selectModelFile", SceneMethod::SelectModelFile, read_requires_arguments},
-    {"importResourceFile", SceneMethod::ImportResourceFile, read_requires_arguments},
+    {"selectModelFile", SceneMethod::SelectModelFile, read_scene_file_request},
+    {"importResourceFile", SceneMethod::ImportResourceFile, read_scene_file_request},
     {"readModelNodes", SceneMethod::ReadModelNodes, read_model_nodes},
     {"setModelNodeState", SceneMethod::SetModelNodeState, read_model_node_state},
     {"createActor", SceneMethod::CreateActor, read_actor_create},
