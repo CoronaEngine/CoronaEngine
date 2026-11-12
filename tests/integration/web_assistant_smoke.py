@@ -8,6 +8,12 @@ from vision_frontend_probe import Frontend
 from web_environment_smoke import wait
 
 
+def archive_call(main, function, request):
+    """Ask the archive service through the one Web -> Python entry."""
+    envelope = json.dumps({"service": "ProjectArchive", "function": function, "args": [request]})
+    return json.loads(main.evaluate("corona.bridge.call(" + json.dumps(envelope) + ")"))
+
+
 def verify_startup(main, root, service, assistant, open_panel, close_panel, select):
     """Reload the real main document; delay only the Web facade's native result."""
     main.evaluate("location.hash='/SceneBar';true")
@@ -20,9 +26,10 @@ def verify_startup(main, root, service, assistant, open_panel, close_panel, sele
                  activeTasks=[dict(taskKey='goal.saved-first', title='Saved first task', type='goal', status='active', order=1),
                               dict(taskKey='goal.saved-second', title='Saved second task', type='goal', status='active', order=2)],
                  chatMessages=[dict(id='saved-message', role='user', content='Persisted assistant message')])
-    previous = main.evaluate('corona.projectSettings.readProjectDocument(' + json.dumps(scope) + ')')
-    committed = main.evaluate('corona.projectSettings.commitProjectDocument('
-                              + json.dumps(dict(scope, revision=previous['revision'], content=saved)) + ')')
+    previous = archive_call(main, 'read_document', {**scope, 'revision_only': True})
+    committed = archive_call(main, 'commit_document',
+                             {**scope, 'revision_only': True,
+                              'revision': previous['revision'], 'content': saved})
     assert committed.get('success'), committed
     seed = main.evaluate("JSON.parse(localStorage.getItem('corona.cabbageAssistantContext.v2'))")
     assert seed and seed.get('projectScopeId'), seed

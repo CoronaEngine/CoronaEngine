@@ -123,9 +123,12 @@ try {
     assert.equal(await main.evaluate(`typeof corona.files?.${retired}`), 'undefined',
       `files.${retired} must not survive the bridge migration`);
   }
-  for (const method of ['getAppVersion', 'getRecentProjects', 'getProjectLoadStatus', 'openProject', 'openProjectFile', 'createWorldProject', 'createMultiplayerProject']) {
+  for (const method of ['getRecentProjects', 'getProjectLoadStatus', 'openProject', 'openProjectFile', 'createWorldProject', 'createMultiplayerProject']) {
     assert.equal(await main.evaluate(`typeof corona.project?.${method}`), 'function', `project.${method} requires a direct V8 binding`);
   }
+  // The version lives in the editor ini, which the archive service owns; the facade asks it
+  // through the bridge instead of keeping a native route that only forwarded the answer.
+  assert.equal(await main.evaluate('typeof corona.project?.getAppVersion'), 'undefined');
   assert.equal(await main.evaluate('typeof corona.project?.saveActiveProjectInfo'), 'function',
     'project.saveActiveProjectInfo refreshes the native scene cache and stays in C++');
   assert.equal(await main.evaluate('typeof corona.projectSettings'), 'undefined',
@@ -531,10 +534,13 @@ try {
     assert.equal(loadStatus.scene, sceneRead.scene);
     assert.equal(loadStatus.total, loadStatus.ready + loadStatus.failed + loadStatus.pending);
     assert.equal('data' in loadStatus, false);
-    assert.equal(typeof await main.evaluate('corona.project.getAppVersion()'), 'string');
+    const versionEnvelope = JSON.stringify({ service: 'ProjectArchive', function: 'editor_settings',
+      args: [{ section: 'General', key: 'version', fallback: '1.2.0' }] });
+    const versionReply = JSON.parse(await main.evaluate(`corona.bridge.call(${JSON.stringify(versionEnvelope)})`));
+    assert.equal(typeof versionReply?.value, 'string', 'the editor version comes from the archive service');
     const recent = await main.evaluate('corona.project.getRecentProjects()');
     assert.ok(Array.isArray(recent) && recent.some(project => project.path.replaceAll('\\', '/').toLowerCase() === cameraWorld.replaceAll('\\', '/').toLowerCase()));
-    for (const method of ['getAppVersion', 'getRecentProjects', 'getProjectLoadStatus']) {
+    for (const method of ['getRecentProjects', 'getProjectLoadStatus']) {
       assert.equal(await main.evaluate(`corona.project.${method}({}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
     }
 

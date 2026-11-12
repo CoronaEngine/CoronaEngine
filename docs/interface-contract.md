@@ -122,6 +122,7 @@ ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web �
 | [`test_docs_reference_live_files.py`](../tests/tools/test_docs_reference_live_files.py) | 文档不指向已删除的文件 |
 | [`test_editor_settings_owner.py`](../tests/tools/test_editor_settings_owner.py) | 编辑器 ini 只有一个 Python 所有者 |
 | [`test_reply_shapes.py`](../tests/tools/test_reply_shapes.py) | Python 产出的回复透传，引擎产出保留类型 |
+| [`test_integration_surface.py`](../tests/tools/test_integration_surface.py) | 集成冒烟只调用仍然存在的原生命中 |
 | [`web_layer_budget.py`](../tests/tools/web_layer_budget.py) | 接口核心行数 ratchet |
 
 ## 已知缺口

@@ -302,12 +302,12 @@ def run(port, root, engine_pid):
                 file_crud = True
             settings_saved = False
             if panel_id == 'ProjectSettings':
-                original = child.evaluate('corona.projectSettings.getActiveProjectInfo()')
+                original = child.evaluate('corona.scene.readActive()')
                 name = original['name'] + ' UI save'
                 child.evaluate("(()=>{const input=document.querySelector('input');input.value=" + json.dumps(name)
                                + ";input.dispatchEvent(new Event('input',{bubbles:true}));"
                                  "document.querySelectorAll('button')[1].click();})()")
-                wait(lambda: child.evaluate('corona.projectSettings.getActiveProjectInfo()'),
+                wait(lambda: child.evaluate('corona.scene.readActive()'),
                      lambda value: value['name'] == name, 'settings UI save')
                 wait(lambda: child.evaluate("!document.querySelectorAll('button')[1].disabled"), bool, 'settings save settled')
                 child.evaluate("(()=>{const input=document.querySelector('input');input.value='unsaved';"
