@@ -44,7 +44,7 @@ TARGET_LINES = 13_807
 # namespace lost setPanelPlacement, the detach state machine left BrowserTab, and
 # the dead pre-ImGui layout solver and input router were deleted. That is what
 # brings the ratchet back down.
-CORE_BUDGET = 14425
+CORE_BUDGET = 14424
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -111,7 +111,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/editor_api/scene_environment_service.cpp", 59),
     ("src/systems/ui/editor_api/scene_model_node_service.cpp", 63),
     ("src/systems/ui/editor_api/scene_projection_service.cpp", 26),
-    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 187),
+    ("CoronaEditor/editor/Frontend/src/api/editorApi.js", 186),
 ]
 
 # Per-file ceilings are the measured baseline. They start equal to the current
