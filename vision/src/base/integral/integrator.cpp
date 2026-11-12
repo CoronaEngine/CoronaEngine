@@ -305,6 +305,9 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         }
         if (hc.lobe_hitdist) {
             Float2 weight = make_float2(max(luminance(lin - spec), 0.f), max(luminance(spec), 0.f));
+            // Keep primary direct specular radiance. Its shadow-ray distance
+            // does not describe a hit along the sampled reflection path.
+            weight.y = ocarina::select(b == 0u, 0.f, weight.y);
             Float hit_t = ocarina::select(b == 0u, distance, first_distance);
             weight *= (hit_t > 0.f).cast<float>();
             distance_sum += weight * hit_t; distance_weight += weight;
