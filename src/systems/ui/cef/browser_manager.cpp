@@ -224,18 +224,6 @@ void BrowserManager::remove_tab(int tab_id) {
     // `removed` releases the tab here, once every reference above is dropped.
 }
 
-void BrowserManager::set_tab_drag_regions(int tab_id, const std::vector<DragRegion>& regions) {
-    BrowserTab* tab = nullptr;
-    {
-        std::lock_guard lock(tabs_mutex_);
-        auto it = tabs_.find(tab_id);
-        if (it == tabs_.end()) return;
-        tab = it->second.get();
-    }
-    std::lock_guard<std::mutex> lock(tab->drag_mutex);
-    tab->drag_regions = regions;
-}
-
 void BrowserManager::update() {
     ++frame_index_;
     retire_deferred_tab_textures();

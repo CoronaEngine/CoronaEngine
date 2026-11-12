@@ -93,11 +93,6 @@ class SdlWindowManager {
     // 1-frame white flash on detach). No-op if already shown or unknown surface.
     void reveal_pending_window(void* surface);
 
-    // Phase 8: install the OS hit-test on a (borderless) secondary window so its Vue title-bar
-    // drag regions move the window (SDL_HITTEST_DRAGGABLE) and its edges resize it (8-way
-    // RESIZE_*), while the panel body stays interactive (SDL_HITTEST_NORMAL). tab_id lets the
-    // callback look up that window's drag_regions. No-op for an unknown surface.
-    void enable_drag_hit_test(void* surface, int tab_id);
 
    private:
     SDL_Window* main_window_ = nullptr;

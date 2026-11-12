@@ -1706,25 +1706,6 @@ bool number(CefRefPtr<CefV8Value> object, const char* name, float& output) {
     return true;
 }
 
-std::optional<std::vector<DragRegion>> read_drag_regions(const CefV8ValueList& arguments) {
-    if (arguments.size() != 1 || !arguments[0]->IsArray()) return std::nullopt;
-    const auto array = arguments[0];
-    const int count = array->GetArrayLength();
-    if (count > 256) return std::nullopt;
-    std::vector<DragRegion> result;
-    result.reserve(count);
-    for (int index = 0; index < count; ++index) {
-        const auto value = array->GetValue(index);
-        DragRegion region{};
-        if (!value || !value->IsObject() ||
-            !number(value, "x", region.x) || !number(value, "y", region.y) ||
-            !number(value, "w", region.width) || !number(value, "h", region.height) ||
-            region.width < 0 || region.height < 0) return std::nullopt;
-        result.push_back(region);
-    }
-    return result;
-}
-
 // Readers shared by the panel and presentation requests: a missing key keeps the
 // caller's default, a wrong type or an empty required string is an argument error.
 bool option_string(const CefRefPtr<CefV8Value>& object, const char* name, std::string& output,
@@ -1815,17 +1796,6 @@ CefRefPtr<CefV8Value> snapshot_value(const WindowSnapshot& snapshot, int browser
     value->SetValue("minimized", CefV8Value::CreateBool(snapshot.minimized), V8_PROPERTY_ATTRIBUTE_NONE);
     value->SetValue("detached", CefV8Value::CreateBool(snapshot.detached), V8_PROPERTY_ATTRIBUTE_NONE);
     value->SetValue("dockState", CefV8Value::CreateString(snapshot.dock_state), V8_PROPERTY_ATTRIBUTE_NONE);
-    auto regions = CefV8Value::CreateArray(static_cast<int>(snapshot.drag_regions.size()));
-    for (int index = 0; index < static_cast<int>(snapshot.drag_regions.size()); ++index) {
-        const auto& region = snapshot.drag_regions[index];
-        auto item = CefV8Value::CreateObject(nullptr, nullptr);
-        item->SetValue("x", CefV8Value::CreateDouble(region.x), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("y", CefV8Value::CreateDouble(region.y), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("w", CefV8Value::CreateDouble(region.width), V8_PROPERTY_ATTRIBUTE_NONE);
-        item->SetValue("h", CefV8Value::CreateDouble(region.height), V8_PROPERTY_ATTRIBUTE_NONE);
-        regions->SetValue(index, item);
-    }
-    value->SetValue("dragRegions", regions, V8_PROPERTY_ATTRIBUTE_NONE);
     return value;
 }
 
@@ -2300,7 +2270,6 @@ public:
             method == WindowMethod::CloseCameraView || resize;
         const bool pair = method == WindowMethod::CloseCameraView;
         const std::size_t offset = resize ? 2u : 0u;
-        if (method == WindowMethod::SetDragRegions) request.regions = read_drag_regions(arguments);
         if ((camera_operation && (arguments.size() != offset + (pair ? 2u : 1u) ||
               !arguments[offset]->IsString() || (pair && !arguments[offset + 1]->IsString()))) ||
             (resize && (!arguments[0]->IsInt() || arguments[0]->GetIntValue() <= 0 ||
@@ -2308,7 +2277,6 @@ public:
             (panel_operation && !read_panel_options(arguments, request)) ||
             (presentation && !read_window_presentation(arguments, request)) ||
             (method == WindowMethod::ConfigureViewport && !read_viewport_configuration(arguments, request)) ||
-            (method == WindowMethod::SetDragRegions && !request.regions) ||
             ((method == WindowMethod::GetCurrent || method == WindowMethod::Close ||
               method == WindowMethod::CloseProcess) && !arguments.empty()) ||
             (targeted && (arguments.size() != 1 || !arguments[0]->IsInt() || arguments[0]->GetIntValue() < 0))) {
@@ -2581,7 +2549,7 @@ private:
         if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
         else if (method == WindowMethod::ConfigureViewport && reply.viewport)
             promise->ResolvePromise(viewport_configuration_value(*reply.viewport));
-        else if (method == WindowMethod::GetCurrent || method == WindowMethod::SetDragRegions)
+        else if (method == WindowMethod::GetCurrent)
             promise->ResolvePromise(snapshot_value(reply.snapshot, browser_id_, frame_id_));
         else if (method == WindowMethod::CloseProcess)
             promise->ResolvePromise(CefV8Value::CreateNull());
@@ -2743,8 +2711,6 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     auto window = CefV8Value::CreateObject(nullptr, nullptr);
     window->SetValue("getCurrent", CefV8Value::CreateFunction("getCurrent",
         new NativeHandler(endpoint, WindowMethod::GetCurrent)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    window->SetValue("setDragRegions", CefV8Value::CreateFunction("setDragRegions",
-        new NativeHandler(endpoint, WindowMethod::SetDragRegions)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("close", CefV8Value::CreateFunction("close",
         new NativeHandler(endpoint, WindowMethod::Close)), V8_PROPERTY_ATTRIBUTE_READONLY);
     window->SetValue("closeTab", CefV8Value::CreateFunction("closeTab",

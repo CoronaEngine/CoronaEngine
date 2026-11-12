@@ -9,7 +9,7 @@ namespace Corona::Systems::UI {
 
 // Web names the surface it wants (CreatePanel + kind, SetWindowPresentation); the native
 // host keeps the specialised transitions behind those names.
-enum class WindowMethod { GetCurrent, SetDragRegions, Close, CloseTab, FocusTab, CreatePanel, CreateCameraView,
+enum class WindowMethod { GetCurrent, Close, CloseTab, FocusTab, CreatePanel, CreateCameraView,
                           SuspendCameraViews, CloseCameraView, ResizeCameraView, SetWindowPresentation,
                           ConfigureViewport, CloseProcess };
 
@@ -59,14 +59,12 @@ struct WindowSnapshot {
     bool detached = false;
     std::string dock_state;
     std::string panel_id;
-    std::vector<DragRegion> drag_regions;
 };
 
 struct WindowRequest {
     WindowMethod method;
     int browser_id;
     int tab_id = -1;
-    std::optional<std::vector<DragRegion>> regions;
     std::optional<PanelOptions> panel;
     std::string base_url;
     std::string scene_id;

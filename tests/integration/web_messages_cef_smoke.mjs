@@ -279,7 +279,7 @@ try {
     for (const doc of docs) {
       assert.equal(await doc.client.evaluate('typeof corona.window.onClosed'), 'function', 'native close events require direct V8 callbacks');
       assert.equal(await doc.client.evaluate('typeof corona.window.onCloseRequested'), 'function');
-      for (const method of ['close', 'closeTab', 'focusTab', 'createPanel', 'setPanelPlacement', 'setWindowPresentation']) {
+      for (const method of ['close', 'closeTab', 'focusTab', 'createPanel', 'setWindowPresentation']) {
         assert.equal(await doc.client.evaluate(`typeof corona.window.${method}`), 'function', `${method} requires a direct native V8 operation`);
       }
       await doc.client.evaluate(`(() => {
@@ -322,25 +322,16 @@ try {
       const result = await doc.client.evaluate(`(async () => {
         JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); };
         const before = await corona.window.getCurrent();
-        await corona.window.setDragRegions([{x:2,y:3,w:40,h:12}]);
         const after = await corona.window.getCurrent();
         let errorCode;
-        try { await corona.window.setDragRegions([{x:0,y:0,w:-1,h:10}]); } catch(error) { errorCode=error.code; }
-        for (const args of [[], [null], [{}], [[null]], [[{x:NaN,y:0,w:1,h:1}]],
-          [[{x:0,y:0,w:Infinity,h:1}]], [[{x:0,y:0,w:1,h:-1}]], [Array(257).fill({x:0,y:0,w:1,h:1})]]) {
-          let invalid;
-          try { await corona.window.setDragRegions(...args); } catch(error) { invalid = error.code; }
-          if (invalid !== 'INVALID_ARGUMENT') throw new Error('invalid drag arguments accepted');
-        }
-        try { await corona.window.getCurrent(null); throw new Error('unexpected argument accepted'); }
-        catch(error) { if (error.code !== 'INVALID_ARGUMENT') throw error; }
-        const unchanged = await corona.window.getCurrent();
-        if (unchanged.dragRegions[0]?.w !== 40) throw new Error('invalid arguments mutated native state');
+        try { await corona.window.getCurrent(null); } catch(error) { errorCode=error.code; }
         return {same:before.browserId === after.browserId, idType:typeof after.browserId,
-          frameType:typeof after.frameId, regions:after.dragRegions, errorCode};
+          frameType:typeof after.frameId, dockState:after.dockState, errorCode,
+          dragBinding: typeof corona.window.setDragRegions};
       })()`);
       assert.deepEqual(result, { same: true, idType: 'string', frameType: 'string',
-        regions: [{ x: 2, y: 3, w: 40, h: 12 }], errorCode: 'INVALID_ARGUMENT' });
+        dockState: result.dockState, errorCode: 'INVALID_ARGUMENT', dragBinding: 'undefined' });
+      assert.ok(['docked', 'detached'].includes(result.dockState));
       evidence.find(item => item.document === doc.label).nativeBindings = 'passed';
     }
     const identities = await Promise.all(docs.map(doc => doc.client.evaluate('corona.window.getCurrent().then(x=>x.browserId)')));
@@ -399,8 +390,6 @@ try {
     const initialDock = await docs[1].client.evaluate('corona.window.getCurrent()');
     assert.ok(['docked', 'detached'].includes(initialDock.dockState), 'native snapshot must expose the ImGui viewport state');
     evidence[0].panelCreationAndDocking = 'passed with JSON disabled; placement is ImGui-owned';
-    await docs[1].client.evaluate('corona.window.setDragRegions([])');
-    assert.deepEqual(await main.evaluate('corona.window.getCurrent().then(x=>x.dragRegions)'), [{ x: 2, y: 3, w: 40, h: 12 }]);
 
   }
   await main.evaluate(`window.__smoke.emit('state',{speed:2})`);
@@ -417,10 +406,8 @@ try {
     await waitFor(() => dock.evaluate('!window.__oldNativeContext && typeof window.corona?.window?.getCurrent === "function"'));
     const after = await dock.evaluate('corona.window.getCurrent()');
     assert.equal(after.browserId, before.browserId);
-    assert.deepEqual(after.dragRegions, []);
     assert.equal(typeof after.frameId, 'string');
     evidence[1].refreshWithPendingReads = 'passed';
-    assert.deepEqual(await main.evaluate('corona.window.getCurrent().then(x=>x.dragRegions)'), [{ x: 2, y: 3, w: 40, h: 12 }]);
     stage = 'actual native window removal event';
     const closedTab = await docs[2].client.evaluate('corona.window.getCurrent()');
     const mainTab = await main.evaluate('corona.window.getCurrent()');

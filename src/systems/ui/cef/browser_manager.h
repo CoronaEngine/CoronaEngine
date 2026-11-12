@@ -38,16 +38,6 @@ inline bool is_valid_texture_id(const UiTextureId texture_id) {
     return texture_id != k_invalid_texture_id;
 }
 
-// Plain 2D point (replaces ImVec2 for drag bookkeeping).
-struct PointF {
-    float x = 0.0f;
-    float y = 0.0f;
-};
-
-struct DragRegion {
-    float x, y, width, height;
-};
-
 // ============================================================================
 // 浏览器标签页数据结构
 // ============================================================================
@@ -126,12 +116,6 @@ struct BrowserTab {
     std::vector<uint8_t> pixel_buffer;
     PopupOverlay popup;
     std::mutex mutex;
-
-    std::vector<DragRegion> drag_regions;
-    bool drag_pending = false;
-    PointF drag_pending_start_pos;
-    bool dragging_window = false;
-    std::mutex drag_mutex;  // 确保线程安全
 };
 
 // ============================================================================
@@ -176,7 +160,7 @@ class BrowserManager {
      * BrowserTab* / OffscreenCefClient*。
      *
      * @note 返回的 BrowserTab* 只在对应标签页未被 remove_tab 期间有效；访问其内容仍
-     *       需该 tab 自己的锁（paint 用 tab->mutex，drag 用 tab->drag_mutex）。
+     *       需该 tab 自己的锁（paint 用 tab->mutex）。
      */
     struct TabSnapshotEntry {
         int tab_id = 0;
@@ -191,7 +175,6 @@ class BrowserManager {
     // 设置主窗口指针
     void set_main_window(SDL_Window* window) { main_window_ = window; }
     [[nodiscard]] SDL_Window* main_window() const { return main_window_; }
-    void set_tab_drag_regions(int tab_id, const std::vector<DragRegion>& regions);
 
    private:
     BrowserManager() = default;
@@ -214,7 +197,7 @@ class BrowserManager {
 
     std::unordered_map<int, std::unique_ptr<BrowserTab>> tabs_;
     /// 保护 tabs_ 与 tab_counter_（见 tabs_snapshot 的说明）。
-    /// 锁序：tabs_mutex_ → tab->mutex / tab->drag_mutex；绝不反向。
+    /// 锁序：tabs_mutex_ → tab->mutex；绝不反向。
     mutable std::mutex tabs_mutex_;
     std::mutex pending_tasks_mutex_;
     std::vector<std::function<void()>> pending_tasks_;

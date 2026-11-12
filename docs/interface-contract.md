@@ -19,7 +19,7 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 
 ## Web 面
 
-共 12 个命名空间 / 66 个方法。清单由
+共 12 个命名空间 / 65 个方法。清单由
 `tests/tools/test_typed_native_surface.py` 精确钉死（多一个、少一个都会失败）：
 
 | 命名空间 | 说明 |
@@ -52,7 +52,7 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 | `project_settings` | `saveActiveProjectInfo` |
 | `scene` | `captureScreenshot`、`createActor`、`createCamera`、`deleteActor`、`deleteCamera`、`focusActor`、`getEnvironment`、`importResourceFile`、`isVisionAvailable`、`readActive`、`readActorProperties`、`readActorRig`、`readCameraRenderSettings`、`readModelNodes`、`readScene`、`readTransforms`、`rebindActorResource`、`save`、`selectActor`、`selectModelFile`、`setActorIkChains`、`setActorTransform`、`setCameraRenderSettings`、`setEnvironment`、`setModelNodeState`、`updateActor`、`updateCamera` |
 | `viewport` | `configure`、`pick` |
-| `window` | `close`、`closeCameraView`、`closeTab`、`createPanel`、`focusTab`、`getCurrent`、`onCloseRequested`、`onClosed`、`resizeCameraView`、`setDragRegions`、`setWindowPresentation`、`suspendCameraViews` |
+| `window` | `close`、`closeCameraView`、`closeTab`、`createPanel`、`focusTab`、`getCurrent`、`onCloseRequested`、`onClosed`、`resizeCameraView`、`setWindowPresentation`、`suspendCameraViews` |
 
 ### 面板与窗口：两个合并后的入口
 

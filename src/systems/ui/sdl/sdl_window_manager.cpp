@@ -19,70 +19,6 @@ namespace Corona::Systems::UI {
 
 namespace {
 
-// Edge margin (logical px) for resize hit-testing on borderless secondary windows.
-constexpr int kResizeBorder = 6;
-
-// SDL hit-test callback for detached (borderless) secondary windows. Runs on the UI thread
-// during SDL event processing. Must be allocation-free and efficient (SDL contract).
-//
-// Priority: window edges -> RESIZE_* (8-way); else Vue title-bar drag regions -> DRAGGABLE;
-// else NORMAL (panel body stays interactive). `data` carries the tab id (intptr_t).
-//
-// `area` is in window logical coordinates; the detached panel fills the window single-bleed,
-// and Vue reports drag regions in the same logical pixels, so no scaling is needed.
-SDL_HitTestResult SDLCALL secondary_window_hit_test(SDL_Window* win, const SDL_Point* area,
-                                                    void* data) {
-    if (win == nullptr || area == nullptr) {
-        return SDL_HITTEST_NORMAL;
-    }
-
-    int w = 0;
-    int h = 0;
-    SDL_GetWindowSize(win, &w, &h);
-    if (w > 0 && h > 0) {
-        const bool left = area->x < kResizeBorder;
-        const bool right = area->x >= w - kResizeBorder;
-        const bool top = area->y < kResizeBorder;
-        const bool bottom = area->y >= h - kResizeBorder;
-        if (top && left) return SDL_HITTEST_RESIZE_TOPLEFT;
-        if (top && right) return SDL_HITTEST_RESIZE_TOPRIGHT;
-        if (bottom && left) return SDL_HITTEST_RESIZE_BOTTOMLEFT;
-        if (bottom && right) return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
-        if (top) return SDL_HITTEST_RESIZE_TOP;
-        if (bottom) return SDL_HITTEST_RESIZE_BOTTOM;
-        if (left) return SDL_HITTEST_RESIZE_LEFT;
-        if (right) return SDL_HITTEST_RESIZE_RIGHT;
-
-        // The Vue title bar reports its whole header as draggable, but the right-side
-        // float/close buttons must remain normal client hit-test targets so SDL/CEF receive
-        // their mouse events instead of Windows consuming them as a native drag.
-        constexpr int kTitlebarHeight = 32;
-        constexpr int kTitlebarActionReserve = 80;
-        if (area->y >= kResizeBorder && area->y < kTitlebarHeight &&
-            area->x >= w - kTitlebarActionReserve) {
-            return SDL_HITTEST_NORMAL;
-        }
-    }
-
-    const int tab_id = static_cast<int>(reinterpret_cast<std::intptr_t>(data));
-    auto* tab = BrowserManager::instance().get_tab(tab_id);
-    if (tab == nullptr) {
-        return SDL_HITTEST_NORMAL;
-    }
-
-    // Read the same protected snapshot updated by the native window binding.
-    std::lock_guard<std::mutex> lock(tab->drag_mutex);
-    for (const DragRegion& region : tab->drag_regions) {
-        if (static_cast<float>(area->x) >= region.x &&
-            static_cast<float>(area->y) >= region.y &&
-            static_cast<float>(area->x) < region.x + region.width &&
-            static_cast<float>(area->y) < region.y + region.height) {
-            return SDL_HITTEST_DRAGGABLE;
-        }
-    }
-    return SDL_HITTEST_NORMAL;
-}
-
 }  // namespace
 
 SdlWindowManager& SdlWindowManager::instance() {
@@ -291,23 +227,6 @@ void* SdlWindowManager::create_secondary_window(int x, int y, int width, int hei
     CFW_LOG_INFO("SdlWindowManager: secondary window created (id={}, surface={})",
                  window_id, surface);
     return surface;
-}
-
-void SdlWindowManager::enable_drag_hit_test(void* surface, int tab_id) {
-    if (surface == nullptr) {
-        return;
-    }
-    const ManagedWindow* mw = find_by_surface(surface);
-    if (mw == nullptr || mw->window == nullptr) {
-        CFW_LOG_WARNING("SdlWindowManager: enable_drag_hit_test: surface {} not found", surface);
-        return;
-    }
-    // callback_data carries the tab id; the callback resolves drag regions via BrowserManager.
-    if (!SDL_SetWindowHitTest(mw->window, &secondary_window_hit_test,
-                              reinterpret_cast<void*>(static_cast<std::intptr_t>(tab_id)))) {
-        CFW_LOG_WARNING("SdlWindowManager: SDL_SetWindowHitTest failed for surface {}: {}",
-                        surface, SDL_GetError());
-    }
 }
 
 bool SdlWindowManager::request_remove_surface(void* surface, std::chrono::milliseconds timeout) {

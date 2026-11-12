@@ -58,8 +58,7 @@ def run_camera_initialization(panel):
       const app=Object.values(m).find(v=>typeof v?.openNativePanel==='function');
       const runtime=window.__coronaObserverRuntime||Object.values(m).find(v=>typeof v?.observe==='function'&&typeof v?.off==='function'&&typeof v?.start==='function');
       if(!runtime)throw Error('observer runtime export is unavailable');
-      const original={drag:app.setCurrentTabDragRegions,read:api.scene.readScene,
-        observe:runtime.observe,off:runtime.off};
+      const original={read:api.scene.readScene,observe:runtime.observe,off:runtime.off};
       const probe=window.__cameraInit={route:location.hash,phase:null};
       const camera=()=>!!document.querySelector('.camera-overlay');
       const hold=(kind,result)=>{
@@ -67,7 +66,6 @@ def run_camera_initialization(panel):
         return p&&camera()&&p.kind===kind
           ?Promise.resolve(result).then(value=>new Promise(resolve=>p.pending.push(()=>resolve(value)))):result;
       };
-      app.setCurrentTabDragRegions=(...args)=>hold('drag',original.drag(...args));
       api.scene.readScene=(...args)=>{if(probe.phase&&camera())probe.phase.reads++;
         return hold('read',original.read(...args));};
       runtime.observe=(...args)=>{
@@ -80,21 +78,19 @@ def run_camera_initialization(panel):
       probe.release=()=>{for(const resume of probe.phase.pending.splice(0))resume();};
       probe.snapshot=()=>{const p=probe.phase;return {kind:p.kind,pending:p.pending.length,reads:p.reads,
         registrations:p.registrations,releases:p.releases,token:p.token};};
-      probe.restore=()=>{probe.release();probe.phase=null;app.setCurrentTabDragRegions=original.drag;
+      probe.restore=()=>{probe.release();probe.phase=null;
         api.scene.readScene=original.read;runtime.observe=original.observe;runtime.off=original.off;};
       return true;
     })()""")
     results = []
     try:
-        for kind in ('drag', 'read', 'subscription'):
+        for kind in ('read', 'subscription'):
             panel.evaluate("location.hash='/SceneBar?'+location.hash.split('?')[1];true")
             wait(lambda: panel.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('.camera-overlay')"),
                  bool, 'camera baseline unmounted')
             panel.evaluate(f"window.__cameraInit.arm('{kind}');location.hash=window.__cameraInit.route;true")
             pending = wait(lambda: panel.evaluate('window.__cameraInit.snapshot()'),
                            lambda p: p['pending'] == 1, 'camera initialization waiting at ' + kind)
-            if kind == 'drag':
-                assert pending['reads'] == pending['registrations'] == 0, pending
             panel.evaluate("location.hash='/SceneBar?'+location.hash.split('?')[1];true")
             wait(lambda: panel.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('.camera-overlay')"),
                  bool, 'camera unmounted during ' + kind)

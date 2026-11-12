@@ -804,9 +804,7 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         target->native_focus_requested = true;
         result.accepted = true;
         break;
-    case WindowMethod::GetCurrent:
-    case WindowMethod::SetDragRegions: {
-        if (request.regions) manager.set_tab_drag_regions(source->tab_id, *request.regions);
+    case WindowMethod::GetCurrent: {
         auto& snapshot = result.snapshot;
         snapshot.tab_id = source->tab_id;
         snapshot.width = source->width;
@@ -817,7 +815,6 @@ WindowReply execute_window_operation(const WindowRequest& request) {
         snapshot.detached = source->host_surface != nullptr;
         snapshot.dock_state = snapshot.detached ? "detached" : "docked";
         snapshot.panel_id = source->panel_id;
-        { std::lock_guard lock(source->drag_mutex); snapshot.drag_regions = source->drag_regions; }
         break;
     }
     }
