@@ -101,6 +101,11 @@ def run(port, root, control):
     def v8(web, method, *args):
         return web.evaluate(method + "(..." + json.dumps(args) + ")")
 
+    def bridge(page, service, function, *args):
+        """Ask the Python service through the one Web -> Python entry."""
+        envelope = json.dumps({"service": service, "function": function, "args": list(args)})
+        return json.loads(page.evaluate("corona.bridge.call(" + json.dumps(envelope) + ")"))
+
     wait(lambda: main.evaluate("document.readyState === 'complete' && !!document.querySelector('#app[data-v-app] button')"),
          bool, "main frontend mounted")
     opened = wait(lambda: open_web_project(main, root),
@@ -178,7 +183,7 @@ def run(port, root, control):
         path.parent.mkdir(exist_ok=True)
         source = source.encode()
         path.write_bytes(source)
-        return v8(main, "corona.scripts.runFile", {**scope, "project_path": str(root), "path": path.relative_to(root).as_posix(),
+        return bridge(main, "FileScripts", "run_file", {**scope, "project_path": str(root), "path": path.relative_to(root).as_posix(),
                    "revision": hashlib.sha256(source).hexdigest(), "target_type": "actor", "scene_name": state["scene"],
                    "actor_name": "Probe", "requestId": filename})
 
@@ -217,7 +222,7 @@ def run(port, root, control):
                 "vuePropertyWrites": ['body_type', 'mass', 'follow_camera', 'linear_lock', 'camera_lock']}
     finally:
         (control / "resume").touch()
-        stopped = v8(main, "corona.scripts.stop", started["runId"], True)
+        stopped = bridge(main, "FileScripts", "stop_file", {"runId": started["runId"], "restore_state": True})
         assert stopped.get("restored"), stopped
     restored = v8(main, "corona.scene.readTransforms", {**scope, 'actors': [guid]})["actors"][0]["position"]
     assert restored == initial, restored
@@ -234,7 +239,7 @@ def run():
         assert isolated == [(control / "interpreter").read_text(), "unset"], isolated
         assert other["runId"] != started["runId"]
         assert (root / "scene.ini").read_bytes() == saved_ini
-        assert v8(main, "corona.scripts.stop", other["runId"])["restored"]
+        assert bridge(main, "FileScripts", "stop_file", {"runId": other["runId"], "restore_state": True})["restored"]
         # Exercise production Vue event handlers, not only direct binding calls.
         def read_probe():
             return read_actor(guid)
@@ -270,7 +275,8 @@ def run():
         new_name = "Two windows"
         moved = [initial[0] + 2, *initial[1:]]
         assert panels[1].evaluate(f"corona.scene.setActorTransform({json.dumps(state['scene'])},{json.dumps(guid)},{json.dumps({**scope, 'position': moved})})")["status"] == "success"
-        metadata = panels[0].evaluate('corona.projectSettings.getActiveProjectInfo()')
+        active = panels[0].evaluate('corona.scene.readActive()')
+        metadata = bridge(panels[0], 'ProjectArchive', 'project_info', {'path': active['project_path']})
         panels[0].evaluate('corona.project.saveActiveProjectInfo(' + json.dumps({
             **scope, 'project_path': metadata['project_path'], 'name': new_name,
             'core_version': metadata['core_version']}) + ')')
@@ -283,12 +289,12 @@ def run():
         assert open_web_project(main, root)["ok"]
         fresh = main.evaluate("corona.scene.readActive()")
         assert fresh["archive_session"] != scope["archive_session"]
-        assert main.evaluate('corona.projectSettings.getActiveProjectInfo()')["name"] == new_name
+        assert main.evaluate('corona.scene.readActive()')["name"] == new_name
         assert read_actor(guid, fresh["archive_session"])["geometry"]["position"] == moved
         return {**report, "restored": restored, "sceneIniUnchangedDuringRun": True, "sameInterpreter": True,
                 "separateRunValue": isolated[1], "twoWindowSave": {"name": new_name, "position": moved}}
     finally:
-        v8(main, "corona.scripts.stop", other["runId"], True)
+        bridge(main, "FileScripts", "stop_file", {"runId": other["runId"], "restore_state": True})
         for panel in panels:
             try:
                 release_probe(panel)

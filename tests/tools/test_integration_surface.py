@@ -5,12 +5,11 @@ when the native surface moves a script can keep calling methods that were
 deleted and nobody notices. This guard reads the same ``EXPECTED_SURFACE`` the
 Web contract is pinned to and fails when a script calls anything else.
 
-``RETIRED_PRE_BRIDGE`` lists the scripts that still drive the surface from
-before the Web -> Python bridge migration (they call ``corona.scripts.*``,
-``corona.projectFiles.*``, ``corona.projectSettings.*`` and
-``corona.files.*`` instead of going through ``corona.bridge.call``). The list
-is pinned so the debt stays visible and can only shrink: migrate one script and
-its entry must go, while a newly stale script fails the guard.
+``RETIRED_PRE_BRIDGE`` is the temporary hold list for scripts that still drive
+the surface from before the Web -> Python bridge migration. It is empty: every
+script now goes through ``corona.bridge.call`` for the file, document and script
+domains. The mechanism stays, so a script that goes stale again fails here, and
+a script placed on the list must be removed once it is migrated.
 """
 
 from pathlib import Path
@@ -28,12 +27,7 @@ INTEGRATION = ROOT / "tests/integration"
 # objects, not native namespaces.
 NON_RPC_ROOTS = {"bridge", "cabbageAssistantContext", "nativeViewportCursor", "viewportUiCalibration"}
 
-RETIRED_PRE_BRIDGE = {
-    "blockly_actor_file_smoke.py",
-    "python_archive_smoke.py",
-    "scene_pull_smoke.py",
-    "web_graph_target_smoke.py",
-}
+RETIRED_PRE_BRIDGE: set[str] = set()
 
 # A direct call (`corona.scene.readScene(`) and the string form the `v8()` helpers use
 # (`v8("corona.scene.readScene", ...)`).

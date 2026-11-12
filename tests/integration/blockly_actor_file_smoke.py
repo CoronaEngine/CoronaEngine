@@ -165,6 +165,17 @@ def verify(port, root, switch_root=None):
         # JSON belongs to the test host/CDP only; arguments reach V8 as values.
         return web.evaluate(method + "(..." + json.dumps(args) + ")")
 
+    def bridge(service, function, *args):
+        # Documents and script runs answer through the one Web -> Python entry.
+        envelope = json.dumps({"service": service, "function": function, "args": list(args)})
+        return json.loads(web.evaluate("corona.bridge.call(" + json.dumps(envelope) + ")"))
+
+    def project_document(function, request):
+        return bridge("ProjectFiles", function, request)
+
+    def script_status():
+        return bridge("FileScripts", "get_script_status")
+
     def position():
         return web.evaluate("(async()=>{const s=await corona.scene.readActive();return "
                             "(await corona.scene.readActorProperties(s.scene,'Probe',{archive_session:s.archive_session})).geometry.position;})()")
@@ -228,7 +239,7 @@ def verify(port, root, switch_root=None):
               "id": "node_graph:actor:scene.ini:Probe", "enabled": True, "runnable": True, "validation_errors": []}
     locator = {"identity": ["node_graph", "actor", "scene.ini", "Probe"],
                "archive_session": first_session, "project_path": str(root)}
-    saved = v8("corona.projectFiles.save", {**locator, "document": {"target": target, "workspace": graph},
+    saved = project_document("save", {**locator, "document": {"target": target, "workspace": graph},
                 "code": "raise RuntimeError('node panel did not generate the script')"})
     assert saved["status"] == "saved", saved
     web.evaluate("localStorage.setItem('corona.activeProjectPath'," + json.dumps(str(root)) +
@@ -246,10 +257,10 @@ def verify(port, root, switch_root=None):
     for _ in range(2):
         web.evaluate(f"{run_button}.click()")
         wait_for(lambda: web.evaluate(f"{run_button}.classList.contains('running')"), bool, "run accepted by panel")
-        status = lambda: v8("corona.scripts.getStatus")
+        status = script_status
         running = wait_for(status, lambda r: r.get("status") == "running" and r.get("marker", {}).get("id") == "start",
                            "generated file running")
-        saved = v8("corona.projectFiles.load", locator)
+        saved = project_document("load", locator)
         path = root / saved["code_path"]
         script = path.read_bytes()
         assert b"def run():" in script and b"KeyD" in script, script
@@ -266,8 +277,8 @@ def verify(port, root, switch_root=None):
                 raise AssertionError(("Run modified archive", changes, saved_workspace,
                                       (root / saved["document_path"]).read_text(encoding="utf-8")))
         request_id = running["requestId"]
-        assert v8("corona.scripts.getRun", request_id)["runId"] == running["runId"]
-        replay = v8("corona.scripts.runFile", {
+        assert bridge("FileScripts", "get_file_run", {"requestId": request_id})["runId"] == running["runId"]
+        replay = bridge("FileScripts", "run_file", {
             "archive_session": first_session,
             "project_path": str(root), "path": saved["code_path"], "revision": hashlib.sha256(script).hexdigest(),
             "target_type": "actor", "scene_name": "scene.ini", "actor_name": "Probe", "requestId": request_id})
@@ -312,7 +323,7 @@ def verify(port, root, switch_root=None):
         row = ("[...document.querySelectorAll('.cursor-pointer')].find(e => "
                "e.innerText.toLowerCase().replaceAll(String.fromCharCode(92), '/').includes(" + peer_path + "))")
         switch_request = "switch-" + runs[-1]["requestId"]
-        active = v8("corona.scripts.runFile", {"archive_session": first_session, "requestId": switch_request, "project_path": str(root),
+        active = bridge("FileScripts", "run_file", {"archive_session": first_session, "requestId": switch_request, "project_path": str(root),
                      "path": report["path"], "revision": hashlib.sha256(script).hexdigest(),
                      "target_type": "actor", "actor_name": "Probe", "scene_name": "scene.ini"})
         wait_for(status, lambda r: r.get("runId") == active.get("runId") and r.get("marker", {}).get("id") == "start", "switch run")
@@ -329,7 +340,7 @@ def verify(port, root, switch_root=None):
                  lambda s: Path(s["project_path"]).resolve() == switch_root, "project switch")
         assert position() == peer_start
         assert project_files() == saved_files
-        assert v8("corona.scripts.getRun", switch_request)["status"] == "stopped"
+        assert bridge("FileScripts", "get_file_run", {"requestId": switch_request})["status"] == "stopped"
         assert not status()["snapshotCaptured"]
         key_down()
         key_up()
@@ -350,14 +361,13 @@ def verify(port, root, switch_root=None):
         stale_run = {**stale_target, "requestId": "late-start", "path": report["path"],
                      "revision": hashlib.sha256(script).hexdigest()}
         def verify_rejected():
-            for name, payload in (
-                ("corona.projectFiles.load", locator),
-                ("corona.projectFiles.save", {**locator, "document": {}, "code": "raise AssertionError()"}),
+            for function, payload in (
+                ("load", locator),
+                ("save", {**locator, "document": {}, "code": "raise AssertionError()"}),
             ):
-                reply = v8(name, payload)
+                reply = project_document(function, payload)
                 assert reply.get("code") == "PROJECT_CONTEXT_CHANGED", reply
-            rejected = web.evaluate("corona.scripts.runFile(" + json.dumps(stale_run) +
-                                    ").then(value=>value,error=>({code:error.code,error:error.message}))")
+            rejected = bridge("FileScripts", "run_file", stale_run)
             assert rejected.get("code") == "PROJECT_CONTEXT_CHANGED", rejected
             assert not status()["snapshotCaptured"]
             current, current_peer = project_files(), project_files(switch_root)
@@ -373,7 +383,7 @@ def verify(port, root, switch_root=None):
         assert open_web_project(web, root).get("ok")
         sessions.append(verify_rejected())
         assert position() == start
-        assert v8("corona.projectFiles.load", {**locator, "archive_session": sessions[-1]})["status"] == "loaded"
+        assert project_document("load", {**locator, "archive_session": sessions[-1]})["status"] == "loaded"
         assert open_web_project(web, root).get("ok")
         sessions.append(verify_rejected())
         assert len(set(sessions)) == 4, sessions

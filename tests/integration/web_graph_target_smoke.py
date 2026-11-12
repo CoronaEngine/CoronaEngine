@@ -11,6 +11,12 @@ from vision_frontend_probe import Frontend
 from web_environment_smoke import wait
 from web_view_lifetime_smoke import run_node_graph
 
+
+def bridge(main, service, function, *args):
+    """Ask the Python service through the one Web -> Python entry."""
+    envelope = json.dumps({"service": service, "function": function, "args": list(args)})
+    return json.loads(main.evaluate("corona.bridge.call(" + json.dumps(envelope) + ")"))
+
 DOCK_STORE = "document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('dock')"
 
 
@@ -81,7 +87,7 @@ def verify_close_during_save(main, panel, tab_id, target_id, service, targets, s
     time.sleep(.5)
     assert panel.evaluate('window.__closeSave.requests.length') == 1, 'failed saves must wait for explicit retry'
     assert panel.evaluate("parseFloat(document.querySelector('.ng-node[data-node-id=packaged-start]').style.left)") == expected_x
-    before = main.evaluate('corona.projectFiles.load(' + json.dumps(scope) + ')')
+    before = bridge(main, 'ProjectFiles', 'load', scope)
     assert before['document']['workspace']['nodes'][0]['x'] == 80, before
 
     # The real menu must reuse the document whose close failed, then retry it.
@@ -99,7 +105,7 @@ def verify_close_during_save(main, panel, tab_id, target_id, service, targets, s
     assert closed['status'] == 'closed', closed
     wait(targets, lambda value: all(target['id'] != target_id for target in value),
          'native graph document retirement after saving')
-    persisted = main.evaluate('corona.projectFiles.load(' + json.dumps(scope) + ')')
+    persisted = bridge(main, 'ProjectFiles', 'load', scope)
     assert persisted['document']['workspace']['nodes'][0]['x'] == expected_x, persisted
     main.evaluate(service + '.then(s=>{s.closePanelTab=window.__originalGraphClose;delete window.__originalGraphClose;return true;})')
     return dict(pendingCloseBlocked=True, failedClose=failed, automaticRetries=0,
@@ -135,7 +141,7 @@ def run(port, root):
                     document=dict(target=dict(id='node_graph:project:global', script_kind='node_graph',
                                   target_type='project', scene_name='', actor_name='', enabled=True,
                                   runnable=True, validation_errors=[]), workspace=workspace))
-        seeded = main.evaluate('corona.projectFiles.save(' + json.dumps(seed) + ')')
+        seeded = bridge(main, 'ProjectFiles', 'save', seed)
         assert seeded['status'] == 'saved', seeded
         panel, tab_id, target = open_graph(main, port, targets, 'node graph document')
         wait(lambda: panel.evaluate("!!document.querySelector('select[aria-label=运行目标] option[value=Probe]')"),
@@ -170,12 +176,12 @@ def run(port, root):
              bool, 'persisted project graph loaded into the real UI')
         wait(lambda: panel.evaluate("!document.querySelector('button.ng-run').disabled"), bool, 'Run button enabled')
         panel.evaluate("document.querySelector('button.ng-run').click();true")
-        running = wait(lambda: main.evaluate('corona.scripts.getStatus()'),
+        running = wait(lambda: bridge(main, 'FileScripts', 'get_script_status'),
                        lambda value: value.get('marker', {}).get('id') == 'packaged-start'
                        and value.get('threadAlive') and value.get('snapshotCaptured'),
                        'Run button saves and starts the generated file')
         assert running['inputLocked'] and running['runId'], running
-        persisted = main.evaluate('corona.projectFiles.load(' + json.dumps(scope) + ')')
+        persisted = bridge(main, 'ProjectFiles', 'load', scope)
         assert persisted['status'] == 'loaded', persisted
         assert persisted['document']['workspace']['nodes'][0]['id'] == 'packaged-start'
         code = (Path(root) / persisted['code_path']).read_bytes()
@@ -186,7 +192,7 @@ def run(port, root):
         assert all(not call['legacyKey'] and len(call['identity']) == 4 for call in file_calls), file_calls
         main.evaluate(f'{service}.then(s=>s.closePanelTab({tab_id},"NodeGraphPanel"))')
         tab_id = None
-        stopped = wait(lambda: main.evaluate('corona.scripts.getStatus()'),
+        stopped = wait(lambda: bridge(main, 'FileScripts', 'get_script_status'),
                        lambda value: value.get('status') == 'stopped' and not value.get('threadAlive')
                        and not value.get('snapshotCaptured') and not value.get('inputLocked'),
                        'closing the graph panel stops and restores its run')

@@ -19,6 +19,16 @@ def verify(port, project, peer):
         # Only the test host/CDP encodes expressions; V8 receives structured values.
         return web.evaluate(method + "(..." + json.dumps(args) + ")")
 
+    def bridge(service, function, *args):
+        # The document and file domains answer through the one Web -> Python entry.
+        envelope = json.dumps({"service": service, "function": function, "args": list(args)})
+        return json.loads(web.evaluate("corona.bridge.call(" + json.dumps(envelope) + ")"))
+
+    def file_manager(op, *args):
+        return bridge("ProjectArchive", "file_manager",
+                      {"archive_session": scope["archive_session"],
+                       "project_path": str(project), "op": op, "args": list(args)})
+
     def read_actor(actor, archive_session):
         return v8("corona.scene.readActorProperties", "scene.ini", actor, {"archive_session": archive_session})
 
@@ -36,17 +46,18 @@ def verify(port, project, peer):
     session = open_project(project)
     scope = {"archive_session": session, "project_path": str(project)}
     doc = {**scope, "document": "CabbageAssistant/archive-smoke.json"}
-    read = v8("corona.projectSettings.readProjectDocument", doc)
+    read = bridge("ProjectArchive", "read_document", {**doc, "revision_only": True})
     assert read["success"] and read['content'] is None and not read['corrupt'], read
     assert read['revision'] == hashlib.sha256(b'').hexdigest(), read
     update = {**doc, "content": {"sample": 1}, "revision": read.get("revision", "")}
-    saved = v8("corona.projectSettings.commitProjectDocument", update)
-    assert saved["success"] and v8("corona.projectSettings.commitProjectDocument", update)["error"] == "DOCUMENT_CONFLICT"
+    saved = bridge("ProjectArchive", "commit_document", {**update, "revision_only": True})
+    assert saved["success"] and bridge("ProjectArchive", "commit_document",
+                                       {**update, "revision_only": True})["error"] == "DOCUMENT_CONFLICT"
 
-    prefab = v8("corona.files.createActorTemplate", {**scope, "path": "", "name": "Probe template"})
+    prefab = file_manager("create_file", "", "Probe template", "actor")
     assert (project / prefab["path"]).is_file()
-    v8("corona.files.renameItem", {**scope, "path": prefab["path"], "name": "Renamed.actor"})
-    v8("corona.files.deleteItem", {**scope, "path": "Renamed.actor"})
+    file_manager("rename_item", prefab["path"], "Renamed.actor")
+    file_manager("delete_item", "Renamed.actor")
     original = read_actor("Probe", session)
     with TemporaryDirectory(dir=project.parent) as source:
         source = Path(source)
@@ -59,10 +70,14 @@ def verify(port, project, peer):
     open_project(peer)
     session = open_project(project)
     assert session != scope["archive_session"]
-    stale = v8("corona.projectSettings.commitProjectDocument", {**update, "revision": saved["revision"], "content": "stale"})
+    stale = bridge("ProjectArchive", "commit_document",
+                   {**update, "revision": saved["revision"], "content": "stale", "revision_only": True})
     assert stale["error"] == "PROJECT_CONTEXT_CHANGED", stale
+    stale_file = bridge("ProjectArchive", "file_manager",
+                        {"archive_session": scope["archive_session"], "project_path": str(project),
+                         "op": "create_file", "args": ["", "stale", "actor"]})
+    assert not stale_file["success"] and "PROJECT_CONTEXT_CHANGED" in stale_file["error"], stale_file
     for name, args in (
-        ("corona.files.createActorTemplate", [{**scope, "path": "", "name": "stale"}]),
         ("corona.scene.importResourceFile", ["scene.ini", {"archive_session": scope["archive_session"], "file_type": "model"}]),
         ("corona.scene.createActor", ["scene.ini", original["model"], {"archive_session": scope["archive_session"], "actor_type": "model"}]),
     ):
@@ -71,7 +86,7 @@ def verify(port, project, peer):
         assert reply.get("code") == "PROJECT_CONTEXT_CHANGED", (name, reply)
     assert not (project / "stale.actor").exists()
     scope = {**scope, "archive_session": session}
-    assert v8("corona.projectSettings.readProjectDocument", {**doc, **scope})["content"] == {"sample": 1}
+    assert bridge("ProjectArchive", "read_document", {**doc, **scope, "revision_only": True})["content"] == {"sample": 1}
     actor = read_actor("Spawned", session)
     assert actor["geometry"]["position"] == [2, 3, 4], actor
     script = project / "Scripts" / "remove_actor_for_restore.py"
@@ -81,12 +96,13 @@ def verify(port, project, peer):
                       "def run():\n    get_script_runtime_editor_api().scene_tools.remove_actor('scene.ini', 'Spawned')\n"
                       "    file_api.mark('removed')\n    while True: file_api.wait(.05)\n", encoding="utf8")
     before = fingerprint()
-    start = v8("corona.scripts.runFile", {**scope, "path": script.relative_to(project).as_posix(), "target_type": "project",
+    start = bridge("FileScripts", "run_file", {**scope, "path": script.relative_to(project).as_posix(), "target_type": "project",
                  "scene_name": "scene.ini", "requestId": "archive-restore", "revision": hashlib.sha256(script.read_bytes()).hexdigest()})
-    wait_for(lambda: v8("corona.scripts.getStatus"), lambda r: r.get("marker", {}).get("id") == "removed", "runtime removal")
+    wait_for(lambda: bridge("FileScripts", "get_script_status"),
+             lambda r: r.get("marker", {}).get("id") == "removed", "runtime removal")
     assert all(a["actor_guid"] != actor["actor_guid"] for a in v8("corona.scene.readScene", {"scene": "scene.ini", "archive_session": session, "actors": "index"})["actors"])
     assert fingerprint() == before
-    stop = v8("corona.scripts.stop", start["runId"])
+    stop = bridge("FileScripts", "stop_file", {"runId": start["runId"], "restore_state": True})
     assert stop["restored"] and not stop["snapshotCaptured"], stop
     restored = read_actor(actor["actor_guid"], session)
     assert restored["geometry"]["position"] == actor["geometry"]["position"] and fingerprint() == before
