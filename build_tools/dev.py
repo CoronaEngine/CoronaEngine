@@ -36,29 +36,38 @@ DEFAULT_TARGET = "corona_engine"
 WORKSPACE_COMMANDS = {f"{workspace.key}-sync": workspace for workspace in WORKSPACES}
 
 
-def pin_workspaces(repo_root: Path, keys: list[str]) -> None:
-    """Point the pinned commits at the checkouts' current HEAD.
+def pin_workspaces(repo_root: Path, keys: list[str], commit: str | None = None) -> None:
+    """Point the pinned commits at a commit.
 
-    A pinned commit must already be on the remote branch, so a checkout that is
-    dirty, detached or on another branch is reported before the file changes.
+    ``commit`` is used when the working checkout is not the one the build reads:
+    the build checkout is kept at the pin, so its HEAD cannot advance the pin.
+    Without it, the checkout's HEAD is the source, and a commit that is not on
+    the remote branch is reported before the file changes.
     """
+    if commit is not None and len(keys) != 1:
+        raise RuntimeError("Name one workspace when pinning an explicit commit")
     for key in keys:
         workspace = find_workspace(key)
         directory = repo_root / workspace.directory
         status = inspect_workspace(repo_root, workspace)
-        if not status.cloned:
+        if not status.cloned and commit is None:
             raise RuntimeError(f"{workspace.name} is not cloned at {directory}")
-        head = status.head.lower()
-        if not head:
-            raise RuntimeError(f"{workspace.name} HEAD could not be read")
-        if status.dirty:
-            print(f"[WARN] {workspace.name} has uncommitted changes; the pin will point at HEAD anyway")
-        if status.detached:
-            print(f"[WARN] {workspace.name} is on a detached HEAD, so the commit belongs to no branch")
-        if head_on_remote(directory) is False:
-            print(f"[WARN] {workspace.name} HEAD is on no remote branch; push it before pinning")
-        if status.branch and status.branch != workspace.ref:
-            print(f"[WARN] {workspace.name} is on {status.branch}, not the pinned {workspace.ref}")
+        if commit is not None:
+            head = commit.lower()
+            if not status.cloned:
+                print(f"[WARN] {workspace.name} is not cloned, so the commit cannot be verified")
+        else:
+            head = status.head.lower()
+            if not head:
+                raise RuntimeError(f"{workspace.name} HEAD could not be read")
+            if status.dirty:
+                print(f"[WARN] {workspace.name} has uncommitted changes; the pin will point at HEAD anyway")
+            if status.detached:
+                print(f"[WARN] {workspace.name} is on a detached HEAD, so the commit belongs to no branch")
+            if head_on_remote(directory) is False:
+                print(f"[WARN] {workspace.name} HEAD is on no remote branch; push it before pinning")
+            if status.branch and status.branch != workspace.ref:
+                print(f"[WARN] {workspace.name} is on {status.branch}, not the pinned {workspace.ref}")
         if head == workspace.commit:
             print(f"{workspace.name}: already pinned at {head}")
             continue
@@ -215,7 +224,12 @@ def execute(args: argparse.Namespace) -> None:
         if workspace.key == "editor":
             materialize_editor_frontend_assets(REPO_ROOT)
     elif args.command == "pin":
-        pin_workspaces(REPO_ROOT, args.targets or [workspace.key for workspace in WORKSPACES])
+        targets = list(args.targets)
+        # `pin editor <commit>` pins an explicit commit; `pin` alone uses HEAD.
+        explicit = None
+        if len(targets) > 1:
+            explicit = targets.pop()
+        pin_workspaces(REPO_ROOT, targets or [workspace.key for workspace in WORKSPACES], explicit)
     elif args.command == "clean":
         clean_repo(REPO_ROOT)
     else:
@@ -232,7 +246,8 @@ def create_parser() -> argparse.ArgumentParser:
             "horizon-sync and editor-sync also synchronize submodules explicitly. "
             "update additionally refreshes Conan dependencies. "
             "pin writes the checkouts' current HEAD into source_workspaces.py "
-            "(optionally for one workspace: pin editor)."
+            "(optionally for one workspace: pin editor), or an explicit commit "
+            "(pin editor <sha>) when the build checkout is pin-aligned."
         ),
     )
     parser.add_argument(
