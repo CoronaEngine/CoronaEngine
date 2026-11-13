@@ -41,6 +41,13 @@
 
 ### 2.2 geometry（21 处）—— 最大，需要新建快照
 
+> **进展（第 12 轮）**：已新建 `GeometrySceneSnapshot`（`shared_data_hub.h`，字段：
+> 节点元数据/构建状态/计数/`transform_handle`/`ik_chains`/聚合 bounds），由
+> `GeometrySystem::update()` 末尾发布，未变化的模型复用上一 tick 的列表与 IK 链。
+> `engine_runtime_api` 的 14 处读已切换；CEF 的 5 处读（投影的 world AABB / IK 配置、
+> gizmo 的位置读写、rig 读取）也已切换。剩余：脚本线程 2 处
+> （`camera_follow_controller`）与 `AnimationPlayer`（经讨论保留为活对象，不是场景状态）。
+
 **现状**：没有几何状态快照。读的主要是 `mesh_handles.size()`、
 `collision_model_id`、`is_skinned` / `skinned_aabb_valid`、`model_node_bounds` 一类标量。
 

@@ -166,12 +166,11 @@ std::optional<ktm::fvec3> actor_gizmo_position(EntityId actor_handle) {
     auto& hub = Corona::SharedDataHub::instance();
     for (const auto geometry_handle :
          hub.resolve_actor_geometry_handles(actor_handle)) {
-        auto geometry = hub.geometry_storage().try_acquire_read(geometry_handle);
-        if (!geometry || geometry->transform_handle == 0) {
+        const auto row = hub.geometry_scene_row(geometry_handle);
+        if (!row || row->transform_handle == 0) {
             continue;
         }
-        if (auto transform =
-                hub.model_transform_storage().try_acquire_read(geometry->transform_handle)) {
+        if (auto transform = hub.transform_view(row->transform_handle)) {
             return transform->position;
         }
     }
@@ -184,13 +183,13 @@ bool write_actor_gizmo_position(EntityId actor_handle,
     auto& hub = Corona::SharedDataHub::instance();
     for (const auto geometry_handle :
          hub.resolve_actor_geometry_handles(actor_handle)) {
-        auto geometry = hub.geometry_storage().try_acquire_read(geometry_handle);
-        if (!geometry || geometry->transform_handle == 0) {
+        const auto row = hub.geometry_scene_row(geometry_handle);
+        if (!row || row->transform_handle == 0) {
             continue;
         }
         // P5：改走命令通道（原先是 UI 线程直接写槽位，违反单写者约束）
         Corona::TransformUpdateCommand command{};
-        command.transform_handle = geometry->transform_handle;
+        command.transform_handle = row->transform_handle;
         command.fields = Corona::TransformField::Position;
         command.position = position;
         hub.enqueue_transform_update(std::move(command));

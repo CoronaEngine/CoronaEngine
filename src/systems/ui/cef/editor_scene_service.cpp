@@ -45,6 +45,8 @@
 #include "editor_dispatch.h"
 #include <cef_task.h>
 #include "scene_folder.h"
+#include <corona/systems/geometry/geometry_commands.h>
+
 #include "ik_chain_config.h"
 #include "animation_config.h"
 #include "model_node_config.h"
@@ -69,6 +71,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <thread>
 #include <cmath>
 #include <cstdint>
 #include <ctime>
@@ -390,11 +393,13 @@ NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
     restore_native_model_nodes(item);
     if (!item.persisted_ik_chains.empty()) {
         auto chains = IkChainConfig::parse(item.persisted_ik_chains);
-        auto geometry = Corona::SharedDataHub::instance().geometry_storage().try_acquire_write(
-            item.geometry->get_handle());
-        if (!geometry) throw std::runtime_error("Actor IK geometry storage is unavailable");
-        geometry->ik_chains = std::move(chains);
-        ++geometry->ik_chains_revision;
+        // IK chains are geometry-owned: enqueue a command instead of writing the slot from
+        // this thread (the old path was a cross-thread write, not just a cross-thread read).
+        Corona::GeometryCommand command{};
+        command.geometry_handle = item.geometry->get_handle();
+        command.fields = Corona::GeometryField::IkChains;
+        command.ik_chains = std::move(chains);
+        Corona::GeometryCommandChannel::instance().commands().push(std::move(command));
     }
 
     item.optics = std::make_unique<Corona::API::Optics>(*item.geometry);
@@ -1784,12 +1789,23 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
             }
             const auto apply_ik = [&](const Corona::Resource::SkeletonData* skeleton) {
                 if (skeleton) incoming_ik_chains = IkChainConfig::parse(actor_data.at("ik_chains"), skeleton);
-                auto storage = Corona::SharedDataHub::instance().geometry_storage().try_acquire_write(
-                    actor->geometry->get_handle());
-                if (!storage) throw std::runtime_error("Remote IK geometry storage is unavailable");
                 auto saved = IkChainConfig::serialize(*incoming_ik_chains, skeleton);
-                IkChainConfig::apply_snapshot(storage->ik_chains, storage->ik_chains_revision,
-                                              std::move(*incoming_ik_chains), skeleton);
+                const auto row = Corona::SharedDataHub::instance().geometry_scene_row(
+                    actor->geometry->get_handle());
+                if (!row) throw std::runtime_error("Remote IK geometry snapshot is unavailable");
+                const std::vector<Corona::Resource::IkChain> current =
+                    row->ik_chains ? *row->ik_chains : std::vector<Corona::Resource::IkChain>{};
+                // Same replay rule as IkChainConfig::apply_snapshot: an identical
+                // configuration must not bump the revision, and runtime support is carried over.
+                if (IkChainConfig::serialize(current, skeleton) != saved) {
+                    auto next = *incoming_ik_chains;
+                    IkChainConfig::preserve_runtime(next, current);
+                    Corona::GeometryCommand command{};
+                    command.geometry_handle = actor->geometry->get_handle();
+                    command.fields = Corona::GeometryField::IkChains;
+                    command.ik_chains = std::move(next);
+                    Corona::GeometryCommandChannel::instance().commands().push(std::move(command));
+                }
                 actor->persisted_ik_chains = std::move(saved);
             };
             try {
@@ -3486,12 +3502,14 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
                 }
             }
 
-            auto geometry = Corona::SharedDataHub::instance().geometry_storage().try_acquire_read(actor->geometry->get_handle());
-            if (!geometry) { reply.error_code = "ACTOR_NOT_READY"; reply.error_message = "IK geometry storage is unavailable"; return reply; }
+            const auto row = Corona::SharedDataHub::instance().geometry_scene_row(actor->geometry->get_handle());
+            if (!row) { reply.error_code = "ACTOR_NOT_READY"; reply.error_message = "IK geometry snapshot is unavailable"; return reply; }
+            const std::vector<Corona::Resource::IkChain> chains =
+                row->ik_chains ? *row->ik_chains : std::vector<Corona::Resource::IkChain>{};
             auto& ik = reply.actor_ik;
             ik.archive_session = scene->archive_session; ik.scene = scene->route; ik.actor = actor->name;
-            ik.ready = true; ik.is_skinned = skeleton != nullptr; ik.revision = geometry->ik_chains_revision;
-            ik.chains = typed_ik_chains(geometry->ik_chains, skeleton, true);
+            ik.ready = true; ik.is_skinned = skeleton != nullptr; ik.revision = row->ik_chains_revision;
+            ik.chains = typed_ik_chains(chains, skeleton, true);
             return reply;
         }
         if (!skeleton) { reply.error_code = "ACTOR_NOT_READY"; reply.error_message = "Actor model has no skeleton"; return reply; }
@@ -3500,18 +3518,38 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         std::vector<Corona::Resource::IkChain> chains;
         try { chains = IkChainConfig::parse(encoded, skeleton); }
         catch (const std::exception& error) { reply.error_code = "INVALID_ARGUMENT"; reply.error_message = error.what(); return reply; }
-        auto writable = Corona::SharedDataHub::instance().geometry_storage().try_acquire_write(actor->geometry->get_handle());
-        if (!writable) { reply.error_code = "ACTOR_NOT_READY"; reply.error_message = "IK geometry storage is unavailable"; return reply; }
-        if (request.ik.expected_revision && *request.ik.expected_revision != writable->ik_chains_revision) {
+        const auto row = Corona::SharedDataHub::instance().geometry_scene_row(actor->geometry->get_handle());
+        if (!row) { reply.error_code = "ACTOR_NOT_READY"; reply.error_message = "IK geometry snapshot is unavailable"; return reply; }
+        if (request.ik.expected_revision && *request.ik.expected_revision != row->ik_chains_revision) {
             reply.error_code = "CONFLICT"; reply.error_message = "IK configuration changed; reload before applying"; return reply;
         }
-        IkChainConfig::preserve_runtime(chains, writable->ik_chains);
+        const std::vector<Corona::Resource::IkChain> current =
+            row->ik_chains ? *row->ik_chains : std::vector<Corona::Resource::IkChain>{};
+        IkChainConfig::preserve_runtime(chains, current);
         auto saved_config = IkChainConfig::serialize(chains, skeleton);
-        writable->ik_chains = std::move(chains); ++writable->ik_chains_revision;
+        // The reply derives the state this request asked for; the command bumps the live
+        // revision on the geometry owner, and the next snapshot read carries the applied one.
+        const auto applied = typed_ik_chains(chains, skeleton, true);
+        Corona::GeometryCommand command{};
+        command.geometry_handle = actor->geometry->get_handle();
+        command.fields = Corona::GeometryField::IkChains;
+        command.ik_chains = chains;
+        Corona::GeometryCommandChannel::instance().commands().push(std::move(command));
+        const auto target_revision = row->ik_chains_revision + 1;
+        // The command applies on the geometry owner's next tick. Wait briefly for the
+        // snapshot to carry it, so a read-after-write and the caller's next
+        // expected_revision see the same revision. The bound keeps a stalled owner from
+        // freezing the UI: on timeout the derived revision is still returned.
+        for (int attempt = 0; attempt < 100; ++attempt) {
+            const auto latest = Corona::SharedDataHub::instance().geometry_scene_row(
+                actor->geometry->get_handle());
+            if (latest && latest->ik_chains_revision >= target_revision) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
         actor->persisted_ik_chains = std::move(saved_config);
         actor->actor_version = std::max(actor->actor_version + 1, 1); ++scene->tree_revision;
         reply.actor_ik = {scene->archive_session, scene->route, actor->name, true, true,
-                          writable->ik_chains_revision, typed_ik_chains(writable->ik_chains, skeleton, true)};
+                          target_revision, applied};
         return reply;
     }
     if (request.method == SceneMethod::ReadTransforms) {

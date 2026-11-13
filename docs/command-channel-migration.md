@@ -34,6 +34,7 @@
 | A14 | `engine_runtime_api.cpp` `Camera::pick_model_node_at_pixel` | ActorPickDevice | 写侧改入队 `enqueue_actor_pick_request`；读侧仍读 `result_*`（只读锁）。原先直接写 `pending/x/y` | 7 |
 | B1 | `engine_runtime_api.cpp` `Geometry::get_render_status` | 跨线程直调 `GeometrySystem::query_mesh_slots()` | 改为按 slot 直接统计（判据与 `build_mesh_slots` 的 `slot.valid` 对齐），不再进入 DAG 系统的 `impl_` | 8 |
 | A12 | `engine_runtime_api.cpp` `Geometry::set_model_node_state` / `set_model_node_overrides` | GeometryDevice | 同步只校验"几何存在 / 索引越界 / 非有限数"，改写入队（Fifo）；应用点负责 `ModelNodes::set`/`update_instances`/`apply_overrides` 与失败回滚 | 9 |
+| A15 | `editor_scene_service.cpp` 三处 IK 写入（场景恢复 / 远端协作应用 / `setActorIkChains`） | GeometryDevice.ik_chains | 改入队 `GeometryField::IkChains`；`setActorIkChains` 的期望版本与 `preserve_runtime` 改读快照，回复用请求推导的 revision（有界等待快照追上） | 12 |
 
 配套修复：
 - `publish_transform_snapshot_from_storage()` 原先**全仓无调用点**，TransformSnapshot 通道是死的；已在 `OpticsSystem::apply_camera_and_transform_updates()` 里补上发布。
@@ -44,7 +45,7 @@
 
 | # | 位置 | 存储 | 计划 |
 | --- | --- | --- | --- |
-| A13 | `cef_editor_native_api_handlers.cpp` ×4 | GeometryDevice（`ik_chains` + revision） | **判定为 D 类，不是绕过**：全仓只有 CEF 写 `ik_chains` / `ik_chains_revision`，Mechanics 只是拷出来读（`mechanics_system.cpp:1549`）。该字段是外部拥有字段，写者与 owner 同线程 |
+| A13 | ~~`cef_editor_native_api_handlers.cpp` ×4~~ | GeometryDevice（`ik_chains` + revision） | **更正**：原判定"D 类"有误——`MechanicsSystem::unregister_foot_plant_chain`（`mechanics_system.cpp:2022-2031`）也写 `ik_chains`，所以 CEF 直写是真正的 A 类。已在 A15 改成命令通道 |
 | B2 | `cef_editor_native_api_handlers.cpp` `get_network_system()` + 约 40 处调用 | CEF → `NetworkSystem` | 见 §2.1 设计 |
 
 ### 1.3 A 类完成度
@@ -54,7 +55,7 @@
 | 类别 | 数量 | 说明 |
 | --- | --- | --- |
 | C 构造期 | 11 | Environment / Geometry / from_image / Optics / Mechanics / Acoustics / Camera×2 / add_profile 及其 deallocate |
-| D 外部拥有 | 2 (+4 CEF) | `Actor::remove_profile`、`set_follow_camera`；CEF 的 `ik_chains` |
+| D 外部拥有 | 2 | `Actor::remove_profile`、`set_follow_camera`（CEF 的 `ik_chains` 已迁到 A15） |
 | E GPU 生产者 | 6 | `vulkan_backend.cpp` 的 `ImageDevice`（receipt 协议） |
 
 ### 1.3 保留（非绕过）

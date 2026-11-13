@@ -6,6 +6,20 @@
 
 namespace Corona {
 
+ktm::fmat4x4 TransformSnapshotRow::compute_matrix() const {
+    ktm::fquat qx = ktm::fquat::from_angle_x(euler_rotation.x);
+    ktm::fquat qy = ktm::fquat::from_angle_y(euler_rotation.y);
+    ktm::fquat qz = ktm::fquat::from_angle_z(euler_rotation.z);
+    ktm::fquat rot_quat = qz * qy * qx;
+
+    ktm::faffine3d affine;
+    affine.translate(position).rotate(rot_quat).scale(scale);
+
+    ktm::fmat4x4 result;
+    affine >> result;
+    return result * affine_basis;
+}
+
 ktm::fmat4x4 ModelTransform::compute_matrix() const {
     ktm::fquat qx = ktm::fquat::from_angle_x(euler_rotation.x);
     ktm::fquat qy = ktm::fquat::from_angle_y(euler_rotation.y);
@@ -474,9 +488,19 @@ void SharedDataHub::publish_geometry_scene_snapshot_from_storage() {
         if (!row.nodes) {
             row.nodes = geometry_scene_nodes(device);
         }
+        if (previous != geometry_scene_cache_.end()) {
+            const auto& cached = previous->second;
+            if (cached.ik_chains && cached.ik_chains_revision == row.ik_chains_revision) {
+                row.ik_chains = cached.ik_chains;
+            }
+        }
+        if (!row.ik_chains) {
+            row.ik_chains = geometry_scene_ik_chains(device);
+        }
         cache[handle] = GeometrySceneCacheEntry{row.model_node_revision, row.gpu_build_state,
                                                 row.mesh_count, row.renderable_mesh_count,
-                                                row.nodes};
+                                                row.ik_chains_revision, row.nodes,
+                                                row.ik_chains};
         snapshot.rows.push_back(std::move(row));
     }
     geometry_scene_cache_ = std::move(cache);

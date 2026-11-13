@@ -28,6 +28,11 @@ int main() {
     device.model_nodes.push_back(root);
     device.model_nodes.push_back(child);
     device.mesh_handles.emplace_back();  // present but without GPU handles
+    device.transform_handle = 77;
+    device.ik_chains_revision = 9;
+    Corona::Resource::IkChain chain;
+    chain.id = "leg";
+    device.ik_chains.push_back(chain);
 
     const auto row = Corona::make_geometry_scene_row(device);
     assert(row.model_node_total == 2);
@@ -38,6 +43,10 @@ int main() {
     assert(row.model_node_revision == 4);
     assert(row.gpu_build_state == Corona::GeometryDevice::GpuBuildState::Ready);
     assert(row.model_resource_handle == device.model_resource_handle);
+    assert(row.transform_handle == 77);
+    assert(row.ik_chains_revision == 9);
+    assert(row.ik_chains && row.ik_chains->size() == 1);
+    assert(row.ik_chains->front().id == "leg");
     assert(row.nodes && row.nodes->size() == 2);
     assert(row.nodes->at(0).visible == false);
     assert(row.nodes->at(1).node_path == "Root/Child");

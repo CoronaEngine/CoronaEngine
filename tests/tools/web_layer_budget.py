@@ -64,24 +64,25 @@ TARGET_LINES = 13_807
 # fields their services validate, so they now share one (fifteen lines). The model node
 # reply stopped re-reading geometry after queuing the write; answering with the derived
 # state cost five lines and made the edit visible to the UI. The facade's file operations
-# now raise refusals with the service code (editorApi.js +14, core +14). Reading rules moved
+# now raise refusals with the service code (editorApi.js +14, core +14). The IK write path
+# moved onto the geometry command channel (+38 in the scene service, core +34). Reading rules moved
 # to cef_request_rules.h so a plain test covers them (+9 in the binding), and closeProcess got
 # its main-window check (+7 in the window operations).
-CORE_BUDGET = 14414
+CORE_BUDGET = 14448
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
     ("src/systems/ui/cef/archive_load_policy.h", 21),
     ("src/systems/ui/cef/camera_window_lifetime.h", 46),
     ("src/systems/ui/cef/cef_operations.h", 130),
-    ("src/systems/ui/cef/editor_scene_service.cpp", 4393),
+    ("src/systems/ui/cef/editor_scene_service.cpp", 4431),
     ("src/systems/ui/cef/editor_paths.h", 22),
     ("src/systems/ui/cef/editor_paths.cpp", 31),
     ("src/systems/ui/cef/editor_service_operations.cpp", 88),
     ("src/systems/ui/cef/editor_network_state.h", 16),
     ("src/systems/ui/cef/editor_network_state.cpp", 219),
     ("src/systems/ui/cef/editor_actor_projection.h", 40),
-    ("src/systems/ui/cef/editor_actor_projection.cpp", 294),
+    ("src/systems/ui/cef/editor_actor_projection.cpp", 293),
     ("src/systems/ui/cef/editor_scene_projection.h", 23),
     ("src/systems/ui/cef/editor_scene_projection.cpp", 165),
     ("src/systems/ui/cef/editor_camera_views.h", 29),

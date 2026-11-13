@@ -130,7 +130,9 @@ settlement；C++ 侧的所有者另走 `cancel_context` 取消工作。
 自己的 tick 内应用；外部读取不再对 `GeometryStorage` 加读锁，而是读 Geometry 在
 `update()` 末尾发布的 `GeometrySceneSnapshot`（`shared_data_hub.h`）。快照只含节点元数据、
 构建状态和计数，未变化的模型复用上一 tick 的节点列表，因此每 tick 的发布成本是 O(actor
-数量) 而不是 O(节点数量)。
+数量) 而不是 O(节点数量)。`tests/tools/test_geometry_external_access.py` 守着这条边界：
+UI 层出现任何 `geometry_storage().try_acquire_write` 都会失败；`try_acquire_read` 只允许
+`editor_actor_projection.cpp` 里读 `AnimationPlayer` 这一处（活控制对象，无法按值快照）。
 
 这条规则的解释力：`readModelNodes` 不再可能读到重建中的半截列表；`get_mesh_count` /
 `get_render_status` 只拿到计数，拿不到句柄；`set_model_node_state` 的入队校验也基于快照。

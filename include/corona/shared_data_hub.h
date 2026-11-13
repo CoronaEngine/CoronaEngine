@@ -552,6 +552,11 @@ struct TransformSnapshotRow {
     /// 作者给定的线性基（set_matrix 写入的那一份）。快照带上它是为了让
     /// get_matrix() 也能走"快照 + pending"而不再读槽位。
     ktm::fmat4x4 affine_basis{ktm::fmat4x4::from_eye()};
+    /// Same composition as ModelTransform::compute_matrix(), so a snapshot reader can
+    /// build the world matrix without touching the transform slot. Defined in
+    /// shared_data_hub.cpp: the quaternion product is ambiguous in translation units that
+    /// also include vision headers (which define a global operator*).
+    [[nodiscard]] ktm::fmat4x4 compute_matrix() const;
 };
 
 struct TransformSnapshot {
@@ -570,6 +575,9 @@ struct GeometrySceneRow {
     EntityId handle{0};
     GeometryDevice::GpuBuildState gpu_build_state{GeometryDevice::GpuBuildState::Ready};
     std::uint64_t model_node_revision{0};
+    EntityId transform_handle{0};
+    std::uint64_t ik_chains_revision{0};
+    std::shared_ptr<const std::vector<Resource::IkChain>> ik_chains;
     std::size_t mesh_count{0};
     std::size_t renderable_mesh_count{0};
     std::size_t invalid_mesh_count{0};
@@ -597,6 +605,11 @@ inline std::shared_ptr<const std::vector<API::ModelNodeState>> geometry_scene_no
     return nodes;
 }
 
+inline std::shared_ptr<const std::vector<Resource::IkChain>> geometry_scene_ik_chains(
+    const GeometryDevice& device) {
+    return std::make_shared<const std::vector<Resource::IkChain>>(device.ik_chains);
+}
+
 /// Counts and state only; the node list is built separately so an unchanged model can
 /// reuse the previous publication instead of copying every node every tick.
 inline GeometrySceneRow geometry_scene_meta_row(const GeometryDevice& device) {
@@ -616,6 +629,8 @@ inline GeometrySceneRow geometry_scene_meta_row(const GeometryDevice& device) {
     for (const auto& node : device.model_nodes) {
         if (node.state.parent_index < 0) ++row.model_node_roots;
     }
+    row.transform_handle = device.transform_handle;
+    row.ik_chains_revision = device.ik_chains_revision;
     row.model_resource_handle = device.model_resource_handle;
     row.model_node_bounds = device.model_node_bounds;
     row.collision_model_id = device.collision_model_id;
@@ -627,6 +642,7 @@ inline GeometrySceneRow geometry_scene_meta_row(const GeometryDevice& device) {
 inline GeometrySceneRow make_geometry_scene_row(const GeometryDevice& device) {
     auto row = geometry_scene_meta_row(device);
     row.nodes = geometry_scene_nodes(device);
+    row.ik_chains = geometry_scene_ik_chains(device);
     return row;
 }
 
@@ -1107,7 +1123,9 @@ class SharedDataHub {
         GeometryDevice::GpuBuildState gpu_build_state{GeometryDevice::GpuBuildState::Ready};
         std::size_t mesh_count{0};
         std::size_t renderable_mesh_count{0};
+        std::uint64_t ik_chains_revision{0};
         std::shared_ptr<const std::vector<API::ModelNodeState>> nodes;
+        std::shared_ptr<const std::vector<Resource::IkChain>> ik_chains;
     };
     /// 仅发布方（Geometry，DAG 线程）访问，用来复用未变化的节点列表。
     std::unordered_map<EntityId, GeometrySceneCacheEntry> geometry_scene_cache_;

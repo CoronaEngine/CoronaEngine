@@ -108,9 +108,9 @@ std::optional<std::array<float, 6>> native_actor_world_aabb(const NativeEditorAc
         return std::nullopt;
     }
     auto& hub = Corona::SharedDataHub::instance();
-    auto geometry = hub.geometry_storage().try_acquire_read(actor.geometry->get_handle());
-    if (!geometry) return std::nullopt;
-    auto transform = hub.model_transform_storage().try_acquire_read(geometry->transform_handle);
+    const auto row = hub.geometry_scene_row(actor.geometry->get_handle());
+    if (!row || row->transform_handle == 0) return std::nullopt;
+    auto transform = hub.transform_view(row->transform_handle);
     if (!transform) return std::nullopt;
     const auto matrix = transform->compute_matrix();
     const float infinity = std::numeric_limits<float>::infinity();
@@ -133,19 +133,18 @@ std::optional<std::array<float, 6>> native_actor_world_aabb(const NativeEditorAc
 
 std::shared_ptr<Corona::Resource::AnimationPlayer> actor_animation_player(const NativeEditorActor& actor) {
     if (!actor.geometry) return {};
+    // The player is a live control object (play/switch/sources), not scene state, so it is
+    // deliberately not part of the geometry snapshot: the editor needs the object, not a copy.
     auto geometry = Corona::SharedDataHub::instance().geometry_storage().try_acquire_read(actor.geometry->get_handle());
     return geometry ? geometry->animation_player : nullptr;
 }
 
 nlohmann::json native_actor_ik_configuration(const NativeEditorActor& actor) {
     if (!actor.geometry) return actor.persisted_ik_chains;
-    std::vector<Corona::Resource::IkChain> chains;
-    {
-        auto geometry = Corona::SharedDataHub::instance().geometry_storage().try_acquire_read(
-            actor.geometry->get_handle());
-        if (!geometry) return actor.persisted_ik_chains;
-        chains = geometry->ik_chains;
-    }
+    const auto row = Corona::SharedDataHub::instance().geometry_scene_row(
+        actor.geometry->get_handle());
+    if (!row || !row->ik_chains) return actor.persisted_ik_chains;
+    const std::vector<Corona::Resource::IkChain> chains = *row->ik_chains;
     if (chains.empty()) return nlohmann::json::array();
     const auto model_id = actor.geometry->get_model_id();
     if (model_id != 0) {
