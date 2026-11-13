@@ -636,7 +636,7 @@ NativeResult invoke_project_archive_parser(const std::string& path,
         {"path", path},
         {"load_policy", load_policy},
     }});
-    return invoke_python_script_service(parser_request, "python-archive", std::chrono::seconds(300));
+    return invoke_python_script_service(parser_request, "python-archive");
 }
 
 struct PreparedArchiveLoad {
@@ -4388,7 +4388,7 @@ NetworkReply execute_network_operation(const NetworkRequest& request) {
 namespace {
 NativeResult project_archive_call(const char* method, nlohmann::json request) {
     return invoke_python_script_service({"ProjectArchive", method, nlohmann::json::array({std::move(request)})},
-                                        "python-archive", std::chrono::seconds(300));
+                                        "python-archive");
 }
 
 nlohmann::json file_script_envelope(const NativeResult& result) {

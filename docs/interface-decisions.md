@@ -156,11 +156,12 @@ revision。命令在 Geometry 所有者的下一个 tick 应用，之后的读�
 正是已经删除的 manifest 模式。真正出现多 Actor 编辑时，加**领域特定**的批处理
 （例如 `setActorTransforms({actorGuids, ...})`，一条命令、一个版本栅栏），而不是通用批处理。
 
-## 7.4 `bridge.call` 不设超时
+## 7.4 Web→Python 服务调用不设超时
 
-**决定**：Web→Python 桥不再使用 300 秒超时。`invoke_python_script_service` 的 timeout 参数
-改为可选（`std::nullopt` = 一直等到服务应答），桥传 `std::nullopt`；具体操作原有的超时
-（归档 300s、脚本状态 2s 等）保持不变。
+**决定**：`invoke_python_script_service` 不再接受 timeout 参数，所有服务调用都一直等到
+Python 应答：桥（`EditorBridge.call`）、归档读写、项目文档、脚本状态/运行/停止都一样。
+`PythonRuntimeCoordinator` 里带超时的 `submit_and_wait(request, timeout)` 保留给测试和
+生命周期控制（Python 关闭请求仍用 2.5 秒）。
 
 **理由**：超时并不能解锁 UI——`bridge.call` 在 CEF UI 线程（=渲染线程）上同步等待 Python
 执行，挂起时这 300 秒里编辑器同样是卡死的；它只会把"永久卡住"变成"300 秒后报错"，还会

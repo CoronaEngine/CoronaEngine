@@ -33,7 +33,7 @@ NativeResult save_project_info(const nlohmann::json& settings) {
     auto result = invoke_python_script_service(
         {"ProjectArchive", "update_metadata",
          nlohmann::json::array({{{"path", path_to_utf8(scene->project_root)}, {"settings", settings}}})},
-        "python-archive", std::chrono::seconds(300));
+        "python-archive");
     if (!result.success || !result.data.contains("name")) return native_failure("Project settings were not saved: " + result.error, 2);
     scene->name = result.data.at("name");
     scene->core_version = result.data.at("core_version");
@@ -93,8 +93,7 @@ BridgeReply execute_bridge_operation(const std::string& envelope) {
     // hangs this call; per-operation timeouts belong to the operation, not the transport.
     const auto result = invoke_python_script_service(
         {"EditorBridge", "call", nlohmann::json::array({envelope})},
-        "python-bridge",
-        std::nullopt);
+        "python-bridge");
     if (!result.success) {
         reply.error_code = python_failure_code(result);
         reply.error_message = result.error;
