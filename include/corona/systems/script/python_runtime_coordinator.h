@@ -98,6 +98,9 @@ class PythonRuntimeTicket {
     PythonRuntimeResponse response;
 
     PythonRuntimeResponse wait(std::chrono::milliseconds timeout) const;
+    /// Wait until the request completes; no deadline. The caller owns the risk of a hung
+    /// service, so this is only for transports that must not invent a deadline.
+    PythonRuntimeResponse wait() const;
 
    private:
     friend class PythonRuntimeCoordinator;
@@ -111,6 +114,7 @@ class PythonRuntimeCoordinator {
     PythonRuntimeTicket submit(PythonRuntimeRequest request);
     PythonRuntimeResponse submit_and_wait(PythonRuntimeRequest request,
                                           std::chrono::milliseconds timeout);
+    PythonRuntimeResponse submit_and_wait(PythonRuntimeRequest request);
     std::optional<PythonRuntimeRequest> wait_pop(std::chrono::milliseconds timeout);
     bool complete(std::uint64_t request_id, PythonRuntimeResponse response);
 

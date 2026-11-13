@@ -89,10 +89,12 @@ BridgeReply execute_bridge_operation(const std::string& envelope) {
         reply.error_message = "Bridge envelope is empty";
         return reply;
     }
+    // The bridge is a transport: it does not invent a deadline. A service that hangs
+    // hangs this call; per-operation timeouts belong to the operation, not the transport.
     const auto result = invoke_python_script_service(
         {"EditorBridge", "call", nlohmann::json::array({envelope})},
         "python-bridge",
-        std::chrono::seconds(300));
+        std::nullopt);
     if (!result.success) {
         reply.error_code = python_failure_code(result);
         reply.error_message = result.error;

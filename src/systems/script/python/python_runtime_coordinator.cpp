@@ -62,6 +62,13 @@ PythonRuntimeResponse PythonRuntimeTicket::wait(std::chrono::milliseconds timeou
     return state_->response;
 }
 
+PythonRuntimeResponse PythonRuntimeTicket::wait() const {
+    if (!accepted || !state_) return response;
+    std::unique_lock lock(state_->mutex);
+    state_->cv.wait(lock, [&] { return state_->done; });
+    return state_->response;
+}
+
 PythonRuntimeCoordinator::PythonRuntimeCoordinator(std::size_t capacity)
     : capacity_(capacity) {}
 
@@ -122,6 +129,17 @@ PythonRuntimeResponse PythonRuntimeCoordinator::submit_and_wait(
         cancel(ticket.request_id, response);
     }
     return response;
+}
+
+PythonRuntimeResponse PythonRuntimeCoordinator::submit_and_wait(PythonRuntimeRequest request) {
+    if (is_consumer_thread()) {
+        return PythonRuntimeResponse::failure(
+            "synchronous python runtime request from the consumer thread would deadlock");
+    }
+    // deadline stays at max(): the consumer never times the request out.
+    auto ticket = submit(std::move(request));
+    if (!ticket.accepted) return ticket.response;
+    return ticket.wait();
 }
 
 std::optional<PythonRuntimeRequest> PythonRuntimeCoordinator::wait_pop(

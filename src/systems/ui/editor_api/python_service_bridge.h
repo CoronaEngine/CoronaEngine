@@ -14,6 +14,7 @@
 #include <Python.h>
 
 #include <chrono>
+#include <optional>
 #include <string>
 
 namespace Corona::Systems::UI {
@@ -22,8 +23,11 @@ void register_python_script_service_dispatcher(PyObject* dispatcher);
 void unregister_python_script_service_dispatcher();
 bool python_script_service_dispatcher_registered();
 
+// `timeout` is the caller's deadline. A transport that must not invent one passes
+// std::nullopt; the request then runs until the service answers.
 NativeResult invoke_python_script_service(const NativeRequest& request,
                                           const char* route = "python-script",
-                                          std::chrono::milliseconds timeout = std::chrono::seconds(2));
+                                          std::optional<std::chrono::milliseconds> timeout =
+                                              std::chrono::seconds(2));
 
 }  // namespace Corona::Systems::UI

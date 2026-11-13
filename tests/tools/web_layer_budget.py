@@ -68,7 +68,7 @@ TARGET_LINES = 13_807
 # moved onto the geometry command channel (+38 in the scene service, core +34). Reading rules moved
 # to cef_request_rules.h so a plain test covers them (+9 in the binding), and closeProcess got
 # its main-window check (+7 in the window operations).
-CORE_BUDGET = 14472
+CORE_BUDGET = 14479
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -78,7 +78,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/editor_scene_service.cpp", 4425),
     ("src/systems/ui/cef/editor_paths.h", 22),
     ("src/systems/ui/cef/editor_paths.cpp", 31),
-    ("src/systems/ui/cef/editor_service_operations.cpp", 106),
+    ("src/systems/ui/cef/editor_service_operations.cpp", 108),
     ("src/systems/ui/cef/editor_network_state.h", 16),
     ("src/systems/ui/cef/editor_network_state.cpp", 219),
     ("src/systems/ui/cef/editor_actor_projection.h", 40),
@@ -127,8 +127,8 @@ INTERFACE_FILES = [
     ("src/systems/ui/editor_api/editor_api_services.h", 288),
     ("src/systems/ui/editor_api/camera_properties_service.cpp", 87),
     ("src/systems/ui/editor_api/camera_render_settings_service.cpp", 38),
-    ("src/systems/ui/editor_api/python_service_bridge.cpp", 91),
-    ("src/systems/ui/editor_api/python_service_bridge.h", 29),
+    ("src/systems/ui/editor_api/python_service_bridge.cpp", 92),
+    ("src/systems/ui/editor_api/python_service_bridge.h", 33),
     ("src/systems/ui/editor_api/editor_dispatch.h", 377),
     ("src/systems/ui/editor_api/project_script_service.cpp", 57),
     ("src/systems/ui/editor_api/resource_import_service.cpp", 55),
