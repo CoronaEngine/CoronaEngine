@@ -102,8 +102,8 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
     if (new_name) actor->name = *new_name;
     actor->actor_version = std::max(actor->actor_version + 1, 1);
     ++scene->tree_revision;
-    reply.properties = actor_properties_snapshot(*scene, *actor);
-    reply.properties.requested_animation_sources = std::move(sources);
+    reply.write.properties = actor_properties_snapshot(*scene, *actor);
+    reply.write.properties.requested_animation_sources = std::move(sources);
     return reply;
 }
 

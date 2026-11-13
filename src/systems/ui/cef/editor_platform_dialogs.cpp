@@ -207,7 +207,7 @@ SceneReply capture_native_screenshot(const SceneRequest& request) {
     if (!camera) return fail("CAMERA_NOT_FOUND", "Screenshot camera identity is unavailable");
     const auto handle = camera->engine_camera->get_handle();
     auto path = target.path;
-    reply.screenshot = {"canceled", *request.archive_session, scene->route, target.camera_id, ""};
+    reply.write.screenshot = {"canceled", *request.archive_session, scene->route, target.camera_id, ""};
     if (!path) {
         const auto selected = select_native_screenshot_path(scene->project_root);
         // A modal dialog can pump native events: reacquire all scene/camera state.
@@ -220,8 +220,8 @@ SceneReply capture_native_screenshot(const SceneRequest& request) {
         path = path_to_utf8(absolute_normalized_path(*selected));
     }
     if (!save_native_camera_screenshot(*camera, *path)) return fail("CAPTURE_FAILED", "Screenshot save failed");
-    reply.screenshot.status = "success";
-    reply.screenshot.path = *path;
+    reply.write.screenshot.status = "success";
+    reply.write.screenshot.path = *path;
     return reply;
 }
 

@@ -260,8 +260,8 @@ def build() -> str:
         "  依赖 `CefV8Value`，单测需要真实 V8 上下文；`tests/tools` 的守卫只钉方法名、拒绝码和集成调用。",
         "- 窗口不再有 `getCurrent()`：它唯一的产品消费者是测试包装，身份改由 `createPanel` 的返回值和",
         "  URL 参数提供。需要「问问自己是谁」的新页面应走同样的两条路，而不是恢复这个查询。",
-        "- `SceneReply` 的 30 个字段每一个都被 `cef_v8_binding.cpp` 读取，所以没有拆成 `std::variant`：",
-        "  变体只会改变回复形状，不会减少任何载荷。",
+        "- `SceneReply` 已按读/写分族（`SceneReadReply` / `SceneWriteReply`），每个方法只填、",
+        "  只读自己族里的字段，不再是一个 30 字段、所有方法共用的结构。",
         "",
     ]
     return "\n".join(lines)

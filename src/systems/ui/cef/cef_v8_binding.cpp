@@ -1444,29 +1444,29 @@ CefRefPtr<CefV8Value> actor_index_value(const ActorIndexSnapshot& snapshot) {
 
 CefRefPtr<CefV8Value> scene_query_value(const SceneReply& reply) {
     auto result = CefV8Value::CreateObject(nullptr, nullptr);
-    result->SetValue("archive_session", CefV8Value::CreateString(reply.active.archive_session), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("scene", CefV8Value::CreateString(reply.active.scene), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("tree_revision", CefV8Value::CreateDouble(static_cast<double>(reply.active.tree_revision)), V8_PROPERTY_ATTRIBUTE_NONE);
-    if (reply.scene_read.cameras) {
-        const auto cameras = cameras_value(reply.camera_list);
+    result->SetValue("archive_session", CefV8Value::CreateString(reply.read.active.archive_session), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("scene", CefV8Value::CreateString(reply.read.active.scene), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("tree_revision", CefV8Value::CreateDouble(static_cast<double>(reply.read.active.tree_revision)), V8_PROPERTY_ATTRIBUTE_NONE);
+    if (reply.read.scene_read.cameras) {
+        const auto cameras = cameras_value(reply.read.camera_list);
         result->SetValue("cameras", cameras->GetValue("cameras"), V8_PROPERTY_ATTRIBUTE_NONE);
         result->SetValue("active_camera_id", cameras->GetValue("active_camera_id"), V8_PROPERTY_ATTRIBUTE_NONE);
     }
     CefRefPtr<CefV8Value> actors;
-    if (reply.scene_read.actors == ActorProjection::Index) actors = actor_index_value(reply.actor_index)->GetValue("actors");
-    else if (reply.scene_read.actors == ActorProjection::Tree) actors = tree_actors_value(reply.tree);
-    else if (reply.scene_read.actors == ActorProjection::Context) actors = actor_context_value(reply.actor_context)->GetValue("actors");
+    if (reply.read.scene_read.actors == ActorProjection::Index) actors = actor_index_value(reply.read.actor_index)->GetValue("actors");
+    else if (reply.read.scene_read.actors == ActorProjection::Tree) actors = tree_actors_value(reply.read.tree);
+    else if (reply.read.scene_read.actors == ActorProjection::Context) actors = actor_context_value(reply.read.actor_context)->GetValue("actors");
     if (actors) result->SetValue("actors", actors, V8_PROPERTY_ATTRIBUTE_NONE);
     return result;
 }
 
 CefRefPtr<CefV8Value> actor_rig_value(const SceneReply& reply) {
     auto result = CefV8Value::CreateObject(nullptr, nullptr);
-    result->SetValue("archive_session", CefV8Value::CreateString(reply.actor_skeleton.archive_session), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("scene", CefV8Value::CreateString(reply.actor_skeleton.scene), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("actor", CefV8Value::CreateString(reply.actor_skeleton.actor), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("skeleton", skeleton_value(reply.actor_skeleton), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("ik", ik_value(reply.actor_ik), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("archive_session", CefV8Value::CreateString(reply.read.actor_skeleton.archive_session), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("scene", CefV8Value::CreateString(reply.read.actor_skeleton.scene), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("actor", CefV8Value::CreateString(reply.read.actor_skeleton.actor), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("skeleton", skeleton_value(reply.read.actor_skeleton), V8_PROPERTY_ATTRIBUTE_NONE);
+    result->SetValue("ik", ik_value(reply.read.actor_ik), V8_PROPERTY_ATTRIBUTE_NONE);
     return result;
 }
 
@@ -2490,68 +2490,68 @@ private:
         if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
         if (!reply.error_code.empty()) reject(context_, pending.promise, reply.error_code, reply.error_message);
         else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActive) {
-            scene_archive_session_ = reply.active.archive_session;
-            pending.promise->ResolvePromise(scene_value(reply.active));
+            scene_archive_session_ = reply.read.active.archive_session;
+            pending.promise->ResolvePromise(scene_value(reply.read.active));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadVisionAvailability) {
             auto value = CefV8Value::CreateObject(nullptr, nullptr);
-            value->SetValue("available", CefV8Value::CreateBool(reply.vision_available), V8_PROPERTY_ATTRIBUTE_NONE);
+            value->SetValue("available", CefV8Value::CreateBool(reply.read.vision_available), V8_PROPERTY_ATTRIBUTE_NONE);
             pending.promise->ResolvePromise(value);
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SelectModelFile) {
-            pending.promise->ResolvePromise(CefV8Value::CreateString(reply.selected_file));
+            pending.promise->ResolvePromise(CefV8Value::CreateString(reply.write.selected_file));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ImportResourceFile) {
-            pending.promise->ResolvePromise(resource_import_value(reply.resource_import));
+            pending.promise->ResolvePromise(resource_import_value(reply.write.resource_import));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::PlayAudioResource ||
                    std::get<SceneMethod>(pending.method) == SceneMethod::StopAudioResource ||
                    std::get<SceneMethod>(pending.method) == SceneMethod::PlayActorAudio ||
                    std::get<SceneMethod>(pending.method) == SceneMethod::StopActorAudio) {
-            pending.promise->ResolvePromise(audio_value(reply.audio));
+            pending.promise->ResolvePromise(audio_value(reply.write.audio));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadScene) {
             pending.promise->ResolvePromise(scene_query_value(reply));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadModelNodes) {
-            pending.promise->ResolvePromise(model_node_page_value(reply.model_nodes));
+            pending.promise->ResolvePromise(model_node_page_value(reply.read.model_nodes));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SetModelNodeState) {
-            pending.promise->ResolvePromise(model_node_page_value(reply.model_node));
+            pending.promise->ResolvePromise(model_node_page_value(reply.write.model_node));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActorProperties ||
                    std::get<SceneMethod>(pending.method) == SceneMethod::CreateActor) {
-            pending.promise->ResolvePromise(actor_read_value(reply.actor_read));
+            pending.promise->ResolvePromise(actor_read_value(reply.read.actor_read));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActorRig) {
             pending.promise->ResolvePromise(actor_rig_value(reply));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SetActorIkChains) {
-            pending.promise->ResolvePromise(ik_value(reply.actor_ik));
+            pending.promise->ResolvePromise(ik_value(reply.read.actor_ik));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadTransforms) {
-            pending.promise->ResolvePromise(transforms_value(reply.transforms, reply.active.archive_session));
+            pending.promise->ResolvePromise(transforms_value(reply.read.transforms, reply.read.active.archive_session));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SetActorTransform) {
-            pending.promise->ResolvePromise(transform_value(reply.transform));
+            pending.promise->ResolvePromise(transform_value(reply.write.transform));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::UpdateActor) {
-            pending.promise->ResolvePromise(properties_value(reply.properties));
+            pending.promise->ResolvePromise(properties_value(reply.write.properties));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::DeleteActor) {
-            pending.promise->ResolvePromise(actor_delete_value(reply.actor_delete));
+            pending.promise->ResolvePromise(actor_delete_value(reply.write.actor_delete));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::RebindActorResource) {
-            pending.promise->ResolvePromise(actor_resource_rebind_value(reply.actor_resource_rebind));
+            pending.promise->ResolvePromise(actor_resource_rebind_value(reply.write.actor_resource_rebind));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::Save) {
-            pending.promise->ResolvePromise(scene_save_value(reply.save));
+            pending.promise->ResolvePromise(scene_save_value(reply.write.save));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::FocusActor) {
-            pending.promise->ResolvePromise(focus_value(reply.focus));
+            pending.promise->ResolvePromise(focus_value(reply.write.focus));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::CaptureScreenshot) {
-            pending.promise->ResolvePromise(screenshot_value(reply.screenshot));
+            pending.promise->ResolvePromise(screenshot_value(reply.write.screenshot));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::UpdateCamera ||
                    std::get<SceneMethod>(pending.method) == SceneMethod::CreateCamera) {
-            pending.promise->ResolvePromise(camera_properties_value(reply.camera));
+            pending.promise->ResolvePromise(camera_properties_value(reply.write.camera));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::DeleteCamera) {
-            pending.promise->ResolvePromise(deleted_camera_value(reply.deleted_camera));
+            pending.promise->ResolvePromise(deleted_camera_value(reply.write.deleted_camera));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SetCameraRenderSettings) {
-            pending.promise->ResolvePromise(camera_render_settings_value(reply.camera_render_settings));
+            pending.promise->ResolvePromise(camera_render_settings_value(reply.read.camera_render_settings));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadCameraRenderSettings) {
-            pending.promise->ResolvePromise(camera_render_settings_value(reply.camera_render_settings));
+            pending.promise->ResolvePromise(camera_render_settings_value(reply.read.camera_render_settings));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::GetEnvironment ||
                    std::get<SceneMethod>(pending.method) == SceneMethod::SetEnvironment) {
-            pending.promise->ResolvePromise(environment_value(reply.environment));
+            pending.promise->ResolvePromise(environment_value(reply.read.environment));
         } else {
             auto value = CefV8Value::CreateObject(nullptr, nullptr);
             value->SetValue("status", CefV8Value::CreateString("success"), V8_PROPERTY_ATTRIBUTE_NONE);
-            value->SetValue("scene", CefV8Value::CreateString(reply.selection.scene), V8_PROPERTY_ATTRIBUTE_NONE);
-            value->SetValue("actor_type", CefV8Value::CreateString(reply.selection.actor_type), V8_PROPERTY_ATTRIBUTE_NONE);
-            value->SetValue("actor", CefV8Value::CreateString(reply.selection.actor), V8_PROPERTY_ATTRIBUTE_NONE);
+            value->SetValue("scene", CefV8Value::CreateString(reply.read.selection.scene), V8_PROPERTY_ATTRIBUTE_NONE);
+            value->SetValue("actor_type", CefV8Value::CreateString(reply.read.selection.actor_type), V8_PROPERTY_ATTRIBUTE_NONE);
+            value->SetValue("actor", CefV8Value::CreateString(reply.read.selection.actor), V8_PROPERTY_ATTRIBUTE_NONE);
             pending.promise->ResolvePromise(value);
         }
         context_->Exit();

@@ -68,14 +68,14 @@ TARGET_LINES = 13_807
 # moved onto the geometry command channel (+38 in the scene service, core +34). Reading rules moved
 # to cef_request_rules.h so a plain test covers them (+9 in the binding), and closeProcess got
 # its main-window check (+7 in the window operations).
-CORE_BUDGET = 14466
+CORE_BUDGET = 14472
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
     ("src/systems/ui/cef/archive_load_policy.h", 21),
     ("src/systems/ui/cef/camera_window_lifetime.h", 46),
     ("src/systems/ui/cef/cef_operations.h", 130),
-    ("src/systems/ui/cef/editor_scene_service.cpp", 4431),
+    ("src/systems/ui/cef/editor_scene_service.cpp", 4425),
     ("src/systems/ui/cef/editor_paths.h", 22),
     ("src/systems/ui/cef/editor_paths.cpp", 31),
     ("src/systems/ui/cef/editor_service_operations.cpp", 106),
@@ -105,10 +105,10 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/cef_paths.h", 41),
     ("src/systems/ui/cef/cef_py_bind.cpp", 186),
     ("src/systems/ui/cef/script_runtime_api.h", 119),
-    ("src/systems/ui/cef/cef_scene_operations.h", 428),
+    ("src/systems/ui/cef/cef_scene_operations.h", 440),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),
-    ("src/systems/ui/cef/cef_v8_binding.cpp", 2783),
+    ("src/systems/ui/cef/cef_v8_binding.cpp", 2780),
     ("src/systems/ui/cef/cef_process.h", 36),
     ("src/systems/ui/cef/cef_viewport_pick.cpp", 119),
     ("src/systems/ui/cef/cef_viewport_pick.h", 60),

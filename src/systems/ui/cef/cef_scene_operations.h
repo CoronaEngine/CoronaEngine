@@ -388,37 +388,49 @@ struct SceneRequest {
     std::string read_actor;
     SceneReadProjection scene_read;
 };
-struct SceneReply {
+// A read reply carries the projection the method was asked for; a write reply carries
+// the state the write produced. Grouping them keeps each branch of
+// execute_scene_operation from filling (and each V8 branch from reading) fields that
+// belong to a different method family.
+struct SceneReadReply {
     SceneReadProjection scene_read;
     ActiveSceneSnapshot active;
     bool vision_available = false;
     ActorSelection selection;
-    std::string error_code;
-    std::string error_message;
-    ActorTransformSnapshot transform;
     std::vector<ActorTransformSnapshot> transforms;
+    CameraListSnapshot camera_list;
+    ActorIndexSnapshot actor_index;
+    SceneTreeSnapshot tree;
+    ActorContextSnapshot actor_context;
+    ActorSkeletonSnapshot actor_skeleton;
+    ActorIkSnapshot actor_ik;
+    ModelNodePageSnapshot model_nodes;
+    EnvironmentSnapshot environment;
+    CameraRenderSettingsSnapshot camera_render_settings;
+    ActorReadSnapshot actor_read;
+};
+
+struct SceneWriteReply {
+    ActorTransformSnapshot transform;
     ActorPropertiesSnapshot properties;
     ActorDeleteSnapshot actor_delete;
     ActorResourceRebindSnapshot actor_resource_rebind;
     SceneSaveSnapshot save;
     std::string selected_file;
     ResourceImportSnapshot resource_import;
-    EnvironmentSnapshot environment;
     ActorFocusSnapshot focus;
     ScreenshotSnapshot screenshot;
     CameraPropertiesSnapshot camera;
     DeletedCameraSnapshot deleted_camera;
-    CameraRenderSettingsSnapshot camera_render_settings;
-    ActorIndexSnapshot actor_index;
-    ActorReadSnapshot actor_read;
-    CameraListSnapshot camera_list;
-    SceneTreeSnapshot tree;
-    ActorSkeletonSnapshot actor_skeleton;
-    ActorIkSnapshot actor_ik;
-    ActorContextSnapshot actor_context;
-    ModelNodePageSnapshot model_nodes;
     ModelNodePageSnapshot model_node;
     AudioSnapshot audio;
+};
+
+struct SceneReply {
+    std::string error_code;
+    std::string error_message;
+    SceneReadReply read;
+    SceneWriteReply write;
 };
 
 // Execute on the native editor scene owner (CEF UI) thread. Non-Web adapters
