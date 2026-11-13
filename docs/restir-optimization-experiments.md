@@ -1,3 +1,5 @@
+> 注：文中引用的 JSON 结果、`native_nrd.*` 等是当时的临时实验产物，未随仓库保存；NRD 相关代码已不在当前树中。
+
 # Corona ReSTIR 优化实验总账
 
 更新：2026-11-01。记录 Corona ReSTIR DI、GI、Stable Planes（SP）及相关缓冲的优化方法、独立对照、失败原因与验收状态，用于避免重复实验。

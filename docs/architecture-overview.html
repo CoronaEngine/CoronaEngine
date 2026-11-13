@@ -1,4 +1,4 @@
-<!-- HISTORICAL-DOC: this page describes the tree as it was when it was written. The editor API handler has since been split; the scene service now lives in src/systems/ui/cef/editor_scene_service.cpp and the Python bridge in src/systems/ui/editor_api/python_service_bridge.{h,cpp}. -->
+<!-- HISTORICAL-DOC: this page describes the tree as it was when it was written. The JSON manifest / EditorApiRegistry / register_*_api_handlers dispatch it documents has been removed outright: the Web layer now calls typed V8 bindings (src/systems/ui/cef/cef_v8_binding.cpp, contract in docs/interface-contract.md), the scene service lives in src/systems/ui/cef/editor_scene_service.cpp, and the Python bridge in src/systems/ui/editor_api/python_service_bridge.{h,cpp}. Do not treat any manifest API in this page as current. -->
 <!DOCTYPE html>
 <html lang="zh-CN" data-theme="dark">
 <head>

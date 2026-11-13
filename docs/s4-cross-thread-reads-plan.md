@@ -1,7 +1,10 @@
 # S4：跨线程读的处理计划
 
-> 前置结论：EnTT 无锁，所以切换容器（S3）之前，必须先把跨线程读改成快照，
-> 或者证明 owner 不会并发写。本文按存储归类这 47 处读，并给出处理顺序。
+> **状态（2026-11）**：S3（Storage → EnTT）已落地（`5581680c`，见
+> `storage-entt-migration-status.md`），所以本文"先改读、再换容器"的前提已不成立。
+> 几何场景快照、CEF 侧的几何/变换/IK 读、脚本侧 `camera_follow_controller` 已改为读快照
+> （第 12 轮）；剩下的读点按本文分批处理：S4-1（camera 读接 `camera_snapshot`）与
+> S4-4（scene/model_transform/actor_pick 零散点）。
 
 基线：`feat/systems-thread-dag` @ `30f9f155`
 

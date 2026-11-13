@@ -1,3 +1,5 @@
+> 注：文中引用的 `render_resource/manifest.json` 等是当时的临时产物，未随仓库保存。
+
 # Mitsuba batch screenshots
 
 Run from the repository root with the `coronaengine-dev` Python environment:

@@ -86,7 +86,7 @@ static_assert(std::is_same_v<horizon::core::Storage<int>,
 | `geometry_system.cpp` | 49 | DAG owner，安全 |
 | **`engine_runtime_api.cpp`** | **31** | **外部线程（CEF/Script/Python），风险** |
 | `optics_system.cpp` | 22 | DAG owner + 同线程读兄弟，安全 |
-| **`cef_editor_native_api_handlers.cpp`** | **10** | **CEF 线程，风险** |
+| **`editor_scene_service.cpp`**（原 `cef_editor_native_api_handlers.cpp`，已删除） | **10** | **CEF 线程，风险** |
 | `mechanics_system.cpp` | 10 | DAG owner + 同线程读兄弟，安全 |
 | **`camera_follow_controller.cpp`** | **6** | **Script 线程，风险** |
 | 其余 30+ 文件 | 33 | 多数在 DAG 内部 |

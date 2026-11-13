@@ -1,7 +1,7 @@
 # 跨线程交互收敛：绕过命令通道的清单与改造记录
 
 > 基线：`feat/systems-thread-dag` @ `f1d4ef0a` · 本文档随改造逐批更新
-> 判据与背景见 `docs/dag-command-vs-event.md`
+> 判据与背景见 `docs/interface-decisions.md` 第 8 节与 `include/corona/kernel/command/snapshot_channel.h` 的头注释
 
 ## 0. 什么算"绕过"
 
@@ -45,8 +45,8 @@
 
 | # | 位置 | 存储 | 计划 |
 | --- | --- | --- | --- |
-| A13 | ~~`cef_editor_native_api_handlers.cpp` ×4~~ | GeometryDevice（`ik_chains` + revision） | **更正**：原判定"D 类"有误——`MechanicsSystem::unregister_foot_plant_chain`（`mechanics_system.cpp:2022-2031`）也写 `ik_chains`，所以 CEF 直写是真正的 A 类。已在 A15 改成命令通道 |
-| B2 | `cef_editor_native_api_handlers.cpp` `get_network_system()` + 约 40 处调用 | CEF → `NetworkSystem` | 见 §2.1 设计 |
+| A13 | ~~`cef_editor_native_api_handlers.cpp` ×4（该文件已随 manifest 退休删除）~~ | GeometryDevice（`ik_chains` + revision） | **更正**：原判定"D 类"有误——`MechanicsSystem::unregister_foot_plant_chain`（`mechanics_system.cpp:2022-2031`）也写 `ik_chains`，所以 CEF 直写是真正的 A 类。已在 A15 改成命令通道 |
+| B2 | `editor_scene_service.cpp` `get_network_system()` + 约 40 处调用（旧 handler 文件已删除） | CEF → `NetworkSystem` | 已完成：命令 + 快照，见 §2.0 |
 
 ### 1.3 A 类完成度
 
@@ -71,7 +71,7 @@
 | # | 位置 | 从 → 到 | 判定 | 处理 |
 | --- | --- | --- | --- | --- |
 | B1 | `engine_runtime_api.cpp` `Geometry::get_render_status()` | 外部 → `GeometrySystem::query_mesh_slots()` | **违规**（跨线程直调 DAG 系统） | 待办：Geometry 发布 mesh-slot 快照，改读快照 |
-| B2 | `cef_editor_native_api_handlers.cpp` `get_network_system()` + 约 40 处调用 | CEF → `NetworkSystem` | **违规**（含 `start_session` / `peek_pending_actor_create` 等） | 待办：`NetworkCommandChannel`（控制面）+ 快照（状态面）；数据面 `peek_pending_*` 本身已是内部队列握手，可保留 |
+| B2 | `editor_scene_service.cpp` `get_network_system()` + 约 40 处调用（旧 handler 文件已删除） | CEF → `NetworkSystem` | **已完成**：`NetworkCommandChannel`（控制面）+ `NetworkStateChannel` 快照（状态面）；数据面 `peek_pending_*` 本身是内部队列握手，保留 |
 | B3 | `display_system.cpp:466` `optics_system_` | Display → Optics | 允许 | 同一 DAG 线程 |
 | B4 | `mechanics_system.cpp:66` `geometry_sys` | Mechanics → Geometry | 允许 | 同一 DAG 线程 |
 | B5 | `engine.cpp:269` `get_system("UI")` | 主线程 → UI | 允许 | 同一主线程 |
@@ -201,7 +201,7 @@ CEF 线程直接调用 `NetworkSystem` 约 40 处，按语义分三组：
 1. **异步化到底**：命令带 `request_id`，`NetworkSystem` 应用后 push
    `NetworkCommandResult{request_id, ok, payload_json}` 到完成队列；
    CEF handler 返回 `{pending: true, request_id}`，前端轮询/等待。
-   → 架构最干净，但要改 `CoronaEditor` 前端（`lanChatService.js` / `worldSessionLifecycle.js`）的调用点。
+   → 架构最干净，但要改前端调用点（LanChat 已移除，这些调用点随之删除）。
 2. **有界同步等待**：只把 handler 改成"发命令 + 在完成队列上带超时等结果"。
    → 不改前端，但仍有一次跨线程阻塞等待，只是从"抢内部锁"变成"走通道 + 等回执"。
 3. **维持现状并登记**：把这 6 个方法标注为"控制面同步 API"。
@@ -310,7 +310,7 @@ ModelNode*（3 个）…
 
 ### 4.4 静态检查（辅助）
 
-`.workspace/tmp/tools-syntax.js` 用 compile db 跑 `cl /Zs`，用于改一处验一处。
+语法检查用 MSVC 的 `cl /Zs`（或直接 `dev.py build-fast --target-family tests`），用于改一处验一处。
 注意该 db 生成于 11-07 18:47，晚于它的源码变更会让部分 TU 的参数过期，
 所以**以 4.1 的真实构建为准**。
 
