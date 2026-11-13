@@ -5,6 +5,7 @@ import re
 from threading import RLock
 
 from runtime.archive.portable import atomic_replace
+from runtime.bridge_errors import BridgeError
 from runtime.project_context import require_project_session
 
 
@@ -16,7 +17,8 @@ class ProjectFiles:
         with cls._lock:
             root, error = require_project_session(request)
             if error:
-                return error
+                raise BridgeError(error.get("code") or "SERVICE_FAILED",
+                                  error.get("message") or "Project session refused")
             try:
                 if "identity" in request:
                     identity = request["identity"]
@@ -69,7 +71,8 @@ class ProjectFiles:
                     return {"status": "missing"}
                 return {"status": "loaded", **json.loads(index.read_bytes())}
             except (KeyError, OSError, ValueError, TypeError, AttributeError) as error:
-                return {"status": "error", "message": str(error)}
+                code = "FILE_OPERATION_FAILED" if isinstance(error, OSError) else "INVALID_ARGUMENT"
+                raise BridgeError(code, str(error)) from error
 
     @classmethod
     def save(cls, request):

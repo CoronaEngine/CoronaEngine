@@ -6,6 +6,7 @@ import shutil
 from threading import RLock
 
 from .portable import atomic_replace
+from runtime.bridge_errors import BridgeError
 from runtime.project_context import require_project_session
 
 
@@ -38,9 +39,9 @@ def file_manager(request):
         return _file_manager(request)
 
 
-# Refusals answer with the code the Web can branch on, like ProjectFiles and
-# FileScripts already did. Raising here made the bridge flatten every reason into
-# SERVICE_FAILED with the text in the message, so callers could only string-match.
+# Refusals carry the code the Web branches on. They are raised (not returned) so the
+# bridge rejects with that code; the dispatcher keeps it in front of the message, which
+# is what stops every reason from flattening into SERVICE_FAILED.
 _REFUSALS = (
     ("Path outside current project", "INVALID_ARGUMENT"),
     ("Cannot modify a linked project path", "INVALID_ARGUMENT"),
@@ -56,15 +57,16 @@ _REFUSALS = (
 def _refusal(message):
     for prefix, code in _REFUSALS:
         if message.startswith(prefix):
-            return {"status": "error", "code": code, "message": message}
-    return {"status": "error", "code": "FILE_OPERATION_FAILED", "message": message}
+            raise BridgeError(code, message)
+    raise BridgeError("FILE_OPERATION_FAILED", message)
 
 
 def _file_manager(request):
     from script_runtime.file_runner import FileScripts
     root, error = require_project_session(request)
     if error:
-        return {"status": "error", "code": error["code"], "message": error["message"]}
+        raise BridgeError(error.get("code") or "SERVICE_FAILED",
+                          error.get("message") or "Project session refused")
     try:
         op, args = request["op"], request["args"]
         requested = root / (args[0] if args else "")
@@ -119,4 +121,4 @@ def _file_manager(request):
             raise ValueError(f"Unsupported project file operation: {op}")
         return True
     except (KeyError, OSError, TypeError, ValueError) as failure:
-        return _refusal(str(failure))
+        _refusal(str(failure))

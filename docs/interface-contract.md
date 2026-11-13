@@ -91,7 +91,7 @@ ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web �
 |---|---|---|
 | 基础设施 | V8 绑定本体，原生工作开始前 | `CONTEXT_CHANGED`、`INVALID_ARGUMENT`、`NATIVE_FAILURE`、`NATIVE_UNAVAILABLE`、`PERMISSION_DENIED` |
 | 窗口 | 原生窗口宿主（窗口消失、建不出来） | `CREATE_FAILED`、`WINDOW_CLOSED` |
-| 场景/归档 | 场景与归档层（对象不存在、只读、冲突…） | `ACTOR_AUDIO_UNAVAILABLE`、`ACTOR_CREATE_FAILED`、`ACTOR_NOT_FOUND`、`ACTOR_NOT_READY`、`ACTOR_VERSION_CONFLICT`、`CAMERA_NOT_DELETABLE`、`CAMERA_NOT_FOUND`、`CAMERA_UNAVAILABLE`、`CAPTURE_FAILED`、`COMPONENT_NOT_FOUND`、`CONFLICT`、`FILE_NOT_FOUND`、`FILE_OPERATION_FAILED`、`INVALID_BOUNDS`、`INVALID_PROJECT_PATH`、`LAST_CAMERA`、`MODEL_DECODE_FAILED`、`NODE_EDIT_REJECTED`、`NODE_NOT_FOUND`、`PICK_FAILED`、`PICK_TIMEOUT`、`PROJECT_CONTEXT_CHANGED`、`PROJECT_CREATION_FAILED`、`PROJECT_OPEN_FAILED`、`READ_ONLY`、`READ_ONLY_PROJECT`、`RESOURCE_NOT_FOUND`、`SAVE_FAILED`、`UNSUPPORTED_RESOURCE_TYPE` |
+| 场景/归档 | 场景与归档层（对象不存在、只读、冲突…） | `ACTOR_AUDIO_UNAVAILABLE`、`ACTOR_CREATE_FAILED`、`ACTOR_NOT_FOUND`、`ACTOR_NOT_READY`、`ACTOR_VERSION_CONFLICT`、`CAMERA_NOT_DELETABLE`、`CAMERA_NOT_FOUND`、`CAMERA_UNAVAILABLE`、`CAPTURE_FAILED`、`COMPONENT_NOT_FOUND`、`CONFLICT`、`DOCUMENT_CONFLICT`、`FILE_NOT_FOUND`、`FILE_OPERATION_FAILED`、`INVALID_BOUNDS`、`INVALID_PROJECT_DOCUMENT`、`INVALID_PROJECT_PATH`、`LAST_CAMERA`、`MODEL_DECODE_FAILED`、`NODE_EDIT_REJECTED`、`NODE_NOT_FOUND`、`NO_ACTIVE_PROJECT`、`PICK_FAILED`、`PICK_TIMEOUT`、`PROJECT_CONTEXT_CHANGED`、`PROJECT_CREATION_FAILED`、`PROJECT_OPEN_FAILED`、`READ_ONLY`、`READ_ONLY_PROJECT`、`RESOURCE_NOT_FOUND`、`RUN_ACTIVE`、`SAVE_FAILED`、`UNSUPPORTED_RESOURCE_TYPE` |
 | Web → Python | bridge 传输与 Python 服务 | `EDITOR_API_TIMEOUT`、`SERVICE_BUSY`、`SERVICE_FAILED`、`SERVICE_UNAVAILABLE` |
 
 **可分支的稳定码**：`ACTOR_NOT_FOUND`、`ACTOR_VERSION_CONFLICT`、`CAMERA_NOT_FOUND`、`CONFLICT`、`CONTEXT_CHANGED`、`CREATE_FAILED`、`EDITOR_API_TIMEOUT`、`FILE_NOT_FOUND`、`INVALID_ARGUMENT`、`NATIVE_UNAVAILABLE`、`PERMISSION_DENIED`、`PICK_TIMEOUT`、`PROJECT_CONTEXT_CHANGED`、`READ_ONLY`、`READ_ONLY_PROJECT`、`RESOURCE_NOT_FOUND`、`SERVICE_BUSY`、`SERVICE_FAILED`、`SERVICE_UNAVAILABLE`、`WINDOW_CLOSED`。
@@ -99,11 +99,14 @@ Web 可以按这些码决定重试、禁用控件或提示；其余是**细节�
 细节码会随实现改名或合并。稳定码的每一次增删都是契约变更，需要写进
 `docs/interface-decisions.md`。
 
-Python 服务的**业务拒绝**是数据，不是异常：`ProjectArchive`、`ProjectFiles`、
-`FileScripts` 都用 `{status:'error', code, message}` 回答（如 `DOCUMENT_CONFLICT`、
-`RUN_ACTIVE`、`PERMISSION_DENIED`、`CONFLICT`），经 bridge 原样透传，不在 C++ 侧扫描
-范围内；前端 facade 把这种回复转成带 `error.code` 的拒绝。只有传输或服务本身失败
-（信封解析、服务未启动、Python 抛异常）才变成 `SERVICE_FAILED`，原因只在 message 里。
+Python 服务的**业务拒绝**统一是 Promise 拒绝，带 `error.code`：`ProjectArchive` 与
+`ProjectFiles` 在 Python 侧抛 `BridgeError(code, message)`，dispatcher 把它写成
+`CODE: message`，C++ 桥只从消息前缀取码，因此 `PROJECT_CONTEXT_CHANGED`、
+`DOCUMENT_CONFLICT`、`READ_ONLY_PROJECT`、`CONFLICT` 等业务码原样到达前端。
+`FileScripts` 是例外：它的回复是**运行状态记录**（`status` 是
+`starting/running/completed/error` 状态机），按值返回，由 Blockly 面板按状态渲染。
+只有传输或服务本身失败（信封解析、服务未启动、Python 抛未知异常）才回落到
+`SERVICE_FAILED`。
 同步方法**永不拒绝**：返回值，找不到时返回文档化的空值。
 
 ## ScriptRuntime 面
@@ -168,6 +171,7 @@ Python 服务的**业务拒绝**是数据，不是异常：`ProjectArchive`、`P
 | [`test_web_layer_budget.py`](../tests/tools/test_web_layer_budget.py) | 接口核心行数 ratchet（度量在 web_layer_budget.py） |
 | [`test_scene_api_consolidation.py`](../tests/tools/test_scene_api_consolidation.py) | 场景 V8 只保留合并后的方法名与总数 |
 | [`test_web_python_bridge.py`](../tests/tools/test_web_python_bridge.py) | Web→Python 信封格式与错误码映射 |
+| [`test_python_refusal_codes.py`](../tests/tools/test_python_refusal_codes.py) | Python 侧拒绝码都在契约词表内 |
 | [`test_lanchat_removal.py`](../tests/tools/test_lanchat_removal.py) | 局域网聊天接口已删除，不得回归 |
 | [`test_project_allocator.py`](../tests/tools/test_project_allocator.py) | 项目目录分配器：重名与原子创建 |
 | [`test_vision_thermal_run.py`](../tests/tools/test_vision_thermal_run.py) | Vision 热运行路径 |

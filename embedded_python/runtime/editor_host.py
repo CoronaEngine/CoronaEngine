@@ -2,6 +2,7 @@ import json
 import sys
 import threading
 
+from runtime.bridge_errors import BridgeError
 from runtime.native_engine import get_corona_engine
 from config.paths_config import get_default_paths
 from runtime.response_utils import create_error_response, create_success_response
@@ -45,8 +46,32 @@ class WebBridgeService:
             raise PermissionError(f"Editor Web layer may not call Python service {service}")
         response = CoronaEditor.dispatch_script_values_from_cpp(service, function, args)
         if not response.get("success", False):
-            raise RuntimeError(response.get("error") or f"{service}.{function} failed")
-        return response.get("data")
+            message = response.get("error") or f"{service}.{function} failed"
+            # A service refusal already carries "CODE: message"; re-raise it as a typed
+            # error so the outer dispatcher keeps the code instead of prefixing
+            # "Error processing request: " in front of it.
+            code, separator, detail = message.partition(": ")
+            if separator and code.isupper() and all(ch.isalnum() or ch == "_" for ch in code):
+                raise BridgeError(code, detail)
+            raise RuntimeError(message)
+        data = response.get("data")
+        # ProjectArchive / ProjectFiles answer a refusal in one of two shapes:
+        # {status:'error', code, message} (file ops, ProjectFiles) or
+        # {success:False, error:<code>, message} (project documents). Raise either one so
+        # the bridge rejects with that code instead of resolving a value; the C++ side
+        # then hands the same code to the Promise rejection. FileScripts is deliberately
+        # excluded: its replies are run-state records whose `status` is the state the
+        # Blockly panel renders, not a transport refusal.
+        if service != "FileScripts" and isinstance(data, dict):
+            if data.get("status") == "error":
+                raise BridgeError(
+                    data.get("code") or "SERVICE_FAILED",
+                    data.get("message") or f"{service}.{function} refused the request")
+            if data.get("success") is False:
+                code = data.get("code") or data.get("error") or "SERVICE_FAILED"
+                raise BridgeError(str(code),
+                                  str(data.get("message") or f"{service}.{function} refused the request"))
+        return data
 
 class CoronaEditor:
     CoronaEngine = get_corona_engine()
@@ -75,6 +100,11 @@ class CoronaEditor:
                 raise ValueError("Not find script function")
             result = getattr(module, func_name)(*args)
             return {"success": True, "data": result}
+        except BridgeError as error:
+            # Keep the business code in front of the message: the C++ bridge extracts it
+            # and rejects with the code rather than flattening every refusal to
+            # SERVICE_FAILED.
+            return {"success": False, "error": f"{error.code}: {error.message}"}
         except Exception as error:
             return {"success": False, "error": f"Error processing request: {error}"}
 

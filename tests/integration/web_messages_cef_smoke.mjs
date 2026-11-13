@@ -161,6 +161,11 @@ try {
       `corona.bridge.call(JSON.stringify({service:${JSON.stringify(service)},`
       + `function:${JSON.stringify(method)},args:${JSON.stringify(args)}}))`
       + `.then(raw => typeof raw === 'string' ? JSON.parse(raw) : raw)`));
+  // A refusal rejects; read its code inside the page, where the Error still carries it
+  // (CDP serializes the message but not custom properties).
+  const bridgeRefusal = (service, method, args) => main.evaluate(
+    `corona.bridge.call(${JSON.stringify(JSON.stringify({ service, function: method, args }))})`
+    + `.then(() => 'resolved', error => error.code || 'SERVICE_FAILED')`);
   const bridgeCall = (service, method, args) => main.evaluate(
     `(() => { if (window.__nativeJSON) { Object.assign(JSON, window.__nativeJSON); } return 0; })()`)
     .then(() => main.evaluate(
@@ -568,7 +573,8 @@ try {
     // through corona.bridge.call and JSON is the transport by design - the old wrapper that
     // forbade JSON.stringify proved a property the bridge intentionally does not hold. The
     // service keeps the legacy content-addressed folders and returns the same
-    // {status, document, revision, code_path, document_path} record the native adapter did.
+    // {status, document, revision, code_path, document_path} record the native adapter did;
+    // a refusal rejects with Error.code (the bridge raises it on the service side).
     const fileCall = (method, request) => bridgeCall('ProjectFiles', method, [request]);
     const oldDocument = await fileCall('load', fileScope);
     assert.equal(oldDocument.status, 'loaded');
@@ -585,15 +591,16 @@ try {
     assert.deepEqual(await fileCall('load', fileScope), { ...savedDocument, status: 'loaded' });
     assert.equal((await fileCall('load', { ...fileScope, identity: ['node_graph', 'project', '', ''] })).status, 'missing');
     for (const changed of [{ archive_session: 'retired' }, { project_path: path.dirname(cameraWorld) }]) {
-      assert.equal((await fileCall('save', { ...fileScope, ...changed, code: 'must not publish', document: {} })).code,
-        'PROJECT_CONTEXT_CHANGED', 'a stale session is refused by the owning service');
+      const code = await bridgeRefusal('ProjectFiles', 'save',
+        [{ ...fileScope, ...changed, code: 'must not publish', document: {} }]);
+      assert.equal(code, 'PROJECT_CONTEXT_CHANGED', 'a stale session rejects with its code');
     }
     assert.deepEqual((await fileCall('load', fileScope)).document, fileDocument);
 
     for (const invalid of [{ ...fileScope, identity: [] },
       { ...fileScope, identity: ['node_graph', 'actor', '', ''] }, { ...fileScope, identity: ['node_graph', 'project', 'wrong', ''] }]) {
-      assert.equal((await fileCall('load', invalid)).status, 'error',
-        'an invalid document identity is reported by the owning service');
+      assert.equal(await bridgeRefusal('ProjectFiles', 'load', [invalid]),
+        'INVALID_ARGUMENT', 'an invalid document identity is refused with its code');
     }
     // KNOWN GAP: the native adapter rejected a non-object or over-deep document with
     // INVALID_ARGUMENT. runtime/archive/script_files.py stores request["document"] verbatim and
@@ -698,12 +705,18 @@ try {
     assert.equal('version' in committed, false);
     assert.equal(committed.revision, createHash('sha256').update(await readFile(path.join(cameraWorld, documentScope.document))).digest('hex'));
     assert.deepEqual((await documentCall('read_document', documentScope)).content, newContent);
-    assert.equal((await documentCall('commit_document', { ...documentScope, revision: numericDocument.revision, content: {} })).error, 'DOCUMENT_CONFLICT');
+    // Refusals reject with the business code; read it inside the page.
+    const documentRefusal = (method, request) =>
+      bridgeRefusal('ProjectArchive', method, [{ ...request, revision_only: true }]);
+    assert.equal(await documentRefusal('commit_document',
+      { ...documentScope, revision: numericDocument.revision, content: {} }), 'DOCUMENT_CONFLICT');
     for (const badScope of [{ archive_session: 'retired' }, { project_path: cameraWorld + '-other' }]) {
-      assert.equal((await documentCall('read_document', { ...documentScope, ...badScope })).error, 'PROJECT_CONTEXT_CHANGED');
+      assert.equal(await documentRefusal('read_document', { ...documentScope, ...badScope }),
+        'PROJECT_CONTEXT_CHANGED');
     }
     for (const document of ['../escape.json', 'assets.manifest.json', 'Scripts/files/forbidden.json']) {
-      assert.equal((await documentCall('read_document', { ...documentScope, document })).error, 'INVALID_PROJECT_DOCUMENT');
+      assert.equal(await documentRefusal('read_document', { ...documentScope, document }),
+        'INVALID_PROJECT_DOCUMENT');
     }
     // A malformed request now reaches the Python owner, which may answer with success:false or
     // raise; either way it must not succeed, which is the property that matters here. A stray
@@ -752,8 +765,8 @@ try {
     const filesScope = { project_path: metadata.project_path, archive_session: metadata.archive_session };
     // The file browser is owned by the Python archive service. runtime/archive/project_files.py
     // returns a tree entry for get_file_tree, {status,path,name,file_type} for create_file, bare
-    // True for create_folder/rename_item/delete_item, and {status:'error', code, message} for a
-    // refusal - so callers compare scalars on success and read the code instead of matching text.
+    // True for create_folder/rename_item/delete_item, and rejects with Error.code for a refusal
+    // - so callers compare scalars on success and read error.code instead of matching text.
     const filesCall = (method, request) => {
       const scope = { ...filesScope, ...request };
       const manager = (op, args) => bridgeCall('ProjectArchive', 'file_manager',
@@ -785,6 +798,24 @@ try {
     assert.equal(await filesCall('renameItem', { path: template.path, name: '改名.actor' }), true);
     assert.equal((await filesCall('openFile', { path: '文件测试/改名.actor', file_type: 'actor' })).ok, true);
     const sceneBytes = await readFile(path.join(cameraWorld, 'scene.ini'));
+    const managerEnvelope = (method, request) => {
+      const scope = { ...filesScope, ...request };
+      const [op, args] = {
+        getFileTree: ['get_file_tree', [scope.path ?? '']],
+        createFolder: ['create_folder', [scope.path, scope.name]],
+        createActorTemplate: ['create_file', [scope.path, scope.name, 'actor']],
+        renameItem: ['rename_item', [scope.path, scope.name]],
+        deleteItem: ['delete_item', [scope.path]],
+      }[method];
+      return JSON.stringify({ service: 'ProjectArchive', function: 'file_manager',
+        args: [{ archive_session: scope.archive_session, project_path: scope.project_path, op, args }] });
+    };
+    const managerRefusal = (method, request) => main.evaluate(
+      `corona.bridge.call(${JSON.stringify(managerEnvelope(method, request))})`
+      + `.then(() => 'resolved', error => error.code || 'SERVICE_FAILED')`);
+    const managerRefusalDetail = (method, request) => main.evaluate(
+      `corona.bridge.call(${JSON.stringify(managerEnvelope(method, request))})`
+      + `.then(() => ({ status: 'resolved' }), error => ({ status: 'rejected', code: error.code, message: error.message }))`);
     for (const [method, request, code] of [
       ['renameItem', { path: 'scene.ini', name: 'moved.ini' }, 'PERMISSION_DENIED'],
       ['deleteItem', { path: 'scene.ini' }, 'PERMISSION_DENIED'],
@@ -793,9 +824,7 @@ try {
       ['createFolder', { path: '../escape', name: 'no' }, 'INVALID_ARGUMENT'],
       ['createActorTemplate', { path: '文件测试', name: '../escape' }, 'INVALID_ARGUMENT'],
     ]) {
-      const refused = await filesCall(method, request);
-      assert.equal(refused.status, 'error', `${method}: ${JSON.stringify(refused)}`);
-      assert.equal(refused.code, code, `${method}: ${refused.code}`);
+      assert.equal(await managerRefusal(method, request), code, `${method}: refusal code`);
     }
     assert.deepEqual(await readFile(path.join(cameraWorld, 'scene.ini')), sceneBytes);
     // A stale archive or project path is refused by the owning service. Unknown extra keys are no
@@ -806,10 +835,8 @@ try {
       ['renameItem', { name: 'no' }], ['deleteItem', {}],
     ]) {
       for (const badScope of [{ archive_session: 'retired' }, { project_path: cameraWorld + '-other' }]) {
-        const refused = await filesCall(method, { path: template.path, ...extra, ...badScope })
-          .then(reply => reply, error => ({ status: 'error', code: error.code || 'SERVICE_FAILED' }));
-        assert.equal(refused?.status, 'error', `a stale project scope must not succeed: ${method}`);
-        assert.equal(refused.code, 'PROJECT_CONTEXT_CHANGED', `${method}: ${refused.code}`);
+        const code = await managerRefusal(method, { path: template.path, ...extra, ...badScope });
+        assert.equal(code, 'PROJECT_CONTEXT_CHANGED', `a stale project scope must not succeed: ${method}`);
       }
     }
     assert.equal(await main.evaluate(`corona.project.openDocument(${JSON.stringify({ ...filesScope, path: '../escape.actor', file_type: 'actor' })}).catch(e=>e.code)`), 'INVALID_PROJECT_PATH');
@@ -1556,8 +1583,8 @@ try {
         ['renameItem', { path: 'integer-boundaries.json', name: 'blocked.json' }],
         ['deleteItem', { path: 'integer-boundaries.json' }],
       ]) {
-        const refused = await filesCall(method, request);
-        assert.equal(refused?.status, 'error', `${method}: ${JSON.stringify(refused)}`);
+        const refused = await managerRefusalDetail(method, request);
+        assert.equal(refused?.status, 'rejected', `${method}: ${JSON.stringify(refused)}`);
         assert.equal(refused.code, 'CONFLICT', `${method}: ${refused.code}`);
         assert.match(refused.message, /Stop and restore the file run/);
       }

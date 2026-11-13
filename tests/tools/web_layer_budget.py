@@ -68,7 +68,7 @@ TARGET_LINES = 13_807
 # moved onto the geometry command channel (+38 in the scene service, core +34). Reading rules moved
 # to cef_request_rules.h so a plain test covers them (+9 in the binding), and closeProcess got
 # its main-window check (+7 in the window operations).
-CORE_BUDGET = 14448
+CORE_BUDGET = 14466
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -78,7 +78,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/editor_scene_service.cpp", 4431),
     ("src/systems/ui/cef/editor_paths.h", 22),
     ("src/systems/ui/cef/editor_paths.cpp", 31),
-    ("src/systems/ui/cef/editor_service_operations.cpp", 88),
+    ("src/systems/ui/cef/editor_service_operations.cpp", 106),
     ("src/systems/ui/cef/editor_network_state.h", 16),
     ("src/systems/ui/cef/editor_network_state.cpp", 219),
     ("src/systems/ui/cef/editor_actor_projection.h", 40),

@@ -116,6 +116,25 @@ settlement；C++ 侧的所有者另走 `cancel_context` 取消工作。
 覆盖重点：方法名表、文档一致性、拒绝码词表、集成脚本（调用与 `typeof` 断言）、前端 facade
 （存在性、唯一入口、一一映射）、前端回归文件、行数 ratchet、pin 工具。
 
+## 7.1 Web→Python 的业务拒绝统一为 Promise 拒绝
+
+**决定**：`ProjectArchive` 与 `ProjectFiles` 的业务拒绝（归档过期、只读、文档 CAS 冲突、
+非法文档路径、运行中占用、无效参数、文件操作失败）一律以 **Promise 拒绝**到达 Web，
+`error.code` 就是业务码。Python 侧抛 `BridgeError(code, message)`，dispatcher 把它写成
+`CODE: message`，C++ 桥从消息前缀取码；前端只写 `try/catch`，不再判断
+`{status:'error'}` 或 `{success:false}` 的返回值。
+
+**理由**：此前同一个桥有三种失败形状（`{status:'error'}`、`{success:false}`、抛异常），
+`fileOp` 之类的 facade 要把值转成异常，漏掉一处就让调用方拿到"成功返回的错误对象"。
+
+**例外**：`FileScripts` 的回复是**运行状态记录**（`status` 是
+`starting/running/completed/error` 状态机），Blockly 面板按状态渲染，因此按值返回；
+它的 `REQUEST_CONFLICT`、`SCRIPT_CHANGED` 等码属于数据，不属于拒绝通道。
+
+**代价**：`commit_document` 的 CAS 冲突从"返回值"变成"拒绝码"，`DOCUMENT_CONFLICT`
+进入词表并记为可重试；`cabbageDomain.js` 的提交循环改为捕获该码后重试。
+`NO_ACTIVE_PROJECT`、`INVALID_PROJECT_DOCUMENT`、`RUN_ACTIVE` 也随之进入词表。
+
 ## 8. 场景数据的读写所有权
 
 场景数据分三类，读写的边界不同：

@@ -16,6 +16,7 @@ EDITOR_ROOT = ROOT / "embedded_python"
 if str(EDITOR_ROOT) not in sys.path:
     sys.path.insert(0, str(EDITOR_ROOT))
 
+from runtime.bridge_errors import BridgeError
 from runtime.editor_host import CoronaEditor, WebBridgeService
 
 
@@ -69,18 +70,48 @@ def test_bridge_surfaces_service_failures(monkeypatch):
         WebBridgeService.call(json.dumps({"service": "ProjectArchive", "function": "open_scene"}))
 
 
-def test_bridge_passes_a_structured_refusal_through_unchanged(monkeypatch):
-    # A service that refuses (stale archive, read-only project, bad path) answers with
-    # {status:'error', code} instead of raising, so Web can branch on the code. Only a
-    # dispatcher-level failure becomes SERVICE_FAILED on the C++ side.
+def test_bridge_raises_a_status_error_refusal_with_its_code(monkeypatch):
+    # A refusal is raised, not returned: Web branches on error.code in one try/catch.
     calls = []
     refusal = {"status": "error", "code": "PROJECT_CONTEXT_CHANGED",
                "message": "Project session is stale"}
     _record(monkeypatch, calls, {"success": True, "data": refusal})
-    result = WebBridgeService.call(json.dumps({
-        "service": "ProjectArchive", "function": "file_manager",
-        "args": [{"archive_session": "old", "project_path": "P:/w", "op": "delete_item", "args": [""]}]}))
-    assert result == refusal
+    with pytest.raises(BridgeError) as raised:
+        WebBridgeService.call(json.dumps({
+            "service": "ProjectArchive", "function": "file_manager",
+            "args": [{"archive_session": "old", "project_path": "P:/w", "op": "delete_item", "args": [""]}]}))
+    assert raised.value.code == "PROJECT_CONTEXT_CHANGED"
+    assert raised.value.message == "Project session is stale"
+
+
+def test_bridge_raises_a_success_false_document_refusal(monkeypatch):
+    calls = []
+    refusal = {"success": False, "error": "DOCUMENT_CONFLICT"}
+    _record(monkeypatch, calls, {"success": True, "data": refusal})
+    with pytest.raises(BridgeError) as raised:
+        WebBridgeService.call(json.dumps({
+            "service": "ProjectArchive", "function": "commit_document", "args": [{}]}))
+    assert raised.value.code == "DOCUMENT_CONFLICT"
+
+
+def test_bridge_keeps_file_script_run_records_as_values(monkeypatch):
+    # FileScripts answers run-state records; `status` is the state the panel renders.
+    calls = []
+    record = {"status": "error", "code": "REQUEST_CONFLICT", "message": "requestId was reused"}
+    _record(monkeypatch, calls, {"success": True, "data": record})
+    assert WebBridgeService.call(json.dumps({
+        "service": "FileScripts", "function": "run_file", "args": [{}]})) == record
+
+
+def test_dispatcher_prefixes_a_bridge_error_with_its_code(monkeypatch):
+    class Probe:
+        @staticmethod
+        def refuse(*_args):
+            raise BridgeError("READ_ONLY_PROJECT", "Project is read-only")
+
+    monkeypatch.setitem(CoronaEditor.module_list, "Probe", Probe)
+    assert CoronaEditor.dispatch_script_values_from_cpp("Probe", "refuse", []) == {
+        "success": False, "error": "READ_ONLY_PROJECT: Project is read-only"}
 
 
 def test_register_script_dispatcher_exposes_the_bridge():

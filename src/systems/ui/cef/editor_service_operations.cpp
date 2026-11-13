@@ -9,6 +9,7 @@
 #include "native_editor_state.h"
 #include "python_service_bridge.h"
 
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <utility>
@@ -61,6 +62,26 @@ ProjectSettingsReply execute_project_settings_operation(const ProjectSettingsReq
     return reply;
 }
 
+// A refusal raised by a Python service arrives as "CODE: message". The code is more
+// useful to the caller than the transport bucket, so prefer it when it looks like a code
+// (uppercase identifier) and keep the transport mapping as the fallback.
+std::string python_failure_code(const NativeResult& result) {
+    const auto colon = result.error.find(": ");
+    if (colon != std::string::npos && colon > 0 && colon <= 48) {
+        const auto candidate = result.error.substr(0, colon);
+        const bool identifier = std::all_of(candidate.begin(), candidate.end(), [](unsigned char ch) {
+            return (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_';
+        });
+        if (identifier && candidate.front() >= 'A' && candidate.front() <= 'Z') {
+            return candidate;
+        }
+    }
+    if (result.error_code == 504) return "EDITOR_API_TIMEOUT";
+    if (result.error_code == 429) return "SERVICE_BUSY";
+    if (result.error_code == 503) return "SERVICE_UNAVAILABLE";
+    return "SERVICE_FAILED";
+}
+
 BridgeReply execute_bridge_operation(const std::string& envelope) {
     BridgeReply reply;
     if (envelope.empty()) {
@@ -73,10 +94,7 @@ BridgeReply execute_bridge_operation(const std::string& envelope) {
         "python-bridge",
         std::chrono::seconds(300));
     if (!result.success) {
-        reply.error_code = result.error_code == 504 ? "EDITOR_API_TIMEOUT"
-                           : result.error_code == 429 ? "SERVICE_BUSY"
-                           : result.error_code == 503 ? "SERVICE_UNAVAILABLE"
-                                                      : "SERVICE_FAILED";
+        reply.error_code = python_failure_code(result);
         reply.error_message = result.error;
         return reply;
     }

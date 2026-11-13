@@ -33,6 +33,7 @@ WINDOW = {
 }
 
 SCENE = {
+    "NO_ACTIVE_PROJECT",        # the archive/file service was asked to work without an open project
     "PROJECT_CONTEXT_CHANGED",  # the request named a scene/archive the editor no longer owns
     "READ_ONLY",                # the scene is read-only
     "READ_ONLY_PROJECT",        # the project is read-only
@@ -53,6 +54,9 @@ SCENE = {
     "INVALID_PROJECT_PATH",
     "PROJECT_OPEN_FAILED",
     "PROJECT_CREATION_FAILED",
+    "DOCUMENT_CONFLICT",         # commit compare-and-swap lost; reload the document then retry
+    "INVALID_PROJECT_DOCUMENT",  # the document route is outside the project or not JSON
+    "RUN_ACTIVE",                # a script run owns the scene; stop and restore it first
     "SAVE_FAILED",            # the scene could not be written
     "CAMERA_UNAVAILABLE",     # the camera has no engine handle yet
     "CAPTURE_FAILED",         # the screenshot could not be taken
@@ -123,6 +127,25 @@ PATTERNS = (
     re.compile(r'[?:]\s*"([A-Z][A-Z_]+)"'),
     re.compile(r'return\s+"([A-Z][A-Z_]+)"'),
 )
+
+
+def python_refusal_codes(root: Path = ROOT / "embedded_python") -> set[str]:
+    """Codes the Python bridge services refuse with (they reach Web as rejections)."""
+    codes: set[str] = set()
+    for path in root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for match in re.finditer(r"BridgeError\(\s*[\"']([A-Z][A-Z0-9_]+)[\"']", text):
+            codes.add(match.group(1))
+        if path.name == "project_context.py":
+            for match in re.finditer(r"\"code\":\s*\"([A-Z][A-Z0-9_]+)\"", text):
+                codes.add(match.group(1))
+        if path.name == "documents.py":
+            for match in re.finditer(r"\"error\":\s*\"([A-Z][A-Z0-9_]+)\"", text):
+                codes.add(match.group(1))
+        if path.name == "project_files.py":
+            for match in re.finditer(r"\(\s*\"[^\"]+\",\s*\"([A-Z][A-Z0-9_]+)\"\s*\)", text):
+                codes.add(match.group(1))
+    return codes
 
 
 def emitted_codes(root: Path = ROOT / "src/systems/ui") -> dict[str, set[str]]:

@@ -70,13 +70,23 @@ def verify(port, project, peer):
     open_project(peer)
     session = open_project(project)
     assert session != scope["archive_session"]
-    stale = bridge("ProjectArchive", "commit_document",
-                   {**update, "revision": saved["revision"], "content": "stale", "revision_only": True})
-    assert stale["error"] == "PROJECT_CONTEXT_CHANGED", stale
-    stale_file = bridge("ProjectArchive", "file_manager",
-                        {"archive_session": scope["archive_session"], "project_path": str(project),
-                         "op": "create_file", "args": ["", "stale", "actor"]})
-    assert stale_file["status"] == "error" and stale_file["code"] == "PROJECT_CONTEXT_CHANGED", stale_file
+    try:
+        bridge("ProjectArchive", "commit_document",
+               {**update, "revision": saved["revision"], "content": "stale", "revision_only": True})
+        raise AssertionError("a stale document commit must refuse")
+    except AssertionError:
+        raise
+    except Exception as error:  # the bridge rejects refusals now
+        assert "PROJECT_CONTEXT_CHANGED" in str(error), error
+    try:
+        bridge("ProjectArchive", "file_manager",
+               {"archive_session": scope["archive_session"], "project_path": str(project),
+                "op": "create_file", "args": ["", "stale", "actor"]})
+        raise AssertionError("a stale file manager request must refuse")
+    except AssertionError:
+        raise
+    except Exception as error:
+        assert "PROJECT_CONTEXT_CHANGED" in str(error), error
     for name, args in (
         ("corona.scene.importResourceFile", ["scene.ini", {"archive_session": scope["archive_session"], "file_type": "model"}]),
         ("corona.scene.createActor", ["scene.ini", original["model"], {"archive_session": scope["archive_session"], "actor_type": "model"}]),

@@ -24,7 +24,7 @@ def test_sources_only_emit_declared_codes():
 
 
 def test_every_declared_code_is_still_emitted():
-    emitted = set(rejection_codes.emitted_codes())
+    emitted = set(rejection_codes.emitted_codes()) | rejection_codes.python_refusal_codes()
     unused = sorted(rejection_codes.ALL - emitted)
     assert not unused, f"declared but no longer emitted: {unused} - remove them from the vocabulary"
 
