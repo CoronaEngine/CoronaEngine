@@ -115,6 +115,19 @@ def test_a_distribution_removed_from_requirements_leaves_the_deployment(tmp_path
     assert not (destination / "Lib" / "site-packages" / "pandas" / "init.py").exists()
 
 
+def test_an_empty_requirements_file_keeps_only_the_standard_library(tmp_path):
+    source, destination = make_source(tmp_path / "env"), tmp_path / "runtime" / "python-runtime"
+    (source / "Lib" / "site-packages" / "numpy").mkdir()
+    (source / "Lib" / "site-packages" / "numpy" / "init.py").write_text("", encoding="utf-8")
+    result = run(source, destination, requirements=[])
+    # stdlib + the Python DLLs, and nothing from site-packages.
+    assert "deployed 2 changed file(s)" in result.stdout, result.stdout
+    assert (destination / "Lib" / "json" / "__init__.py").is_file()
+    assert (destination / "DLLs" / "python313.dll").is_file()
+    assert not (destination / "Lib" / "site-packages" / "numpy").exists()
+    assert not (destination / "Lib" / "site-packages" / "pkg").exists()
+
+
 def test_without_requirements_everything_is_deployed(tmp_path):
     source, destination = make_source(tmp_path / "env"), tmp_path / "runtime" / "python-runtime"
     (source / "Lib" / "site-packages" / "torch").mkdir()

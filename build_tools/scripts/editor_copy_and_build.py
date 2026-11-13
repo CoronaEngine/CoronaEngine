@@ -53,7 +53,7 @@ def _should_ignore(name: str) -> bool:
         # Documentation
         "README.md", "docs",
         # Dependencies manifests (dev-only lock files)
-        "requirements.txt", "yarn.lock",
+        "requirements.txt", "runtime-requirements.txt", "yarn.lock",
         # Test files and engine-only python development assets
         "tests", "test", "frontend_assets",
         # Temporary and log files

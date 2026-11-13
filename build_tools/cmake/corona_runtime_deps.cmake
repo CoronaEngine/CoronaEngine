@@ -123,10 +123,11 @@ function(corona_install_runtime_deps target_name)
             # only copies what changed; an unchanged tree costs one stat per file.
             set(_CORONA_PY_RUNTIME_DIR "${_CORONA_DESTINATION_DIR}/python-runtime")
             set(_CORONA_PY_DEPLOY_SCRIPT "${CORONA_BUILD_SCRIPTS_DIR}/deploy_python_runtime.py")
-            # The deployed runtime is limited to the distributions the engine declares in
-            # embedded_python/requirements.txt; the dev environment also carries AI/ML and
-            # GUI stacks (about 1.7 GB) that the runtime never imports.
-            set(_CORONA_PY_REQUIREMENTS "${CORONA_EMBEDDED_PYTHON_SOURCE_DIR}/requirements.txt")
+            # requirements.txt lists the dev environment's tooling packages (numpy, Pillow)
+            # and is validated by check_pip_modules; the runtime has its own list so the
+            # engine only ships the standard library unless a script explicitly needs more.
+            set(_CORONA_PY_REQUIREMENTS
+                "${CORONA_EMBEDDED_PYTHON_SOURCE_DIR}/runtime-requirements.txt")
             set(_CORONA_PY_REQUIREMENTS_ARGS)
             if(EXISTS "${_CORONA_PY_REQUIREMENTS}")
                 list(APPEND _CORONA_PY_REQUIREMENTS_ARGS --requirements "${_CORONA_PY_REQUIREMENTS}")

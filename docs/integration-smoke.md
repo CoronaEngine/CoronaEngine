@@ -49,10 +49,12 @@ build/conan/examples/relwithdebinfo/examples/engine/RelWithDebInfo
 `os.scandir` 遍历（用目录项里的大小/mtime，不读文件内容），实测 **约 5 秒**；源变化时只复制
 变化的文件，并删除源中已消失的条目。首次部署仍会复制全量（一次性成本）。
 
-部署的 `site-packages` 只保留 `embedded_python/requirements.txt` 里声明的发行包（当前是
-`numpy` 与 `Pillow`），标准库永远完整；开发环境里的 AI/ML 与 GUI 栈（PySide6、torch、
-transformers、cv2、pandas 等，约 1.7 GB）不进入运行时。运行时因此从约 2.1 GB 降到约
-0.4 GB。需要新的第三方包时，改 `requirements.txt` 再配置一次即可。
+部署的 `site-packages` 只保留 `embedded_python/runtime-requirements.txt` 里声明的发行包
+（当前为空：引擎自带的 Python 只用标准库），标准库永远完整。开发环境里的 AI/ML、GUI 与
+工具包（PySide6、torch、transformers、cv2、pandas、numpy、Pillow 等）都不进入运行时，
+运行时因此降到约 **30 MB**。`embedded_python/requirements.txt` 仍然列出环境级工具依赖
+（numpy、Pillow），供 `check_pip_modules.py` 校验；它们只用 conda 环境跑，从不进引擎。
+需要给运行时脚本加第三方包时，改 `runtime-requirements.txt` 再配置一次即可。
 
 ## 3. 打包 UI 套件（12 个）
 
