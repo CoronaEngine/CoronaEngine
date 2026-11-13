@@ -20,6 +20,7 @@ CameraFollowController& CameraFollowController::instance() {
 void CameraFollowController::set_target(EntityId actor_handle, EntityId camera_handle,
                                         float offset_x, float offset_y, float offset_z) {
     actor_handle_ = actor_handle;
+    follow_transform_ = 0;
     camera_handle_ = camera_handle;
     offset_ = ktm::fvec3{offset_x, offset_y, offset_z};
     active_ = true;
@@ -30,6 +31,7 @@ void CameraFollowController::set_target(EntityId actor_handle, EntityId camera_h
 void CameraFollowController::clear_target() {
     active_ = false;
     actor_handle_ = 0;
+    follow_transform_ = 0;
     camera_handle_ = 0;
     rmb_down_ = false;
     CFW_LOG_INFO("CameraFollowController: target cleared");
@@ -95,29 +97,31 @@ void CameraFollowController::update(float delta_time) {
     auto& hub = SharedDataHub::instance();
     ktm::fvec3 obj_pos{0.0f, 0.0f, 0.0f};
 
-    // Resolve actor -> profile -> geometry -> transform_handle -> position
-    std::vector<std::uintptr_t> profile_handles;
-    if (auto actor = hub.actor_storage().try_acquire_read(actor_handle_)) {
-        profile_handles = actor->profile_handles;
-    }
-
-    bool found_transform = false;
-    for (const auto profile_handle : profile_handles) {
-        if (auto profile = hub.profile_storage().try_acquire_read(profile_handle)) {
-            if (profile->geometry_handle != 0) {
-                if (auto geo = hub.geometry_storage().try_acquire_read(profile->geometry_handle)) {
-                    if (geo->transform_handle != 0) {
-                        if (auto transform = hub.model_transform_storage().try_acquire_read(geo->transform_handle)) {
-                            obj_pos = transform->position;
-                            found_transform = true;
-                            break;
-                        }
-                    }
-                }
+    // Resolve actor -> profile -> geometry -> transform_handle. The actor/profile slots are
+    // editor-owned, so they are only read when the cached transform handle is missing; the
+    // geometry and transform values come from DAG-published snapshots.
+    const auto resolve_transform = [&]() -> EntityId {
+        std::vector<std::uintptr_t> profile_handles;
+        if (auto actor = hub.actor_storage().try_acquire_read(actor_handle_)) {
+            profile_handles = actor->profile_handles;
+        }
+        for (const auto profile_handle : profile_handles) {
+            if (auto profile = hub.profile_storage().try_acquire_read(profile_handle)) {
+                if (profile->geometry_handle == 0) continue;
+                const auto row = hub.geometry_scene_row(profile->geometry_handle);
+                if (row && row->transform_handle != 0) return row->transform_handle;
             }
         }
+        return 0;
+    };
+    if (follow_transform_ == 0) follow_transform_ = resolve_transform();
+    auto follow = follow_transform_ != 0 ? hub.transform_view(follow_transform_) : std::nullopt;
+    if (!follow) {
+        follow_transform_ = resolve_transform();
+        follow = follow_transform_ != 0 ? hub.transform_view(follow_transform_) : std::nullopt;
     }
-    if (!found_transform) return;
+    if (!follow) return;
+    obj_pos = follow->position;
 
     if (input_enabled_.load()) {
         // WASD movement (modifies obj_pos directly)
@@ -126,23 +130,13 @@ void CameraFollowController::update(float delta_time) {
         // RMB orbit (modifies obj_pos directly)
         update_rmb_orbit(obj_pos, offset_);
 
-        // Write back actor position only while editor input owns movement.
-        for (const auto profile_handle : profile_handles) {
-            if (auto profile = hub.profile_storage().try_acquire_read(profile_handle)) {
-                if (profile->geometry_handle != 0) {
-                    if (auto geo = hub.geometry_storage().try_acquire_read(profile->geometry_handle)) {
-                        if (geo->transform_handle != 0) {
-                            // P5：改走命令通道（原先是脚本线程直接写槽位）
-                            Corona::TransformUpdateCommand command{};
-                            command.transform_handle = geo->transform_handle;
-                            command.fields = Corona::TransformField::Position;
-                            command.position = obj_pos;
-                            hub.enqueue_transform_update(std::move(command));
-                        }
-                    }
-                }
-            }
-        }
+        // Write back actor position only while editor input owns movement; the handle was
+        // resolved above from the snapshot, so the write stays on the command channel.
+        Corona::TransformUpdateCommand command{};
+        command.transform_handle = follow_transform_;
+        command.fields = Corona::TransformField::Position;
+        command.position = obj_pos;
+        hub.enqueue_transform_update(std::move(command));
     } else {
         rmb_down_ = false;
     }

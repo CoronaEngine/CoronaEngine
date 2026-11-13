@@ -2,8 +2,10 @@
 
 Scene state reaches the editor through GeometrySceneSnapshot, and writes go through
 GeometryCommandChannel; a cross-thread `try_acquire_write` on a geometry slot would put two
-writers on data the DAG owns. The single allowed read is the live AnimationPlayer control
-object (play/switch/sources), which is not scene state and cannot be snapshotted by value.
+writers on data the DAG owns. The single allowed read fetches the AnimationPlayer control
+object: every one of its methods (set_sources / set_paused / request_switch / snapshot) takes
+the player's own mutex, so it is a cross-thread-safe control surface, not scene state. A
+snapshot copy would duplicate its state and add a tick of latency without removing a lock.
 """
 
 import re

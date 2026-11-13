@@ -41,6 +41,9 @@ class CameraFollowController {
 
     bool active_{false};
     EntityId actor_handle_{0};
+    /// Resolved actor -> profile -> geometry -> transform handle. Cached so the
+    /// per-frame path only touches the transform snapshot, not actor/profile slots.
+    EntityId follow_transform_{0};
     EntityId camera_handle_{0};
     ktm::fvec3 offset_{0.0f, 0.0f, 2.0f};
     bool camera_look_at_{true};

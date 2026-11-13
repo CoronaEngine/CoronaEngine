@@ -73,8 +73,11 @@
 它读 `profile`(2) / `geometry`(2) / `model_transform`(1) / `actor`(1)。
 脚本每帧跑，这 6 处需要快照或论证。
 
-**处置**：先加断言确认 actor/profile 在脚本读的时候不会被 CEF 写；
-如果不能保证，就把脚本需要的字段投影进一个 `FollowCameraSnapshot`。
+**处置（第 12 轮已做）**：`CameraFollowController` 的 geometry 读改成 `geometry_scene_row()`、
+transform 读改成 `transform_view()`，并把 actor -> profile -> geometry -> transform 的解析结果
+**缓存**成 `follow_transform_`：每帧只读 transform 快照，actor/profile 只在缓存失效时读一次。
+写回仍走 `TransformUpdateCommand`。剩余：缓存刷新时仍会读 editor-owned 的 actor/profile 槽位；
+彻底移除需要编辑器发布一个 follow-target 快照（记录为后续项，当前无 UB 风险——槽位有 try 锁）。
 
 ### 2.5 scene / model_transform / actor_pick（5 处）
 

@@ -132,7 +132,9 @@ settlement；C++ 侧的所有者另走 `cancel_context` 取消工作。
 构建状态和计数，未变化的模型复用上一 tick 的节点列表，因此每 tick 的发布成本是 O(actor
 数量) 而不是 O(节点数量)。`tests/tools/test_geometry_external_access.py` 守着这条边界：
 UI 层出现任何 `geometry_storage().try_acquire_write` 都会失败；`try_acquire_read` 只允许
-`editor_actor_projection.cpp` 里读 `AnimationPlayer` 这一处（活控制对象，无法按值快照）。
+`editor_actor_projection.cpp` 里取 `AnimationPlayer` 这一处——它的每个方法（`set_sources` /
+`set_paused` / `request_switch` / `snapshot`）都持自己的互斥量，是跨线程安全的控制对象，
+不是场景状态；按值快照只会复制状态并多一 tick 延迟，换不掉任何锁。
 
 这条规则的解释力：`readModelNodes` 不再可能读到重建中的半截列表；`get_mesh_count` /
 `get_render_status` 只拿到计数，拿不到句柄；`set_model_node_state` 的入队校验也基于快照。
