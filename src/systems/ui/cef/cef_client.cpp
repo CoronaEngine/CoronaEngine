@@ -1,3 +1,4 @@
+#include "bridge_worker.h"
 #include "cef_client.h"
 #include "cef_paths.h"
 #include <corona/utils/runtime_paths.h>
@@ -834,6 +835,9 @@ void shutdown_cef() {
         return;
     }
     CFW_LOG_INFO("CEF: Starting shutdown...");
+    // Bridge calls post their completion to a CEF task runner; stop the worker first so
+    // nothing posts into a torn-down CEF.
+    BridgeWorker::instance().stop();
     CefShutdown();
     CFW_LOG_INFO("CEF: Shutdown complete");
 }

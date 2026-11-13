@@ -4,6 +4,7 @@
 #include "cef_request_rules.h"
 #include "cef_window_operations.h"
 #include "cef_scene_operations.h"
+#include "bridge_worker.h"
 #include "cef_operations.h"
 #include "cef_viewport_pick.h"
 #include "cef_viewport_gizmo.h"
@@ -2228,8 +2229,10 @@ public:
         }
         const auto id = ++sequence_;
         pending_.emplace(id, Pending{BridgeMethod::Call, promise});
-        const bool posted = CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
-            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id, std::string envelope) {
+        // The worker waits for Python off the owner thread; the promise resolves when the
+        // service answers. See bridge_worker.h for why this is not just a UI-thread post.
+        const bool posted = BridgeWorker::instance().post(
+            [weak = weak_from_this(), id, envelope = std::move(envelope)]() mutable {
                 const auto endpoint = weak.lock();
                 if (!endpoint || !endpoint->active()) return;
                 BridgeReply reply;
@@ -2237,7 +2240,7 @@ public:
                 catch (const std::exception& error) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = error.what(); }
                 catch (...) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = "Bridge call failed"; }
                 endpoint->complete(id, std::move(reply));
-            }, weak_from_this(), id, envelope)));
+            });
         if (!posted) {
             pending_.erase(id);
             reject(context_, promise, "NATIVE_UNAVAILABLE", "Python service owner is unavailable");

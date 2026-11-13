@@ -19,6 +19,8 @@ set(UI_SYSTEM_SOURCES
     vulk/browser_manager_vulkan.cpp
 
     cef/browser_manager.cpp
+    cef/bridge_worker.h
+    cef/bridge_worker.cpp
     cef/actor_selection_routing.h
     cef/browser_ui.cpp
     cef/cef_app.cpp

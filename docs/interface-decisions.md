@@ -167,9 +167,14 @@ Python 应答：桥（`EditorBridge.call`）、归档读写、项目文档、脚
 执行，挂起时这 300 秒里编辑器同样是卡死的；它只会把"永久卡住"变成"300 秒后报错"，还会
 误杀合法的长操作（大项目打开、文档提交）。超时应该属于**操作**而不是**传输**。
 
-**代价与后续**：Python 服务真的挂死时，桥调用会一直等下去（进程可杀）。彻底解决需要把桥
-改成异步完成（Python 应用线程完成时 post 回主线程 resolve Promise，配合
-`editor_dispatch` 的三段交接协议重做），记录为后续项。
+**实现**：`bridge.call` 已改为**异步完成**——`cef/bridge_worker.{h,cpp}` 在专用线程上执行
+`execute_bridge_operation`，V8 Promise 保持 pending，服务应答后由 worker 把结果 post 回
+渲染线程 resolve。owner（CEF UI）线程不再阻塞，因此 Python 服务回调编辑器 API 时可以直接
+marshal 到 owner 线程；若 owner 此刻正在另一个同步服务调用里（`EditorWaitingForPythonScope`
+置位），回调照旧走就地执行分支，不会互相等待。`shutdown_cef` 先停 worker 再 `CefShutdown`。
+
+**代价**：worker 上的一次桥调用若真的挂死，它不会完成（进程可杀）；但 editor 的其它请求
+不再被它拖住——这正是异步要换来的东西。
 
 ## 8. 场景数据的读写所有权
 
