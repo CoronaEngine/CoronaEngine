@@ -1,4 +1,5 @@
 # The editor AI services use the Python standard library.
-# Retained for CoronaEngine image/vision regression tools sharing this environment.
+# This file is also the list of third-party distributions deployed next to the engine:
+# everything else in the dev environment (AI/ML and GUI stacks) stays out of the runtime.
 numpy
 Pillow

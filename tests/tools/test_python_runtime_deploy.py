@@ -9,13 +9,15 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "build_tools" / "scripts" / "deploy_python_runtime.py"
 
 
-def run(source: Path, destination: Path, excludes=()) -> subprocess.CompletedProcess:
+def run(source: Path, destination: Path, requirements=None) -> subprocess.CompletedProcess:
     command = [sys.executable, str(SCRIPT),
                "--source-lib", str(source / "Lib"),
                "--source-dlls", str(source / "DLLs"),
                "--destination", str(destination)]
-    for name in excludes:
-        command += ["--exclude", name]
+    if requirements is not None:
+        file = source.parent / "requirements.txt"
+        file.write_text("\n".join(requirements) + "\n", encoding="utf-8")
+        command += ["--requirements", str(file)]
     result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
     assert result.returncode == 0, result.stderr
     return result
@@ -71,29 +73,55 @@ def test_a_file_removed_from_the_source_leaves_the_deployment(tmp_path):
     assert not (destination / "Lib" / "site-packages" / "pkg" / "mod.py").exists()
 
 
-def test_excluded_distributions_are_never_copied(tmp_path):
+def test_only_requirements_distributions_are_copied(tmp_path):
+    source, destination = make_source(tmp_path / "env"), tmp_path / "runtime" / "python-runtime"
+    (source / "Lib" / "site-packages" / "numpy").mkdir()
+    (source / "Lib" / "site-packages" / "numpy" / "init.py").write_text("", encoding="utf-8")
+    (source / "Lib" / "site-packages" / "numpy-2.1.0.dist-info").mkdir()
+    (source / "Lib" / "site-packages" / "numpy-2.1.0.dist-info" / "METADATA").write_text("", encoding="utf-8")
+    (source / "Lib" / "site-packages" / "torch").mkdir()
+    (source / "Lib" / "site-packages" / "torch" / "init.py").write_text("", encoding="utf-8")
+    result = run(source, destination, requirements=["numpy", "Pillow"])
+    # stdlib + DLLs + numpy (the fixture's "pkg" is a site-package, so it is filtered too).
+    assert "deployed 4 changed file(s)" in result.stdout, result.stdout
+    assert not (destination / "Lib" / "site-packages" / "pkg").exists()
+    assert (destination / "Lib" / "site-packages" / "numpy" / "init.py").is_file()
+    assert (destination / "Lib" / "site-packages" / "numpy-2.1.0.dist-info" / "METADATA").is_file()
+    assert not (destination / "Lib" / "site-packages" / "torch").exists()
+    assert (destination / "Lib" / "json" / "__init__.py").is_file()  # stdlib is always deployed
+
+
+def test_requirements_names_are_normalized(tmp_path):
+    source, destination = make_source(tmp_path / "env"), tmp_path / "runtime" / "python-runtime"
+    (source / "Lib" / "site-packages" / "PIL").mkdir()
+    (source / "Lib" / "site-packages" / "PIL" / "init.py").write_text("", encoding="utf-8")
+    # Distribution names and import names differ (Pillow -> PIL); a module name listed
+    # directly is accepted as well.
+    result = run(source, destination, requirements=["PIL"])
+    assert "deployed 3 changed file(s)" in result.stdout, result.stdout
+    assert (destination / "Lib" / "site-packages" / "PIL" / "init.py").is_file()
+
+
+def test_a_distribution_removed_from_requirements_leaves_the_deployment(tmp_path):
+    source, destination = make_source(tmp_path / "env"), tmp_path / "runtime" / "python-runtime"
+    (source / "Lib" / "site-packages" / "numpy").mkdir()
+    (source / "Lib" / "site-packages" / "numpy" / "init.py").write_text("", encoding="utf-8")
+    (source / "Lib" / "site-packages" / "pandas").mkdir()
+    (source / "Lib" / "site-packages" / "pandas" / "init.py").write_text("", encoding="utf-8")
+    run(source, destination, requirements=["numpy", "pandas"])
+    assert (destination / "Lib" / "site-packages" / "pandas" / "init.py").is_file()
+    result = run(source, destination, requirements=["numpy"])
+    assert "removed 1 stale file(s)" in result.stdout, result.stdout
+    assert not (destination / "Lib" / "site-packages" / "pandas" / "init.py").exists()
+
+
+def test_without_requirements_everything_is_deployed(tmp_path):
     source, destination = make_source(tmp_path / "env"), tmp_path / "runtime" / "python-runtime"
     (source / "Lib" / "site-packages" / "torch").mkdir()
     (source / "Lib" / "site-packages" / "torch" / "init.py").write_text("", encoding="utf-8")
-    (source / "Lib" / "site-packages" / "torch-2.6.0.dist-info").mkdir()
-    (source / "Lib" / "site-packages" / "torch-2.6.0.dist-info" / "METADATA").write_text("", encoding="utf-8")
-    result = run(source, destination, excludes=("torch", "PySide6"))
-    assert "deployed 3 changed file(s)" in result.stdout, result.stdout
-    assert not (destination / "Lib" / "site-packages" / "torch").exists()
-    assert not (destination / "Lib" / "site-packages" / "torch-2.6.0.dist-info").exists()
-    manifest = json.loads((destination / ".deploy-manifest.json").read_text(encoding="utf-8"))
-    assert not any("torch" in key for key in manifest)
-
-
-def test_a_distribution_excluded_later_disappears_from_the_deployment(tmp_path):
-    source, destination = make_source(tmp_path / "env"), tmp_path / "runtime" / "python-runtime"
-    (source / "Lib" / "site-packages" / "pandas").mkdir()
-    (source / "Lib" / "site-packages" / "pandas" / "init.py").write_text("", encoding="utf-8")
-    run(source, destination)
-    assert (destination / "Lib" / "site-packages" / "pandas" / "init.py").is_file()
-    result = run(source, destination, excludes=("pandas",))
-    assert "removed 1 stale file(s)" in result.stdout, result.stdout
-    assert not (destination / "Lib" / "site-packages" / "pandas" / "init.py").exists()
+    result = run(source, destination)
+    assert "deployed 4 changed file(s)" in result.stdout, result.stdout
+    assert (destination / "Lib" / "site-packages" / "torch" / "init.py").is_file()
 
 
 def test_a_removed_package_leaves_no_empty_directories(tmp_path):

@@ -22,6 +22,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+from importlib import metadata
 from pathlib import Path
 import shutil
 import sys
@@ -31,24 +33,64 @@ ROOTS = ("Lib", "DLLs")
 MANIFEST_NAME = ".deploy-manifest.json"
 
 
+def _normalize(name: str) -> str:
+    """PEP 503 normalization: numpy, NumPy, numpy.libs and numpy-2.0.dist-info agree."""
+    return re.sub(r"[-_.]+", "-", name.strip().lower())
+
+
 def _package_name(head: str) -> str:
-    """Normalize a site-packages entry to its distribution name (lowercase)."""
+    """Normalize a site-packages entry to its distribution name."""
     name = head.lower()
     if name.endswith(".dist-info"):
-        # "torch-2.6.0.dist-info": strip the metadata suffix, then the version.
+        # "numpy-2.1.0.dist-info": strip the metadata suffix, then the version.
         name = name[: -len(".dist-info")].rsplit("-", 1)[0]
     elif name.endswith(".libs"):
         name = name[: -len(".libs")]
-    return name
+    return _normalize(name)
 
 
-def excluded(relative: str, excludes: set[str]) -> bool:
-    """True when the entry belongs to an excluded distribution inside site-packages."""
+def read_requirements(path: Path) -> set[str]:
+    """Top-level distributions the deployed runtime is allowed to contain."""
+    names: set[str] = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", line)
+        if match:
+            names.add(_normalize(match.group(0)))
+    return names
+
+
+def expand(requirements: set[str]) -> set[str]:
+    """Add the import package names a distribution provides (Pillow -> PIL)."""
+    names = set(requirements)
+    for name in requirements:
+        try:
+            distribution = metadata.distribution(name)
+        except metadata.PackageNotFoundError:
+            continue
+        top_level = distribution.read_text("top_level.txt")
+        if top_level:
+            names.update(_normalize(line) for line in top_level.splitlines() if line.strip())
+            continue
+        for file in distribution.files or []:
+            parts = file.parts
+            if len(parts) > 1 and not parts[0].endswith((".dist-info", ".libs")):
+                head = parts[0]
+                names.add(_normalize(head[:-3] if head.endswith(".py") else head))
+    return names
+
+
+def allowed(relative: str, requirements: set[str] | None) -> bool:
+    """With a requirements list, site-packages is limited to those distributions."""
+    if requirements is None:
+        return True
     prefix = "site-packages/"
-    if not excludes or not relative.startswith(prefix):
-        return False
+    if not relative.startswith(prefix):
+        return True
     head = relative[len(prefix):].split("/", 1)[0]
-    return _package_name(head) in excludes
+    return _package_name(head) in requirements
 
 
 def scan(root: Path) -> dict[str, tuple[int, int]]:
@@ -72,13 +114,12 @@ def scan(root: Path) -> dict[str, tuple[int, int]]:
 
 
 def collect(source_lib: Path, source_dlls: Path,
-            excludes: set[str] | None = None) -> dict[str, list]:
+            requirements: set[str] | None = None) -> dict[str, list]:
     """Map "<root>/<relative path>" -> [size, mtime_ns] for every managed file."""
-    excludes = excludes or set()
     entries: dict[str, list] = {}
     for root_name, root in (("Lib", source_lib), ("DLLs", source_dlls)):
         for relative, (size, mtime) in scan(root).items():
-            if root_name == "Lib" and excluded(relative, excludes):
+            if root_name == "Lib" and not allowed(relative, requirements):
                 continue
             entries[f"{root_name}/{relative}"] = [size, mtime]
     return entries
@@ -124,9 +165,9 @@ def deployed_matches(destination: Path, entries: dict[str, list]) -> bool:
 
 
 def deploy(source_lib: Path, source_dlls: Path, destination: Path,
-           excludes: set[str] | None = None) -> int:
+           requirements: set[str] | None = None) -> int:
     manifest_path = destination / MANIFEST_NAME
-    entries = collect(source_lib, source_dlls, excludes)
+    entries = collect(source_lib, source_dlls, requirements)
     previous = load_manifest(manifest_path)
 
     if previous == entries and deployed_matches(destination, entries):
@@ -169,20 +210,17 @@ def main() -> int:
     parser.add_argument("--source-lib", type=Path, required=True)
     parser.add_argument("--source-dlls", type=Path, required=True)
     parser.add_argument("--destination", type=Path, required=True)
-    parser.add_argument("--exclude", action="append", default=[],
-                        help="site-packages distribution to leave out (repeatable)")
+    parser.add_argument("--requirements", type=Path,
+                        help="only deploy site-packages distributions listed in this file")
     args = parser.parse_args()
-    excludes = {name.strip().lower()
-                for group in args.exclude
-                for name in group.replace(";", ",").split(",")
-                if name.strip()}
+    requirements = expand(read_requirements(args.requirements)) if args.requirements else None
 
     for path in (args.source_lib, args.source_dlls):
         if not path.is_dir():
             print(f"[python-runtime] missing source directory: {path}", file=sys.stderr)
             return 2
     args.destination.mkdir(parents=True, exist_ok=True)
-    return deploy(args.source_lib, args.source_dlls, args.destination, excludes)
+    return deploy(args.source_lib, args.source_dlls, args.destination, requirements)
 
 
 if __name__ == "__main__":
