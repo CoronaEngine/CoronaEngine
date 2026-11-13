@@ -123,6 +123,16 @@ function(corona_install_runtime_deps target_name)
             # only copies what changed; an unchanged tree costs one stat per file.
             set(_CORONA_PY_RUNTIME_DIR "${_CORONA_DESTINATION_DIR}/python-runtime")
             set(_CORONA_PY_DEPLOY_SCRIPT "${CORONA_BUILD_SCRIPTS_DIR}/deploy_python_runtime.py")
+            # The conda env also carries the AI/ML and GUI stacks. The engine's Python code
+            # imports only the standard library, so these are left out of the deployed
+            # runtime (about 1.7 GB). Override the list if a project script needs one.
+            set(CORONA_PYTHON_RUNTIME_EXCLUDES
+                "PySide6;shiboken6;torch;torchvision;torchaudio;bitsandbytes;cv2;transformers;sympy;av;pandas"
+                CACHE STRING "site-packages distributions to leave out of the deployed Python runtime")
+            set(_CORONA_PY_EXCLUDE_ARGS)
+            foreach(_corona_exclude IN LISTS CORONA_PYTHON_RUNTIME_EXCLUDES)
+                list(APPEND _CORONA_PY_EXCLUDE_ARGS --exclude "${_corona_exclude}")
+            endforeach()
             if(EXISTS "${_CORONA_PY_DEPLOY_SCRIPT}" AND DEFINED Python_EXECUTABLE)
                 add_custom_command(
                     TARGET ${target_name}
@@ -131,6 +141,7 @@ function(corona_install_runtime_deps target_name)
                         --source-lib "${_CORONA_PY_LIB_DIR}"
                         --source-dlls "${_CORONA_PY_DLL_DIR}"
                         --destination "${_CORONA_PY_RUNTIME_DIR}"
+                        ${_CORONA_PY_EXCLUDE_ARGS}
                     COMMENT "[Corona:RuntimeDeps] Deploy Python runtime (incremental) -> ${target_name}"
                     VERBATIM
                 )

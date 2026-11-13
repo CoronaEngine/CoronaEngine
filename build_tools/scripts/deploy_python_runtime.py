@@ -31,6 +31,26 @@ ROOTS = ("Lib", "DLLs")
 MANIFEST_NAME = ".deploy-manifest.json"
 
 
+def _package_name(head: str) -> str:
+    """Normalize a site-packages entry to its distribution name (lowercase)."""
+    name = head.lower()
+    if name.endswith(".dist-info"):
+        # "torch-2.6.0.dist-info": strip the metadata suffix, then the version.
+        name = name[: -len(".dist-info")].rsplit("-", 1)[0]
+    elif name.endswith(".libs"):
+        name = name[: -len(".libs")]
+    return name
+
+
+def excluded(relative: str, excludes: set[str]) -> bool:
+    """True when the entry belongs to an excluded distribution inside site-packages."""
+    prefix = "site-packages/"
+    if not excludes or not relative.startswith(prefix):
+        return False
+    head = relative[len(prefix):].split("/", 1)[0]
+    return _package_name(head) in excludes
+
+
 def scan(root: Path) -> dict[str, tuple[int, int]]:
     """Walk a tree with os.scandir; Windows fills DirEntry.stat() from the directory read."""
     entries: dict[str, tuple[int, int]] = {}
@@ -51,11 +71,15 @@ def scan(root: Path) -> dict[str, tuple[int, int]]:
     return entries
 
 
-def collect(source_lib: Path, source_dlls: Path) -> dict[str, list]:
+def collect(source_lib: Path, source_dlls: Path,
+            excludes: set[str] | None = None) -> dict[str, list]:
     """Map "<root>/<relative path>" -> [size, mtime_ns] for every managed file."""
+    excludes = excludes or set()
     entries: dict[str, list] = {}
     for root_name, root in (("Lib", source_lib), ("DLLs", source_dlls)):
         for relative, (size, mtime) in scan(root).items():
+            if root_name == "Lib" and excluded(relative, excludes):
+                continue
             entries[f"{root_name}/{relative}"] = [size, mtime]
     return entries
 
@@ -66,6 +90,17 @@ def load_manifest(path: Path) -> dict[str, list] | None:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
+
+
+def prune_empty_dirs(root: Path) -> None:
+    """Removing files leaves their directories behind; drop the empty shells."""
+    for directory in sorted((path for path in root.rglob("*") if path.is_dir()),
+                            key=lambda path: len(path.parts), reverse=True):
+        try:
+            if not any(directory.iterdir()):
+                directory.rmdir()
+        except OSError:
+            continue
 
 
 def write_manifest(path: Path, entries: dict[str, list]) -> None:
@@ -88,9 +123,10 @@ def deployed_matches(destination: Path, entries: dict[str, list]) -> bool:
     return {relative: (size, mtime) for relative, (size, mtime) in entries.items()} == deployed
 
 
-def deploy(source_lib: Path, source_dlls: Path, destination: Path) -> int:
+def deploy(source_lib: Path, source_dlls: Path, destination: Path,
+           excludes: set[str] | None = None) -> int:
     manifest_path = destination / MANIFEST_NAME
-    entries = collect(source_lib, source_dlls)
+    entries = collect(source_lib, source_dlls, excludes)
     previous = load_manifest(manifest_path)
 
     if previous == entries and deployed_matches(destination, entries):
@@ -118,6 +154,9 @@ def deploy(source_lib: Path, source_dlls: Path, destination: Path) -> int:
             if target.is_file():
                 target.unlink()
                 removed += 1
+    if removed:
+        for root_name in ROOTS:
+            prune_empty_dirs(destination / root_name)
 
     write_manifest(manifest_path, entries)
     print(f"[python-runtime] deployed {copied} changed file(s), removed {removed} stale file(s), "
@@ -130,14 +169,20 @@ def main() -> int:
     parser.add_argument("--source-lib", type=Path, required=True)
     parser.add_argument("--source-dlls", type=Path, required=True)
     parser.add_argument("--destination", type=Path, required=True)
+    parser.add_argument("--exclude", action="append", default=[],
+                        help="site-packages distribution to leave out (repeatable)")
     args = parser.parse_args()
+    excludes = {name.strip().lower()
+                for group in args.exclude
+                for name in group.replace(";", ",").split(",")
+                if name.strip()}
 
     for path in (args.source_lib, args.source_dlls):
         if not path.is_dir():
             print(f"[python-runtime] missing source directory: {path}", file=sys.stderr)
             return 2
     args.destination.mkdir(parents=True, exist_ok=True)
-    return deploy(args.source_lib, args.source_dlls, args.destination)
+    return deploy(args.source_lib, args.source_dlls, args.destination, excludes)
 
 
 if __name__ == "__main__":

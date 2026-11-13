@@ -49,6 +49,11 @@ build/conan/examples/relwithdebinfo/examples/engine/RelWithDebInfo
 `os.scandir` 遍历（用目录项里的大小/mtime，不读文件内容），实测 **约 5 秒**；源变化时只复制
 变化的文件，并删除源中已消失的条目。首次部署仍会复制全量（一次性成本）。
 
+部署同时跳过引擎从不 import 的 AI/ML 与 GUI 包（`CORONA_PYTHON_RUNTIME_EXCLUDES`：
+`PySide6`、`shiboken6`、`torch`、`torchvision`、`torchaudio`、`bitsandbytes`、`cv2`、
+`transformers`、`sympy`、`av`、`pandas`），运行时从约 2.1 GB 降到约 0.4 GB（保留标准库、
+numpy、Pillow 等通用包）。需要某个被排除的包时，在 CMake 缓存里改这个变量。
+
 ## 3. 打包 UI 套件（12 个）
 
 ```powershell
