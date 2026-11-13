@@ -71,7 +71,6 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
-#include <thread>
 #include <cmath>
 #include <cstdint>
 #include <ctime>
@@ -3536,16 +3535,11 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         command.ik_chains = chains;
         Corona::GeometryCommandChannel::instance().commands().push(std::move(command));
         const auto target_revision = row->ik_chains_revision + 1;
-        // The command applies on the geometry owner's next tick. Wait briefly for the
-        // snapshot to carry it, so a read-after-write and the caller's next
-        // expected_revision see the same revision. The bound keeps a stalled owner from
-        // freezing the UI: on timeout the derived revision is still returned.
-        for (int attempt = 0; attempt < 100; ++attempt) {
-            const auto latest = Corona::SharedDataHub::instance().geometry_scene_row(
-                actor->geometry->get_handle());
-            if (latest && latest->ik_chains_revision >= target_revision) break;
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
+        // The command applies on the geometry owner's next tick. The reply is optimistic:
+        // it names the revision this write targets, and the next read carries the applied
+        // one. Waiting here would block the CEF UI thread for up to 100ms when the owner
+        // is late, so the caller's next expected_revision is what fences a concurrent
+        // writer (a lost race rejects with CONFLICT and the panel reloads).
         actor->persisted_ik_chains = std::move(saved_config);
         actor->actor_version = std::max(actor->actor_version + 1, 1); ++scene->tree_revision;
         reply.actor_ik = {scene->archive_session, scene->route, actor->name, true, true,

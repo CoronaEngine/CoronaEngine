@@ -135,6 +135,27 @@ settlement；C++ 侧的所有者另走 `cancel_context` 取消工作。
 进入词表并记为可重试；`cabbageDomain.js` 的提交循环改为捕获该码后重试。
 `NO_ACTIVE_PROJECT`、`INVALID_PROJECT_DOCUMENT`、`RUN_ACTIVE` 也随之进入词表。
 
+## 7.2 写回复不阻塞 UI 线程
+
+**决定**：`setActorIkChains`（以及后续同类写）在入队命令后立即回复，回复里的
+`ik_chains_revision` 是**这次写入目标**的 revision（当前快照 + 1），不是"已经应用"的
+revision。命令在 Geometry 所有者的下一个 tick 应用，之后的读取会带回应用后的 revision。
+
+**理由**：此前为了"写后读一致"在 CEF UI 线程上做最多 100×1ms 的有界等待。这在 Geometry
+繁忙时会冻住整个编辑器（CEF UI 线程就是渲染线程），代价远大于它保证的那次读。
+
+**客户端契约**：写回复是乐观确认；需要确认应用时，读一次 `readActorRig` 并比较 revision。
+并发写者会让第一次写以 `CONFLICT` 拒绝（`expected_revision` 不匹配），面板重载后重试。
+
+## 7.3 暂不提供批处理接口
+
+**决定**：当前不添加 `scene.batch` 或通用的 `{method, args}` 操作列表。
+
+**理由**：编辑器目前没有多 Actor 同时写的产品路径（选择是单 Actor，gizmo/属性面板都只写一个），
+为不存在的调用方加接口只会多一份要保持一致的契约；而通用操作列表本质上是"名字变成数据"，
+正是已经删除的 manifest 模式。真正出现多 Actor 编辑时，加**领域特定**的批处理
+（例如 `setActorTransforms({actorGuids, ...})`，一条命令、一个版本栅栏），而不是通用批处理。
+
 ## 8. 场景数据的读写所有权
 
 场景数据分三类，读写的边界不同：
