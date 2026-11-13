@@ -983,6 +983,10 @@ void GeometrySystem::update() {
         update_phase.set("memory_pressure_evict");
         evict_under_memory_pressure();
     }
+
+    // ---- 场景状态快照：本 tick 的命令和重建都已落地，发布给 DAG 外的读者 ----
+    update_phase.set("publish_scene_snapshot");
+    hub.publish_geometry_scene_snapshot_from_storage();
 }
 
 void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {

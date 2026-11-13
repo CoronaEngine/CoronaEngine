@@ -115,3 +115,24 @@ settlement；C++ 侧的所有者另走 `cancel_context` 取消工作。
 
 覆盖重点：方法名表、文档一致性、拒绝码词表、集成脚本（调用与 `typeof` 断言）、前端 facade
 （存在性、唯一入口、一一映射）、前端回归文件、行数 ratchet、pin 工具。
+
+## 8. 场景数据的读写所有权
+
+场景数据分三类，读写的边界不同：
+
+| 数据 | 写者 | 外部读者 | 通道 |
+|---|---|---|---|
+| 编辑器镜像（树、选择、`tree_revision`、环境策略） | CEF UI 线程 | 编辑器自身 | 单线程独占，无锁 |
+| 场景状态（transform、可见性、模型节点元数据、构建状态、计数） | DAG 系统 | 编辑器 / 脚本 | **DAG 每 tick 发布的不可变快照**（`SnapshotChannel`） |
+| 渲染资源（mesh 句柄/实例/GPU 缓冲） | Geometry / 渲染管线 | 只有渲染侧 | 引擎私有，**从不出现在场景快照或 Web 接口里** |
+
+外部对场景状态的写入仍走命令（`TransformUpdateCommand`、`GeometryCommand`），由拥有者在
+自己的 tick 内应用；外部读取不再对 `GeometryStorage` 加读锁，而是读 Geometry 在
+`update()` 末尾发布的 `GeometrySceneSnapshot`（`shared_data_hub.h`）。快照只含节点元数据、
+构建状态和计数，未变化的模型复用上一 tick 的节点列表，因此每 tick 的发布成本是 O(actor
+数量) 而不是 O(节点数量)。
+
+这条规则的解释力：`readModelNodes` 不再可能读到重建中的半截列表；`get_mesh_count` /
+`get_render_status` 只拿到计数，拿不到句柄；`set_model_node_state` 的入队校验也基于快照。
+需要"写入何时真正生效"时，快照里的 `model_node_revision` 就是天然的完成锚点（尚未接成
+Web 回执，见第 5 节）。

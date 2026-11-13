@@ -448,6 +448,61 @@ void SharedDataHub::publish_transform_snapshot_from_storage() {
     transform_snapshot_.publish(std::move(snapshot));
 }
 
+void SharedDataHub::publish_geometry_scene_snapshot_from_storage() {
+    GeometrySceneSnapshot snapshot;
+    snapshot.tick = geometry_scene_snapshot_.revision() + 1;
+    std::unordered_map<EntityId, GeometrySceneCacheEntry> cache;
+    for (auto geometry_it = geometry_storage_.cbegin(); geometry_it != geometry_storage_.cend();
+         ++geometry_it) {
+        const EntityId handle = geometry_it.id();
+        if (handle == 0) {
+            continue;
+        }
+        const auto& device = *geometry_it;
+        auto row = geometry_scene_meta_row(device);
+        row.handle = handle;
+        const auto previous = geometry_scene_cache_.find(handle);
+        if (previous != geometry_scene_cache_.end()) {
+            const auto& cached = previous->second;
+            if (cached.nodes && cached.model_node_revision == row.model_node_revision &&
+                cached.gpu_build_state == row.gpu_build_state &&
+                cached.mesh_count == row.mesh_count &&
+                cached.renderable_mesh_count == row.renderable_mesh_count) {
+                row.nodes = cached.nodes;
+            }
+        }
+        if (!row.nodes) {
+            row.nodes = geometry_scene_nodes(device);
+        }
+        cache[handle] = GeometrySceneCacheEntry{row.model_node_revision, row.gpu_build_state,
+                                                row.mesh_count, row.renderable_mesh_count,
+                                                row.nodes};
+        snapshot.rows.push_back(std::move(row));
+    }
+    geometry_scene_cache_ = std::move(cache);
+    geometry_scene_snapshot_.publish(std::move(snapshot));
+}
+
+std::shared_ptr<const GeometrySceneSnapshot> SharedDataHub::geometry_scene_snapshot() const {
+    return geometry_scene_snapshot_.read();
+}
+
+std::optional<GeometrySceneRow> SharedDataHub::geometry_scene_row(EntityId geometry_handle) const {
+    if (geometry_handle == 0) {
+        return std::nullopt;
+    }
+    auto snapshot = geometry_scene_snapshot_.read();
+    if (!snapshot) {
+        return std::nullopt;
+    }
+    for (const auto& row : snapshot->rows) {
+        if (row.handle == geometry_handle) {
+            return row;
+        }
+    }
+    return std::nullopt;
+}
+
 std::shared_ptr<const TransformSnapshot> SharedDataHub::transform_snapshot() const {
     return transform_snapshot_.read();
 }

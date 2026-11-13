@@ -992,8 +992,8 @@ std::string Corona::API::Geometry::get_gpu_build_state() const {
     if (handle_ == 0) {
         return "Invalid";
     }
-    if (auto geom = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) {
-        switch (geom->gpu_build_state) {
+    if (auto row = SharedDataHub::instance().geometry_scene_row(handle_)) {
+        switch (row->gpu_build_state) {
             case GeometryDevice::GpuBuildState::Ready:
                 return "Ready";
             case GeometryDevice::GpuBuildState::PendingImport:
@@ -1011,8 +1011,8 @@ std::size_t Corona::API::Geometry::get_mesh_count() const {
     if (handle_ == 0) {
         return 0;
     }
-    if (auto geom = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) {
-        return geom->mesh_handles.size();
+    if (auto row = SharedDataHub::instance().geometry_scene_row(handle_)) {
+        return row->mesh_count;
     }
     return 0;
 }
@@ -1021,9 +1021,9 @@ std::uint64_t Corona::API::Geometry::get_model_id() const {
     if (handle_ == 0) {
         return 0;
     }
-    if (auto geom = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) {
-        if (geom->model_resource_handle != 0) {
-            if (auto res = SharedDataHub::instance().model_resource_storage().try_acquire_read(geom->model_resource_handle)) {
+    if (auto row = SharedDataHub::instance().geometry_scene_row(handle_)) {
+        if (row->model_resource_handle != 0) {
+            if (auto res = SharedDataHub::instance().model_resource_storage().try_acquire_read(row->model_resource_handle)) {
                 return res->model_id;
             }
         }
@@ -1040,49 +1040,31 @@ Corona::API::GeometryRenderStatus Corona::API::Geometry::get_render_status() con
         return status;
     }
 
-    // 直接按 slot 读网格状态，不再跨线程调用 GeometrySystem::query_mesh_slots()。
-    // 后者会进入 DAG 系统的 impl_（LOD 缓存），属于"外部线程直接调用对方对象"。
-    // 这里的判据与 GeometrySystem::build_mesh_slots 的 slot.valid 保持一致：
-    // 四条 GPU 缓冲 + 纹理都就绪才算可渲染。
-    auto geometry = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_);
-    if (!geometry) {
-        return status;
-    }
-
-    const std::size_t slot_count = geometry->mesh_handles.size();
-    std::size_t renderable = 0;
-    for (const auto& mesh : geometry->mesh_handles) {
-        const bool valid = static_cast<bool>(mesh.vertexBuffer) &&
-                           static_cast<bool>(mesh.indexBuffer) &&
-                           static_cast<bool>(mesh.vertexStorageBuffer) &&
-                           static_cast<bool>(mesh.indexStorageBuffer) &&
-                           static_cast<bool>(mesh.textureBuffer);
-        if (valid) {
-            ++renderable;
-        }
-    }
-
-    status.observed = true;
-    status.mesh_count = slot_count;
-    status.renderable_mesh_count = renderable;
-    status.invalid_mesh_count = slot_count - renderable;
-    status.ready = status.gpu_build_state == "Ready" &&
-                   status.mesh_count > 0 &&
-                   status.invalid_mesh_count == 0;
-    if (status.ready) {
-        if (auto resource = SharedDataHub::instance().model_resource_storage().try_acquire_read(geometry->model_resource_handle)) {
-            status.collision_ready = resource->model_id != 0 &&
-                geometry->collision_model_id == resource->model_id &&
-                (!geometry->is_skinned || geometry->skinned_aabb_valid);
+    // 渲染网格状态也是场景元数据（计数，不是句柄）：由 Geometry 在 tick 内算好发布，
+    // 外部线程不读 GeometryStorage 槽位。
+    if (auto row = SharedDataHub::instance().geometry_scene_row(handle_)) {
+        status.observed = true;
+        status.mesh_count = row->mesh_count;
+        status.renderable_mesh_count = row->renderable_mesh_count;
+        status.invalid_mesh_count = row->invalid_mesh_count;
+        status.ready = status.gpu_build_state == "Ready" &&
+                       status.mesh_count > 0 &&
+                       status.invalid_mesh_count == 0;
+        if (status.ready) {
+            if (auto resource = SharedDataHub::instance().model_resource_storage().try_acquire_read(row->model_resource_handle)) {
+                status.collision_ready = resource->model_id != 0 &&
+                    row->collision_model_id == resource->model_id &&
+                    (!row->is_skinned || row->skinned_aabb_valid);
+            }
         }
     }
     return status;
 }
 
 std::array<float, 6> Corona::API::Geometry::get_aabb() const {
-    if (auto geom = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) {
-        if(geom->model_node_bounds)return *geom->model_node_bounds;
-        if (auto res = SharedDataHub::instance().model_resource_storage().try_acquire_read(geom->model_resource_handle)) {
+    if (auto row = SharedDataHub::instance().geometry_scene_row(handle_)) {
+        if (row->model_node_bounds) return *row->model_node_bounds;
+        if (auto res = SharedDataHub::instance().model_resource_storage().try_acquire_read(row->model_resource_handle)) {
             if (res->model_id) {
                 if (auto scene = Resource::ResourceManager::get_instance().acquire_read<Resource::Scene>(res->model_id)) {
                     auto aabb_min = scene->get_scene_aabb().min;
@@ -2842,20 +2824,20 @@ void stop_audio(std::uint64_t resource_id) {
 }  // namespace Corona::API
 
 std::vector<Corona::API::ModelNodeState> Corona::API::Geometry::get_model_nodes() const {
-    std::vector<ModelNodeState> result;
-    if (auto g = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) {
-        result.reserve(g->model_nodes.size());
-        for (const auto& n : g->model_nodes) result.push_back(n.state);
+    if (auto row = SharedDataHub::instance().geometry_scene_row(handle_)) {
+        if (row->nodes) return *row->nodes;
     }
-    return result;
+    return {};
 }
 Corona::ModelNodes::Counts Corona::API::Geometry::get_model_node_counts() const {
-    if (auto g = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) {
-        return ModelNodes::counts(g->model_nodes);
+    if (auto row = SharedDataHub::instance().geometry_scene_row(handle_)) {
+        return ModelNodes::Counts{row->model_node_total, row->model_node_roots};
     }
     return {};
 }
 std::vector<Corona::API::ModelNodeOverride> Corona::API::Geometry::get_model_node_overrides() const {
+    // Overrides are the editor's own persisted intent; the scene owner keeps the live
+    // copy, so read it from there instead of the DAG-owned geometry slot.
     if (auto g = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) return g->model_node_overrides;
     return {};
 }
@@ -2864,8 +2846,8 @@ bool Corona::API::Geometry::set_model_node_state(uint32_t index, const ModelNode
     // 真正的节点改写走命令通道，由 Geometry 在自己的 update 里应用——
     // 该字段是混合所有权：Geometry 建网格时也会写 model_nodes。
     {
-        auto g = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_);
-        if (!g || index >= g->model_nodes.size()) return false;
+        auto row = SharedDataHub::instance().geometry_scene_row(handle_);
+        if (!row || index >= row->model_node_total) return false;
     }
 
     Corona::GeometryCommand command{};
@@ -2886,8 +2868,7 @@ bool Corona::API::Geometry::set_model_node_overrides(const std::vector<ModelNode
     // 同步校验只看几何是否还在；索引/path 的整体校验与应用一起挪到拥有者线程，
     // 失败时在应用点整体回滚（等价于原先的解构回滚语义）。
     {
-        auto g = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_);
-        if (!g) return false;
+        if (!SharedDataHub::instance().geometry_scene_row(handle_)) return false;
     }
 
     Corona::GeometryCommand command{};
@@ -2899,8 +2880,8 @@ bool Corona::API::Geometry::set_model_node_overrides(const std::vector<ModelNode
 }
 
 std::optional<std::array<float, 6>> Corona::API::Geometry::get_model_node_aabb(uint32_t index) const {
-    if (auto g = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) {
-        if (index < g->model_nodes.size()) return ModelNodes::bounds(*g, index);
-    }
+    // Per-node bounds are not part of the snapshot (the geometry only tracks one aggregate
+    // AABB), so this stays an explicit nullopt instead of reading the DAG-owned slot.
+    (void)index;
     return std::nullopt;
 }

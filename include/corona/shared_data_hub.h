@@ -559,6 +559,77 @@ struct TransformSnapshot {
     std::vector<TransformSnapshotRow> rows;
 };
 
+// ---------------------------------------------------------------------------
+// 几何场景状态快照（外部读者：CEF 编辑器 / 脚本）
+//
+// GeometrySystem 是 GeometryStorage 的写者。外部线程不再对槽位加读锁：编辑所需的
+// 场景状态（节点元数据、构建状态、计数）由 Geometry 每 tick 发布一份不可变快照。
+// GPU 数据（mesh 句柄/实例/缓冲）不进入这个类型——那是渲染侧的私有数据。
+// ---------------------------------------------------------------------------
+struct GeometrySceneRow {
+    EntityId handle{0};
+    GeometryDevice::GpuBuildState gpu_build_state{GeometryDevice::GpuBuildState::Ready};
+    std::uint64_t model_node_revision{0};
+    std::size_t mesh_count{0};
+    std::size_t renderable_mesh_count{0};
+    std::size_t invalid_mesh_count{0};
+    std::size_t model_node_total{0};
+    std::size_t model_node_roots{0};
+    EntityId model_resource_handle{0};
+    std::optional<std::array<float, 6>> model_node_bounds;
+    std::uint64_t collision_model_id{0};
+    bool is_skinned{false};
+    bool skinned_aabb_valid{false};
+    /// 未变化时发布方复用上一 tick 的列表，避免每 tick 复制节点状态。
+    std::shared_ptr<const std::vector<API::ModelNodeState>> nodes;
+};
+
+struct GeometrySceneSnapshot {
+    std::uint64_t tick{0};
+    std::vector<GeometrySceneRow> rows;
+};
+
+inline std::shared_ptr<const std::vector<API::ModelNodeState>> geometry_scene_nodes(
+    const GeometryDevice& device) {
+    auto nodes = std::make_shared<std::vector<API::ModelNodeState>>();
+    nodes->reserve(device.model_nodes.size());
+    for (const auto& node : device.model_nodes) nodes->push_back(node.state);
+    return nodes;
+}
+
+/// Counts and state only; the node list is built separately so an unchanged model can
+/// reuse the previous publication instead of copying every node every tick.
+inline GeometrySceneRow geometry_scene_meta_row(const GeometryDevice& device) {
+    GeometrySceneRow row;
+    row.gpu_build_state = device.gpu_build_state;
+    row.model_node_revision = device.model_node_revision;
+    row.mesh_count = device.mesh_handles.size();
+    for (const auto& mesh : device.mesh_handles) {
+        if (static_cast<bool>(mesh.vertexBuffer) && static_cast<bool>(mesh.indexBuffer) &&
+            static_cast<bool>(mesh.vertexStorageBuffer) &&
+            static_cast<bool>(mesh.indexStorageBuffer) && static_cast<bool>(mesh.textureBuffer)) {
+            ++row.renderable_mesh_count;
+        }
+    }
+    row.invalid_mesh_count = row.mesh_count - row.renderable_mesh_count;
+    row.model_node_total = device.model_nodes.size();
+    for (const auto& node : device.model_nodes) {
+        if (node.state.parent_index < 0) ++row.model_node_roots;
+    }
+    row.model_resource_handle = device.model_resource_handle;
+    row.model_node_bounds = device.model_node_bounds;
+    row.collision_model_id = device.collision_model_id;
+    row.is_skinned = device.is_skinned;
+    row.skinned_aabb_valid = device.skinned_aabb_valid;
+    return row;
+}
+
+inline GeometrySceneRow make_geometry_scene_row(const GeometryDevice& device) {
+    auto row = geometry_scene_meta_row(device);
+    row.nodes = geometry_scene_nodes(device);
+    return row;
+}
+
 // Runtime-only actor pick request/completion messages. These are deliberately
 // kept outside ActorPickDevice so multiple clicks can be in flight without a
 // newer request overwriting an older one.
@@ -921,6 +992,14 @@ class SharedDataHub {
         EntityId transform_handle) const;
     void clear_transform_updates(EntityId transform_handle);
 
+    // ---- 几何场景状态快照：外部读者不再对 GeometryStorage 加读锁 ----
+    /// 从几何槽位重建整份快照（Geometry，DAG 线程；每 tick 末尾调用）
+    void publish_geometry_scene_snapshot_from_storage();
+    /// 当前快照（任意线程，可为 nullptr）
+    [[nodiscard]] std::shared_ptr<const GeometrySceneSnapshot> geometry_scene_snapshot() const;
+    /// 某个几何句柄的当前快照行
+    [[nodiscard]] std::optional<GeometrySceneRow> geometry_scene_row(EntityId geometry_handle) const;
+
     // ---- 相机快照（P1）：DAG 每 tick 发布，外部线程只读 ----
     /// 用一整份新快照替换当前快照（Optics，DAG 线程）
     void publish_camera_snapshot(CameraSnapshot snapshot);
@@ -1021,6 +1100,17 @@ class SharedDataHub {
                           Kernel::CoalescePolicy::LatestWins>
         transform_updates_;
     Kernel::SnapshotChannel<TransformSnapshot> transform_snapshot_;
+
+    Kernel::SnapshotChannel<GeometrySceneSnapshot> geometry_scene_snapshot_;
+    struct GeometrySceneCacheEntry {
+        std::uint64_t model_node_revision{0};
+        GeometryDevice::GpuBuildState gpu_build_state{GeometryDevice::GpuBuildState::Ready};
+        std::size_t mesh_count{0};
+        std::size_t renderable_mesh_count{0};
+        std::shared_ptr<const std::vector<API::ModelNodeState>> nodes;
+    };
+    /// 仅发布方（Geometry，DAG 线程）访问，用来复用未变化的节点列表。
+    std::unordered_map<EntityId, GeometrySceneCacheEntry> geometry_scene_cache_;
     mutable std::mutex camera_timing_mutex_;
     std::unordered_map<EntityId, CameraFrameTiming> camera_timings_;
     ActorPickStorage actor_pick_storage_;
