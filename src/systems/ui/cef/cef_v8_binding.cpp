@@ -1894,7 +1894,6 @@ bool read_audio_stop(const CefV8ValueList& arguments, SceneRequest& request) {
 inline const SceneOperationSpec kSceneOperations[] = {
     {"readScene", SceneMethod::ReadScene, read_scene_query},
     {"readActive", SceneMethod::ReadActive, read_no_arguments},
-    {"isVisionAvailable", SceneMethod::ReadVisionAvailability, read_no_arguments},
     {"selectModelFile", SceneMethod::SelectModelFile, read_scene_file_request},
     {"importResourceFile", SceneMethod::ImportResourceFile, read_scene_file_request},
     {"readModelNodes", SceneMethod::ReadModelNodes, read_model_nodes},
@@ -1910,7 +1909,7 @@ inline const SceneOperationSpec kSceneOperations[] = {
     {"deleteActor", SceneMethod::DeleteActor, read_actor_delete},
     {"rebindActorResource", SceneMethod::RebindActorResource, read_actor_resource_rebind},
     {"save", SceneMethod::Save, read_scene_save},
-    {"getEnvironment", SceneMethod::GetEnvironment, read_environment},
+    {"readEnvironment", SceneMethod::GetEnvironment, read_environment},
     {"setEnvironment", SceneMethod::SetEnvironment, read_environment},
     {"focusActor", SceneMethod::FocusActor, read_focus},
     {"updateCamera", SceneMethod::UpdateCamera, read_camera_properties},
@@ -1918,12 +1917,18 @@ inline const SceneOperationSpec kSceneOperations[] = {
     {"readCameraRenderSettings", SceneMethod::ReadCameraRenderSettings, read_render_settings_only},
     {"createCamera", SceneMethod::CreateCamera, read_camera_create},
     {"deleteCamera", SceneMethod::DeleteCamera, read_camera_delete},
-    {"captureScreenshot", SceneMethod::CaptureScreenshot, read_screenshot},
 };
 
 inline const SceneOperationSpec kAudioOperations[] = {
     {"play", SceneMethod::PlayAudioResource, read_audio_play},
     {"stop", SceneMethod::StopAudioResource, read_audio_stop},
+};
+
+// Installed outside the scene namespace (app.isVisionAvailable,
+// viewport.captureScreenshot) but dispatched through the same readers.
+inline const SceneOperationSpec kSceneExtraOperations[] = {
+    {"isVisionAvailable", SceneMethod::ReadVisionAvailability, read_no_arguments},
+    {"captureScreenshot", SceneMethod::CaptureScreenshot, read_screenshot},
 };
 
 /// The reader for an operation, or nullptr when the method is not part of the tables.
@@ -1932,6 +1937,9 @@ bool (*scene_operation_reader(SceneMethod method))(const CefV8ValueList&, SceneR
         if (spec.method == method) return spec.read;
     }
     for (const auto& spec : kAudioOperations) {
+        if (spec.method == method) return spec.read;
+    }
+    for (const auto& spec : kSceneExtraOperations) {
         if (spec.method == method) return spec.read;
     }
     return nullptr;
@@ -2716,10 +2724,12 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
         scene->SetValue(spec.name, CefV8Value::CreateFunction(spec.name, new NativeHandler(endpoint, spec.method)),
                         V8_PROPERTY_ATTRIBUTE_READONLY);
     }
-    // Input belongs to the scene's camera surface, so it rides the scene namespace.
-    scene->SetValue("dispatchInput", CefV8Value::CreateFunction("dispatchInput",
-        new NativeHandler(endpoint, ScriptInputMethod::Dispatch)), V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("scene", scene, V8_PROPERTY_ATTRIBUTE_READONLY);
+    // Input is its own surface: the camera is the target, not the namespace.
+    auto input = CefV8Value::CreateObject(nullptr, nullptr);
+    input->SetValue("dispatch", CefV8Value::CreateFunction("dispatch",
+        new NativeHandler(endpoint, ScriptInputMethod::Dispatch)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    root->SetValue("input", input, V8_PROPERTY_ATTRIBUTE_READONLY);
     auto audio = CefV8Value::CreateObject(nullptr, nullptr);
     for (const auto& spec : kAudioOperations) {
         audio->SetValue(spec.name, CefV8Value::CreateFunction(spec.name, new NativeHandler(endpoint, spec.method)),
@@ -2750,11 +2760,17 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     auto app = CefV8Value::CreateObject(nullptr, nullptr);
     app->SetValue("closeProcess", CefV8Value::CreateFunction("closeProcess",
         new NativeHandler(endpoint, WindowMethod::CloseProcess)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    // Engine capability, not scene state: it answers whether Vision can render.
+    app->SetValue("isVisionAvailable", CefV8Value::CreateFunction("isVisionAvailable",
+        new NativeHandler(endpoint, SceneMethod::ReadVisionAvailability)), V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("app", app, V8_PROPERTY_ATTRIBUTE_READONLY);
     viewport->SetValue("pick", CefV8Value::CreateFunction("pick",
         new NativeHandler(endpoint, ViewportMethod::Pick)), V8_PROPERTY_ATTRIBUTE_READONLY);
     viewport->SetValue("configure", CefV8Value::CreateFunction("configure",
         new NativeHandler(endpoint, WindowMethod::ConfigureViewport)), V8_PROPERTY_ATTRIBUTE_READONLY);
+    // A screenshot is a viewport capture, not scene state.
+    viewport->SetValue("captureScreenshot", CefV8Value::CreateFunction("captureScreenshot",
+        new NativeHandler(endpoint, SceneMethod::CaptureScreenshot)), V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("viewport", viewport, V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("window", window, V8_PROPERTY_ATTRIBUTE_READONLY);
     // One function for every Web -> Python request.  JS builds the envelope and

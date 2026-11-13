@@ -149,7 +149,7 @@ def dispatch_script_key(web, event_type, code='KeyD', key='d', *, port):
         # stronger evidence than a tab id was.
         wait_for(lambda: viewport.evaluate("!!document.querySelector('.input-layer')"),
                  bool, 'file script CameraView mounted')
-        result = viewport.evaluate(f'corona.scene.dispatchInput({json.dumps(scope["scene"])},{json.dumps(camera_id)},{json.dumps(event)})')
+        result = viewport.evaluate(f'corona.input.dispatch({json.dumps(scope["scene"])},{json.dumps(camera_id)},{json.dumps(event)})')
         assert result == {'status': 'queued'}, result
     finally:
         viewport.socket.close()

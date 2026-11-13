@@ -100,7 +100,7 @@ try {
 
   await waitFor(() => main.evaluate('typeof window.corona?.window?.close === "function"'));
   assert.equal(await main.evaluate('typeof corona.viewport?.pick'), 'function');
-  assert.equal(await main.evaluate('typeof corona.scene?.dispatchInput'), 'function');
+  assert.equal(await main.evaluate('typeof corona.input?.dispatch'), 'function');
   assert.equal(await main.evaluate('typeof corona.app?.closeProcess'), 'function');
   assert.equal(await main.evaluate('corona.app.closeProcess(null).catch(error=>error.code)'), 'INVALID_ARGUMENT');
   // Use a file-origin fixture in the real BrowserManager windows. The editor
@@ -142,7 +142,7 @@ try {
   assert.equal(await main.evaluate('typeof corona.scene?.readActive'), 'function');
   assert.equal(await main.evaluate('typeof corona.scene?.readScene'), 'function');
   assert.equal(await main.evaluate('typeof corona.scene?.selectActor'), 'function');
-  for (const method of ['getEnvironment', 'setEnvironment']) {
+  for (const method of ['readEnvironment', 'setEnvironment']) {
     assert.equal(await main.evaluate(`typeof corona.scene?.${method}`), 'function', 'environment requires the same direct V8 endpoint');
   }
   for (const method of ['readActorRig', 'setActorIkChains']) {
@@ -176,7 +176,7 @@ try {
     JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); };
     return corona.scene.readActive();
   })()`), { archive_session: '' });
-  assert.equal(await main.evaluate("corona.scene.getEnvironment('scene.ini',{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
+  assert.equal(await main.evaluate("corona.scene.readEnvironment('scene.ini',{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
   assert.equal(await main.evaluate("corona.scene.readScene({...({archive_session:'missing'}),scene:'scene.ini',actors:'index'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
   assert.equal(await main.evaluate("corona.scene.readActorProperties('scene.ini','missing',{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
   assert.equal(await main.evaluate("corona.scene.readScene({...({archive_session:'missing'}),scene:'scene.ini',actors:'context'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
@@ -184,7 +184,7 @@ try {
   assert.equal(await main.evaluate("corona.scene.setActorIkChains('scene.ini','actor',[],{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
   assert.equal(await main.evaluate("corona.scene.readScene({...({archive_session:'missing'}),scene:'scene.ini',cameras:true}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
   assert.deepEqual(await main.evaluate('corona.scene.readActive()'), { archive_session: '' });
-  assert.equal(typeof (await main.evaluate('corona.scene.isVisionAvailable()')).available, 'boolean');
+  assert.equal(typeof (await main.evaluate('corona.app.isVisionAvailable()')).available, 'boolean');
 
   for (const method of ['readActive', 'selectActor']) {
     assert.equal(await main.evaluate(`corona.scene.${method}(null).catch(error=>error.code)`), 'INVALID_ARGUMENT');
@@ -853,7 +853,7 @@ try {
     stage = 'one typed native environment read and patch with JSON disabled';
     console.log(`CEF smoke: ${stage}`);
     const environmentScope = { archive_session: camera.archive_session };
-    const readEnvironment = () => main.evaluate(`corona.scene.getEnvironment('scene.ini',${JSON.stringify(environmentScope)})`);
+    const readEnvironment = () => main.evaluate(`corona.scene.readEnvironment('scene.ini',${JSON.stringify(environmentScope)})`);
     const originalEnvironment = await readEnvironment();
     assert.equal(originalEnvironment.archive_session, camera.archive_session);
     assert.equal(originalEnvironment.scene, 'scene.ini');
@@ -880,7 +880,7 @@ try {
       assert.equal(await main.evaluate(`corona.scene.setEnvironment('scene.ini',${invalid}).catch(error=>error.code)`), 'INVALID_ARGUMENT', invalid);
     }
     assert.equal(await main.evaluate("corona.scene.setEnvironment('scene.ini',{archive_session:'old',grid:{enabled:true}}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
-    assert.equal(await main.evaluate(`corona.scene.getEnvironment('other.ini',${JSON.stringify(environmentScope)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
+    assert.equal(await main.evaluate(`corona.scene.readEnvironment('other.ini',${JSON.stringify(environmentScope)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.deepEqual(await readEnvironment(), appliedEnvironment, 'invalid mixed environment values cannot partly apply');
     const partialEnvironment = await main.evaluate(`corona.scene.setEnvironment('scene.ini',{...${JSON.stringify(environmentScope)},sun:{enabled:true}})`);
     assert.deepEqual(partialEnvironment.sun, { enabled: true, direction: [1, 1, 1] });
@@ -1484,7 +1484,7 @@ try {
         return picked.status === 'success';
       }, 20_000);
     } catch (error) {
-      await cameraClient.evaluate(`corona.scene.captureScreenshot('scene.ini','smoke-camera',
+      await cameraClient.evaluate(`corona.viewport.captureScreenshot('scene.ini','smoke-camera',
         {...${JSON.stringify(cameraScope)},path:${JSON.stringify(path.join(output, 'pick-debug.png'))}})`);
       console.log('Pick diagnostics', JSON.stringify({ picked, actor: (await readActor()).data,
         cameras: (await listCameras()).data }));
@@ -1516,12 +1516,12 @@ try {
     const mouseInput = { ...cameraScope, type: 'mouse', event: 'click', button: 'LeftButton',
       x: 90, y: 80, viewport_x: 5, viewport_y: 6, viewport_width: 320, viewport_height: 240, picked_actor: actor.name };
     const dispatchInput = (client, event, id = 'smoke-camera', scene = 'scene.ini') => client.evaluate(
-      `corona.scene.dispatchInput(${JSON.stringify(scene)},${JSON.stringify(id)},${JSON.stringify(event)})`);
+      `corona.input.dispatch(${JSON.stringify(scene)},${JSON.stringify(id)},${JSON.stringify(event)})`);
     for (const input of ['null', '[]', '{}', '{type:"keyDown"}',
       `{...${JSON.stringify(keyInput)},extra:true}`, `{...${JSON.stringify(keyInput)},code:1}`,
       `{...${JSON.stringify(mouseInput)},x:NaN}`, `{...${JSON.stringify(mouseInput)},viewport_width:0}`,
       `{...${JSON.stringify(mouseInput)},event:'unknown'}`, `{...${JSON.stringify(mouseInput)},button:'unknown'}`]) {
-      assert.equal(await main.evaluate(`corona.scene.dispatchInput('scene.ini','smoke-camera',${input}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
+      assert.equal(await main.evaluate(`corona.input.dispatch('scene.ini','smoke-camera',${input}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
     }
     for (const [client, scene, cameraId, event, code] of [
       [toolClient, 'scene.ini', 'smoke-camera', keyInput, 'PERMISSION_DENIED'],
@@ -1530,7 +1530,7 @@ try {
       [main, 'scene.ini', 'smoke-camera', { ...keyInput, archive_session: 'retired' }, 'PROJECT_CONTEXT_CHANGED'],
       [main, 'scene.ini', camera.opaque_handle, keyInput, 'CAMERA_NOT_FOUND'],
     ]) {
-      assert.equal(await client.evaluate(`corona.scene.dispatchInput(${JSON.stringify(scene)},${JSON.stringify(cameraId)},${JSON.stringify(event)}).catch(error=>error.code)`), code);
+      assert.equal(await client.evaluate(`corona.input.dispatch(${JSON.stringify(scene)},${JSON.stringify(cameraId)},${JSON.stringify(event)}).catch(error=>error.code)`), code);
     }
 
     const tracePath = path.join(output, 'script-input.jsonl');
@@ -1608,7 +1608,7 @@ try {
     const screenshotPath = path.join(output, 'native-screenshot.png');
     await rm(screenshotPath, { force: true });
     const screenshotOptions = { archive_session: camera.archive_session, path: screenshotPath };
-    const screenshot = args => cameraClient.evaluate(`corona.scene.captureScreenshot(...${JSON.stringify(args)})`);
+    const screenshot = args => cameraClient.evaluate(`corona.viewport.captureScreenshot(...${JSON.stringify(args)})`);
     const beforeCapture = (await listCameras()).data.cameras;
     const captured = await screenshot(['scene.ini', 'smoke-camera', screenshotOptions]);
     assert.deepEqual(captured, { status: 'success', archive_session: camera.archive_session,
@@ -1622,7 +1622,7 @@ try {
       ['scene.ini', 'smoke-camera', { ...screenshotOptions, path: null }],
       ['scene.ini', 'smoke-camera', { ...screenshotOptions, path: 'bad\0.png' }],
       ['scene.ini', 'smoke-camera', { ...screenshotOptions, camera: {} }]]) {
-      assert.equal(await cameraClient.evaluate(`corona.scene.captureScreenshot(...${JSON.stringify(invalid)}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
+      assert.equal(await cameraClient.evaluate(`corona.viewport.captureScreenshot(...${JSON.stringify(invalid)}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
     }
     for (const [scene, cameraId, scope, code] of [
       ['wrong.ini', 'smoke-camera', screenshotOptions, 'PROJECT_CONTEXT_CHANGED'],
@@ -1631,7 +1631,7 @@ try {
       ['scene.ini', 'smoke-camera', { ...screenshotOptions, archive_session: 'old' }, 'PROJECT_CONTEXT_CHANGED'],
       ['scene.ini', 'smoke-camera', { ...screenshotOptions, path: path.join(output, 'missing-parent', 'failed.png') }, 'CAPTURE_FAILED'],
     ]) {
-      assert.equal(await cameraClient.evaluate(`corona.scene.captureScreenshot(...${JSON.stringify([scene, cameraId, scope])}).catch(error=>error.code)`), code);
+      assert.equal(await cameraClient.evaluate(`corona.viewport.captureScreenshot(...${JSON.stringify([scene, cameraId, scope])}).catch(error=>error.code)`), code);
     }
     assert.deepEqual((await listCameras()).data.cameras, beforeCapture);
     evidence[0].screenshot = 'typed direct V8 with JSON disabled: actual PNG signature/320x240 dimensions, exact identity, invalid options, capture failure, no pose/output changes';
@@ -1699,10 +1699,10 @@ try {
     assert.equal(replacedPointer.pointer.cursor, 'hidden');
     assert.equal(replacedPointer.systemCursorHidden, false);
     assert.equal(await main.evaluate(`corona.scene.focusActor(...${JSON.stringify(focusArgs)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
-    assert.equal(await main.evaluate(`corona.scene.captureScreenshot('scene.ini','smoke-camera',${JSON.stringify(screenshotOptions)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
+    assert.equal(await main.evaluate(`corona.viewport.captureScreenshot('scene.ini','smoke-camera',${JSON.stringify(screenshotOptions)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.equal(await cameraPatch(main, JSON.stringify({ ...cameraScope, position: [9, 8, 7] }), '.catch(error=>error.code)'), 'PROJECT_CONTEXT_CHANGED');
     assert.equal(await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'flat2d' }), '.catch(error=>error.code)'), 'PROJECT_CONTEXT_CHANGED');
-    assert.equal(await main.evaluate(`corona.scene.getEnvironment('scene.ini',${JSON.stringify(environmentScope)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
+    assert.equal(await main.evaluate(`corona.scene.readEnvironment('scene.ini',${JSON.stringify(environmentScope)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.deepEqual(activeAgain.selection, {});
     assert.deepEqual(await main.evaluate(`corona.scene.selectActor('scene.ini','scene','')`),
       { status: 'success', scene: 'scene.ini', actor_type: 'scene', actor: '' });

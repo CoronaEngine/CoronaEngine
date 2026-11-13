@@ -199,9 +199,9 @@ def main_environment_projection_race(main, controls, settings, environment):
     """A mode refresh must not replay an environment sample older than a Dock edit."""
     original = environment()['grid']['enabled']
     main.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.getEnvironment==='function');
-      const p=window.__environmentRace={api,read:api.scene.getEnvironment,held:false,ready:false};
-      api.scene.getEnvironment=(...args)=>{if(p.held)return p.read(...args);p.held=true;p.args=args;
+      const api=Object.values(m).find(v=>typeof v?.scene?.readEnvironment==='function');
+      const p=window.__environmentRace={api,read:api.scene.readEnvironment,held:false,ready:false};
+      api.scene.readEnvironment=(...args)=>{if(p.held)return p.read(...args);p.held=true;p.args=args;
         return p.read(...args).then(result=>new Promise(resolve=>{p.release=()=>resolve(result);p.ready=true;}));};
       return true;})()""")
 
@@ -227,7 +227,7 @@ def main_environment_projection_race(main, controls, settings, environment):
         projected = main.evaluate(state)
         assert projected['gridEnabled'] is not original, f'Old environment sample rolled back grid UI: {projected}'
     finally:
-        main.evaluate("""(async()=>{const p=window.__environmentRace;p.api.scene.getEnvironment=p.read;p.release?.();
+        main.evaluate("""(async()=>{const p=window.__environmentRace;p.api.scene.readEnvironment=p.read;p.release?.();
           if(p.args)await corona.scene.setEnvironment(p.args[0],{...p.args[1],grid:{enabled:"""
                       + json.dumps(original) + "}});return true;})()")
         select_mode('Vision PT')
@@ -247,7 +247,7 @@ def run(port, root):
     clients, opened, panel_targets = [main], [], []
     session = main.evaluate("corona.scene.readActive()")['archive_session']
     def environment():
-        return main.evaluate("corona.scene.getEnvironment('scene.ini'," + json.dumps({'archive_session': session}) + ")")
+        return main.evaluate("corona.scene.readEnvironment('scene.ini'," + json.dumps({'archive_session': session}) + ")")
 
     service = """(async()=>{const module=await import(document.querySelector('script[type=module]').src);
       return Object.values(module).find(value=>typeof value?.openNativePanel==='function');})()"""

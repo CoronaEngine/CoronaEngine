@@ -31,6 +31,7 @@ NAMESPACE_NOTES = {
     "project": "项目新建/打开/最近列表",
     "project_settings": "当前项目元数据保存",
     "scene": "场景读、写、Actor 与相机",
+    "input": "脚本输入派发（目标是一个场景相机）",
     "viewport": "视口配置与拾取",
     "window": "Dock、面板与相机窗口",
 }
@@ -106,7 +107,7 @@ def build() -> str:
         "的桥。名字都是**具名函数**。",
         "",
         "命名空间按职责划分，不再是「一个方法一个命名空间」：项目文档与项目元数据在 `project`，",
-        "gizmo 叠加层在 `viewport`，脚本输入派发在 `scene`，音频按身份分 `play`/`stop`。",
+        "gizmo 叠加层在 `viewport`，脚本输入派发在 `input`，音频按身份分 `play`/`stop`。",
         "**键名规则**：请求键用 camelCase（`panelId`、`routePath`），回复键用 snake_case",
         "（`window_token`、`panel_id`、`actor_guid`、`archive_session`）；`createPanel` 的回复是",
         "既有规则，不是笔误。",

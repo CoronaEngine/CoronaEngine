@@ -106,6 +106,7 @@ STABLE = frozenset({
     "RESOURCE_NOT_FOUND",
     "FILE_NOT_FOUND",
     "PICK_TIMEOUT",           # the frame had not rendered yet; retry
+    "DOCUMENT_CONFLICT",      # the document CAS lost; reload the document then retry
     # bridge
     "EDITOR_API_TIMEOUT",
     "SERVICE_BUSY",

@@ -70,8 +70,8 @@ def run(port, root, engine_pid):
           window.__pickCalls=[];const pick=api.viewport.pick;
           api.viewport.pick=(...args)=>pick(...args).then(result=>{
             window.__pickCalls.push({args,result});return result;});
-          window.__scriptInputs=[];const dispatch=api.scene.dispatchInput;
-          api.scene.dispatchInput=(...args)=>dispatch(...args).then(result=>{
+          window.__scriptInputs=[];const dispatch=api.input.dispatch;
+          api.input.dispatch=(...args)=>dispatch(...args).then(result=>{
             window.__scriptInputs.push({args,result});return result;});
           window.__cameraMoveResults=[];window.__cameraMoveCalls=[];const move=api.scene.updateCamera;
           api.scene.updateCamera=(...args)=>{window.__cameraMoveCalls.push(args);return move(...args).then(result=>{window.__cameraMoveResults.push({result});return result;},error=>{window.__cameraMoveResults.push({error:String(error),code:error.code});throw error;});};return true;})()"""

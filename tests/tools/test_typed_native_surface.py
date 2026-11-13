@@ -13,10 +13,11 @@ V8 = ROOT / "src/systems/ui/cef/cef_v8_binding.cpp"
 FRONTEND_SRC = ROOT / "CoronaEditor/editor/Frontend/src"
 
 EXPECTED_SURFACE = {
-    "app": {"closeProcess"},
+    "app": {"closeProcess", "isVisionAvailable"},
     # One verb per action; the identity names a resource or an actor of a scene.
     "audio": {"play", "stop"},
     "bridge": {"call"},
+    "input": {"dispatch"},
     "network": {
         "clearDiscoveredPeers", "connectToPeer", "getDiscoveredPeers", "getSessionInfo",
         "searchLan", "setProjectRoot", "startSession", "stopSession",
@@ -27,15 +28,14 @@ EXPECTED_SURFACE = {
         "openProjectFile", "saveActiveProjectInfo",
     },
     "scene": {
-        "captureScreenshot", "createActor", "createCamera", "deleteActor", "deleteCamera",
-        "dispatchInput", "focusActor", "getEnvironment", "importResourceFile", "isVisionAvailable",
-        "readActive", "readActorProperties", "readActorRig", "readCameraRenderSettings",
-        "readModelNodes", "readScene", "readTransforms", "rebindActorResource", "save",
-        "selectActor", "selectModelFile", "setActorIkChains", "setActorTransform",
-        "setCameraRenderSettings", "setEnvironment", "setModelNodeState", "updateActor",
-        "updateCamera",
+        "createActor", "createCamera", "deleteActor", "deleteCamera", "focusActor",
+        "importResourceFile", "readActive", "readActorProperties", "readActorRig",
+        "readCameraRenderSettings", "readEnvironment", "readModelNodes", "readScene",
+        "readTransforms", "rebindActorResource", "save", "selectActor", "selectModelFile",
+        "setActorIkChains", "setActorTransform", "setCameraRenderSettings", "setEnvironment",
+        "setModelNodeState", "updateActor", "updateCamera",
     },
-    "viewport": {"configure", "pick", "setGizmoPointer", "setGizmoTarget"},
+    "viewport": {"captureScreenshot", "configure", "pick", "setGizmoPointer", "setGizmoTarget"},
     "window": {
         "close", "createPanel", "focus",
         "onCloseRequested", "onClosed", "setWindowPresentation",

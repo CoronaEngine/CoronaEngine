@@ -117,7 +117,7 @@ def main():
         assert first['scene']['archive_session'] != second['scene']['archive_session'], evidence
 
         def environment(launch):
-            return launch['main'].evaluate("corona.scene.getEnvironment('scene.ini'," + json.dumps(
+            return launch['main'].evaluate("corona.scene.readEnvironment('scene.ini'," + json.dumps(
                 {'archive_session': launch['scene']['archive_session']}) + ')')
 
         original = [environment(launch) for launch in launches]

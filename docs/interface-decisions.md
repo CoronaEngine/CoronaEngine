@@ -132,7 +132,8 @@ settlement；C++ 侧的所有者另走 `cancel_context` 取消工作。
 它的 `REQUEST_CONFLICT`、`SCRIPT_CHANGED` 等码属于数据，不属于拒绝通道。
 
 **代价**：`commit_document` 的 CAS 冲突从"返回值"变成"拒绝码"，`DOCUMENT_CONFLICT`
-进入词表并记为可重试；`cabbageDomain.js` 的提交循环改为捕获该码后重试。
+进入词表并**提升为 STABLE**（前端要按它重试，属于可分支的决定）；`cabbageDomain.js` 的提交
+循环改为捕获该码后重试。
 `NO_ACTIVE_PROJECT`、`INVALID_PROJECT_DOCUMENT`、`RUN_ACTIVE` 也随之进入词表。
 
 ## 7.2 写回复不阻塞 UI 线程
