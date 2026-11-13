@@ -29,6 +29,7 @@
 #include "reblur_guide_fusion.h"
 #include "reblur_precise_lobes_probe.h"
 #include "reblur_coverage_history_probe.h"
+#include "pt_denoiser_signal_probe.h"
 #ifdef VISION_REBLUR_EDSL
 #include "reblur_unpack_compose_probe.h"
 #endif
@@ -1030,8 +1031,12 @@ void check_scene_signals() {
         auto &fb = *pipeline->frame_buffer();
         const uint count = pipeline->pixel_num(), layers = stable ? 3u : 1u;
         std::vector<float4> pixels(count), d(count * 3u), s(d.size()), b(d.size()), emission(count);
+        if (scenario == 0u) pt_denoiser_signal_probe::check_frame(*pipeline, *illumination, false);
+        if (pt) pt_denoiser_signal_probe::compile_raw_producer(*pipeline, *illumination);
         for (uint frame = 0; frame < 4u; ++frame) {
-            pipeline->upload_data(); pipeline->display(1.0 / 60.0);
+            pipeline->upload_data();
+            if (pt) pt_denoiser_signal_probe::dispatch_raw_producer(*pipeline, *illumination, frame);
+            else pipeline->display(1.0 / 60.0);
             pipeline->stream() << fb.rt_buffer().device_buffer().download(pixels.data())
                 << fb.denoiser_diffuse().view().download(d.data()) << fb.denoiser_specular().view().download(s.data())
                 << fb.denoiser_bypass().view().download(b.data());
@@ -1061,7 +1066,7 @@ void check_scene_signals() {
                     "raw per-lobe energy plus bypass must equal the original estimator, including DI/GI switches and stable layers");
             }
         }
-        if (scenario == 0u) check_total_radiance_coverage(*pipeline);
+        if (scenario == 0u && !std::getenv("REBLUR_TEST_PT_SIGNALS_ONLY")) check_total_radiance_coverage(*pipeline);
         pipeline->set_output_denoise(true);
         // First enable follows the renderer's prepare-before-compile contract.
         // The raw-only fixture deliberately skipped denoiser preparation.
@@ -1077,8 +1082,15 @@ void check_scene_signals() {
         pipeline->stream() << fb.rt_buffer().device_buffer().download(pixels.data()) << synchronize() << commit();
         for (auto pixel : pixels) expect(std::isfinite(pixel.x) && std::isfinite(pixel.y) && std::isfinite(pixel.z),
             "enabling the actual REBLUR plugin after raw frames must produce finite colors");
+        if (scenario == 0u) {
+            pt_denoiser_signal_probe::check_frame(*pipeline, *illumination, true);
+            pipeline->set_output_denoise(false);
+            pt_denoiser_signal_probe::check_frame(*pipeline, *illumination, false);
+            pipeline->set_output_denoise(true);
+            pt_denoiser_signal_probe::check_frame(*pipeline, *illumination, true);
+        }
         std::cout << "PASS: producer energy, runtime enable, scenario=" << scenario << '\n';
-        if (std::getenv("REBLUR_TEST_COVERAGE_ONLY")) break;
+        if (std::getenv("REBLUR_TEST_COVERAGE_ONLY") || std::getenv("REBLUR_TEST_PT_SIGNALS_ONLY")) break;
     }
     fs::remove_all(fixture);
 }
@@ -1181,7 +1193,7 @@ int main() {
             check_reblur_guide_fusion();
             return 0;
         }
-        if (std::getenv("REBLUR_TEST_COVERAGE_ONLY")) {
+        if (std::getenv("REBLUR_TEST_COVERAGE_ONLY") || std::getenv("REBLUR_TEST_PT_SIGNALS_ONLY")) {
             check_scene_signals();
             return 0;
         }

@@ -215,7 +215,7 @@ public:
         return weight;
     };
 
-    void compile_path_tracing() noexcept;
+    void compile_path_tracing(bool lobe_signals = true) noexcept;
     [[nodiscard]] CommandBatch path_tracing(const PTParam &param, uint2 res) const noexcept;
     template<typename... Args>
     [[nodiscard]] SampledSpectrum direct_light_mis(Args &&...args) const noexcept {

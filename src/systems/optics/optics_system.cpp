@@ -2267,7 +2267,7 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
         if (!pipeline->activate_view_context(camera_handle)) return false;
         const auto* fb = pipeline->frame_buffer();
         const auto state = runtime.view_denoise_states.find(camera_handle);
-        // Enable toggles reuse PT/ReSTIR kernels. Changing the denoiser type
+        // PT enable toggles select its lobe producer; ReSTIR kernels are reused. Changing the denoiser type
         // rebuilds this view so REBLUR's lobe producers and history agree.
         // SSAT also needs recreation for its GBuffer callbacks.
         const bool recreate = !fb || fb->resolution().x != resolution.x ||

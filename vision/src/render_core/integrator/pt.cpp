@@ -36,6 +36,11 @@ private:
     SP<ScreenBuffer> taa_history_;
     Shader<void(uint)> taa_shader_;
 
+    [[nodiscard]] bool needs_lobe_signals() const noexcept {
+        return !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled() &&
+               denoiser_->requires_lobe_signals();
+    }
+
 public:
     PathTracingIntegrator() = default;
     explicit PathTracingIntegrator(const IntegratorDesc &desc)
@@ -48,6 +53,16 @@ public:
     [[nodiscard]] bool jitter_primary_samples() const noexcept override {
         const char *value = std::getenv("VISION_PT_PRIMARY_JITTER");
         return value == nullptr || value[0] == '\0' || value[0] != '0';
+    }
+
+    void set_denoise_enabled(bool enabled) noexcept override {
+        const bool changed = denoiser_ && denoiser_->enabled() != enabled;
+        IlluminationIntegrator::set_denoise_enabled(enabled);
+        if (changed && denoiser_->requires_lobe_signals() && path_tracing_.has_function()) {
+            Global::SceneGpuContextScope scene_gpu_context{
+                scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
+            compile_path_tracing(needs_lobe_signals());
+        }
     }
 
     void render_sub_UI(Widgets *widgets) noexcept override {
@@ -75,7 +90,7 @@ public:
             // normal pipeline compile, including during live parameter edits.
             Global::SceneGpuContextScope scene_gpu_context{
                 scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
-            compile_path_tracing();
+            compile_path_tracing(needs_lobe_signals());
         }
         return true;
     }
@@ -230,7 +245,7 @@ public:
 //        };
 //        taa_shader_ = device().compile(taa_kernel, "TAA temporal accumulation");
 
-        compile_path_tracing();
+        compile_path_tracing(needs_lobe_signals());
         OC_INFO_FORMAT("PathTracingIntegrator::compile after compile_path_tracing framebuffer=({}, {}), raytracing=({}, {})",
                        frame_buffer().resolution().x, frame_buffer().resolution().y,
                        frame_buffer().raytracing_resolution().x, frame_buffer().raytracing_resolution().y);

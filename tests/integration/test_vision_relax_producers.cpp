@@ -5,6 +5,7 @@
 #include "base/integral/integrator.h"
 #include "base/mgr/pipeline.h"
 #include "base/sampler.h"
+#include "pt_denoiser_signal_probe.h"
 #include <array>
 #include <cmath>
 #include <filesystem>
@@ -257,8 +258,12 @@ void check_scene_signals(bool restir, bool lifecycle = false) {
                "selected RELAX requires the producer to allocate explicit lobe signals");
         const uint count = pipeline->pixel_num(), layers = stable ? 3u : 1u;
         std::vector<float4> pixels(count), d(count * 3u), s(d.size()), b(d.size()), emission(count);
+        if (scenario == 0u) pt_denoiser_signal_probe::check_frame(*pipeline, *illumination, false);
+        if (pt) pt_denoiser_signal_probe::compile_raw_producer(*pipeline, *illumination);
         for (uint frame = 0; frame < 4u; ++frame) {
-            pipeline->upload_data(); pipeline->display(1.0 / 60.0);
+            pipeline->upload_data();
+            if (pt) pt_denoiser_signal_probe::dispatch_raw_producer(*pipeline, *illumination, frame);
+            else pipeline->display(1.0 / 60.0);
             expect(illumination->cur_denoise_time() == 0.0, "disabled denoising must report zero time");
             pipeline->stream() << fb.rt_buffer().device_buffer().download(pixels.data())
                 << fb.denoiser_diffuse().view().download(d.data()) << fb.denoiser_specular().view().download(s.data())
@@ -310,6 +315,13 @@ void check_scene_signals(bool restir, bool lifecycle = false) {
             "enabling the actual RELAX plugin after raw frames must produce finite colors");
         expect(illumination->denoiser()->enabled() && illumination->denoiser()->has_prepared_resources(),
             "scene evaluation must execute the selected RELAX filter after runtime enable");
+        if (scenario == 0u) {
+            pt_denoiser_signal_probe::check_frame(*pipeline, *illumination, true);
+            pipeline->set_output_denoise(false);
+            pt_denoiser_signal_probe::check_frame(*pipeline, *illumination, false);
+            pipeline->set_output_denoise(true);
+            pt_denoiser_signal_probe::check_frame(*pipeline, *illumination, true);
+        }
         if (lifecycle) {
             auto draw = [&] {
                 pipeline->upload_data(); pipeline->display(1.0 / 60.0);

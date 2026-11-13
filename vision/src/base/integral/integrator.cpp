@@ -142,7 +142,8 @@ void IlluminationIntegrator::update_device_data() noexcept {
     }
 }
 
-void IlluminationIntegrator::compile_path_tracing() noexcept {
+void IlluminationIntegrator::compile_path_tracing(bool lobe_signals) noexcept {
+    lobe_signals = lobe_signals && denoiser_ && denoiser_->requires_lobe_signals();
     TSensor &camera = scene().sensor();
     TSampler &sampler = renderer().sampler();
     const char *aligned_value = std::getenv("VISION_PT_ALIGNED_LAMBERT");
@@ -188,7 +189,6 @@ void IlluminationIntegrator::compile_path_tracing() noexcept {
         Float2 hit_distance = make_float2(0.f);
         HitContext context{Ld, Ld_specular};
         context.aligned_lambert = aligned_lambert;
-        const bool lobe_signals = denoiser_ && denoiser_->requires_lobe_signals();
         if (lobe_signals) { context.bypass = &bypass; context.lobe_hitdist = &hit_distance; }
         Float3 L = Integrator::Li(rs, scatter_pdf, context, render_env);
         if (mb && mb[0] == '1') {
