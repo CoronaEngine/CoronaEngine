@@ -47,6 +47,7 @@ GUARDS = [
     ("test_rejection_vocabulary.py", "拒绝码词表：源码只发已声明的码；稳定码可分支、细节码只进日志"),
     ("test_window_permission_matrix.py", "每个窗口方法都带调用者检查，例外必须逐条说明"),
     ("test_geometry_external_access.py", "外部只读几何场景快照，写一律走命令通道"),
+    ("test_python_runtime_deploy.py", "Python 运行时部署是增量的：未变化的树只做 stat"),
     ("test_source_pins.py", "pin 改写幂等；只有已推送到远程的提交才算可 pin"),
     ("test_frontend_facade.py", "原生方法↔facade 一一对应；前端只经 facade 触达原生对象"),
     ("test_frontend_regressions.py", "逐个跑前端窗口/音频/facade 回归文件（带超时）"),

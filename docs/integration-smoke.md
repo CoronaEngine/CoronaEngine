@@ -38,13 +38,16 @@ build/conan/examples/relwithdebinfo/examples/engine/RelWithDebInfo
 
 `vulkan-1.dll` 取引擎构建时使用的那一份，不取 CEF 自带的副本。
 
-### 构建耗时备注（待优化）
+### 构建耗时备注（已优化）
 
-`corona_engine` 的 POST_BUILD 里有一步 `cmake -E copy_directory_if_different`，把 conda
-环境的 `Lib`（约 2.1 GB / 5.3 万文件）复制到 `python-runtime/Lib`。它每轮构建都会跑，
-常常比编译 + 链接本身还慢（本机实测可超过 15 分钟）。**记录待办**：只在源变化时复制，
-或排除 `site-packages` 中与运行时无关的包。当前绕过方式：等 `corona_engine.exe` 链接完成后
-中断构建（复制不影响已链接的二进制）。
+`corona_engine` 的 POST_BUILD 需要把 conda 环境的 `Lib` + `DLLs`（约 2.1 GB / 5.4 万文件）
+部署到 `python-runtime/`。原先用 `cmake -E copy_directory_if_different`，它每次都比较文件
+内容，常常比编译 + 链接本身还慢（实测单步可超过 15 分钟）。
+
+现在由 `build_tools/scripts/deploy_python_runtime.py` 增量部署：维护一份
+`python-runtime/.deploy-manifest.json`（相对路径 + 大小 + mtime），未变化时只做一次
+`os.scandir` 遍历（用目录项里的大小/mtime，不读文件内容），实测 **约 5 秒**；源变化时只复制
+变化的文件，并删除源中已消失的条目。首次部署仍会复制全量（一次性成本）。
 
 ## 3. 打包 UI 套件（12 个）
 

@@ -118,18 +118,36 @@ function(corona_install_runtime_deps target_name)
         set(_CORONA_PY_LIB_DIR "${_CORONA_PY_ENV_DIR}/Lib")
         set(_CORONA_PY_DLL_DIR "${_CORONA_PY_ENV_DIR}/DLLs")
         if(EXISTS "${_CORONA_PY_LIB_DIR}" AND EXISTS "${_CORONA_PY_DLL_DIR}")
-            add_custom_command(
-                TARGET ${target_name}
-                POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-                    "${_CORONA_PY_LIB_DIR}"
-                    "${_CORONA_DESTINATION_DIR}/python-runtime/Lib"
-                COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
-                    "${_CORONA_PY_DLL_DIR}"
-                    "${_CORONA_DESTINATION_DIR}/python-runtime/DLLs"
-                COMMENT "[Corona:RuntimeDeps] Deploy Python standard library and modules -> ${target_name}"
-                VERBATIM
-            )
+            # The standard library is ~2 GB / 53k files, and cmake -E copy_directory_if_different
+            # compares file contents on every build. The script keeps a size+mtime manifest and
+            # only copies what changed; an unchanged tree costs one stat per file.
+            set(_CORONA_PY_RUNTIME_DIR "${_CORONA_DESTINATION_DIR}/python-runtime")
+            set(_CORONA_PY_DEPLOY_SCRIPT "${CORONA_BUILD_SCRIPTS_DIR}/deploy_python_runtime.py")
+            if(EXISTS "${_CORONA_PY_DEPLOY_SCRIPT}" AND DEFINED Python_EXECUTABLE)
+                add_custom_command(
+                    TARGET ${target_name}
+                    POST_BUILD
+                    COMMAND "${Python_EXECUTABLE}" "${_CORONA_PY_DEPLOY_SCRIPT}"
+                        --source-lib "${_CORONA_PY_LIB_DIR}"
+                        --source-dlls "${_CORONA_PY_DLL_DIR}"
+                        --destination "${_CORONA_PY_RUNTIME_DIR}"
+                    COMMENT "[Corona:RuntimeDeps] Deploy Python runtime (incremental) -> ${target_name}"
+                    VERBATIM
+                )
+            else()
+                add_custom_command(
+                    TARGET ${target_name}
+                    POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+                        "${_CORONA_PY_LIB_DIR}"
+                        "${_CORONA_PY_RUNTIME_DIR}/Lib"
+                    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+                        "${_CORONA_PY_DLL_DIR}"
+                        "${_CORONA_PY_RUNTIME_DIR}/DLLs"
+                    COMMENT "[Corona:RuntimeDeps] Deploy Python standard library and modules (full) -> ${target_name}"
+                    VERBATIM
+                )
+            endif()
         else()
             message(WARNING
                 "[Corona:RuntimeDeps] Python runtime directories are incomplete: ${_CORONA_PY_ENV_DIR}")
