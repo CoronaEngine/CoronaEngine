@@ -142,7 +142,26 @@ def test_promise_rejections_use_the_documented_vocabulary():
         "adding one is a contract change")
 
 
+def _scene_layer_codes() -> set[str]:
+    """Codes the scene layer originates outside this binding.
+
+    Operation replies carry their own symbolic codes through verbatim, so a
+    pass-through code never appears as a literal in the binding. Scanning the
+    layer keeps the documented pass-through vocabulary honest without a second
+    hand-maintained list.
+    """
+    codes = set()
+    for path in (ROOT / "src/systems/ui/cef").glob("*.cpp"):
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+        codes |= set(re.findall(r'fail\(\s*"([A-Z][A-Z_]+)"', text))
+        codes |= set(re.findall(r'error_code\s*=\s*"([A-Z][A-Z_]+)"', text))
+        codes |= set(re.findall(r'\{\s*"([A-Z][A-Z_]+)"\s*,\s*"', text))
+    return codes
+
+
 def test_every_documented_code_is_still_used():
-    unused = sorted(REJECTION_CODES - _reported_codes())
+    unused = sorted(INFRASTRUCTURE_CODES - _reported_codes())
     assert not unused, f"documented but no longer produced: {unused} - remove it from the contract"
+    missing = sorted(SCENE_LAYER_CODES - _scene_layer_codes())
+    assert not missing, f"documented but no layer produces it: {missing} - update the contract"
 
