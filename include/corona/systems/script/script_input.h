@@ -12,7 +12,6 @@ struct InputEvent {
     std::string arg0, arg1, arg2;
     double arg3 = 0, arg4 = 0;
     double viewport_x = 0, viewport_y = 0, viewport_width = 0, viewport_height = 0;
-    std::string picked_actor;
 };
 
 // A Web event remains valid only while its native context and archive are alive.

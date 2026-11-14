@@ -13,8 +13,6 @@
 #include "cef/cef_window_operations.h"
 #include "cef/cef_scene_operations.h"
 #include "cef/scene_tree_actor.h"
-#include "cef/cef_viewport_pick.h"
-#include "cef/viewport_image_input.h"
 #include "cef/cef_script_input.h"
 #include "cef/browser_ui.h"
 #include "editor_api/python_service_bridge.h"
@@ -478,106 +476,6 @@ void test_viewport_configuration_shares_identity_and_applies_atomically() {
     require(UI::apply_viewport_configuration(request, tab).error_code == "WINDOW_CLOSED", "closed viewport cannot mutate state");
 }
 
-void test_pointer_configuration_owns_one_state_and_retires_with_its_context() {
-    UI::WindowRequest request{UI::WindowMethod::ConfigureViewport, 1};
-    request.archive_session = UI::execute_scene_operation({UI::SceneMethod::ReadActive}).read.active.archive_session;
-    request.scene_id = "scene.ini"; request.camera_id = "primary"; request.context_id = 101;
-    require(UI::prepare_camera_window_request(request).error_code.empty(), "pointer resolves exact scoped camera");
-    request.viewport.emplace(); request.viewport->mode = "stereo3d";
-    request.viewport->bounds = UI::ViewportBounds{0, 0, 800, 600, 800, 600};
-    request.viewport->pointer = UI::ViewportPointer{400, 300, "grab"};
-    UI::BrowserTab tab; tab.open = true; tab.main_workspace = true;
-    auto& hub = Corona::SharedDataHub::instance();
-    std::optional<UI::InputDetail::ImagePoint> image_point;
-    {
-        const auto camera = hub.camera_storage().acquire_read(request.camera_handle);
-        image_point = UI::InputDetail::map_viewport_image_point(*camera, 400, 300, 800, 600);
-    }
-    require(image_point.has_value(), "center pointer lies inside the current camera image");
-    auto result = UI::apply_viewport_configuration(request, tab);
-    require(result.error_code.empty() && result.viewport->pointer.cursor == "grab" && result.viewport->system_cursor_hidden,
-        "pointer and system cursor share one actual accepted configuration");
-    const auto state = hub.viewport_ui_state(request.camera_handle);
-    require(state.pointer.x == static_cast<float>(image_point->x) && state.pointer.y == static_cast<float>(image_point->y) && state.pointer.owner_context == 101 &&
-        state.pointer.cursor_shape == Corona::ViewportUiCursorShape::Grab && tab.hide_system_cursor.load(),
-        "rendering reads the typed pointer state directly without another command queue");
-    for (int kind = 0; kind < 4; ++kind) {
-        auto invalid = request; invalid.viewport->mode = "flat2d";
-        if (kind == 0) invalid.viewport->pointer->x = NAN;
-        if (kind == 1) invalid.viewport->pointer->y = -1;
-        if (kind == 2) invalid.viewport->pointer->cursor = "invalid";
-        if (kind == 3) invalid.context_id = 0;
-        require(!UI::apply_viewport_configuration(invalid, tab).error_code.empty(), "invalid pointer rejects entire patch");
-        const auto after = hub.viewport_ui_state(request.camera_handle);
-        require(after.mode == state.mode && after.pointer.x == state.pointer.x && tab.hide_system_cursor.load(), "invalid pointer has no partial side effects");
-    }
-    auto replacement = request; replacement.context_id = 202; replacement.viewport->pointer->cursor = "crosshair";
-    require(UI::apply_viewport_configuration(replacement, tab).error_code.empty(), "new context can own its pointer");
-    UI::release_viewport_pointer(tab, 101);
-    require(tab.hide_system_cursor.load() && hub.viewport_ui_state(request.camera_handle).pointer.owner_context == 202,
-        "late old-context cleanup cannot clear a newer pointer in the same tab");
-    UI::BrowserTab peer; peer.open = true; peer.main_workspace = true;
-    auto other = replacement; other.context_id = 303;
-    require(UI::apply_viewport_configuration(other, peer).error_code.empty(), "second surface takes its own pointer ownership");
-    UI::refresh_viewport_state(tab);
-    require(!tab.hide_system_cursor.load() && peer.hide_system_cursor.load() &&
-        hub.viewport_ui_state(request.camera_handle).pointer.owner_context == 303, "old surface cleanup preserves the new surface cursor");
-    auto retired = std::make_shared<UI::CameraWindowAuthority>(); retired->active = false;
-    peer.viewport_pointer_authority = retired;
-    UI::refresh_viewport_state(peer);
-    require(!peer.hide_system_cursor.load() && hub.viewport_ui_state(request.camera_handle).pointer.cursor_shape == Corona::ViewportUiCursorShape::Hidden,
-        "archive retirement restores the system cursor and removes stale pointer state");
-    auto flat = request; flat.viewport->mode = "flat2d";
-    require(UI::apply_viewport_configuration(flat, tab).error_code.empty() && !tab.hide_system_cursor.load(), "2D UI never hides the system cursor");
-    UI::release_viewport_pointer(tab, 101);
-}
-
-void test_owned_pick_requests_and_coordinate_mapping() {
-    Corona::CameraDevice embedded;
-    embedded.width = 1920; embedded.height = 1080;
-    embedded.viewport_rect_active = true; embedded.view_open = false;
-    embedded.view_width = 1536; embedded.view_height = 825;
-    const auto edge = UI::map_viewport_pick_point(34, 0, 1536, 825, embedded);
-    require(edge.valid && edge.inside && edge.x == 0 && edge.y == 0,
-        "live pick coordinates must start at the compositor image edge");
-    require(!UI::map_viewport_pick_point(33, 400, 1536, 825, embedded).inside,
-        "embedded image black bars must not submit GPU picks");
-    Corona::CameraDevice camera;
-    camera.width = 800; camera.height = 600;
-    const auto mapped = UI::map_viewport_pick_point(30, 20, 100, 50, camera);
-    require(mapped.valid && mapped.inside && mapped.x == 240 && mapped.y == 240, "one pixel mapping must serve Web and Python");
-    require(!UI::map_viewport_pick_point(0, 0, std::numeric_limits<double>::infinity(), 50, camera).valid,
-        "non-finite dimensions must reject before casts");
-    for (const double x : {-0.01, 100.0}) require(!UI::map_viewport_pick_point(x, 0, 100, 50, camera).inside,
-        "negative and right-edge coordinates must miss without truncation");
-    UI::ViewportPickRequests requests;
-    UI::ViewportPickRequest request;
-    request.camera.camera_handle = 19; request.camera.scene_id = "scene.ini";
-    request.camera.browser_id = 10; request.camera.context_id = 100;
-    const auto now = UI::ViewportPickRequests::Clock::now();
-    int called = 0;
-    const auto done = [&](const auto&, const auto&) { ++called; };
-    const auto first = requests.add(request, done, now);
-    const auto second = requests.add(request, done, now);
-    require(first != second, "native request IDs must be unique even in one context");
-    require(!requests.complete({20, "scene.ini", first, "success"}) && !requests.complete({19, "other.ini", first, "success"}),
-        "foreign camera/scene completion must not consume the request");
-    require(requests.complete({19, "scene.ini", first, "miss"}) && called == 1, "typed completion must deliver exactly once");
-    require(!requests.complete({19, "scene.ini", first, "miss"}) && called == 1, "duplicate GPU result must not redeliver");
-    requests.expire(now + UI::ViewportPickRequests::timeout);
-    require(called == 2 && requests.pending_count() == 0, "deadline must complete remaining request once");
-    require(!requests.complete({19, "scene.ini", second, "success"}), "late GPU result after timeout must be ignored");
-    const auto old = requests.add(request, done);
-    request.camera.context_id = 101;
-    const auto peer = requests.add(request, done);
-    requests.cancel_context(100);
-    require(requests.pending_count() == 1 && !requests.complete({19, "scene.ini", old, "success"}), "reload must cancel only its own requests");
-    require(requests.complete({19, "scene.ini", peer, "success"}) && called == 3, "new context must retain its request");
-    requests.add(request, done);
-    requests.cancel_browser(10);
-    require(requests.pending_count() == 0 && called == 3, "window close must release pending readbacks without callbacks");
-}
-
 void test_script_input_queue_has_one_owner_and_drops_retired_scopes() {
     UI::drain_input_events();
     bool active = true;
@@ -585,12 +483,12 @@ void test_script_input_queue_has_one_owner_and_drops_retired_scopes() {
     UI::enqueue_input_event(key);
     UI::InputEvent mouse{}; mouse.type = 2; mouse.arg0 = "click"; mouse.arg1 = "LeftButton";
     mouse.arg3 = 70; mouse.arg4 = 80; mouse.viewport_x = 5; mouse.viewport_y = 6;
-    mouse.viewport_width = 400; mouse.viewport_height = 200; mouse.picked_actor = "Picked";
+    mouse.viewport_width = 400; mouse.viewport_height = 200;
     UI::enqueue_input_event(mouse, [&] { return active; });
     const auto events = UI::drain_input_events();
     require(events.size() == 2 && events[0].arg0 == "KeyJ" && events[0].arg2 == "d", "SDL and Web share ordered typed input");
-    require(events[1].picked_actor == "Picked" && events[1].viewport_x == 5 && events[1].viewport_height == 200,
-        "mouse viewport/picked Actor values must survive the native queue");
+    require(events[1].viewport_x == 5 && events[1].viewport_height == 200,
+        "mouse viewport values must survive the native queue");
     require(UI::drain_input_events().empty(), "input must be consumed once");
     UI::enqueue_input_event(mouse, [&] { return active; }); active = false;
     UI::enqueue_input_event(key);
@@ -795,11 +693,9 @@ int main() {
         run("actor_property_projection", test_owned_actor_property_projection);
         run("transform_authority", test_one_native_transform_authority);
         run("viewport_configuration", test_viewport_configuration_shares_identity_and_applies_atomically);
-        run("pointer_configuration", test_pointer_configuration_owns_one_state_and_retires_with_its_context);
         run("camera_release", test_camera_release_discards_queued_viewport_updates);
         run("deferred_viewports", test_deferred_viewports_use_the_original_camera_authority);
         run("cached_viewport_binding", test_cached_web_viewport_binding_retires_with_its_camera);
-        run("pick_requests", test_owned_pick_requests_and_coordinate_mapping);
         run("consolidated_queries", test_consolidated_queries_and_atomic_names);
         run("script_service_wait_uncontended",
             [&] { test_native_script_service_wait_does_not_hold_editor_state(false); });

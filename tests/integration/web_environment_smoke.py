@@ -48,7 +48,7 @@ def main_render_retirement(main, controls):
         wait(lambda: main.evaluate('window.__mainRenderLifetime.ready'), bool, 'real main mode reply held')
         main.evaluate("""(async()=>{const p=window.__mainRenderLifetime;
           await document.querySelector('#app').__vue_app__.config.globalProperties.$router.push('/ProjectSettings');
-          if(document.querySelector('[data-viewport-pick-surface]'))throw Error('MainPage was not retired');
+          if(document.querySelector('[data-viewport-surface]'))throw Error('MainPage was not retired');
           p.release();return true;})()""")
         main.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))')
         reads = main.evaluate('window.__mainRenderLifetime.reads')
@@ -61,7 +61,7 @@ def main_render_retirement(main, controls):
             await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
           }finally{BroadcastChannel.prototype.postMessage=p.post;}
           return true;})()""")
-    wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-pick-surface]')"), bool, 'MainPage normal remount')
+    wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-surface]')"), bool, 'MainPage normal remount')
     wait(lambda: controls.evaluate("!document.querySelector('.scene-quick-render-trigger').disabled"
                                   "&&!document.querySelector('[data-guidance=render-settings]').inert"),
          bool, 'render controls reconnected')
@@ -122,7 +122,7 @@ def main_selection_retirement(main, open_panel, root, session):
             wait(lambda: main.evaluate('window.__selectionLifetime.ready'), bool, 'real selection Actor index reply held')
             main.evaluate("""(async()=>{const p=window.__selectionLifetime;
               await document.querySelector('#app').__vue_app__.config.globalProperties.$router.push('/ProjectSettings');
-              if(document.querySelector('[data-viewport-pick-surface]'))throw Error('MainPage still mounted');
+              if(document.querySelector('[data-viewport-surface]'))throw Error('MainPage still mounted');
               p.retired=true;p.release();return true;})()""")
             main.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))')
             effects = main.evaluate('window.__selectionLifetime.effects')
@@ -132,7 +132,7 @@ def main_selection_retirement(main, open_panel, root, session):
               p.dock.openPanel=p.open;p.release?.();
               await document.querySelector('#app').__vue_app__.config.globalProperties.$router.push(p.route.slice(1)||'/');
               return true;})()""")
-        wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-pick-surface]')"), bool, 'MainPage selection remount')
+        wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-surface]')"), bool, 'MainPage selection remount')
         wait(lambda: main.call('Runtime.evaluate', {
             'expression': "Boolean(getEventListeners(window)['cabbage-run-failed']?.length)",
             'includeCommandLineAPI': True, 'returnByValue': True,
@@ -265,7 +265,7 @@ def run(port, root):
 
     try:
         main.evaluate("localStorage.setItem('corona.activeProjectPath'," + json.dumps(str(root)) + "); location.hash='/'")
-        wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-pick-surface]')"), bool, 'MainPage mount')
+        wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-surface]')"), bool, 'MainPage mount')
         wait(lambda: main.evaluate(f"{service}.then(service=>service.readEditorUiPolicy())"), lambda policy: policy and policy.get('enabled'), 'Web owner ready')
         main.evaluate(monitor)
         original = environment()

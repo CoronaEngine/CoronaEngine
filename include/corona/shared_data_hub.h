@@ -382,7 +382,6 @@ struct CameraDevice {
     int view_width{960};
     int view_height{540};
     float move_speed{1.0f};
-    EntityId actor_pick_handle{};
 
     CameraDevice() {
         position.x = 0.0f;
@@ -414,18 +413,6 @@ struct CameraDevice {
     [[nodiscard]] ktm::fmat4x4 compute_view_proj_matrix() const {
         return compute_projection_matrix() * compute_view_matrix();
     }
-};
-
-struct ActorPickDevice {
-    std::string request_id;
-    std::uint32_t x{0};
-    std::uint32_t y{0};
-    std::uint32_t result_x{0};
-    std::uint32_t result_y{0};
-    EntityId actor_handle{0};
-    std::uint32_t node_index{UINT32_MAX};
-    bool pending{false};
-    bool result_ready{false};
 };
 
 // ---------------------------------------------------------------------------
@@ -645,28 +632,6 @@ inline GeometrySceneRow make_geometry_scene_row(const GeometryDevice& device) {
     return row;
 }
 
-// Runtime-only actor pick request/completion messages. These are deliberately
-// kept outside ActorPickDevice so multiple clicks can be in flight without a
-// newer request overwriting an older one.
-struct ActorPickRequestCommand {
-    EntityId camera_handle{};
-    std::string scene_id;
-    std::string request_id;
-    std::uint32_t x{0};
-    std::uint32_t y{0};
-};
-
-struct ActorPickCompletion {
-    EntityId camera_handle{};
-    std::string scene_id;
-    std::string request_id;
-    std::string status; // success, miss, error
-    EntityId actor_handle{};
-    std::uint32_t x{0};
-    std::uint32_t y{0};
-    std::uint32_t node_index{UINT32_MAX};
-};
-
 struct CameraMoveCommand {
     EntityId camera_handle{};
     ktm::fvec3 position{};
@@ -778,7 +743,6 @@ struct CameraStateUpdateCommand {
 
 struct CameraReleaseCommand {
     EntityId camera_handle{};
-    EntityId actor_pick_handle{};
 };
 
 /// 相机释放命令的合并键（Fifo 队列只用它做 peek / erase）
@@ -793,15 +757,6 @@ enum class ViewportUiMode : std::uint8_t {
     Stereo3D,
 };
 
-enum class ViewportUiCursorShape : std::uint8_t {
-    Arrow,
-    Hand,
-    Crosshair,
-    Grab,
-    Grabbing,
-    Hidden,
-};
-
 struct ViewportUiCalibration {
     float lenticular_pitch{19.1849f};
     float slant_angle_radians{0.2333f};
@@ -812,20 +767,10 @@ struct ViewportUiCalibration {
     float parallax_scale{19.1849f};
 };
 
-struct ViewportUiPointerState {
-    float x{0.0f};
-    float y{0.0f};
-    ViewportUiCursorShape cursor_shape{ViewportUiCursorShape::Hidden};
-    std::uint64_t owner_context{};
-};
-
 struct ViewportUiState {
     EntityId camera_handle{};
     ViewportUiMode mode{ViewportUiMode::Flat2D};
-    ViewportUiCursorShape cursor_shape{ViewportUiCursorShape::Arrow};
     ViewportUiCalibration calibration{};
-    /// 远端 CEF 重构引入：指针状态并入 session store
-    ViewportUiPointerState pointer{};
 };
 
 struct EnvironmentDevice {
@@ -895,7 +840,6 @@ class SharedDataHub {
     using ProfileStorage = Kernel::Utils::EntityStorage<ProfileDevice, 128, 2>;
     using ActorStorage = Kernel::Utils::EntityStorage<ActorDevice, 128, 2>;
     using CameraStorage = Kernel::Utils::EntityStorage<CameraDevice, 128, 2>;
-    using ActorPickStorage = Kernel::Utils::EntityStorage<ActorPickDevice, 128, 2>;
     using EnvironmentStorage = Kernel::Utils::EntityStorage<EnvironmentDevice, 128, 2>;
     using SceneStorage = Kernel::Utils::EntityStorage<SceneDevice, 128, 2>;
     using ImageStorage = Kernel::Utils::EntityStorage<ImageDevice, 128, 2>;
@@ -936,13 +880,6 @@ class SharedDataHub {
 
     CameraStorage& camera_storage();
     const CameraStorage& camera_storage() const;
-
-    ActorPickStorage& actor_pick_storage();
-    const ActorPickStorage& actor_pick_storage() const;
-    void enqueue_actor_pick_request(ActorPickRequestCommand command);
-    std::optional<ActorPickRequestCommand> take_actor_pick_request(EntityId camera_handle);
-    void enqueue_actor_pick_completion(ActorPickCompletion completion);
-    std::vector<ActorPickCompletion> drain_actor_pick_completions();
 
     EnvironmentStorage& environment_storage();
     const EnvironmentStorage& environment_storage() const;
@@ -1043,8 +980,6 @@ class SharedDataHub {
                                      const ViewportUiCalibration& calibration);
     [[nodiscard]] ViewportUiState viewport_ui_state(EntityId camera_handle) const;
     /// 远端 CEF 重构引入：直接写/清 session store 里的指针状态
-    void set_viewport_ui_pointer(EntityId camera_handle, ViewportUiPointerState pointer);
-    void clear_viewport_ui_pointer(EntityId camera_handle, std::uint64_t owner_context);
 
    private:
     ModelResourceStorage model_resource_storage_;
@@ -1079,10 +1014,6 @@ class SharedDataHub {
     std::unordered_map<EntityId, GeometrySceneCacheEntry> geometry_scene_cache_;
     mutable std::mutex camera_timing_mutex_;
     std::unordered_map<EntityId, CameraFrameTiming> camera_timings_;
-    ActorPickStorage actor_pick_storage_;
-    mutable std::mutex actor_pick_queue_mutex_;
-    std::vector<ActorPickRequestCommand> pending_actor_pick_requests_;
-    std::vector<ActorPickCompletion> actor_pick_completions_;
     SceneStorage scene_storage_;
     ImageStorage image_storage_;
     // 相机姿态：LatestWins（拖拽在 120Hz 下只需最后一次），P5 起统一走 CommandBuffer

@@ -18,14 +18,14 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 的桥。名字都是**具名函数**。
 
 命名空间按职责划分，不再是「一个方法一个命名空间」：项目文档与项目元数据在 `project`，
-命令通道与拾取在 `viewport`，脚本输入派发在 `input`，音频按身份分 `play`/`stop`。
+视口配置在 `viewport`，脚本输入派发在 `input`，音频按身份分 `play`/`stop`。
 **键名规则**：请求键用 camelCase（`panelId`、`routePath`），回复键用 snake_case
 （`window_token`、`panel_id`、`actor_guid`、`archive_session`）；`createPanel` 的回复是
 既有规则，不是笔误。
 
 ## Web 面
 
-共 9 个命名空间 / 56 个方法。清单由
+共 9 个命名空间 / 55 个方法。清单由
 `tests/tools/test_typed_native_surface.py` 精确钉死（多一个、少一个都会失败）：
 
 | 命名空间 | 说明 |
@@ -37,7 +37,7 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 | `network` | 协作会话与发现 |
 | `project` | 项目新建/打开/最近列表 |
 | `scene` | 场景读、写、Actor 与相机 |
-| `viewport` | 视口配置与拾取 |
+| `viewport` | 视口配置 |
 | `window` | Dock、面板与相机窗口 |
 
 ### 全部方法清单
@@ -51,7 +51,7 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 | `network` | `clearDiscoveredPeers`、`connectToPeer`、`getDiscoveredPeers`、`getSessionInfo`、`searchLan`、`setProjectRoot`、`startSession`、`stopSession` |
 | `project` | `createMultiplayerProject`、`createWorldProject`、`getProjectLoadStatus`、`getRecentProjects`、`openDocument`、`openProject`、`openProjectFile`、`saveActiveProjectInfo` |
 | `scene` | `createActor`、`createCamera`、`deleteActor`、`deleteCamera`、`focusActor`、`importResourceFile`、`readActive`、`readActorProperties`、`readActorRig`、`readCameraRenderSettings`、`readEnvironment`、`readModelNodes`、`readScene`、`readTransforms`、`rebindActorResource`、`save`、`selectActor`、`selectModelFile`、`setActorIkChains`、`setActorTransform`、`setCameraRenderSettings`、`setEnvironment`、`setModelNodeState`、`updateActor`、`updateCamera` |
-| `viewport` | `captureScreenshot`、`configure`、`pick` |
+| `viewport` | `captureScreenshot`、`configure` |
 | `window` | `close`、`createPanel`、`focus`、`onCloseRequested`、`onClosed`、`setWindowPresentation` |
 
 ### 面板与窗口：三个合并后的入口
@@ -97,10 +97,10 @@ ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web �
 |---|---|---|
 | 基础设施 | V8 绑定本体，原生工作开始前 | `CONTEXT_CHANGED`、`INVALID_ARGUMENT`、`NATIVE_FAILURE`、`NATIVE_UNAVAILABLE`、`PERMISSION_DENIED` |
 | 窗口 | 原生窗口宿主（窗口消失、建不出来） | `CREATE_FAILED`、`WINDOW_CLOSED` |
-| 场景/归档 | 场景与归档层（对象不存在、只读、冲突…） | `ACTOR_AUDIO_UNAVAILABLE`、`ACTOR_CREATE_FAILED`、`ACTOR_NOT_FOUND`、`ACTOR_NOT_READY`、`ACTOR_VERSION_CONFLICT`、`CAMERA_NOT_DELETABLE`、`CAMERA_NOT_FOUND`、`CAMERA_UNAVAILABLE`、`CAPTURE_FAILED`、`COMPONENT_NOT_FOUND`、`CONFLICT`、`DOCUMENT_CONFLICT`、`FILE_NOT_FOUND`、`FILE_OPERATION_FAILED`、`INVALID_BOUNDS`、`INVALID_PROJECT_DOCUMENT`、`INVALID_PROJECT_PATH`、`LAST_CAMERA`、`MODEL_DECODE_FAILED`、`NODE_EDIT_REJECTED`、`NODE_NOT_FOUND`、`NO_ACTIVE_PROJECT`、`PICK_FAILED`、`PICK_TIMEOUT`、`PROJECT_CONTEXT_CHANGED`、`PROJECT_CREATION_FAILED`、`PROJECT_OPEN_FAILED`、`READ_ONLY`、`READ_ONLY_PROJECT`、`RESOURCE_NOT_FOUND`、`RUN_ACTIVE`、`SAVE_FAILED`、`UNSUPPORTED_RESOURCE_TYPE` |
+| 场景/归档 | 场景与归档层（对象不存在、只读、冲突…） | `ACTOR_AUDIO_UNAVAILABLE`、`ACTOR_CREATE_FAILED`、`ACTOR_NOT_FOUND`、`ACTOR_NOT_READY`、`ACTOR_VERSION_CONFLICT`、`CAMERA_NOT_DELETABLE`、`CAMERA_NOT_FOUND`、`CAPTURE_FAILED`、`COMPONENT_NOT_FOUND`、`CONFLICT`、`DOCUMENT_CONFLICT`、`FILE_NOT_FOUND`、`FILE_OPERATION_FAILED`、`INVALID_BOUNDS`、`INVALID_PROJECT_DOCUMENT`、`INVALID_PROJECT_PATH`、`LAST_CAMERA`、`MODEL_DECODE_FAILED`、`NODE_EDIT_REJECTED`、`NODE_NOT_FOUND`、`NO_ACTIVE_PROJECT`、`PROJECT_CONTEXT_CHANGED`、`PROJECT_CREATION_FAILED`、`PROJECT_OPEN_FAILED`、`READ_ONLY`、`READ_ONLY_PROJECT`、`RESOURCE_NOT_FOUND`、`RUN_ACTIVE`、`SAVE_FAILED`、`UNSUPPORTED_RESOURCE_TYPE` |
 | Web → Python | bridge 传输与 Python 服务 | `EDITOR_API_TIMEOUT`、`SERVICE_BUSY`、`SERVICE_FAILED`、`SERVICE_UNAVAILABLE` |
 
-**可分支的稳定码**：`ACTOR_NOT_FOUND`、`ACTOR_VERSION_CONFLICT`、`CAMERA_NOT_FOUND`、`CONFLICT`、`CONTEXT_CHANGED`、`CREATE_FAILED`、`DOCUMENT_CONFLICT`、`EDITOR_API_TIMEOUT`、`FILE_NOT_FOUND`、`INVALID_ARGUMENT`、`NATIVE_UNAVAILABLE`、`PERMISSION_DENIED`、`PICK_TIMEOUT`、`PROJECT_CONTEXT_CHANGED`、`READ_ONLY`、`READ_ONLY_PROJECT`、`RESOURCE_NOT_FOUND`、`SERVICE_BUSY`、`SERVICE_FAILED`、`SERVICE_UNAVAILABLE`、`WINDOW_CLOSED`。
+**可分支的稳定码**：`ACTOR_NOT_FOUND`、`ACTOR_VERSION_CONFLICT`、`CAMERA_NOT_FOUND`、`CONFLICT`、`CONTEXT_CHANGED`、`CREATE_FAILED`、`DOCUMENT_CONFLICT`、`EDITOR_API_TIMEOUT`、`FILE_NOT_FOUND`、`INVALID_ARGUMENT`、`NATIVE_UNAVAILABLE`、`PERMISSION_DENIED`、`PROJECT_CONTEXT_CHANGED`、`READ_ONLY`、`READ_ONLY_PROJECT`、`RESOURCE_NOT_FOUND`、`SERVICE_BUSY`、`SERVICE_FAILED`、`SERVICE_UNAVAILABLE`、`WINDOW_CLOSED`。
 Web 可以按这些码决定重试、禁用控件或提示；其余是**细节码**，照常拒绝，但只应进日志——
 细节码会随实现改名或合并。稳定码的每一次增删都是契约变更，需要写进
 `docs/interface-decisions.md`。

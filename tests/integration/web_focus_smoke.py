@@ -28,7 +28,7 @@ def run(port, root, engine_pid):
     try:
         main.evaluate("localStorage.setItem('corona.nativeViewportCursor.enabled','1');localStorage.setItem('corona.activeProjectPath',"
                       + json.dumps(str(root)) + ");location.hash='/'")
-        wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-pick-surface]')"), bool, 'MainPage mount')
+        wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-surface]')"), bool, 'MainPage mount')
         # The DOM surface precedes asynchronous camera/render setup. Exercise
         # input only once the mounted hook has installed the viewport lifecycle.
         wait(lambda: main.call('Runtime.evaluate', {
@@ -67,9 +67,6 @@ def run(port, root, engine_pid):
           window.__viewportRequests=[];window.__viewportCalls=[];const configure=api.viewport.configure;
           api.viewport.configure=(...args)=>{const request={args,status:'pending'};window.__viewportRequests.push(request);
             return configure(...args).then(result=>{request.status='resolved';window.__viewportCalls.push({args,result});return result;},error=>{request.status='rejected';request.error=String(error);throw error;});};
-          window.__pickCalls=[];const pick=api.viewport.pick;
-          api.viewport.pick=(...args)=>pick(...args).then(result=>{
-            window.__pickCalls.push({args,result});return result;});
           window.__scriptInputs=[];const dispatch=api.input.dispatch;
           api.input.dispatch=(...args)=>dispatch(...args).then(result=>{
             window.__scriptInputs.push({args,result});return result;});
@@ -85,7 +82,7 @@ def run(port, root, engine_pid):
         assert main.evaluate('window.__cameraMoveCalls') == [], 'Focus must not submit a second camera write'
         assert focused['fov'] == initial['fov']
         assert focused['camera_id'] == initial['camera_id']
-        main.evaluate("document.querySelector('[data-viewport-pick-surface]').dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:-100}));true")
+        main.evaluate("document.querySelector('[data-viewport-surface]').dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:-100}));true")
         moved = wait(lambda: cameras()[0], lambda camera: camera['position'] != focused['position'], 'movement from applied focus pose')
         assert abs(moved['position'][0] - focused['position'][0]) < 1e-5, (focused, moved)
         assert abs(moved['position'][1] - focused['position'][1]) < 1e-5, (focused, moved)
@@ -178,83 +175,33 @@ def run(port, root, engine_pid):
             assert call['result']['camera_id'] == 'focus-camera', call
             assert call['result']['archive_session'] == scope, call
         assert viewport_calls[-1]['result']['mode'] == 'stereo3d', viewport_calls
-        def move_native_pointer():
-            camera_view.evaluate("(()=>{const el=document.querySelector('.input-layer'),r=el.getBoundingClientRect();"
-                                 "el.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerId:9,clientX:r.left+r.width/2,clientY:r.top+r.height/2}));return true;})()")
-            return wait(lambda: camera_view.evaluate('window.__viewportCalls'),
-                        lambda calls: calls[-1]['args'][2].get('pointer', {}).get('cursor') == 'arrow'
-                        and calls[-1]['result']['systemCursorHidden'], 'CameraView typed pointer and OS cursor')
-        pointer_calls = move_native_pointer()
-        assert pointer_calls[-1]['args'][0:2] == ['scene.ini', 'focus-camera'], pointer_calls[-1]
-        assert pointer_calls[-1]['args'][2]['archive_session'] == scope, pointer_calls[-1]
-        for cancel in ["window.dispatchEvent(new Event('blur'))",
-                       "document.querySelector('.input-layer').dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:9}))"]:
-            print('CameraView cancel check: ' + cancel, flush=True)
-            camera_view.evaluate(cancel + ';true')
-            wait(lambda: camera_view.evaluate('window.__viewportCalls'),
-                 lambda calls: calls[-1]['args'][2].get('pointer', {}).get('cursor') == 'hidden'
-                 and not calls[-1]['result']['systemCursorHidden'], 'CameraView cursor restored on blur/cancel')
-            move_native_pointer()
         camera_view.evaluate("[...document.querySelectorAll('.ui-mode-switch button')].find(b=>b.textContent.trim()==='2D UI').click();true")
         wait(lambda: camera_view.evaluate('window.__viewportCalls'),
              lambda calls: calls[-1]['result']['mode'] == 'flat2d', 'CameraView returns to 2D')
-        # Exercise actual production click handlers, including Promise delivery into
-        # selection, after the movement and pointer regressions above have finished.
-        tree = main.evaluate('corona.scene.readScene({scene:"scene.ini",actors:"tree",cameras:true,...' + json.dumps({'archive_session': scope}) + '})')
-        probe_actor = next(actor for actor in tree['actors'] if actor['name'] == 'Probe')
-        main.evaluate("corona.scene.setActorTransform('scene.ini'," + json.dumps(probe_actor['actor_guid'])
-                      + "," + json.dumps({'archive_session': scope, 'position': [0, 0, 0],
-                                          'rotation': [0, 0, 0], 'scale': [1, 1, 1]}) + ")")
+        # Exercise the production click handler and its scoped script input
+        # delivery. Viewport picking was removed, so a click no longer resolves
+        # an Actor before the input is dispatched.
         for document, camera_id, selector, source in [
-            (main, initial['camera_id'], '[data-viewport-pick-surface]', 'main'),
+            (main, initial['camera_id'], '[data-viewport-surface]', 'main'),
             (camera_view, 'focus-camera', '.input-layer', 'cameraView'),
         ]:
             document.evaluate("corona.scene.updateCamera('scene.ini'," + json.dumps(camera_id)
                               + "," + json.dumps({'archive_session': scope, 'position': [-.25, -.25, 3],
                                                   'forward': [0, 0, -1], 'world_up': [0, 1, 0], 'fov': 60}) + ")")
-            # CameraView renders behind the title bar as well; its input layer
-            # excludes that bar. Aim at the render center, inside the hit layer.
             point = document.evaluate("(()=>{const el=document.querySelector(" + json.dumps(selector)
                                       + "),r=el.getBoundingClientRect();return {x:"
                                       + ("innerWidth/2,y:innerHeight/2" if source == 'cameraView'
                                          else "r.left+r.width/2,y:r.top+r.height/2") + "};})()")
-            # Property acceptance precedes the next GPU frame. Establish the
-            # known fixture hit with read-only picks before exercising one DOM
-            # click, rather than retrying the production event on stale frames.
-            render = document.evaluate("({width:innerWidth,height:innerHeight})" if source == 'cameraView'
-                                       else "(()=>{const r=document.querySelector('[data-viewport-pick-surface]').getBoundingClientRect();return {width:r.width,height:r.height,x:r.left,y:r.top};})()")
-            pick_options = {'archive_session': scope, 'x': int(point['x'] - render.get('x', 0)),
-                            'y': int(point['y'] - render.get('y', 0)),
-                            'width': int(render['width']), 'height': int(render['height'])}
-            print(f'{source} GPU fixture ready: waiting for first rendered hit', flush=True)
-            wait(lambda: document.evaluate("corona.viewport.pick('scene.ini'," + json.dumps(camera_id)
-                                           + "," + json.dumps(pick_options)
-                                           + ").catch(error=>{if(error.message==='Viewport pick failed: timeout')"
-                                             "return {status:'pending-frame'};throw error;})"),
-                 lambda value: value.get('actor_guid') == probe_actor['actor_guid'],
-                 f'{source} GPU fixture ready', seconds=60)
-            document.evaluate("window.__pickCalls=[];window.__scriptInputs=[];true")
+            document.evaluate("window.__scriptInputs=[];true")
             document.evaluate("(()=>{const el=document.querySelector(" + json.dumps(selector)
                               + "),r=el.getBoundingClientRect();el.dispatchEvent(new MouseEvent('click',"
                                 "{bubbles:true,detail:1,clientX:" + json.dumps(point['x'])
                               + ",clientY:" + json.dumps(point['y']) + "}));return true;})()")
-            picked = wait(lambda: document.evaluate('window.__pickCalls'), bool, f'{source} production click pick Promise')
-            assert len(picked) == 1, picked
-            assert picked[0]['args'][0:2] == ['scene.ini', camera_id], picked
-            assert picked[0]['args'][2]['archive_session'] == scope, picked
-            assert picked[0]['result']['status'] == 'success', picked
-            assert picked[0]['result']['actor_guid'] == probe_actor['actor_guid'], picked
-            assert isinstance(picked[0]['result']['actor_handle'], str), picked
-            wait(lambda: main.evaluate('corona.scene.readActive()')['selection'],
-                 lambda selection: selection.get('actor_guid') == probe_actor['actor_guid']
-                 and selection.get('source_viewport') == source, f'{source} picked Actor selection')
-            assert document.evaluate('typeof globalThis.coronaBridge?.pickActor') == 'undefined'
             inputs = wait(lambda: document.evaluate('window.__scriptInputs'), bool, f'{source} scoped script click')
             clicks = [call for call in inputs if call['args'][2].get('event') == 'click']
             assert len(clicks) == 1, inputs
             assert clicks[0]['args'][0:2] == ['scene.ini', camera_id], clicks
             assert clicks[0]['args'][2]['archive_session'] == scope, clicks
-            assert clicks[0]['args'][2]['picked_actor'] == probe_actor['name'], clicks
             assert clicks[0]['args'][2]['viewport_width'] > 0 and clicks[0]['result'] == {'status': 'queued'}, clicks
             document.evaluate("window.__scriptInputs=[];window.dispatchEvent(new KeyboardEvent('keydown',{key:'d',code:'KeyD'}));window.dispatchEvent(new KeyboardEvent('keyup',{key:'d',code:'KeyD'}));true")
             assert not any(call['args'][2]['type'].startswith('key') for call in document.evaluate('window.__scriptInputs'))
@@ -285,8 +232,8 @@ def run(port, root, engine_pid):
                 'sceneTreeRead': 'actual SceneBar scoped V8 refresh preserves Actor rows and camera windows',
                 'secondaryFocusPosition': focused_secondary['position'], 'secondaryMovementPosition': moved_secondary['position'],
                 'secondaryFocusDoesNotRebindMain': True, 'viewportModeAndCalibration': 'shared scoped V8 operation',
-                'retiredViewportBindings': 0, 'viewportPointer': 'typed scoped state, actual DOM movement, blur/cancel restore OS cursor',
-                'viewportPick': 'actual main and CameraView DOM clicks, one V8 Promise each, GPU hit and source-scoped selection',
+                'retiredViewportBindings': 0,
+                'viewportPick': 'retired: viewport.pick and GPU hit testing were removed',
                 'scriptInput': 'actual main and CameraView click uses one scoped typed input with picked Actor; DOM keyboard does not duplicate SDL'}
     except Exception as error:
         diagnostic = {}

@@ -123,10 +123,10 @@ def run(port, root):
         identities = [client.target_id for client in (second, third)]
         marker = main.evaluate('window.__calibrationRemount=crypto.randomUUID()')
         main.evaluate("location.hash='/SceneBar';true")
-        wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-viewport-pick-surface]')"),
+        wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-viewport-surface]')"),
              bool, 'real MainPage route unmounted')
         main.evaluate("location.hash='/';true")
-        wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-pick-surface]')"), bool, 'real MainPage route remounted')
+        wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-surface]')"), bool, 'real MainPage route remounted')
         assert main.evaluate('window.__calibrationRemount') == marker, 'route remount replaced the CEF document'
         fourth = open_panel()
         wait(lambda: values(fourth), lambda v: v == expected, 'remounted main retains unsaved live calibration')

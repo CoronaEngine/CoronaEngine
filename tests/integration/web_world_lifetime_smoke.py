@@ -26,7 +26,7 @@ def run(port, root):
         worlds.append(world)
     try:
         main.evaluate("location.hash='/SceneBar';true")
-        wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-viewport-pick-surface]')"),
+        wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-viewport-surface]')"),
              bool, 'main viewport retired before arming initialization')
         initial = main.evaluate('corona.scene.readActive()')
         main.evaluate("""(async()=>{
@@ -38,7 +38,7 @@ def run(port, root):
           const original={read:api.scene.readScene,open:api.project.openProject,
             properties:api.scene.updateCamera,render:api.scene.setCameraRenderSettings,viewport:api.viewport.configure};
           api.scene.readScene=(...args)=>{
-            const hold=probe.holdRead&&document.querySelector('[data-viewport-pick-surface]');
+            const hold=probe.holdRead&&document.querySelector('[data-viewport-surface]');
             if(hold)probe.holdRead=false;
             const result=original.read(...args);
             return hold?Promise.resolve(result).then(value=>new Promise(resolve=>probe.pendingRead.push(()=>resolve(value)))):result;
@@ -77,7 +77,7 @@ def run(port, root):
         current = main.evaluate('corona.scene.readActive()')
         assert current['archive_session'] not in (initial['archive_session'], intermediate['archive_session']), current
         wait(lambda: main.call('Runtime.evaluate', {
-            'expression': "Boolean(document.querySelector('[data-viewport-pick-surface]')&&getEventListeners(document).keydown?.some(e=>e.listener.toString().includes('new-tab-name')))",
+            'expression': "Boolean(document.querySelector('[data-viewport-surface]')&&getEventListeners(document).keydown?.some(e=>e.listener.toString().includes('new-tab-name')))",
             'includeCommandLineAPI': True, 'returnByValue': True,
         })['result'].get('value'), bool, 'latest MainPage input fully initialized')
         main.evaluate('window.__worldLifetime.commands=[];window.__worldLifetime.release("pendingRead");true')

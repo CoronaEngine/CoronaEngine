@@ -512,8 +512,8 @@ void test_camera_release_queue_is_fifo() {
     hub.publish_camera_frame_timing(first, 1.5, 0.5, Corona::CameraVisionRenderMode::PathTracing);
     CHECK(hub.camera_frame_timing(first).has_value());
 
-    hub.enqueue_camera_release({.camera_handle = first, .actor_pick_handle = 0});
-    hub.enqueue_camera_release({.camera_handle = second, .actor_pick_handle = 0});
+    hub.enqueue_camera_release({.camera_handle = first});
+    hub.enqueue_camera_release({.camera_handle = second});
 
     const auto releases = hub.drain_camera_releases();
     CHECK(releases.size() == 2);        // Fifo：不合并
@@ -574,41 +574,26 @@ void test_camera_viewport_queue_coalescing() {
     hub.camera_storage().deallocate(camera);
 }
 
-void test_viewport_ui_pointer_state_and_owner_cleanup() {
+void test_viewport_ui_mode_and_calibration_are_per_camera() {
     auto& hub = SharedDataHub::instance();
     const auto camera = hub.camera_storage().allocate();
     const auto other = hub.camera_storage().allocate();
-    using Cursor = Corona::ViewportUiCursorShape;
-    CHECK(hub.viewport_ui_state(camera).pointer.cursor_shape == Cursor::Hidden);
+    CHECK(hub.viewport_ui_state(camera).mode == Corona::ViewportUiMode::Flat2D);
 
-    // Cursor state is now a camera-local session snapshot, not an event FIFO.
     hub.set_viewport_ui_mode(camera, Corona::ViewportUiMode::Stereo3D);
     Corona::ViewportUiCalibration calibration;
     calibration.lenticular_pitch = 6.f;
     hub.set_viewport_ui_calibration(camera, calibration);
-    hub.set_viewport_ui_pointer(camera, {1.f, 2.f, Cursor::Hand, 101});
-    const auto before = hub.viewport_ui_state(camera);
-    hub.set_viewport_ui_pointer(camera, {3.f, 4.f, Cursor::Grabbing, 202});
-    hub.set_viewport_ui_pointer(other, {5.f, 6.f, Cursor::Crosshair, 303});
-    const auto latest = hub.viewport_ui_state(camera);
-    CHECK(before.pointer.owner_context == 101 && before.pointer.x == 1.f);
-    CHECK(latest.camera_handle == camera);
-    CHECK(latest.pointer.x == 3.f && latest.pointer.y == 4.f);
-    CHECK(latest.pointer.cursor_shape == Cursor::Grabbing);
-    CHECK(latest.pointer.owner_context == 202);
-    CHECK(latest.mode == Corona::ViewportUiMode::Stereo3D);
-    CHECK(latest.calibration.lenticular_pitch == 6.f);
+    const auto state = hub.viewport_ui_state(camera);
+    CHECK(state.camera_handle == camera);
+    CHECK(state.mode == Corona::ViewportUiMode::Stereo3D);
+    CHECK(state.calibration.lenticular_pitch == 6.f);
 
-    // Retiring an old context must not remove the replacement window's cursor.
-    hub.clear_viewport_ui_pointer(camera, 101);
-    CHECK(hub.viewport_ui_state(camera).pointer.owner_context == 202);
-    hub.clear_viewport_ui_pointer(camera, 202);
-    CHECK(hub.viewport_ui_state(camera).pointer.cursor_shape == Cursor::Hidden);
-    CHECK(hub.viewport_ui_state(other).pointer.owner_context == 303);
-    hub.clear_viewport_ui_pointer(other, 0); // Unconditional session teardown.
-    CHECK(hub.viewport_ui_state(other).pointer.cursor_shape == Cursor::Hidden);
-    hub.set_viewport_ui_pointer(0, {1.f, 2.f, Cursor::Hand, 101});
-    CHECK(hub.viewport_ui_state(0).pointer.cursor_shape == Cursor::Hidden);
+    // Session state is per camera: one viewport cannot configure another.
+    const auto peer = hub.viewport_ui_state(other);
+    CHECK(peer.mode == Corona::ViewportUiMode::Flat2D);
+    CHECK(peer.calibration.lenticular_pitch != 6.f);
+
     hub.camera_storage().deallocate(other);
     hub.camera_storage().deallocate(camera);
 }
@@ -692,7 +677,7 @@ int main() {
     test_mechanics_structural_commands();
     test_camera_release_queue_is_fifo();
     test_camera_viewport_queue_coalescing();
-    test_viewport_ui_pointer_state_and_owner_cleanup();
+    test_viewport_ui_mode_and_calibration_are_per_camera();
     test_camera_api_construction_does_not_self_deadlock();
 
     if (g_failures == 0) {

@@ -58,14 +58,11 @@ SCENE = {
     "INVALID_PROJECT_DOCUMENT",  # the document route is outside the project or not JSON
     "RUN_ACTIVE",                # a script run owns the scene; stop and restore it first
     "SAVE_FAILED",            # the scene could not be written
-    "CAMERA_UNAVAILABLE",     # the camera has no engine handle yet
     "CAPTURE_FAILED",         # the screenshot could not be taken
     "COMPONENT_NOT_FOUND",    # the imported model has no such component
     "INVALID_BOUNDS",         # the requested rectangle is degenerate
     "NODE_EDIT_REJECTED",     # the geometry owner refused the node write
     "NODE_NOT_FOUND",         # the model node index is unknown
-    "PICK_FAILED",            # the viewport pick had no answer
-    "PICK_TIMEOUT",
 }
 
 BRIDGE = {
@@ -105,7 +102,6 @@ STABLE = frozenset({
     "ACTOR_NOT_FOUND",
     "RESOURCE_NOT_FOUND",
     "FILE_NOT_FOUND",
-    "PICK_TIMEOUT",           # the frame had not rendered yet; retry
     "DOCUMENT_CONFLICT",      # the document CAS lost; reload the document then retry
     # bridge
     "EDITOR_API_TIMEOUT",

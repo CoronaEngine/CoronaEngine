@@ -1833,7 +1833,6 @@ Corona::API::Camera::Camera()
 
     float fov = 45.0f;
 
-    auto actor_pick_handle = SharedDataHub::instance().actor_pick_storage().allocate();
     handle_ = SharedDataHub::instance().camera_storage().allocate();
     if (auto accessor = SharedDataHub::instance().camera_storage().acquire_write(handle_)) {
         accessor->position = pos_vec;
@@ -1844,11 +1843,9 @@ Corona::API::Camera::Camera()
         accessor->height = static_cast<std::uint32_t>(height_);
         accessor->aspect = static_cast<float>(width_) / static_cast<float>(height_);
         accessor->surface = get_default_surface();
-        accessor->actor_pick_handle = actor_pick_handle;
     } else {
         CFW_LOG_ERROR("[Camera::Camera] Failed to acquire write access to camera storage");
         SharedDataHub::instance().camera_storage().deallocate(handle_);
-        SharedDataHub::instance().actor_pick_storage().deallocate(actor_pick_handle);
         handle_ = 0;
     }
 
@@ -1876,7 +1873,6 @@ Corona::API::Camera::Camera(const std::array<float, 3>& position, const std::arr
     up_vec.y = world_up[1];
     up_vec.z = world_up[2];
 
-    auto actor_pick_handle = SharedDataHub::instance().actor_pick_storage().allocate();
     handle_ = SharedDataHub::instance().camera_storage().allocate();
     if (auto accessor = SharedDataHub::instance().camera_storage().acquire_write(handle_)) {
         accessor->position = pos_vec;
@@ -1887,11 +1883,9 @@ Corona::API::Camera::Camera(const std::array<float, 3>& position, const std::arr
         accessor->height = static_cast<std::uint32_t>(height_);
         accessor->aspect = static_cast<float>(width_) / static_cast<float>(height_);
         accessor->surface = get_default_surface();
-        accessor->actor_pick_handle = actor_pick_handle;
     } else {
         CFW_LOG_ERROR("[Camera::Camera] Failed to acquire write access to camera storage");
         SharedDataHub::instance().camera_storage().deallocate(handle_);
-        SharedDataHub::instance().actor_pick_storage().deallocate(actor_pick_handle);
         handle_ = 0;
     }
 
@@ -1904,14 +1898,7 @@ Corona::API::Camera::Camera(const std::array<float, 3>& position, const std::arr
 
 Corona::API::Camera::~Camera() {
     if (handle_) {
-        EntityId actor_pick_handle = 0;
-        if (auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(handle_)) {
-            actor_pick_handle = camera->actor_pick_handle;
-        }
-        SharedDataHub::instance().enqueue_camera_release({
-            .camera_handle = handle_,
-            .actor_pick_handle = actor_pick_handle,
-        });
+        SharedDataHub::instance().enqueue_camera_release({.camera_handle = handle_});
         handle_ = 0;
     }
 }
@@ -2352,51 +2339,6 @@ std::array<int, 2> Corona::API::Camera::get_size() const {
     };
 }
 
-
-std::uintptr_t Corona::API::Camera::pick_actor_at_pixel(int x, int y) const {
-    return pick_model_node_at_pixel(x,y).actor_handle;
-}
-
-Corona::API::ModelNodePickResult Corona::API::Camera::pick_model_node_at_pixel(int x, int y) const {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Camera::pick_actor_at_pixel] Invalid camera handle");
-        return {};
-    }
-
-    if (x < 0 || y < 0) {
-        return {};
-    }
-
-    // 读侧：相机句柄 + 上一次结果。读取只拿读锁，不再写槽位。
-    EntityId actor_pick_handle = 0;
-    if (auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(handle_)) {
-        actor_pick_handle = camera->actor_pick_handle;
-    }
-    if (actor_pick_handle == 0) {
-        return {};
-    }
-
-    const auto ux = static_cast<std::uint32_t>(x);
-    const auto uy = static_cast<std::uint32_t>(y);
-    ModelNodePickResult completed_actor;
-    if (auto pick = SharedDataHub::instance().actor_pick_storage().try_acquire_read(actor_pick_handle)) {
-        if (pick->result_ready && pick->result_x == ux && pick->result_y == uy) {
-            completed_actor = ModelNodePickResult{pick->actor_handle, pick->node_index};
-        }
-    }
-
-    // 写侧：入队请求，由 Optics 在自己的 tick 里消费并把结果写回 ActorPickDevice。
-    // 原先这里直接写 pending/x/y，是外部线程对 DAG 拥有槽位的直写。
-    static std::atomic<std::uint64_t> pick_sequence{0};
-    Corona::ActorPickRequestCommand request{};
-    request.camera_handle = handle_;
-    request.request_id = "model_node:" + std::to_string(pick_sequence.fetch_add(1) + 1);
-    request.x = ux;
-    request.y = uy;
-    SharedDataHub::instance().enqueue_actor_pick_request(std::move(request));
-
-    return completed_actor;
-}
 
 namespace Corona::API {
 void set_editor_camera_input_enabled(bool enabled) {

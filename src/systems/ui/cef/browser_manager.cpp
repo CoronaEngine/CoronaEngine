@@ -11,7 +11,6 @@
 #include "cef_paths.h"
 #include "cef_process.h"
 #include "cef_window_operations.h"
-#include "cef_viewport_pick.h"
 #include "cef_osr_mode.h"
 #include "horizon/core/logging.h"
 #include "corona/systems/ui/camera_viewport_manager.h"
@@ -176,7 +175,6 @@ void BrowserManager::remove_tab(int tab_id) {
     }
     BrowserTab* tab = removed.get();
     if (!tab) return;
-    release_viewport_pointer(*tab, tab->viewport_pointer_owner);
 
     CFW_LOG_INFO("[CEF/Tab] remove_tab id={} camera_view={} open={}", tab_id,
                  tab->camera_view, tab->open);
@@ -218,14 +216,13 @@ void BrowserManager::update() {
         }
     }
 
-    // Retire cached viewport bindings and restore the OS cursor with their scene.
+    // Retire cached viewport bindings with their scene.
     for (const auto& entry : tabs_snapshot()) {
         if (entry.tab) refresh_viewport_state(*entry.tab);
     }
 
     // GPU actor-pick completions are produced by OpticsSystem on another thread;
     // resolve owned native requests only from this main-thread tick.
-    drain_viewport_picks();
 
     // Texture uploads are driven by UiFrameRunner after this frame's SDL/CEF input has
     // already been routed. Keeping uploads out of this queue drain prevents a GPU receipt

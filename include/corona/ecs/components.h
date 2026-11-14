@@ -28,14 +28,13 @@ using StorageComponentTypes = std::tuple<
     ProfileDevice,
     ActorDevice,
     CameraDevice,
-    ActorPickDevice,
     EnvironmentDevice,
     SceneDevice,
     ImageDevice>;
 
 inline constexpr std::size_t kStorageComponentCount = std::tuple_size_v<StorageComponentTypes>;
 
-static_assert(kStorageComponentCount == 13,
+static_assert(kStorageComponentCount == 12,
               "SharedDataHub 的 Storage 数量变了，请同步更新组件清单与迁移文档");
 
 }  // namespace Corona::Ecs

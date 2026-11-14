@@ -375,7 +375,7 @@ def handle_key_release(key, display_key=None):
                 ctx.key_state[display_key.upper()] = False
 
 
-def handle_mouse_event(event_type, button, x, y, viewport_x=None, viewport_y=None, viewport_width=None, viewport_height=None, picked_actor=""):
+def handle_mouse_event(event_type, button, x, y, viewport_x=None, viewport_y=None, viewport_width=None, viewport_height=None):
     normalized_event = str(event_type or '').strip().lower()
     for ctx in _live_contexts() or [_default_context]:
         if normalized_event in ("mousedown", "pointerdown", "down"):
@@ -396,10 +396,6 @@ def handle_mouse_event(event_type, button, x, y, viewport_x=None, viewport_y=Non
         ctx.mouse_viewport_y = float(next_y if viewport_y is None else viewport_y)
         ctx.mouse_viewport_width = max(0.0, float(viewport_width or 0.0))
         ctx.mouse_viewport_height = max(0.0, float(viewport_height or 0.0))
-        # The frontend resolves GPU picking asynchronously before dispatching the
-        # Blockly mouse event.  Cache that result so click blocks do not block
-        # the render thread by polling the native picker from Python.
-        ctx.last_mouse_pick_object = str(picked_actor or "")
         if ctx.mouse_handler is None or ctx.stop_requested:
             continue
         try:

@@ -112,7 +112,7 @@ def run(port, root, engine_pid):
     window_token = None
     try:
         main.evaluate("localStorage.setItem('corona.activeProjectPath'," + json.dumps(str(root)) + ");location.hash='/'")
-        wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-pick-surface]')"), bool, 'MainPage mount')
+        wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-surface]')"), bool, 'MainPage mount')
         service = """(async()=>{const m=await import(document.querySelector('script[type=module]').src);
           return Object.values(m).find(v=>typeof v?.openNativePanel==='function');})()"""
         wait(lambda: main.evaluate(f'{service}.then(s=>s.readEditorUiPolicy())'),

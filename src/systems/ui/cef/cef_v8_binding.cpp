@@ -6,7 +6,6 @@
 #include "cef_scene_operations.h"
 #include "bridge_worker.h"
 #include "cef_operations.h"
-#include "cef_viewport_pick.h"
 #include "editor_scene_service.h"
 #include "cef_script_input.h"
 #include "horizon/core/logging.h"
@@ -294,12 +293,12 @@ bool read_script_input(const CefV8ValueList& arguments, ScriptInputRequest& requ
     auto& event = request.event;
     const bool mouse = type == "mouse", key_down = type == "keyDown";
     if (!mouse && !key_down && type != "keyUp") return false;
-    if (keys.size() != (mouse ? 11u : key_down ? 5u : 4u)) return false;
+    if (keys.size() != (mouse ? 10u : key_down ? 5u : 4u)) return false;
     for (const auto& k : keys) {
         if (k == "archive_session" || k == "type") continue;
         if (mouse) {
             if (k != "event" && k != "button" && k != "x" && k != "y" && k != "viewport_x" && k != "viewport_y" &&
-                k != "viewport_width" && k != "viewport_height" && k != "picked_actor") return false;
+                k != "viewport_width" && k != "viewport_height") return false;
         } else if (k != "code" && k != "key" && !(key_down && k == "modifiers")) return false;
     }
     if (!mouse) {
@@ -310,7 +309,7 @@ bool read_script_input(const CefV8ValueList& arguments, ScriptInputRequest& requ
         event.arg1 = key; return true;
     }
     event.type = 2;
-    if (!text("event", event.arg0) || !text("button", event.arg1) || !text("picked_actor", event.picked_actor)) return false;
+    if (!text("event", event.arg0) || !text("button", event.arg1)) return false;
     if (event.arg0 != "move" && event.arg0 != "mousedown" && event.arg0 != "mouseup" && event.arg0 != "click" && event.arg0 != "wheel") return false;
     if (!event.arg1.empty() && event.arg1 != "LeftButton" && event.arg1 != "MiddleButton" && event.arg1 != "RightButton") return false;
     const auto number = [&](const char* key, double& out) {
@@ -321,43 +320,6 @@ bool read_script_input(const CefV8ValueList& arguments, ScriptInputRequest& requ
     return number("x", event.arg3) && number("y", event.arg4) && number("viewport_x", event.viewport_x) &&
         number("viewport_y", event.viewport_y) && number("viewport_width", event.viewport_width) &&
         number("viewport_height", event.viewport_height) && event.viewport_width > 0 && event.viewport_height > 0;
-}
-
-bool read_viewport_pick(const CefV8ValueList& arguments, ViewportPickRequest& request) {
-    if (arguments.size() != 3 || !arguments[0]->IsString() || arguments[0]->GetStringValue().empty() ||
-        !arguments[1]->IsString() || arguments[1]->GetStringValue().empty()) return false;
-    const auto options = arguments[2];
-    if (!options || !options->IsObject() || options->IsArray() || options->IsFunction()) return false;
-    std::vector<CefString> keys;
-    if (!options->GetKeys(keys) || keys.size() != 5) return false;
-    for (const auto& key : keys) if (key != "archive_session" && key != "x" && key != "y" && key != "width" && key != "height") return false;
-    const auto session = options->GetValue("archive_session");
-    if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
-    request.camera.scene_id = arguments[0]->GetStringValue().ToString();
-    request.camera.camera_id = arguments[1]->GetStringValue().ToString();
-    request.camera.archive_session = session->GetStringValue().ToString();
-    const auto number = [&](const char* name, double& out) {
-        const auto value = options->GetValue(name);
-        if (!value || !(value->IsInt() || value->IsUInt() || value->IsDouble())) return false;
-        out = value->GetDoubleValue(); return std::isfinite(out);
-    };
-    return number("x", request.x) && number("y", request.y) && number("width", request.width) &&
-        number("height", request.height) && request.width > 0 && request.height > 0;
-}
-
-CefRefPtr<CefV8Value> viewport_pick_value(const ViewportPickReply& reply) {
-    auto value = CefV8Value::CreateObject(nullptr, nullptr);
-    const auto text = [&](const char* name, const std::string& text) {
-        value->SetValue(name, CefV8Value::CreateString(text), V8_PROPERTY_ATTRIBUTE_NONE);
-    };
-    text("status", reply.status); text("archive_session", reply.archive_session);
-    text("scene", reply.scene); text("camera_id", reply.camera_id);
-    text("actor_guid", reply.actor_guid); text("actor_name", reply.actor_name);
-    text("actor_type", reply.actor_type); text("actor_handle", reply.actor_handle);
-    value->SetValue("node_index", reply.node_index ? CefV8Value::CreateUInt(*reply.node_index) : CefV8Value::CreateNull(), V8_PROPERTY_ATTRIBUTE_NONE);
-    value->SetValue("x", CefV8Value::CreateUInt(reply.x), V8_PROPERTY_ATTRIBUTE_NONE);
-    value->SetValue("y", CefV8Value::CreateUInt(reply.y), V8_PROPERTY_ATTRIBUTE_NONE);
-    return value;
 }
 
 bool read_float3(CefRefPtr<CefV8Value> value, std::array<float, 3>& copy) {
@@ -441,7 +403,7 @@ bool read_viewport_configuration(const CefV8ValueList& arguments, WindowRequest&
     for (int index = 0; index < 2; ++index)
         if (!arguments[index]->IsString() || arguments[index]->GetStringValue().empty()) return false;
     const auto object = arguments[2];
-    if (!object_keys(object, {"archive_session", "mode", "calibration", "bounds", "pointer"})) return false;
+    if (!object_keys(object, {"archive_session", "mode", "calibration", "bounds"})) return false;
     const auto session = object->GetValue("archive_session");
     if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
     request.scene_id = arguments[0]->GetStringValue().ToString();
@@ -477,18 +439,8 @@ bool read_viewport_configuration(const CefV8ValueList& arguments, WindowRequest&
             !number(value, "height", bounds.height) || !number(value, "renderWidth", bounds.render_width) ||
             !number(value, "renderHeight", bounds.render_height)) return false;
     }
-    if (object->HasValue("pointer")) {
-        const auto value = object->GetValue("pointer");
-        if (!object_keys(value, {"x", "y", "cursor"})) return false;
-        const auto cursor = value->GetValue("cursor");
-        if (!cursor || !cursor->IsString()) return false;
-        auto& pointer = patch.pointer.emplace();
-        pointer.cursor = cursor->GetStringValue().ToString();
-        if (pointer.cursor != "hidden" || value->HasValue("x") || value->HasValue("y")) {
-            if (!number(value, "x", pointer.x) || !number(value, "y", pointer.y)) return false;
-        }
-    }
-    return patch.mode || patch.calibration || patch.bounds || patch.pointer;
+
+    return patch.mode || patch.calibration || patch.bounds;
 }
 
 CefRefPtr<CefV8Value> viewport_configuration_value(const ViewportConfigurationSnapshot& snapshot) {
@@ -512,11 +464,7 @@ CefRefPtr<CefV8Value> viewport_configuration_value(const ViewportConfigurationSn
         number(bounds, "renderWidth", values.render_width); number(bounds, "renderHeight", values.render_height);
     }
     result->SetValue("bounds", bounds, V8_PROPERTY_ATTRIBUTE_NONE);
-    auto pointer = CefV8Value::CreateObject(nullptr, nullptr);
-    number(pointer, "x", snapshot.pointer.x); number(pointer, "y", snapshot.pointer.y);
-    pointer->SetValue("cursor", CefV8Value::CreateString(snapshot.pointer.cursor), V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("pointer", pointer, V8_PROPERTY_ATTRIBUTE_NONE);
-    result->SetValue("systemCursorHidden", CefV8Value::CreateBool(snapshot.system_cursor_hidden), V8_PROPERTY_ATTRIBUTE_NONE);
+
     return result;
 }
 
@@ -1923,15 +1871,9 @@ public:
     void release() {
         CEF_REQUIRE_RENDERER_THREAD();
         active_.store(false);
-        BrowserManager::instance().enqueue_main_thread_task([browser_id = browser_id_, context_id = context_id_] {
-            release_viewport_pointer_context(browser_id, context_id);
-            viewport_pick_requests().cancel_context(context_id);
-        });
         // The page that is going away is the only one that could observe these promises,
         // and OnContextReleased is not a place to call into V8: rejecting them here crashed
-        // the single-process renderer (the CDP socket dropped during the pick stage).
-        // Dropping the map is the safe settlement; C++ owners cancel the work separately
-        // through cancel_context below.
+        // the single-process renderer. Dropping the map is the safe settlement.
         pending_.clear();
         subscribers_.clear();
         context_ = nullptr;
@@ -2085,59 +2027,6 @@ public:
                 });
             }, weak, id, std::move(request))));
         if (!posted) { pending_.erase(id); reject(context_, promise, "NATIVE_UNAVAILABLE", "Scene owner unavailable"); }
-        return promise;
-    }
-
-    CefRefPtr<CefV8Value> invoke(ViewportMethod method, const CefV8ValueList& arguments) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        auto promise = CefV8Value::CreatePromise();
-        if (!owns_current_context()) {
-            if (active() && context_ && context_->IsValid()) reject(context_, promise, "PERMISSION_DENIED", "Pick binding belongs to another context");
-            else promise->RejectPromise("CONTEXT_CHANGED");
-            return promise;
-        }
-        ViewportPickRequest request;
-        if (!read_viewport_pick(arguments, request)) {
-            reject(context_, promise, "INVALID_ARGUMENT", "Expected scene, camera ID and scoped viewport coordinates"); return promise;
-        }
-        request.camera.browser_id = browser_id_; request.camera.context_id = context_id_;
-        const auto id = ++sequence_;
-        pending_.emplace(id, Pending{method, promise});
-        const auto weak = weak_from_this();
-        const bool posted = CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
-            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id, ViewportPickRequest request) {
-                const auto endpoint = weak.lock();
-                if (!endpoint || !endpoint->active()) return;
-                WindowReply prepared;
-                try { prepared = prepare_camera_window_request(request.camera); }
-                catch (...) { prepared.error_code = "NATIVE_FAILURE"; prepared.error_message = "Pick camera lookup failed"; }
-                if (!prepared.error_code.empty()) {
-                    ViewportPickReply reply; reply.error_code = prepared.error_code; reply.error_message = prepared.error_message;
-                    endpoint->complete(id, std::move(reply)); return;
-                }
-                BrowserManager::instance().enqueue_main_thread_task([weak, id, request = std::move(request)]() mutable {
-                    const auto endpoint = weak.lock();
-                    if (!endpoint || !endpoint->active()) return;
-                    begin_viewport_pick(std::move(request), [weak, id](const ViewportPickRequest& request, const Corona::ActorPickCompletion& result) {
-                        const bool posted = CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
-                            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id, ViewportPickRequest request, Corona::ActorPickCompletion result) {
-                                const auto endpoint = weak.lock();
-                                if (!endpoint || !endpoint->active()) return;
-                                ViewportPickReply reply;
-                                try { reply = finish_viewport_pick(request, result); }
-                                catch (...) { reply.error_code = "NATIVE_FAILURE"; reply.error_message = "Pick result lookup failed"; }
-                                endpoint->complete(id, std::move(reply));
-                            }, weak, id, request, result)));
-                        if (!posted) if (const auto endpoint = weak.lock()) {
-                            ViewportPickReply reply; reply.error_code = "NATIVE_UNAVAILABLE"; reply.error_message = "Scene owner unavailable";
-                            endpoint->complete(id, std::move(reply));
-                        }
-                    });
-                });
-            }, weak, id, std::move(request))));
-        if (!posted) {
-            pending_.erase(id); reject(context_, promise, "NATIVE_UNAVAILABLE", "Scene owner unavailable");
-        }
         return promise;
     }
 
@@ -2387,10 +2276,6 @@ private:
         context_->Exit();
     }
 
-    void resolve(std::uint64_t id, const ViewportPickReply& reply) {
-        resolve_with(id, reply, [](const ViewportPickReply& value) { return viewport_pick_value(value); });
-    }
-
     void resolve(std::uint64_t id, const BridgeReply& reply) {
         resolve_with(id, reply, [](const BridgeReply& value) { return CefV8Value::CreateString(value.json); });
     }
@@ -2515,7 +2400,7 @@ private:
     const std::uint64_t context_id_ = ++context_sequence_;
     std::uint64_t sequence_ = 0;
     std::string scene_archive_session_;
-    struct Pending { std::variant<WindowMethod, SceneMethod, ViewportMethod, ScriptInputMethod, BridgeMethod, ProjectSettingsMethod, ProjectLauncherMethod, NetworkMethod, FilesMethod> method; CefRefPtr<CefV8Value> promise; };
+    struct Pending { std::variant<WindowMethod, SceneMethod, ScriptInputMethod, BridgeMethod, ProjectSettingsMethod, ProjectLauncherMethod, NetworkMethod, FilesMethod> method; CefRefPtr<CefV8Value> promise; };
     std::unordered_map<std::uint64_t, Pending> pending_;
     std::map<std::uint64_t, Subscriber> subscribers_;
 };
@@ -2662,8 +2547,6 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     app->SetValue("isVisionAvailable", CefV8Value::CreateFunction("isVisionAvailable",
         new NativeHandler(endpoint, SceneMethod::ReadVisionAvailability)), V8_PROPERTY_ATTRIBUTE_READONLY);
     root->SetValue("app", app, V8_PROPERTY_ATTRIBUTE_READONLY);
-    viewport->SetValue("pick", CefV8Value::CreateFunction("pick",
-        new NativeHandler(endpoint, ViewportMethod::Pick)), V8_PROPERTY_ATTRIBUTE_READONLY);
     viewport->SetValue("configure", CefV8Value::CreateFunction("configure",
         new NativeHandler(endpoint, WindowMethod::ConfigureViewport)), V8_PROPERTY_ATTRIBUTE_READONLY);
     // A screenshot is a viewport capture, not scene state.

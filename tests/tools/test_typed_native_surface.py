@@ -35,7 +35,7 @@ EXPECTED_SURFACE = {
         "setActorIkChains", "setActorTransform", "setCameraRenderSettings", "setEnvironment",
         "setModelNodeState", "updateActor", "updateCamera",
     },
-    "viewport": {"captureScreenshot", "configure", "pick"},
+    "viewport": {"captureScreenshot", "configure"},
     "window": {
         "close", "createPanel", "focus",
         "onCloseRequested", "onClosed", "setWindowPresentation",

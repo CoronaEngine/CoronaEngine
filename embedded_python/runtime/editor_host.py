@@ -341,7 +341,7 @@ class CoronaEditor:
                         FileScripts.key_release(e.arg0, e.arg1 or e.arg0)
                     elif e.type == 2:    # mouseEvent
                         FileScripts.mouse_event(e.arg0, e.arg1, e.arg3, e.arg4,
-                                                e.viewport_x, e.viewport_y, e.viewport_width, e.viewport_height, e.picked_actor)
+                                                e.viewport_x, e.viewport_y, e.viewport_width, e.viewport_height)
         except RuntimeError:
             return False
         except Exception:

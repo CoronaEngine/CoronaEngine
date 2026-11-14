@@ -466,8 +466,7 @@ void BindAll(nanobind::module_& m) {
              },
              "Every camera pose field from one snapshot")
         .def("set_size", &Camera::set_size, nb::arg("width"), nb::arg("height"), "Set camera render dimensions")
-        .def("get_size", &Camera::get_size, "Get camera render dimensions [width, height]")
-        .def("pick_actor_at_pixel", &Camera::pick_actor_at_pixel, nb::arg("x"), nb::arg("y"), "Pick actor at pixel coordinates");
+        .def("get_size", &Camera::get_size, "Get camera render dimensions [width, height]");
 
     // ============================================================================
     // Environment: 环境类
@@ -631,8 +630,7 @@ void BindAll(nanobind::module_& m) {
         .def_ro("viewport_x", &Corona::Systems::UI::InputEvent::viewport_x)
         .def_ro("viewport_y", &Corona::Systems::UI::InputEvent::viewport_y)
         .def_ro("viewport_width", &Corona::Systems::UI::InputEvent::viewport_width)
-        .def_ro("viewport_height", &Corona::Systems::UI::InputEvent::viewport_height)
-        .def_ro("picked_actor", &Corona::Systems::UI::InputEvent::picked_actor);
+        .def_ro("viewport_height", &Corona::Systems::UI::InputEvent::viewport_height);
 
     m.def("drain_input_events", []() -> std::vector<Corona::Systems::UI::InputEvent> {
         return Corona::Systems::UI::drain_input_events();

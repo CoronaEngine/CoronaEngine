@@ -49,7 +49,6 @@ set(UI_SYSTEM_SOURCES
     cef/editor_scene_service.cpp
     cef/scene_folder.cpp
     cef/scene_archive_rpc.cpp
-    cef/cef_viewport_pick.cpp
     cef/cef_script_input.cpp
     cef/cef_renderer_bridge.cpp
     cef/cef_v8_binding.cpp
@@ -68,7 +67,6 @@ set(UI_SYSTEM_SOURCES
     cef/browser_manager.h
     cef/browser_ui.h
     cef/cef_process.h
-    cef/cef_viewport_pick.h
     cef/editor_scene_service.h
     cef/cef_script_input.h
     cef/cef_client.h

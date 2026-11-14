@@ -98,10 +98,6 @@ struct BrowserTab {
     bool has_focus = false;
     bool cef_creation_failed = false;
     bool transparent_overlay = false;
-    std::atomic_bool hide_system_cursor{false};
-    std::uint64_t viewport_pointer_owner = 0;
-    std::uintptr_t viewport_pointer_camera = 0;
-    std::weak_ptr<CameraWindowAuthority> viewport_pointer_authority;
     bool preserve_camera_open_on_close = false;
     SDL_WindowID platform_window_id = 0;
     void* platform_handle_raw = nullptr;

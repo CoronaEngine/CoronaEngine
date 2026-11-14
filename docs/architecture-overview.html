@@ -352,7 +352,7 @@ svg{display:block;max-width:100%;height:auto}
 <thead><tr><th style="width:180px">术语</th><th>本文含义</th></tr></thead>
 <tbody>
 <tr><td class="f">DAG 线程</td><td class="s"><code>Kernel::SystemsThread</code>。一条真实 OS 线程，按 <code>FrameGraph</code> 拓扑序依次同步调用 5 个系统的 <code>update()</code>。它是 <b>Mechanics / Geometry / Acoustics / Optics / Display</b> 的唯一调用者。（<code>src/kernel/system/system_manager.cpp:106-132</code>）</td></tr>
-<tr><td class="f">外部线程</td><td class="s">除 DAG 线程以外的一切：主线程（<code>Engine::run</code> + <code>UiSystem</code>）、CEF 的 IO/UI 线程、Python 脚本线程、Network 线程、Geometry 的异步 import worker、ActorPick 回读 worker。</td></tr>
+<tr><td class="f">外部线程</td><td class="s">除 DAG 线程以外的一切：主线程（<code>Engine::run</code> + <code>UiSystem</code>）、CEF 的 IO/UI 线程、Python 脚本线程、Network 线程、Geometry 的异步 import worker、GPU 回读 worker。</td></tr>
 <tr><td class="f">槽位 / 句柄</td><td class="s"><code>Storage&lt;T,128,2&gt;</code> 的一个元素。句柄 = 该元素在池里的<b>内存地址</b> <code>reinterpret_cast&lt;uintptr_t&gt;</code>，不是索引。（<code>Horizon/include/horizon/core/storage.h:139</code>）</td></tr>
 <tr><td class="f">拥有者（owner）</td><td class="s">某个槽位字段"唯一允许写"的系统。单写者纪律由 <code>ThreadAffinity</code> 在运行期断言。（<code>i_thread_affinity.h:59</code>）</td></tr>
 <tr><td class="f">提交值 / 待提交值</td><td class="s">提交值 = 已进入槽位、并由快照发布的最终值；待提交值 = 还在 <code>CommandBuffer</code> 里、下一 tick 才被应用的值。<code>get_*</code> 读前者，<code>get_requested_*</code>/<code>*_view()</code> 读"前者 + 后者叠加"。</td></tr>
@@ -976,7 +976,6 @@ Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会
 <tr><td class="f">sequence</td><td class="t">uint64</td><td class="c">0</td><td class="s">用于回执匹配：<code>acknowledge_camera_*</code> 只在序列对得上时才清 pending 镜像。</td></tr>
 <tr class="group"><td colspan="4">CameraReleaseCommand — 销毁相机（Fifo，顺序有意义）</td></tr>
 <tr><td class="f">camera_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">要释放的相机槽位；Fifo 队列只用它做 peek / erase。</td></tr>
-<tr><td class="f">actor_pick_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">与之绑定的拾取槽位，一并释放（拾取结果不再有意义）。</td></tr>
 <tr class="group"><td colspan="4">DefaultSurfaceCameraUpdateCommand — 默认 surface（容量 1 的 LatestWins）</td></tr>
 <tr><td class="f">surface</td><td class="t">void*</td><td class="c">nullptr</td><td class="s">新的默认 surface（通常是 SDL 窗口）。</td></tr>
 <tr><td class="f">width / height</td><td class="t">uint32</td><td class="c">0</td><td class="s">窗口新尺寸，跟随 resize。</td></tr>
@@ -1027,17 +1026,6 @@ Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会
 <tr><td class="f">position</td><td class="t">fvec3</td><td class="c">(0,0,0)</td><td class="s">世界位置。</td></tr>
 <tr><td class="f">euler_rotation</td><td class="t">fvec3</td><td class="c">(0,0,0)</td><td class="s">欧拉角（度）。</td></tr>
 <tr><td class="f">scale</td><td class="t">fvec3</td><td class="c">(1,1,1)</td><td class="s">缩放。<b>默认 1 而非 0</b>，否则未声明 Scale 位时会把物体压成一点。</td></tr>
-<tr class="group"><td colspan="4">ActorPickRequestCommand — 点击拾取请求（独立队列，可多个在飞）</td></tr>
-<tr><td class="f">camera_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">用哪台相机的视图做射线。</td></tr>
-<tr><td class="f">scene_id</td><td class="t">string</td><td class="c">""</td><td class="s">场景标识，用于回执路由。</td></tr>
-<tr><td class="f">request_id</td><td class="t">string</td><td class="c">""</td><td class="s"><b>请求级唯一 id</b>。故意不放进 <code>ActorPickDevice</code>，这样多次点击不会互相覆盖。</td></tr>
-<tr><td class="f">x / y</td><td class="t">uint32</td><td class="c">0</td><td class="s">屏幕像素坐标。</td></tr>
-<tr class="group"><td colspan="4">ActorPickCompletion — 拾取回执</td></tr>
-<tr><td class="f">camera_handle / scene_id / request_id</td><td class="t">—</td><td class="c">—</td><td class="s">与请求对应。</td></tr>
-<tr><td class="f">status</td><td class="t">string</td><td class="c">""</td><td class="s"><code>success</code> / <code>miss</code> / <code>error</code>。<b>miss 是正常结果</b>，不是错误。</td></tr>
-<tr><td class="f">actor_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">命中的 Actor。</td></tr>
-<tr><td class="f">x / y</td><td class="t">uint32</td><td class="c">0</td><td class="s">命中的像素坐标（可能与请求相同）。</td></tr>
-<tr><td class="f">node_index</td><td class="t">uint32</td><td class="c">UINT32_MAX</td><td class="s">命中的模型子节点索引；<code>UINT32_MAX</code> = 未命中具体节点（整个 Actor 级命中）。</td></tr>
 </tbody>
 </table>
 </div>
@@ -1186,9 +1174,7 @@ Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会
 <tr class="group"><td colspan="3">ViewportUiState</td></tr>
 <tr><td class="f">camera_handle</td><td class="t">uintptr_t</td><td class="s">所属相机。</td></tr>
 <tr><td class="f">mode</td><td class="t">ViewportUiMode</td><td class="s"><code>Flat2D</code> / <code>Stereo3D</code>（裸眼 3D 视口）。</td></tr>
-<tr><td class="f">cursor_shape</td><td class="t">ViewportUiCursorShape</td><td class="s"><code>Arrow/Hand/Crosshair/Grab/Grabbing/Hidden</code>。</td></tr>
 <tr><td class="f">calibration</td><td class="t">ViewportUiCalibration</td><td class="s">裸眼 3D 标定参数（透镜节距、倾角、相位、子像素偏移、显示尺寸、视差缩放）。</td></tr>
-<tr><td class="f">pointer</td><td class="t">ViewportUiPointerState</td><td class="s"><code>x / y / cursor_shape / owner_context</code>。远端 CEF 重构后并入 session store。</td></tr>
 </tbody>
 </table>
 </div>
@@ -1448,7 +1434,6 @@ Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会
 <tr><td class="f">viewport_rect_active</td><td class="t">bool</td><td class="c">false</td><td class="s">下面四个矩形是否有效。</td></tr>
 <tr><td class="f">view_x / view_y / view_width / view_height</td><td class="t">int</td><td class="c">120/120/960/540</td><td class="s">屏幕矩形。</td></tr>
 <tr><td class="f">move_speed</td><td class="t">float</td><td class="c">1.0</td><td class="s">编辑器飞行速度。</td></tr>
-<tr><td class="f">actor_pick_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">该相机的拾取槽位（<code>CameraReleaseCommand</code> 会一并释放）。</td></tr>
 </tbody>
 </table>
 </div>
@@ -1458,14 +1443,6 @@ Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会
 <table>
 <thead><tr><th style="width:200px">字段</th><th style="width:140px">类型</th><th style="width:80px">默认</th><th>语义</th></tr></thead>
 <tbody>
-<tr class="group"><td colspan="4">ActorPickDevice</td></tr>
-<tr><td class="f">request_id</td><td class="t">string</td><td class="c">""</td><td class="s">最近一次请求 id。</td></tr>
-<tr><td class="f">x / y</td><td class="t">uint32</td><td class="c">0</td><td class="s">请求的屏幕坐标。</td></tr>
-<tr><td class="f">result_x / result_y</td><td class="t">uint32</td><td class="c">0</td><td class="s">结果坐标。</td></tr>
-<tr><td class="f">actor_handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">命中 Actor。</td></tr>
-<tr><td class="f">node_index</td><td class="t">uint32</td><td class="c">UINT32_MAX</td><td class="s">命中子节点。</td></tr>
-<tr><td class="f">pending</td><td class="t">bool</td><td class="c">false</td><td class="s">请求在途。</td></tr>
-<tr><td class="f">result_ready</td><td class="t">bool</td><td class="c">false</td><td class="s">结果可读。</td></tr>
 <tr class="group"><td colspan="4">EnvironmentDevice</td></tr>
 <tr><td class="f">authored_lighting</td><td class="t">shared_ptr&lt;const json&gt;</td><td class="c">nullptr</td><td class="s">作者给定的完整光照配置。<b>结构负载</b>，不进 Environment 命令通道。</td></tr>
 <tr><td class="f">authored_lighting_revision</td><td class="t">size_t</td><td class="c">0</td><td class="s">上面这份配置的版本，用于换绑判定。</td></tr>
@@ -1505,7 +1482,7 @@ Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会
 <tr><td class="f">CameraRenderBackend</td><td class="s"><code>Native</code>（Vulkan 光栅）｜ <code>Vision</code>（Vulkan 路径追踪，设备惰性初始化）</td></tr>
 <tr><td class="f">CameraVisionRenderMode</td><td class="s"><code>PathTracing / SVGF / SSAT / ProgressivePathTracing / ReSTIR</code></td></tr>
 <tr><td class="f">CameraVisionDenoiser</td><td class="s"><code>Scene / SVGF / ReBLUR / ReLAX</code></td></tr>
-<tr><td class="f">ViewportUiMode / CursorShape</td><td class="s"><code>Flat2D / Stereo3D</code>；<code>Arrow / Hand / Crosshair / Grab / Grabbing / Hidden</code></td></tr>
+<tr><td class="f">ViewportUiMode</td><td class="s"><code>Flat2D / Stereo3D</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -1770,7 +1747,7 @@ Scripts / ScriptInput / Viewport / Scene / Window</code>。
 <tr><td class="f">src/kernel/system/system_manager.cpp</td><td class="s"><code>start_all()</code> 如何在 DAG 模式下用 <code>start_inline()</code>，以及 <code>configure_dag()</code></td></tr>
 <tr><td class="f">src/engine.cpp</td><td class="s">系统注册顺序、DAG 装配、主循环、关闭顺序</td></tr>
 <tr><td class="f">include/corona/shared_data_hub.h</td><td class="s">13 个 Storage、全部命令/快照结构、句柄解析与 Actor 元数据</td></tr>
-<tr><td class="f">src/shared_data_hub.cpp</td><td class="s">句柄解析、快照发布、pick 队列、viewport 会话存储的实现</td></tr>
+<tr><td class="f">src/shared_data_hub.cpp</td><td class="s">句柄解析、快照发布、viewport 会话存储的实现</td></tr>
 <tr><td class="f">include/corona/systems/*/*_commands.h</td><td class="s">各领域的命令 + 快照通道（Optics / Mechanics / Acoustics / Environment / Display）</td></tr>
 <tr><td class="f">include/corona/events/*.h</td><td class="s">全部事件类型（含占位的 Demo 事件）</td></tr>
 <tr><td class="f">include/corona/engine/engine_runtime_api.h</td><td class="s">C++ 公开 API：<code>Geometry / Mechanics / Optics / Acoustics / Actor / Camera / Scene</code></td></tr>
@@ -2152,7 +2129,7 @@ function renderSeq(id, spec) {
     { id: "hub", x: 112, y: b2 + 30, w: 228, h: 58, title: "SharedDataHub", sub: "13 × Storage<T,128,2>", k: "store" },
     { id: "cbd", x: 356, y: b2 + 30, w: 218, h: 58, title: "CommandBuffer ×13", sub: "写方向 · 有界 · 可合并", k: "store" },
     { id: "scd", x: 590, y: b2 + 30, w: 218, h: 58, title: "SnapshotChannel ×6", sub: "读方向 · 单发布多读", k: "store" },
-    { id: "misc", x: 824, y: b2 + 30, w: 220, h: 58, title: "Session / Pick / 回执", sub: "viewport · GPU", k: "store" },
+    { id: "misc", x: 824, y: b2 + 30, w: 220, h: 58, title: "Session / 回执", sub: "viewport", k: "store" },
 
     // backend
     { id: "hzn", x: 112, y: b1 + 28, w: 250, h: 50, title: "Horizon · Ocarina EDSL", sub: "AST → Slang → SPIR-V", k: "gpu" },
@@ -2220,7 +2197,7 @@ function renderSeq(id, spec) {
     { id: "c3", x: 514, y: 482, w: 180, h: 44, title: "native handlers", sub: "scene / viewport", k: "ext" },
     // workers
     { id: "w1", x: 122, y: 586, w: 210, h: 46, title: "Geometry import / build", sub: "异步资源任务", k: "sys" },
-    { id: "w2", x: 348, y: 586, w: 180, h: 46, title: "ActorPick 回读", sub: "readback worker", k: "gpu" },
+    { id: "w2", x: 348, y: 586, w: 180, h: 46, title: "GPU 回读", sub: "worker", k: "gpu" },
     { id: "w3", x: 544, y: 586, w: 190, h: 46, title: "Vision 场景构建", sub: "惰性初始化", k: "gpu" },
 
     // right column

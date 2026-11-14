@@ -148,18 +148,6 @@ add_test(NAME VisionWorldBoundsGpuTests
 set_tests_properties(VisionGeometryGpuResourceTests VisionWorldBoundsGpuTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
 
-add_executable(corona_optics_actor_pick_readback_worker_tests
-    test_actor_pick_readback_worker.cpp
-    ${PROJECT_SOURCE_DIR}/src/systems/optics/actor_pick_readback_worker.cpp
-)
-target_include_directories(corona_optics_actor_pick_readback_worker_tests
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/include
-        ${PROJECT_SOURCE_DIR}/src/systems/optics
-)
-add_test(NAME OpticsActorPickReadbackWorkerTests
-         COMMAND corona_optics_actor_pick_readback_worker_tests)
-
 add_executable(corona_optics_native_frame_throttle_tests
     test_native_frame_throttle.cpp
 )

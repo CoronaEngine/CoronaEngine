@@ -21,7 +21,6 @@ namespace Corona {
 class Model;
 
 namespace API {
-struct ModelNodePickResult { EntityId actor_handle{0}; std::uint32_t node_index{UINT32_MAX}; };
 
 struct GeometryRenderStatus {
     bool observed{false};
@@ -424,8 +423,6 @@ class Camera {
     // ========== 原 Viewport 功能 ==========
     void set_size(int width, int height);
     [[nodiscard]] std::array<int, 2> get_size() const;
-    [[nodiscard]] EntityId pick_actor_at_pixel(int x, int y) const;
-    [[nodiscard]] ModelNodePickResult pick_model_node_at_pixel(int x, int y) const;
 
    private:
     friend class Scene;

@@ -17,7 +17,7 @@ def archive_call(main, function, request):
 def verify_startup(main, root, service, assistant, open_panel, close_panel, select):
     """Reload the real main document; delay only the Web facade's native result."""
     main.evaluate("location.hash='/SceneBar';true")
-    wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-viewport-pick-surface]')"),
+    wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-viewport-surface]')"),
          bool, 'startup fixture main view unmounted')
     active = main.evaluate('corona.scene.readActive()')
     scope = dict(project_path=str(root), archive_session=active['archive_session'], document='CabbageAssistant/context.json')
@@ -239,10 +239,10 @@ def run(port, root):
         identities = [client.panel_id for client in (board, chat, late)]
         marker = main.evaluate('window.__assistantRemount=crypto.randomUUID()')
         main.evaluate("location.hash='/SceneBar';true")
-        wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-viewport-pick-surface]')"),
+        wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-viewport-surface]')"),
              bool, 'MainPage actually unmounted')
         main.evaluate("location.hash='/';true")
-        wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-pick-surface]')"), bool, 'MainPage actually remounted')
+        wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-surface]')"), bool, 'MainPage actually remounted')
         assert main.evaluate('window.__assistantRemount') == marker
         wait(lambda: state(main), lambda v: v and v['selected'] == options[0], 'main remount retains active selection')
         select(late, '')

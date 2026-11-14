@@ -23,22 +23,15 @@ struct ViewportBounds {
 struct ViewportLenticularCalibration {
     double pe = 19.1813, angle = 0.2305, offset = 14.1171, parallax_scale = 19.1849;
 };
-struct ViewportPointer {
-    double x = 0, y = 0;
-    std::string cursor = "hidden";
-};
 struct ViewportConfiguration {
     std::optional<std::string> mode;
     std::optional<ViewportLenticularCalibration> calibration;
     std::optional<ViewportBounds> bounds;
-    std::optional<ViewportPointer> pointer;
 };
 struct ViewportConfigurationSnapshot {
     std::string archive_session, scene, camera_id, mode;
     ViewportLenticularCalibration calibration;
     std::optional<ViewportBounds> bounds;
-    ViewportPointer pointer;
-    bool system_cursor_hidden = false;
 };
 
 // A panel open request. ImGui owns placement, so this carries only identity and size: the
@@ -74,9 +67,9 @@ struct WindowRequest {
     /// close({sceneId}) — the plural form. The scene may be empty: it then closes no view
     /// but still answers in the next main-thread turn, which is the session's fence.
     bool close_scene_views = false;
+    std::uint64_t context_id = 0; // Native endpoint identity; never supplied by Web.
     int width = 0, height = 0;
     std::optional<ViewportConfiguration> viewport;
-    std::uint64_t context_id = 0; // Native endpoint identity; never supplied by Web.
 };
 
 struct WindowReply {
@@ -94,9 +87,7 @@ struct WindowReply {
 WindowReply execute_window_operation(const WindowRequest& request);
 bool request_application_exit();
 WindowReply apply_viewport_configuration(const WindowRequest& request, BrowserTab& source);
-void release_viewport_pointer(BrowserTab& source, std::uint64_t context_id);
 void refresh_viewport_state(BrowserTab& source);
-void release_viewport_pointer_context(int browser_id, std::uint64_t context_id);
 
 // Invoked asynchronously on the native editor scene owner (CEF UI) thread.
 // Resolves exact IDs and fills only immutable DTO values plus a native lease.

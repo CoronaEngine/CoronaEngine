@@ -7,9 +7,6 @@ corona_add_system(optics
         optics_system.cpp
         native_lighting.cpp
         retain_submission.cpp
-        actor_pick_readback_worker.cpp
-        ${PROJECT_SOURCE_DIR}/include/corona/systems/optics/actor_pick_readback_worker.h
-        actor_pick_result.h
         hardware.h
         vision/vision_material_adapter.cpp
         vision/vision_material_adapter.h
@@ -50,10 +47,6 @@ target_link_libraries(corona_optics_system PRIVATE horizon::volk)
 # system's public headers only forward-declare Vision types, so PRIVATE linkage
 # is sufficient.
 target_link_libraries(corona_optics_system PRIVATE vision-all_libs)
-
-set(OPTICS_CURSOR_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/optics_cursor.comp.glsl")
-set_source_files_properties("${OPTICS_CURSOR_SHADER}" PROPERTIES HEADER_FILE_ONLY TRUE)
-target_sources(corona_optics_system PRIVATE "${OPTICS_CURSOR_SHADER}")
 
 # The OpticsSystem translation unit exceeds MSVC's default COFF
 # section limit in Debug builds. Restrict /bigobj to that compiler and source

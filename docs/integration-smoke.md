@@ -34,7 +34,7 @@ build/conan/examples/relwithdebinfo/examples/engine/RelWithDebInfo
 前端依赖用项目自己的锁文件安装：`CabbageEditor/Frontend/pnpm-lock.yaml` 随编辑器资源一起部署，
 构建阶段执行 `pnpm install --frozen-lockfile` 再 `pnpm run build`（pnpm 通过 npm 缓存获取）。
 不要退回 `npm install`：它按 semver 重新解析依赖，同一份源码两次构建可能得到不同的 Vue/Vite，
-打包页面会因此改变行为——曾导致 `focus` 套件的 viewport 点击不再触发 pick。
+打包页面会因此改变行为——曾导致 `focus` 套件的视口点击不再派发脚本输入。
 
 `vulkan-1.dll` 取引擎构建时使用的那一份，不取 CEF 自带的副本。
 
@@ -78,7 +78,7 @@ python tests/integration/web_packaged_ui_smoke.py <runtime> --suite panels
 
 `--native-bindings` 才会跑窗口/面板/相机的生命周期部分。它验证：结构化克隆（JSON 被禁用）、
 512 次原生调用的队列突发、两个主线程回合的退休栅栏、`close` 的身份与权限、面板/相机窗口创建、
-项目文档与文件 CRUD、资源导入、环境、Actor/相机属性、viewport pick、脚本输入、截图、Actor 删除，
+项目文档与文件 CRUD、资源导入、环境、Actor/相机属性、脚本输入、截图、Actor 删除，
 以及**模型节点写入**：过期 `expected_actor_version` 得到 `ACTOR_VERSION_CONFLICT`、未知节点得到
 `NODE_NOT_FOUND`、写入回复与下一次读取都反映请求推导出的状态。
 

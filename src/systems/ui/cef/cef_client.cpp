@@ -28,7 +28,6 @@
 #include "python_service_bridge.h"
 #include "cef_osr_mode.h"
 #include "cef_shared_texture_probe.h"
-#include "cef_viewport_pick.h"
 
 namespace Corona::Systems::UI {
 
@@ -392,7 +391,6 @@ void OffscreenCefClient::OnLoadError(CefRefPtr<CefBrowser> browser,
 void OffscreenCefClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     CEF_REQUIRE_UI_THREAD();
     if (browser) {
-        viewport_pick_requests().cancel_browser(browser->GetIdentifier());
     }
     {
         std::lock_guard lock(browser_mutex_);

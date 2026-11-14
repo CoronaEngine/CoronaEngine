@@ -267,7 +267,6 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             });
         }
     }
-    if (auto* hover = manager.get_tab(hovered_tab_); hover && hover->hide_system_cursor.load()) SDL_HideCursor();
     render_imgui_platform_windows(*context.vulkan_backend);
     for (auto [tab_id, tab] : manager.tabs_snapshot()) {
         if (tab && !tab->open) {

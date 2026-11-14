@@ -8,7 +8,6 @@
 #include <corona/kernel/system/system_base.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/display/published_image.h>
-#include <corona/systems/optics/actor_pick_readback_worker.h>
 #include <corona/systems/optics/vision_pipeline_key.h>
 #include <corona/systems/optics/vision_scene_resource.h>
 
@@ -101,7 +100,6 @@ class OpticsSystem : public Kernel::SystemBase {
     bool initialize_render_pipelines();
     bool ensure_native_render_resources();
     void release_native_render_resources();
-    bool ensure_cursor_icon_texture();
 
     /// Make capacity available in the native frame throttle before recording a view.
     ///
@@ -160,10 +158,6 @@ class OpticsSystem : public Kernel::SystemBase {
     bool init_vision_lazy();  ///< 首次切换到 Vision 时的 lazy 初始化
     void run_vision_frame(float frame_count, uint64_t frame_index,
                          const std::vector<RenderView>& views);
-    void process_vision_actor_pick(EntityId camera_handle,
-                                   const CameraDevice& camera,
-                                   const SceneDevice& scene,
-                                   uint64_t frame_index);
 
     using VisionPipelineKey = Vision::VisionPipelineKey;
     using VisionPipelineKeyHash = Vision::VisionPipelineKeyHash;
@@ -228,29 +222,6 @@ class OpticsSystem : public Kernel::SystemBase {
         vision_runtimes_;
     std::shared_ptr<VisionSceneResource> vision_scene_resource_;
 
-    struct ActorPickRequest {
-        EntityId pick_handle{0};
-        EntityId camera_handle{0};
-        std::string scene_id;
-        std::string request_id;
-        std::uint32_t x{0};
-        std::uint32_t y{0};
-    };
-    std::optional<ActorPickRequest> take_pending_actor_pick(EntityId camera_handle,
-                                                          const CameraDevice& camera);
-    void complete_actor_pick(const ActorPickRequest& request,
-                             const std::vector<std::uintptr_t>& scene_actor_handles,
-                             const std::vector<std::uint32_t>& node_indices,
-                             bool read_ok,
-                             std::uint32_t instance_id);
-    void fail_actor_pick(const ActorPickRequest& request);
-    void enqueue_actor_pick_readback(
-        ActorPickRequest request,
-        Horizon::HardwareBuffer result_buffer,
-        Horizon::SubmitReceipt receipt,
-        std::vector<std::uintptr_t> scene_actor_handles,
-        std::vector<std::uint32_t> node_indices,
-        OpticsDetail::ActorPickReadbackWorker::Reservation reservation);
 
     // ========================================================================
     // Per-surface optics render output
@@ -309,7 +280,6 @@ class OpticsSystem : public Kernel::SystemBase {
         bool has_state = false;
         bool has_follow_camera_instances = false;
         bool stereo_ui = false;
-        bool cursor_visible = false;
         std::uint32_t instance_count = 0;
         std::uint32_t width = 0;
         std::uint32_t height = 0;
@@ -328,7 +298,6 @@ class OpticsSystem : public Kernel::SystemBase {
     static constexpr uint64_t kUiViewIdleEvictFrames = 240;
 
     std::unique_ptr<Hardware> hardware_;
-    std::unique_ptr<OpticsDetail::ActorPickReadbackWorker> actor_pick_readback_worker_;
     double pending_native_throttle_wait_ms_{0.0};
     std::atomic<std::uint64_t> pending_native_consumed_serial_{0};
     /// Rate limit for the "native frame throttle saturated" report.

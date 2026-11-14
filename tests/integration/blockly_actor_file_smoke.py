@@ -317,7 +317,7 @@ def verify(port, root, switch_root=None):
         # run. Input must originate from a live viewport before entering the
         # launcher, which intentionally retires editor windows.
         web.evaluate("location.hash='/'")
-        wait_for(lambda: web.evaluate("!!document.querySelector('[data-viewport-pick-surface]')"),
+        wait_for(lambda: web.evaluate("!!document.querySelector('[data-viewport-surface]')"),
                  bool, 'main editor before switch run')
         peer_path = json.dumps(str(switch_root).replace("\\", "/").lower())
         row = ("[...document.querySelectorAll('.cursor-pointer')].find(e => "
@@ -353,7 +353,7 @@ def verify(port, root, switch_root=None):
         # again when the archive is reopened below.
         web.evaluate("location.hash='/SceneBar'")
         wait_for(lambda: web.evaluate("!!document.querySelector('[data-guidance=scene-import-model]')"
-                                      "&&!document.querySelector('[data-viewport-pick-surface]')"),
+                                      "&&!document.querySelector('[data-viewport-surface]')"),
                  bool, 'scope isolation editor owner')
         peer_files = project_files(switch_root)
         stale_target = {"archive_session": first_session, "project_path": str(root),

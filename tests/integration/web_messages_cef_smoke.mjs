@@ -99,7 +99,7 @@ try {
   const main = await connect(mainTarget);
 
   await waitFor(() => main.evaluate('typeof window.corona?.window?.close === "function"'));
-  assert.equal(await main.evaluate('typeof corona.viewport?.pick'), 'function');
+  assert.equal(await main.evaluate('typeof corona.viewport?.pick'), 'undefined');
   assert.equal(await main.evaluate('typeof corona.input?.dispatch'), 'function');
   assert.equal(await main.evaluate('typeof corona.app?.closeProcess'), 'function');
   assert.equal(await main.evaluate('corona.app.closeProcess(null).catch(error=>error.code)'), 'INVALID_ARGUMENT');
@@ -1362,42 +1362,14 @@ try {
     assert.equal(await cameraClient.evaluate(`corona.viewport.configure('scene.ini','main-camera',
       {...${JSON.stringify(cameraScope)},bounds:${JSON.stringify(bounds)}}).catch(error=>error.code)`), 'PERMISSION_DENIED');
     assert.deepEqual(await viewportPatch(cameraClient, JSON.stringify({ ...cameraScope, mode: 'stereo3d' })), cameraViewport);
-    stage = 'pointer and system cursor share one typed state and context ownership';
+    stage = 'retired viewport pointer contract';
     console.log(`CEF smoke: ${stage}`);
-    const pointerState = { x: 12.5, y: 34.5, cursor: 'grab' };
-    const pointerResult = await viewportPatch(main, JSON.stringify({ ...cameraScope, pointer: pointerState }));
-    assert.deepEqual(pointerResult.pointer, pointerState);
-    assert.equal(pointerResult.systemCursorHidden, true);
-    for (const pointer of ['null', '{}', '{cursor:"unknown",x:1,y:2}', '{cursor:"arrow"}',
-      '{cursor:"grab",x:-1,y:2}', '{cursor:"grab",x:NaN,y:2}', '{cursor:"grab",x:1,y:Infinity}',
-      '{cursor:"grab",x:1,y:Number.MAX_VALUE}', '{cursor:"grab",x:1,y:2,owner_context:1}',
-      '{cursor:"hidden",x:1}']) {
-      assert.equal(await viewportPatch(main, `{...${JSON.stringify(cameraScope)},mode:'flat2d',pointer:${pointer}}`, '.catch(error=>error.code)'), 'INVALID_ARGUMENT');
+    for (const pointer of ['{x:12.5,y:34.5,cursor:"grab"}', '{cursor:"hidden"}']) {
+      assert.equal(await viewportPatch(main,
+        `{...${JSON.stringify(cameraScope)},pointer:${pointer}}`, '.catch(error=>error.code)'), 'INVALID_ARGUMENT',
+        'the retired pointer field must not be accepted');
     }
-    assert.deepEqual(await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d' })), pointerResult,
-      'invalid mixed pointer patches cannot change mode, pointer or the OS cursor');
-    for (const client of [main, cameraClient]) {
-      assert.equal(await client.evaluate(`corona.viewport.configure('scene.ini','main-camera',
-        {...${JSON.stringify(cameraScope)},pointer:${JSON.stringify(pointerState)}}).catch(error=>error.code)`), 'PERMISSION_DENIED');
-    }
-    assert.equal(await viewportPatch(toolClient, JSON.stringify({ ...cameraScope, pointer: pointerState }), '.catch(error=>error.code)'), 'PERMISSION_DENIED');
-    const peerPointer = { ...pointerState, cursor: 'crosshair' };
-    assert.equal((await viewportPatch(cameraClient, JSON.stringify({ ...cameraScope, pointer: peerPointer }))).systemCursorHidden, true);
-    const oldSurface = await viewportPatch(main, JSON.stringify({ ...cameraScope, pointer: { cursor: 'hidden' } }));
-    assert.deepEqual(oldSurface.pointer, peerPointer, 'old surface cleanup must not erase the new surface pointer');
-    assert.equal(oldSurface.systemCursorHidden, false);
-    // A real renderer context release must clean native pointer ownership even
-    // when page teardown cannot send another Web request.
-    await cameraClient.call('Page.reload', {});
-    await waitFor(() => cameraClient.evaluate('typeof corona?.viewport?.configure === "function"'));
-    await cameraClient.evaluate('window.__nativeJSON = { stringify: JSON.stringify, parse: JSON.parse }; true');
-    await cameraClient.evaluate(`JSON.stringify = JSON.parse = () => { throw Error('JSON transport is forbidden'); }; true`);
-    await waitFor(async () => (await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d' }))).pointer.cursor === 'hidden');
-    const afterReload = await viewportPatch(cameraClient, JSON.stringify({ ...cameraScope, pointer: pointerState }));
-    assert.equal(afterReload.systemCursorHidden, true);
-    assert.deepEqual(afterReload.pointer, pointerState);
-    assert.equal((await viewportPatch(cameraClient, JSON.stringify({ ...cameraScope, pointer: { cursor: 'hidden' } }))).systemCursorHidden, false);
-    evidence[0].viewportPointer = 'one configuration state replaces pointer/system-cursor Fast routes and render queue/cache; JSON disabled, atomic validation, exact surface identity, cross-context ownership, real renderer reload cleanup';
+    evidence[0].viewportPointer = 'retired: configure rejects the pointer field instead of drawing a native cursor';
     await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'flat2d' }));
     evidence[0].viewportConfiguration = 'one typed V8 operation replaces three Fast routes; JSON disabled, exact scoped identity, atomic validation, partial preservation and per-window bounds isolation';
     stage = 'shared native camera properties with JSON disabled';
@@ -1446,67 +1418,10 @@ try {
     }
     assert.deepEqual((await listCameras()).data.cameras, afterCameraPatch);
     evidence[0].cameraProperties = 'shared typed pose/settings patch from main and CameraView with JSON disabled; exact identity, opaque handle, partial preservation, atomic rejection, old CEF/Fast routes removed';
-    stage = 'one scoped V8 pick Promise with actual GPU readback';
+    stage = 'retired viewport pick contract';
     console.log(`CEF smoke: ${stage}`);
-    const pickOptions = { ...cameraScope, x: 160, y: 120, width: 320, height: 240 };
-    const pick = (client, options = pickOptions, id = 'smoke-camera', scene = 'scene.ini') => client.evaluate(
-      `corona.viewport.pick(${JSON.stringify(scene)},${JSON.stringify(id)},${JSON.stringify(options)})`);
-    for (const value of ['null', '[]', '{}', '{archive_session:"a",x:NaN,y:0,width:1,height:1}',
-      '{archive_session:"a",x:0,y:0,width:Infinity,height:1}',
-      '{archive_session:"a",x:0,y:0,width:0,height:1}',
-      '{archive_session:"a",x:0,y:0,width:1,height:1,cameraHandle:1}']) {
-      assert.equal(await main.evaluate(`corona.viewport.pick('scene.ini','smoke-camera',${value}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
-    }
-    assert.equal(await toolClient.evaluate(`corona.viewport.pick('scene.ini','smoke-camera',${JSON.stringify(pickOptions)}).catch(error=>error.code)`), 'PERMISSION_DENIED');
-    for (const [scene, id, session, code] of [
-      ['wrong.ini', 'smoke-camera', camera.archive_session, 'PROJECT_CONTEXT_CHANGED'],
-      ['scene.ini', camera.name, camera.archive_session, 'CAMERA_NOT_FOUND'],
-      ['scene.ini', camera.opaque_handle, camera.archive_session, 'CAMERA_NOT_FOUND'],
-      ['scene.ini', 'smoke-camera', 'old', 'PROJECT_CONTEXT_CHANGED'],
-    ]) {
-      assert.equal(await main.evaluate(`corona.viewport.pick(${JSON.stringify(scene)},${JSON.stringify(id)},
-        {...${JSON.stringify(pickOptions)},archive_session:${JSON.stringify(session)}}).catch(error=>error.code)`), code);
-    }
-    const outside = await pick(cameraClient, { ...pickOptions, x: -1 });
-    assert.equal(outside.status, 'miss');
-    assert.equal(outside.archive_session, camera.archive_session);
-    assert.equal(outside.camera_id, 'smoke-camera');
-    assert.equal(await cameraClient.evaluate(`corona.viewport.pick('scene.ini','main-camera',${JSON.stringify(pickOptions)}).catch(error=>error.code)`), 'PERMISSION_DENIED');
-    await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'flat2d' }));
-    await main.evaluate(`corona.scene.setActorTransform('scene.ini',${JSON.stringify(actor.actor_guid)},
-      {...${JSON.stringify(cameraScope)},position:[0,0,0],rotation:[0,0,0],scale:[1,1,1]})`);
-    await cameraClient.evaluate(`corona.scene.updateCamera('scene.ini','smoke-camera',
-      {...${JSON.stringify(cameraScope)},position:[-0.25,-0.25,3],forward:[0,0,-1],world_up:[0,1,0],fov:60})`);
-    let picked;
-    try {
-      await waitFor(async () => {
-        picked = await pick(cameraClient);
-        return picked.status === 'success';
-      }, 20_000);
-    } catch (error) {
-      await cameraClient.evaluate(`corona.viewport.captureScreenshot('scene.ini','smoke-camera',
-        {...${JSON.stringify(cameraScope)},path:${JSON.stringify(path.join(output, 'pick-debug.png'))}})`);
-      console.log('Pick diagnostics', JSON.stringify({ picked, actor: (await readActor()).data,
-        cameras: (await listCameras()).data }));
-      throw error;
-    }
-    assert.equal(picked.actor_guid, actor.actor_guid);
-    assert.equal(picked.actor_name, actor.name);
-    assert.equal(typeof picked.actor_handle, 'string');
-    assert.equal(picked.actor_handle, actor.opaque_handle || String(actor.handle));
-    assert.ok(picked.node_index === null || Number.isInteger(picked.node_index));
-    const simultaneous = await Promise.all([pick(main), pick(cameraClient)]);
-    assert.ok(simultaneous.every(value => value.actor_guid === actor.actor_guid));
-    await cameraClient.evaluate(`(() => { window.__oldPickContext = true;
-      window.__oldPick = corona.viewport.pick('scene.ini','smoke-camera',${JSON.stringify(pickOptions)}).catch(()=>null);
-      return true; })()`);
-    await cameraClient.call('Page.reload', {});
-    await waitFor(() => cameraClient.evaluate('!window.__oldPickContext && typeof corona?.viewport?.pick === "function"'));
-    await cameraClient.evaluate('window.__nativeJSON = { stringify: JSON.stringify, parse: JSON.parse }; true');
-    await cameraClient.evaluate(`JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); }; true`);
-    assert.equal((await pick(cameraClient)).actor_guid, actor.actor_guid);
-
-    evidence[0].viewportPick = 'direct V8 with JSON disabled, actual GPU Actor/node hit, opaque handle, simultaneous main/CameraView isolation, actual reload with pending readback, miss/validation/surface permissions and retired query/event denied';
+    assert.equal(await main.evaluate('typeof corona?.viewport?.pick'), 'undefined');
+    evidence[0].viewportPick = 'retired: viewport.pick, GPU Actor/node readback and the pick promise were removed for a future redesign';
     stage = 'one scoped V8 script input queue with real Python consumption';
     console.log(`CEF smoke: ${stage}`);
     for (const client of [main, cameraClient, toolClient]) {
@@ -1514,7 +1429,7 @@ try {
     }
     const keyInput = { ...cameraScope, type: 'keyDown', code: 'KeyJ', key: 'd', modifiers: 'Shift' };
     const mouseInput = { ...cameraScope, type: 'mouse', event: 'click', button: 'LeftButton',
-      x: 90, y: 80, viewport_x: 5, viewport_y: 6, viewport_width: 320, viewport_height: 240, picked_actor: actor.name };
+      x: 90, y: 80, viewport_x: 5, viewport_y: 6, viewport_width: 320, viewport_height: 240 };
     const dispatchInput = (client, event, id = 'smoke-camera', scene = 'scene.ini') => client.evaluate(
       `corona.input.dispatch(${JSON.stringify(scene)},${JSON.stringify(id)},${JSON.stringify(event)})`);
     for (const input of ['null', '[]', '{}', '{type:"keyDown"}',
@@ -1591,7 +1506,7 @@ try {
       assert.deepEqual(await dispatchInput(main, keyInput), { status: 'queued' });
       assert.deepEqual(await dispatchInput(cameraClient, { ...cameraScope, type: 'keyUp', code: 'KeyJ', key: 'd' }), { status: 'queued' });
       assert.deepEqual(await dispatchInput(main, mouseInput), { status: 'queued' });
-      assert.deepEqual(await dispatchInput(cameraClient, { ...mouseInput, event: 'move', picked_actor: '' }), { status: 'queued' });
+      assert.deepEqual(await dispatchInput(cameraClient, { ...mouseInput, event: 'move' }), { status: 'queued' });
       const rows = await waitFor(async () => {
         try { const rows = (await readFile(tracePath, 'utf8')).trim().split('\n').map(row => JSON.parse(row)); return rows.length >= 4 && rows; }
         catch { return false; }

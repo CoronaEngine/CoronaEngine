@@ -132,48 +132,6 @@ void SharedDataHub::clear_actor_metadata(EntityId actor_handle) {
 SharedDataHub::CameraStorage& SharedDataHub::camera_storage() { return camera_storage_; }
 const SharedDataHub::CameraStorage& SharedDataHub::camera_storage() const { return camera_storage_; }
 
-SharedDataHub::ActorPickStorage& SharedDataHub::actor_pick_storage() { return actor_pick_storage_; }
-const SharedDataHub::ActorPickStorage& SharedDataHub::actor_pick_storage() const { return actor_pick_storage_; }
-
-void SharedDataHub::enqueue_actor_pick_request(ActorPickRequestCommand command) {
-    if (command.camera_handle == 0 || command.request_id.empty()) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(actor_pick_queue_mutex_);
-    pending_actor_pick_requests_.push_back(std::move(command));
-}
-
-std::optional<ActorPickRequestCommand> SharedDataHub::take_actor_pick_request(
-    EntityId camera_handle) {
-    std::lock_guard<std::mutex> lock(actor_pick_queue_mutex_);
-    const auto it = std::find_if(pending_actor_pick_requests_.begin(),
-                                 pending_actor_pick_requests_.end(),
-                                 [camera_handle](const auto& request) {
-                                     return request.camera_handle == camera_handle;
-                                 });
-    if (it == pending_actor_pick_requests_.end()) {
-        return std::nullopt;
-    }
-    auto request = std::move(*it);
-    pending_actor_pick_requests_.erase(it);
-    return request;
-}
-
-void SharedDataHub::enqueue_actor_pick_completion(ActorPickCompletion completion) {
-    if (completion.camera_handle == 0 || completion.request_id.empty()) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(actor_pick_queue_mutex_);
-    actor_pick_completions_.push_back(std::move(completion));
-}
-
-std::vector<ActorPickCompletion> SharedDataHub::drain_actor_pick_completions() {
-    std::lock_guard<std::mutex> lock(actor_pick_queue_mutex_);
-    std::vector<ActorPickCompletion> completions;
-    completions.swap(actor_pick_completions_);
-    return completions;
-}
-
 SharedDataHub::EnvironmentStorage& SharedDataHub::environment_storage() { return environment_storage_; }
 const SharedDataHub::EnvironmentStorage& SharedDataHub::environment_storage() const { return environment_storage_; }
 
@@ -206,7 +164,7 @@ std::optional<CameraFrameTiming> SharedDataHub::camera_frame_timing(
 namespace {
 
 // CameraDevice -> 外部可读投影。只搬运"读者需要的字段"，内部状态（字符串设置、
-// actor_pick_handle 等）留在 DAG 内部。
+// camera_handle 等）留在 DAG 内部。
 CameraSnapshotRow make_camera_row(EntityId handle, const CameraDevice& camera) {
     CameraSnapshotRow row;
     row.handle = handle;
@@ -926,27 +884,4 @@ ViewportUiState SharedDataHub::viewport_ui_state(EntityId camera_handle) const {
     return state;
 }
 
-void SharedDataHub::set_viewport_ui_pointer(EntityId camera_handle,
-                                              ViewportUiPointerState pointer) {
-    if (camera_handle == 0) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(viewport_ui_mutex_);
-    auto& state = viewport_ui_states_[camera_handle];
-    state.camera_handle = camera_handle;
-    state.pointer = pointer;
-}
-
-void SharedDataHub::clear_viewport_ui_pointer(EntityId camera_handle,
-                                                std::uint64_t owner_context) {
-    std::lock_guard<std::mutex> lock(viewport_ui_mutex_);
-    const auto it = viewport_ui_states_.find(camera_handle);
-    if (it == viewport_ui_states_.end()) {
-        return;
-    }
-    if (owner_context != 0 && it->second.pointer.owner_context != owner_context) {
-        return;
-    }
-    it->second.pointer = {};
-}
 }  // namespace Corona

@@ -39,7 +39,6 @@
 #include "cef_scene_operations.h"
 #include "editor_api_services.h"
 #include "cef_process.h"
-#include "cef_viewport_pick.h"
 #include "editor_scene_service.h"
 #include "script_runtime_api.h"
 #include "editor_dispatch.h"
@@ -3592,45 +3591,6 @@ WindowReply prepare_camera_window_request(WindowRequest& request) {
     return reply;
 }
 
-ViewportPickReply finish_viewport_pick(const ViewportPickRequest& request, const Corona::ActorPickCompletion& result) {
-    ViewportPickReply reply;
-    auto camera = request.camera;
-    const auto checked = prepare_camera_window_request(camera);
-    reply.archive_session = camera.archive_session;
-    reply.scene = camera.scene_id;
-    reply.camera_id = camera.camera_id;
-    reply.x = result.x; reply.y = result.y;
-    if (!checked.error_code.empty() || camera.camera_handle != request.camera.camera_handle ||
-        camera.camera_authority != request.camera.camera_authority) {
-        reply.error_code = checked.error_code.empty() ? "PROJECT_CONTEXT_CHANGED" : checked.error_code;
-        reply.error_message = "Pick belongs to a retired camera or archive";
-        return reply;
-    }
-    if (result.status != "success" && result.status != "miss") {
-        reply.error_code = result.status == "timeout" ? "PICK_TIMEOUT" :
-            result.status == "permission_denied" ? "PERMISSION_DENIED" :
-            result.status == "window_closed" ? "WINDOW_CLOSED" :
-            result.status == "stale_scene" ? "PROJECT_CONTEXT_CHANGED" :
-            result.status == "invalid_argument" ? "INVALID_ARGUMENT" : "PICK_FAILED";
-        reply.error_message = "Viewport pick failed: " + result.status;
-        return reply;
-    }
-    reply.status = "miss";
-    if (result.status == "miss" || !result.actor_handle) return reply;
-    auto& scene = *native_editor_state().scene;
-    // Exact native handle lookup only: actor names/guids may look numeric.
-    const auto actor = std::find_if(scene.actors.begin(), scene.actors.end(), [&](const auto& item) {
-        return item.engine_actor && item.engine_actor->get_handle() == result.actor_handle;
-    });
-    if (actor == scene.actors.end()) return reply;
-    reply.status = "success";
-    reply.actor_handle = std::to_string(result.actor_handle);
-    reply.actor_guid = actor->actor_guid;
-    reply.actor_name = actor->name;
-    reply.actor_type = actor->actor_type;
-    if (result.node_index != UINT32_MAX) reply.node_index = result.node_index;
-    return reply;
-}
 
 namespace {
 

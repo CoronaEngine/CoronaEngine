@@ -1,6 +1,5 @@
 #include "cef_window_operations.h"
 #include "cef_client.h"
-#include "viewport_image_input.h"
 #include <corona/systems/ui/camera_viewport_manager.h>
 #include <corona/shared_data_hub.h>
 #include <cmath>
@@ -439,24 +438,6 @@ void resize_camera_view(int tab_id, int width, int height) {
 
 }  // namespace
 
-namespace {
-constexpr const char* viewport_cursors[] = {"arrow", "hand", "crosshair", "grab", "grabbing", "hidden"};
-std::optional<Corona::ViewportUiCursorShape> viewport_cursor_shape(const std::string& name) {
-    for (std::size_t i = 0; i < std::size(viewport_cursors); ++i)
-        if (name == viewport_cursors[i]) return static_cast<Corona::ViewportUiCursorShape>(i);
-    return std::nullopt;
-}
-}
-
-void release_viewport_pointer(BrowserTab& source, std::uint64_t context_id) {
-    if (!context_id || source.viewport_pointer_owner != context_id) return;
-    Corona::SharedDataHub::instance().clear_viewport_ui_pointer(source.viewport_pointer_camera, context_id);
-    source.hide_system_cursor.store(false, std::memory_order_relaxed);
-    source.viewport_pointer_owner = 0;
-    source.viewport_pointer_camera = 0;
-    source.viewport_pointer_authority.reset();
-}
-
 void refresh_viewport_state(BrowserTab& source) {
     if (source.web_camera_handle) {
         const auto authority = source.web_camera_authority;
@@ -468,23 +449,6 @@ void refresh_viewport_state(BrowserTab& source) {
             source.web_camera_width = source.web_camera_height = 0;
             source.web_camera_render_width = source.web_camera_render_height = 0;
         }
-    }
-    if (!source.viewport_pointer_owner) return;
-    const auto authority = source.viewport_pointer_authority.lock();
-    std::unique_lock<std::mutex> lease;
-    if (authority) lease = std::unique_lock(authority->mutex);
-    const auto state = Corona::SharedDataHub::instance().viewport_ui_state(source.viewport_pointer_camera);
-    if (!source.open || !authority || !authority->active || state.mode != Corona::ViewportUiMode::Stereo3D ||
-        state.pointer.owner_context != source.viewport_pointer_owner || state.pointer.cursor_shape == Corona::ViewportUiCursorShape::Hidden)
-        release_viewport_pointer(source, source.viewport_pointer_owner);
-}
-
-void release_viewport_pointer_context(int browser_id, std::uint64_t context_id) {
-    for (const auto& entry : BrowserManager::instance().tabs_snapshot()) {
-        auto* tab = entry.tab;
-        if (!tab || !tab->client || tab->viewport_pointer_owner != context_id) continue;
-        const auto browser = tab->client->GetBrowser();
-        if (browser && browser->GetIdentifier() == browser_id) release_viewport_pointer(*tab, context_id);
     }
 }
 
@@ -499,7 +463,7 @@ WindowReply apply_viewport_configuration(const WindowRequest& request, BrowserTa
     if (authority) lease = std::unique_lock(authority->mutex);
     if (!authority || !authority->active || !request.camera_handle)
         return fail("PROJECT_CONTEXT_CHANGED", "Viewport camera identity was retired");
-    if (!request.viewport || (!request.viewport->mode && !request.viewport->calibration && !request.viewport->bounds && !request.viewport->pointer))
+    if (!request.viewport || (!request.viewport->mode && !request.viewport->calibration && !request.viewport->bounds))
         return fail("INVALID_ARGUMENT", "Viewport configuration requires at least one property");
     const auto& patch = *request.viewport;
     if (patch.mode && *patch.mode != "flat2d" && *patch.mode != "stereo3d")
@@ -524,41 +488,13 @@ WindowReply apply_viewport_configuration(const WindowRequest& request, BrowserTa
         if (bounds.x < 0 || bounds.y < 0 || bounds.width <= 0 || bounds.height <= 0 || bounds.render_width <= 0 || bounds.render_height <= 0)
             return fail("INVALID_ARGUMENT", "Invalid viewport bounds");
     }
-    if ((patch.bounds || patch.pointer) && source.camera_view) {
+    if (patch.bounds && source.camera_view) {
         const auto record = CameraViewportManager::instance().find_by_tab(source.tab_id);
         if (!record || record->camera_handle != request.camera_handle)
             return fail("PERMISSION_DENIED", "CameraView cannot bind another camera surface");
     }
-    std::optional<Corona::ViewportUiCursorShape> cursor;
-    if (patch.pointer) {
-        const auto& pointer = *patch.pointer;
-        cursor = viewport_cursor_shape(pointer.cursor);
-        if (!request.context_id || !cursor || !std::isfinite(pointer.x) || !std::isfinite(pointer.y) ||
-            pointer.x < 0 || pointer.y < 0 || pointer.x > std::numeric_limits<float>::max() || pointer.y > std::numeric_limits<float>::max())
-            return fail("INVALID_ARGUMENT", "Invalid viewport pointer state");
-        if (!source.camera_view && (!source.main_workspace || (!patch.bounds && source.web_camera_handle != request.camera_handle)))
-            return fail("PERMISSION_DENIED", "Pointer requires the caller's bound camera surface");
-    }
-    std::optional<InputDetail::ImagePoint> pointer_point;
-    if (patch.pointer && *cursor != Corona::ViewportUiCursorShape::Hidden) {
-        const auto& pointer = *patch.pointer;
-        if (source.camera_view) {
-            // Detached CameraView sends camera render pixels directly.
-            pointer_point = InputDetail::ImagePoint{pointer.x, pointer.y};
-        } else {
-            const auto input_width = patch.bounds ? patch.bounds->render_width : source.web_camera_render_width;
-            const auto input_height = patch.bounds ? patch.bounds->render_height : source.web_camera_render_height;
-            if (input_width <= 0 || input_height <= 0)
-                return fail("INVALID_ARGUMENT", "Pointer requires valid viewport render dimensions");
-            const auto camera = Corona::SharedDataHub::instance().camera_storage().try_acquire_read(request.camera_handle);
-            if (!camera) return fail("CAMERA_UNAVAILABLE", "Viewport camera is unavailable");
-            pointer_point = InputDetail::map_viewport_image_point(*camera, pointer.x, pointer.y, input_width, input_height);
-        }
-    }
     // All fields and the native identity lease are valid before any mutation.
     auto& hub = Corona::SharedDataHub::instance();
-    if (patch.bounds && source.viewport_pointer_camera && source.viewport_pointer_camera != request.camera_handle)
-        release_viewport_pointer(source, source.viewport_pointer_owner);
     if (patch.mode) hub.set_viewport_ui_mode(request.camera_handle,
         *patch.mode == "stereo3d" ? Corona::ViewportUiMode::Stereo3D : Corona::ViewportUiMode::Flat2D);
     if (converted) hub.set_viewport_ui_calibration(request.camera_handle, *converted);
@@ -570,28 +506,11 @@ WindowReply apply_viewport_configuration(const WindowRequest& request, BrowserTa
         source.web_camera_width = bounds.width; source.web_camera_height = bounds.height;
         source.web_camera_render_width = bounds.render_width; source.web_camera_render_height = bounds.render_height;
     }
-    if (patch.pointer) {
-        if (*cursor == Corona::ViewportUiCursorShape::Hidden || !pointer_point) release_viewport_pointer(source, request.context_id);
-        else {
-            if (source.viewport_pointer_owner != request.context_id || source.viewport_pointer_camera != request.camera_handle)
-                release_viewport_pointer(source, source.viewport_pointer_owner);
-            hub.set_viewport_ui_pointer(request.camera_handle, {static_cast<float>(pointer_point->x), static_cast<float>(pointer_point->y), *cursor, request.context_id});
-            source.viewport_pointer_owner = request.context_id;
-            source.viewport_pointer_camera = request.camera_handle;
-            source.viewport_pointer_authority = authority;
-        }
-    }
     const auto state = hub.viewport_ui_state(request.camera_handle);
-    const bool hide_cursor = source.viewport_pointer_owner && state.pointer.owner_context == source.viewport_pointer_owner &&
-        state.mode == Corona::ViewportUiMode::Stereo3D && state.pointer.cursor_shape != Corona::ViewportUiCursorShape::Hidden;
-    if (source.viewport_pointer_camera == request.camera_handle || !source.viewport_pointer_owner)
-        source.hide_system_cursor.store(hide_cursor, std::memory_order_relaxed);
     const auto& c = state.calibration;
     result.viewport = ViewportConfigurationSnapshot{request.archive_session, request.scene_id, request.camera_id,
         state.mode == Corona::ViewportUiMode::Stereo3D ? "stereo3d" : "flat2d",
         {double(c.lenticular_pitch) * 3, -double(c.slant_angle_radians), double(c.phase_offset) * double(c.lenticular_pitch) * 3, c.parallax_scale}};
-    result.viewport->pointer = {state.pointer.x, state.pointer.y, viewport_cursors[static_cast<std::size_t>(state.pointer.cursor_shape)]};
-    result.viewport->system_cursor_hidden = source.hide_system_cursor.load(std::memory_order_relaxed);
     if (source.web_camera_handle == request.camera_handle)
         result.viewport->bounds = ViewportBounds{source.web_camera_x, source.web_camera_y,
             source.web_camera_width, source.web_camera_height, source.web_camera_render_width, source.web_camera_render_height};

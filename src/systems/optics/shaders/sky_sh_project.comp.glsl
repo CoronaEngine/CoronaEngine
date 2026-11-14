@@ -16,7 +16,7 @@
 
 layout(local_size_x = 64) in;
 
-// Writable SSBO pool (same set/binding as actor_pick.comp.glsl). The lighting
+// Writable SSBO pool shared with the lighting passes. The lighting
 // pass reads the same buffer through the readonly SSBOPool view.
 layout(set = 1, binding = 0) buffer SSBOPool { uint data[]; } ssbos[];
 
