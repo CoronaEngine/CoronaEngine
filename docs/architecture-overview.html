@@ -555,7 +555,7 @@ svg{display:block;max-width:100%;height:auto}
 <tr><td class="s">外部线程要改 DAG 拥有的状态</td><td><span class="badge b-cmd">命令</span></td><td><span class="badge b-ev">事件</span></td><td class="s">需要合并、排序、拒绝、回执；事件语义里没有"请求"和"失败"</td></tr>
 <tr><td class="s">外部线程要读 DAG 拥有的状态</td><td><span class="badge b-snap">快照</span></td><td><span class="badge b-slot">槽位</span></td><td class="s">直接读槽位会阻塞在 DAG 临界区，或用 <code>_nowait</code> 丢一整帧</td></tr>
 <tr><td class="s">离散的动作（创建/销毁/注册回调）</td><td><span class="badge b-cmd">Fifo 命令</span></td><td><span class="badge b-cmd">LatestWins</span></td><td class="s">顺序有意义，合并会丢操作</td></tr>
-<tr><td class="s">连续量（拖拽、滑条、gizmo）</td><td><span class="badge b-cmd">LatestWins</span></td><td><span class="badge b-cmd">Fifo</span></td><td class="s">120 Hz 下中间态没有价值，队列会堆积</td></tr>
+<tr><td class="s">连续量（拖拽、滑条）</td><td><span class="badge b-cmd">LatestWins</span></td><td><span class="badge b-cmd">Fifo</span></td><td class="s">120 Hz 下中间态没有价值，队列会堆积</td></tr>
 <tr><td class="s">"这件事发生了"，且订阅者互不相关</td><td><span class="badge b-ev">事件</span></td><td>—</td><td class="s">这是事件唯一站得住的场景</td></tr>
 <tr><td class="s">跨线程通知一个事实</td><td><span class="badge b-cmd">命令</span> 或 <span class="badge b-ev">EventStream</span></td><td><span class="badge b-ev">同步 EventBus</span></td><td class="s">同步总线会把 DAG 代码拉到调用者线程上执行</td></tr>
 <tr><td class="s">等待 GPU 用完再复用资源</td><td><span class="badge b-gpu">回执</span></td><td>任何线程原语</td><td class="s">这是设备异步，不是线程竞争</td></tr>
@@ -581,7 +581,7 @@ svg{display:block;max-width:100%;height:auto}
 <tr><td class="f">UIFrameCommandChannel</td><td class="c">LatestWins</td><td class="c">默认 256</td><td class="s">VulkanBackend（主线程）</td><td class="s">DisplaySystem::update 开头</td></tr>
 <tr><td class="f">DisplaySurfaceCommandChannel</td><td class="c">Fifo</td><td class="c">默认 256</td><td class="s">主线程 / CEF / Vulkan</td><td class="s">DisplaySystem::update 开头</td></tr>
 <tr class="group"><td colspan="5">定义在 SharedDataHub 内（相机 / 变换 / 拾取）</td></tr>
-<tr><td class="f">transform_updates_</td><td class="c">LatestWins</td><td class="c">256</td><td class="s">CEF gizmo / 脚本 / 网络</td><td class="s">Optics（tick 内应用后发布快照）</td></tr>
+<tr><td class="f">transform_updates_</td><td class="c">LatestWins</td><td class="c">256</td><td class="s">属性面板 / 脚本 / 网络</td><td class="s">Optics（tick 内应用后发布快照）</td></tr>
 <tr><td class="f">camera_moves_</td><td class="c">LatestWins</td><td class="c">256</td><td class="s">CEF 视口 / 脚本跟随</td><td class="s">Optics</td></tr>
 <tr><td class="f">camera_viewport_updates_</td><td class="c">LatestWins</td><td class="c">256</td><td class="s">CEF 视口管理</td><td class="s">Optics</td></tr>
 <tr><td class="f">default_surface_camera_update_</td><td class="c">LatestWins</td><td class="c"><b>1</b></td><td class="s">主线程（窗口尺寸变化）</td><td class="s">Optics</td></tr>
@@ -596,7 +596,7 @@ svg{display:block;max-width:100%;height:auto}
 <thead><tr><th style="width:250px">快照</th><th style="width:170px">发布者</th><th style="width:96px">行结构</th><th>读者</th></tr></thead>
 <tbody>
 <tr><td class="f">CameraSnapshot</td><td class="s">Optics（每 tick）</td><td class="c">CameraSnapshotRow</td><td class="s"><code>Camera::get_*</code>、CEF 视口面板、脚本</td></tr>
-<tr><td class="f">TransformSnapshot</td><td class="s">Optics</td><td class="c">TransformSnapshotRow</td><td class="s">CEF gizmo / 属性面板</td></tr>
+<tr><td class="f">TransformSnapshot</td><td class="s">Optics</td><td class="c">TransformSnapshotRow</td><td class="s">属性面板</td></tr>
 <tr><td class="f">OpticsSnapshot</td><td class="s">Optics</td><td class="c">OpticsSnapshotRow</td><td class="s">CEF 材质面板</td></tr>
 <tr><td class="f">MechanicsSnapshot</td><td class="s">Mechanics</td><td class="c">MechanicsSnapshotRow</td><td class="s">CEF 物理面板 / 脚本</td></tr>
 <tr><td class="f">AcousticsSnapshot</td><td class="s">Acoustics</td><td class="c">AcousticsSnapshotRow</td><td class="s">CEF 音频面板</td></tr>
@@ -1145,7 +1145,7 @@ Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会
 <tr class="group"><td colspan="4">TransformSnapshot / TransformSnapshotRow</td></tr>
 <tr><td class="f">tick</td><td class="t">uint64</td><td class="c">0</td><td class="s">快照 tick。</td></tr>
 <tr><td class="f">handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">transform 句柄。</td></tr>
-<tr><td class="f">position / euler_rotation / scale</td><td class="t">fvec3</td><td class="c">—</td><td class="s">TRS 三分量。gizmo 用它避免 5–6 把锁的链式读取。</td></tr>
+<tr><td class="f">position / euler_rotation / scale</td><td class="t">fvec3</td><td class="c">—</td><td class="s">TRS 三分量。外部读者用它避免 5–6 把锁的链式读取。</td></tr>
 <tr class="group"><td colspan="4">OpticsSnapshot / OpticsSnapshotRow</td></tr>
 <tr><td class="f">handle</td><td class="t">uintptr_t</td><td class="c">0</td><td class="s">optics 句柄。</td></tr>
 <tr><td class="f">visible / enable_lighting</td><td class="t">bool</td><td class="c">true</td><td class="s">可见 / 受光。</td></tr>
@@ -1178,7 +1178,7 @@ Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会
 </table>
 </div>
 
-<h4>视口 UI / Gizmo 会话状态 <span class="tag">Session Store（独立 mutex，不进快照）</span></h4>
+<h4>视口 UI 会话状态 <span class="tag">Session Store（独立 mutex，不进快照）</span></h4>
 <div class="tbl-wrap">
 <table>
 <thead><tr><th style="width:200px">字段</th><th style="width:130px">类型</th><th>语义</th></tr></thead>
@@ -1189,10 +1189,6 @@ Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会
 <tr><td class="f">cursor_shape</td><td class="t">ViewportUiCursorShape</td><td class="s"><code>Arrow/Hand/Crosshair/Grab/Grabbing/Hidden</code>。</td></tr>
 <tr><td class="f">calibration</td><td class="t">ViewportUiCalibration</td><td class="s">裸眼 3D 标定参数（透镜节距、倾角、相位、子像素偏移、显示尺寸、视差缩放）。</td></tr>
 <tr><td class="f">pointer</td><td class="t">ViewportUiPointerState</td><td class="s"><code>x / y / cursor_shape / owner_context</code>。远端 CEF 重构后并入 session store。</td></tr>
-<tr class="group"><td colspan="3">ViewportGizmoState / Target / PointerCommand / PointerResult</td></tr>
-<tr><td class="f">target.{camera_handle, scene_id, actor_name, actor_handle}</td><td class="t">混合</td><td class="s">gizmo 当前作用于谁。<code>scene_id</code> 与 <code>actor_name</code> 是<b>给编辑器的可读身份</b>，句柄给引擎。</td></tr>
-<tr><td class="f">hover_axis / active_axis</td><td class="t">ViewportGizmoAxis</td><td class="s">悬停轴 / 正在拖拽的轴。</td></tr>
-<tr><td class="f">dragging / sequence</td><td class="t">bool / uint64</td><td class="s">拖拽中标志 / 交互序号（丢弃过期输入）。</td></tr>
 </tbody>
 </table>
 </div>
@@ -1720,7 +1716,7 @@ HELLO (0x04)
 <h4>CEF V8 侧的方法族</h4>
 <p><code>cef_v8_binding.cpp</code> 为每个域注册一个 endpoint：
 <code>ProjectSettings / LanChat / Network / ProjectLauncher / Files / ProjectFiles /
-Scripts / ScriptInput / Viewport / Gizmo / Scene / Window</code>。
+Scripts / ScriptInput / Viewport / Scene / Window</code>。
 每个 endpoint 的 <code>invoke(Method, args)</code> 把枚举转成 manifest 调用，
 异常走 <code>exception</code> 通道返回而不是崩溃。</p>
 
@@ -2156,7 +2152,7 @@ function renderSeq(id, spec) {
     { id: "hub", x: 112, y: b2 + 30, w: 228, h: 58, title: "SharedDataHub", sub: "13 × Storage<T,128,2>", k: "store" },
     { id: "cbd", x: 356, y: b2 + 30, w: 218, h: 58, title: "CommandBuffer ×13", sub: "写方向 · 有界 · 可合并", k: "store" },
     { id: "scd", x: 590, y: b2 + 30, w: 218, h: 58, title: "SnapshotChannel ×6", sub: "读方向 · 单发布多读", k: "store" },
-    { id: "misc", x: 824, y: b2 + 30, w: 220, h: 58, title: "Session / Pick / 回执", sub: "viewport · gizmo · GPU", k: "store" },
+    { id: "misc", x: 824, y: b2 + 30, w: 220, h: 58, title: "Session / Pick / 回执", sub: "viewport · GPU", k: "store" },
 
     // backend
     { id: "hzn", x: 112, y: b1 + 28, w: 250, h: 50, title: "Horizon · Ocarina EDSL", sub: "AST → Slang → SPIR-V", k: "gpu" },
@@ -2253,7 +2249,7 @@ function renderSeq(id, spec) {
   var cy = [
     { y: 34,  lft: "外部线程",      mid: "命令 CommandBuffer",  rgt: "DAG 拥有者",  lk: "cmd",  lsub: "CEF / 脚本 / 网络", msub: "有界 · 可合并 · 单消费者", rsub: "apply 后写槽位",  tag: "写 = 命令" },
     { y: 178, lft: "DAG 拥有者",    mid: "事件 EventBus",       rgt: "订阅者",      lk: "ev",   lsub: "Mechanics … Display", msub: "同步广播 · 零回执", rsub: "任意数量 · 互不相关", tag: "通知 = 事件" },
-    { y: 322, lft: "DAG 拥有者",    mid: "快照 SnapshotChannel", rgt: "任意读者",   lk: "snap", lsub: "每 tick 发布一次",   msub: "单发布 · 多读 · 无队列", rsub: "面板 / gizmo / get_*", tag: "读 = 快照" }
+    { y: 322, lft: "DAG 拥有者",    mid: "快照 SnapshotChannel", rgt: "任意读者",   lk: "snap", lsub: "每 tick 发布一次",   msub: "单发布 · 多读 · 无队列", rsub: "面板 / get_*", tag: "读 = 快照" }
   ];
   var N = [], E = [], L = [];
   cy.forEach(function (r, i) {
@@ -2278,7 +2274,7 @@ function renderSeq(id, spec) {
     { id: "ow", x: 590, y: 30,  w: 190, h: 74, title: "拥有者 update()", sub: "drain → apply", k: "sys" },
     { id: "sl", x: 880, y: 30,  w: 180, h: 74, title: "Storage<T> 槽位", sub: "单写者 · 每槽读写锁", k: "data" },
     { id: "dv", x: 20,  y: 200, w: 180, h: 74, title: "有效值", sub: ["快照 + pending", "*_view() 叠加 peek"], k: "sys" },
-    { id: "rd", x: 300, y: 200, w: 190, h: 74, title: "外部读者", sub: "get_* / 面板 / gizmo", k: "ext" },
+    { id: "rd", x: 300, y: 200, w: 190, h: 74, title: "外部读者", sub: "get_* / 面板", k: "ext" },
     { id: "sc", x: 590, y: 200, w: 190, h: 74, title: "SnapshotChannel", sub: "publish(revision++)", k: "store" }
   ];
   var E = [

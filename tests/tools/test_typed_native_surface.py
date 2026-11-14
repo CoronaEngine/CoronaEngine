@@ -35,7 +35,7 @@ EXPECTED_SURFACE = {
         "setActorIkChains", "setActorTransform", "setCameraRenderSettings", "setEnvironment",
         "setModelNodeState", "updateActor", "updateCamera",
     },
-    "viewport": {"captureScreenshot", "configure", "pick", "setGizmoPointer", "setGizmoTarget"},
+    "viewport": {"captureScreenshot", "configure", "pick"},
     "window": {
         "close", "createPanel", "focus",
         "onCloseRequested", "onClosed", "setWindowPresentation",

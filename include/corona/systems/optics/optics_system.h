@@ -102,7 +102,6 @@ class OpticsSystem : public Kernel::SystemBase {
     bool ensure_native_render_resources();
     void release_native_render_resources();
     bool ensure_cursor_icon_texture();
-    bool ensure_gizmo_axis_textures();
 
     /// Make capacity available in the native frame throttle before recording a view.
     ///
@@ -311,8 +310,6 @@ class OpticsSystem : public Kernel::SystemBase {
         bool has_follow_camera_instances = false;
         bool stereo_ui = false;
         bool cursor_visible = false;
-        bool gizmo_target = false;
-        bool gizmo_visible = false;
         std::uint32_t instance_count = 0;
         std::uint32_t width = 0;
         std::uint32_t height = 0;

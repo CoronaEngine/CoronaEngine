@@ -25,7 +25,7 @@
 | `resizeCameraView` → `setWindowPresentation({width,height})` | 尺寸就是一种呈现状态 |
 | `suspendCameraViews` → `close({sceneId})` | 复数关闭是 `close` 的第二种身份 |
 | `focusTab(tabId)` → `focus({panelId})` | 和 `close` 用同一个稳定身份 |
-| `files` / `gizmo` / `input` / `projectSettings` 折叠进 `project` / `viewport` / `scene` | 一个方法一个命名空间没有意义 |
+| `files` / `input` / `projectSettings` 折叠进 `project` / `viewport` / `scene` | 一个方法一个命名空间没有意义 |
 | `audio.playResource|playActor|stopResource|stopActor` → `audio.play|stop` | 两个动作，按身份区分资源或 Actor |
 | 删 `getCurrent` | 没有产品消费者；身份来自 `createPanel` 返回值和 URL 参数 |
 | 删 `minimized` 等死字段与死函数 | 没有写入路径或没有读取方 |
@@ -152,7 +152,7 @@ revision。命令在 Geometry 所有者的下一个 tick 应用，之后的读�
 
 **决定**：当前不添加 `scene.batch` 或通用的 `{method, args}` 操作列表。
 
-**理由**：编辑器目前没有多 Actor 同时写的产品路径（选择是单 Actor，gizmo/属性面板都只写一个），
+**理由**：编辑器目前没有多 Actor 同时写的产品路径（选择是单 Actor，属性面板也只写一个），
 为不存在的调用方加接口只会多一份要保持一致的契约；而通用操作列表本质上是"名字变成数据"，
 正是已经删除的 manifest 模式。真正出现多 Actor 编辑时，加**领域特定**的批处理
 （例如 `setActorTransforms({actorGuids, ...})`，一条命令、一个版本栅栏），而不是通用批处理。

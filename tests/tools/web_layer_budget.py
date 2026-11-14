@@ -5,7 +5,7 @@ file is a deliberate budget decision, not silent growth. ``CORE_BUDGET`` is a
 ratchet: a slimming task lowers it first (RED) and deletes code second (GREEN).
 
 Files excluded from the core are the CEF host and window/viewport plumbing
-(``cef_client``, ``browser_manager``, ``browser_ui``, ``cef_viewport_gizmo``,
+(``cef_client``, ``browser_manager``, ``browser_ui``,
 ``scene_folder``, ``popup_overlay``, ``cef_osr_mode``, ``cef_paint_upload``,
 ``cef_shared_texture_probe``, ``cef_app``, ``cef_runtime``, ``cef_renderer_bridge``,
 ``scene_archive_rpc``). They are a separate project from the interface surface.

@@ -10,7 +10,6 @@
 #include <corona/resource/model_import_options.h>
 #include <corona/resource/types/animation_player.h>
 #include <corona/systems/display/image_frame_metadata.h>
-#include <corona/systems/optics/viewport_gizmo_math.h>
 #include <corona/systems/optics/material_source.h>
 
 #include <ktm/ktm.h>
@@ -476,7 +475,7 @@ struct CameraSnapshot {
 // ---------------------------------------------------------------------------
 // 变换（P2：跨线程写命令 + 读快照）
 //
-// ModelTransform 有 3 个非 DAG 写者（CEF gizmo、脚本、网络）和 4 个 DAG 写者。
+// ModelTransform 有 3 个非 DAG 写者（属性面板、脚本、网络）和 4 个 DAG 写者。
 // 过去外部写者直接 try_acquire_write 槽位，与 DAG 写者之间没有顺序保证；
 // 现在外部写只走 TransformUpdateCommand，由 Optics 在 tick 内应用。
 // ---------------------------------------------------------------------------
@@ -829,46 +828,6 @@ struct ViewportUiState {
     ViewportUiPointerState pointer{};
 };
 
-struct ViewportGizmoTarget {
-    EntityId camera_handle{};
-    std::string scene_id;
-    std::string actor_name;
-    EntityId actor_handle{};
-};
-
-struct ViewportGizmoPointerCommand {
-    EntityId camera_handle{};
-    std::string request_id;
-    std::string event_type;
-    float x{0.0f};
-    float y{0.0f};
-    float viewport_width{0.0f};
-    float viewport_height{0.0f};
-    std::uint32_t button{0};
-    std::uint32_t buttons{0};
-    std::uint32_t modifiers{0};
-    std::uint64_t sequence{};
-};
-
-struct ViewportGizmoPointerResult {
-    EntityId camera_handle{};
-    std::string request_id;
-    ViewportGizmoAxis axis{ViewportGizmoAxis::None};
-    bool consumed{false};
-    bool dragging{false};
-    bool ended{false};
-    bool cancelled{false};
-    ktm::fvec3 position{};
-};
-
-struct ViewportGizmoState {
-    ViewportGizmoTarget target{};
-    ViewportGizmoAxis hover_axis{ViewportGizmoAxis::None};
-    ViewportGizmoAxis active_axis{ViewportGizmoAxis::None};
-    bool dragging{false};
-    std::uint64_t sequence{};
-};
-
 struct EnvironmentDevice {
     std::shared_ptr<const nlohmann::json> authored_lighting;
     std::size_t authored_lighting_revision{};
@@ -966,8 +925,6 @@ class SharedDataHub {
     const ActorStorage& actor_storage() const;
     [[nodiscard]] std::vector<EntityId> resolve_actor_geometry_handles(
         EntityId actor_handle);
-    [[nodiscard]] std::optional<EntityId>
-    resolve_actor_primary_transform_handle(EntityId actor_handle);
 
     // Runtime-only editor metadata keyed by native actor handle. Persisted state
     // remains in scene.ini; this cache only bridges Python proxy actors to native
@@ -1088,15 +1045,6 @@ class SharedDataHub {
     /// 远端 CEF 重构引入：直接写/清 session store 里的指针状态
     void set_viewport_ui_pointer(EntityId camera_handle, ViewportUiPointerState pointer);
     void clear_viewport_ui_pointer(EntityId camera_handle, std::uint64_t owner_context);
-    void set_viewport_gizmo_target(ViewportGizmoTarget target);
-    void clear_viewport_gizmo_target(EntityId camera_handle);
-    [[nodiscard]] ViewportGizmoState viewport_gizmo_state(
-        EntityId camera_handle) const;
-    void update_viewport_gizmo_interaction(EntityId camera_handle,
-                                           ViewportGizmoAxis axis,
-                                           bool dragging,
-                                           ViewportGizmoAxis hover_axis =
-                                               ViewportGizmoAxis::None);
 
    private:
     ModelResourceStorage model_resource_storage_;
@@ -1197,9 +1145,6 @@ class SharedDataHub {
         camera_releases_;
     mutable std::mutex viewport_ui_mutex_;
     std::unordered_map<EntityId, ViewportUiState> viewport_ui_states_;
-    mutable std::mutex viewport_gizmo_mutex_;
-    std::unordered_map<EntityId, ViewportGizmoState> viewport_gizmo_states_;
-    std::uint64_t viewport_gizmo_sequence_{0};
 };
 
 }  // namespace Corona

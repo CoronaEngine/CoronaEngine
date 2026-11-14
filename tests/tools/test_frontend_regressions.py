@@ -34,7 +34,6 @@ FILES = (
     "nativeFiles.test.mjs",
     "nativeScriptInput.test.mjs",
     "autosave.test.mjs",
-    "viewportGizmo.test.mjs",
 )
 TIMEOUT_SECONDS = 180
 

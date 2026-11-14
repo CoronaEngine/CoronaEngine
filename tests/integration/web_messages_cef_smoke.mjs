@@ -459,7 +459,7 @@ try {
       return corona.scene.readScene({...({archive_session:state.archive_session}),scene:state.scene,cameras:true});})()`) });
     stage = 'orphan mesh movement event removed from the native contract';
 
-    evidence[0].orphanMeshMovement = 'legacy bridge absent in every window; retired mesh and Gizmo events absent and subscriptions refused';
+    evidence[0].orphanMeshMovement = 'legacy bridge absent in every window; retired mesh events absent and subscriptions refused';
     const opened = await main.evaluate(`corona.project.openProject(${JSON.stringify(cameraWorld)})`);
     assert.equal(opened.ok, true, JSON.stringify(opened));
     assert.equal(Object.hasOwn(opened, 'data'), false);

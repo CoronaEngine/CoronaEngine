@@ -252,7 +252,7 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             CameraViewportManager::instance().update_layout(content.tab_id, x, y, width, height);
         }
         if (tab->web_camera_handle && tab->web_camera_width > 0) {
-            // The DOM rectangle is also the picking/gizmo coordinate boundary.
+            // The DOM rectangle is also the picking coordinate boundary.
             // Use it for the main view too, rather than stretching its image
             // across a different native-window rectangle.
             SharedDataHub::instance().enqueue_camera_viewport_update({

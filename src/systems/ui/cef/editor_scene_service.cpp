@@ -2541,27 +2541,6 @@ NativeEditorState& native_editor_state() {
     return *state;
 }
 
-EntityId resolve_native_actor_handle_by_guid(const std::string& scene_id,
-                                                   const std::string& archive_session,
-                                                   const std::string& actor_guid,
-                                                   std::string& error_code,
-                                                   std::string& error_message) {
-    auto* scene = native_editor_state().scene.get();
-    if (!scene || scene->archive_session != archive_session ||
-        !native_scene_request_matches(*scene, scene_id)) {
-        error_code = "PROJECT_CONTEXT_CHANGED";
-        error_message = "Gizmo belongs to an inactive scene";
-        return 0;
-    }
-    const auto* actor = find_native_actor_by_guid(*scene, actor_guid);
-    if (!actor || !actor->engine_actor) {
-        error_code = "ACTOR_NOT_FOUND";
-        error_message = "Gizmo actor is no longer available";
-        return 0;
-    }
-    return actor->engine_actor->get_handle();
-}
-
 CameraPropertiesSnapshot camera_properties_snapshot(const NativeEditorScene& scene, const NativeEditorCamera& camera) {
     CameraPropertiesSnapshot result;
     const auto& engine = *camera.engine_camera;

@@ -18,14 +18,14 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 的桥。名字都是**具名函数**。
 
 命名空间按职责划分，不再是「一个方法一个命名空间」：项目文档与项目元数据在 `project`，
-gizmo 叠加层在 `viewport`，脚本输入派发在 `input`，音频按身份分 `play`/`stop`。
+命令通道与拾取在 `viewport`，脚本输入派发在 `input`，音频按身份分 `play`/`stop`。
 **键名规则**：请求键用 camelCase（`panelId`、`routePath`），回复键用 snake_case
 （`window_token`、`panel_id`、`actor_guid`、`archive_session`）；`createPanel` 的回复是
 既有规则，不是笔误。
 
 ## Web 面
 
-共 9 个命名空间 / 58 个方法。清单由
+共 9 个命名空间 / 56 个方法。清单由
 `tests/tools/test_typed_native_surface.py` 精确钉死（多一个、少一个都会失败）：
 
 | 命名空间 | 说明 |
@@ -51,7 +51,7 @@ gizmo 叠加层在 `viewport`，脚本输入派发在 `input`，音频按身份�
 | `network` | `clearDiscoveredPeers`、`connectToPeer`、`getDiscoveredPeers`、`getSessionInfo`、`searchLan`、`setProjectRoot`、`startSession`、`stopSession` |
 | `project` | `createMultiplayerProject`、`createWorldProject`、`getProjectLoadStatus`、`getRecentProjects`、`openDocument`、`openProject`、`openProjectFile`、`saveActiveProjectInfo` |
 | `scene` | `createActor`、`createCamera`、`deleteActor`、`deleteCamera`、`focusActor`、`importResourceFile`、`readActive`、`readActorProperties`、`readActorRig`、`readCameraRenderSettings`、`readEnvironment`、`readModelNodes`、`readScene`、`readTransforms`、`rebindActorResource`、`save`、`selectActor`、`selectModelFile`、`setActorIkChains`、`setActorTransform`、`setCameraRenderSettings`、`setEnvironment`、`setModelNodeState`、`updateActor`、`updateCamera` |
-| `viewport` | `captureScreenshot`、`configure`、`pick`、`setGizmoPointer`、`setGizmoTarget` |
+| `viewport` | `captureScreenshot`、`configure`、`pick` |
 | `window` | `close`、`createPanel`、`focus`、`onCloseRequested`、`onClosed`、`setWindowPresentation` |
 
 ### 面板与窗口：三个合并后的入口

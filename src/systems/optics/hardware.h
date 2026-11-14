@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "horizon.h"
 
@@ -36,7 +36,6 @@
 #include GLSL(shaders/actor_pick.comp.glsl)
 #include GLSL(shaders/image_readback.comp.glsl)
 #include GLSL(shaders/optics_overlay.comp.glsl)
-#include GLSL(shaders/optics_gizmo.comp.glsl)
 #include GLSL(shaders/optics_cursor.comp.glsl)
 #include GLSL(shaders/optics_ui_warp.comp.glsl)
 #include GLSL(shaders/optics_composite.comp.glsl)
@@ -132,8 +131,6 @@ struct Hardware {
     Corona::Horizon::HardwareImage finalOutputImage;
     Corona::Horizon::HardwareImage cursorIconImage;
     bool cursorIconLoadAttempted = false;
-    std::array<Corona::Horizon::HardwareImage, 3> gizmoAxisImages;
-    bool gizmoAxisLoadAttempted = false;
     Corona::Horizon::HardwareExecutor executor;
     // Horizon 移除了 HardwareExecutor::last_receipt()，Hardware 自己记住最后一次提交。
     Corona::Horizon::SubmitReceipt last_receipt;
@@ -185,7 +182,6 @@ struct Hardware {
     std::optional<Corona::Horizon::ComputePipeline<actor_pick_comp_glsl_t>> actorPickPipeline;
     std::optional<Corona::Horizon::ComputePipeline<image_readback_comp_glsl_t>> screenshotReadbackPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_overlay_comp_glsl_t>> opticsOverlayPipeline;
-    std::optional<Corona::Horizon::ComputePipeline<optics_gizmo_comp_glsl_t>> opticsGizmoPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_cursor_comp_glsl_t>> opticsCursorPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_ui_warp_comp_glsl_t>> opticsUiWarpPipeline;
     std::optional<Corona::Horizon::ComputePipeline<optics_composite_comp_glsl_t>> opticsCompositePipeline;

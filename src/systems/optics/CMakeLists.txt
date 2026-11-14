@@ -54,18 +54,6 @@ target_link_libraries(corona_optics_system PRIVATE vision-all_libs)
 set(OPTICS_CURSOR_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/optics_cursor.comp.glsl")
 set_source_files_properties("${OPTICS_CURSOR_SHADER}" PROPERTIES HEADER_FILE_ONLY TRUE)
 target_sources(corona_optics_system PRIVATE "${OPTICS_CURSOR_SHADER}")
-set(OPTICS_GIZMO_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/optics_gizmo.comp.glsl")
-set_source_files_properties("${OPTICS_GIZMO_SHADER}" PROPERTIES HEADER_FILE_ONLY TRUE)
-target_sources(corona_optics_system PRIVATE "${OPTICS_GIZMO_SHADER}")
-# The shader is included through Helicon's GLSL(...) macro in hardware.h.  Keep
-# an explicit object dependency as well, so changing the GLSL source always
-# recompiles the optics translation unit even when the compiler's generated
-# header dependency scanner misses the macro-expanded include.
-set_source_files_properties(
-    optics_system.cpp
-    hardware.h
-    PROPERTIES OBJECT_DEPENDS "${OPTICS_GIZMO_SHADER}"
-)
 
 # The OpticsSystem translation unit exceeds MSVC's default COFF
 # section limit in Debug builds. Restrict /bigobj to that compiler and source

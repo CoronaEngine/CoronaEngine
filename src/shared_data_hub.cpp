@@ -101,22 +101,6 @@ std::vector<std::uintptr_t> SharedDataHub::resolve_actor_geometry_handles(
     return geometry_handles;
 }
 
-std::optional<std::uintptr_t>
-SharedDataHub::resolve_actor_primary_transform_handle(
-    EntityId actor_handle) {
-    for (const auto geometry_handle :
-         resolve_actor_geometry_handles(actor_handle)) {
-        const auto geometry = geometry_storage_.try_acquire_read(geometry_handle);
-        if (geometry && geometry->transform_handle != 0) {
-            if (model_transform_storage_.try_acquire_read(
-                    geometry->transform_handle)) {
-                return geometry->transform_handle;
-            }
-        }
-    }
-    return std::nullopt;
-}
-
 void SharedDataHub::set_actor_guid(EntityId actor_handle, std::string actor_guid) {
     if (actor_handle == 0) {
         return;
@@ -964,61 +948,5 @@ void SharedDataHub::clear_viewport_ui_pointer(EntityId camera_handle,
         return;
     }
     it->second.pointer = {};
-}
-
-void SharedDataHub::set_viewport_gizmo_target(ViewportGizmoTarget target) {
-    if (target.camera_handle == 0) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(viewport_gizmo_mutex_);
-    auto& state = viewport_gizmo_states_[target.camera_handle];
-    const bool changed = state.target.actor_handle != target.actor_handle ||
-                         state.target.scene_id != target.scene_id ||
-                         state.target.actor_name != target.actor_name;
-    state.target = std::move(target);
-    state.sequence = ++viewport_gizmo_sequence_;
-    if (changed) {
-        state.hover_axis = ViewportGizmoAxis::None;
-        state.active_axis = ViewportGizmoAxis::None;
-        state.dragging = false;
-    }
-}
-
-void SharedDataHub::clear_viewport_gizmo_target(EntityId camera_handle) {
-    if (camera_handle == 0) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(viewport_gizmo_mutex_);
-    viewport_gizmo_states_.erase(camera_handle);
-    ++viewport_gizmo_sequence_;
-}
-
-ViewportGizmoState SharedDataHub::viewport_gizmo_state(
-    EntityId camera_handle) const {
-    std::lock_guard<std::mutex> lock(viewport_gizmo_mutex_);
-    const auto it = viewport_gizmo_states_.find(camera_handle);
-    if (it != viewport_gizmo_states_.end()) {
-        return it->second;
-    }
-    ViewportGizmoState state;
-    state.target.camera_handle = camera_handle;
-    return state;
-}
-
-void SharedDataHub::update_viewport_gizmo_interaction(
-    EntityId camera_handle,
-    ViewportGizmoAxis axis,
-    bool dragging,
-    ViewportGizmoAxis hover_axis) {
-    if (camera_handle == 0) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(viewport_gizmo_mutex_);
-    auto& state = viewport_gizmo_states_[camera_handle];
-    state.target.camera_handle = camera_handle;
-    state.active_axis = dragging ? axis : ViewportGizmoAxis::None;
-    state.hover_axis = dragging ? axis : hover_axis;
-    state.dragging = dragging;
-    state.sequence = ++viewport_gizmo_sequence_;
 }
 }  // namespace Corona

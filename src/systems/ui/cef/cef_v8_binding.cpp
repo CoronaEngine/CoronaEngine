@@ -7,7 +7,6 @@
 #include "bridge_worker.h"
 #include "cef_operations.h"
 #include "cef_viewport_pick.h"
-#include "cef_viewport_gizmo.h"
 #include "editor_scene_service.h"
 #include "cef_script_input.h"
 #include "horizon/core/logging.h"
@@ -36,8 +35,6 @@
 #include <nlohmann/json.hpp>
 
 namespace Corona::Systems::UI {
-ViewportGizmoReply execute_viewport_gizmo_target(const ViewportGizmoTargetRequest& request);
-ViewportGizmoReply execute_viewport_gizmo_pointer(const ViewportGizmoPointerRequest& request);
 namespace {
 
 bool v8_to_json(CefRefPtr<CefV8Value> value, nlohmann::json& output, unsigned depth = 0) {
@@ -101,7 +98,6 @@ CefRefPtr<CefV8Value> json_to_v8(const nlohmann::json& value) {
     return result;
 }
 
-enum class GizmoMethod { SetTarget, Pointer };
 enum class BridgeMethod { Call };
 
 bool object_keys(CefRefPtr<CefV8Value> object, std::initializer_list<const char*> allowed);
@@ -260,37 +256,6 @@ bool read_project_settings(ProjectSettingsMethod, const CefV8ValueList& argument
 
 CefRefPtr<CefV8Value> project_settings_value(const ProjectSettingsReply& reply) {
     return json_to_v8(reply.value);
-}
-
-bool read_gizmo_request(GizmoMethod method, const CefV8ValueList& arguments,
-                        ViewportGizmoTargetRequest& target, ViewportGizmoPointerRequest& pointer) {
-    if (arguments.size() != 3 || !arguments[0]->IsString() || !arguments[1]->IsString() ||
-        arguments[0]->GetStringValue().empty() || arguments[1]->GetStringValue().empty() ||
-        !object_keys(arguments[2], method == GizmoMethod::SetTarget
-            ? std::initializer_list<const char*>{"archive_session", "actor_guid"}
-            : std::initializer_list<const char*>{"archive_session", "request_id", "event", "x", "y", "width", "height", "button", "buttons", "modifiers"})) return false;
-    auto options = arguments[2];
-    auto session = options->GetValue("archive_session");
-    if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
-    target.scene_id = arguments[0]->GetStringValue().ToString();
-    target.camera_id = arguments[1]->GetStringValue().ToString();
-    target.archive_session = session->GetStringValue().ToString();
-    if (method == GizmoMethod::SetTarget) {
-        auto actor = options->GetValue("actor_guid");
-        if (actor && !actor->IsNull()) {
-            if (!actor->IsString() || actor->GetStringValue().empty()) return false;
-            target.actor_guid = actor->GetStringValue().ToString();
-        }
-        return true;
-    }
-    pointer.scene_id = target.scene_id; pointer.camera_id = target.camera_id;
-    pointer.archive_session = target.archive_session;
-    const auto text = [&](const char* name, std::string& value) { auto v = options->GetValue(name); if (!v || !v->IsString()) return false; value = v->GetStringValue().ToString(); return !value.empty(); };
-    const auto number = [&](const char* name, double& value) { auto v = options->GetValue(name); if (!v || !(v->IsInt() || v->IsUInt() || v->IsDouble())) return false; value = v->GetDoubleValue(); return std::isfinite(value); };
-    double button = 0, buttons = 0, modifiers = 0;
-    if (!text("request_id", pointer.request_id) || !text("event", pointer.event) || !number("x", pointer.x) || !number("y", pointer.y) || !number("width", pointer.width) || !number("height", pointer.height) || !number("button", button) || !number("buttons", buttons) || !number("modifiers", modifiers) || pointer.width <= 0 || pointer.height <= 0) return false;
-    pointer.button = static_cast<int>(button); pointer.buttons = static_cast<int>(buttons); pointer.modifiers = static_cast<int>(modifiers);
-    return true;
 }
 
 enum class NativeEventKind { Closed, CloseRequested };
@@ -2176,47 +2141,6 @@ public:
         return promise;
     }
 
-    CefRefPtr<CefV8Value> invoke(GizmoMethod method, const CefV8ValueList& arguments) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        auto promise = CefV8Value::CreatePromise();
-        if (!owns_current_context()) { promise->RejectPromise("CONTEXT_CHANGED"); return promise; }
-        ViewportGizmoTargetRequest target;
-        ViewportGizmoPointerRequest pointer;
-        if (!read_gizmo_request(method, arguments, target, pointer)) {
-            reject(context_, promise, "INVALID_ARGUMENT", "Expected scoped typed viewport gizmo data"); return promise;
-        }
-        const auto id = ++sequence_;
-        pending_.emplace(id, Pending{method, promise});
-        const auto weak = weak_from_this();
-        CefPostTask(TID_UI, CefCreateClosureTask(base::BindOnce(
-            [](std::weak_ptr<CoronaV8Endpoint> weak, std::uint64_t id, GizmoMethod method,
-               ViewportGizmoTargetRequest target, ViewportGizmoPointerRequest pointer) {
-                const auto endpoint = weak.lock(); if (!endpoint || !endpoint->active()) return;
-                WindowRequest camera{WindowMethod::ConfigureViewport, endpoint->browser_id_};
-                camera.scene_id = method == GizmoMethod::SetTarget ? target.scene_id : pointer.scene_id;
-                camera.camera_id = method == GizmoMethod::SetTarget ? target.camera_id : pointer.camera_id;
-                camera.archive_session = method == GizmoMethod::SetTarget ? target.archive_session : pointer.archive_session;
-                const auto checked = prepare_camera_window_request(camera);
-                if (!checked.error_code.empty()) {
-                    ViewportGizmoReply reply; reply.error_code = checked.error_code; reply.error_message = checked.error_message; endpoint->complete(id, std::move(reply)); return;
-                }
-                if (method == GizmoMethod::SetTarget) {
-                    target.camera_handle = camera.camera_handle;
-                    target.camera_authority = camera.camera_authority;
-                    if (target.actor_guid) {
-                        target.actor_handle = resolve_native_actor_handle_by_guid(target.scene_id, target.archive_session, *target.actor_guid, target.error_code, target.error_message);
-                        if (!target.actor_handle) { ViewportGizmoReply reply; reply.error_code = target.error_code; reply.error_message = target.error_message; endpoint->complete(id, std::move(reply)); return; }
-                    }
-                    BrowserManager::instance().enqueue_main_thread_task([weak, id, target = std::move(target)]() mutable { if (const auto e = weak.lock(); e && e->active()) { ViewportGizmoReply reply; if (!target.camera_authority) { reply.error_code = "PROJECT_CONTEXT_CHANGED"; reply.error_message = "Camera was retired"; } else { std::lock_guard lock(target.camera_authority->mutex); if (!target.camera_authority->active) { reply.error_code = "PROJECT_CONTEXT_CHANGED"; reply.error_message = "Camera was retired"; } else reply = execute_viewport_gizmo_target(target); } e->complete(id, std::move(reply)); } });
-                } else {
-                    pointer.camera_handle = camera.camera_handle;
-                    pointer.camera_authority = camera.camera_authority;
-                    BrowserManager::instance().enqueue_main_thread_task([weak, id, pointer = std::move(pointer)]() mutable { if (const auto e = weak.lock(); e && e->active()) { ViewportGizmoReply reply; if (!pointer.camera_authority) { reply.error_code = "PROJECT_CONTEXT_CHANGED"; reply.error_message = "Camera was retired"; } else { std::lock_guard lock(pointer.camera_authority->mutex); if (!pointer.camera_authority->active) { reply.error_code = "PROJECT_CONTEXT_CHANGED"; reply.error_message = "Camera was retired"; } else reply = execute_viewport_gizmo_pointer(pointer); } e->complete(id, std::move(reply)); } });
-                }
-            }, weak, id, method, std::move(target), std::move(pointer))));
-        return promise;
-    }
-
     CefRefPtr<CefV8Value> invoke(BridgeMethod, const CefV8ValueList& arguments) {
         CEF_REQUIRE_RENDERER_THREAD();
         auto promise = CefV8Value::CreatePromise();
@@ -2416,8 +2340,8 @@ private:
     }
 
     // Ten reply types repeated this settlement sequence, differing only in how the reply becomes a
-    // V8 value. One template holds the sequence; each overload supplies its own shaper. The scene,
-    // script-input and gizmo replies keep their own bodies because they do real work here.
+    // V8 value. One template holds the sequence; each overload supplies its own shaper. The scene
+    // and script-input replies keep their own bodies because they do real work here.
     template <typename Reply, typename Shaper>
     void resolve_with(std::uint64_t id, const Reply& reply, Shaper shape) {
         CEF_REQUIRE_RENDERER_THREAD();
@@ -2469,27 +2393,6 @@ private:
 
     void resolve(std::uint64_t id, const BridgeReply& reply) {
         resolve_with(id, reply, [](const BridgeReply& value) { return CefV8Value::CreateString(value.json); });
-    }
-
-    void resolve(std::uint64_t id, const ViewportGizmoReply& reply) {
-        CEF_REQUIRE_RENDERER_THREAD();
-        const auto entry = pending_.find(id); if (entry == pending_.end()) return;
-        const auto promise = entry->second.promise; pending_.erase(entry);
-        if (!active() || !context_ || !context_->IsValid() || !context_->Enter()) return;
-        if (!reply.error_code.empty()) reject(context_, promise, reply.error_code, reply.error_message);
-        else {
-            auto value = CefV8Value::CreateObject(nullptr, nullptr);
-            value->SetValue("axis", CefV8Value::CreateString(reply.axis), V8_PROPERTY_ATTRIBUTE_NONE);
-            value->SetValue("consumed", CefV8Value::CreateBool(reply.consumed), V8_PROPERTY_ATTRIBUTE_NONE);
-            value->SetValue("dragging", CefV8Value::CreateBool(reply.dragging), V8_PROPERTY_ATTRIBUTE_NONE);
-            value->SetValue("ended", CefV8Value::CreateBool(reply.ended), V8_PROPERTY_ATTRIBUTE_NONE);
-            value->SetValue("cancelled", CefV8Value::CreateBool(reply.cancelled), V8_PROPERTY_ATTRIBUTE_NONE);
-            auto position = CefV8Value::CreateArray(3);
-            for (int i = 0; i < 3; ++i) position->SetValue(i, CefV8Value::CreateDouble(reply.position[i]));
-            value->SetValue("position", position, V8_PROPERTY_ATTRIBUTE_NONE);
-            promise->ResolvePromise(value);
-        }
-        context_->Exit();
     }
 
     void resolve(std::uint64_t id, const SceneReply& reply) {
@@ -2612,7 +2515,7 @@ private:
     const std::uint64_t context_id_ = ++context_sequence_;
     std::uint64_t sequence_ = 0;
     std::string scene_archive_session_;
-    struct Pending { std::variant<WindowMethod, SceneMethod, ViewportMethod, ScriptInputMethod, GizmoMethod, BridgeMethod, ProjectSettingsMethod, ProjectLauncherMethod, NetworkMethod, FilesMethod> method; CefRefPtr<CefV8Value> promise; };
+    struct Pending { std::variant<WindowMethod, SceneMethod, ViewportMethod, ScriptInputMethod, BridgeMethod, ProjectSettingsMethod, ProjectLauncherMethod, NetworkMethod, FilesMethod> method; CefRefPtr<CefV8Value> promise; };
     std::unordered_map<std::uint64_t, Pending> pending_;
     std::map<std::uint64_t, Subscriber> subscribers_;
 };
@@ -2752,11 +2655,6 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     window->SetValue("onCloseRequested", CefV8Value::CreateFunction("onCloseRequested",
         new NativeEventHandler(endpoint, NativeEventKind::CloseRequested)), V8_PROPERTY_ATTRIBUTE_READONLY);
     auto viewport = CefV8Value::CreateObject(nullptr, nullptr);
-    // The gizmo is a viewport overlay: it rides the viewport namespace.
-    viewport->SetValue("setGizmoTarget", CefV8Value::CreateFunction("setGizmoTarget",
-        new NativeHandler(endpoint, GizmoMethod::SetTarget)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    viewport->SetValue("setGizmoPointer", CefV8Value::CreateFunction("setGizmoPointer",
-        new NativeHandler(endpoint, GizmoMethod::Pointer)), V8_PROPERTY_ATTRIBUTE_READONLY);
     auto app = CefV8Value::CreateObject(nullptr, nullptr);
     app->SetValue("closeProcess", CefV8Value::CreateFunction("closeProcess",
         new NativeHandler(endpoint, WindowMethod::CloseProcess)), V8_PROPERTY_ATTRIBUTE_READONLY);

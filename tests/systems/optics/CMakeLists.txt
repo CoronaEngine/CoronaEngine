@@ -217,14 +217,3 @@ target_link_libraries(corona_shadow_culling_tests PRIVATE Horizon corona::resour
 add_test(NAME ShadowCullingTests
          COMMAND corona_shadow_culling_tests)
 
-add_executable(corona_viewport_gizmo_math_tests
-    test_viewport_gizmo_math.cpp
-)
-target_include_directories(corona_viewport_gizmo_math_tests
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/include
-        ${PROJECT_SOURCE_DIR}/src/systems/optics
-)
-target_link_libraries(corona_viewport_gizmo_math_tests PRIVATE Horizon)
-add_test(NAME ViewportGizmoMathTests
-         COMMAND corona_viewport_gizmo_math_tests)

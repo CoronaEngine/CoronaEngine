@@ -11,7 +11,7 @@ struct ImagePoint {
     double x, y;
 };
 
-// Input coordinates may be CSS pixels (picking/gizmo) or frontend render pixels
+// Input coordinates may be CSS pixels (picking) or frontend render pixels
 // (the stereo cursor). The camera rectangle is in native physical pixels.
 template <typename Camera>
 [[nodiscard]] std::optional<ImagePoint> map_viewport_image_point(

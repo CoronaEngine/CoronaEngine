@@ -550,11 +550,6 @@ struct OpticsEventViewport {
     return desc;
 }
 constexpr char kMouseIconRelativePath[] = "assets/icon/mouse_icon.png";
-constexpr std::array<const char*, 3> kGizmoAxisRelativePaths{{
-    "assets/icon/axis_x.png",
-    "assets/icon/axis_y.png",
-    "assets/icon/axis_z.png",
-}};
 
 struct CursorIconPixels {
     std::vector<unsigned char> rgba;
@@ -2635,7 +2630,6 @@ bool OpticsSystem::initialize_render_pipelines() {
         hardware_->actorPickPipeline.emplace(actor_pick_comp_glsl, ktm::uvec3(1, 1, 1));
         hardware_->screenshotReadbackPipeline.emplace(image_readback_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->opticsOverlayPipeline.emplace(optics_overlay_comp_glsl, ktm::uvec3(8, 8, 1));
-        hardware_->opticsGizmoPipeline.emplace(optics_gizmo_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->opticsCursorPipeline.emplace(optics_cursor_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->opticsUiWarpPipeline.emplace(optics_ui_warp_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->opticsCompositePipeline.emplace(optics_composite_comp_glsl, ktm::uvec3(8, 8, 1));
@@ -2799,65 +2793,6 @@ bool OpticsSystem::ensure_cursor_icon_texture() {
     return true;
 }
 
-bool OpticsSystem::ensure_gizmo_axis_textures() {
-    if (!hardware_) {
-        return false;
-    }
-    if (std::all_of(hardware_->gizmoAxisImages.begin(),
-                    hardware_->gizmoAxisImages.end(),
-                    [](const Horizon::HardwareImage& image) {
-                        return static_cast<bool>(image);
-                    })) {
-        return true;
-    }
-    if (hardware_->gizmoAxisLoadAttempted) {
-        return false;
-    }
-    hardware_->gizmoAxisLoadAttempted = true;
-
-    std::array<CursorIconPixels, 3> pixels;
-    for (std::size_t i = 0; i < pixels.size(); ++i) {
-        auto loaded = load_rgba_icon_pixels(kGizmoAxisRelativePaths[i], "Optics gizmo axis");
-        if (!loaded) {
-            return false;
-        }
-        pixels[i] = std::move(*loaded);
-    }
-
-    Horizon::HardwareExecutor executor;
-    for (std::size_t i = 0; i < pixels.size(); ++i) {
-        Horizon::HardwareImage image(Horizon::HardwareImageDesc::texture_2d(
-            static_cast<std::uint32_t>(pixels[i].width),
-            static_cast<std::uint32_t>(pixels[i].height),
-            Horizon::Format::SRGBA8_UNORM,
-            Horizon::ImageUsage_Sampled | Horizon::ImageUsage_TransferDst,
-            i == 0 ? "optics.gizmo_axis_x"
-                   : (i == 1 ? "optics.gizmo_axis_y" : "optics.gizmo_axis_z")));
-        if (!image) {
-            CFW_LOG_WARNING("Optics gizmo axis GPU image creation failed at {}", i);
-            return false;
-        }
-        const auto bytes = std::span<const std::byte>(
-            reinterpret_cast<const std::byte*>(pixels[i].rgba.data()),
-            pixels[i].rgba.size());
-
-        // Use staging buffer + copy_from() like cursor icon (new Horizon API)
-        Horizon::HardwareBufferDesc staging_desc;
-        staging_desc.element_count = bytes.size_bytes();
-        staging_desc.element_size = 1;
-        staging_desc.usage = Horizon::BufferUsage_TransferSrc;
-        staging_desc.cpu_access = Horizon::CpuAccessMode::Write;
-        const Horizon::HardwareBuffer staging(staging_desc, bytes);
-
-        const auto receipt = executor.stream()
-            << image.copy_from(staging)
-            << Horizon::commit();
-        executor.wait_idle(receipt);
-        hardware_->gizmoAxisImages[i] = std::move(image);
-    }
-    CFW_LOG_INFO("Optics gizmo axis textures uploaded");
-    return true;
-}
 
 void OpticsSystem::bind_native_view_resources(EntityId camera_handle,
                                               uint32_t width,
@@ -3275,7 +3210,7 @@ void OpticsSystem::apply_camera_and_transform_updates() {
     apply_pending_transform_updates();
     apply_pending_camera_releases();
     SharedDataHub::instance().publish_camera_snapshot_from_storage();
-    // 变换快照：外部读者（get_position/get_matrix/面板/gizmo）只读这一份投影，
+    // 变换快照：外部读者（get_position/get_matrix/面板）只读这一份投影，
     // 不再对 slot 加锁。必须在 transform 命令应用之后重建，才是"本 tick 的最终值"。
     SharedDataHub::instance().publish_transform_snapshot_from_storage();
     acknowledge_camera_state_updates(state_updates);
@@ -5030,7 +4965,6 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
     uint64_t frame_index) {
     auto& uiVisibility = *hardware_->uiVisibilityPipeline;
     auto& opticsOverlay = *hardware_->opticsOverlayPipeline;
-    auto& opticsGizmo = *hardware_->opticsGizmoPipeline;
     auto& opticsCursor = *hardware_->opticsCursorPipeline;
     auto& opticsUiWarp = *hardware_->opticsUiWarpPipeline;
     auto& opticsComposite = *hardware_->opticsCompositePipeline;
@@ -5078,38 +5012,12 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
         pointer.cursor_shape != ViewportUiCursorShape::Hidden && std::isfinite(pointer.x) && std::isfinite(pointer.y);
     const auto* cursor_state = cursor_visible ? &pointer : nullptr;
 
-    const auto gizmo_state =
-        SharedDataHub::instance().viewport_gizmo_state(camera_handle);
-    OpticsDetail::ViewportGizmoLayout gizmo_layout;
-    bool gizmo_visible = false;
-    if (gizmo_state.target.actor_handle != 0 && ensure_gizmo_axis_textures()) {
-        auto& hub = SharedDataHub::instance();
-        const auto transform_handle =
-            hub.resolve_actor_primary_transform_handle(
-                gizmo_state.target.actor_handle);
-        if (transform_handle) {
-            if (auto transform =
-                    hub.model_transform_storage().try_acquire_read(
-                        *transform_handle)) {
-                gizmo_layout = OpticsDetail::make_viewport_gizmo_layout(
-                    camera.compute_view_proj_matrix(),
-                    transform->position,
-                    hardware_->gbufferSize.x,
-                    hardware_->gbufferSize.y,
-                    128.0f);
-                gizmo_visible = gizmo_layout.visible;
-            }
-        }
-    }
-
     const auto ui_instance_count = static_cast<std::uint32_t>(uiBatch.instances.size());
     auto& ui_log_state = ui_pass_log_states_[camera_handle];
     if (!ui_log_state.has_state ||
         ui_log_state.has_follow_camera_instances != has_follow_camera_instances ||
         ui_log_state.stereo_ui != stereo_ui ||
         ui_log_state.cursor_visible != cursor_visible ||
-        ui_log_state.gizmo_target != (gizmo_state.target.actor_handle != 0) ||
-        ui_log_state.gizmo_visible != gizmo_visible ||
         ui_log_state.instance_count != ui_instance_count ||
         ui_log_state.width != hardware_->gbufferSize.x ||
         ui_log_state.height != hardware_->gbufferSize.y) {
@@ -5118,28 +5026,24 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
             .has_follow_camera_instances = has_follow_camera_instances,
             .stereo_ui = stereo_ui,
             .cursor_visible = cursor_visible,
-            .gizmo_target = gizmo_state.target.actor_handle != 0,
-            .gizmo_visible = gizmo_visible,
             .instance_count = ui_instance_count,
             .width = hardware_->gbufferSize.x,
             .height = hardware_->gbufferSize.y,
         };
-        CFW_LOG_INFO("Optics UI pass: camera={} mode={} follow_camera_instances={} gizmo_target={} gizmo={} cursor={} output={}x{} warp={}",
+        CFW_LOG_INFO("Optics UI pass: camera={} mode={} follow_camera_instances={} cursor={} output={}x{} warp={}",
                      camera_handle,
                      stereo_ui ? "stereo3d" : "flat2d",
                      ui_instance_count,
-                     gizmo_state.target.actor_handle != 0 ? "set" : "none",
-                     gizmo_visible ? "visible" : "hidden",
                      cursor_visible ? "visible" : "hidden",
                      hardware_->gbufferSize.x,
                      hardware_->gbufferSize.y,
                      (stereo_ui &&
-                      (has_follow_camera_instances || gizmo_visible || cursor_visible))
+                      (has_follow_camera_instances || cursor_visible))
                          ? "submitted"
                          : "skipped");
     }
 
-    if (!has_follow_camera_instances && !gizmo_visible && !cursor_visible) {
+    if (!has_follow_camera_instances && !cursor_visible) {
         return &background;
     }
 
@@ -5206,52 +5110,12 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
         }
     }
 
-    if (!follow_camera_overlay_ready && !gizmo_visible && !cursor_visible) {
+    if (!follow_camera_overlay_ready && !cursor_visible) {
         return &background;
     }
 
-    if (gizmo_visible) {
-        bind_storage_image(opticsGizmo, opticsGizmo.pushConsts.outputImage, target.ui_overlay);
-        opticsGizmo.pushConsts.outputWidth = hardware_->gbufferSize.x;
-        opticsGizmo.pushConsts.outputHeight = hardware_->gbufferSize.y;
-        opticsGizmo.pushConsts.originX = 0u;
-        opticsGizmo.pushConsts.originY = 0u;
-        opticsGizmo.pushConsts.gizmoOrigin = upload_value(gizmo_layout.origin);
-        opticsGizmo.pushConsts.xDirection =
-            upload_value(gizmo_layout.axes[0].direction);
-        opticsGizmo.pushConsts.yDirection =
-            upload_value(gizmo_layout.axes[1].direction);
-        opticsGizmo.pushConsts.zDirection =
-            upload_value(gizmo_layout.axes[2].direction);
-        bind_sampled_image(opticsGizmo, opticsGizmo.pushConsts.xImage, hardware_->gizmoAxisImages[0]);
-        bind_sampled_image(opticsGizmo, opticsGizmo.pushConsts.yImage, hardware_->gizmoAxisImages[1]);
-        bind_sampled_image(opticsGizmo, opticsGizmo.pushConsts.zImage, hardware_->gizmoAxisImages[2]);
-        opticsGizmo.pushConsts.activeAxis =
-            static_cast<std::uint32_t>(gizmo_state.active_axis);
-        opticsGizmo.pushConsts.hoverAxis =
-            static_cast<std::uint32_t>(gizmo_state.hover_axis);
-        opticsGizmo.pushConsts.preserveExisting =
-            follow_camera_overlay_ready ? 1u : 0u;
-        opticsGizmo.pushConsts.axisLength = 128.0f;
-        const auto& sprite_metadata =
-            OpticsDetail::kViewportGizmoSpriteMetadata;
-        opticsGizmo.pushConsts.xSourceAnchorTip =
-            upload_value(ktm::fvec4{
-                sprite_metadata[0].anchor.x, sprite_metadata[0].anchor.y,
-                sprite_metadata[0].tip.x, sprite_metadata[0].tip.y});
-        opticsGizmo.pushConsts.ySourceAnchorTip =
-            upload_value(ktm::fvec4{
-                sprite_metadata[1].anchor.x, sprite_metadata[1].anchor.y,
-                sprite_metadata[1].tip.x, sprite_metadata[1].tip.y});
-        opticsGizmo.pushConsts.zSourceAnchorTip =
-            upload_value(ktm::fvec4{
-                sprite_metadata[2].anchor.x, sprite_metadata[2].anchor.y,
-                sprite_metadata[2].tip.x, sprite_metadata[2].tip.y});
-    }
-
     if (cursor_visible && cursor_state != nullptr) {
-        const bool preserve_existing_overlay =
-            follow_camera_overlay_ready || gizmo_visible;
+        const bool preserve_existing_overlay = follow_camera_overlay_ready;
         uint32_t cursor_origin_x = 0;
         uint32_t cursor_origin_y = 0;
         uint32_t cursor_width = hardware_->gbufferSize.x;
@@ -5312,9 +5176,6 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
     if (follow_camera_overlay_ready) {
         stream << uiVisibility.extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y)
                << opticsOverlay.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
-    }
-    if (gizmo_visible) {
-        stream << opticsGizmo.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
     }
     if (cursor_visible) {
         stream << opticsCursor.dispatch_extent(cursorDispatchWidth, cursorDispatchHeight);
