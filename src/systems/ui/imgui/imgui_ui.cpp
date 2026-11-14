@@ -5,6 +5,7 @@
 #include <corona/shared_data_hub.h>
 #include "imgui_platform.h"
 #include "imgui_workspace.h"
+#include "camera_timing_overlay.h"
 #include "cef/browser_manager.h"
 #include "cef/cef_client.h"
 #include "sdl/sdl_utils.h"
@@ -171,6 +172,7 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             if (is_valid_texture_id(tab->texture_id)) ImGui::Image(tab->texture_id, size);
             else ImGui::Dummy(size);
             contents.push_back({tab_id, ImGui::GetWindowViewport()->ID, origin, size, ImGui::IsItemHovered()});
+            CameraTimingOverlay::draw(*tab, origin, size);
         }
         if (main) end_main_workspace();
         else {
