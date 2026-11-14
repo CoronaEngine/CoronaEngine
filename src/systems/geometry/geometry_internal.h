@@ -8,7 +8,7 @@
 #include <corona/resource/types/scene.h>
 #include "shadow_lod_state.h"
 
-#include <oneapi/tbb/task_group.h>
+#include <corona/concurrency/thread_pool.h>
 
 #include <algorithm>
 #include <atomic>
@@ -294,8 +294,8 @@ struct GeometrySystem::Impl {
     std::unordered_map<uint64_t /*lod_key*/, PendingLodBuild> pending_lod_builds;
     std::unordered_map<uint64_t /*lod_key*/, PendingLodBuild> pending_shadow_lod_builds;
 
-    // TBB 任务组（复用全局 worker 池，不新建线程）；shutdown 时 wait() 排空。
-    tbb::task_group lod_build_tasks;
+    // 引擎统一线程池的任务组（不新建线程）；shutdown 时 wait() 排空。
+    Corona::Concurrency::TaskGroup lod_build_tasks;
 
     // 条目身份版本分配器（几何线程单调递增，0 保留为"无"）。
     std::uint64_t next_residency_epoch = 1;
@@ -455,26 +455,29 @@ struct GeometrySystem::Impl {
     /// 保护 pending_lod_disk_writes 的互斥锁
     std::mutex                      lod_disk_write_mutex;
 
-    /// 通知 worker 线程有新任务入队
-    std::condition_variable         lod_disk_write_cv;
-
-    /// worker 当前正在落盘的 key（受 lod_disk_write_mutex 保护，空 = 无在写任务）。
+    /// 当前正在落盘的 key（受 lod_disk_write_mutex 保护，空 = 无在写任务）。
     /// restore 侧据此识别"任务已出队但 blob 尚未写完"的窗口，此时跳过磁盘回读，
     /// 避免命中同 key 的陈旧 blob；下个评估周期自然从磁盘命中。
     std::string                     lod_disk_write_inflight_key;
 
-    /// 后台序列化+写盘线程（独立线程，避免阻塞几何帧循环）
-    std::unique_ptr<std::thread>    lod_disk_worker;
+    /// 是否已有写盘任务在池中执行（受 lod_disk_write_mutex 保护）。
+    /// 保持"同一时刻只有一轮写盘"，与原先单 worker 串行语义一致。
+    bool                            lod_disk_write_scheduled{false};
 
-    /// worker 线程运行标志（shutdown 时设为 false 通知退出）
-    std::atomic<bool>               lod_disk_worker_running{false};
+    /// 写盘失败后的退避截止时间（受 lod_disk_write_mutex 保护），
+    /// 取代原先 worker 里的 100ms sleep，避免在池线程上空转。
+    std::chrono::steady_clock::time_point lod_disk_retry_not_before{};
 
-    /// 延迟初始化磁盘缓存 + 启动 worker 线程
-    ///（reconcile_cpu_residency 入口、Scene 写锁之外调用；call_once 幂等）
+    /// 池中执行的写盘任务组；shutdown 时 wait() 排空
+    Corona::Concurrency::TaskGroup  lod_disk_writes;
+
+    /// 延迟初始化磁盘缓存（幂等；不再启动线程）
+    ///（reconcile_cpu_residency 入口、Scene 写锁之外调用）
     void ensure_lod_disk_cache();
 
-    /// worker 线程主循环：等待任务 → 序列化 → 写盘
-    void lod_disk_writer_loop();
+    /// 从队列取一个任务提交到线程池：同一时刻只允许一个在飞，
+    /// 完成回调会自行再 pump 一次以继续排空队列。
+    void pump_lod_disk_writes();
 
     /// 处理单个写入任务：序列化 + 容量检查 + 写入 CacheManager
     /// @return true 写入成功；false 失败（超大项或 put 错误），调用方决定重试/丢弃
@@ -531,7 +534,7 @@ struct GeometrySystem::Impl {
     // A reload remains in Loading until the last GPU batch has been published.
     // Keyed by geometry so several profiles sharing one geometry emit one event.
     std::unordered_map<Payload, std::pair<Payload, Payload>> pending_geometry_load_events;
-    tbb::task_group geometry_build_tasks;
+    Corona::Concurrency::TaskGroup geometry_build_tasks;
     static constexpr std::size_t kMaxInflightGeometryBuilds = 1;
     // A scene is uploaded in bounded mesh batches.  Hardware resource creation
     // is serialized by Horizon, so this yield point is what lets rendering

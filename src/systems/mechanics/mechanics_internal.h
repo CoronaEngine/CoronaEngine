@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/concurrency/thread_pool.h>
 #include <corona/events/scene_system_events.h>
 #include <corona/resource/resource_manager.h>
 #include <corona/systems/geometry/geometry_system.h>
@@ -1036,8 +1037,9 @@ struct MechanicsSystem::Impl {
     MechanicsInternal::PreparedGpuPipeline<GpuRigidIntegrationPipeline> gpu_rigid_integration;
     MechanicsInternal::PreparedGpuPipeline<GpuContactSolverPipeline> gpu_contact_solver;
     MechanicsInternal::PreparedGpuPipeline<GpuFloorSleepPipeline> gpu_floor_sleep;
-    // Declared after slots so workers join before those slots are destroyed.
-    std::vector<std::jthread> gpu_preparation_workers;
+    // Declared after slots so the task group waits before those slots are destroyed.
+    Corona::Concurrency::TaskGroup gpu_preparation_tasks;
+    bool gpu_preparation_started{false};
     void start_gpu_preparation();
     std::size_t collision_preparation_cursor{};
     using GpuMeshIdentity = std::tuple<std::uintptr_t, std::uint64_t, std::size_t, std::size_t>;
@@ -1090,8 +1092,9 @@ struct MechanicsSystem::Impl {
     }
 
     void clear_runtime_state() {
-        for (auto& worker : gpu_preparation_workers) worker.request_stop();
-        gpu_preparation_workers.clear();
+        // 预热任务可能仍在池中运行并访问下面的 pipeline，必须先等它们结束，
+        // 等价于原先 jthread 向量的 request_stop + 析构 join。
+        gpu_preparation_tasks.wait();
         collision_preparation_cursor = 0;
         gpu_submission_batch.reset();
         gpu_floor_sleep.reset();

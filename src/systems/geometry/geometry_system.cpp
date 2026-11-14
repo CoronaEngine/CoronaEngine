@@ -299,6 +299,8 @@ void GeometrySystem::update() {
     Corona::apply_pending_scene_commands();
     // 外部线程（CEF/脚本）对 GeometryDevice 的写入也在这里落地。
     Corona::apply_pending_geometry_commands();
+    // 兜底：上一轮写盘可能因失败进入退避，这里按时间戳重新尝试排空队列。
+    impl_->pump_lod_disk_writes();
     auto& hub = SharedDataHub::instance();
     auto& scene_storage = hub.scene_storage();
     auto& camera_storage = hub.camera_storage();
@@ -1133,19 +1135,12 @@ void GeometrySystem::shutdown() {
     impl_->lod_build_tasks.wait();
     impl_->pending_lod_builds.clear();
 
-    // 停止 LOD 磁盘缓存写入线程：先置停止标志再唤醒，worker 醒来后会把队列中
-    // 剩余任务排空再退出；join 确保线程在 Impl 成员销毁前结束，防止 worker
-    // 访问悬空的 this / 已析构的队列与缓存对象。
-    if (impl_->lod_disk_worker_running.load(std::memory_order_acquire)) {
-        impl_->lod_disk_worker_running.store(false, std::memory_order_release);
-        impl_->lod_disk_write_cv.notify_one();
-        if (impl_->lod_disk_worker && impl_->lod_disk_worker->joinable()) {
-            impl_->lod_disk_worker->join();
-        }
-    }
+    // 等待在途写盘任务结束（等价于原先的 thread::join），确保池任务不会在 Impl
+    // 成员销毁后继续访问 this / 队列 / 缓存对象。
+    impl_->lod_disk_writes.wait();
 
-    // join 之后不会再有新任务入队，但仍做一次防御性排空：覆盖"置停止标志与
-    // worker 检查标志之间"极窄窗口内入队、worker 退出前未及处理的任务，
+    // 之后不会再有新任务入队，但仍做一次同步排空：覆盖"wait 返回与销毁之间"
+    // 极窄窗口内入队、池任务未及处理的任务，
     // 确保已从 lod_levels 移出的数据不丢失（该数据是此级唯一的副本，
     // 丢失后该级不再可恢复）。
     while (true) {
@@ -1927,13 +1922,9 @@ void GeometrySystem::Impl::ensure_lod_disk_cache() {
                 CFW_LOG_NOTICE("[LOD-Disk] LRU 淘汰: {} (该级数据不再可恢复)", key);
             });
 
-        // 启动后台序列化+写盘线程
-        lod_disk_worker_running = true;
-        lod_disk_worker = std::make_unique<std::thread>([this]() {
-            lod_disk_writer_loop();
-        });
-
-        CFW_LOG_NOTICE("[LOD-Disk] 缓存已初始化: dir={} 内存=128MB 磁盘=512MB",
+        // 写盘改为线程池任务（Background 类）：不再为 LOD 单独起线程。
+        CFW_LOG_NOTICE("[LOD-Disk] 缓存已初始化（写盘走线程池 Background 道）: "
+                       "dir={} 内存=128MB 磁盘=512MB",
                        dir.string());
     });
 }
@@ -1951,82 +1942,78 @@ void GeometrySystem::Impl::report_cpu_residency_scene_busy(std::uint64_t model_i
     last_cpu_residency_busy_log = now;
 }
 
-void GeometrySystem::Impl::lod_disk_writer_loop() {
-    CFW_LOG_NOTICE("[LOD-Disk] 写入线程已启动");
-
-    while (lod_disk_worker_running.load(std::memory_order_acquire)) {
-        LodDiskWriteTask task;
-
-        {
-            std::unique_lock lock(lod_disk_write_mutex);
-            lod_disk_write_cv.wait(lock, [this]() {
-                return !pending_lod_disk_writes.empty()
-                    || !lod_disk_worker_running.load(std::memory_order_acquire);
-            });
-
-            if (!lod_disk_worker_running.load(std::memory_order_acquire)) {
-                // 关闭中：排空剩余任务后再退出（含重试逻辑，与正常路径一致）
-                while (!pending_lod_disk_writes.empty()) {
-                    task = std::move(pending_lod_disk_writes.front());
-                    pending_lod_disk_writes.pop_front();
-                    lod_disk_write_inflight_key = task.key;
-                    lock.unlock();
-                    bool ok = write_one_lod_record(task);
-                    lock.lock();
-                    lod_disk_write_inflight_key.clear();
-
-                    if (!ok && task.retry_count < Impl::kMaxLodDiskWriteRetries) {
-                        ++task.retry_count;
-                        CFW_LOG_WARNING("[LOD-Disk] 关闭时写入失败，重试 {}/{}: {}",
-                                       task.retry_count, Impl::kMaxLodDiskWriteRetries,
-                                       task.key);
-                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                        pending_lod_disk_writes.push_front(std::move(task));
-                        continue;
-                    }
-                    if (!ok) {
-                        CFW_LOG_ERROR("[LOD-Disk] 关闭时写入失败已达最大重试次数，丢弃: {}"
-                                      " (model={:#x} mesh={} lod={})",
-                                      task.key, task.model_id, task.mesh_index,
-                                      task.lod_level);
-                    }
-                }
-                break;
-            }
-
-            task = std::move(pending_lod_disk_writes.front());
-            pending_lod_disk_writes.pop_front();
-            // 标记在写 key：restore 侧在"已出队、blob 未写完"窗口内跳过磁盘回读
-            lod_disk_write_inflight_key = task.key;
-        }  // 解锁后再写盘，避免长时间持锁阻塞几何线程入队
-
-        bool write_ok = write_one_lod_record(task);
-        {
-            std::lock_guard clear_lock(lod_disk_write_mutex);
-            lod_disk_write_inflight_key.clear();
+void GeometrySystem::Impl::pump_lod_disk_writes() {
+    LodDiskWriteTask task;
+    {
+        std::lock_guard qlock(lod_disk_write_mutex);
+        if (lod_disk_write_scheduled || pending_lod_disk_writes.empty() || !lod_disk_cache) {
+            return;
         }
-
-        // 写盘失败重试：瞬时错误（磁盘满、CacheManager 内部异常等）短暂退避后重新入队。
-        // 超大 blob（超过内存缓存容量）同样返回 false，但 retry 计数仍递增——超大项
-        // 每次都会失败，达到上限后丢弃，避免无限循环。
-        if (!write_ok && task.retry_count < Impl::kMaxLodDiskWriteRetries) {
-            ++task.retry_count;
-            CFW_LOG_WARNING("[LOD-Disk] 写入失败，重试 {}/{}: {}",
-                           task.retry_count, Impl::kMaxLodDiskWriteRetries, task.key);
-            // 短暂退避：给瞬时错误（磁盘满等）恢复窗口，也避免快速空转
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            {
-                std::lock_guard qlock(lod_disk_write_mutex);
-                pending_lod_disk_writes.push_front(std::move(task));
-            }
-        } else if (!write_ok) {
-            CFW_LOG_ERROR("[LOD-Disk] 写入失败已达最大重试次数，丢弃: {} "
-                          "(model={:#x} mesh={} lod={}, 该级不再可恢复)",
-                          task.key, task.model_id, task.mesh_index, task.lod_level);
+        // 失败退避：原先由 worker 里的 sleep(100ms) 承担，现在由几何线程/任务尾
+        // 按时间戳跳过，避免在线程池 worker 上空转。
+        if (lod_disk_retry_not_before != std::chrono::steady_clock::time_point{} &&
+            std::chrono::steady_clock::now() < lod_disk_retry_not_before) {
+            return;
         }
+        task = std::move(pending_lod_disk_writes.front());
+        pending_lod_disk_writes.pop_front();
+        // 标记在写 key：restore 侧在"已出队、blob 未写完"窗口内跳过磁盘回读
+        lod_disk_write_inflight_key = task.key;
+        lod_disk_write_scheduled = true;
     }
 
-    CFW_LOG_NOTICE("[LOD-Disk] 写入线程已退出");
+    // Background 类：允许被资源导入等长任务推迟，但与 Realtime/Compute 分道，
+    // 不会拖慢几何帧循环。
+    lod_disk_writes.submit(
+        Corona::Concurrency::TaskClass::Background,
+        [this, task = std::move(task)]() mutable {
+            const std::string task_key = task.key;
+            const std::uint64_t task_model = task.model_id;
+            const std::size_t task_mesh = task.mesh_index;
+            const std::size_t task_lod = task.lod_level;
+
+            bool write_ok = false;
+            try {
+                write_ok = write_one_lod_record(task);
+            } catch (const std::exception& error) {
+                CFW_LOG_ERROR("[LOD-Disk] 写入抛出异常: {} ({})", task_key, error.what());
+            } catch (...) {
+                CFW_LOG_ERROR("[LOD-Disk] 写入抛出未知异常: {}", task_key);
+            }
+
+            const bool should_retry =
+                !write_ok && task.retry_count < Impl::kMaxLodDiskWriteRetries;
+            if (should_retry) {
+                ++task.retry_count;
+            }
+            const int retry_count = task.retry_count;
+
+            {
+                std::lock_guard qlock(lod_disk_write_mutex);
+                lod_disk_write_inflight_key.clear();
+                lod_disk_write_scheduled = false;
+                if (should_retry) {
+                    // 失败任务放回队首，退避后再写；数据是该级唯一副本，不能丢。
+                    pending_lod_disk_writes.push_front(std::move(task));
+                    lod_disk_retry_not_before =
+                        std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+                } else {
+                    lod_disk_retry_not_before = {};
+                }
+            }
+
+            if (should_retry) {
+                CFW_LOG_WARNING("[LOD-Disk] 写入失败，退避后重试 {}/{}: {}",
+                                retry_count, Impl::kMaxLodDiskWriteRetries, task_key);
+            } else if (!write_ok) {
+                CFW_LOG_ERROR("[LOD-Disk] 写入失败已达最大重试次数，丢弃: {} "
+                              "(model={:#x} mesh={} lod={}, 该级不再可恢复)",
+                              task_key, task_model, task_mesh, task_lod);
+            }
+
+            // 继续排空队列：下一次提交由本任务发起，不依赖几何帧到达。
+            pump_lod_disk_writes();
+        });
 }
 
 bool GeometrySystem::Impl::write_one_lod_record(const LodDiskWriteTask& task) {
@@ -3046,7 +3033,7 @@ void GeometrySystem::process_pending_geometry_builds() {
             const auto model_id = task.model_id;
             const auto texture_cache = task.texture_cache;
             impl_->pending_geometry_builds.emplace(handle, std::move(task));
-            impl_->geometry_build_tasks.run(
+            impl_->geometry_build_tasks.submit(Corona::Concurrency::TaskClass::Compute, 
                 [model_id, first_mesh, batch_count, texture_cache, promise, &resource_manager]() {
                     Corona::Diagnostics::PhaseScope build_phase{"GeometryWorker", "build_batch"};
                     std::vector<MeshDevice> result;
@@ -3200,7 +3187,7 @@ void GeometrySystem::process_pending_geometry_builds() {
             item.geom_handle,
             Impl::PendingGeometryBuild{item.model_id, epoch, 0, mesh_count, batch_count, {},
                                        texture_cache, promise->get_future()});
-        impl_->geometry_build_tasks.run(
+        impl_->geometry_build_tasks.submit(Corona::Concurrency::TaskClass::Compute, 
             [model_id = item.model_id, batch_count, texture_cache, promise, &resource_manager]() {
                 Corona::Diagnostics::PhaseScope build_phase{"GeometryWorker", "build_first_batch"};
                 std::vector<MeshDevice> result;
@@ -3642,7 +3629,7 @@ void GeometrySystem::reconcile_lod_residency() {
                         auto promise = std::make_shared<std::promise<Impl::LODBuildResult>>();
                         impl_->pending_lod_builds[lod_key] = Impl::PendingLodBuild{
                             model_id, epoch, level, promise->get_future()};
-                        impl_->lod_build_tasks.run(
+                        impl_->lod_build_tasks.submit(Corona::Concurrency::TaskClass::Compute, 
                             [verts = std::move(verts_copy), inds = std::move(inds_copy),
                              promise]() {
                                 Impl::LODBuildResult r;
@@ -4123,7 +4110,7 @@ void GeometrySystem::reconcile_lod_residency() {
                             auto promise = std::make_shared<std::promise<Impl::LODBuildResult>>();
                             impl_->pending_lod_builds[lod_key] =
                                 Impl::PendingLodBuild{model_id, entry_epoch, demand, promise->get_future()};
-                            impl_->lod_build_tasks.run(
+                            impl_->lod_build_tasks.submit(Corona::Concurrency::TaskClass::Compute, 
                                 [verts = std::move(verts), inds = std::move(inds), promise]() {
                                     Impl::LODBuildResult r;
                                     try {
@@ -4166,7 +4153,7 @@ void GeometrySystem::reconcile_lod_residency() {
                             auto promise = std::make_shared<std::promise<Impl::LODBuildResult>>();
                             impl_->pending_shadow_lod_builds[lod_key] =
                                 Impl::PendingLodBuild{model_id, epoch, shadow_demand, promise->get_future(), Impl::LodBuildPurpose::Shadow};
-                            impl_->lod_build_tasks.run([verts=std::move(verts), inds=std::move(inds), promise]() {
+                            impl_->lod_build_tasks.submit(Corona::Concurrency::TaskClass::Compute, [verts=std::move(verts), inds=std::move(inds), promise]() {
                                 Impl::LODBuildResult r; try {
                                     auto buffers = GeometryDetail::make_draw_buffers(verts, inds);
                                     r.vertex_buffer = r.vertex_storage = std::move(buffers.vertices);
@@ -4218,7 +4205,7 @@ void GeometrySystem::reconcile_lod_residency() {
                             auto promise = std::make_shared<std::promise<Impl::LODBuildResult>>();
                             impl_->pending_lod_builds[lod_key] =
                                 Impl::PendingLodBuild{model_id, entry_epoch, 0, promise->get_future()};
-                            impl_->lod_build_tasks.run(
+                            impl_->lod_build_tasks.submit(Corona::Concurrency::TaskClass::Compute, 
                                 [verts = std::move(verts), inds = std::move(inds), promise]() {
                                     Impl::LODBuildResult r;
                                     try {
@@ -4837,8 +4824,9 @@ void GeometrySystem::reconcile_cpu_residency() {
                 }
 
                 if (queued) {
-                    // notify 放在队列锁外，避免 worker 被唤醒后立刻阻塞在锁上
-                    impl_->lod_disk_write_cv.notify_one();
+                    // 提交放在队列锁外，避免池 worker 立刻阻塞在锁上。
+                    // 同一时刻只允许一个写盘任务在飞，其余排队等任务尾部再 pump。
+                    impl_->pump_lod_disk_writes();
                     // moved-from vector 标准上仅保证 valid-but-unspecified；后续
                     // evict/restore 逻辑依赖 empty() 判断，显式 clear 守规
                     //（所有主流实现移动后即为空，clear 为零开销）

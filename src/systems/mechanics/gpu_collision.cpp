@@ -2,6 +2,8 @@
 #include "gpu_performance.h"
 #include "gpu_compute_pipeline.h"
 
+#include <corona/concurrency/thread_pool.h>
+
 #include <Codegen/BuiltinVariate.h>
 #include <Codegen/ControlFlows.h>
 #include <Codegen/CustomLibrary.h>
@@ -1596,7 +1598,10 @@ std::future<GpuCollisionPipeline::MeshMotionResult> GpuCollisionPipeline::move_m
     impl_->finish(stream,false);
     // A compact completion record is read on a worker. The mechanics thread
     // never waits for a rendering submission while holding scene/geometry locks.
-    return std::async(std::launch::async,[receipt=impl_->last_receipt,buffer=impl_->motion_callback,
+    // Realtime 道：与资源导入等长任务隔离，避免完成回读被长任务推迟。
+    return Corona::Concurrency::ThreadPool::instance().submit(
+        Corona::Concurrency::TaskClass::Realtime,
+        [receipt=impl_->last_receipt,buffer=impl_->motion_callback,
         uploads=std::move(impl_->in_flight_uploads)]() -> MeshMotionResult {
         H::HardwareExecutor completion;completion.wait_completed(receipt);
         std::array<float,24> r{};

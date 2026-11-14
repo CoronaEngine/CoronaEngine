@@ -190,7 +190,8 @@ MechanicsSystem::MechanicsSystem() : impl_(std::make_unique<Impl>()) {
 MechanicsSystem::~MechanicsSystem() = default;
 
 void MechanicsSystem::Impl::start_gpu_preparation() {
-    if (!gpu_preparation_workers.empty()) return;
+    if (gpu_preparation_started) return;
+    gpu_preparation_started = true;
     struct Jobs {
         std::vector<std::packaged_task<void()>> tasks;
         std::atomic<std::size_t> next{};
@@ -203,15 +204,17 @@ void MechanicsSystem::Impl::start_gpu_preparation() {
     jobs->tasks.push_back(gpu_broadphase.prepare("broad phase", warmup_pipeline));
     jobs->tasks.push_back(gpu_skinning.prepare("skinning", warmup_pipeline));
     // Bound compiler concurrency instead of starting a compiler for every
-    // kernel. Workers capture only their job queue, never Impl or SystemContext.
+    // kernel. 两条取任务的池任务等价于原先的两条预热线程；workers capture
+    // only their job queue, never Impl or SystemContext.
     for (unsigned i = 0; i < 2; ++i) {
-        gpu_preparation_workers.emplace_back([jobs](std::stop_token stop) {
-            while (!stop.stop_requested()) {
-                const auto index = jobs->next.fetch_add(1, std::memory_order_relaxed);
-                if (index >= jobs->tasks.size()) break;
-                if (jobs->tasks[index].valid()) jobs->tasks[index]();
-            }
-        });
+        gpu_preparation_tasks.submit(
+            Corona::Concurrency::TaskClass::Compute, [jobs]() {
+                for (;;) {
+                    const auto index = jobs->next.fetch_add(1, std::memory_order_relaxed);
+                    if (index >= jobs->tasks.size()) break;
+                    if (jobs->tasks[index].valid()) jobs->tasks[index]();
+                }
+            });
     }
 }
 

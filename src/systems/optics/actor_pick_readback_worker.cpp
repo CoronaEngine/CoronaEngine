@@ -4,6 +4,8 @@
 
 namespace Corona::Systems::OpticsDetail {
 
+using Corona::Concurrency::TaskClass;
+
 ActorPickReadbackWorker::Reservation::Reservation(ActorPickReadbackWorker* owner,
                                                   std::uint64_t id) noexcept
     : owner_(owner), id_(id) {}
@@ -42,12 +44,7 @@ ActorPickReadbackWorker::~ActorPickReadbackWorker() {
 
 void ActorPickReadbackWorker::start() {
     std::lock_guard lock(mutex_);
-    if (thread_.joinable()) {
-        return;
-    }
-    stopping_ = false;
     accepting_ = true;
-    thread_ = std::thread([this] { run(); });
 }
 
 std::optional<ActorPickReadbackWorker::Reservation> ActorPickReadbackWorker::reserve() {
@@ -73,31 +70,43 @@ bool ActorPickReadbackWorker::submit(Reservation&& reservation, Work work) {
             !reservations_.contains(reservation.id_)) {
             return false;
         }
-        work_.push_back(std::move(work));
+        // 槽位所有权移交给任务：任务结束时归还，Reservation 不再负责取消。
         reservations_.erase(reservation.id_);
         reservation.owner_ = nullptr;
         reservation.id_ = 0;
     }
-    work_available_.notify_one();
-    return true;
+
+    auto* worker = this;
+    const bool enqueued = in_flight_.submit(
+        TaskClass::Realtime, [worker, work = std::move(work)]() mutable {
+            try {
+                work();
+            } catch (...) {
+                // GPU/回读任务自身会把失败翻译成完成回调；这里只保证不杀死 worker。
+            }
+            std::lock_guard lock(worker->mutex_);
+            if (worker->occupied_ > 0) --worker->occupied_;
+        });
+
+    if (!enqueued) {
+        // 线程池已停止：立即归还槽位，避免容量永久泄漏。
+        std::lock_guard lock(mutex_);
+        if (occupied_ > 0) --occupied_;
+    }
+    return enqueued;
 }
 
 void ActorPickReadbackWorker::shutdown() {
     {
         std::lock_guard lock(mutex_);
-        if (!thread_.joinable()) {
-            accepting_ = false;
-            reservations_.clear();
-            occupied_ = 0;
-            return;
-        }
         accepting_ = false;
-        stopping_ = true;
-        occupied_ -= reservations_.size();
+        occupied_ = occupied_ > reservations_.size() ? occupied_ - reservations_.size() : 0;
         reservations_.clear();
     }
-    work_available_.notify_all();
-    thread_.join();
+    // 等已提交任务结束：它们可能正卡在 GPU 时间线上，不能带着悬空 this 退出。
+    in_flight_.wait();
+    std::lock_guard lock(mutex_);
+    occupied_ = 0;
 }
 
 std::size_t ActorPickReadbackWorker::pending_count() const noexcept {
@@ -108,37 +117,7 @@ std::size_t ActorPickReadbackWorker::pending_count() const noexcept {
 void ActorPickReadbackWorker::cancel(std::uint64_t id) noexcept {
     std::lock_guard lock(mutex_);
     if (reservations_.erase(id) == 1) {
-        --occupied_;
-    }
-}
-
-void ActorPickReadbackWorker::run() {
-    for (;;) {
-        Work work;
-        {
-            std::unique_lock lock(mutex_);
-            work_available_.wait(lock, [this] { return stopping_ || !work_.empty(); });
-            if (work_.empty()) {
-                if (stopping_) {
-                    return;
-                }
-                continue;
-            }
-            work = std::move(work_.front());
-            work_.pop_front();
-        }
-
-        try {
-            work();
-        } catch (...) {
-            // GPU/readback jobs translate failures into their own completion.
-            // Keep this worker alive if a defensive catch is still reached.
-        }
-
-        {
-            std::lock_guard lock(mutex_);
-            --occupied_;
-        }
+        if (occupied_ > 0) --occupied_;
     }
 }
 

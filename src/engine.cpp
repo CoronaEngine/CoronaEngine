@@ -1,5 +1,6 @@
 #include "corona/engine.h"
 
+#include <corona/concurrency/thread_pool.h>
 #include <corona/events/engine_events.h>
 #include <corona/systems/geometry/scene_commands.h>
 #include <corona/systems/optics/environment_commands.h>
@@ -169,6 +170,17 @@ bool Engine::initialize() {
     // "一个系统一条线程"的旧模式并打印原因 —— 编辑器起不来比跑得慢更糟。
     configure_systems_dag(sys_mgr);
 
+    // 辅助任务线程池：显式在初始化末尾启动，线程数在日志里一眼可见。
+    // 池承担几何/LOD 构建、LOD 落盘、拾取回读、网格运动完成、GPU 预热等任务，
+    // 使引擎常驻线程保持为 main / SystemsThread / Script / Network + 池。
+    {
+        auto& pool = Corona::Concurrency::ThreadPool::instance();
+        pool.start();
+        const auto stats = pool.stats();
+        CFW_LOG_NOTICE("Utility thread pool started: {} worker(s), {} realtime lane(s)",
+                       stats.workers, stats.realtime_workers);
+    }
+
     initialized_.store(true);
 
     CFW_LOG_NOTICE("====================================");
@@ -277,6 +289,11 @@ void Engine::shutdown() {
         }
 
         sys_mgr->stop_all();
+
+        // 系统已停，池里不应再有引擎任务；排空并 join，避免 shutdown_all()
+        // 析构系统时还有任务在访问它们的成员。
+        Corona::Concurrency::ThreadPool::instance().stop();
+
         sys_mgr->shutdown_all();
     }
 
