@@ -3,6 +3,7 @@
 //
 
 #include "material.h"
+#include "prepared_bsdf.h"
 #include "base/import/param_schema.h"
 #include "base/sampler.h"
 #include "base/mgr/scene.h"
@@ -337,6 +338,17 @@ Float MaterialEvaluator::diffuse_factor() const noexcept {
         ret = lobe_set->diffuse_factor();
     });
     return ret;
+}
+
+void MaterialEvaluator::with_prepared_evaluation(
+    const Float3 &world_wo,
+    const std::function<void(const PreparedMaterialEvaluator &)> &consume,
+    MaterialEvalMode mode, const Uint &flag, TransportMode tm) const noexcept {
+    // Preparation writes shared outer-scope cache variables in the selected
+    // material case. Emit the consumer once, outside that dispatch switch.
+    PreparedMaterialEvaluator prepared{*this, *swl_, shading_frame_, ng_, world_wo,
+                                         mode, flag, tm, MaterialRegistry::instance().individual_ns()};
+    consume(prepared);
 }
 
 ScatterEval MaterialEvaluator::evaluate(const Float3 &world_wo, const Float3 &world_wi,

@@ -14,6 +14,7 @@
 namespace vision {
 
 class ParamSchema;
+class PreparedMaterialEvaluator;
 
 class MaterialLut {
 private:
@@ -105,6 +106,14 @@ public:
                                        MaterialEvalMode mode = All,
                                        const Uint &flag = BxDFFlag::All,
                                        TransportMode tm = Radiance) const noexcept;
+    // A scoped view bound to this outgoing direction and current material
+    // state. Prepare after frame/roughness changes and consume inside the
+    // callback; the view must not outlive this evaluator or its DSL scope.
+    void with_prepared_evaluation(const Float3 &world_wo,
+                                   const std::function<void(const PreparedMaterialEvaluator &)> &consume,
+                                   MaterialEvalMode mode = All,
+                                   const Uint &flag = BxDFFlag::All,
+                                   TransportMode tm = Radiance) const noexcept;
     [[nodiscard]] BSDFSample sample_delta(const Float3 &world_wo, TSampler &sampler) const noexcept;
     [[nodiscard]] BSDFSample sample(const Float3 &world_wo, TSampler &sampler,
                                     const Uint &flag = BxDFFlag::All,

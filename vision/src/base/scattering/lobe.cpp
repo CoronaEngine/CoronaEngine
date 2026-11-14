@@ -185,6 +185,18 @@ MicrofacetLobe::MicrofacetLobe(const SP<Fresnel> &fresnel, UP<MicrofacetBxDF> re
                                const Uint &flag, optional<ShadingFrame> shading_frame)
     : Lobe(std::move(shading_frame)), fresnel_(fresnel), bxdf_(std::move(refl)), flag_{flag} {}
 
+const MicrofacetReflection *MicrofacetLobe::prepared_reflection_pdf() const noexcept {
+    const auto *reflection = dynamic_cast<const MicrofacetReflection *>(bxdf());
+    const auto *ggx = dynamic_cast<const GGXMicrofacet *>(microfacet());
+    // Custom primitive/distribution overrides retain their original virtual
+    // implementation unless they explicitly supply a compatible lobe hook.
+    if (!reflection || typeid(*reflection) != typeid(MicrofacetReflection) ||
+        !ggx || typeid(*ggx) != typeid(GGXMicrofacet) || !ggx->sample_visible()) {
+        return nullptr;
+    }
+    return reflection;
+}
+
 void MicrofacetLobe::from_ratio_x(const Float &roughness) noexcept {
     bxdf()->set_alpha(clamp(sqr(roughness), alpha_lower, alpha_upper));
 }

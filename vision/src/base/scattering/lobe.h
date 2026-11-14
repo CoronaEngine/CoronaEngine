@@ -66,6 +66,17 @@ public:
     [[nodiscard]] virtual bool is_multi() const noexcept { return false; }
     [[nodiscard]] virtual Float valid_world_factor(const Float3 &wo, const Float3 &wi) const noexcept;
     [[nodiscard]] virtual Float valid_factor(const Float3 &wo, const Float3 &wi) const noexcept;
+    // Unknown world-space evaluators keep their original evaluate() path.
+    // Opted-in derived classes that customize that wrapper must opt out again.
+    [[nodiscard]] virtual bool supports_prepared_local_evaluation() const noexcept { return false; }
+    // A combined lobe can expose the ordinary weighted-child evaluation tree.
+    // A derived set that changes that evaluation must decline this capability.
+    [[nodiscard]] virtual const LobeSet *prepared_lobe_set() const noexcept { return nullptr; }
+    // Opt in only when local PDF evaluation is the original safe reflection
+    // BxDF, including its flags and hemisphere validity. A derived lobe that
+    // changes that PDF contract must override this hook (nullptr keeps its
+    // original virtual evaluation). F always uses the original lobe evaluator.
+    [[nodiscard]] virtual const MicrofacetReflection *prepared_reflection_pdf() const noexcept { return nullptr; }
     [[nodiscard]] BSDFSample sample(const Float3 &world_wo, const Uint &flag,
                                     TSampler &sampler, TransportMode tm) const noexcept;
     [[nodiscard]] virtual BSDFSample sample_local(const Float3 &wo, const Uint &flag,
@@ -144,6 +155,8 @@ public:
     [[nodiscard]] MicrofacetBxDF *bxdf() noexcept { return bxdf_.get(); }
     [[nodiscard]] Microfacet<D> *microfacet() noexcept { return bxdf()->microfacet(); }
     [[nodiscard]] const Microfacet<D> *microfacet() const noexcept { return bxdf()->microfacet(); }
+    [[nodiscard]] const MicrofacetReflection *prepared_reflection_pdf() const noexcept override;
+    [[nodiscard]] bool supports_prepared_local_evaluation() const noexcept override { return true; }
     void from_ratio_x(const ocarina::Float &roughness) noexcept override;
     [[nodiscard]] Float to_ratio_x() const noexcept override;
     [[nodiscard]] Float diffuse_factor() const noexcept override;
@@ -181,6 +194,7 @@ public:
     DiffuseLobe(const SampledSpectrum &kr, const SampledWavelengths &swl,
                 optional<PartialDerivative<Float3>> shading_frame = {})
         : Lobe(std::move(shading_frame)), bxdf_(std::make_unique<LambertReflection>(kr, swl)) {}
+    [[nodiscard]] bool supports_prepared_local_evaluation() const noexcept override { return true; }
     DiffuseLobe(SampledSpectrum R, Float sigma, const SampledWavelengths &swl,
                 optional<PartialDerivative<Float3>> shading_frame = {})
         : Lobe(std::move(shading_frame)), bxdf_(std::make_unique<OrenNayar>(R, sigma, swl)) {}
@@ -253,6 +267,7 @@ public:
         : Lobe(std::move(shading_frame)), fresnel_(fresnel), microfacet_(microfacet),
           kt_(std::move(color)), dispersive_(ocarina::move(dispersive)),
           flag_(std::move(flag)) {}
+    [[nodiscard]] bool supports_prepared_local_evaluation() const noexcept override { return true; }
     void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
                         Float2 &roughness) const noexcept override;
     VS_MAKE_LOBE_ASSIGNMENT(DielectricLobe)
@@ -333,6 +348,7 @@ protected:
 
 public:
     LobeSet() = default;
+    [[nodiscard]] const LobeSet *prepared_lobe_set() const noexcept override { return this; }
     explicit LobeSet(Lobes lobes) : lobes_(std::move(lobes)) {
         initialize();
     }

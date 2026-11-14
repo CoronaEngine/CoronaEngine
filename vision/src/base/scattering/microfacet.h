@@ -229,6 +229,7 @@ public:
         : alpha_x_(std::move(ax)), alpha_y_(std::move(ay)),
           sample_visible_(sample_visible), type_(type) {}
     [[nodiscard]] oc_float<p> max_alpha() const noexcept { return max(alpha_x_, alpha_y_); }
+    [[nodiscard]] bool sample_visible() const noexcept { return sample_visible_; }
     OC_MAKE_MEMBER_GETTER_SETTER(alpha_x, )
     OC_MAKE_MEMBER_GETTER_SETTER(alpha_y, )
     [[nodiscard]] virtual oc_float<p> bsdf_D(oc_float3<p> wh) const noexcept {
