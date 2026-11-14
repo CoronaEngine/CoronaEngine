@@ -11,6 +11,14 @@
 
 namespace vision {
 
+const ShaderNodeSlot *ShaderNodeSlotSet::input_slot(string_view name) const noexcept {
+    const ShaderNodeSlot *result = nullptr;
+    for_each_slot<false>([&](const ShaderNodeSlot &slot) {
+        if (slot.attr_name() == name) result = addressof(slot);
+    });
+    return result;
+}
+
 const ShaderNodeSlot &ShaderNodeSlotSet::get_slot(int index) const noexcept {
     return *(reinterpret_cast<const ShaderNodeSlot *>(size_t(this) + slot_infos_[index].offset));
 }

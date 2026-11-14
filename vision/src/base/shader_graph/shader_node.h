@@ -25,6 +25,9 @@ class ShaderNodeSlot;
     name##_.set(graph().construct_slot(desc, #name, type))
 
 class ShaderNodeSlotSet {
+public:
+    [[nodiscard]] const ShaderNodeSlot *input_slot(string_view name) const noexcept;
+
 protected:
     struct SlotInfo {
 #ifndef NDEBUG

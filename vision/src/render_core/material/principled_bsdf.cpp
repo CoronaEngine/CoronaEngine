@@ -6,6 +6,7 @@
 #include <utility>
 #include "base/import/param_schema.h"
 #include "base/scattering/material.h"
+#include "base/scattering/gi_principled_parameters.h"
 #include "base/shader_graph/shader_node.h"
 #include "base/mgr/scene.h"
 #include "base/mgr/pipeline.h"
@@ -473,6 +474,7 @@ public:
         return ret;
     }
     [[nodiscard]] UP<Lobe> create_lobe_set(const Interaction &it, const SampledWavelengths &swl) const noexcept override {
+        if (gi_principled::reading() || gi_principled::writing()) return create_gi_lobe_set(it, swl);
         ShadingFrame shading_frame = compute_shading_frame(it, swl);
         Float transmission = transmission_weight_.evaluate(it, swl)->as_scalar();
         Float cos_theta = dot(it.wo, it.ng);
@@ -551,6 +553,158 @@ public:
         if (switches_[EMetallic]) {
             outline("principled metallic", [&] {
                 metallic = metallic_.evaluate(it, swl)->as_scalar() * front_factor;
+                SP<FresnelF82Tint> fresnel_f82 = make_shared<FresnelF82Tint>(color, swl);
+                fresnel_f82->init_from_F82(specular_tint);
+                UP<MicrofacetReflection> metal_refl = make_unique<MicrofacetReflection>(weight * metallic,
+                                                                                        swl, microfacet);
+                WeightedLobe metal_lobe(metallic * weight.average(),
+                                        make_unique<MetallicLobe>(fresnel_f82, std::move(metal_refl), flag, shading_frame));
+                stable_lobe = select(stable_layers && metallic == 1.f && flag == SurfaceData::NearSpec,
+                                     uint(lobes.size()), stable_lobe);
+                lobes.push_back(std::move(metal_lobe));
+                weight *= (1.0f - metallic);
+            });
+        }
+        if (switches_[ETrans]) {
+            outline("principled transmission", [&] {
+                Float trans_weight = transmission;
+                float_array etas = it.correct_eta(iors);
+                Float eta = etas[0];
+                auto fresnel = make_shared<FresnelDielectric>(SampledSpectrum{swl, eta}, swl);
+                SampledSpectrum t_weight = trans_weight * weight;
+                SP<Fresnel> fresnel_schlick = make_shared<FresnelSchlick>(schlick_F0_from_ior(eta) * specular_tint, etas, swl);
+                UP<Lobe> dielectric = make_unique<DielectricLobe>(fresnel_schlick, microfacet, color, false,
+                                                                  flag, shading_frame);
+                WeightedLobe trans_lobe(t_weight.average(), t_weight.average(), std::move(dielectric));
+                stable_lobe = select(stable_layers && metallic == 0.f && transmission == 1.f && flag == SurfaceData::NearSpec,
+                                     uint(lobes.size()), stable_lobe);
+                lobes.push_back(std::move(trans_lobe));
+                weight *= (1.0f - trans_weight);
+            });
+        }
+        if (switches_[ESpec]) {
+            outline("principled specular", [&] {
+                Float f0 = schlick_F0_from_ior(ior);
+                SP<Fresnel> fresnel_schlick = make_shared<FresnelSchlick>(f0 * specular_tint, iors, swl);
+                UP<Lobe> spec_refl = make_unique<SpecularLobe>(fresnel_schlick,
+                                                               make_unique<MicrofacetReflection>(weight, swl, microfacet),
+                                                               flag,
+                                                               shading_frame);
+                SampledSpectrum spec_refl_albedo = spec_refl->albedo(cos_theta);
+                WeightedLobe specular_lobe(spec_refl_albedo.average(), std::move(spec_refl));
+                lobes.push_back(std::move(specular_lobe));
+                weight = layering_weight(spec_refl_albedo, weight);
+            });
+        }
+        if (switches_[EDiffuse]) {
+            outline("principled diffuse", [&] {
+                SampledSpectrum diff_weight = color * weight * front_factor;
+                WeightedLobe diffuse_lobe{diff_weight.average(),
+                                          make_shared<DiffuseLobe>(diff_weight, swl, shading_frame)};
+                lobes.push_back(std::move(diffuse_lobe));
+            });
+        }
+        UP<LobeSet> ret = make_unique<PrincipledLobeSet>(std::move(lobes), stable_lobe);
+        return ret;
+    }
+
+    // GI-only construction. Keep the ordinary material path above verbatim so
+    // compression cannot alter ordinary PT or Falcor DI shader generation.
+    [[nodiscard]] UP<Lobe> create_gi_lobe_set(const Interaction &it, const SampledWavelengths &swl) const noexcept {
+        uint gi_configuration = (uint(two_sided_) << 6u) | (uint(sheen_mode_ == SheenLTC::Approximate) << 7u);
+        for (uint i = 0u; i < LobeType::Count; ++i) gi_configuration |= uint(switches_[i]) << i;
+        gi_principled::begin_material(it.material_id(), gi_configuration, swl.dimension() == 3u && spectrum()->impl_type() == "srgb");
+        ShadingFrame shading_frame = gi_principled::reading() ? it.shading : compute_shading_frame(it, swl);
+        Float transmission = gi_principled::scalar(18u, [&] { return transmission_weight_.evaluate(it, swl)->as_scalar(); });
+        Float cos_theta = dot(it.wo, it.ng);
+        Float front_factor = cast<float>(cos_theta > 0.f);
+        if (two_sided_) {
+            // Two-sided reflection applies to opaque surfaces only. Keep the
+            // geometric normal and transmissive interfaces unchanged so eta,
+            // ray offsets and one-sided emission retain their original meaning.
+            Bool opaque = transmission <= 0.f;
+            Float side = select(opaque && dot(it.wo, shading_frame.normal()) < 0.f, -1.f, 1.f);
+            shading_frame.y *= side;
+            shading_frame.z *= side;
+            shading_frame.dn_du *= side;
+            shading_frame.dn_dv *= side;
+            front_factor = select(opaque, 1.f, front_factor);
+            cos_theta = select(opaque, abs(cos_theta), cos_theta);
+        }
+        const_cast<Interaction &>(it).shading = shading_frame;
+        LobeSet::Lobes lobes;
+        SampledSpectrum color = gi_principled::color(0u, [&] { return color_.eval_albedo_spectrum(it, swl).sample; });
+        DynamicArray<float> iors = gi_principled::reading()
+            ? DynamicArray<float>{1u, gi_principled::value(16u)} : ior_.evaluate(it, swl).array;
+        if (gi_principled::writing()) {
+            gi_principled::row(4u).x = iors.as_scalar();
+            if (iors.size() != 1u) Env::instance().get<Bool>(gi_principled::ReadyKey) = false;
+        }
+        Float ior = iors.as_scalar();
+        Float roughness = ocarina::clamp(gi_principled::scalar(3u, [&] { return roughness_.evaluate(it, swl)->as_scalar(); }), 0.0001f, 1.f);
+        Float anisotropic = gi_principled::scalar(17u, [&] { return anisotropic_.evaluate(it, swl)->as_scalar(); });
+        SampledSpectrum specular_tint = gi_principled::color(4u, [&] { return spec_tint_.eval_albedo_spectrum(it, swl).sample; });
+
+        Float aspect = sqrt(1 - anisotropic * 0.9f);
+        Float2 alpha = make_float2(max(0.001f, sqr(roughness) / aspect),
+                                   max(0.001f, sqr(roughness) * aspect));
+
+        Float alpha_min = min(alpha.x, alpha.y);
+        Uint flag = gi_principled::reading()
+            ? select((gi_principled::flags() & gi_principled::BaseNearBit) != 0u, SurfaceData::NearSpec, SurfaceData::Glossy)
+            : select(alpha_min < alpha_threshold_, SurfaceData::NearSpec, SurfaceData::Glossy);
+        if (gi_principled::writing()) gi_principled::set_flags(gi_principled::flags() |
+            select(flag == SurfaceData::NearSpec, gi_principled::BaseNearBit, 0u));
+
+        SP<GGXMicrofacet> microfacet = make_shared<GGXMicrofacet>(alpha.x, alpha.y);
+
+        SampledSpectrum weight = SampledSpectrum::one(swl.dimension());
+        Bool stable_layers = true;
+        Float metallic = 0.f;
+        Uint stable_lobe = InvalidUI32;
+
+        if (switches_[ESheen]) {
+            outline("principled sheen", [&] {
+                SampledSpectrum sheen_tint = gi_principled::color(8u, [&] { return sheen_tint_.eval_albedo_spectrum(it, swl).sample; });
+                Float sheen_weight = gi_principled::scalar(11u, [&] { return sheen_weight_.evaluate(it, swl)->as_scalar(); }) * front_factor;
+                stable_layers &= sheen_weight == 0.f;
+                Float sheen_roughness = gi_principled::scalar(20u, [&] { return sheen_roughness_.evaluate(it, swl)->as_scalar(); });
+                UP<SheenLTC> sheen_ltc = make_unique<SheenLTC>(sheen_mode_, cos_theta,
+                                                               sheen_tint * sheen_weight * weight,
+                                                               sheen_roughness, swl, shading_frame);
+                SampledSpectrum sheen_albedo = sheen_ltc->albedo(cos_theta);
+                WeightedLobe sheen_lobe(sheen_albedo.average(), std::move(sheen_ltc));
+                lobes.push_back(std::move(sheen_lobe));
+                weight = layering_weight(sheen_albedo, weight);
+            });
+        }
+        if (switches_[ECoat]) {
+            outline("principled coat", [&] {
+                Float cc_weight = gi_principled::scalar(15u, [&] { return coat_weight_.evaluate(it, swl)->as_scalar(); }) * front_factor;
+                stable_layers &= cc_weight == 0.f;
+                Float cc_roughness = clamp(gi_principled::scalar(21u, [&] { return coat_roughness_.evaluate(it, swl)->as_scalar(); }), 0.0001f, 1.f);
+                cc_roughness = sqr(cc_roughness);
+                Uint flag = gi_principled::reading()
+                    ? select((gi_principled::flags() & gi_principled::CoatNearBit) != 0u, SurfaceData::NearSpec, SurfaceData::Glossy)
+                    : select(cc_roughness < alpha_threshold_, SurfaceData::NearSpec, SurfaceData::Glossy);
+                if (gi_principled::writing()) gi_principled::set_flags(gi_principled::flags() |
+                    select(flag == SurfaceData::NearSpec, gi_principled::CoatNearBit, 0u));
+                Float cc_ior = gi_principled::scalar(19u, [&] { return coat_ior_.evaluate(it, swl)->as_scalar(); });
+                SampledSpectrum cc_tint = gi_principled::color(12u, [&] { return coat_tint_.eval_albedo_spectrum(it, swl).sample; });
+                SP<Fresnel> fresnel_cc = make_shared<FresnelDielectric>(SampledSpectrum(swl, cc_ior), swl);
+                SP<GGXMicrofacet> microfacet_cc = make_shared<GGXMicrofacet>(make_float2(cc_roughness));
+                UP<MicrofacetReflection> cc_refl = make_unique<MicrofacetReflection>(cc_weight * weight * cc_tint, swl,
+                                                                                     microfacet_cc);
+                UP<CoatLobe> cc_lobe = make_unique<CoatLobe>(fresnel_cc, std::move(cc_refl), flag, shading_frame);
+                SampledSpectrum cc_albedo = cc_lobe->albedo(cos_theta);
+                WeightedLobe w_cc_lobe(cc_albedo.average(), std::move(cc_lobe));
+                weight = layering_weight(cc_albedo, weight);
+                lobes.push_back(std::move(w_cc_lobe));
+            });
+        }
+        if (switches_[EMetallic]) {
+            outline("principled metallic", [&] {
+                metallic = gi_principled::scalar(7u, [&] { return metallic_.evaluate(it, swl)->as_scalar(); }) * front_factor;
                 SP<FresnelF82Tint> fresnel_f82 = make_shared<FresnelF82Tint>(color, swl);
                 fresnel_f82->init_from_F82(specular_tint);
                 UP<MicrofacetReflection> metal_refl = make_unique<MicrofacetReflection>(weight * metallic,
