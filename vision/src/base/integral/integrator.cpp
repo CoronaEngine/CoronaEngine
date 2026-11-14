@@ -7,8 +7,10 @@
 #include "base/mgr/pipeline.h"
 #include "math/warp.h"
 #include "base/color/spectrum.h"
+#include "base/scattering/prepared_bsdf.h"
 #include "base/sampler.h"
 #include <cstdlib>
+#include "path_work_capture.h"
 
 namespace vision {
 using namespace ocarina;
@@ -98,6 +100,13 @@ IlluminationIntegrator::IlluminationIntegrator(const vision::IntegratorDesc &des
     const char *backend = std::getenv("VISION_RESTIR_GI_BACKEND");
     if ((backend && string_view(backend) == "rtxpt") ||
         desc.value("indirect")["backend"].as_string("legacy") == "rtxpt") separate_ = true;
+    // Cost attribution only: use ordinary PT's material dispatch layout while
+    // retaining the same complete BSDF, path samples and export observers.
+    const char *inline_cost = std::getenv("VISION_GI_EXPORT_INLINE_MATERIAL");
+    if (backend && string_view(backend) == "rtxpt" && inline_cost && string_view(inline_cost) == "1") {
+        separate_ = false;
+        OC_INFO("GI export cost diagnostic: ordinary PT material dispatch layout");
+    }
 }
 
 DataWrap IlluminationIntegrator::illumination_settings() const {
@@ -155,6 +164,11 @@ void IlluminationIntegrator::compile_path_tracing(bool lobe_signals) noexcept {
     if (mb_log && mb_log[0] == '1') {
         OC_INFO("PT multibounce benchmark active: min_depth=5 max_depth=16 rr_threshold=1; first_RR_after_surface=6; faceforward_geometric_normals; raw_total=pure_indirect_without_primary_Ld");
     }
+    const bool count_work = path_cost::enabled();
+    if (count_work) {
+        path_work_counters_ = device().create_buffer<path_cost::PathWorkCounters>(pipeline()->pixel_num(), "Ordinary PT work counters");
+        OC_INFO("Path work counts enabled: mode=pt, stride=64, API-level calls");
+    }
     Kernel kernel = [&](PTParamVar param) {
         Env::instance().clear_global_vars();
         Uint2 pixel = dispatch_idx().xy();
@@ -187,10 +201,14 @@ void IlluminationIntegrator::compile_path_tracing(bool lobe_signals) noexcept {
         if (mb && mb[0] == '1') Ld = make_RadType3(make_float3(0.f));
         Float3 bypass = make_float3(0.f);
         Float2 hit_distance = make_float2(0.f);
+        optional<path_cost::PathWorkCountersVar> work_counters;
+        if (count_work) work_counters.emplace();
         HitContext context{Ld, Ld_specular};
+        context.work_counters = work_counters ? &*work_counters : nullptr;
         context.aligned_lambert = aligned_lambert;
         if (lobe_signals) { context.bypass = &bypass; context.lobe_hitdist = &hit_distance; }
         Float3 L = Integrator::Li(rs, scatter_pdf, context, render_env);
+        if (work_counters) path_work_counters_.write(dispatch_id(), *work_counters);
         if (mb && mb[0] == '1') {
             // Ld is the primary-vertex contribution, not the lobe-labelled
             // `indirect` framebuffer. The benchmark exports true indirect here.
@@ -215,6 +233,7 @@ void IlluminationIntegrator::compile_path_tracing(bool lobe_signals) noexcept {
 CommandBatch IlluminationIntegrator::path_tracing(const PTParam &param, uint2 res) const noexcept {
     CommandBatch ret;
     ret << path_tracing_(param).dispatch(res);
+    if (path_cost::enabled()) ret << path_cost::capture(path_work_counters_.view(), param.frame_index, res, "pt");
     return ret;
 }
 
@@ -272,6 +291,20 @@ SampledSpectrum IlluminationIntegrator::evaluate_miss(RayState &rs, const Float3
 
 Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &max_depth, SampledSpectrum throughput,
                                   bool only_direct, const HitContext &hc, const RenderEnv &render_env) const noexcept {
+    const char *nee_cost_mode = std::getenv("VISION_PT_COST_NEE");
+    const bool cost_skip_nee = nee_cost_mode && string_view(nee_cost_mode) == "off";
+    if (cost_skip_nee) {
+        OC_ASSERT(!scene().process_mediums());
+        OC_INFO("Ordinary PT NEE cost diagnostic: proposals retained, visibility and direct F/PDF skipped, no media");
+    }
+    const char *nee_diagnostic = hc.rtxpt_sampling ? std::getenv("VISION_GI_NEE_DIAGNOSTIC") : nullptr;
+    const bool nee_one_by_one = nee_diagnostic && string_view(nee_diagnostic) == "1x1";
+    OC_ERROR_IF(nee_diagnostic && !nee_one_by_one, "GI NEE diagnostic supports only 1x1.");
+    const uint nee_candidates = nee_one_by_one ? 1u : 6u;
+    const uint nee_full_samples = nee_one_by_one ? 1u : 2u;
+    if (nee_one_by_one) {
+        OC_INFO("GI NEE diagnostic: 1x1, candidates=1, full_samples=1, visibility=true");
+    }
     Pipeline *rp = pipeline();
     TSampler &sampler = renderer().sampler();
     TLightSampler &light_sampler = renderer().light_sampler();
@@ -303,7 +336,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         if (hc.direct_specular) {
             $if(b == 0u || (Bool(hc.restir_direct_split && emission) && b == 1u)) { ret_direct_specular += spec; };
         }
-        if (hc.lobe_hitdist) {
+        if (hc.lobe_hitdist && (!hc.path_capture || hc.path_capture->record_hit_distance)) {
             Float2 weight = make_float2(max(luminance(lin - spec), 0.f), max(luminance(spec), 0.f));
             // Keep primary direct specular radiance. Its shadow-ray distance
             // does not describe a hit along the sampled reflection path.
@@ -321,13 +354,15 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
     Bool pending_rr_death = false;
     Float pending_rr_boost = 1.f;
     auto mis_bsdf = [&](auto &bounces, bool inner) {
+        if (hc.work_counters) hc.work_counters->trace.x += 1u;
         hit = geometry.trace_closest(rs.ray);
-        if (hc.lobe_hitdist) {
+        if (hc.lobe_hitdist && (!hc.path_capture || hc.path_capture->record_hit_distance)) {
             // RTXPT StablePlaneAccumulateSampleHitT: start after the primary
             // scatter, then allow a delta-only entry/exit pair (at most 3 segments).
             $if(bounces == 1u || (bounces > 1u && bounces <= 3u && delta_only)) {
                 Float segment_distance = scene().world_diameter();
                 $if(hit->is_hit()) {
+                    if (hc.work_counters) hc.work_counters->trace.z += 1u;
                     auto endpoint = geometry.compute_surface_interaction(hit, rs.ray);
                     segment_distance = length(endpoint.pos - rs.origin());
                 };
@@ -355,8 +390,15 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
 
         $if(hit->is_miss()) {
             $if(include_emission) {
-                SampledSpectrum d = evaluate_miss(rs, prev_surface_ng, scatter_pdf, bounces, swl,
-                                                 hc.rtxpt_sampling ? 2u : 1u) * throughput;
+                SampledSpectrum d = [&] {
+                    if (!hc.path_capture || !hc.path_capture->record_radiance) return evaluate_miss(rs, prev_surface_ng, scatter_pdf, bounces, swl,
+                                                              hc.rtxpt_sampling ? nee_full_samples : 1u) * throughput;
+                    auto incoming = evaluate_miss(rs, prev_surface_ng, scatter_pdf, bounces, swl);
+                    $if(hc.path_capture->active && bounces > 1u) {
+                        hc.path_capture->radiance += spectrum()->linear_srgb(incoming * SampledSpectrum{hc.path_capture->beta}, swl);
+                    };
+                    return incoming * throughput;
+                }();
                 Float3 lin = spectrum()->linear_srgb(d, swl);
                 ret += lin;
                 if (hc.restir_direct_split && hc.Ld) {
@@ -368,6 +410,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             $super_break;
         };
 
+        if (hc.work_counters) hc.work_counters->trace.z += 1u;
         it = geometry.compute_surface_interaction(hit, rs.ray);
         const char *mb = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
         if (mb && mb[0] == '1' && hc.aligned_lambert) {
@@ -399,8 +442,18 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             $super_continue;
         };
 
+        if (hc.work_counters) {
+            hc.work_counters->path.y += 1u;
+            hc.work_counters->path.z = max(hc.work_counters->path.z, bounces + 1u);
+        }
+
         if (hc.it) {
             $if(bounces == 0) { *hc.it = it; };
+        }
+        if (hc.path_capture && hc.path_capture->on_endpoint) {
+            $if(hc.path_capture->active && bounces == hc.path_capture->receiver_bounce + 1u) {
+                hc.path_capture->on_endpoint(it);
+            };
         }
 
         comment("hit light");
@@ -411,10 +464,16 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             LightEval eval = light_sampler->evaluate_hit_wi(p_ref, it, swl);
             SampledSpectrum tr = geometry.Tr(scene(), renderer().sampler(), swl, rs);
             Float weight = hc.rtxpt_sampling
-                ? select(ocarina::isinf(scatter_pdf), 1.f, MIS_weight_n<D>(1, scatter_pdf, 2, eval.pdf))
+                ? select(ocarina::isinf(scatter_pdf), 1.f, MIS_weight_n<D>(1, scatter_pdf, int(nee_full_samples), eval.pdf))
                 : MIS_weight<D>(scatter_pdf, eval.pdf);
             weight = correct_bsdf_weight(weight, bounces);
             SampledSpectrum d = eval.L * throughput * weight * tr;
+            if (hc.path_capture && hc.path_capture->record_radiance) {
+                $if(hc.path_capture->active && bounces > 1u) {
+                    hc.path_capture->radiance += spectrum()->linear_srgb(
+                        eval.L * SampledSpectrum{hc.path_capture->beta} * weight * tr, swl);
+                };
+            }
             Float3 lin = spectrum()->linear_srgb(d, swl);
             ret += lin;
             if (hc.restir_direct_split && hc.Ld) {
@@ -443,10 +502,14 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         Bool occluded = false;
         SampledSpectrum tr = spectrum()->one();
         if (!hc.rtxpt_sampling) {
+            if (hc.work_counters) hc.work_counters->bsdf.w += 1u;
             light_sample = light_sampler->sample_wi(it, sampler, swl);
-            RayState shadow_ray;
-            occluded = geometry.occluded(it, light_sample.p_light, &shadow_ray);
-            tr = geometry.Tr(scene(), renderer().sampler(), swl, shadow_ray);
+            if (!cost_skip_nee) {
+                RayState shadow_ray;
+                if (hc.work_counters) { hc.work_counters->trace.y += 1u; hc.work_counters->path.x += 1u; }
+                occluded = geometry.occluded(it, light_sample.p_light, &shadow_ray);
+                tr = geometry.Tr(scene(), renderer().sampler(), swl, shadow_ray);
+            }
         }
         comment("sample bsdf");
         BSDFSample bsdf_sample{swl};
@@ -461,51 +524,69 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             if (hc.captured_secondary_normal) {
                 $if(bounces == 0u) { *hc.captured_secondary_normal = evaluator.shading_frame().normal(); };
             }
-            if (!hc.rtxpt_sampling)
+            if (!hc.rtxpt_sampling) {
+                if (cost_skip_nee) {
+                    if (hc.work_counters) hc.work_counters->bsdf.x += 1u;
+                    bsdf_sample = evaluator.sample(it.wo, sampler);
+                    if (hc.path_capture) hc.path_capture->on_sample(it, hit, evaluator, bsdf_sample, bounces, throughput);
+                    return spectrum()->zero();
+                }
+                if (hc.work_counters) { hc.work_counters->bsdf.x += 1u; hc.work_counters->bsdf.y += 1u; hc.work_counters->bsdf.z += 1u; }
+                if (hc.path_capture) {
+                    auto direct = direct_light_mis(it, evaluator, light_sample, occluded, sampler, swl, bsdf_sample);
+                    hc.path_capture->on_sample(it, hit, evaluator, bsdf_sample, bounces, throughput);
+                    return direct;
+                }
                 return direct_light_mis(it, evaluator, light_sample, occluded, sampler, swl, bsdf_sample);
+            }
+            if (hc.work_counters) hc.work_counters->bsdf.x += 1u;
             bsdf_sample = evaluator.sample(it.wo, sampler);
             if (mis_mode_ == MISMode::EBSDF) return spectrum()->zero();
             SampledSpectrum lighting = spectrum()->zero();
-            $for(shadow_sample, 2u) {
-                LightSample selected{swl.dimension()};
-                Float total_weight = 0.f, selected_weight = 0.f;
-                $for(candidate_index, 6u) {
-                    LightSample candidate = light_sampler->sample_wi(it, sampler, swl);
-                    Float proposal_pdf = abs(candidate.eval.pdf);
-                    Float target = 0.f;
-                    $if(candidate.valid() && proposal_pdf > 0.f) {
-                        Float3 direction = normalize(candidate.p_light - it.pos);
-                        auto eval = evaluator.evaluate(it.wo, direction, MaterialEvalMode::PDF,
-                                                       BxDFFlag::All, TransportMode::Radiance);
-                        Float3 incoming = spectrum()->linear_srgb(candidate.eval.L, swl) / proposal_pdf;
-                        target = max(max(incoming.x, incoming.y), incoming.z) * eval.pdf();
-                        target = max(ocarina::zero_if_nan_inf(target), 0.f);
-                    };
-                    total_weight += target;
-                    $if(sampler->next_1d() * total_weight < target) {
-                        selected = candidate;
-                        selected_weight = target;
-                    };
-                };
-                $if(selected_weight > 0.f) {
-                    Float3 direction = normalize(selected.p_light - it.pos);
-                    auto eval = evaluator.evaluate(it.wo, direction, MaterialEvalMode::All,
-                                                   BxDFFlag::All, TransportMode::Radiance);
-                    $if(eval.valid()) {
-                        RayState selected_shadow;
-                        Bool blocked = geometry.occluded(it, selected.p_light, &selected_shadow);
-                        SampledSpectrum transmission = geometry.Tr(scene(), sampler, swl, selected_shadow);
-                        Float pdf = abs(selected.eval.pdf);
-                        Float mis = mis_mode_ == MISMode::ELight ? Float{1.f}
-                            : select(selected.eval.pdf < 0.f, 1.f, MIS_weight_n<D>(2, pdf, 1, eval.pdf()));
-                        Float ris_weight = total_weight / (6.f * selected_weight);
-                        $if(!blocked && pdf > 0.f) {
-                            lighting += selected.eval.L * eval.f * transmission * (ris_weight * mis / (2.f * pdf));
+            evaluator.with_prepared_evaluation(it.wo, [&](const PreparedMaterialEvaluator &prepared) {
+                $for(shadow_sample, nee_full_samples) {
+                    LightSample selected{swl.dimension()};
+                    Float total_weight = 0.f, selected_weight = 0.f;
+                    $for(candidate_index, nee_candidates) {
+                        if (hc.work_counters) hc.work_counters->bsdf.w += 1u;
+                        LightSample candidate = light_sampler->sample_wi(it, sampler, swl);
+                        Float proposal_pdf = abs(candidate.eval.pdf);
+                        Float target = 0.f;
+                        $if(candidate.valid() && proposal_pdf > 0.f) {
+                            Float3 direction = normalize(candidate.p_light - it.pos);
+                            if (hc.work_counters) hc.work_counters->bsdf.z += 1u;
+                            auto eval = prepared.evaluate(direction, MaterialEvalMode::PDF);
+                            Float3 incoming = spectrum()->linear_srgb(candidate.eval.L, swl) / proposal_pdf;
+                            target = max(max(incoming.x, incoming.y), incoming.z) * eval.pdf();
+                            target = max(ocarina::zero_if_nan_inf(target), 0.f);
+                        };
+                        total_weight += target;
+                        $if(sampler->next_1d() * total_weight < target) {
+                            selected = candidate;
+                            selected_weight = target;
                         };
                     };
-                    light_sample = selected;
+                    $if(selected_weight > 0.f) {
+                        Float3 direction = normalize(selected.p_light - it.pos);
+                        if (hc.work_counters) { hc.work_counters->bsdf.y += 1u; hc.work_counters->bsdf.z += 1u; }
+                        auto eval = prepared.evaluate(direction);
+                        $if(eval.valid()) {
+                            RayState selected_shadow;
+                            if (hc.work_counters) { hc.work_counters->trace.y += 1u; hc.work_counters->path.x += 1u; }
+                            Bool blocked = geometry.occluded(it, selected.p_light, &selected_shadow);
+                            SampledSpectrum transmission = geometry.Tr(scene(), sampler, swl, selected_shadow);
+                            Float pdf = abs(selected.eval.pdf);
+                            Float mis = mis_mode_ == MISMode::ELight ? Float{1.f}
+                                : select(selected.eval.pdf < 0.f, 1.f, MIS_weight_n<D>(int(nee_full_samples), pdf, 1, eval.pdf()));
+                            Float ris_weight = total_weight / (float(nee_candidates) * selected_weight);
+                            $if(!blocked && pdf > 0.f) {
+                                lighting += selected.eval.L * eval.f * transmission * (ris_weight * mis / (float(nee_full_samples) * pdf));
+                            };
+                        };
+                        light_sample = selected;
+                    };
                 };
-            };
+            }, MaterialEvalMode::All);
             return lighting;
         };
 
@@ -522,11 +603,19 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                 Interaction lambert_it = it;
                 lambert_it.shading = shading;
                 lambert_it.ng = shading.normal();
+                if (hc.work_counters) hc.work_counters->trace.w += 1u;
                 MaterialEvaluator evaluator(lambert_it, swl);
                 evaluator.update_frame(shading);
                 evaluator.link(make_unique<DiffuseLobe>(SampledSpectrum{swl, .7f}, swl, shading));
-                Ld = direct_light_mis(it, evaluator, light_sample, occluded,
-                                      sampler, swl, bsdf_sample);
+                if (cost_skip_nee && !hc.rtxpt_sampling) {
+                    if (hc.work_counters) hc.work_counters->bsdf.x += 1u;
+                    bsdf_sample = evaluator.sample(it.wo, sampler);
+                    Ld = spectrum()->zero();
+                } else {
+                    if (hc.work_counters) { hc.work_counters->bsdf.x += 1u; hc.work_counters->bsdf.y += 1u; hc.work_counters->bsdf.z += 1u; }
+                    Ld = direct_light_mis(it, evaluator, light_sample, occluded,
+                                          sampler, swl, bsdf_sample);
+                }
                 albedo = make_float3(.7f);
                 delta_scatter = false;
                 spec_frac_b0 = make_float3(0.f);
@@ -536,6 +625,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             if (separate_) {
                 MaterialEvaluator evaluator(it, swl);
                 scene().materials().dispatch(it.material_id(), [&](const Material *material) {
+                    if (hc.work_counters) hc.work_counters->trace.w += 1u;
                     outline("PT build material evaluator", [&] {
                         material->build_evaluator(evaluator, it, swl);
                         evaluator.update_frame(it.shading);
@@ -555,6 +645,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                 return;
             }
             scene().materials().dispatch(it.material_id(), [&](const Material *material) {
+                if (hc.work_counters) hc.work_counters->trace.w += 1u;
                 MaterialEvaluator evaluator = material->create_evaluator(it, swl);
                 swl.check_dispersive(spectrum(), evaluator);
                 Ld = sample_lighting(evaluator);
@@ -574,6 +665,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         if (scene().process_mediums()) {
             $if(it.has_phase()) {
                 PhaseSample ps{swl.dimension()};
+                if (hc.work_counters) { hc.work_counters->bsdf.x += 1u; hc.work_counters->bsdf.y += 1u; hc.work_counters->bsdf.z += 1u; }
                 Ld = direct_light_mis(it, it.phase(), light_sample, occluded, sampler, swl, ps);
                 bsdf_sample.eval = ps.eval;
                 bsdf_sample.wi = ps.wi;
@@ -585,6 +677,12 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             sample_surface();
         }
         SampledSpectrum d = throughput * Ld * tr;
+        if (hc.path_capture && hc.path_capture->record_radiance) {
+            $if(hc.path_capture->active && bounces > hc.path_capture->receiver_bounce) {
+                hc.path_capture->radiance += spectrum()->linear_srgb(
+                    SampledSpectrum{hc.path_capture->beta} * Ld * tr, swl);
+            };
+        }
         Float3 lin = spectrum()->linear_srgb(d, swl);
         ret += lin;
         route_spec(lin, bounces, spec_frac_b0, length(light_sample.p_light - it.pos), false);
@@ -599,13 +697,30 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                 spec_route = make_float3(ocarina::select(BxDFFlag::is_glossy(sflags) | BxDFFlag::is_specular(sflags), 1.f, 0.f));
             };
         }
+        if (hc.work_counters) {
+            $if(bsdf_sample.valid() && BxDFFlag::is_specular(bsdf_sample.eval.flags)) { hc.work_counters->path.w += 1u; };
+        }
         eta_scale *= sqr(bsdf_sample.eta);
         if (hc.lobe_hitdist) delta_only &= delta_scatter;
         Float lum = throughput.max();
+        if (hc.path_capture && hc.path_capture->record_radiance) {
+            $if(hc.path_capture->active && lum == 0.f && any(hc.path_capture->beta != make_float3(0.f))) {
+                // Camera absorption can stop channels still present in the
+                // receiver-free suffix. Keep this path as raw PT, not a
+                // partially traced radiance candidate for another receiver.
+                hc.path_capture->active = false;
+                hc.path_capture->receiver_bounce = InvalidUI32;
+            };
+        }
         $if(!bsdf_sample.valid() || lum == 0.f) {
             $break;
         };
         throughput *= bsdf_sample.eval.throughput();
+        if (hc.path_capture && hc.path_capture->record_radiance) {
+            $if(hc.path_capture->active && bounces > hc.path_capture->receiver_bounce) {
+                hc.path_capture->beta *= bsdf_sample.eval.throughput().vec3();
+            };
+        }
         Uint rr_depth = bounces;
         if (hc.rr_depth_offset) { rr_depth += *hc.rr_depth_offset; }
         Float rr_lum = lum;
@@ -617,16 +732,25 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             $if(surface_depth > *min_depth_ && surface_depth < total_depth) {
                 Float3 camera_beta = spectrum()->linear_srgb(throughput, swl);
                 if (hc.rr_camera_throughput) camera_beta *= *hc.rr_camera_throughput;
+                if (hc.work_counters) hc.work_counters->rr.x += 1u;
                 Float terminate = rtxpt_rr_probability(camera_beta, surface_depth, total_depth);
                 pending_rr_death = sampler->next_1d() < terminate;
+                if (hc.work_counters) { $if(pending_rr_death) { hc.work_counters->rr.y += 1u; }; }
                 $if(!pending_rr_death) { pending_rr_boost = 1.f / (1.f - terminate); };
             };
         } else {
             $if(eta_scale * rr_lum < *rr_threshold_ && rr_depth >= *min_depth_) {
+                if (hc.work_counters) hc.work_counters->rr.x += 1u;
                 Float q = min(0.95f, rr_lum);
                 Float rr = sampler->next_1d();
-                $if(q < rr) { $break; };
+                $if(q < rr) {
+                    if (hc.work_counters) hc.work_counters->rr.y += 1u;
+                    $break;
+                };
                 throughput /= q;
+                if (hc.path_capture && hc.path_capture->record_radiance) {
+                    $if(hc.path_capture->active) { hc.path_capture->beta /= q; };
+                }
             };
         }
         scatter_pdf = bsdf_sample.eval.pdf();
@@ -656,6 +780,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         *hc.Ld_specular = make_RadType3(ret_specular);
     }
     if (hc.direct_specular) { *hc.direct_specular = ret_direct_specular; }
+    if (hc.path_capture) hc.path_capture->camera_specular_fraction = spec_route;
     if (hc.lobe_hitdist) {
         *hc.lobe_hitdist = ocarina::select(distance_weight > 1e-5f,
             distance_sum / max(distance_weight, make_float2(1e-5f)), sampled_distance);

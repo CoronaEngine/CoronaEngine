@@ -3,7 +3,15 @@
 //
 
 #include "indirect.h"
+#include "base/integral/path_work_capture.h"
 #include "rtxpt_gi.h"
+#include "rtxpt_gi_candidate.h"
+#include "rtxpt_gi_material.h"
+#include "rtxpt_gi_material_inputs.h"
+#include "rtxpt_gi_lights.h"
+#include "rtxpt_gi_rays.h"
+#include "rtxpt_gi_prefix.h"
+#include "rtxpt_gi_pt.h"
 #include "denoiser_signals.h"
 #include "base/integral/integrator.h"
 
@@ -26,15 +34,25 @@ ReSTIRGI::ReSTIRGI(IntegratorPtr integrator,
 
 void ReSTIRGI::compile() noexcept {
     switch_profile::Scope profile{"ReSTIR.GI.compile", "compile"};
-    compile_initial_samples();
     if (rtxpt_backend_) {
+        if (native_reblur_enabled_) prepare_native_reblur_buffers();
+        if (!rtxpt_materials_) rtxpt_materials_ = make_shared<rtxpt_gi::StandardMaterialInputs>();
+        rtxpt_materials_->prepare();
+        // Preserve the existing binding layout used by the independent DI
+        // shaders. Shared PT does not dispatch these private light producers.
+        if (!rtxpt_lights_) {
+            rtxpt_lights_ = make_shared<rtxpt_gi::NativeLightSampler>(*this);
+            rtxpt_lights_->prepare();
+        }
         if (!rtxpt_) {
             rtxpt_ = make_shared<RtxptGI>(*this);
             rtxpt_->prepare();
         }
+        compile_initial_samples();
         rtxpt_->compile();
-        OC_INFO("RTXPT ReSTIR GI active: Ocarina DSL, packed32 reservoirs, native temporal/spatial/final MIS; Corona PT candidate suffix");
+        OC_INFO("RTXPT ReSTIR GI active: shared ordinary PT, complete BSDF, private proposals, packed32 reservoirs, temporal/spatial reuse");
     } else {
+        compile_initial_samples();
         compile_temporal_reuse();
         compile_spatial_shading();
     }
@@ -197,11 +215,211 @@ GISampleVar ReSTIRGI::init_sample(const Interaction &it, const SensorSample &ss,
 
 void ReSTIRGI::compile_initial_samples() noexcept {
     switch_profile::Scope profile{"GI.initial.compile", "compile"};
+    if (rtxpt_backend_) {
+        const char *nee_diagnostic = std::getenv("VISION_GI_NEE_DIAGNOSTIC");
+        OC_ERROR_IF(nee_diagnostic && string_view(nee_diagnostic) != "1x1",
+                    "Standard RTXPT GI currently supports NEE 1x1 only.");
+        OC_ERROR_IF(scene().process_mediums(), "Standard RTXPT GI does not support participating media.");
+        OC_ERROR_IF(spectrum()->dimension() != 3u, "Standard RTXPT GI requires RGB rendering.");
+        OC_INFO("GI NEE diagnostic: 1x1, candidates=1, full_samples=1, visibility=true");
+        OC_INFO("GI candidate transport: shared ordinary PT, full MaterialEvaluator, camera_path=true, single_path=true, exports_only=true, NEE=1/1");
+        OC_INFO_FORMAT("ReSTIR GI candidate transport: backend=rtxpt, native_transport=false, candidates_per_pixel=1, NEE_candidates_per_shadow=1, NEE_shadow_samples=1, RR=ordinary immediate, max_surface_depth={}, suffix_depth={}, terminal_endpoint=ordinary PT, BSDF=complete Corona",
+                       integrator()->suffix_depth() + 1u, integrator()->suffix_depth());
+        OC_INFO("RTXPT GI private stable planes: count=3, max_vertex_depth=5, primary_replacement=true, incident_Lo=unweighted, shared_Falcor_primary=true");
+        Kernel build = [&](Uint frame_index) {
+            initial(sampler(), frame_index, spectrum());
+            scene().sensor()->load_data();
+            sampler()->load_data();
+            integrator()->load_data();
+            rtxpt_gi::build_pt_prefix(prefix_storage(), *this);
+        };
+        build.function()->set_block_dim(8u, 8u, 1u);
+        rtxpt_prefix_build_ = device().compile(build, "RTXPT GI stable plane build");
+        const bool count_work = path_cost::enabled();
+        const char *cost_override = std::getenv("VISION_GI_EXPORT_COST");
+        const string_view cost_mode = cost_override && *cost_override ? string_view{cost_override} : string_view{"full"};
+        const array<string_view, 9> cost_modes{"full", "no-distance", "no-aux", "no-guides", "no-surface",
+                                             "no-endpoint", "no-radiance", "no-observer", "plain"};
+        uint cost_rank = 0u;
+        if (cost_mode == "zero-surface") cost_rank = 3u;
+        else if (cost_mode == "plain-output48") cost_rank = 8u;
+        else if (cost_mode != "no-distance-math") {
+            while (cost_rank < cost_modes.size() && cost_modes[cost_rank] != cost_mode) ++cost_rank;
+            OC_ERROR_IF(cost_rank == cost_modes.size(), "Unknown GI export cost diagnostic.");
+        }
+        const bool skip_distance = cost_rank >= 1u, skip_aux = cost_rank >= 2u, skip_guides = cost_rank >= 3u;
+        const bool skip_surface = cost_rank >= 4u, skip_endpoint = cost_rank >= 5u;
+        const bool skip_radiance = cost_rank >= 6u, skip_observer = cost_rank >= 7u;
+        OC_INFO_FORMAT("GI export cost mode={}, production={}", cost_mode, cost_mode == "full");
+        OC_INFO_FORMAT("GI Fill transport: ordinary camera PT with observers only, counters={}", count_work);
+        Kernel kernel = [&](Uint frame_index, Var<RtxptGICameraParam> camera) {
+            gi_principled::CompilationScope parameters{false};
+            initial(sampler(), frame_index, spectrum());
+            scene().sensor()->load_data(); sampler()->load_data(); integrator()->load_data();
+            sampler()->set_seed(dispatch_idx().xy(), frame_index, PTParam{}.dimension_index);
+            optional<path_cost::PathWorkCountersVar> work_counters;
+            if (count_work) work_counters.emplace();
+            if (cost_mode == "plain" || cost_mode == "plain-output48") {
+                RadType3Var direct, specular;
+                HitContext context{direct, specular};
+                context.work_counters = work_counters ? &*work_counters : nullptr;
+                RayState ray = frame_buffer().rays().read(dispatch_id())->to_ray_state();
+                Float3 total = integrator()->Li(ray, Float{1e16f}, integrator()->runtime_suffix_depth() + 1u,
+                    spectrum()->one(), false, context, *this);
+                if (cost_mode == "plain-output48") {
+                    rtxpt_bypass_.write(dispatch_id(), make_float4(total, 1.f));
+                    auto denoiser = prefix_storage().denoiser;
+                    OC_ASSERT(denoiser.enabled());
+                    denoiser.write(dispatch_id(), Uint{0u},
+                        make_float4(total - make_float3(specular), 1.f), make_float4(specular, 1.f));
+                    if (work_counters) path_work_counters_.write(dispatch_id(), *work_counters);
+                    return;
+                }
+                rtxpt_bypass_.write(dispatch_id(), make_float4(total, 1.f));
+                rtxpt_gi::CandidateTraceResult empty;
+                empty.sample.Lo.set(make_float3(specular));
+                samples_.write(dispatch_id(), empty.sample);
+                rtxpt_proposals_.write(dispatch_id(), empty.proposal);
+                if (work_counters) path_work_counters_.write(dispatch_id(), *work_counters);
+                return;
+            }
+            PTPathCapture capture;
+            capture.record_radiance = !skip_radiance;
+            capture.record_hit_distance = cost_mode != "no-distance-math";
+            Bool terminal_seen = false, receiver_written = false;
+            Uint signal_plane = 0u;
+            const auto storage = prefix_storage();
+            Uint4 header = storage.headers.read(dispatch_id());
+            Uint dominant = header.w & 3u;
+            capture.on_sample = [&](const Interaction &it, const TriangleHitVar &hit,
+                                    const MaterialEvaluator &bsdf, const BSDFSample &sample,
+                                    const Uint &bounce, const SampledSpectrum &throughput) {
+                $if(!terminal_seen) {
+                    $for(plane, 3u) {
+                        $if(header[plane] == rtxpt_gi::PrefixInvalid || header[plane] == rtxpt_gi::PrefixQueued) { $continue; };
+                        auto node = storage.read(plane);
+                        $if(node.throughput_flags.w != 0.f) { $continue; };
+                        Float2 bary = as<float2>(Uint2{node.hit_words.zw()});
+                        $if(hit.inst_id != node.hit_words.x || hit.prim_id != node.hit_words.y ||
+                            length_squared(Float2{hit.bary} - bary) > 1e-6f) { $continue; };
+                        terminal_seen = true; signal_plane = plane;
+                        $if(plane == dominant) {
+                            rtxpt_gi::PTSurfaceView receiver;
+                            receiver.it = it; receiver.hit = hit;
+                            receiver.depth = node.virtual_position.w;
+                            receiver.plane_hash = (plane << 24u) | header[plane];
+                            receiver.valid = gi_principled::captured(it.material_id());
+                            for (uint i = 0u; i < 6u; ++i) receiver.parameters[i] = gi_principled::row(i);
+                            if (!skip_guides) {
+                                receiver.normal = bsdf.shading_frame().normal();
+                                SampledSpectrum d{spectrum()->dimension()}, sp{spectrum()->dimension()}; Float2 roughness;
+                                bsdf.reuse_material(d, sp, roughness);
+                                receiver.diffuse_guide = spectrum()->linear_srgb(d, sampled_wavelengths());
+                                receiver.specular_guide = spectrum()->linear_srgb(sp, sampled_wavelengths());
+                                receiver.roughness = roughness;
+                            }
+                            if (cost_mode == "zero-surface") {
+                                // Keep the same receiver stores; let unused
+                                // interaction payload reconstruction disappear.
+                                rtxpt_gi::PTSurfaceView empty;
+                                rtxpt_->write_pt_surface(dispatch_id(), empty);
+                            } else if (!skip_surface) rtxpt_->write_pt_surface(dispatch_id(), receiver);
+                            receiver_written = receiver.valid;
+                            RtxptGIPrefixAuxVar aux;
+                            aux.prefix_throughput_depth = make_float4(spectrum()->linear_srgb(throughput, sampled_wavelengths()), receiver.depth);
+                            if (!skip_aux) {
+                            aux.current_virtual_position = make_float4(node.virtual_position.xyz(), node.origin_distance.w);
+                            aux.previous_virtual_position = make_float4(node.virtual_position.xyz(), 0.f);
+                            aux.metadata = make_uint4(receiver.plane_hash, plane, bounce + 1u, header[plane]);
+                            Float4x4 world_to_camera = make_float4x4(camera.columns[0u], camera.columns[1u], camera.columns[2u], camera.columns[3u]);
+                            Float4x4 camera_to_raster = make_float4x4(camera.columns[4u], camera.columns[5u], camera.columns[6u], camera.columns[7u]);
+                            Float3 current_view = transform_point(world_to_camera, aux.current_virtual_position.xyz());
+                            Float3 current_raster = transform_point(camera_to_raster, current_view / current_view.z);
+                            Float2 motion = current_raster.xy() - scene().sensor()->prev_raster_coord(aux.previous_virtual_position.xyz()).xy();
+                            Float previous_depth = scene().sensor()->prev_linear_depth(aux.previous_virtual_position.xyz());
+                            aux.packed_motion = make_uint2(f32tof16(motion.x) | (f32tof16(motion.y) << 16u), f32tof16(previous_depth - current_view.z));
+                            }
+                            rtxpt_prefix_aux_.write(dispatch_id(), aux);
+                            Bool delta = BxDFFlag::is_specular(sample.eval.flags) || ocarina::isinf(sample.eval.pdf());
+                            Float3 physical = spectrum()->linear_srgb(throughput * sample.eval.throughput(), sampled_wavelengths());
+                            capture.active = receiver.valid && sample.valid() && !delta && any(physical != make_float3(0.f));
+                            capture.receiver_bounce = bounce;
+                            $if(capture.active) {
+                                HitBSDFVar proposal;
+                                proposal.wi.set(sample.wi); proposal.bsdf.set(sample.eval.f.vec3()); proposal.pdf = sample.eval.pdf();
+                                rtxpt_proposals_.write(dispatch_id(), proposal);
+                                GISampleVar empty; empty.sp->set_position(make_float3(0.f)); empty.sp->set_normal(make_float3(0.f)); empty.Lo.set(Float3{make_float3(0.f)});
+                                samples_.write(dispatch_id(), empty);
+                            };
+                        };
+                        $break;
+                    };
+                };
+            };
+            capture.on_endpoint = [&](const Interaction &it) {
+                GISampleVar sample;
+                sample.sp->set(it); sample.Lo.set(Float3{make_float3(0.f)}); sample.age = 0.f;
+                samples_.write(dispatch_id(), sample);
+            };
+            if (skip_endpoint) capture.on_endpoint = {};
+            RadType3Var direct = make_RadType3(make_float3(0.f)), total_specular = make_RadType3(make_float3(0.f));
+            Float3 direct_specular = make_float3(0.f);
+            Float2 hit_distance = make_float2(0.f);
+            HitContext context{direct, total_specular};
+            if (!skip_observer) context.path_capture = &capture;
+            context.work_counters = work_counters ? &*work_counters : nullptr;
+            context.restir_direct_split = true;
+            context.direct_specular = &direct_specular;
+            if (storage.denoiser.enabled() && !skip_distance) context.lobe_hitdist = &hit_distance;
+            // This is the ordinary camera PT: one Li call, original camera ray,
+            // complete depth, original NEE, BSDF samples and immediate roulette.
+            RayState ray = frame_buffer().rays().read(dispatch_id())->to_ray_state();
+            Float3 total = integrator()->Li(ray, Float{1e16f}, integrator()->runtime_suffix_depth() + 1u,
+                spectrum()->one(), false, context, *this);
+            Float3 indirect = total - make_float3(direct);
+            Float3 bypass_specular = make_float3(total_specular) - direct_specular;
+            $if(capture.active) {
+                auto sample = samples_.read(dispatch_id());
+                sample.Lo.set(ocarina::zero_if_nan_inf(capture.radiance));
+                samples_.write(dispatch_id(), sample);
+                auto proposal = rtxpt_proposals_.read(dispatch_id());
+                Float3 prefix = rtxpt_prefix_aux_.read(dispatch_id()).prefix_throughput_depth.xyz();
+                Float3 fresh = prefix * proposal->safe_throughput() * sample.Lo.as_vec3();
+                indirect -= fresh;
+                bypass_specular -= fresh * capture.camera_specular_fraction;
+            } $else {
+                rtxpt_gi::CandidateTraceResult empty;
+                rtxpt_proposals_.write(dispatch_id(), empty.proposal);
+                samples_.write(dispatch_id(), empty.sample);
+            };
+            $if(!receiver_written || capture.receiver_bounce == InvalidUI32) {
+                rtxpt_gi::PTSurfaceView empty;
+                if (!skip_surface) rtxpt_->write_pt_surface(dispatch_id(), empty);
+                RtxptGIPrefixAuxVar aux; rtxpt_prefix_aux_.write(dispatch_id(), aux);
+            };
+            indirect = ocarina::zero_if_nan_inf(indirect);
+            bypass_specular = ocarina::zero_if_nan_inf(bypass_specular);
+            rtxpt_bypass_.write(dispatch_id(), make_float4(indirect, 0.f));
+            if (work_counters) path_work_counters_.write(dispatch_id(), *work_counters);
+            if (storage.denoiser.enabled()) {
+                for (uint p = 0u; p < 3u; ++p) storage.denoiser.write(dispatch_id(), Uint{p}, make_float4(0.f), make_float4(0.f));
+                storage.denoiser.write(dispatch_id(), signal_plane,
+                    make_float4(indirect - bypass_specular, hit_distance.x), make_float4(bypass_specular, hit_distance.y));
+                // Camera PT already included every sampled stable-prefix term.
+                storage.denoiser.bypass->write(dispatch_id(), make_float4(0.f));
+            }
+        };
+        kernel.function()->set_block_dim(64u, 1u, 1u);
+        rtxpt_initial_samples_ = device().compile(kernel, "RTXPT GI shared PT initial candidates");
+        return;
+    }
     const char *transport_override = std::getenv("VISION_RESTIR_GI_NATIVE_TRANSPORT");
     const bool native_transport = rtxpt_backend_ && transport_override && string_view(transport_override) == "1";
+    const char *nee_diagnostic = std::getenv("VISION_GI_NEE_DIAGNOSTIC");
+    const bool nee_one_by_one = nee_diagnostic && string_view(nee_diagnostic) == "1x1";
     OC_INFO_FORMAT("ReSTIR GI candidate transport: backend={}, native_transport={}, candidates_per_pixel=1, NEE_candidates_per_shadow={}, NEE_shadow_samples={}, RR={}, max_surface_depth={}, suffix_depth={}, terminal_endpoint={}",
         rtxpt_backend_ ? "rtxpt" : "legacy", native_transport,
-        native_transport ? 6u : 1u, native_transport ? 2u : 1u,
+        native_transport && !nee_one_by_one ? 6u : 1u, native_transport && !nee_one_by_one ? 2u : 1u,
         native_transport ? "native deferred" : "Corona immediate",
         integrator()->suffix_depth() + 1u, integrator()->suffix_depth(),
         native_transport ? "hard stop" : "Corona BSDF supplement");
@@ -736,7 +954,25 @@ CommandBatch ReSTIRGI::dispatch(uint frame_index, bool precise_lobes, bool denoi
     // The first frame after a mode/scene reset must not reuse old reservoirs.
     bool history_valid = history_.begin_frame(frame_index, param.camera_jitter);
     param.temporal = param.temporal && history_valid;
-    ret << initial_samples_(frame_index).dispatch(rp->resolution());
+    const char *stage_profile = std::getenv("VISION_STAGE_PROFILE");
+    const bool synchronize_native_stages = rtxpt_backend_ && stage_profile && string_view(stage_profile) == "1";
+    if (synchronize_native_stages) ret << synchronize();
+    if (rtxpt_backend_) ret << rtxpt_prefix_build_(frame_index).dispatch(rp->resolution());
+    if (synchronize_native_stages) ret << synchronize();
+    if (rtxpt_backend_) {
+        RtxptGICameraParam camera;
+        const float4x4 world_to_camera = inverse(scene().sensor()->host_c2w());
+        const float4x4 camera_to_raster = inverse(scene().sensor()->host_raster_to_sensor());
+        for (uint column = 0u; column < 4u; ++column) {
+            camera.columns[column] = world_to_camera[column];
+            camera.columns[4u + column] = camera_to_raster[column];
+        }
+        ret << rtxpt_initial_samples_(frame_index, camera).dispatch(rp->resolution());
+        if (path_cost::enabled()) ret << path_cost::capture(path_work_counters_.view(), frame_index, rp->resolution(), "gi");
+    } else {
+        ret << initial_samples_(frame_index).dispatch(rp->resolution());
+    }
+    if (synchronize_native_stages) ret << synchronize();
     if (rtxpt_backend_) ret << rtxpt_->dispatch(frame_index, param);
     else {
         ret << temporal_pass_(param, frame_index).dispatch(rp->resolution());
@@ -762,6 +998,15 @@ void ReSTIRGI::update_resolution(ocarina::uint2 res) noexcept {
     reservoirs_.upload_immediately(host.data());
     }
     if (rtxpt_) rtxpt_->update_resolution(res);
+    if (rtxpt_lights_) rtxpt_lights_->update_resolution(res);
+    if (rtxpt_backend_) prepare_rtxpt_candidate_buffers();
+    if (native_reblur_enabled_) {
+        prepare_native_reblur_buffers();
+        if (rtxpt_) {
+            compile_initial_samples();
+            rtxpt_->compile_native_reblur_final();
+        }
+    }
 
 
     samples_.super() = device().create_buffer<GISample>(rp->pixel_num(),
@@ -797,8 +1042,11 @@ void ReSTIRGI::restore(RuntimeObject *old_obj) noexcept {
     ReSTIR::restore(old_obj);
     VS_HOTFIX_MOVE_ATTRS(radiance_, reservoirs_, samples_, sample_num_, ratio_, debias_,
                        initial_samples_, temporal_pass_, spatial_shading_, raw_radiance_, compact_radiance_, radiance_prepared_,
-                       rtxpt_backend_, rtxpt_)
+                       rtxpt_backend_, rtxpt_, rtxpt_proposals_, rtxpt_bypass_, rtxpt_lights_, rtxpt_materials_,
+                       rtxpt_prefix_planes_, rtxpt_prefix_headers_, rtxpt_prefix_stable_, rtxpt_prefix_aux_, rtxpt_prefix_build_, rtxpt_initial_samples_,
+                       native_reblur_enabled_, native_reblur_diffuse_, native_reblur_specular_, native_reblur_bypass_, native_reblur_guides_)
     if (rtxpt_) rtxpt_->rebind_owner(*this);
+    if (rtxpt_lights_) rtxpt_lights_->rebind_owner(*this);
 }
 
 void ReSTIRGI::set_compact_radiance(bool compact) noexcept {
@@ -864,6 +1112,60 @@ void ReSTIRGI::prepare(bool compact_radiance) noexcept {
     samples_.register_self();
     vector<GISample> vec{rp->pixel_num(), GISample{}};
     samples_.upload_immediately(vec.data());
+    if (rtxpt_backend_) prepare_rtxpt_candidate_buffers();
+}
+
+void ReSTIRGI::prepare_rtxpt_candidate_buffers() noexcept {
+    const uint pixels = pipeline()->pixel_num();
+    if (path_cost::enabled()) path_work_counters_ = device().create_buffer<path_cost::PathWorkCounters>(pixels, "GI Fill work counters");
+    rtxpt_proposals_.super() = device().create_buffer<HitBSDF>(pixels,
+        "ReSTIRGI::rtxpt_proposals_ [native-standard-v1]");
+    rtxpt_proposals_.register_self();
+    vector<HitBSDF> proposals(pixels);
+    rtxpt_proposals_.upload_immediately(proposals.data());
+    rtxpt_bypass_.super() = device().create_buffer<float4>(pixels,
+        "ReSTIRGI::rtxpt_bypass_ [native-standard-v1]");
+    rtxpt_bypass_.register_self();
+    vector<float4> bypass(pixels, make_float4(0.f));
+    rtxpt_bypass_.upload_immediately(bypass.data());
+    rtxpt_prefix_planes_.super() = device().create_buffer<RtxptGIPrefixPlane>(pixels * 3u,
+        "RTXPT GI private native three stable planes");
+    rtxpt_prefix_planes_.register_self();
+    rtxpt_prefix_headers_.super() = device().create_buffer<uint4>(pixels,
+        "RTXPT GI private stable plane headers");
+    rtxpt_prefix_headers_.register_self();
+    rtxpt_prefix_stable_.super() = device().create_buffer<float4>(pixels,
+        "RTXPT GI private stable emission without shared direct");
+    rtxpt_prefix_stable_.register_self();
+    rtxpt_prefix_aux_.super() = device().create_buffer<RtxptGIPrefixAux>(pixels,
+        "RTXPT GI private prefix aux and half motion [80B-v2]");
+    rtxpt_prefix_aux_.register_self();
+}
+
+void ReSTIRGI::prepare_native_reblur_buffers() noexcept {
+    const uint pixels = pipeline()->pixel_num();
+    if (native_reblur_guides_.size() == size_t(pixels) * 3u) return;
+    native_reblur_diffuse_ = device().create_buffer<float4>(size_t(pixels) * 3u, "RTXPT GI native REBLUR diffuse x3");
+    native_reblur_specular_ = device().create_buffer<float4>(size_t(pixels) * 3u, "RTXPT GI native REBLUR specular x3");
+    native_reblur_bypass_ = device().create_buffer<float4>(pixels, "RTXPT GI native deterministic stable radiance");
+    native_reblur_guides_ = device().create_buffer<reblur::Guide>(size_t(pixels) * 3u, "RTXPT GI native REBLUR AOS guides x3");
+}
+
+bool ReSTIRGI::set_native_reblur_enabled(bool enabled) noexcept {
+    enabled = enabled && rtxpt_backend_;
+    if (enabled == native_reblur_enabled_) return false;
+    native_reblur_enabled_ = enabled;
+    if (rtxpt_) {
+        if (enabled) prepare_native_reblur_buffers();
+        compile_initial_samples();
+        rtxpt_->compile_native_reblur_final();
+    }
+    invalidate_history();
+    if (!enabled && native_reblur_guides_.size() != 0u) {
+        native_reblur_diffuse_.destroy(); native_reblur_specular_.destroy();
+        native_reblur_bypass_.destroy(); native_reblur_guides_.destroy();
+    }
+    return true;
 }
 }// namespace vision
 

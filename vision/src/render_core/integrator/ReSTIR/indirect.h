@@ -9,6 +9,9 @@
 #include "radiance_storage.h"
 #include "base/mgr/switch_profile.h"
 #include "reservoir.h"
+#include "rtxpt_gi_prefix_storage.h"
+#include "rtxpt_gi_denoiser.h"
+#include "base/integral/path_work_diagnostic.h"
 
 namespace vision {
 struct GIParam {
@@ -47,6 +50,10 @@ namespace vision {
 
 class RayTracingIntegrator;
 class RtxptGI;
+namespace rtxpt_gi {
+class NativeLightSampler;
+class StandardMaterialInputs;
+}
 
 // Cached secondary radiance is evaluated toward the source receiver. Preserve
 // that geometric side, including when both receivers view a two-sided back face.
@@ -85,6 +92,30 @@ private:
     bool radiance_prepared_{};
     bool rtxpt_backend_{};
     SP<RtxptGI> rtxpt_;
+    RegistrableBuffer<HitBSDF> rtxpt_proposals_{pipeline()->bindless_array()};
+    RegistrableBuffer<float4> rtxpt_bypass_{pipeline()->bindless_array()};
+    SP<rtxpt_gi::NativeLightSampler> rtxpt_lights_;
+    SP<rtxpt_gi::StandardMaterialInputs> rtxpt_materials_;
+    RegistrableBuffer<RtxptGIPrefixPlane> rtxpt_prefix_planes_{pipeline()->bindless_array()};
+    RegistrableBuffer<uint4> rtxpt_prefix_headers_{pipeline()->bindless_array()};
+    RegistrableBuffer<float4> rtxpt_prefix_stable_{pipeline()->bindless_array()};
+    RegistrableBuffer<RtxptGIPrefixAux> rtxpt_prefix_aux_{pipeline()->bindless_array()};
+    Shader<void(uint)> rtxpt_prefix_build_;
+    Shader<void(uint, RtxptGICameraParam)> rtxpt_initial_samples_;
+    ocarina::Buffer<path_cost::PathWorkCounters> path_work_counters_;
+    bool native_reblur_enabled_{};
+    mutable Buffer<float4> native_reblur_diffuse_, native_reblur_specular_, native_reblur_bypass_;
+    mutable Buffer<reblur::Guide> native_reblur_guides_;
+
+    [[nodiscard]] rtxpt_gi::PrefixStorage prefix_storage() const noexcept {
+        auto &bindings = pipeline()->bindless_array();
+        return {bindings.buffer_var<RtxptGIPrefixPlane>(rtxpt_prefix_planes_.index_var()),
+                bindings.buffer_var<uint4>(rtxpt_prefix_headers_.index_var()),
+                bindings.buffer_var<float4>(rtxpt_prefix_stable_.index_var()), Uint{pipeline()->pixel_num()}, native_reblur_storage()};
+    }
+
+    void prepare_rtxpt_candidate_buffers() noexcept;
+    void prepare_native_reblur_buffers() noexcept;
 
     // Internal pass-local receiver cache; no new virtual slots or stored state.
     [[nodiscard]] GIReservoirVar constant_combine_cached(const GIReservoirVar &canonical_rsv,
@@ -138,7 +169,30 @@ public:
     HOTFIX_VIRTUAL void compile_spatial_shading() noexcept;
     void compile() noexcept;
     [[nodiscard]] bool uses_rtxpt_backend() const noexcept { return rtxpt_backend_; }
+    // Caller drains the stream and activates this scene's GPU context before a
+    // mode switch. An enabled switch recompiles only private Build/Fill/Final.
+    bool set_native_reblur_enabled(bool enabled) noexcept;
+    [[nodiscard]] bool native_reblur_enabled() const noexcept { return native_reblur_enabled_; }
+    [[nodiscard]] BufferView<float4> native_reblur_diffuse(uint layer) const noexcept {
+        return native_reblur_diffuse_.view(size_t(layer) * pipeline()->pixel_num(), pipeline()->pixel_num());
+    }
+    [[nodiscard]] BufferView<float4> native_reblur_specular(uint layer) const noexcept {
+        return native_reblur_specular_.view(size_t(layer) * pipeline()->pixel_num(), pipeline()->pixel_num());
+    }
+    [[nodiscard]] BufferView<float4> native_reblur_bypass() const noexcept { return native_reblur_bypass_.view(); }
+    [[nodiscard]] BufferView<std::byte> native_reblur_guides(uint layer) const noexcept {
+        return native_reblur_guides_.view(size_t(layer) * pipeline()->pixel_num(), pipeline()->pixel_num()).view_as<std::byte>();
+    }
+    [[nodiscard]] rtxpt_gi::NativeReblurStorage native_reblur_storage() const noexcept {
+        return native_reblur_enabled_ ? rtxpt_gi::NativeReblurStorage{&native_reblur_diffuse_, &native_reblur_specular_,
+            &native_reblur_bypass_, &native_reblur_guides_, pipeline()->pixel_num()} : rtxpt_gi::NativeReblurStorage{};
+    }
     [[nodiscard]] const RegistrableBuffer<GISample> &sample_buffer() const noexcept { return samples_; }
+    [[nodiscard]] const RegistrableBuffer<HitBSDF> &rtxpt_proposals() const noexcept { return rtxpt_proposals_; }
+    [[nodiscard]] const RegistrableBuffer<float4> &rtxpt_bypass() const noexcept { return rtxpt_bypass_; }
+    [[nodiscard]] const rtxpt_gi::NativeLightSampler &rtxpt_lights() const noexcept { return *rtxpt_lights_; }
+    [[nodiscard]] rtxpt_gi::StandardMaterialInputs &rtxpt_materials() const noexcept { return *rtxpt_materials_; }
+    [[nodiscard]] const RegistrableBuffer<RtxptGIPrefixAux> &rtxpt_prefix_aux() const noexcept { return rtxpt_prefix_aux_; }
     void update_resolution(ocarina::uint2 res) noexcept override;
     [[nodiscard]] HOTFIX_VIRTUAL Float Jacobian_det(Float3 cur_pos, Float3 neighbor_pos, Var<SurfacePoint> sample_point) const noexcept;
     [[nodiscard]] HOTFIX_VIRTUAL GISampleVar init_sample(const Interaction &it, const SensorSample &ss,

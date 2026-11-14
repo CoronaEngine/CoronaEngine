@@ -177,6 +177,10 @@ void ReBLUR::compile() noexcept {
             if constexpr (!std::is_same_v<Param, GuideParam>) edsl::emit_pack_pixel(parameters.pack, guide, repaired_hits);
 #endif
         };
+        $if(p.prepared != 0u) {
+            publish_guide(p.prepared_guides.read(i));
+            $return();
+        };
         $if(p.layered != 0u) {
             // Test the small validity field before loading the surface, camera
             // and sampler state for mostly empty secondary stable planes.
@@ -364,6 +368,8 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
     gp.output = filter_->guides().descriptor();
     gp.diffuse = input.lobe_signals.diffuse_radiance_hitdist.descriptor();
     gp.specular = input.lobe_signals.specular_radiance_hitdist.descriptor();
+    gp.prepared = input.prepared_reblur_guides.size() != 0u;
+    gp.prepared_guides = input.prepared_reblur_guides.view_as<Guide>().descriptor();
 #ifdef VISION_REBLUR_EDSL
     if (!edsl_ || !fuse_guides_)
 #endif
@@ -414,7 +420,7 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
             matches(input.lobe_signals.diffuse_radiance_hitdist, input.lobe_signals.output_diffuse) &&
             matches(input.lobe_signals.specular_radiance_hitdist, input.lobe_signals.output_specular);
         const uint pixels = input.resolution.x * input.resolution.y;
-        if (fuse_guides_ && compact_guides_ && reblur_option_enabled("REBLUR_COMPOSE_IN_UNPACK") &&
+        if (input.allow_fused_composition && fuse_guides_ && compact_guides_ && reblur_option_enabled("REBLUR_COMPOSE_IN_UNPACK") &&
             input.channel_kind == RealTimeDenoiseInput::ChannelKind::DirectIndirect &&
             (input.layer_count == 1u || input.layer_count == StablePlaneCount) &&
             (defer_unpack || input.layer_index + 1u == input.layer_count)) {

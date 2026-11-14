@@ -11,6 +11,8 @@
 #include "math/optics.h"
 #include "base/using.h"
 #include "half_storage.h"
+#include "base/integral/path_work_diagnostic.h"
+#include <functional>
 
 namespace vision {
 struct SurfaceData {
@@ -419,8 +421,29 @@ auto make_RadType3(Args &&...args) noexcept {
 
 #endif
 
+class MaterialEvaluator;
+
+// Optional observers of the ordinary PT path. They never sample a new ray or
+// change its NEE/BSDF/RR decisions. The independent suffix beta preserves RGB
+// channels which the source receiver's BSDF may have multiplied by zero.
+struct PTPathCapture {
+    // Host-only cost diagnostics. Defaults generate the production expressions.
+    bool record_radiance{true};
+    bool record_hit_distance{true};
+    Bool active{false};
+    Uint receiver_bounce{InvalidUI32};
+    Float3 beta{make_float3(1.f)}, radiance{make_float3(0.f)};
+    Float3 camera_specular_fraction{make_float3(0.f)};
+    std::function<void(const Interaction &, const TriangleHitVar &, const MaterialEvaluator &,
+                       const BSDFSample &, const Uint &, const SampledSpectrum &)> on_sample;
+    std::function<void(const Interaction &)> on_endpoint;
+};
+
 struct HitContext {
 public:
+    // Host-only opt-in capture pointer. nullptr generates no diagnostic shader AST.
+    path_cost::PathWorkCountersVar *work_counters{};
+    PTPathCapture *path_capture{};
     mutable TriangleHitVar *hit{};
     mutable Interaction *it{};
     mutable RadType3Var *Ld{};

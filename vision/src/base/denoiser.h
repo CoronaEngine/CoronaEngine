@@ -51,6 +51,11 @@ struct RealTimeDenoiseInput {
     bool compose_only{false};
     // Dispatch result: the final lobe pass wrote the complete FP32 rt_buffer.
     bool composed_lobe_output{};
+    // Optional AOS reblur::Guide records supplied by a private transport
+    // producer. REBLUR converts them through its usual SOA/NRD pack path.
+    BufferView<std::byte> prepared_reblur_guides;
+    // Independent DI/GI histories are composed explicitly by their owner.
+    bool allow_fused_composition{true};
 
 //    BufferView<float4> output;
 //    BufferView<float4> radiance;

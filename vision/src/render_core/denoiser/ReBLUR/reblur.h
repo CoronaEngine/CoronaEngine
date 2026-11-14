@@ -24,8 +24,9 @@ struct GuideParam {
     BufferDesc<float2> motion;
     BufferDesc<> output;
     BufferDesc<float4> diffuse, specular;
+    BufferDesc<Guide> prepared_guides;
     uint2 size{};
-    uint layered{}, stable{}, frame{};
+    uint layered{}, stable{}, frame{}, prepared{};
 };
 struct PublishParam {
     BufferDesc<float4> diffuse, specular, bypass;
@@ -38,7 +39,7 @@ struct GuidePackParam {
 };
 #endif
 }
-OC_PARAM_STRUCT(vision::reblur, GuideParam, visibility, planes, surfaces, extensions, motion, output, diffuse, specular, size, layered, stable, frame) {};
+OC_PARAM_STRUCT(vision::reblur, GuideParam, visibility, planes, surfaces, extensions, motion, output, diffuse, specular, prepared_guides, size, layered, stable, frame, prepared) {};
 OC_PARAM_STRUCT(vision::reblur, PublishParam, diffuse, specular, bypass, direct, indirect) {};
 #ifdef VISION_REBLUR_EDSL
 OC_PARAM_STRUCT(vision::reblur, GuidePackParam, guide, pack) {};

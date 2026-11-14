@@ -5,6 +5,7 @@
 #include "falcor_di/common.h"
 #include "falcor_di/candidates.h"
 #include "falcor_di/reuse.h"
+#include "falcor_di/denoiser_signals.h"
 #include "render_core/warper/alias.h"
 #include <cmath>
 #include <stdexcept>
@@ -27,6 +28,8 @@ class FalcorDIExperiment final : private Toolkit {
     uint64_t previous_geometry_revision_{};
     std::string mode_;
     bool publish_gi_{};
+    bool lobe_signals_{};
+    Buffer<float4> denoiser_diffuse_, denoiser_specular_, denoiser_bypass_;
     // Non-owning typed descriptors captured by the compiled shaders.
     Buffer<uint4> surfaces0_;
     Buffer<uint2> surface_normals_;
@@ -106,6 +109,11 @@ class FalcorDIExperiment final : private Toolkit {
         bind(surfaces0_, "Falcor DI surface position and depth", 1u, 2u);
         bind(surface_normals_, "Falcor DI surface normals", 1u, 2u);
         bind(reservoirs_, "Falcor DI packed reservoir", falcor_di::screen_tile_size, 3u);
+        if (lobe_signals_) {
+            bind(denoiser_diffuse_, "Falcor DI denoiser diffuse", 1u, 1u);
+            bind(denoiser_specular_, "Falcor DI denoiser specular", 1u, 1u);
+            bind(denoiser_bypass_, "Falcor DI denoiser bypass", 1u, 1u);
+        }
     }
 
     void prepare_sampling_buffers() {
@@ -303,6 +311,14 @@ class FalcorDIExperiment final : private Toolkit {
             const Uint2 pixel = dispatch_idx().xy();
             auto hit = fb.cur_visibility_buffer_var(frame).read(i);
             Float3 value = make_float3(0.f);
+            optional<Float3> diffuse, specular, bypass;
+            optional<Float> hit_distance;
+            if (lobe_signals_) {
+                diffuse.emplace(make_float3(0.f));
+                specular.emplace(make_float3(0.f));
+                bypass.emplace(make_float3(0.f));
+                hit_distance.emplace(0.f);
+            }
             const auto swl = spec->sample_wavelength(sampler);
             $if(hit->is_hit()) {
                 auto primary = fb.rays().read(i)->to_ray_state().ray;
@@ -313,6 +329,7 @@ class FalcorDIExperiment final : private Toolkit {
                         LightSampleContext ref;
                         ref.pos = primary.org_min.xyz();
                         value = light->evaluate_wi(ref, it, swl, LightEvalMode::L).L.vec3();
+                        if (lobe_signals_) *bypass = value;
                     });
                 };
                 {
@@ -326,7 +343,17 @@ class FalcorDIExperiment final : private Toolkit {
                             $if(!geo.trace_occlusion(shadow)) {
                                 materials.dispatch(it.material_id(), [&](const Material *material) {
                                     auto bsdf = material->create_evaluator(it, swl);
-                                    value += bsdf.evaluate(it.wo, sample.direction, MaterialEvalMode::F).f.vec3() * weighted_radiance;
+                                    if (lobe_signals_) {
+                                        const Float3 contribution = bsdf.evaluate(it.wo, sample.direction, MaterialEvalMode::F).f.vec3() * weighted_radiance;
+                                        value += contribution;
+                                        const auto split = falcor_di::split_denoiser_contribution(
+                                            contribution, bsdf.specular_fraction_rgb(it.wo, sample.direction));
+                                        *diffuse = split.diffuse;
+                                        *specular = split.specular;
+                                        *hit_distance = max(sample.distance, 1e-5f);
+                                    } else {
+                                        value += bsdf.evaluate(it.wo, sample.direction, MaterialEvalMode::F).f.vec3() * weighted_radiance;
+                                    }
                                 });
                             };
                         };
@@ -339,17 +366,23 @@ class FalcorDIExperiment final : private Toolkit {
                     ref.pos = primary.org_min.xyz();
                     ref.ng = primary.dir_max.xyz();
                     value = lights->evaluate_miss_wi(ref, primary.dir_max.xyz(), swl, LightEvalMode::L).L.vec3();
+                    if (lobe_signals_) *bypass = value;
                 }
             };
             direct.write_radiance(i, make_float4(value, 1.f));
+            if (lobe_signals_) {
+                denoiser_diffuse_.write(i, make_float4(*diffuse, *hit_distance));
+                denoiser_specular_.write(i, make_float4(*specular, *hit_distance));
+                denoiser_bypass_.write(i, make_float4(*bypass, 0.f));
+            }
         };
         shade.function()->set_block_dim(16u, 16u);
         shade_ = device().compile(shade, "Falcor DI final shading");
     }
 
 public:
-    FalcorDIExperiment(ReSTIRDI &direct, std::string_view mode, bool publish_gi)
-        : extent_{pipeline()->resolution()}, frame_buffer_{&frame_buffer()}, mode_{mode}, publish_gi_{publish_gi} {
+    FalcorDIExperiment(ReSTIRDI &direct, std::string_view mode, bool publish_gi, bool lobe_signals = false)
+        : extent_{pipeline()->resolution()}, frame_buffer_{&frame_buffer()}, mode_{mode}, publish_gi_{publish_gi}, lobe_signals_{lobe_signals} {
         uint bias_mode = 0u;
         if (mode == "basic") bias_mode = 1u;
         else if (mode == "pairwise") bias_mode = 2u;
@@ -359,15 +392,21 @@ public:
         bind_screen_buffers();
         prepare_sampling_buffers();
         compile(direct, bias_mode);
+        if (lobe_signals_)
+            OC_INFO("Falcor DI denoiser outputs active: physical primary, original BSDF lobe split, emission/sky bypass, independent buffers");
         OC_INFO_FORMAT("Falcor DI native route active: mode={}, {} triangles, {}x{}, environment={}, NEE=10+1, env_pdf=uniform_sphere, actual_scene_radiance, selection={}", mode,
                        area_light_count_, extent_.x, extent_.y, environment_index_ != InvalidUI32,
                        environment_index_ != InvalidUI32 ? "framework alias, area/env mass .5/.5 (env-only1)" : "original area CDF");
     }
 
-    [[nodiscard]] bool matches(uint2 extent, std::string_view mode, bool publish_gi) const noexcept {
+    [[nodiscard]] BufferView<float4> denoiser_diffuse() const { return denoiser_diffuse_.view(); }
+    [[nodiscard]] BufferView<float4> denoiser_specular() const { return denoiser_specular_.view(); }
+    [[nodiscard]] BufferView<float4> denoiser_bypass() const { return denoiser_bypass_.view(); }
+
+    [[nodiscard]] bool matches(uint2 extent, std::string_view mode, bool publish_gi, bool lobe_signals = false) const noexcept {
         // A replacement FrameBuffer owns different storage even when the extent is unchanged.
         return frame_buffer_ == &frame_buffer() && extent.x == extent_.x && extent.y == extent_.y &&
-               mode == mode_ && publish_gi == publish_gi_;
+               mode == mode_ && publish_gi == publish_gi_ && lobe_signals == lobe_signals_;
     }
 
     [[nodiscard]] CommandBatch dispatch(uint frame) {

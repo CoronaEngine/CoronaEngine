@@ -46,7 +46,13 @@ void pack_valid_signals(const Var<Dispatch> &p, const Var<Guide> &guide, const I
     Image<float4, Format::RGB10A2Unorm>{p.outputs.t2}.write_in_bounds(position, PackNormalRoughness(normal_roughness.xyz(), saturate(normal_roughness.w + disocclusion_mix), 0.f));
     Image<float, Format::R32Float>{p.outputs.t3}.write_in_bounds(position, geometry.w);
     Float previous_depth = dot(p.previous_view_depth_row, make_float4(geometry.xyz(), 1.f));
-    Image<float4, Format::RGBA16Float>{p.outputs.t4}.write_in_bounds(position, make_float4(-make_float2(diffuse_factor.w, specular_factor.w), previous_depth - geometry.w, 0.f));
+    Float depth_motion = previous_depth - geometry.w;
+    // Native stable-plane viewZ is its virtual camera-ray distance. Preserve
+    // the producer's explicit depth motion instead of deriving it from XYZ.
+    $if((identity.w & 2u) != 0u) {
+        depth_motion = ocarina::f16tof32(identity.w >> 16u);
+    };
+    Image<float4, Format::RGBA16Float>{p.outputs.t4}.write_in_bounds(position, make_float4(-make_float2(diffuse_factor.w, specular_factor.w), depth_motion, 0.f));
 }
 void pack_valid_pixel(const Var<Dispatch> &p, const Var<Guide> &guide, const Uint &index, const Int2 &position,
                       const Float2 &repaired_hits) {

@@ -1,4 +1,4 @@
-﻿//
+//
 // Created by Zero on 10/09/2022.
 //
 
@@ -175,6 +175,7 @@ protected:
     bool separate_{false};
     HotfixSlot<SP<Denoiser>> denoiser_{};
     ocarina::Shader<void(PTParam)> path_tracing_;
+    ocarina::Buffer<path_cost::PathWorkCounters> path_work_counters_;
 
     [[nodiscard]] DataWrap illumination_settings() const;
     [[nodiscard]] static bool merge_illumination_setting(DataWrap &candidate, const std::string &key,
@@ -191,6 +192,7 @@ public:
     OC_MAKE_MEMBER_GETTER(separate, )
     [[nodiscard]] uint suffix_depth() const noexcept { return max_depth_.hv(); }
     [[nodiscard]] Uint runtime_suffix_depth() const noexcept { return *max_depth_; }
+    [[nodiscard]] Uint runtime_min_depth() const noexcept { return *min_depth_; }
     [[nodiscard]] Denoiser *denoiser() noexcept { return denoiser_.get(); }
     [[nodiscard]] const Denoiser *denoiser() const noexcept { return denoiser_.get(); }
     bool render_UI(Widgets *widgets) noexcept override;
