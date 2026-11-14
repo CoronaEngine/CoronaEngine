@@ -28,10 +28,6 @@ def camera_update_harness():
     if not headers:
         pytest.skip("Standalone CPU regression requires the project's nlohmann header")
     source = (ROOT / "src/systems/ui/cef/editor_scene_service.cpp").read_text(encoding="utf-8")
-    start = source.index('{"update_camera_view", []')
-    start = source.index("{", source.index("const NativeContext&)", start)) + 1
-    end = source.index("\n        }},", start)
-    handler = source[start:end]
     operation_start = source.index("SceneReply apply_native_camera_properties(")
     operation_end = source.index("\nSceneReply apply_native_camera_render_settings(", operation_start)
     adapter_start = source.index("NativeResult apply_non_web_camera_properties(")
@@ -78,7 +74,7 @@ using NativeResult = Json;
 PATCH
 SERVICE
 struct Snapshot { float projection_x_sign=1, near_plane=.1f, far_plane=100; };
-struct SceneReply { std::string error_code,error_message; Snapshot camera; };
+struct SceneReply { std::string error_code,error_message; Snapshot camera; struct { Snapshot camera; } write; };
 enum class SceneMethod { SetCameraProperties, UpdateCamera };
 struct SceneRequest {
  SceneMethod method;
@@ -171,14 +167,16 @@ float json_float_value(const Json& j,const char* k,float v) { return j.value(k,v
 void persist_native_scene_cameras(Scene&) {}
 Json camera_to_json(Camera&) { return Json::object(); }
 Json native_success(Json j) { return j; }
+// The extracted adapter funnels its failure path through the scene layer's shaper;
+// the harness only asserts successful replies, so a minimal shaper is enough.
+Json native_result_from_scene(const SceneReply& reply) {
+    return {{"status","error"},{"code",reply.error_code},{"message",reply.error_message}};
+}
 // The extracted handler body is namespace-qualified in the engine; this alias
 // keeps the snippet compiling at global scope in the harness.
 namespace CameraPropertiesService = Corona::Systems::UI::CameraPropertiesService;
 OPERATION
 ADAPTER
-Json update(const NativeRequest& request, const NativeContext&) {
-HANDLER
-}
 int main(int argc,char** argv) {
     if (argc > 2) {
         SceneRequest request{SceneMethod::UpdateCamera};
@@ -189,14 +187,14 @@ int main(int argc,char** argv) {
         const auto reply=apply_native_camera_properties(request);
         if (!reply.error_code.empty()) return 2;
     } else {
-        update({Json::array({"scene","source-camera",Json::parse(argv[1])})},{});
+        apply_non_web_camera_properties({Json::array({"scene","source-camera",Json::parse(argv[1])})}, false);
     }
     std::cout << Json{{"width",engine.width},{"height",engine.height},
       {"rect",{engine.x,engine.y,engine.view_width,engine.view_height}},
       {"open",engine.open},{"speed",engine.speed},
       {"geometry_calls",engine.geometry_calls},{"size_calls",engine.size_calls}}.dump();
 }
-'''.replace("HANDLER", handler).replace("PATCH", patch)
+'''.replace("PATCH", patch)
     cpp = cpp.replace("SERVICE", service)
     cpp = cpp.replace("OPERATION", source[operation_start:operation_end])
     cpp = cpp.replace("ADAPTER", source[adapter_start:adapter_end])

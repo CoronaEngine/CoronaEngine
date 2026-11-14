@@ -65,12 +65,12 @@ int main() {
     if (pending.size() != 1 || pending[0].kind != DisplaySurfaceCommand::Kind::Changed ||
         pending[0].surface != window.surface) return 4;
     // Registration alone must not reveal the window; first-present owns that.
-    const auto* managed = manager.find_by_id(window.id);
+    const auto* managed = manager.find_by_surface(window.surface);
     if (!managed || !managed->pending_show) return 5;
 }
 ''', encoding='utf-8')
     # Link the real lookup and completion tickets too; only OS access is stubbed.
-    lookup_start = source.index('const ManagedWindow* SdlWindowManager::find_by_id(')
+    lookup_start = source.index('const ManagedWindow* SdlWindowManager::find_by_surface(')
     lookup_end = source.index('\n}', lookup_start) + 2
     with harness.open('a', encoding='utf-8') as output:
         output.write('\nnamespace Corona::Systems::UI {\n' + source[lookup_start:lookup_end] + '\n}\n')
