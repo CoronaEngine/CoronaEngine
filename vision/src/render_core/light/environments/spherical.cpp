@@ -67,12 +67,18 @@ vector<float> aggregate_environment_importance(const vector<float> &weights, uin
  */
 class SphericalMap final : public Environment {
 private:
-    float4x4 o2w_;
+    float4x4 base_o2w_;
     EncodedData<float4x4> w2o_;
     SP<Warper2D> warper_{};
     float yaw_{0};
     bool flip_u_{false};
     uint importance_max_resolution_{0u};
+    EncodedData<float4x4> o2w_;
+
+    void update_transform(const float4x4 &o2w) noexcept {
+        o2w_ = o2w;
+        w2o_ = inverse(o2w);
+    }
 
 public:
     SphericalMap() : Environment(LightType::Infinite) {}
@@ -85,19 +91,19 @@ public:
         float4x4 o2w = desc.o2w.mat;
         float x = flip_u_ ? 1.f : -1.f;
         float4x4 rx = rotation_x<H>(-90) * transform::scale<H>(1.f, x, 1.f);
-        o2w_ = o2w * rx;
-        w2o_ = inverse(o2w_);
+        base_o2w_ = o2w * rx;
+        update_transform(base_o2w_);
     }
     void render_sub_UI(Widgets *widgets) noexcept override {
         Environment::render_sub_UI(widgets);
         changed_ |= widgets->drag_float("yaw", std::addressof(yaw_), 1, -180, 180);
         if (changed_) {
             float4x4 r = rotation_y<H>(yaw_);
-            w2o_ = inverse(r * o2w_);
+            update_transform(r * base_o2w_);
         }
     }
-    OC_ENCODABLE_FUNC(Environment, w2o_, *warper_)
-    VS_HOTFIX_MAKE_RESTORE(Environment, o2w_, w2o_, warper_, yaw_, flip_u_, importance_max_resolution_)
+    OC_ENCODABLE_FUNC(Environment, w2o_, *warper_, o2w_)
+    VS_HOTFIX_MAKE_RESTORE(Environment, base_o2w_, w2o_, warper_, yaw_, flip_u_, importance_max_resolution_, o2w_)
     VS_MAKE_PLUGIN_NAME_FUNC
     [[nodiscard]] float3 power() const noexcept override {
         float world_radius = scene().world_diameter() / 2.f;
@@ -108,8 +114,7 @@ public:
         return make_float2(org_u, spherical_theta(local_dir) * InvPi);
     }
 
-    [[nodiscard]] SampledSpectrum L(const Float3 &local_dir, const SampledWavelengths &swl) const {
-        Float2 uv = calculate_uv(local_dir);
+    [[nodiscard]] SampledSpectrum L(const Float2 &uv, const SampledWavelengths &swl) const {
         return color_.eval_illumination_spectrum(uv, swl).sample * scale();
     }
 
@@ -139,7 +144,7 @@ public:
         Float sin_theta = sin(theta);
         Float2 uv = make_float2(phi * Inv2Pi, theta * InvPi);
         if (match_L(mode)) {
-            ret.L = L(local_dir, swl);
+            ret.L = L(uv, swl);
         }
         if (match_PDF(mode)) {
             Float pdf = warper_->PDF(uv) / (_2Pi * Pi * sin_theta);
@@ -156,14 +161,14 @@ public:
         Float sin_theta = sin(theta);
         Float cos_theta = cos(theta);
         Float3 local_dir = spherical_direction(sin_theta, cos_theta, phi);
-        Float3 world_dir = normalize(transform_vector(inverse(*w2o_), local_dir));
+        Float3 world_dir = normalize(transform_vector(*o2w_, local_dir));
         if (match_PDF(mode)) {
             Float pdf_dir = pdf_map / (_2Pi * Pi * sin_theta);
             pdf_dir = select(ocarina::isinf(pdf_dir), 0.f, pdf_dir);
             ret.eval.pdf = pdf_dir;
         }
         if (match_L(mode)) {
-            ret.eval.L = L(local_dir, swl);
+            ret.eval.L = L(uv, swl);
         }
         Float3 pos = p_ref.pos + world_dir * scene().world_diameter();
         ret.p_light = pos;
@@ -201,7 +206,7 @@ public:
         Float sin_theta = sin(theta);
         Float cos_theta = cos(theta);
         Float3 local_dir = spherical_direction(sin_theta, cos_theta, phi);
-        Float3 world_dir = normalize(transform_vector(inverse(*w2o_), local_dir));
+        Float3 world_dir = normalize(transform_vector(*o2w_, local_dir));
         Float3 pos = p_ref.pos + world_dir * scene().world_diameter();
         return LightEvalContext{pos, -world_dir};
     }
