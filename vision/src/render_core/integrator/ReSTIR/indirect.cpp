@@ -242,7 +242,9 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                                              "no-endpoint", "no-radiance", "no-observer", "plain"};
         uint cost_rank = 0u;
         if (cost_mode == "zero-surface") cost_rank = 3u;
-        else if (cost_mode == "plain-output48") cost_rank = 8u;
+        else if (cost_mode == "zero-material") cost_rank = 0u;
+        else if (cost_mode == "plain-output48" || cost_mode == "plain-no-bridge" ||
+                 cost_mode == "plain-output48-no-bridge") cost_rank = 8u;
         else if (cost_mode != "no-distance-math") {
             while (cost_rank < cost_modes.size() && cost_modes[cost_rank] != cost_mode) ++cost_rank;
             OC_ERROR_IF(cost_rank == cost_modes.size(), "Unknown GI export cost diagnostic.");
@@ -250,23 +252,25 @@ void ReSTIRGI::compile_initial_samples() noexcept {
         const bool skip_distance = cost_rank >= 1u, skip_aux = cost_rank >= 2u, skip_guides = cost_rank >= 3u;
         const bool skip_surface = cost_rank >= 4u, skip_endpoint = cost_rank >= 5u;
         const bool skip_radiance = cost_rank >= 6u, skip_observer = cost_rank >= 7u;
+        const bool no_parameter_bridge = cost_mode == "plain-no-bridge" || cost_mode == "plain-output48-no-bridge";
         OC_INFO_FORMAT("GI export cost mode={}, production={}", cost_mode, cost_mode == "full");
         OC_INFO_FORMAT("GI Fill transport: ordinary camera PT with observers only, counters={}", count_work);
         Kernel kernel = [&](Uint frame_index, Var<RtxptGICameraParam> camera) {
-            gi_principled::CompilationScope parameters{false};
+            gi_principled::CompilationScope parameters{false, !no_parameter_bridge};
             initial(sampler(), frame_index, spectrum());
             scene().sensor()->load_data(); sampler()->load_data(); integrator()->load_data();
             sampler()->set_seed(dispatch_idx().xy(), frame_index, PTParam{}.dimension_index);
             optional<path_cost::PathWorkCountersVar> work_counters;
             if (count_work) work_counters.emplace();
-            if (cost_mode == "plain" || cost_mode == "plain-output48") {
+            if (cost_mode == "plain" || cost_mode == "plain-output48" ||
+                cost_mode == "plain-no-bridge" || cost_mode == "plain-output48-no-bridge") {
                 RadType3Var direct, specular;
                 HitContext context{direct, specular};
                 context.work_counters = work_counters ? &*work_counters : nullptr;
                 RayState ray = frame_buffer().rays().read(dispatch_id())->to_ray_state();
                 Float3 total = integrator()->Li(ray, Float{1e16f}, integrator()->runtime_suffix_depth() + 1u,
                     spectrum()->one(), false, context, *this);
-                if (cost_mode == "plain-output48") {
+                if (cost_mode == "plain-output48" || cost_mode == "plain-output48-no-bridge") {
                     rtxpt_bypass_.write(dispatch_id(), make_float4(total, 1.f));
                     auto denoiser = prefix_storage().denoiser;
                     OC_ASSERT(denoiser.enabled());
@@ -310,6 +314,12 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                             receiver.plane_hash = (plane << 24u) | header[plane];
                             receiver.valid = gi_principled::captured(it.material_id());
                             for (uint i = 0u; i < 6u; ++i) receiver.parameters[i] = gi_principled::row(i);
+                            if (cost_mode == "zero-material") {
+                                // Cost diagnostic only: preserve receiver eligibility,
+                                // configuration, geometry, guides and all96B stores.
+                                for (uint i = 0u; i < 5u; ++i) receiver.parameters[i] = make_float4(0.f);
+                                receiver.parameters[5].xyz() = make_float3(0.f);
+                            }
                             if (!skip_guides) {
                                 receiver.normal = bsdf.shading_frame().normal();
                                 SampledSpectrum d{spectrum()->dimension()}, sp{spectrum()->dimension()}; Float2 roughness;

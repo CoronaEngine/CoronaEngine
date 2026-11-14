@@ -24,9 +24,10 @@ inline void set_flags(const Uint &value) { row(5u).w = ocarina::as<float>(value)
 
 class CompilationScope {
 public:
-    explicit CompilationScope(bool decode) {
+    explicit CompilationScope(bool decode, bool install = true) {
         auto &env = ocarina::Env::instance();
         env.clear_global_vars();
+        if (!install) return;
         for (uint i = 0u; i < 6u; ++i) {
             Float4 initial = ocarina::make_float4(0.f);
             env.set(key(i), initial);
