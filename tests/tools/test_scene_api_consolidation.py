@@ -15,8 +15,8 @@ def test_scene_v8_has_only_the_consolidated_names():
     registered += ['scene'] * len(names) + ['audio'] * 2
     # Scene operations are counted above; the rest is the editor surface, which
     # now includes the single Web -> Python bridge entry. Namespaces that moved
-    # behind the bridge no longer appear here. The native gizmo overlay was
-    # removed together with its two viewport methods, so the surface is 56.
+    # behind the bridge no longer appear here. Two viewport methods retired with
+    # the native overlay, so the surface is 56.
     assert len(registered) == 56
     assert len(set(registered)) == 9
     assert re.findall(r'bridge->SetValue\("([^"]+)"', source) == ['call'], (
