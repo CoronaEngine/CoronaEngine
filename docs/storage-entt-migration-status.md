@@ -3,7 +3,6 @@
 <!-- HISTORICAL-DOC: this page describes the tree as it was when it was written. The editor API handler has since been split; the scene service now lives in src/systems/ui/cef/editor_scene_service.cpp and the Python bridge in src/systems/ui/editor_api/python_service_bridge.{h,cpp}. -->
 
 > 本文记录**实际做了什么**。设计分析见 `entt-full-replacement-analysis.md`，
-> 跨线程读计划见 `s4-cross-thread-reads-plan.md`。
 
 基线：`feat/systems-thread-dag`，起点 `ab989237`。
 
@@ -41,7 +40,7 @@ Engine 里 250+ 调用点**一行未改**。
 
 3. **锁改成条带锁**
    旧实现每槽一把 `shared_timed_mutex`；新实现是 4096 把按实体索引哈希。
-   这是**过渡兼容层**：`s4-cross-thread-reads-plan.md` 里 47 处跨线程读改成快照后，
+   这是**过渡兼容层**：47 处跨线程读改成快照后，
    这些锁可以直接删掉，那时 entt 才是真正无锁的。
 
 ### S3 验证
@@ -100,7 +99,7 @@ ctest --output-on-failure → 111 个用例，87% 通过（14 失败）
 ### S4 · 跨线程读改快照（47 处）
 
 容器已经换成 entt，但**锁还在**（条带锁），所以当前行为与迁移前一致。
-要真正用上 entt 的无锁特性，需要按 `s4-cross-thread-reads-plan.md` 把
+要真正用上 entt 的无锁特性，需要把
 47 处跨线程读改成快照：
 
 | 存储 | 处数 | 计划 |
