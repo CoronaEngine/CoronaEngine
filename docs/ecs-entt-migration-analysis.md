@@ -1,6 +1,6 @@
 # 用 EnTT 替换 Storage 容器：可行性分析
 
-<!-- HISTORICAL-DOC: the feasibility analysis below was written before the migration; S3 has since landed (commit 5581680c): all 13 SharedDataHub storages use EntityStorage<T> backed by entt, and the editor API handler it mentions no longer exists (typed V8 binding). See docs/storage-entt-migration-status.md for the actual implementation. -->
+<!-- HISTORICAL-DOC: the feasibility analysis below was written before the migration; S3 has since landed (commit 5581680c): all 13 SharedDataHub storages use EntityStorage<T> backed by entt, and the editor API handler it mentions no longer exists (typed V8 binding). The storages were backed by EntityStorage<T> over entt (see include/corona/kernel/entity_storage.h). -->
 
 > 本文只做分析，**不改任何代码**。
 > 结论：技术上可行，但不是"删掉 13 个 Storage"这么简单——有三个硬约束必须先解决，
