@@ -55,7 +55,7 @@ GUARDS = [
     ("test_frontend_regressions.py", "逐个跑前端窗口/音频/facade 回归文件（带超时）"),
     ("test_web_layer_budget.py", "接口核心行数 ratchet（度量在 web_layer_budget.py）"),
     ("test_scene_api_consolidation.py", "场景 V8 只保留合并后的方法名与总数"),
-    ("test_web_python_bridge.py", "Web→Python 信封格式与错误码映射"),
+    ("test_web_python_bridge.py", "Web→Python 信封原样转发：C++ 不解析、不重建，服务白名单在 Python"),
     ("test_python_refusal_codes.py", "Python 侧拒绝码都在契约词表内"),
     ("test_lanchat_removal.py", "局域网聊天接口已删除，不得回归"),
     ("test_project_allocator.py", "项目目录分配器：重名与原子创建"),

@@ -3,9 +3,16 @@
 C++ carries the envelope verbatim; routing and the service allowlist live on the
 Python side.  These tests pin that split: JS owns the request schema, Python
 owns the reachable services.
+
+The C++ half is pinned too: `execute_bridge_operation` is a transport. It takes the
+envelope string, hands it to the Python service untouched and returns what the service
+said - no `json::parse`, no key inspection, no re-encoding. The two *other* interfaces
+(`window.corona.*` for Web, `CoronaEngine.<ns>.<name>` for the ScriptRuntime) are typed
+on both sides; this one is deliberately not.
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -18,6 +25,53 @@ if str(EDITOR_ROOT) not in sys.path:
 
 from runtime.bridge_errors import BridgeError
 from runtime.editor_host import CoronaEditor, WebBridgeService
+
+BRIDGE_IMPL = ROOT / "src/systems/ui/cef/editor_service_operations.cpp"
+
+
+def _function_body(source: str, signature: str) -> str:
+    """The brace-balanced body of the function whose signature contains `signature`."""
+    start = source.index(signature)
+    brace = source.index("{", start)
+    depth = 0
+    for index in range(brace, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start:index + 1]
+    raise AssertionError(f"unbalanced body for {signature}")
+
+
+def test_cpp_forwards_the_envelope_without_parsing_or_rebuilding_it():
+    body = _function_body(BRIDGE_IMPL.read_text(encoding="utf-8-sig"),
+                          "BridgeReply execute_bridge_operation")
+    # The request leg is the envelope string, untouched. Only the reply leg converts the
+    # service's own answer for JS, so the scan stops at the service call.
+    request_leg = body[:body.index("invoke_python_script_service")]
+    for forbidden in ("json::parse", "from_json", ".get<", '"service"', '"function"',
+                      '"args"', '"op"'):
+        assert forbidden not in request_leg, (
+            f"C++ started interpreting the Web -> Python envelope ({forbidden}); "
+            "the envelope schema belongs to JS and Python")
+    assert '{"EditorBridge", "call", nlohmann::json::array({envelope})}' in body, (
+        "the envelope must reach the Python service as a single untouched argument")
+
+
+def test_cpp_only_rejects_an_empty_envelope():
+    body = _function_body(BRIDGE_IMPL.read_text(encoding="utf-8-sig"),
+                          "BridgeReply execute_bridge_operation")
+    # The one check C++ is allowed: an empty string cannot be a request. Everything else
+    # (shape, service, allowlist) is answered by Python.
+    assert body.count("envelope.empty()") == 1
+
+
+def test_the_v8_binding_posts_the_string_and_never_parses_it():
+    binding = (ROOT / "src/systems/ui/cef/cef_v8_binding.cpp").read_text(encoding="utf-8-sig")
+    body = _function_body(binding, "invoke(BridgeMethod")
+    assert "json::parse" not in body, "the V8 bridge parsed the envelope instead of forwarding it"
+    assert "execute_bridge_operation(envelope)" in body
 
 
 def _record(monkeypatch, calls, response):
