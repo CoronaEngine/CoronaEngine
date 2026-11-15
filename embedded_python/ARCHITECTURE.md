@@ -15,7 +15,8 @@
 
 - `include/corona/engine/engine_runtime_api.h`：C++ Engine Runtime 底层接口。
 - `src/systems/ui/cef/cef_v8_binding.cpp`：Web 唯一的 C++ 契约（typed V8 具名绑定）。
-- `src/systems/ui/cef/script_runtime_api.h`：Script Runtime 的 16 条具名入口。
+- `src/systems/ui/cef/editor_operation_table.h`：唯一的操作表（名字、命名空间、投影）。
+- `src/systems/ui/cef/script_runtime_api.h`：Script Runtime 的 18 条 handler（内部实现）。
 - `embedded_python/api/editor_api.py`：Python 侧受限契约入口。
 - `editor/Frontend/src/api`：Vue 聚合契约 adapter。
 - `script_runtime/native_scene_adapter.py`：角色脚本可用的受限子集。

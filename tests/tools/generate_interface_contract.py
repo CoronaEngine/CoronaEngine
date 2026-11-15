@@ -16,8 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import rejection_codes
 
 ROOT = Path(__file__).resolve().parents[2]
-HEADER = ROOT / "src/systems/ui/cef/script_runtime_api.h"
-SURFACE = ROOT / "tests/tools/test_typed_native_surface.py"
+TABLE = ROOT / "src/systems/ui/cef/editor_operation_table.h"
+SURFACE = ROOT / "tests/tools/native_surface.py"
 OUT = ROOT / "docs/interface-contract.md"
 
 NAMESPACE_NOTES = {
@@ -38,7 +38,9 @@ NAMESPACE_NOTES = {
 GUARDS = [
     ("test_manifest_retirement.py", "已删除的 manifest 不许回来"),
     ("test_typed_native_surface.py", "Web 面方法 + 拒绝码词表"),
-    ("test_script_runtime_contract.py", "脚本绑定：名字 / 参数位 / 数量 / 实现不越界"),
+    ("test_editor_operation_table.py", "唯一的操作表：36 行 / 11 双投影 / camelCase 推导"),
+    ("test_script_runtime_contract.py", "脚本绑定：表 ↔ nanobind ↔ Python 适配器"),
+    ("test_script_call_sites.py", "脚本调用点只使用表里发布的操作"),
     ("test_interface_contract_doc.py", "这份文档与代码一致"),
     ("test_docs_reference_live_files.py", "文档不指向已删除的文件"),
     ("test_editor_settings_owner.py", "编辑器 ini 只有一个 Python 所有者"),
@@ -61,15 +63,22 @@ GUARDS = [
 ]
 
 
+TABLE_ROW = re.compile(
+    r'\{"(\w+)",\s*"(\w+)",\s*(SceneMethod::\w+|std::nullopt),\s*'
+    r'(true|false),\s*(true|false),\s*(\d+),\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\}'
+)
+
+
 def script_operations():
-    header = HEADER.read_text(encoding="utf-8-sig")
-    rows = re.findall(
-        r'\{"(script_scene_\w+)",\s*"((?:[^"\\]|\\.)*)",\s*(\d+),\s*\n\s*((?:"(?:[^"\\]|\\.)*"\s*)+)\}',
-        header)
+    """(namespace, name, arguments, arity, summary) for every script row, in table order."""
+    text = TABLE.read_text(encoding="utf-8-sig")
+    start = text.index("kEditorOperations[] = {")
+    end = text.index("};", start)
     specs = []
-    for name, arguments, arity, summary in rows:
-        text = " ".join(re.findall(r'"((?:[^"\\]|\\.)*)"', summary)).strip()
-        specs.append((name, arguments, arity, text))
+    for group, name, _method, _web, script, arity, arguments, summary in TABLE_ROW.findall(text[start:end]):
+        if script != "true":
+            continue
+        specs.append((group, name, arguments, int(arity), summary))
     return specs
 
 
@@ -99,7 +108,7 @@ def build() -> str:
         "| 边界 | 谁在说 | 落到哪里 | 传输 |",
         "|---|---|---|---|",
         "| Web → C++ | 编辑器前端 | `window.corona.*` | 同步值 / Promise |",
-        f"| ScriptRuntime → C++ | 角色脚本（Python） | {len(specs)} 条 `script_scene_*` 具名绑定 | JSON 数组字符串 |",
+        f"| ScriptRuntime → C++ | 角色脚本（Python） | {len(specs)} 条 `CoronaEngine.<namespace>.<name>` 具名绑定 | 真参数 / `EditorApiError` |",
         "| Web → Python | 前端与 C++ 都可能发起 | `corona.bridge.call` → Python 服务 | JSON 信封 |",
         "",
         "manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里没有任何按名字分发",
@@ -212,24 +221,27 @@ def build() -> str:
         "",
         "## ScriptRuntime 面",
         "",
-        f"{len(specs)} 条具名绑定。调用方传一个 JSON 数组的字符串；`arity` 是运行时强制的下限",
-        "（传少了直接 400，不会进到场景逻辑里）。",
+        f"{len(specs)} 条具名绑定。名字、命名空间和参数位与 Web 面一一对应（这里用 snake_case）；",
+        "调用方传真参数，`arity` 是文档化的位置数（可选参数计入），真正的签名由 nanobind 强制。",
         "",
-        "| 绑定 | 参数 | arity | 说明 |",
-        "|---|---|---|---|",
+        "| 命名空间 | 绑定 | 参数 | arity | 说明 |",
+        "|---|---|---|---|---|",
     ]
-    for name, arguments, arity, summary in specs:
-        lines.append(f"| `{name.replace('script_scene_', '')}` | `{arguments}` | {arity} | {summary} |")
+    for group, name, arguments, arity, summary in specs:
+        lines.append(f"| `{group}` | `{name}` | `{arguments}` | {arity} | {summary} |")
 
     lines += [
         "",
-        "**失败形状**：`{success: false, error, error_code, data}`。",
+        "**失败形状**：方法抛 `api.errors.EditorApiError(code, message)`，`code` 就是 Web 面拒绝时",
+        "用的同一个符号码（`PROJECT_CONTEXT_CHANGED`、`ACTOR_NOT_FOUND`、`READ_ONLY`、",
+        "`INVALID_ARGUMENT`…）；C++ 侧把它放在 `data.code`，基础设施错误另有 `NATIVE_FAILURE` 与",
+        "`NATIVE_UNAVAILABLE`。成功时直接返回 `data` 本体，键为 snake_case。",
         "",
-        "- `error_code` 是数字类：**409** 归档过期、**403** 只读、**404** Actor 不存在、",
-        "  **400** 参数不合法、**2** 其它。",
-        "- `data.code` 保留场景层的符号码（`PROJECT_CONTEXT_CHANGED`、`ACTOR_NOT_READY`…）。",
-        "  按数字分支，日志里引用符号。Python 侧抛出的异常形如",
-        "  `RuntimeError(\"PROJECT_CONTEXT_CHANGED: ...\")`。",
+        "C++ 侧同时保留数字类（**409** 归档过期、**403** 只读、**404** Actor 不存在、",
+        "**400** 参数不合法、**2** 其它）供行为测试断言；脚本只按符号码分支。",
+        "",
+        "`read_scene` 要求 `archive_session` 非空：没传是 `INVALID_ARGUMENT`（400），",
+        "传了但属于另一个归档是 `PROJECT_CONTEXT_CHANGED`（409）。",
         "",
         "## 文件脚本路由",
         "",

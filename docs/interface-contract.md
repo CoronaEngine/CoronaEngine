@@ -11,7 +11,7 @@
 | 边界 | 谁在说 | 落到哪里 | 传输 |
 |---|---|---|---|
 | Web → C++ | 编辑器前端 | `window.corona.*` | 同步值 / Promise |
-| ScriptRuntime → C++ | 角色脚本（Python） | 18 条 `script_scene_*` 具名绑定 | JSON 数组字符串 |
+| ScriptRuntime → C++ | 角色脚本（Python） | 18 条 `CoronaEngine.<namespace>.<name>` 具名绑定 | 真参数 / `EditorApiError` |
 | Web → Python | 前端与 C++ 都可能发起 | `corona.bridge.call` → Python 服务 | JSON 信封 |
 
 manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里没有任何按名字分发
@@ -117,37 +117,40 @@ Python 服务的**业务拒绝**统一是 Promise 拒绝，带 `error.code`：`P
 
 ## ScriptRuntime 面
 
-18 条具名绑定。调用方传一个 JSON 数组的字符串；`arity` 是运行时强制的下限
-（传少了直接 400，不会进到场景逻辑里）。
+18 条具名绑定。名字、命名空间和参数位与 Web 面一一对应（这里用 snake_case）；
+调用方传真参数，`arity` 是文档化的位置数（可选参数计入），真正的签名由 nanobind 强制。
 
-| 绑定 | 参数 | arity | 说明 |
-|---|---|---|---|
-| `get_environment` | `[scene]` | 1 | The scene environment: sun, grid, physics scalars. |
-| `read_active_scene` | `[]` | 0 | Archive session, scene route, name, project path, tree revision, selection. |
-| `read_actor` | `[{archive_session, actor}]` | 1 | One actor by guid or name, projected the way the Web sees it. |
-| `read_transforms` | `[{archive_session, actors[]}]` | 1 | Transforms for several guids; unknown guids are skipped, not an error. |
-| `read_archive_scene` | `[{archive_session}]` | 1 | The persisted scene values: actors, cameras, environment, terrain. |
-| `get_scene_snapshot` | `[scene]` | 1 | The full scene snapshot built from native state. |
-| `set_actor_transform` | `[scene, actor, {position?, rotation?, scale?, archive_session?}]` | 3 | Writes transform components; omitted components keep their value. |
-| `set_environment` | `[scene, {archive_session?, sun?, grid?, physics?}]` | 2 | Patches the environment. |
-| `set_actor_state` | `[scene, actor, {archive_session?, name?, visible?, ...}]` | 3 | Patches the actor's own state (not its body). |
-| `set_actor_animation` | `[scene, actor, animation, blend_seconds?]` | 4 | Requests an animation clip; fails with ANIMATION_NOT_READY when no clip is loaded. |
-| `pause_actor_animation` | `[scene, actor]` | 2 | Pauses the actor's animation player. |
-| `resume_actor_animation` | `[scene, actor]` | 2 | Resumes the actor's animation player. |
-| `set_actor_physics` | `[scene, actor, {archive_session?, mass?, body_type?, ...}]` | 3 | Patches the actor's body properties. |
-| `set_camera_pose` | `[scene, camera, {position?, forward?, up?, fov?, ...}]` | 3 | Writes a camera pose. The script channel may write pose; it may not retarget cameras. |
-| `create_actor` | `[scene, source_path, actor_type, actor_snapshot]` | 4 | Creates an actor from an asset path. ctor_snapshot is the same actor object the  archive stores (name, actor_guid, transform, visible, optics, mechanics, ik_chains,  model_node_overrides, animation_sources); rchive_session inside it is validated.  The script channel owns no assets, so it never imports one. |
-| `play_actor_audio` | `[scene, actor, {archive_session?, loop?}]` | 3 | Plays the audio attached to an actor; the engine owns the sound device. |
-| `stop_actor_audio` | `[scene, actor, {archive_session?}]` | 3 | Stops the audio attached to an actor. |
-| `remove_actor` | `[scene, actor]` | 2 | Removes an actor and reports what was removed. |
+| 命名空间 | 绑定 | 参数 | arity | 说明 |
+|---|---|---|---|---|
+| `scene` | `read_scene` | `[{archive_session, scene, actors?, cameras?}]` | 1 | The scene tree, cameras and actor projection the Web reads. |
+| `scene` | `read_active` | `[]` | 0 | Archive session, scene route, name, project path, tree revision, selection. |
+| `scene` | `create_actor` | `[scene, path, {archive_session, actor_type?, actor_name?, audio_resource_id?}]` | 3 | Creates an actor from an asset path. |
+| `scene` | `read_actor` | `[{archive_session, actor}]` | 1 | One actor by guid or name, projected the way the Web sees it. |
+| `scene` | `read_transforms` | `[{archive_session, actors[]}]` | 1 | Transforms for several guids; unknown guids are skipped, not an error. |
+| `scene` | `set_actor_transform` | `[scene, actor, {archive_session, position?, rotation?, scale?}]` | 3 | Writes transform components; omitted components keep their value. |
+| `scene` | `update_actor` | `[scene, actor, {archive_session, name?, visible?, ...}]` | 3 | Patches the actor's own state (not its body). |
+| `scene` | `delete_actor` | `[scene, actor, {archive_session}]` | 3 | Removes an actor and reports what was removed. |
+| `scene` | `read_environment` | `[scene, {archive_session}]` | 2 | The scene environment: sun, grid, physics scalars. |
+| `scene` | `set_environment` | `[scene, {archive_session?, sun?, grid?, physics?}]` | 2 | Patches the environment. |
+| `scene` | `read_archive_scene` | `[{archive_session}]` | 1 | The persisted scene values: actors, cameras, environment, terrain. |
+| `scene` | `set_actor_animation` | `[scene, actor, animation, blend_seconds?]` | 4 | Requests an animation clip; fails with ANIMATION_NOT_READY when no clip is loaded. |
+| `scene` | `pause_actor_animation` | `[scene, actor]` | 2 | Pauses the actor's animation player. |
+| `scene` | `resume_actor_animation` | `[scene, actor]` | 2 | Resumes the actor's animation player. |
+| `scene` | `set_actor_physics` | `[scene, actor, {archive_session?, mass?, body_type?, ...}]` | 3 | Patches the actor's body properties. |
+| `audio` | `play` | `[{scene, actor, archive_session?, loop?}]` | 1 | Plays the audio attached to an actor; the Web also plays a bare resource. |
+| `audio` | `stop` | `[{scene, actor, archive_session?}]` | 1 | Stops the audio attached to an actor; the Web also stops a bare resource. |
+| `viewport` | `set_camera_pose` | `[scene, camera, {position?, forward?, up?, fov?, ...}]` | 3 | Writes a camera pose. The script channel may write pose; it may not retarget cameras. |
 
-**失败形状**：`{success: false, error, error_code, data}`。
+**失败形状**：方法抛 `api.errors.EditorApiError(code, message)`，`code` 就是 Web 面拒绝时
+用的同一个符号码（`PROJECT_CONTEXT_CHANGED`、`ACTOR_NOT_FOUND`、`READ_ONLY`、
+`INVALID_ARGUMENT`…）；C++ 侧把它放在 `data.code`，基础设施错误另有 `NATIVE_FAILURE` 与
+`NATIVE_UNAVAILABLE`。成功时直接返回 `data` 本体，键为 snake_case。
 
-- `error_code` 是数字类：**409** 归档过期、**403** 只读、**404** Actor 不存在、
-  **400** 参数不合法、**2** 其它。
-- `data.code` 保留场景层的符号码（`PROJECT_CONTEXT_CHANGED`、`ACTOR_NOT_READY`…）。
-  按数字分支，日志里引用符号。Python 侧抛出的异常形如
-  `RuntimeError("PROJECT_CONTEXT_CHANGED: ...")`。
+C++ 侧同时保留数字类（**409** 归档过期、**403** 只读、**404** Actor 不存在、
+**400** 参数不合法、**2** 其它）供行为测试断言；脚本只按符号码分支。
+
+`read_scene` 要求 `archive_session` 非空：没传是 `INVALID_ARGUMENT`（400），
+传了但属于另一个归档是 `PROJECT_CONTEXT_CHANGED`（409）。
 
 ## 文件脚本路由
 
@@ -161,7 +164,9 @@ Python 服务的**业务拒绝**统一是 Promise 拒绝，带 `error.code`：`P
 |---|---|
 | [`test_manifest_retirement.py`](../tests/tools/test_manifest_retirement.py) | 已删除的 manifest 不许回来 |
 | [`test_typed_native_surface.py`](../tests/tools/test_typed_native_surface.py) | Web 面方法 + 拒绝码词表 |
-| [`test_script_runtime_contract.py`](../tests/tools/test_script_runtime_contract.py) | 脚本绑定：名字 / 参数位 / 数量 / 实现不越界 |
+| [`test_editor_operation_table.py`](../tests/tools/test_editor_operation_table.py) | 唯一的操作表：36 行 / 11 双投影 / camelCase 推导 |
+| [`test_script_runtime_contract.py`](../tests/tools/test_script_runtime_contract.py) | 脚本绑定：表 ↔ nanobind ↔ Python 适配器 |
+| [`test_script_call_sites.py`](../tests/tools/test_script_call_sites.py) | 脚本调用点只使用表里发布的操作 |
 | [`test_interface_contract_doc.py`](../tests/tools/test_interface_contract_doc.py) | 这份文档与代码一致 |
 | [`test_docs_reference_live_files.py`](../tests/tools/test_docs_reference_live_files.py) | 文档不指向已删除的文件 |
 | [`test_editor_settings_owner.py`](../tests/tools/test_editor_settings_owner.py) | 编辑器 ini 只有一个 Python 所有者 |

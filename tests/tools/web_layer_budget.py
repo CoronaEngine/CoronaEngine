@@ -68,7 +68,7 @@ TARGET_LINES = 13_807
 # moved onto the geometry command channel (+38 in the scene service, core +34). Reading rules moved
 # to cef_request_rules.h so a plain test covers them (+9 in the binding), and closeProcess got
 # its main-window check (+7 in the window operations).
-CORE_BUDGET = 14492
+CORE_BUDGET = 14292
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -103,12 +103,18 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/native_api_types.cpp", 250),
     ("src/systems/ui/cef/native_api_types.h", 80),
     ("src/systems/ui/cef/cef_paths.h", 41),
-    ("src/systems/ui/cef/cef_py_bind.cpp", 186),
-    ("src/systems/ui/cef/script_runtime_api.h", 119),
+    ("src/systems/ui/cef/cef_py_bind.cpp", 306),
+    ("src/systems/ui/cef/script_runtime_api.h", 41),
+    # The single operation table and the typed entries behind CoronaEngine.<ns>.<name>.
+    # They carry lines the binding and the handler header used to hold, which is why the
+    # budget moved up: the same vocabulary now has one declaration instead of three.
+    ("src/systems/ui/cef/editor_operation_table.h", 183),
+    ("src/systems/ui/cef/script_operation_entry.h", 67),
+    ("src/systems/ui/cef/script_operation_entry.cpp", 153),
     ("src/systems/ui/cef/cef_scene_operations.h", 440),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),
-    ("src/systems/ui/cef/cef_v8_binding.cpp", 2799),
+    ("src/systems/ui/cef/cef_v8_binding.cpp", 2565),
     ("src/systems/ui/cef/cef_process.h", 36),
     ("src/systems/ui/cef/cef_window_operations.cpp", 833),
     ("src/systems/ui/cef/cef_window_operations.h", 105),

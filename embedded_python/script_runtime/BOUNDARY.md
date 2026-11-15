@@ -7,7 +7,7 @@
 | `file_runner.py` | 接受 `scripts.runFile` 的项目会话、相对路径、SHA-256 和 `requestId`，校验文件，分配独立模块并调用 `run()`。 |
 | `file_api.py` | 提供与本次执行绑定的输入、协作停止、运行标记和受限的 Actor 操作。 |
 | `scene_state.py` | 在 Python 捕获、恢复并校验同一场景会话的运行前状态。 |
-| `native_scene_adapter.py` | 受限原生场景适配器：把 16 条 `script_scene_*` 具名绑定映射成脚本可用的 API。 |
+| `native_scene_adapter.py` | 受限原生场景适配器：只做命名空间导出（`CoronaEngine.scene/audio/viewport`），不再自己映射名字或参数。 |
 
 脚本不得绕过受限接口取得编辑器公共 API 的原生对象。存档与文件执行共享宿主解释器，每次运行拥有独立模块和输入处理器。C++ 与 Web 均可查询启动回执，并用 `runId` 停止指定运行。恢复失败时保留快照，重新加载或切换项目必须先完成恢复。
 
@@ -17,8 +17,8 @@
 `import_media` / `play_audio` / `stop_audio` 六个模块函数，C++ 侧一个都没绑定，所以它恒返回
 `None`——已删除。相应地：
 
-- **音频**：**Actor 自带的音频可以播**（`script_scene_play_actor_audio` /
-  `script_scene_stop_actor_audio`，与 Web 的 `corona.audio.playActor` 是同一个场景操作）。
+- **音频**：**Actor 自带的音频可以播**（`audio.play` /
+  `audio.stop`，与 Web 的 `corona.audio.play` 是同一个场景操作）。
   缺的是**文件素材**：脚本侧没有资源导入，所以 `block_program.py` 按文件名播放的积木仍是
   空操作，每次运行只警告一次。
 - **射线**：没有原生射线查询；`raycast_hit` 用运行时自己跟踪的 Actor AABB 求交。

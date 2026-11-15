@@ -37,5 +37,6 @@ utils 和 scripts 兼容目录已删除，新增代码不得重新引入这些�
 
 跨层契约有两份，按调用方划分，互相不重叠：Web 使用 C++ 的 typed V8 具名契约
 （`window.corona.*`，加一个 `corona.bridge` 进入 Python 服务），Script Runtime 使用
-16 条 `CoronaEngine.script_scene_*` 具名绑定。JSON manifest 已删除。
+18 条 `CoronaEngine.<namespace>.<name>` 具名绑定，命名空间、方法名（snake_case）和参数位与
+Web 面一一对应。JSON manifest 已删除。
 场景事实始终由 C++ 持有。

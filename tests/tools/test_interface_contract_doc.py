@@ -9,8 +9,13 @@ import re
 
 ROOT = Path(__file__).resolve().parents[2]
 DOC = ROOT / "docs/interface-contract.md"
-HEADER = ROOT / "src/systems/ui/cef/script_runtime_api.h"
-SURFACE = ROOT / "tests/tools/test_typed_native_surface.py"
+TABLE = ROOT / "src/systems/ui/cef/editor_operation_table.h"
+SURFACE = ROOT / "tests/tools/native_surface.py"
+
+TABLE_ROW = re.compile(
+    r'\{"(\w+)",\s*"(\w+)",\s*(SceneMethod::\w+|std::nullopt),\s*'
+    r'(true|false),\s*(true|false),'
+)
 
 
 def _doc() -> str:
@@ -18,8 +23,11 @@ def _doc() -> str:
 
 
 def _operations_in_source() -> set[str]:
-    text = HEADER.read_text(encoding="utf-8-sig")
-    return set(re.findall(r'\{"(script_scene_\w+)",\s*"', text))
+    text = TABLE.read_text(encoding="utf-8-sig")
+    start = text.index("kEditorOperations[] = {")
+    end = text.index("};", start)
+    return {name for _group, name, _method, _web, script in TABLE_ROW.findall(text[start:end])
+            if script == "true"}
 
 
 def _namespaces_in_source() -> set[str]:
@@ -37,8 +45,8 @@ def test_the_document_exists_and_is_the_entry_point():
 
 def test_every_script_operation_is_listed_once():
     text = _doc()
-    listed = re.findall(r"^\| `(\w+)` \| `\[", text, re.M)
-    expected = {name.replace("script_scene_", "") for name in _operations_in_source()}
+    listed = re.findall(r"^\| `\w+` \| `(\w+)` \| `\[", text, re.M)
+    expected = _operations_in_source()
     assert len(listed) == len(set(listed)), f"duplicated rows: {sorted(listed)}"
     missing = sorted(expected - set(listed))
     extra = sorted(set(listed) - expected)
