@@ -430,6 +430,9 @@ struct PTPathCapture {
     // Host-only cost diagnostics. Defaults generate the production expressions.
     bool record_radiance{true};
     bool record_hit_distance{true};
+    bool reuse_signal_distance{false};
+    bool evaluate_signal_direct_fraction{true};
+    bool native_signal_miss{true};
     // GI-only reflection DI ownership; ordinary PT never enables this policy.
     bool reflection_only_direct{false};
     Bool first_reflection_covered_by_di{true}, first_scatter_transmission{false};
@@ -437,6 +440,13 @@ struct PTPathCapture {
     Uint receiver_bounce{InvalidUI32};
     Float3 beta{make_float3(1.f)}, radiance{make_float3(0.f)};
     Float3 camera_specular_fraction{make_float3(0.f)};
+    // Native GI signals have their own stable-plane base, independent of
+    // candidate validity and the ordinary camera denoiser's first lobe.
+    Uint signal_bounce{0u};
+    Bool signal_base_diffuse{false}, signal_delta_only{true};
+    Float signal_hit_distance{0.f};
+    std::function<void(const Float3 &, const Float3 &, const Float &, const Float &,
+                       const Uint &, bool)> on_signal;
     std::function<void(const Interaction &, const TriangleHitVar &, const MaterialEvaluator &,
                        const BSDFSample &, const Uint &, const SampledSpectrum &)> on_sample;
     std::function<void(const Interaction &)> on_endpoint;

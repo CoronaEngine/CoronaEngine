@@ -19,6 +19,18 @@ namespace vision {
 using namespace ocarina;
 
 namespace {
+Float pt_signal_accumulate_hit_distance(const Float &current, const Float &segment,
+                                       const Uint &bounces_from_plane, const Bool &delta_only) {
+    return ocarina::select(bounces_from_plane == 1u, segment,
+        ocarina::select(bounces_from_plane > 1u && bounces_from_plane <= 3u && delta_only, current + segment, current));
+}
+
+Float3 pt_signal_specular_fraction(const Float3 &direct_fraction, const Bool &base_diffuse,
+                                  const Uint &bounce, const Uint &base_bounce, bool emission) {
+    Float3 suffix_fraction = ocarina::select(base_diffuse, Float3{make_float3(0.f)}, Float3{make_float3(1.f)});
+    return emission ? suffix_fraction : ocarina::select(bounce == base_bounce, direct_fraction, suffix_fraction);
+}
+
 Float rtxpt_rr_probability(const Float3 &camera_beta, const Uint &surface_depth, const Uint &total_depth) {
     Float terminate = saturate(0.85f - sqrt(max(luminance(camera_beta), 0.f)));
     return saturate(terminate * terminate +
@@ -336,7 +348,17 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
     Float3 ret_direct_specular = make_float3(0.f);
     Float2 distance_sum = make_float2(0.f), distance_weight = make_float2(0.f), sampled_distance = make_float2(0.f);
     Float first_distance = 0.f;
+    Float3 signal_direct_fraction = make_float3(0.f);
     auto route_spec = [&](const Float3 &lin, const Uint &b, const Float3 &frac_b0, const Float &distance, bool emission) {
+        if (hc.path_capture && hc.path_capture->on_signal) {
+            auto &capture = *hc.path_capture;
+            Float3 fraction = pt_signal_specular_fraction(signal_direct_fraction, capture.signal_base_diffuse,
+                b, capture.signal_bounce, emission);
+            Float hit_t = emission ? capture.signal_hit_distance
+                : pt_signal_accumulate_hit_distance(capture.signal_hit_distance, distance,
+                    b - capture.signal_bounce + 1u, Bool{false});
+            capture.on_signal(lin, lin * fraction, hit_t, capture.signal_hit_distance, b, emission);
+        }
         if (!hc.split()) { return; }
         // bounce 0: proportional (emission/miss pass frac_b0=0 -> diffuse; direct passes the
         // BRDF specular fraction). bounce >=1: whole contribution follows the primary lobe.
@@ -376,6 +398,29 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         }
         if (hc.work_counters) hc.work_counters->trace.x += 1u;
         hit = geometry.trace_closest(rs.ray);
+        if (hc.path_capture && hc.path_capture->on_signal && hc.path_capture->record_hit_distance) {
+            auto &capture = *hc.path_capture;
+            Uint relative_bounce = bounces - capture.signal_bounce;
+            $if(relative_bounce == 1u || (relative_bounce > 1u && relative_bounce <= 3u && capture.signal_delta_only)) {
+                Float segment = capture.native_signal_miss ? Float{50000.f} : Float{scene().world_diameter()};
+                if (capture.reuse_signal_distance) {
+                    // Hit distance is recorded after the ordinary interaction
+                    // reconstruction below, before any hit emission observer.
+                    $if(hit->is_miss()) {
+                        capture.signal_hit_distance = pt_signal_accumulate_hit_distance(
+                            capture.signal_hit_distance, segment, relative_bounce, capture.signal_delta_only);
+                    };
+                } else {
+                    $if(hit->is_hit()) {
+                        if (hc.work_counters) hc.work_counters->trace.z += 1u;
+                        auto endpoint = geometry.compute_surface_interaction(hit, rs.ray);
+                        segment = length(endpoint.pos - rs.origin());
+                    };
+                    capture.signal_hit_distance = pt_signal_accumulate_hit_distance(
+                        capture.signal_hit_distance, segment, relative_bounce, capture.signal_delta_only);
+                }
+            };
+        }
         if (hc.lobe_hitdist && (!hc.path_capture || hc.path_capture->record_hit_distance)) {
             // RTXPT StablePlaneAccumulateSampleHitT: start after the primary
             // scatter, then allow a delta-only entry/exit pair (at most 3 segments).
@@ -443,6 +488,15 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
 
         if (hc.work_counters) hc.work_counters->trace.z += 1u;
         it = geometry.compute_surface_interaction(hit, rs.ray);
+        if (hc.path_capture && hc.path_capture->on_signal && hc.path_capture->record_hit_distance &&
+            hc.path_capture->reuse_signal_distance) {
+            auto &capture = *hc.path_capture;
+            Uint relative_bounce = bounces - capture.signal_bounce;
+            $if(relative_bounce == 1u || (relative_bounce > 1u && relative_bounce <= 3u && capture.signal_delta_only)) {
+                capture.signal_hit_distance = pt_signal_accumulate_hit_distance(
+                    capture.signal_hit_distance, length(it.pos - rs.origin()), relative_bounce, capture.signal_delta_only);
+            };
+        }
         const char *mb = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
         if (mb && mb[0] == '1' && hc.aligned_lambert) {
             Float3 n = normalize(it.ng);
@@ -590,6 +644,14 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                 if (hc.path_capture) {
                     auto direct = direct_light_mis(it, evaluator, light_sample, occluded, sampler, swl, bsdf_sample);
                     hc.path_capture->on_sample(it, hit, evaluator, bsdf_sample, bounces, throughput);
+                    if (hc.path_capture->on_signal && hc.path_capture->evaluate_signal_direct_fraction) {
+                        $if(bounces == hc.path_capture->signal_bounce) {
+                            // Fill has one ordinary PT NEE sample. Split that
+                            // exact evaluated direction only at a plane base.
+                            signal_direct_fraction = evaluator.specular_fraction_rgb(it.wo,
+                                normalize(light_sample.p_light - it.pos));
+                        };
+                    }
                     return direct;
                 }
                 return direct_light_mis(it, evaluator, light_sample, occluded, sampler, swl, bsdf_sample);
@@ -749,6 +811,11 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         } else {
             sample_surface();
         }
+        if (hc.path_capture && hc.path_capture->on_signal) {
+            $if(bounces == hc.path_capture->signal_bounce) {
+                hc.path_capture->signal_base_diffuse = BxDFFlag::is_diffuse(bsdf_sample.eval.flags);
+            };
+        }
         SampledSpectrum d = throughput * Ld * tr;
         if (hc.path_capture && hc.path_capture->record_radiance) {
             $if(hc.path_capture->active && bounces > hc.path_capture->receiver_bounce) {
@@ -775,6 +842,11 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         }
         eta_scale *= sqr(bsdf_sample.eta);
         if (hc.lobe_hitdist) delta_only &= delta_scatter;
+        if (hc.path_capture && hc.path_capture->on_signal) {
+            // RTXPT's delta-only flag is global; switching planes does not
+            // restore it after a rough prefix or receiver scatter.
+            hc.path_capture->signal_delta_only &= BxDFFlag::is_specular(bsdf_sample.eval.flags);
+        }
         Float lum = throughput.max();
         if (hc.path_capture && hc.path_capture->record_radiance) {
             $if(hc.path_capture->active && lum == 0.f && any(hc.path_capture->beta != make_float3(0.f))) {

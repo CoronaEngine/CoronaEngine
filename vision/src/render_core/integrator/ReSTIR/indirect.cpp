@@ -61,6 +61,46 @@ void ReSTIRGI::compile() noexcept {
 }
 
 namespace {
+void gi_signal_switch_plane(PTPathCapture &capture, Uint &current_plane,
+                            const Uint &plane, const Uint &bounce) {
+    current_plane = plane;
+    capture.signal_bounce = bounce;
+    capture.signal_hit_distance = 0.f;
+    // The global delta-only flag survives plane switches, as in RTXPT.
+}
+
+void gi_signal_commit(Float4 &diffuse, Float4 &specular, const Float3 &secondary,
+                       const Float &hit_distance, const Bool &base_diffuse) {
+    // Native CommitDenoiserRadiance merges the whole secondaryL once, using
+    // the final sampleHitT even when early delta suffix vertices emitted.
+    $if(base_diffuse) {
+        diffuse = rtxpt_gi::native_reblur_commit(diffuse, secondary, hit_distance);
+    } $else {
+        specular = rtxpt_gi::native_reblur_commit(specular, secondary, hit_distance);
+    };
+}
+
+void gi_signal_commit_visit(Float4 &committed_diffuse, Float4 &committed_specular,
+                             Float4 &base_diffuse, Float4 &base_specular, Float3 &secondary,
+                             const Float &hit_distance, const Bool &scatter_diffuse) {
+    gi_signal_commit(base_diffuse, base_specular, secondary, hit_distance, scatter_diffuse);
+    committed_diffuse = rtxpt_gi::native_reblur_commit(committed_diffuse, Float3{base_diffuse.xyz()}, base_diffuse.w);
+    committed_specular = rtxpt_gi::native_reblur_commit(committed_specular, Float3{base_specular.xyz()}, base_specular.w);
+    base_diffuse = make_float4(0.f); base_specular = make_float4(0.f); secondary = make_float3(0.f);
+}
+
+void gi_signal_commit_buffer_visit(const rtxpt_gi::NativeReblurStorage &storage,
+                                   const Uint &pixel, const Uint &plane,
+                                   Float4 &base_diffuse, Float4 &base_specular, Float3 &secondary,
+                                   const Float &hit_distance, const Bool &scatter_diffuse) {
+    Float4 diffuse = storage.read_diffuse(pixel, plane);
+    Float4 specular = storage.read_specular(pixel, plane);
+    gi_signal_commit_visit(diffuse, specular, base_diffuse, base_specular, secondary, hit_distance, scatter_diffuse);
+    // Keep the existing float32 accumulation. Native packs FP16 here, but that
+    // would change the signal values and confound this retained-state test.
+    storage.write(pixel, plane, diffuse, specular);
+}
+
 // Branches occupy two bits: transmission 01, reflection 10. The root
 // sentinel is also 01, so inspect only the depth encoded branch pairs.
 Bool gi_prefix_has_transmission(const Uint &sequence, const Uint &depth) {
@@ -260,6 +300,33 @@ void ReSTIRGI::compile_initial_samples() noexcept {
         const bool skip_radiance = cost_rank >= 6u, skip_observer = cost_rank >= 7u;
         const bool no_parameter_bridge = cost_mode == "plain-no-bridge" || cost_mode == "plain-output48-no-bridge";
         OC_INFO_FORMAT("GI export cost mode={}, production={}", cost_mode, cost_mode == "full");
+        const char *signal_cost_override = std::getenv("VISION_GI_SIGNAL_COST");
+        const string_view signal_cost_mode = signal_cost_override && *signal_cost_override
+            ? string_view{signal_cost_override} : string_view{"optimized-buffer"};
+        const bool reuse_signal_distance = signal_cost_mode == "reuse-distance" || signal_cost_mode == "optimized" ||
+                                           signal_cost_mode == "optimized-buffer" || signal_cost_mode == "optimized-native";
+        const bool stop_leaf_match = signal_cost_mode == "stop-leaf-match" || signal_cost_mode == "optimized" ||
+                                     signal_cost_mode == "optimized-buffer" || signal_cost_mode == "optimized-native";
+        const bool skip_signal_direct_fraction = signal_cost_mode == "skip-direct-fraction";
+        const bool skip_signal_commit = signal_cost_mode == "no-commit";
+        const bool buffer_signal_commit = signal_cost_mode == "buffer-commit" || signal_cost_mode == "optimized-buffer" ||
+                                          signal_cost_mode == "optimized-native";
+        const bool skip_dominant_signal_suffix = signal_cost_mode == "skip-dominant-suffix" ||
+                                                 signal_cost_mode == "optimized-native";
+        const bool stop_zero_signal_branch = signal_cost_mode == "optimized-buffer" || signal_cost_mode == "optimized-native";
+        OC_ERROR_IF(signal_cost_mode != "full" && !reuse_signal_distance && !stop_leaf_match &&
+                    !skip_signal_direct_fraction && !skip_signal_commit && !buffer_signal_commit && !skip_dominant_signal_suffix,
+                    "Unknown GI signal cost diagnostic.");
+        const char *signal_override = std::getenv("VISION_GI_SIGNAL_DIAGNOSTIC");
+        const string_view signal_mode = signal_override && *signal_override ? string_view{signal_override} : string_view{"full"};
+        const bool native_signal_miss = signal_mode != "world-miss" && signal_mode != "half-mis-world-miss";
+        OC_ERROR_IF(signal_mode != "full" && signal_mode != "half-mis" && signal_mode != "mis-distance-only" && native_signal_miss,
+                    "Unknown GI signal diagnostic.");
+        OC_INFO_FORMAT("GI signal cost mode={}, reuse_distance={}, stop_leaf_match={}, direct_fraction={}, visit_commit={}, buffer_commit={}, dominant_suffix={}, stop_zero_branch={}",
+                       signal_cost_mode, reuse_signal_distance, stop_leaf_match,
+                       !skip_signal_direct_fraction, !skip_signal_commit, buffer_signal_commit,
+                       !skip_dominant_signal_suffix, stop_zero_signal_branch);
+        OC_INFO_FORMAT("GI signal diagnostic mode={}, native_miss={}", signal_mode, native_signal_miss);
         OC_INFO_FORMAT("GI Fill transport: ordinary camera PT with observers only, counters={}", count_work);
         Kernel kernel = [&](Uint frame_index, Var<RtxptGICameraParam> camera) {
             gi_principled::CompilationScope parameters{false, !no_parameter_bridge};
@@ -300,13 +367,33 @@ void ReSTIRGI::compile_initial_samples() noexcept {
             capture.first_reflection_covered_by_di = !BxDFFlag::is_specular(physical_primary.flag);
             capture.record_radiance = !skip_radiance;
             capture.record_hit_distance = cost_mode != "no-distance-math";
+            capture.reuse_signal_distance = reuse_signal_distance;
+            capture.evaluate_signal_direct_fraction = !skip_signal_direct_fraction;
+            capture.native_signal_miss = native_signal_miss;
             Bool terminal_seen = false, receiver_written = false;
             Uint signal_plane = 0u;
             Bool sampled_stable_event = false;
+            optional<array<Float4, 3>> signal_diffuse, signal_specular;
+            if (!buffer_signal_commit) { signal_diffuse.emplace(); signal_specular.emplace(); }
+            Float4 signal_base_diffuse = make_float4(0.f), signal_base_specular = make_float4(0.f);
+            Float3 signal_secondary = make_float3(0.f);
+            Bool signal_scatter_diffuse = false;
+            if (!buffer_signal_commit) {
+                for (uint p = 0u; p < 3u; ++p) {
+                    (*signal_diffuse)[p] = make_float4(0.f); (*signal_specular)[p] = make_float4(0.f);
+                }
+            }
             Uint sampled_branch = 1u;
             Bool ideal_prefix = true;
             Float3 sampled_stable = make_float3(0.f);
             const auto storage = prefix_storage();
+            if (buffer_signal_commit && storage.denoiser.enabled()) {
+                // This invocation owns all three plane addresses for its
+                // pixel. Initialize them before any visit reads them.
+                for (uint p = 0u; p < 3u; ++p) {
+                    storage.denoiser.write(dispatch_id(), Uint{p}, make_float4(0.f), make_float4(0.f));
+                }
+            }
             Uint4 header = storage.headers.read(dispatch_id());
             Uint dominant = header.w & 3u;
             capture.on_sample = [&](const Interaction &it, const TriangleHitVar &hit,
@@ -325,8 +412,26 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                         Float2 bary = as<float2>(Uint2{node.hit_words.zw()});
                         $if(hit.inst_id != node.hit_words.x || hit.prim_id != node.hit_words.y ||
                             length_squared(Float2{hit.bary} - bary) > 1e-6f) { $continue; };
+                        // Signals follow every visited plane, including a
+                        // consumed primary and an ineligible GI receiver.
+                        if (storage.denoiser.enabled() && !skip_signal_commit) {
+                            for (uint p = 0u; p < 3u; ++p) {
+                                $if(signal_plane == p) {
+                                    if (buffer_signal_commit) {
+                                        gi_signal_commit_buffer_visit(storage.denoiser, dispatch_id(), Uint{p},
+                                            signal_base_diffuse, signal_base_specular, signal_secondary,
+                                            skip_distance ? Float{0.f} : capture.signal_hit_distance, signal_scatter_diffuse);
+                                    } else {
+                                        gi_signal_commit_visit((*signal_diffuse)[p], (*signal_specular)[p], signal_base_diffuse,
+                                            signal_base_specular, signal_secondary,
+                                            skip_distance ? Float{0.f} : capture.signal_hit_distance, signal_scatter_diffuse);
+                                    }
+                                };
+                            }
+                        }
+                        gi_signal_switch_plane(capture, signal_plane, plane, bounce);
                         $if(!terminal_seen && node.throughput_flags.w == 0.f) {
-                            terminal_seen = true; signal_plane = plane;
+                            terminal_seen = true;
                             $if(plane == dominant) {
                                 rtxpt_gi::PTSurfaceView receiver;
                                 receiver.it = it; receiver.hit = hit;
@@ -386,7 +491,19 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                         $break;
                     };
                 };
-                $if(!terminal_seen) { match_planes(); };
+                if (stop_leaf_match) {
+                    // The prefix producer stores no descendant of an unconsumed
+                    // endpoint. Consumed-parent visits still run before the leaf.
+                    if (stop_zero_signal_branch) {
+                        // A zero sampled branch is absorbing and cannot match
+                        // any stored endpoint at this or a later bounce.
+                        $if(!terminal_seen && sampled_branch != 0u) { match_planes(); };
+                    } else {
+                        $if(!terminal_seen) { match_planes(); };
+                    }
+                } else {
+                    match_planes();
+                }
                 sampled_branch = gi_prefix_next_branch(sampled_branch, sample.stable_lobe_index, sample.valid());
                 ideal_prefix = ideal_prefix && BxDFFlag::is_specular(sample.eval.flags) && sample.valid();
             };
@@ -416,34 +533,56 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                 };
                 sampled_stable_event = represented;
             };
+            if (storage.denoiser.enabled()) {
+                capture.on_signal = [&](const Float3 &radiance, const Float3 &specular,
+                                         const Float &hit_distance, const Float &,
+                                         const Uint &bounce, bool emission) {
+                    signal_scatter_diffuse = capture.signal_base_diffuse;
+                    // First retained light stays in the camera-plane residual,
+                    // not receiver Lo. Build replaces represented ideal events.
+                    const Bool direct_owned = gi_camera_emission_owned_by_di(capture.first_scatter_transmission,
+                        capture.first_reflection_covered_by_di, bounce);
+                    $if(bounce > 0u && !(Bool{emission} && (direct_owned || sampled_stable_event))) {
+                        $if(Bool{!emission} && bounce == capture.signal_bounce) {
+                            Float distance = skip_distance ? Float{0.f} : hit_distance;
+                            signal_base_diffuse = make_float4(radiance - specular, distance);
+                            signal_base_specular = make_float4(specular, distance);
+                        } $else {
+                            if (skip_dominant_signal_suffix) {
+                                // Native dominant GI writes this suffix to the
+                                // candidate, rather than adding then cancelling it.
+                                // Diagnostic: an invalidated candidate cannot
+                                // recover suffix events already omitted here.
+                                $if(!capture.active) { signal_secondary += radiance; };
+                            } else {
+                                signal_secondary += radiance;
+                            }
+                        };
+                    };
+                };
+            }
             capture.on_endpoint = [&](const Interaction &it) {
                 GISampleVar sample;
                 sample.sp->set(it); sample.Lo.set(Float3{make_float3(0.f)}); sample.age = 0.f;
                 samples_.write(dispatch_id(), sample);
             };
             if (skip_endpoint) capture.on_endpoint = {};
-            RadType3Var direct = make_RadType3(make_float3(0.f)), total_specular = make_RadType3(make_float3(0.f));
-            Float3 direct_specular = make_float3(0.f);
-            Float2 hit_distance = make_float2(0.f);
-            HitContext context{direct, total_specular};
+            RadType3Var direct = make_RadType3(make_float3(0.f));
+            HitContext context{direct};
             context.restir_shadow_connections = true;
             if (!skip_observer) context.path_capture = &capture;
             context.work_counters = work_counters ? &*work_counters : nullptr;
             context.restir_direct_split = true;
-            context.direct_specular = &direct_specular;
-            if (storage.denoiser.enabled() && !skip_distance) context.lobe_hitdist = &hit_distance;
             // This is the ordinary camera PT: one Li call, original camera ray,
             // complete depth, original NEE, BSDF samples and immediate roulette.
             RayState ray = frame_buffer().rays().read(dispatch_id())->to_ray_state();
             Float3 total = integrator()->Li(ray, Float{1e16f}, integrator()->runtime_suffix_depth() + 1u,
                 spectrum()->one(), false, context, *this);
             Float3 indirect = total - make_float3(direct);
-            Float3 bypass_specular = make_float3(total_specular) - direct_specular;
             Float3 stable = make_float3(0.f);
             if (!skip_observer) {
                 stable = storage.stable_radiance.read(dispatch_id()).xyz();
                 indirect -= sampled_stable;
-                bypass_specular -= sampled_stable * capture.camera_specular_fraction;
             }
             $if(capture.active) {
                 auto sample = samples_.read(dispatch_id());
@@ -453,7 +592,11 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                 Float3 prefix = rtxpt_prefix_aux_.read(dispatch_id()).prefix_throughput_depth.xyz();
                 Float3 fresh = prefix * proposal->safe_throughput() * sample.Lo.as_vec3();
                 indirect -= fresh;
-                bypass_specular -= fresh * capture.camera_specular_fraction;
+                if (storage.denoiser.enabled() && !skip_dominant_signal_suffix) {
+                    // An eligible terminal receiver's candidate is the final
+                    // visit; earlier visits have already been committed.
+                    signal_secondary -= fresh;
+                }
             } $else {
                 rtxpt_gi::CandidateTraceResult empty;
                 rtxpt_proposals_.write(dispatch_id(), empty.proposal);
@@ -465,13 +608,37 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                 RtxptGIPrefixAuxVar aux; rtxpt_prefix_aux_.write(dispatch_id(), aux);
             };
             indirect = ocarina::zero_if_nan_inf(indirect);
-            bypass_specular = ocarina::zero_if_nan_inf(bypass_specular);
             rtxpt_bypass_.write(dispatch_id(), make_float4(indirect + stable, 0.f));
             if (work_counters) path_work_counters_.write(dispatch_id(), *work_counters);
             if (storage.denoiser.enabled()) {
-                for (uint p = 0u; p < 3u; ++p) storage.denoiser.write(dispatch_id(), Uint{p}, make_float4(0.f), make_float4(0.f));
-                storage.denoiser.write(dispatch_id(), signal_plane,
-                    make_float4(indirect - bypass_specular, hit_distance.x), make_float4(bypass_specular, hit_distance.y));
+                if (buffer_signal_commit) {
+                    for (uint p = 0u; p < 3u; ++p) {
+                        $if(signal_plane == p) {
+                            gi_signal_commit_buffer_visit(storage.denoiser, dispatch_id(), Uint{p},
+                                signal_base_diffuse, signal_base_specular, signal_secondary,
+                                skip_distance ? Float{0.f} : capture.signal_hit_distance, signal_scatter_diffuse);
+                        };
+                        Float4 diffuse = storage.denoiser.read_diffuse(dispatch_id(), Uint{p});
+                        Float4 specular = storage.denoiser.read_specular(dispatch_id(), Uint{p});
+                        storage.denoiser.write(dispatch_id(), Uint{p},
+                            make_float4(ocarina::zero_if_nan_inf(Float3{diffuse.xyz()}), diffuse.w),
+                            make_float4(ocarina::zero_if_nan_inf(Float3{specular.xyz()}), specular.w));
+                    }
+                } else {
+                    for (uint p = 0u; p < 3u; ++p) {
+                        if (!skip_signal_commit) {
+                            $if(signal_plane == p) {
+                                gi_signal_commit_visit((*signal_diffuse)[p], (*signal_specular)[p], signal_base_diffuse,
+                                    signal_base_specular, signal_secondary,
+                                    skip_distance ? Float{0.f} : capture.signal_hit_distance, signal_scatter_diffuse);
+                            };
+                        }
+                        Float4 diffuse = (*signal_diffuse)[p], specular = (*signal_specular)[p];
+                        storage.denoiser.write(dispatch_id(), Uint{p},
+                            make_float4(ocarina::zero_if_nan_inf(Float3{diffuse.xyz()}), diffuse.w),
+                            make_float4(ocarina::zero_if_nan_inf(Float3{specular.xyz()}), specular.w));
+                    }
+                }
                 // Physical stable-prefix radiance is outside every noisy plane
                 // and receives no second multiplication by prefix throughput.
                 storage.denoiser.bypass->write(dispatch_id(), make_float4(stable, 0.f));

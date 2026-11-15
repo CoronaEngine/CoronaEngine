@@ -266,7 +266,11 @@ Float3 MaterialEvaluator::specular_fraction_rgb(const Float3 &world_wo, const Fl
         if (root->is_multi()) static_cast<const LobeSet *>(root)->for_each([&](const WeightedLobe &l) { accum(l.get(), l.weight(), true); });
         else accum(root, 1.f, false);
     });
-    return specular / max(diffuse + specular, make_float3(1e-20f));
+    Float3 fraction = specular / max(diffuse + specular, make_float3(1e-20f));
+    if (gi_principled::reading() || gi_principled::writing()) {
+        fraction = select(BxDFFlag::is_specular(flag()), make_float3(1.f), fraction);
+    }
+    return fraction;
 }
 
 void MaterialEvaluator::albedo_split(const Float3 &world_wo, SampledSpectrum &diffuse,
