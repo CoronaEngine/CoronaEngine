@@ -2,73 +2,81 @@
 
 With the JSON manifest retired there is exactly one way for the renderer to reach
 C++: the `window.corona` object installed by `attach_corona_v8_binding`, plus its
-single `bridge.call` entry to Python.  These guards pin that surface exactly, so
+single `bridge.call` entry to Python. These guards pin that surface exactly, so
 a namespace cannot quietly grow a second transport or lose a method.
+
+Scene, audio, app and viewport names are installed from `editor_operation_table.h`
+(the camelCase spelling is derived there); the remaining namespaces are still
+installed by `SetValue` pairs in the binding.
 """
 from pathlib import Path
 import re
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from native_surface import EXPECTED_SURFACE, camel_case
 
 ROOT = Path(__file__).resolve().parents[2]
 V8 = ROOT / "src/systems/ui/cef/cef_v8_binding.cpp"
+TABLE = ROOT / "src/systems/ui/cef/editor_operation_table.h"
 FRONTEND_SRC = ROOT / "CoronaEditor/editor/Frontend/src"
 
-EXPECTED_SURFACE = {
-    "app": {"closeProcess", "isVisionAvailable"},
-    # One verb per action; the identity names a resource or an actor of a scene.
-    "audio": {"play", "stop"},
-    "bridge": {"call"},
-    "input": {"dispatch"},
-    "network": {
-        "clearDiscoveredPeers", "connectToPeer", "getDiscoveredPeers", "getSessionInfo",
-        "searchLan", "setProjectRoot", "startSession", "stopSession",
-    },
-    "project": {
-        "createMultiplayerProject", "createWorldProject",
-        "getProjectLoadStatus", "getRecentProjects", "openDocument", "openProject",
-        "openProjectFile", "saveActiveProjectInfo",
-    },
-    "scene": {
-        "createActor", "createCamera", "deleteActor", "deleteCamera", "focusActor",
-        "importResourceFile", "readActive", "readActorProperties", "readActorRig",
-        "readCameraRenderSettings", "readEnvironment", "readModelNodes", "readScene",
-        "readTransforms", "rebindActorResource", "save", "selectActor", "selectModelFile",
-        "setActorIkChains", "setActorTransform", "setCameraRenderSettings", "setEnvironment",
-        "setModelNodeState", "updateActor", "updateCamera",
-    },
-    "viewport": {"captureScreenshot", "configure"},
-    "window": {
-        "close", "createPanel", "focus",
-        "onCloseRequested", "onClosed", "setWindowPresentation",
-    },
-}
+TABLE_ROW = re.compile(
+    r'\{"(\w+)",\s*"(\w+)",\s*(SceneMethod::\w+|std::nullopt),\s*'
+    r'(true|false),\s*(true|false),\s*(\d+),'
+)
 
 
 def _binding_source() -> str:
     return V8.read_text(encoding="utf-8-sig")
 
 
-def _table_names(source: str, table: str) -> set[str]:
-    """Names installed from a registration table instead of a SetValue pair."""
-    start = source.index(f"{table}[] = {{")
-    end = source.index("};", start)
-    return set(re.findall(r'\{"(\w+)", SceneMethod::', source[start:end]))
+def _table_surface() -> dict[str, set[str]]:
+    """Names the binding installs from the operation table (web rows only)."""
+    text = TABLE.read_text(encoding="utf-8-sig")
+    start = text.index("kEditorOperations[] = {")
+    end = text.index("};", start)
+    surface: dict[str, set[str]] = {}
+    for group, name, _method, web, _script, _arity in TABLE_ROW.findall(text[start:end]):
+        if web != "true":
+            continue
+        surface.setdefault(group, set()).add(camel_case(name))
+    return surface
+
+
+def _literal_surface() -> dict[str, set[str]]:
+    """Names still installed with a SetValue pair in the binding."""
+    surface: dict[str, set[str]] = {}
+    for namespace, name in re.findall(
+            r'(\w+)->SetValue\("([^"]+)", CefV8Value::CreateFunction', _binding_source()):
+        surface.setdefault(namespace, set()).add(name)
+    return surface
 
 
 def _installed_surface() -> dict[str, set[str]]:
-    source = _binding_source()
-    surface: dict[str, set[str]] = {}
-    # Namespaces whose methods come from a table: the name and the operation are declared
-    # together, and the install loop below them uses both.
-    for table, namespace in (("kSceneOperations", "scene"), ("kAudioOperations", "audio")):
-        surface.setdefault(namespace, set()).update(_table_names(source, table))
-    pairs = re.findall(r'(\w+)->SetValue\("([^"]+)", CefV8Value::CreateFunction', source)
-    for namespace, name in pairs:
-        surface.setdefault(namespace, set()).add(name)
+    surface = _literal_surface()
+    for namespace, names in _table_surface().items():
+        assert not (surface.get(namespace, set()) & names), (
+            f"{namespace} installs {sorted(surface.get(namespace, set()) & names)} twice")
+        surface.setdefault(namespace, set()).update(names)
     return surface
 
 
 def test_window_corona_surface_is_exactly_the_named_contract():
     assert _installed_surface() == EXPECTED_SURFACE
+
+
+def test_scene_names_are_installed_from_the_operation_table():
+    source = _binding_source()
+    for retired in ("kSceneOperations", "kAudioOperations", "kSceneExtraOperations"):
+        assert retired not in source, f"{retired} must be installed from kEditorOperations"
+    assert "kEditorOperations" in source, "the binding must install the shared table"
+    # The table owns the spellings: no scene/audio name may also be written literally.
+    table_names = {name for names in _table_surface().values() for name in names}
+    literal = {name for names in _literal_surface().values() for name in names}
+    assert not (table_names & literal), (
+        f"table-installed names written literally again: {sorted(table_names & literal)}")
 
 
 def test_corona_is_the_only_global_installed():
@@ -124,8 +132,6 @@ REJECTION_CODES = INFRASTRUCTURE_CODES | SCENE_LAYER_CODES
 
 
 def _reported_codes() -> set[str]:
-    import re
-
     source = _binding_source()
     codes = set(re.findall(r'reject\([^;]*?"([A-Z][A-Z_]+)"', source))
     codes |= set(re.findall(r'RejectPromise\(\s*"([A-Z][A-Z_]+)"', source))
@@ -164,4 +170,3 @@ def test_every_documented_code_is_still_used():
     assert not unused, f"documented but no longer produced: {unused} - remove it from the contract"
     missing = sorted(SCENE_LAYER_CODES - _scene_layer_codes())
     assert not missing, f"documented but no layer produces it: {missing} - update the contract"
-
