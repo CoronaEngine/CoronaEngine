@@ -465,6 +465,15 @@ void RtxptGI::compile_spatial() noexcept {
 }
 
 void RtxptGI::compile_final() noexcept {
+    const char *signal_override = std::getenv("VISION_GI_SIGNAL_DIAGNOSTIC");
+    const string_view signal_mode = signal_override && *signal_override ? string_view{signal_override} : string_view{"full"};
+    OC_ERROR_IF(signal_mode != "full" && signal_mode != "half-mis" && signal_mode != "world-miss" &&
+                signal_mode != "half-mis-world-miss" && signal_mode != "mis-distance-only", "Unknown GI signal diagnostic.");
+    const bool half_mis = signal_mode == "half-mis" || signal_mode == "half-mis-world-miss";
+    const bool mis_distance_only = signal_mode == "mis-distance-only";
+    OC_INFO_FORMAT("GI signal final diagnostic: mode={}, MIS={}, fresh_guard={}, distance={}", signal_mode,
+                   half_mis ? "legacy half" : "native directional cubic", half_mis ? "M nonzero" : "positive weight",
+                   half_mis || mis_distance_only ? "legacy half with M guard" : "native directional cubic");
     const bool native_reblur = owner_->native_reblur_enabled();
     const bool lobes = !native_reblur && owner_->integrator()->denoiser() && owner_->integrator()->denoiser()->requires_lobe_signals();
     Kernel kernel = [&](Var<GIParam> param, Uint frame, Uint2 resolution) {
@@ -490,21 +499,31 @@ void RtxptGI::compile_final() noexcept {
                     li *= cast<float>(!rtxpt_gi::native_occluded(it, selected.sample.sp->position(), owner_->rtxpt_materials(), owner_->sampled_wavelengths()));
                 };
                 Float selected_weight = 1.f, initial_weight = 0.f;
-                Float3 fresh_f = make_float3(0.f), fresh_diffuse = make_float3(0.f), fresh_specular = make_float3(0.f);
+                Float3 fresh_diffuse = make_float3(0.f), fresh_specular = make_float3(0.f);
                 Float initial_distance = 0.f;
                 $if(param.rtxpt_final_mis != 0u) {
-                    // Both estimates now use the identical full BSDF proposal.
-                    // A constant convex mixture preserves their expectations;
-                    // no roughened StandardBSDF proxy enters final shading.
-                    selected_weight = .5f;
-                    $if(fresh.M != 0u && length_squared(fresh.sample.sp->position() - it.pos) > 0.f) {
+                    // RTXPT GIFinalShading partitions each sampled direction
+                    // using true/roughened BRDF response, never proposal PDFs.
+                    if (half_mis) {
+                        selected_weight = .5f;
+                    } else {
+                        Float3 rough_f = surface.f_roughness_clamp(.2f, direction, owner_->sampled_wavelengths());
+                        selected_weight = 1.f - rtxpt_gi::mis_initial_weight(f, rough_f);
+                    }
+                    Bool fresh_valid = half_mis ? fresh.M != 0u : fresh.weight > 0.f;
+                    $if(fresh_valid && length_squared(fresh.sample.sp->position() - it.pos) > 0.f) {
                         Float3 fresh_direction = normalize(fresh.sample.sp->position() - it.pos);
                         initial_distance = length(fresh.sample.sp->position() - it.pos);
                         auto fresh_evaluated = surface.evaluate(fresh_direction, owner_->sampled_wavelengths());
-                        fresh_f = fresh_evaluated.diffuse + fresh_evaluated.specular;
+                        Float3 fresh_f = fresh_evaluated.diffuse + fresh_evaluated.specular;
                         fresh_diffuse = fresh_evaluated.diffuse;
                         fresh_specular = fresh_evaluated.specular;
-                        initial_weight = .5f;
+                        if (half_mis) {
+                            initial_weight = .5f;
+                        } else {
+                            Float3 fresh_rough_f = surface.f_roughness_clamp(.2f, fresh_direction, owner_->sampled_wavelengths());
+                            initial_weight = rtxpt_gi::mis_initial_weight(fresh_f, fresh_rough_f);
+                        }
                     };
                 };
                 Float3 fresh_li = fresh.sample.Lo.as_vec3() * fresh.weight * initial_weight;
@@ -520,7 +539,19 @@ void RtxptGI::compile_final() noexcept {
                 // Receiver-independent Lo receives the current prefix once.
                 radiance += diffuse_result + specular_result;
                 if (lobes) specular += specular_result;
-                hit_distance = hit_distance * selected_weight + initial_distance * initial_weight;
+                if (mis_distance_only) {
+                    // GI diagnostic: retain native RGB weights and replace only
+                    // the final distance by the exact previous half-MIS rule.
+                    $if(param.rtxpt_final_mis != 0u) {
+                        Float legacy_initial_distance = 0.f;
+                        $if(fresh.M != 0u && length_squared(fresh.sample.sp->position() - it.pos) > 0.f) {
+                            legacy_initial_distance = length(fresh.sample.sp->position() - it.pos);
+                        };
+                        hit_distance = .5f * hit_distance + .5f * legacy_initial_distance;
+                    };
+                } else {
+                    hit_distance = hit_distance * selected_weight + initial_distance * initial_weight;
+                }
                 if (native_reblur) {
                     const auto output = owner_->native_reblur_storage();
                     Uint plane = owner_->rtxpt_prefix_aux().read(index).metadata.y;

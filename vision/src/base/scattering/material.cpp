@@ -608,6 +608,16 @@ void Material::add_material_reference(SP<ShapeInstance> shape_instance) noexcept
     shape_instances.push_back(std::move(shape_instance));
 }
 
+Float3 Material::gi_unoriented_shading_normal(const Interaction &it,
+                                             const SampledWavelengths &swl) const noexcept {
+    Float3 normal = it.shading.normal();
+    if (normal_) {
+        Float3 local_normal = normal_.evaluate(it, swl)->as_vec3();
+        normal = normalize(it.shading.to_world(local_normal));
+    }
+    return normal;
+}
+
 PartialDerivative<Float3> Material::compute_shading_frame(const Interaction &it,
                                                           const SampledWavelengths &swl) const noexcept {
     PartialDerivative<Float3> ret = it.shading;

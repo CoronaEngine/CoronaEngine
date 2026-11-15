@@ -254,6 +254,9 @@ protected:
     [[nodiscard]] SampledSpectrum integral_albedo(const Float3 &wo, const Lobe *lobe_set) const noexcept;
 
 public:
+    // GI endpoint payload needs the authored normal before view-side clamping.
+    [[nodiscard]] Float3 gi_unoriented_shading_normal(const Interaction &it,
+                                                      const SampledWavelengths &swl) const noexcept;
     [[nodiscard]] Float3 shading_normal(const Interaction &it,
                                        const SampledWavelengths &swl) const noexcept {
         return compute_shading_frame(it, swl).normal();

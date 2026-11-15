@@ -327,6 +327,13 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                        !skip_signal_direct_fraction, !skip_signal_commit, buffer_signal_commit,
                        !skip_dominant_signal_suffix, stop_zero_signal_branch);
         OC_INFO_FORMAT("GI signal diagnostic mode={}, native_miss={}", signal_mode, native_signal_miss);
+        const char *endpoint_normal_override = std::getenv("VISION_GI_ENDPOINT_NORMAL");
+        const string_view endpoint_normal_mode = endpoint_normal_override && *endpoint_normal_override
+            ? string_view{endpoint_normal_override} : string_view{"shading-facing"};
+        OC_ERROR_IF(endpoint_normal_mode != "geometric" && endpoint_normal_mode != "geometric-facing" &&
+                    endpoint_normal_mode != "shading-facing", "Unknown GI endpoint normal diagnostic.");
+        OC_INFO_FORMAT("GI endpoint normal diagnostic: mode={}, material_normal={}, native_grazing_adjust={}",
+                       endpoint_normal_mode, endpoint_normal_mode == "shading-facing", endpoint_normal_mode == "shading-facing");
         OC_INFO_FORMAT("GI Fill transport: ordinary camera PT with observers only, counters={}", count_work);
         Kernel kernel = [&](Uint frame_index, Var<RtxptGICameraParam> camera) {
             gi_principled::CompilationScope parameters{false, !no_parameter_bridge};
@@ -564,6 +571,29 @@ void ReSTIRGI::compile_initial_samples() noexcept {
             capture.on_endpoint = [&](const Interaction &it) {
                 GISampleVar sample;
                 sample.sp->set(it); sample.Lo.set(Float3{make_float3(0.f)}); sample.age = 0.f;
+                if (endpoint_normal_mode != "geometric") {
+                    Float side = select(dot(it.ng, it.wo) >= 0.f, 1.f, -1.f);
+                    Float3 normal = it.ng * side;
+                    if (endpoint_normal_mode == "shading-facing") {
+                        // The endpoint callback precedes ordinary material
+                        // evaluation. Read the deterministic unoriented normal;
+                        // no BSDF sample, throughput, PDF or RNG is changed.
+                        scene().materials().dispatch(it.material_id(), [&](const Material *material) {
+                            normal = material->gi_unoriented_shading_normal(it, sampled_wavelengths()) * side;
+                        });
+                        // Native Bridge::loadSurface first orients Ns by the
+                        // geometric front-face test, then adjustShadingNormal
+                        // blends it towards the oriented Ng below NdotV=.1.
+                        Float3 geometric = it.ng * side;
+                        Float sign_n = select(dot(normal, geometric) >= 0.f, 1.f, -1.f);
+                        Float3 oriented = normal * sign_n;
+                        Float cosine = dot(it.wo, oriented);
+                        $if(cosine <= .1f) {
+                            normal = sign_n * normalize(lerp(geometric, oriented, saturate(cosine * 10.f)));
+                        };
+                    }
+                    sample.sp->set_normal(normal);
+                }
                 samples_.write(dispatch_id(), sample);
             };
             if (skip_endpoint) capture.on_endpoint = {};

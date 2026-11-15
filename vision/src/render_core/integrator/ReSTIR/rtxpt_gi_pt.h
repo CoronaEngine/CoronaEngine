@@ -54,6 +54,16 @@ struct PTSurfaceView {
         });
         return result;
     }
+    // Final MIS evaluates a roughened copy of the complete receiver. The
+    // original parameters and true transport evaluation remain unchanged.
+    [[nodiscard]] Float3 f_roughness_clamp(const Float &minimum_roughness, const Float3 &wi,
+                                          const SampledWavelengths &swl) const noexcept {
+        PTSurfaceView rough = *this;
+        rough.parameters[0].w = max(rough.parameters[0].w, minimum_roughness);
+        rough.parameters[5].w = as<float>(as<uint>(rough.parameters[5].w) &
+            ~(gi_principled::BaseNearBit | gi_principled::IdealGlassBit));
+        return rough.f(wi, swl);
+    }
     [[nodiscard]] PTEval evaluate(const Float3 &wi, const SampledWavelengths &swl) const noexcept {
         gi_principled::CompilationScope decode{true};
         load_parameters();
