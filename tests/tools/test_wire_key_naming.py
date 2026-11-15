@@ -15,6 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
 BINDING = ROOT / "src/systems/ui/cef/cef_v8_binding.cpp"
 APP_SERVICE = ROOT / "CoronaEditor/editor/Frontend/src/services/appService.js"
 WINDOW_SESSION = ROOT / "CoronaEditor/editor/Frontend/src/services/editorWindowSession.js"
+NATIVE_PANEL_HOSTS = ROOT / "CoronaEditor/editor/Frontend/src/services/nativePanelHosts.js"
+CAMEL_ID = re.compile(r"\b(panelId|windowToken|sceneId|cameraId|routePath|archiveSession)\b")
 
 # A data key, wherever a reader looks one up or writes one out. Method installation
 # (`SetValue("readScene", CefV8Value::CreateFunction(...))`) is excluded below.
@@ -43,15 +45,18 @@ def test_every_wire_key_in_the_binding_is_snake_case():
         "snake_case; translate internally, not at the wire")
 
 
-def test_the_web_command_carries_the_wire_spelling():
-    """The command object IS the wire object: no translation helper, no second vocabulary."""
-    source = APP_SERVICE.read_text(encoding="utf-8-sig")
-    assert "panelWire" not in source, "a translation helper came back; name the keys at the source"
-    for key in ("panel_id:", "scene_id:", "camera_id:", "archive_session:", "route_path:"):
-        assert key in source, f"appService.js no longer builds the '{key.rstrip(':')}' wire key"
-    session = WINDOW_SESSION.read_text(encoding="utf-8-sig")
-    for key in ("panel_id:", "scene_id:"):
-        assert key in session, f"editorWindowSession.js still speaks its own spelling for '{key.rstrip(':')}'"
+def test_the_window_layer_speaks_one_spelling():
+    """The window session's own records use the wire spelling: one vocabulary, end to end.
+
+    There is no conversion step to check, so what this pins is absence: no camelCase
+    identifier survives in the three files that build and consume window messages.
+    """
+    for path in (APP_SERVICE, WINDOW_SESSION, NATIVE_PANEL_HOSTS):
+        text = path.read_text(encoding="utf-8-sig")
+        offenders = CAMEL_ID.findall(text)
+        assert not offenders, (
+            f"{path.name} mixes spellings: {sorted(set(offenders))}. Window records, commands "
+            "and payloads all use the wire spelling")
 
 
 def test_window_ops_forward_the_command_untouched():
