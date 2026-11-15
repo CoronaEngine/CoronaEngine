@@ -108,7 +108,7 @@ struct ReceiverTargets {
     $if(valid_reservoir(output)) {
         // Re-evaluate the winner on each admitted history receiver to normalize against its support.
         const LightTriangleGeometryVar triangle = ctx.light_geometry.read(output.light_index, false);
-        const LightEvalContext point = load_light_point(ctx, output.light_index, triangle, output->uv());
+        LightEvalContext point = load_light_point(ctx, output.light_index, triangle, output->uv());
         const Float3 emission = light_emission(ctx, output.light_index, triangle, point);
         Float numerator = output.target;
         Float denominator = current.count * output.target;
@@ -141,7 +141,7 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
         Float target_current_at_neighbor = 0.f;
         $if(valid_reservoir(canonical)) {
             const LightTriangleGeometryVar triangle = ctx.light_geometry.read(canonical.light_index, false);
-            const auto point = load_light_point(ctx, canonical.light_index, triangle, canonical_uv);
+            auto point = load_light_point(ctx, canonical.light_index, triangle, canonical_uv);
             // The canonical sample was checked against this frame's acceleration structure.
             target_current_at_neighbor = history_target(
                 ctx, light_emission(ctx, canonical.light_index, triangle, point), point, canonical.light_index,

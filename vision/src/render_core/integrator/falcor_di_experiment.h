@@ -393,8 +393,11 @@ public:
         compile(direct, bias_mode);
         if (lobe_signals_)
             OC_INFO("Falcor DI denoiser outputs active: physical primary, original BSDF lobe split, emission/sky bypass, independent buffers");
-        OC_INFO_FORMAT("Falcor DI native route active: mode={}, {} triangles, {}x{}, environment={}, NEE=10+1, env_pdf=uniform_sphere, actual_scene_radiance, selection={}", mode,
+        const auto *environment = scene().light_manager().env_light();
+        const bool delta_environment = environment && environment->match(LightType::DeltaDirection);
+        OC_INFO_FORMAT("Falcor DI native route active: mode={}, {} triangles, {}x{}, environment={}, DI_proposals=10+1, env_pdf={}, env_uv=world_equal_area16, actual_scene_radiance, selection={}", mode,
                        area_light_count_, extent_.x, extent_.y, environment_index_ != InvalidUI32,
+                       delta_environment ? "legacy_uniform_delta" : "hdr_importance",
                        environment_index_ != InvalidUI32 ? "framework alias, area/env mass .5/.5 (env-only1)" : "original area CDF");
     }
 

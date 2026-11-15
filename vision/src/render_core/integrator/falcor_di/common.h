@@ -116,6 +116,29 @@ inline constexpr float environment_ray_distance = 1e16f;
         select(phi < 0.f, phi + 2.f * Pi, phi) / (2.f * Pi));
 }
 
+[[nodiscard]] inline Float2 canonical_environment_uv(const Float2 &uv) {
+    // Evaluate F, Le and both proposal PDFs at the direction actually retained
+    // by the reservoir. A small UV16 change can cross a sharp HDR boundary.
+    return floor(saturate(uv) * 65535.f + 0.5f) / 65535.f;
+}
+
+[[nodiscard]] inline Float2 sample_environment_uv(const Float2 &random) {
+    // Delta environments do not define the continuous HDR CDF contract. Keep
+    // their pre-existing uniform approximation outside this narrowly scoped fix.
+    if (Toolkit::renderer().light_sampler()->env_light()->match(LightType::DeltaDirection)) return random;
+    Float2 uv = random;
+    Toolkit::renderer().light_sampler()->dispatch_environment([&](const Environment *environment) {
+        // Warp only the direction here; resolve Le and its conditional density
+        // together once, after canonicalizing the stored world-direction UV.
+        const auto sample = environment->sample_only(random);
+        LightSampleContext reference;
+        reference.pos = make_float3(0.f);
+        const auto point = environment->compute_light_eval_context(reference, sample);
+        uv = environment_uv(point.pos - reference.pos);
+    });
+    return canonical_environment_uv(uv);
+}
+
 struct Context {
     uint2 extent;
     Uint frame;
@@ -215,14 +238,16 @@ struct TriangleSample {
         $if(index == ctx.environment_index) {
             // An environment sample is a direction, independent of the receiver.
             point.pos = environment_direction(u);
-            point.PDF_pos = uniform_sphere_PDF();
+            // light_emission resolves Le and its conditional solid-angle PDF
+            // together. Area points continue to carry their area density.
+            point.PDF_pos = 0.f;
         } $else { area_point(); };
     } else area_point();
     return point;
 }
 
 [[nodiscard]] inline Float3 light_emission(const Context &ctx, const Uint &index,
-                                          const LightTriangleGeometryVar &triangle, const LightEvalContext &point) {
+                                          const LightTriangleGeometryVar &triangle, LightEvalContext &point) {
     Float3 emission = triangle.emission.as_vec3();
     const auto evaluate_area = [&] {
         $if(triangle.pdf_pos <= 0.f) {
@@ -242,7 +267,15 @@ struct TriangleSample {
             LightSampleContext ref;
             ref.pos = make_float3(0.f);
             ref.ng = point.pos;
-            emission = Toolkit::renderer().light_sampler()->evaluate_miss_wi(ref, point.pos, swl, LightEvalMode::L).L.vec3();
+            Toolkit::renderer().light_sampler()->dispatch_environment([&](const Environment *environment) {
+                const bool delta = environment->match(LightType::DeltaDirection);
+                const auto eval = environment->evaluate_wi(ref, point, swl, delta ? LightEvalMode::L : LightEvalMode::All);
+                emission = eval.L.vec3();
+                // Falcor's selector PMF is accounted for separately. The
+                // framework LightSampler's selector must not enter this PDF.
+                if (delta) point.PDF_pos = uniform_sphere_PDF();
+                else point.PDF_pos = eval.pdf;
+            });
         } $else { evaluate_area(); };
     } else evaluate_area();
     return emission;
@@ -268,11 +301,13 @@ struct TriangleSample {
     };
     if (ctx.environment_index != InvalidUI32) {
         $if(index == ctx.environment_index) {
-            sample.direction = point.pos;
-            sample.distance = environment_ray_distance;
-            sample.infinite = true;
-            sample.pdf = uniform_sphere_PDF();
-            sample.radiance = emission / sample.pdf;
+            $if(point.PDF_pos > 0.f && finite(point.PDF_pos)) {
+                sample.direction = point.pos;
+                sample.distance = environment_ray_distance;
+                sample.infinite = true;
+                sample.pdf = point.PDF_pos;
+                sample.radiance = emission / sample.pdf;
+            };
         } $else { area_sample(); };
     } else area_sample();
     return sample;
@@ -281,8 +316,9 @@ struct TriangleSample {
 [[nodiscard]] inline TriangleSample sample_light(const Context &ctx, const Uint &index, const Surface &surface,
                                                 const Float2 &uv) {
     const LightTriangleGeometryVar triangle = ctx.light_geometry.read(index, false);
-    const auto point = load_light_point(ctx, index, triangle, uv);
-    return evaluate_light_point(ctx, index, light_emission(ctx, index, triangle, point), point, surface);
+    auto point = load_light_point(ctx, index, triangle, uv);
+    const auto emission = light_emission(ctx, index, triangle, point);
+    return evaluate_light_point(ctx, index, emission, point, surface);
 }
 
 [[nodiscard]] inline RayVar make_light_ray(const Float3 &origin, const Float3 &direction,

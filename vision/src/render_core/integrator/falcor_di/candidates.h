@@ -45,9 +45,12 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
     if (ctx.precompute_light_points) {
         $if(selected != InvalidUI32) {
             // Share the sampled point across pixels that draw this RIS entry.
-            const Float2 uv = sampler->next_2d();
+            Float2 uv = sampler->next_2d();
+            if (ctx.environment_index != InvalidUI32) {
+                $if(selected == ctx.environment_index) { uv = sample_environment_uv(uv); };
+            }
             const auto triangle = ctx.light_geometry.read(selected, false);
-            const auto point = load_light_point(ctx, selected, triangle, uv);
+            auto point = load_light_point(ctx, selected, triangle, uv);
             const auto emission = light_emission(ctx, selected, triangle, point);
             const Uint base = index * ris_point_words;
             ctx.ris_points.write(base, make_float4(point.pos, point.PDF_pos), false);
@@ -69,6 +72,8 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
     // with a discrete lobe uses only the light proposal.
     const Uint flags = bsdf.flag();
     const Bool use_bsdf = !BxDFFlag::is_specular(flags);
+    const bool importance_environment = ctx.environment_index != InvalidUI32 &&
+        !Toolkit::renderer().light_sampler()->env_light()->match(LightType::DeltaDirection);
     const auto offer_candidate = [&](const Uint &light_index, const Float2 &uv, const Float &light_probability,
                                      const TriangleSample &light, const Float &u, const Float *sampled_pdf = nullptr) {
         $if(light.pdf > 0.f) {
@@ -141,8 +146,12 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
                     const auto light = evaluate_light_point(ctx, entry.x, emission_v.xyz(), point, surface);
                     offer_candidate(entry.x, make_float2(normal_u.w, emission_v.w), as<float>(entry.y), light, u);
                 } else {
-                    const auto light = sample_light(ctx, entry.x, surface, uv);
-                    offer_candidate(entry.x, uv, as<float>(entry.y), light, u);
+                    Float2 sample_uv = uv;
+                    if (ctx.environment_index != InvalidUI32) {
+                        $if(entry.x == ctx.environment_index) { sample_uv = sample_environment_uv(uv); };
+                    }
+                    const auto light = sample_light(ctx, entry.x, surface, sample_uv);
+                    offer_candidate(entry.x, sample_uv, as<float>(entry.y), light, u);
                 }
             };
         };
@@ -165,9 +174,20 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
             const Uint4 hit = trace_light(ctx, origin, sample.wi, ray_epsilon, environment_ray_distance);
             $if(hit.x != InvalidUI32) {
                 // The folded-square sampler accepts the native triangle hit weights.
-                const Float2 uv = make_float2(as<float>(hit.z), as<float>(hit.w));
+                Float2 uv = make_float2(as<float>(hit.z), as<float>(hit.w));
+                if (importance_environment) {
+                    $if(hit.x == ctx.environment_index) { uv = canonical_environment_uv(uv); };
+                }
                 const auto light = sample_light(ctx, hit.x, surface, uv);
-                offer_candidate(hit.x, uv, ctx.probabilities.read(hit.x, false), light, bsdf_replacement, &pdf);
+                Float proposal_pdf = pdf;
+                if (importance_environment) {
+                    $if(hit.x == ctx.environment_index) {
+                        // Only DI's retained environment direction is rounded.
+                        // gi_proposal above keeps the original BSDF sample.
+                        proposal_pdf = bsdf.evaluate(wo, light.direction, MaterialEvalMode::PDF).pdf();
+                    };
+                }
+                offer_candidate(hit.x, uv, ctx.probabilities.read(hit.x, false), light, bsdf_replacement, &proposal_pdf);
             };
         };
     };

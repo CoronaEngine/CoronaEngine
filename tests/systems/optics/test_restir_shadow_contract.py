@@ -57,7 +57,6 @@ struct Context{uint environment_index=2;};struct Surface{Float3 position;};
 struct LightEvalContext{Float3 pos,ng;float PDF_pos;};
 struct TriangleSample{Float3 direction{};float distance{};Float3 radiance{};float pdf{};Float3 target{};bool infinite=false;};
 constexpr float environment_ray_distance=1e16f;
-constexpr float uniform_sphere_PDF(){return 1.f/(4.f*3.14159265358979323846f);}
 namespace vision{float PDF_wi(float pdf,Float3 normal,Float3 delta){return pdf*dot(delta,delta)/(std::abs(dot(normal,delta))/length(delta));}}
 __EVALUATE_POINT__
 __BUILDERS__
