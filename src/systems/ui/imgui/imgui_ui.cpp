@@ -14,6 +14,7 @@
 #include <backends/imgui_impl_sdl3.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 #ifdef _WIN32
 #include <windows.h>
@@ -31,6 +32,19 @@ std::string window_name(const BrowserTab& tab) {
     if (tab.main_workspace) return kMainWorkspaceName;
     return (tab.panel_title.empty() ? tab.name : tab.panel_title) + "###Corona.Panel." +
         (tab.panel_id.empty() ? std::to_string(tab.tab_id) : tab.panel_id);
+}
+// A camera view renders at the host window's physical pixels, capped with the
+// same 1080p-area policy the main viewport applies on the Web side. The display
+// rect stays full-size, so a capped frame is upscaled rather than cropped.
+constexpr int kMaxCameraViewRenderPixels = 1920 * 1080;
+void cap_camera_view_render_extent(int& width, int& height) {
+    if (width <= 0 || height <= 0) return;
+    const auto pixels = static_cast<std::int64_t>(width) * static_cast<std::int64_t>(height);
+    if (pixels <= kMaxCameraViewRenderPixels) return;
+    const double ratio = std::sqrt(static_cast<double>(kMaxCameraViewRenderPixels) /
+                                   static_cast<double>(pixels));
+    width = std::max(1, static_cast<int>(std::lround(static_cast<double>(width) * ratio)));
+    height = std::max(1, static_cast<int>(std::lround(static_cast<double>(height) * ratio)));
 }
 void set_visible(BrowserTab& tab, bool visible) {
     if (tab.cef_visible == visible || !tab.client) return;
@@ -246,10 +260,14 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             SDL_SetTextInputArea(window, &area, 0);
         }
         if (tab->camera_view) {
-            const int width = std::max(1, static_cast<int>(content.size.x * sx));
-            const int height = std::max(1, static_cast<int>(content.size.y * sy));
-            CameraViewportManager::instance().bind_surface(content.tab_id, surface, x, y, width, height);
-            CameraViewportManager::instance().update_layout(content.tab_id, x, y, width, height);
+            // The native camera frame follows the window's physical pixels. The
+            // Web side no longer owns this size: it only resizes the window.
+            const int pixel_width = std::max(1, static_cast<int>(std::lround(content.size.x * sx)));
+            const int pixel_height = std::max(1, static_cast<int>(std::lround(content.size.y * sy)));
+            int render_width = pixel_width, render_height = pixel_height;
+            cap_camera_view_render_extent(render_width, render_height);
+            CameraViewportManager::instance().bind_surface(content.tab_id, surface, x, y, render_width, render_height);
+            CameraViewportManager::instance().update_layout(content.tab_id, x, y, pixel_width, pixel_height);
         }
         if (tab->web_camera_handle && tab->web_camera_width > 0) {
             // The DOM rectangle is also the picking coordinate boundary.
