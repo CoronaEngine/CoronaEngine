@@ -188,7 +188,7 @@ add_custom_command(TARGET corona_camera_window_identity_tests POST_BUILD
 add_test(NAME CameraWindowIdentityTests COMMAND corona_camera_window_identity_tests)
 set_tests_properties(CameraWindowIdentityTests PROPERTIES TIMEOUT 30)
 
-# ScriptRuntime 具名入口的行为契约：16 条 script_scene_* 每条都真正被驱动一次，
+# ScriptRuntime 具名入口的行为契约：18 条 typed entry 每条都真正被驱动一次，
 # 断言成功形状、归档身份校验和既定的失败码；名称层面的守卫在 tests/tools 里。
 add_executable(corona_script_runtime_api_tests test_script_runtime_api.cpp)
 target_include_directories(corona_script_runtime_api_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui)
