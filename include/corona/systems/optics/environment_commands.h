@@ -83,6 +83,14 @@ struct EnvironmentUpdateKey {
         if (has_environment_field(next.fields, EnvironmentField::FloorY)) pending.floor_y = next.floor_y;
         if (has_environment_field(next.fields, EnvironmentField::FloorRestitution)) pending.floor_restitution = next.floor_restitution;
         if (has_environment_field(next.fields, EnvironmentField::FixedDt)) pending.fixed_dt = next.fixed_dt;
+        // Imported scenes set scalar properties first, then the authored lighting
+        // payload. Without this branch the merged command keeps the earlier
+        // command's null payload while gaining the AuthoredLighting bit, which
+        // clears the scene's only light source.
+        if (has_environment_field(next.fields, EnvironmentField::AuthoredLighting)) {
+            pending.authored_lighting = next.authored_lighting;
+            pending.authored_lighting_revision = next.authored_lighting_revision;
+        }
         pending.fields = pending.fields | next.fields;
     }
 };
