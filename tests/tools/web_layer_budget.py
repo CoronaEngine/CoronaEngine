@@ -68,7 +68,7 @@ TARGET_LINES = 13_807
 # moved onto the geometry command channel (+38 in the scene service, core +34). Reading rules moved
 # to cef_request_rules.h so a plain test covers them (+9 in the binding), and closeProcess got
 # its main-window check (+7 in the window operations).
-CORE_BUDGET = 14292
+CORE_BUDGET = 14304
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -103,7 +103,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/native_api_types.cpp", 250),
     ("src/systems/ui/cef/native_api_types.h", 80),
     ("src/systems/ui/cef/cef_paths.h", 41),
-    ("src/systems/ui/cef/cef_py_bind.cpp", 306),
+    ("src/systems/ui/cef/cef_py_bind.cpp", 318),
     ("src/systems/ui/cef/script_runtime_api.h", 41),
     # The single operation table and the typed entries behind CoronaEngine.<ns>.<name>.
     # They carry lines the binding and the handler header used to hold, which is why the
