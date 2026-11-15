@@ -19,9 +19,9 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 
 命名空间按职责划分，不再是「一个方法一个命名空间」：项目文档与项目元数据在 `project`，
 视口配置在 `viewport`，脚本输入派发在 `input`，音频按身份分 `play`/`stop`。
-**键名规则**：请求键用 camelCase（`panelId`、`routePath`），回复键用 snake_case
-（`window_token`、`panel_id`、`actor_guid`、`archive_session`）；`createPanel` 的回复是
-既有规则，不是笔误。
+**键名规则**：过原生的键一律 snake_case（`panel_id`、`route_path`、`archive_session`），
+请求和回复用同一套写法；Web 内部保持自己的 camelCase，翻译只发生在
+`Frontend/src/services/appService.js` 一处。方法名是 JS 标识符，用 camelCase。
 
 ## Web 面
 
@@ -62,25 +62,25 @@ ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web �
 
 | 方法 | 请求 | 说明 |
 |---|---|---|
-| `createPanel` | `{kind?: 'panel' \| 'camera', width?, height?, x?, y?, panelId?, routePath?, title?}` | `kind` 缺省为 `panel`。相机窗口要求 `archiveSession`/`sceneId`/`cameraId` 同时非空；`cameraHandle` 一律拒绝，相机身份由原生解析。`x`/`y` 只给相机窗口——停靠面板的位置由 ImGui 决定，面板带 `x`/`y` 会被拒绝而不是静默忽略；`archiveSession`/`sceneId`/`cameraId` 同样只属于相机窗口。 |
-| `close` | 无参数 / `{panelId}` / `{sceneId, cameraId}` / `{sceneId}` | 无参数关自己；`panelId` 是 `createPanel` 的稳定面板身份（只有主窗口能关别人，主窗口不能被当作面板关）；`sceneId`+`cameraId` 关一个相机窗口（主窗口可关任意，相机窗口只能关自己）；只给 `sceneId` 是复数形式，关掉该场景全部相机窗口。返回 `{closed: n}`，`0` 表示没有匹配窗口（幂等清理）。空 `sceneId` 不关任何窗口，但仍在下一次主线程调度里应答——窗口会话用它作退休栅栏。 |
-| `focus` | `{panelId}` | 聚焦该面板（只有主窗口能聚焦别人）。 |
-| `setWindowPresentation` | `{target?: 'camera' \| 'main', mode, sceneId?, cameraId?, width?, height?}` | 请求要么给 `mode`（`windowed`/`maximized`/`borderless`/`toggle`），要么给 `width`+`height`（相机窗口改尺寸），不能同时给；主窗口只有 `windowed`/`borderless`/`toggle` 且没有尺寸请求。相机窗口可用 `sceneId`+`cameraId` 指定，缺省为自己。 |
+| `createPanel` | `{kind?: 'panel' \| 'camera', width?, height?, x?, y?, panel_id?, route_path?, title?}` | `kind` 缺省为 `panel`。相机窗口要求 `archive_session`/`scene_id`/`camera_id` 同时非空；`camera_handle` 一律拒绝，相机身份由原生解析。`x`/`y` 只给相机窗口——停靠面板的位置由 ImGui 决定，面板带 `x`/`y` 会被拒绝而不是静默忽略；`archive_session`/`scene_id`/`camera_id` 同样只属于相机窗口。 |
+| `close` | 无参数 / `{panel_id}` / `{scene_id, camera_id}` / `{scene_id}` | 无参数关自己；`panel_id` 是 `createPanel` 的稳定面板身份（只有主窗口能关别人，主窗口不能被当作面板关）；`scene_id`+`camera_id` 关一个相机窗口（主窗口可关任意，相机窗口只能关自己）；只给 `scene_id` 是复数形式，关掉该场景全部相机窗口。返回 `{closed: n}`，`0` 表示没有匹配窗口（幂等清理）。空 `scene_id` 不关任何窗口，但仍在下一次主线程调度里应答——窗口会话用它作退休栅栏。 |
+| `focus` | `{panel_id}` | 聚焦该面板（只有主窗口能聚焦别人）。 |
+| `setWindowPresentation` | `{target?: 'camera' \| 'main', mode, scene_id?, camera_id?, width?, height?}` | 请求要么给 `mode`（`windowed`/`maximized`/`borderless`/`toggle`），要么给 `width`+`height`（相机窗口改尺寸），不能同时给；主窗口只有 `windowed`/`borderless`/`toggle` 且没有尺寸请求。相机窗口可用 `sceneId`+`cameraId` 指定，缺省为自己。 |
 
 `mode` 描述**窗口要处于的状态**，不是要执行的开关；`toggle` 是唯一不带状态值的请求，
 表示“往前走一步”（相机窗口：无边框 → 窗口化，窗口化 ⇄ 最大化）。
 `createPanel` 返回 `{window_token, panel_id, existing}`；`close` 返回
 `{closed: n}`（`0` 表示没有匹配窗口）；`focus` 返回布尔。
 
-`panelId` 是**稳定面板身份**，开/关/聚焦都用它。`windowToken` 是**这一次创建**的
-不透明令牌：同一个 `panelId` 重开后令牌不同，用来把 `onClosed` 的负载和当初那次创建的
+`panel_id` 是**稳定面板身份**，开/关/聚焦都用它。`window_token` 是**这一次创建**的
+不透明令牌：同一个 `panel_id` 重开后令牌不同，用来把 `onClosed` 的负载和当初那次创建的
 返回值对齐（原始 tab id 不再暴露）。窗口不查询自身状态：身份来自 `createPanel` 的返回值
 和打开时带在 URL 上的参数。
 
 **权限**：窗口操作按调用者身份授权，规则集中在 `cef_window_operations.cpp` 的每个 case，
 这里列全，接入方不必读源码：
 
-| 调用者 \ 操作 | 关自己 | `close({panelId})` | `close({sceneId, cameraId})` | `close({sceneId})` | `focus({panelId})` | `setWindowPresentation({target:'main'})` |
+| 调用者 \ 操作 | 关自己 | `close({panel_id})` | `close({scene_id, camera_id})` | `close({scene_id})` | `focus({panel_id})` | `setWindowPresentation({target:'main'})` |
 |---|---|---|---|---|---|---|
 | 主工作区 | ✗（主窗口不是面板） | ✓ 除主窗口外的任意面板 | ✓ 任意相机 | ✓ 该场景的全部相机窗口 | ✓ 任意面板 | ✓ |
 | 面板 | ✓ | ✗ | ✗ | ✗ | ✓ 只有自己 | ✗ |
@@ -167,6 +167,7 @@ C++ 侧同时保留数字类（**409** 归档过期、**403** 只读、**404** A
 | [`test_editor_operation_table.py`](../tests/tools/test_editor_operation_table.py) | 唯一的操作表：36 行 / 11 双投影 / camelCase 推导 |
 | [`test_script_runtime_contract.py`](../tests/tools/test_script_runtime_contract.py) | 脚本绑定：表 ↔ nanobind ↔ Python 适配器 |
 | [`test_script_call_sites.py`](../tests/tools/test_script_call_sites.py) | 脚本调用点只使用表里发布的操作 |
+| [`test_wire_key_naming.py`](../tests/tools/test_wire_key_naming.py) | 过原生的键一律 snake_case，Web 侧翻译只在 appService |
 | [`test_interface_contract_doc.py`](../tests/tools/test_interface_contract_doc.py) | 这份文档与代码一致 |
 | [`test_docs_reference_live_files.py`](../tests/tools/test_docs_reference_live_files.py) | 文档不指向已删除的文件 |
 | [`test_editor_settings_owner.py`](../tests/tools/test_editor_settings_owner.py) | 编辑器 ini 只有一个 Python 所有者 |

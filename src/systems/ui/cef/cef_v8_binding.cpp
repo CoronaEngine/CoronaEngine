@@ -268,8 +268,8 @@ struct WindowEventData {
 NativeEventKind native_event_kind(const WindowEventData& data) { return data.type; }
 CefRefPtr<CefV8Value> native_event_value(const WindowEventData& data) {
     auto value = CefV8Value::CreateObject(nullptr, nullptr);
-    value->SetValue("windowToken", CefV8Value::CreateInt(data.window_token), V8_PROPERTY_ATTRIBUTE_NONE);
-    value->SetValue("panelId", CefV8Value::CreateString(data.panel_id), V8_PROPERTY_ATTRIBUTE_NONE);
+    value->SetValue("window_token", CefV8Value::CreateInt(data.window_token), V8_PROPERTY_ATTRIBUTE_NONE);
+    value->SetValue("panel_id", CefV8Value::CreateString(data.panel_id), V8_PROPERTY_ATTRIBUTE_NONE);
     return value;
 }
 
@@ -1515,14 +1515,14 @@ bool read_selection(const CefV8ValueList& arguments, ActorSelection& selection) 
     if (arguments.size() == 3) return true;
     const auto context = arguments[3];
     if (!context->IsObject() || context->IsArray() || context->IsFunction()) return false;
-    if (context->HasValue("sourceViewport")) {
-        const auto value = context->GetValue("sourceViewport");
+    if (context->HasValue("source_viewport")) {
+        const auto value = context->GetValue("source_viewport");
         if (!value || !value->IsString()) return false;
         selection.source_viewport = value->GetStringValue().ToString();
     }
     if (selection.source_viewport != "main" && selection.source_viewport != "cameraView") return false;
-    if (context->HasValue("sourceCameraId")) {
-        const auto value = context->GetValue("sourceCameraId");
+    if (context->HasValue("source_camera_id")) {
+        const auto value = context->GetValue("source_camera_id");
         if (!value || !value->IsString()) return false;
         selection.source_camera_id = value->GetStringValue().ToString();
         if (selection.source_camera_id.empty()) return false;
@@ -1599,8 +1599,8 @@ bool option_integer(const CefRefPtr<CefV8Value>& object, const char* name, int& 
 // once, so Web never learns the specialised native verb. Placement belongs to ImGui.
 bool read_panel_options(const CefV8ValueList& arguments, WindowRequest& request) {
     if (arguments.size() != 1 || !object_keys(arguments[0],
-        std::initializer_list<const char*>{"kind", "width", "height", "x", "y", "panelId", "routePath", "title",
-                                           "archiveSession", "sceneId", "cameraId"})) return false;
+        std::initializer_list<const char*>{"kind", "width", "height", "x", "y", "panel_id", "route_path", "title",
+                                           "archive_session", "scene_id", "camera_id"})) return false;
     const auto object = arguments[0];
     std::string kind = "panel";
     if (!option_string(object, "kind", kind)) return false;
@@ -1617,18 +1617,18 @@ bool read_panel_options(const CefV8ValueList& arguments, WindowRequest& request)
         !option_integer(object, "height", options.height, 1) ||
         !option_integer(object, "x", options.x, std::numeric_limits<int>::min()) ||
         !option_integer(object, "y", options.y, std::numeric_limits<int>::min()) ||
-        !option_string(object, "panelId", options.panel_id) ||
-        !option_string(object, "routePath", options.route)) return false;
+        !option_string(object, "panel_id", options.panel_id) ||
+        !option_string(object, "route_path", options.route)) return false;
     options.title = options.panel_id;
     if (!option_string(object, "title", options.title)) return false;
     // Camera identity only means something to a camera surface; a panel that names one would
     // have it accepted and dropped.
-    if (!camera && (object->HasValue("archiveSession") || object->HasValue("sceneId") ||
-                    object->HasValue("cameraId"))) return false;
-    if (camera && (object->HasValue("cameraHandle") || object->HasValue("handle") ||
-        !option_string(object, "archiveSession", request.archive_session, true) ||
-        !option_string(object, "sceneId", request.scene_id, true) ||
-        !option_string(object, "cameraId", request.camera_id, true) ||
+    if (!camera && (object->HasValue("archive_session") || object->HasValue("scene_id") ||
+                    object->HasValue("camera_id"))) return false;
+    if (camera && (object->HasValue("camera_handle") || object->HasValue("handle") ||
+        !option_string(object, "archive_session", request.archive_session, true) ||
+        !option_string(object, "scene_id", request.scene_id, true) ||
+        !option_string(object, "camera_id", request.camera_id, true) ||
         request.camera_id == "undefined" || request.camera_id == "null")) return false;
     request.panel = std::move(options);
     return true;
@@ -1639,7 +1639,7 @@ bool read_panel_options(const CefV8ValueList& arguments, WindowRequest& request)
 // button without window state can honestly ask for.
 bool read_window_presentation(const CefV8ValueList& arguments, WindowRequest& request) {
     if (arguments.size() != 1 || !object_keys(arguments[0],
-        std::initializer_list<const char*>{"target", "mode", "sceneId", "cameraId", "width", "height"})) return false;
+        std::initializer_list<const char*>{"target", "mode", "scene_id", "camera_id", "width", "height"})) return false;
     const auto object = arguments[0];
     std::string target = "camera";
     if (!option_string(object, "target", target)) return false;
@@ -1664,13 +1664,13 @@ bool read_window_presentation(const CefV8ValueList& arguments, WindowRequest& re
     if (target == "main") {
         if (!RequestRules::main_accepts_mode(request.presentation == WindowPresentation::Maximized))
             return false;
-        if (object->HasValue("sceneId") || object->HasValue("cameraId")) return false;
+        if (object->HasValue("scene_id") || object->HasValue("camera_id")) return false;
         request.main_window_target = true;
         return true;
     }
     if (target != "camera") return false;
-    if (!option_string(object, "sceneId", request.scene_id) ||
-        !option_string(object, "cameraId", request.camera_id)) return false;
+    if (!option_string(object, "scene_id", request.scene_id) ||
+        !option_string(object, "camera_id", request.camera_id)) return false;
     return request.scene_id.empty() == request.camera_id.empty();
 }
 
@@ -1680,27 +1680,27 @@ bool read_window_presentation(const CefV8ValueList& arguments, WindowRequest& re
 bool read_close_request(const CefV8ValueList& arguments, WindowRequest& request) {
     if (arguments.empty()) return true;
     if (arguments.size() != 1 || !object_keys(arguments[0],
-        std::initializer_list<const char*>{"panelId", "sceneId", "cameraId"})) return false;
+        std::initializer_list<const char*>{"panel_id", "scene_id", "camera_id"})) return false;
     const auto object = arguments[0];
     const auto identity = RequestRules::close_identity(
-        object->HasValue("panelId"), object->HasValue("sceneId"), object->HasValue("cameraId"));
+        object->HasValue("panel_id"), object->HasValue("scene_id"), object->HasValue("camera_id"));
     if (identity == RequestRules::CloseIdentity::None) return false;
     if (identity == RequestRules::CloseIdentity::Panel)
-        return option_string(object, "panelId", request.panel_id, true);
-    if (!option_string(object, "sceneId", request.scene_id)) return false;
+        return option_string(object, "panel_id", request.panel_id, true);
+    if (!option_string(object, "scene_id", request.scene_id)) return false;
     if (identity == RequestRules::CloseIdentity::Camera)
-        return option_string(object, "cameraId", request.camera_id, true);
+        return option_string(object, "camera_id", request.camera_id, true);
     // Plural form. An empty scene closes nothing but still fences, which the window
     // session relies on when it retires a world.
     request.close_scene_views = true;
     return true;
 }
 
-// focus({panelId}) — the same stable identity close uses.
+// focus({panel_id}) — the same stable identity close uses.
 bool read_focus_request(const CefV8ValueList& arguments, WindowRequest& request) {
     if (arguments.size() != 1 || !object_keys(arguments[0],
-        std::initializer_list<const char*>{"panelId"})) return false;
-    return option_string(arguments[0], "panelId", request.panel_id, true);
+        std::initializer_list<const char*>{"panel_id"})) return false;
+    return option_string(arguments[0], "panel_id", request.panel_id, true);
 }
 
 // CEF's RejectPromise only accepts a string. Adopt Promise.reject(Error) to
