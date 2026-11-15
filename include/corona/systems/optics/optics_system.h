@@ -174,6 +174,7 @@ class OpticsSystem : public Kernel::SystemBase {
     struct VisionCameraFeedback {
         std::optional<std::string> restir_effective, restir_applied;
         std::optional<std::string> pt_effective, reblur_effective, relax_effective;
+        std::optional<std::string> reblur_contexts;
     };
     void publish_vision_camera_feedback(std::uintptr_t camera_handle,
                                        const VisionCameraFeedback& feedback);

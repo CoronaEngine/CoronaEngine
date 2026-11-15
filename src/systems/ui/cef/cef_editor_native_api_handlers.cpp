@@ -6546,7 +6546,12 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             if (!settings.is_object()) settings = nlohmann::json::object();
             const auto overrides = nlohmann::json::parse(camera->engine_camera->get_requested_vision_reblur_settings(), nullptr, false);
             if (overrides.is_object()) settings.update(overrides);
-            return native_success({{"settings", std::move(settings)}});
+            auto contexts = nlohmann::json::object();
+            if (auto state = SharedDataHub::instance().camera_storage().acquire_read(camera->engine_camera->get_handle())) {
+                const auto effective = nlohmann::json::parse(state->vision_reblur_context_settings, nullptr, false);
+                if (effective.is_object()) contexts = effective;
+            }
+            return native_success({{"settings", std::move(settings)}, {"contexts", std::move(contexts)}});
         }},
         {"set_reblur_settings", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));

@@ -364,6 +364,7 @@ struct CameraDevice {
     std::string vision_restir_settings{"{}"};
     std::string vision_relax_settings{"{}"};
     std::string vision_reblur_effective_settings{"{}"}; // Runtime feedback, not serialized.
+    std::string vision_reblur_context_settings{"{}"}; // Private-context feedback, not serialized.
     std::string vision_pt_effective_settings{"{}"}; // Runtime feedback, not serialized.
     std::string vision_restir_effective_settings{"{}"}; // Runtime feedback, not serialized.
     std::string vision_restir_applied_settings; // Overrides matching runtime feedback, not serialized.

@@ -14,6 +14,7 @@
 #include "ReSTIR/rtxpt_gi_denoiser_diagnostic.h"
 #include "ReSTIR/stable_planes.h"
 #include "ReSTIR/denoiser_signals.h"
+#include "ReSTIR/physical_di_reblur.h"
 #include "falcor_di_experiment.h"
 #include "restir_gi_experiment.h"
 #include <cstdlib>
@@ -134,7 +135,7 @@ private:
             denoiser_->impl_type() == "ReBLUR";
     }
 
-    void prepare_native_di_denoiser() const noexcept {
+    void prepare_native_di_denoiser(const string &settings) const noexcept {
         // Runtime compilation needs the scene's material LUT bindings.
         Global::SceneGpuContextScope scene_gpu_context{
             scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
@@ -152,10 +153,21 @@ private:
             native_denoiser_size_ = pipeline()->resolution();
         }
         native_di_denoiser_->set_enabled(true);
-        native_di_denoiser_->set_reblur_settings(denoiser_->reblur_settings_json());
+        native_di_denoiser_->set_reblur_settings(settings);
     }
 
 public:
+    [[nodiscard]] DataWrap reblur_context_settings() const override {
+        if (!native_reblur_requested()) return DataWrap::object();
+        const auto parent = DataWrap::parse(denoiser_->reblur_settings_json());
+        const auto target = physical_di_reblur_settings(parent);
+        const auto physical = native_di_denoiser_
+            ? DataWrap::parse(native_di_denoiser_->reblur_settings_json()) : DataWrap::object();
+        return {{"policy", "physical-di-detail-preserving-v1"},
+                {"physical_di", {{"count", 1u}, {"ready", physical == target}, {"settings", physical}}},
+                {"gi", {{"count", 3u}, {"settings", parent}}}};
+    }
+
     RealTimeIntegrator() = default;
     explicit RealTimeIntegrator(const IntegratorDesc &desc)
         : IlluminationIntegrator(desc) {
@@ -678,6 +690,7 @@ public:
                     views.gi_guides[layer] = indirect_->native_reblur_guides(layer);
                 }
                 rtxpt_gi::download_native_reblur_diagnostics(device(), stream, views, rp->resolution(), directory, stage);
+
             }
             if (string_view(stage) == "raw" && indirect_->uses_rtxpt_backend()) {
                 indirect_->rtxpt_lights().download_validation(directory);
@@ -766,10 +779,12 @@ public:
         debug_readback("raw");
         const bool denoiser = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled() && denoiser_->requires_lobe_signals();
         if (native_denoising && use_falcor) {
+            const auto physical_di_settings = physical_di_reblur_settings(
+                DataWrap::parse(denoiser_->reblur_settings_json())).dump();
             if (!native_di_denoiser_ || any(native_denoiser_size_ != pipeline()->resolution()) ||
-                native_di_denoiser_->reblur_settings_json() != denoiser_->reblur_settings_json())
+                native_di_denoiser_->reblur_settings_json() != physical_di_settings)
                 stream << synchronize() << commit();
-            prepare_native_di_denoiser();
+            prepare_native_di_denoiser(physical_di_settings);
             begin_denoise_timing(stream);
             auto physical = denoise_input();
             physical.use_stable_planes = false;

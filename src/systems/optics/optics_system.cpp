@@ -2331,6 +2331,7 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
             pipeline->invalidate();
             feedback.reblur_effective = filter->reblur_settings_json();
         }
+        feedback.reblur_contexts = illumination->reblur_context_settings().dump();
         if (auto* filter = illumination->denoiser(); filter && filter->impl_type() == "ReLAX") {
             const bool changed = filter->set_relax_settings(relax_settings);
             if (changed) pipeline->invalidate();
@@ -2375,13 +2376,14 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
 void OpticsSystem::publish_vision_camera_feedback(std::uintptr_t camera_handle,
                                                  const VisionCameraFeedback& feedback) {
     if (!feedback.restir_effective && !feedback.pt_effective &&
-        !feedback.reblur_effective && !feedback.relax_effective) return;
+        !feedback.reblur_effective && !feedback.relax_effective && !feedback.reblur_contexts) return;
     auto camera = SharedDataHub::instance().camera_storage().try_acquire_write(camera_handle);
     if (!camera) return;
     if (feedback.restir_effective) camera->vision_restir_effective_settings = *feedback.restir_effective;
     if (feedback.restir_applied) camera->vision_restir_applied_settings = *feedback.restir_applied;
     if (feedback.pt_effective) camera->vision_pt_effective_settings = *feedback.pt_effective;
     if (feedback.reblur_effective) camera->vision_reblur_effective_settings = *feedback.reblur_effective;
+    if (feedback.reblur_contexts) camera->vision_reblur_context_settings = *feedback.reblur_contexts;
     if (feedback.relax_effective) camera->vision_relax_effective_settings = *feedback.relax_effective;
 }
 

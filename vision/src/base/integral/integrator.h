@@ -195,6 +195,8 @@ public:
     [[nodiscard]] Uint runtime_min_depth() const noexcept { return *min_depth_; }
     [[nodiscard]] Denoiser *denoiser() noexcept { return denoiser_.get(); }
     [[nodiscard]] const Denoiser *denoiser() const noexcept { return denoiser_.get(); }
+    // Read-only effective settings for integrators with private denoisers.
+    [[nodiscard]] virtual DataWrap reblur_context_settings() const { return DataWrap::object(); }
     bool render_UI(Widgets *widgets) noexcept override;
     void set_denoise_enabled(bool enabled) noexcept override {
         if (denoiser_) {
