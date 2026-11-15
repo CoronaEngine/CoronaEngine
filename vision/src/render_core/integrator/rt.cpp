@@ -12,6 +12,8 @@
 #include "ReSTIR/indirect.h"
 #include "ReSTIR/rtxpt_gi_lights.h"
 #include "ReSTIR/rtxpt_gi_denoiser_diagnostic.h"
+#include "ReSTIR/rtxpt_gi_shadow_diagnostic.h"
+#include "ReSTIR/rtxpt_gi_primary_light_diagnostic.h"
 #include "ReSTIR/stable_planes.h"
 #include "ReSTIR/denoiser_signals.h"
 #include "ReSTIR/physical_di_reblur.h"
@@ -690,7 +692,14 @@ public:
                     views.gi_guides[layer] = indirect_->native_reblur_guides(layer);
                 }
                 rtxpt_gi::download_native_reblur_diagnostics(device(), stream, views, rp->resolution(), directory, stage);
-
+                if (string_view(stage) == "raw") {
+                    rtxpt_gi::download_shadow_diagnostics(device(), stream, frame_buffer(), frame_index_,
+                                                         rp->resolution(), *direct_, directory);
+                    rtxpt_gi::download_environment_diagnostics(device(), stream, frame_buffer(), frame_index_,
+                                                              rp->resolution(), directory);
+                    rtxpt_gi::download_primary_light_diagnostics(device(), stream, frame_buffer(), frame_index_,
+                                                                rp->resolution(), *direct_, directory);
+                }
             }
             if (string_view(stage) == "raw" && indirect_->uses_rtxpt_backend()) {
                 indirect_->rtxpt_lights().download_validation(directory);
@@ -793,6 +802,8 @@ public:
             auto dd = falcor_di_->denoiser_diffuse(), ds = falcor_di_->denoiser_specular();
             physical.lobe_signals = {dd, ds, dd, ds};
             submit(native_di_denoiser_->dispatch(physical), &cur_stage_profile_.spatial_angular_ms);
+            if (!evaluation_debug::directory(frame_index_).empty())
+                rtxpt_gi::copy_physical_di_snapshots(stream, frame_index_);
             for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
                 auto gi = denoise_input();
                 gi.use_stable_planes = true; gi.layer_count = StablePlaneCount; gi.layer_index = layer;
