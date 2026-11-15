@@ -65,7 +65,19 @@ void ensure_editor_dispatch_hooks() {
 /// same one the manifest used, so a busy editor still answers with a timeout.
 constexpr std::chrono::milliseconds kEditorDispatchTimeout{5000};
 
-/// Converts one Python value into the JSON shape the C++ entries pack.
+/// Converts one Python value into the JSON shape the shared scene helpers take.
+///
+/// This is not an extra hop invented for Python: the Web adapter builds the very same
+/// `nlohmann::json` before calling the same helper. `create_native_editor_actor`,
+/// `set_native_editor_actor_transform` and `set_native_actor_properties` take JSON by
+/// design - the CreateActor case in editor_scene_service.cpp says so:
+///
+///   > Reuse the same native business operation as Python/ScriptRuntime. Its internal
+///   > JSON object stays on this owner thread, never serialized or passed to the renderer.
+///
+/// So a dict has to become one somewhere; doing it here is what keeps the two channel
+/// adapters symmetric (V8 reader -> typed -> json on the Web side, dict -> json here).
+/// If those shared helpers ever take typed structs, this function goes away with the JSON.
 ///
 /// The script contract speaks JSON-compatible values only; anything else is a caller bug
 /// and raises TypeError rather than being silently stringified.
