@@ -1,9 +1,8 @@
-#pragma once
-
 #include "python_service_bridge.h"
-#include "script_runtime_api.h"
+#include "script_operation_entry.h"
 
 #include "editor_dispatch.h"
+#include "editor_operation_table.h"
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
@@ -13,16 +12,24 @@
 #include <wrapper/cef_closure_task.h>
 #include <wrapper/cef_helpers.h>
 
+#include <Python.h>
+
 #include <chrono>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <string_view>
+
+#include <nlohmann/json.hpp>
 
 namespace EngineScripts {
 
 namespace {
 
+namespace nb = nanobind;
 namespace UI = Corona::Systems::UI;
 
 /// Runs an editor operation on the CEF UI (editor state owner) thread.
@@ -58,94 +65,112 @@ void ensure_editor_dispatch_hooks() {
 /// same one the manifest used, so a busy editor still answers with a timeout.
 constexpr std::chrono::milliseconds kEditorDispatchTimeout{5000};
 
-using ScriptOperation = UI::NativeResult (*)(const UI::NativeRequest&);
-
-/// Runs one named ScriptRuntime operation and returns the JSON envelope the Python
-/// adapter already expects.
+/// Converts one Python value into the JSON shape the C++ entries pack.
 ///
-/// The GIL is released while the operation is dispatched: an operation can wait on
-/// the Python runtime (the scene snapshot comes back through the dispatcher), and the
-/// CEF UI thread that runs it can itself be waiting for Python.  Holding the GIL here
-/// turned that handshake into a 5 s timeout in the field.
-std::string invoke_script_operation(ScriptOperation operation, const char* operation_name,
-                                    const std::string& args_json) {
-    auto args = nlohmann::json::parse(args_json.empty() ? "[]" : args_json, nullptr, false);
-    if (args.is_discarded() || !args.is_array()) {
-        return nlohmann::json{{"success", false},
-                              {"error", "Invalid Script Runtime API args JSON"},
-                              {"error_code", 400}}
-            .dump();
+/// The script contract speaks JSON-compatible values only; anything else is a caller bug
+/// and raises TypeError rather than being silently stringified.
+nlohmann::json to_json(nb::handle value) {
+    if (value.is_none()) return nullptr;
+    if (nb::isinstance<nb::bool_>(value)) return nb::cast<bool>(value);
+    if (nb::isinstance<nb::int_>(value)) return nb::cast<std::int64_t>(value);
+    if (nb::isinstance<nb::float_>(value)) return nb::cast<double>(value);
+    if (nb::isinstance<nb::str>(value)) return nb::cast<std::string>(value);
+    if (nb::isinstance<nb::dict>(value)) {
+        nlohmann::json result = nlohmann::json::object();
+        for (const auto& item : nb::cast<nb::dict>(value)) {
+            result[nb::cast<std::string>(nb::str(item.first))] = to_json(item.second);
+        }
+        return result;
     }
-
-    // The contract table says how many positions each binding takes; checking here means a
-    // caller that forgot an argument hears about the argument instead of a downstream
-    // "actor not found". The failure keeps its symbol in data.code.
-    if (const auto rejected = UI::validate_script_arguments(operation_name, args)) {
-        return nlohmann::json{{"success", false},
-                              {"error", rejected->error},
-                              {"error_code", rejected->error_code},
-                              {"data", rejected->data}}
-            .dump();
+    if (nb::isinstance<nb::list>(value) || nb::isinstance<nb::tuple>(value)) {
+        nlohmann::json result = nlohmann::json::array();
+        for (const auto& item : value) result.push_back(to_json(item));
+        return result;
     }
+    throw nb::type_error("script arguments must be JSON-compatible values");
+}
 
+/// The Python exception type failures are raised as. Cached because the translator runs
+/// on the interpreter thread and must not re-import on every call.
+PyObject* editor_error_type() {
+    static PyObject* type = nullptr;
+    static std::once_flag once;
+    std::call_once(once, [] {
+        nb::object module = nb::module_::import_("api.errors");
+        nb::object cls = module.attr("EditorApiError");
+        type = cls.ptr();
+        Py_INCREF(type);  // outlive the imported module handle
+    });
+    return type;
+}
+
+/// Registers the translator once; a failed entry answers EditorApiError(code, message).
+void install_exception_translator() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        nb::register_exception_translator([](const std::exception_ptr& error, void*) {
+            try {
+                std::rethrow_exception(error);
+            } catch (const UI::EditorApiError& api_error) {
+                PyObject* type = editor_error_type();
+                nb::object instance = nb::steal<nb::object>(
+                    PyObject_CallFunction(type, "ss", api_error.code.c_str(), api_error.what()));
+                if (!instance) return;
+                PyErr_SetObject(type, instance.ptr());
+            }
+        });
+    });
+}
+
+/// Dispatches one entry on the editor owner thread and turns its result into a Python value.
+///
+/// Success answers `result.data`; failure raises EditorApiError with the scene layer's
+/// symbolic code. The GIL is released while the operation runs (it can wait on the Python
+/// runtime, which may itself be waiting for the owner thread), and the exception is raised
+/// only after the release scope ends - never from the owner thread.
+nlohmann::json run_script_entry(const char* name, std::function<UI::NativeResult()> call) {
+    install_exception_translator();
     ensure_editor_dispatch_hooks();
-    UI::NativeRequest request;
-    request.module = "ScriptRuntime";
-    request.function = operation_name;
-    request.args = std::move(args);
 
-    const bool on_owner_thread = UI::Detail::on_editor_owner_thread();
+    const UI::NativeRequest diagnostic{"ScriptRuntime", name, nlohmann::json::array()};
     const auto route = UI::Detail::decide_editor_dispatch_route(
-        on_owner_thread,
+        UI::Detail::on_editor_owner_thread(),
         UI::Detail::editor_thread_waiting_for_python(),
         UI::Detail::editor_owner_thread_seen());
 
     UI::Detail::EditorDispatchReport report;
     std::optional<UI::NativeResult> result;
     {
-        nanobind::gil_scoped_release release;
+        nb::gil_scoped_release release;
         result = UI::Detail::call_editor_dispatch(
-            [operation, request] {
-                // The in-flight mark has to live on the thread that runs the
-                // operation: the stuck report names whatever the editor owner
-                // thread was executing when it stopped completing requests.
-                UI::NativeApiRequestScope scope(request);
-                auto completed = operation(request);
+            [&call, &diagnostic] {
+                UI::NativeApiRequestScope scope(diagnostic);
+                auto completed = call();
                 scope.report_if_slow(completed);
                 return completed;
             },
-            route,
-            kEditorDispatchTimeout,
-            &report);
+            route, kEditorDispatchTimeout, &report);
     }
 
     if (!result) {
         const bool timed_out = report.run == UI::Detail::EditorOwnerRun::Timeout;
-        return nlohmann::json{{"success", false},
-                              {"error", timed_out ? "Script Runtime API timed out waiting for the editor thread"
-                                                  : "Script Runtime API could not be posted to the editor thread"},
-                              {"error_code", timed_out ? 504 : 503}}
-            .dump();
+        throw UI::EditorApiError(
+            "NATIVE_UNAVAILABLE",
+            timed_out ? "Script Runtime API timed out waiting for the editor thread"
+                      : "Script Runtime API could not be posted to the editor thread");
     }
-
-    nlohmann::json response = {
-        {"success", result->success},
-        {"route", "script-runtime"},
-    };
-    // `data` rides along on failure too: it carries the symbolic code, which is what lets the
-    // adapter say "PROJECT_CONTEXT_CHANGED: ..." instead of parsing message text.
-    if (!result->data.empty()) response["data"] = result->data;
     if (!result->success) {
-        response["error"] = result->error;
-        response["error_code"] = result->error_code;
+        const auto code = result->data.is_object() && result->data.contains("code")
+                              ? result->data.at("code").get<std::string>()
+                              : std::string{"NATIVE_FAILURE"};
+        throw UI::EditorApiError(code, result->error);
     }
-    return response.dump();
+    return result->data;
 }
 
 }  // namespace
 
 void BindCef(nanobind::module_& m) {
-    namespace nb = nanobind;
     m.def("register_python_script_service_dispatcher", [](nb::object dispatcher) {
         Corona::Systems::UI::register_python_script_service_dispatcher(dispatcher.ptr());
     }, nb::arg("dispatcher"));
@@ -154,33 +179,128 @@ void BindCef(nanobind::module_& m) {
         Corona::Systems::UI::unregister_python_script_service_dispatcher();
     });
 
-    // The ScriptRuntime editor contract. One named binding per operation: the Python
-    // adapter below the interpreter decides which one to call, so C++ carries no name
-    // table, no argument schema and no caller mask.
-    const auto bind_script_operation = [&m](const char* name, ScriptOperation operation) {
-        m.def(name, [name, operation](const std::string& args_json) {
-            return invoke_script_operation(operation, name, args_json);
-        }, nb::arg("args_json"));
+    // The ScriptRuntime contract: one typed binding per table row, installed under the same
+    // namespace and name the Web surface publishes (snake_case here, camelCase there).
+    std::map<std::string_view, nb::module_> submodules = {
+        {"scene", m.def_submodule("scene")},
+        {"audio", m.def_submodule("audio")},
+        {"viewport", m.def_submodule("viewport")},
     };
-    bind_script_operation("script_scene_get_environment", Corona::Systems::UI::script_scene_get_environment);
-    bind_script_operation("script_scene_read_active_scene", Corona::Systems::UI::script_scene_read_active_scene);
-    bind_script_operation("script_scene_read_actor", Corona::Systems::UI::script_scene_read_actor);
-    bind_script_operation("script_scene_read_transforms", Corona::Systems::UI::script_scene_read_transforms);
-    bind_script_operation("script_scene_read_archive_scene", Corona::Systems::UI::script_scene_read_archive_scene);
-    bind_script_operation("script_scene_get_scene_snapshot", Corona::Systems::UI::script_scene_get_scene_snapshot);
-    bind_script_operation("script_scene_set_actor_transform", Corona::Systems::UI::script_scene_set_actor_transform);
-    bind_script_operation("script_scene_set_environment", Corona::Systems::UI::script_scene_set_environment);
-    bind_script_operation("script_scene_set_actor_state", Corona::Systems::UI::script_scene_set_actor_state);
-    bind_script_operation("script_scene_set_actor_animation", Corona::Systems::UI::script_scene_set_actor_animation);
-    bind_script_operation("script_scene_pause_actor_animation", Corona::Systems::UI::script_scene_pause_actor_animation);
-    bind_script_operation("script_scene_resume_actor_animation", Corona::Systems::UI::script_scene_resume_actor_animation);
-    bind_script_operation("script_scene_set_actor_physics", Corona::Systems::UI::script_scene_set_actor_physics);
-    bind_script_operation("script_scene_set_camera_pose", Corona::Systems::UI::script_scene_set_camera_pose);
-    bind_script_operation("script_scene_create_actor", Corona::Systems::UI::script_scene_create_actor);
-    bind_script_operation("script_scene_play_actor_audio", Corona::Systems::UI::script_scene_play_actor_audio);
-    bind_script_operation("script_scene_stop_actor_audio", Corona::Systems::UI::script_scene_stop_actor_audio);
-    bind_script_operation("script_scene_remove_actor", Corona::Systems::UI::script_scene_remove_actor);
 
+    const auto bind_script = [&submodules](const char* group, const char* name, auto fn,
+                                           auto&&... args) {
+        const auto* spec = Corona::Systems::UI::find_editor_operation(group, name);
+        if (spec == nullptr || !spec->script) {
+            throw std::logic_error(std::string("script binding without a table row: ") + group + "." + name);
+        }
+        submodules.at(group).def(name, std::move(fn), std::forward<decltype(args)>(args)...);
+    };
+
+    bind_script("scene", "read_active", [] {
+        return run_script_entry("read_active", [] { return UI::script_entry_read_active(); });
+    });
+    bind_script("scene", "read_environment", [](std::string scene_name, nb::dict scope) {
+        auto scope_json = to_json(scope);
+        return run_script_entry("read_environment", [scene_name, scope_json] {
+            return UI::script_entry_read_environment(scene_name, scope_json);
+        });
+    }, nb::arg("scene"), nb::arg("scope") = nb::dict());
+    bind_script("scene", "read_actor", [](nb::dict request) {
+        auto request_json = to_json(request);
+        return run_script_entry("read_actor", [request_json] {
+            return UI::script_entry_read_actor(request_json);
+        });
+    }, nb::arg("request"));
+    bind_script("scene", "read_transforms", [](nb::dict request) {
+        auto request_json = to_json(request);
+        return run_script_entry("read_transforms", [request_json] {
+            return UI::script_entry_read_transforms(request_json);
+        });
+    }, nb::arg("request"));
+    bind_script("scene", "read_archive_scene", [](nb::dict request) {
+        auto request_json = to_json(request);
+        return run_script_entry("read_archive_scene", [request_json] {
+            return UI::script_entry_read_archive_scene(request_json);
+        });
+    }, nb::arg("request"));
+    bind_script("scene", "read_scene", [](nb::dict request) {
+        auto request_json = to_json(request);
+        return run_script_entry("read_scene", [request_json] {
+            return UI::script_entry_read_scene(request_json);
+        });
+    }, nb::arg("request"));
+    bind_script("scene", "set_actor_transform", [](std::string scene, std::string actor, nb::dict patch) {
+        auto patch_json = to_json(patch);
+        return run_script_entry("set_actor_transform", [scene, actor, patch_json] {
+            return UI::script_entry_set_actor_transform(scene, actor, patch_json);
+        });
+    }, nb::arg("scene"), nb::arg("actor"), nb::arg("patch"));
+    bind_script("scene", "update_actor", [](std::string scene, std::string actor, nb::dict patch) {
+        auto patch_json = to_json(patch);
+        return run_script_entry("update_actor", [scene, actor, patch_json] {
+            return UI::script_entry_update_actor(scene, actor, patch_json);
+        });
+    }, nb::arg("scene"), nb::arg("actor"), nb::arg("patch"));
+    bind_script("scene", "set_environment", [](std::string scene, nb::dict patch) {
+        auto patch_json = to_json(patch);
+        return run_script_entry("set_environment", [scene, patch_json] {
+            return UI::script_entry_set_environment(scene, patch_json);
+        });
+    }, nb::arg("scene"), nb::arg("patch"));
+    bind_script("scene", "set_actor_animation",
+                [](std::string scene, std::string actor, std::string animation, double blend_seconds) {
+        return run_script_entry("set_actor_animation", [scene, actor, animation, blend_seconds] {
+            return UI::script_entry_set_actor_animation(scene, actor, animation, blend_seconds);
+        });
+    }, nb::arg("scene"), nb::arg("actor"), nb::arg("animation"), nb::arg("blend_seconds") = 0.2);
+    bind_script("scene", "pause_actor_animation", [](std::string scene, std::string actor) {
+        return run_script_entry("pause_actor_animation", [scene, actor] {
+            return UI::script_entry_pause_actor_animation(scene, actor);
+        });
+    }, nb::arg("scene"), nb::arg("actor"));
+    bind_script("scene", "resume_actor_animation", [](std::string scene, std::string actor) {
+        return run_script_entry("resume_actor_animation", [scene, actor] {
+            return UI::script_entry_resume_actor_animation(scene, actor);
+        });
+    }, nb::arg("scene"), nb::arg("actor"));
+    bind_script("scene", "set_actor_physics", [](std::string scene, std::string actor, nb::dict patch) {
+        auto patch_json = to_json(patch);
+        return run_script_entry("set_actor_physics", [scene, actor, patch_json] {
+            return UI::script_entry_set_actor_physics(scene, actor, patch_json);
+        });
+    }, nb::arg("scene"), nb::arg("actor"), nb::arg("patch"));
+    bind_script("scene", "create_actor", [](std::string scene, std::string path, nb::dict options) {
+        auto options_json = to_json(options);
+        return run_script_entry("create_actor", [scene, path, options_json] {
+            return UI::script_entry_create_actor(scene, path, options_json);
+        });
+    }, nb::arg("scene"), nb::arg("path"), nb::arg("options"));
+    bind_script("scene", "delete_actor", [](std::string scene, std::string actor, nb::dict scope) {
+        auto scope_json = to_json(scope);
+        return run_script_entry("delete_actor", [scene, actor, scope_json] {
+            return UI::script_entry_delete_actor(scene, actor, scope_json);
+        });
+    }, nb::arg("scene"), nb::arg("actor"), nb::arg("scope") = nb::dict());
+
+    bind_script("audio", "play", [](nb::dict request) {
+        auto request_json = to_json(request);
+        return run_script_entry("play", [request_json] {
+            return UI::script_entry_play_actor_audio(request_json);
+        });
+    }, nb::arg("request"));
+    bind_script("audio", "stop", [](nb::dict request) {
+        auto request_json = to_json(request);
+        return run_script_entry("stop", [request_json] {
+            return UI::script_entry_stop_actor_audio(request_json);
+        });
+    }, nb::arg("request"));
+
+    bind_script("viewport", "set_camera_pose", [](std::string scene, std::string camera, nb::dict patch) {
+        auto patch_json = to_json(patch);
+        return run_script_entry("set_camera_pose", [scene, camera, patch_json] {
+            return UI::script_entry_set_camera_pose(scene, camera, patch_json);
+        });
+    }, nb::arg("scene"), nb::arg("camera"), nb::arg("patch"));
 }
 
 }  // namespace EngineScripts

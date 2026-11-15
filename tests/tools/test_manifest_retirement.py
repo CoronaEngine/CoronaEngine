@@ -49,6 +49,29 @@ SCRIPT_RUNTIME_OPERATIONS = [
     "script_scene_remove_actor",
 ]
 
+# The public spelling: (namespace, operation) pairs the nanobind module installs. The names
+# come from editor_operation_table.h; the handlers above are the internal implementation.
+SCRIPT_BINDINGS = [
+    ("scene", "read_scene"),
+    ("scene", "read_active"),
+    ("scene", "create_actor"),
+    ("scene", "read_actor"),
+    ("scene", "read_transforms"),
+    ("scene", "set_actor_transform"),
+    ("scene", "update_actor"),
+    ("scene", "delete_actor"),
+    ("scene", "read_environment"),
+    ("scene", "set_environment"),
+    ("scene", "read_archive_scene"),
+    ("scene", "set_actor_animation"),
+    ("scene", "pause_actor_animation"),
+    ("scene", "resume_actor_animation"),
+    ("scene", "set_actor_physics"),
+    ("audio", "play"),
+    ("audio", "stop"),
+    ("viewport", "set_camera_pose"),
+]
+
 
 def _sources():
     for path in SRC.rglob("*"):
@@ -97,9 +120,10 @@ def test_script_runtime_contract_is_the_named_bindings():
         f"extra {sorted(set(declared) - set(SCRIPT_RUNTIME_OPERATIONS))}")
 
     bindings = BINDINGS.read_text(encoding="utf-8-sig")
-    bound = re.findall(r'bind_script_operation\("(script_scene_\w+)"', bindings)
-    assert sorted(bound) == sorted(SCRIPT_RUNTIME_OPERATIONS), (
-        "every named operation must be bound exactly once")
+    bound = re.findall(r'bind_script\("(\w+)",\s*"(\w+)"', bindings)
+    assert sorted(bound) == sorted(SCRIPT_BINDINGS), (
+        f"every named operation must be bound exactly once: "
+        f"missing {sorted(set(SCRIPT_BINDINGS) - set(bound))}, extra {sorted(set(bound) - set(SCRIPT_BINDINGS))}")
 
 
 def test_web_still_cannot_reach_any_editor_manifest():
