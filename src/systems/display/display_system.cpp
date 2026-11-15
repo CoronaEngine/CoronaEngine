@@ -1084,12 +1084,31 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     composite_pipeline.pushConsts.bgHeight = std::max(bg_extent.height, 1u);
     composite_pipeline.pushConsts.fgWidth = std::max(fg_extent.width, 1u);
     composite_pipeline.pushConsts.fgHeight = std::max(fg_extent.height, 1u);
-    composite_pipeline.pushConsts.bgViewportX = state.optics.viewport_x;
-    composite_pipeline.pushConsts.bgViewportY = state.optics.viewport_y;
-    composite_pipeline.pushConsts.bgViewportWidth =
-        state.optics.viewport_width != 0 ? state.optics.viewport_width : output_width;
-    composite_pipeline.pushConsts.bgViewportHeight =
-        state.optics.viewport_height != 0 ? state.optics.viewport_height : output_height;
+    // A camera without a viewport rect publishes its own render extent as the
+    // viewport, which is how a scene presents before the Web reports its bounds.
+    // Treat that "no rect" state as "fill the surface": placing the archive-sized
+    // render 1:1 at the origin would leave the rest of the window black. A real
+    // rect equal to the render extent on a larger surface gets the same fill,
+    // which matches how a configured viewport already scales its render.
+    uint32_t bg_viewport_x = state.optics.viewport_x;
+    uint32_t bg_viewport_y = state.optics.viewport_y;
+    uint32_t bg_viewport_width = state.optics.viewport_width;
+    uint32_t bg_viewport_height = state.optics.viewport_height;
+    if (bg_viewport_width == 0 || bg_viewport_height == 0) {
+        bg_viewport_x = 0;
+        bg_viewport_y = 0;
+        bg_viewport_width = output_width;
+        bg_viewport_height = output_height;
+    } else if (bg_viewport_x == 0 && bg_viewport_y == 0 &&
+               bg_viewport_width == bg_extent.width && bg_viewport_height == bg_extent.height &&
+               (bg_viewport_width != output_width || bg_viewport_height != output_height)) {
+        bg_viewport_width = output_width;
+        bg_viewport_height = output_height;
+    }
+    composite_pipeline.pushConsts.bgViewportX = bg_viewport_x;
+    composite_pipeline.pushConsts.bgViewportY = bg_viewport_y;
+    composite_pipeline.pushConsts.bgViewportWidth = bg_viewport_width;
+    composite_pipeline.pushConsts.bgViewportHeight = bg_viewport_height;
     composite_pipeline.pushConsts.fgOpaque =
         (state.ui.image_handle != 0 && state.optics.image_handle == 0) ? 1u : 0u;
     composite_pipeline.pushConsts.encodeOutputSrgb = encode_output_srgb;
