@@ -13,6 +13,7 @@ inline constexpr const char *ReadyKey = "GI Principled parameter ready";
 inline constexpr uint ValidBit = 1u << 10u;
 inline constexpr uint BaseNearBit = 1u << 8u;
 inline constexpr uint CoatNearBit = 1u << 9u;
+inline constexpr uint IdealGlassBit = 1u << 11u;
 
 [[nodiscard]] inline string key(uint row) { return ocarina::format("GI Principled row {}", row); }
 [[nodiscard]] inline Float4 &row(uint index) { return ocarina::Env::instance().get<Float4>(key(index)); }

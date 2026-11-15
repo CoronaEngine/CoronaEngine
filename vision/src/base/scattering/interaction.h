@@ -430,6 +430,9 @@ struct PTPathCapture {
     // Host-only cost diagnostics. Defaults generate the production expressions.
     bool record_radiance{true};
     bool record_hit_distance{true};
+    // GI-only reflection DI ownership; ordinary PT never enables this policy.
+    bool reflection_only_direct{false};
+    Bool first_reflection_covered_by_di{true}, first_scatter_transmission{false};
     Bool active{false};
     Uint receiver_bounce{InvalidUI32};
     Float3 beta{make_float3(1.f)}, radiance{make_float3(0.f)};
@@ -437,6 +440,10 @@ struct PTPathCapture {
     std::function<void(const Interaction &, const TriangleHitVar &, const MaterialEvaluator &,
                        const BSDFSample &, const Uint &, const SampledSpectrum &)> on_sample;
     std::function<void(const Interaction &)> on_endpoint;
+    // Already weighted camera-path emitter/miss contributions. Empty observers
+    // generate no extra expressions in ordinary PT or Falcor DI shaders.
+    std::function<void(const TriangleHitVar &, const Float3 &, const Uint &,
+                       const Float3 &, const Float3 &)> on_emission;
 };
 
 struct HitContext {

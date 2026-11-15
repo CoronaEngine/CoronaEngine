@@ -3,6 +3,7 @@
 //
 
 #include "indirect.h"
+#include "base/scattering/gi_ideal_glass.h"
 #include "base/integral/path_work_capture.h"
 #include "rtxpt_gi.h"
 #include "rtxpt_gi_candidate.h"
@@ -228,7 +229,10 @@ void ReSTIRGI::compile_initial_samples() noexcept {
         OC_INFO_FORMAT("ReSTIR GI candidate transport: backend=rtxpt, native_transport=false, candidates_per_pixel=1, NEE_candidates_per_shadow=1, NEE_shadow_samples=1, RR=ordinary immediate, max_surface_depth={}, suffix_depth={}, terminal_endpoint=ordinary PT, BSDF=complete Corona",
                        integrator()->suffix_depth() + 1u, integrator()->suffix_depth());
         OC_INFO("RTXPT GI private stable planes: count=3, max_vertex_depth=5, primary_replacement=true, incident_Lo=unweighted, shared_Falcor_primary=true");
+        OC_INFO("RTXPT GI glass policy: complete pure RGB dielectric, roughness^2<0.0064 ideal delta, exact Fresnel, thick sqrt tint per interface, occupied-slot transmission continuation; ordinary PT/Falcor DI unchanged");
+        OC_INFO("RTXPT GI stable emission: continuous first reflection owned by DI; first transmission and uncovered delta reflection retained by PT/Build exactly once");
         Kernel build = [&](Uint frame_index) {
+            gi_principled::CompilationScope parameters{false};
             initial(sampler(), frame_index, spectrum());
             scene().sensor()->load_data();
             sampler()->load_data();
@@ -291,83 +295,126 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                 return;
             }
             PTPathCapture capture;
+            capture.reflection_only_direct = true;
+            const auto physical_primary = frame_buffer().cur_surfaces_var(frame_index).read(dispatch_id());
+            capture.first_reflection_covered_by_di = !BxDFFlag::is_specular(physical_primary.flag);
             capture.record_radiance = !skip_radiance;
             capture.record_hit_distance = cost_mode != "no-distance-math";
             Bool terminal_seen = false, receiver_written = false;
             Uint signal_plane = 0u;
+            Bool sampled_stable_event = false;
+            Uint sampled_branch = 1u;
+            Bool ideal_prefix = true;
+            Float3 sampled_stable = make_float3(0.f);
             const auto storage = prefix_storage();
             Uint4 header = storage.headers.read(dispatch_id());
             Uint dominant = header.w & 3u;
             capture.on_sample = [&](const Interaction &it, const TriangleHitVar &hit,
                                     const MaterialEvaluator &bsdf, const BSDFSample &sample,
                                     const Uint &bounce, const SampledSpectrum &throughput) {
-                $if(!terminal_seen) {
+                $if(bounce == 0u) {
+                    const Float3 n = bsdf.shading_frame().normal();
+                    capture.first_scatter_transmission = dot(n, it.wo) * dot(n, sample.wi) < 0.f;
+                };
+                auto match_planes = [&] {
                     $for(plane, 3u) {
                         $if(header[plane] == rtxpt_gi::PrefixInvalid || header[plane] == rtxpt_gi::PrefixQueued) { $continue; };
                         auto node = storage.read(plane);
-                        $if(node.throughput_flags.w != 0.f) { $continue; };
+                        $if(!gi_prefix_endpoint_matches(sampled_branch, bounce + 1u, -it.wo,
+                            header[plane], cast<uint>(node.direction_vertex.w), node.direction_vertex.xyz())) { $continue; };
                         Float2 bary = as<float2>(Uint2{node.hit_words.zw()});
                         $if(hit.inst_id != node.hit_words.x || hit.prim_id != node.hit_words.y ||
                             length_squared(Float2{hit.bary} - bary) > 1e-6f) { $continue; };
-                        terminal_seen = true; signal_plane = plane;
-                        $if(plane == dominant) {
-                            rtxpt_gi::PTSurfaceView receiver;
-                            receiver.it = it; receiver.hit = hit;
-                            receiver.depth = node.virtual_position.w;
-                            receiver.plane_hash = (plane << 24u) | header[plane];
-                            receiver.valid = gi_principled::captured(it.material_id());
-                            for (uint i = 0u; i < 6u; ++i) receiver.parameters[i] = gi_principled::row(i);
-                            if (cost_mode == "zero-material") {
-                                // Cost diagnostic only: preserve receiver eligibility,
-                                // configuration, geometry, guides and all96B stores.
-                                for (uint i = 0u; i < 5u; ++i) receiver.parameters[i] = make_float4(0.f);
-                                receiver.parameters[5].xyz() = make_float3(0.f);
-                            }
-                            if (!skip_guides) {
-                                receiver.normal = bsdf.shading_frame().normal();
-                                SampledSpectrum d{spectrum()->dimension()}, sp{spectrum()->dimension()}; Float2 roughness;
-                                bsdf.reuse_material(d, sp, roughness);
-                                receiver.diffuse_guide = spectrum()->linear_srgb(d, sampled_wavelengths());
-                                receiver.specular_guide = spectrum()->linear_srgb(sp, sampled_wavelengths());
-                                receiver.roughness = roughness;
-                            }
-                            if (cost_mode == "zero-surface") {
-                                // Keep the same receiver stores; let unused
-                                // interaction payload reconstruction disappear.
-                                rtxpt_gi::PTSurfaceView empty;
-                                rtxpt_->write_pt_surface(dispatch_id(), empty);
-                            } else if (!skip_surface) rtxpt_->write_pt_surface(dispatch_id(), receiver);
-                            receiver_written = receiver.valid;
-                            RtxptGIPrefixAuxVar aux;
-                            aux.prefix_throughput_depth = make_float4(spectrum()->linear_srgb(throughput, sampled_wavelengths()), receiver.depth);
-                            if (!skip_aux) {
-                            aux.current_virtual_position = make_float4(node.virtual_position.xyz(), node.origin_distance.w);
-                            aux.previous_virtual_position = make_float4(node.virtual_position.xyz(), 0.f);
-                            aux.metadata = make_uint4(receiver.plane_hash, plane, bounce + 1u, header[plane]);
-                            Float4x4 world_to_camera = make_float4x4(camera.columns[0u], camera.columns[1u], camera.columns[2u], camera.columns[3u]);
-                            Float4x4 camera_to_raster = make_float4x4(camera.columns[4u], camera.columns[5u], camera.columns[6u], camera.columns[7u]);
-                            Float3 current_view = transform_point(world_to_camera, aux.current_virtual_position.xyz());
-                            Float3 current_raster = transform_point(camera_to_raster, current_view / current_view.z);
-                            Float2 motion = current_raster.xy() - scene().sensor()->prev_raster_coord(aux.previous_virtual_position.xyz()).xy();
-                            Float previous_depth = scene().sensor()->prev_linear_depth(aux.previous_virtual_position.xyz());
-                            aux.packed_motion = make_uint2(f32tof16(motion.x) | (f32tof16(motion.y) << 16u), f32tof16(previous_depth - current_view.z));
-                            }
-                            rtxpt_prefix_aux_.write(dispatch_id(), aux);
-                            Bool delta = BxDFFlag::is_specular(sample.eval.flags) || ocarina::isinf(sample.eval.pdf());
-                            Float3 physical = spectrum()->linear_srgb(throughput * sample.eval.throughput(), sampled_wavelengths());
-                            capture.active = receiver.valid && sample.valid() && !delta && any(physical != make_float3(0.f));
-                            capture.receiver_bounce = bounce;
-                            $if(capture.active) {
-                                HitBSDFVar proposal;
-                                proposal.wi.set(sample.wi); proposal.bsdf.set(sample.eval.f.vec3()); proposal.pdf = sample.eval.pdf();
-                                rtxpt_proposals_.write(dispatch_id(), proposal);
-                                GISampleVar empty; empty.sp->set_position(make_float3(0.f)); empty.sp->set_normal(make_float3(0.f)); empty.Lo.set(Float3{make_float3(0.f)});
-                                samples_.write(dispatch_id(), empty);
+                        $if(!terminal_seen && node.throughput_flags.w == 0.f) {
+                            terminal_seen = true; signal_plane = plane;
+                            $if(plane == dominant) {
+                                rtxpt_gi::PTSurfaceView receiver;
+                                receiver.it = it; receiver.hit = hit;
+                                receiver.depth = node.virtual_position.w;
+                                receiver.plane_hash = (plane << 24u) | header[plane];
+                                receiver.valid = gi_principled::captured(it.material_id());
+                                for (uint i = 0u; i < 6u; ++i) receiver.parameters[i] = gi_principled::row(i);
+                                if (cost_mode == "zero-material") {
+                                    // Cost diagnostic only: preserve receiver eligibility,
+                                    // configuration, geometry, guides and all96B stores.
+                                    for (uint i = 0u; i < 5u; ++i) receiver.parameters[i] = make_float4(0.f);
+                                    receiver.parameters[5].xyz() = make_float3(0.f);
+                                }
+                                if (!skip_guides) {
+                                    receiver.normal = bsdf.shading_frame().normal();
+                                    SampledSpectrum d{spectrum()->dimension()}, sp{spectrum()->dimension()}; Float2 roughness;
+                                    bsdf.reuse_material(d, sp, roughness);
+                                    receiver.diffuse_guide = spectrum()->linear_srgb(d, sampled_wavelengths());
+                                    receiver.specular_guide = spectrum()->linear_srgb(sp, sampled_wavelengths());
+                                    receiver.roughness = roughness;
+                                }
+                                if (cost_mode == "zero-surface") {
+                                    // Keep the same receiver stores; let unused
+                                    // interaction payload reconstruction disappear.
+                                    rtxpt_gi::PTSurfaceView empty;
+                                    rtxpt_->write_pt_surface(dispatch_id(), empty);
+                                } else if (!skip_surface) rtxpt_->write_pt_surface(dispatch_id(), receiver);
+                                receiver_written = receiver.valid;
+                                RtxptGIPrefixAuxVar aux;
+                                aux.prefix_throughput_depth = make_float4(spectrum()->linear_srgb(throughput, sampled_wavelengths()), receiver.depth);
+                                if (!skip_aux) {
+                                aux.current_virtual_position = make_float4(node.virtual_position.xyz(), node.origin_distance.w);
+                                aux.previous_virtual_position = make_float4(node.virtual_position.xyz(), 0.f);
+                                aux.metadata = make_uint4(receiver.plane_hash, plane, bounce + 1u, header[plane]);
+                                Float4x4 world_to_camera = make_float4x4(camera.columns[0u], camera.columns[1u], camera.columns[2u], camera.columns[3u]);
+                                Float4x4 camera_to_raster = make_float4x4(camera.columns[4u], camera.columns[5u], camera.columns[6u], camera.columns[7u]);
+                                Float3 current_view = transform_point(world_to_camera, aux.current_virtual_position.xyz());
+                                Float3 current_raster = transform_point(camera_to_raster, current_view / current_view.z);
+                                Float2 motion = current_raster.xy() - scene().sensor()->prev_raster_coord(aux.previous_virtual_position.xyz()).xy();
+                                Float previous_depth = scene().sensor()->prev_linear_depth(aux.previous_virtual_position.xyz());
+                                aux.packed_motion = make_uint2(f32tof16(motion.x) | (f32tof16(motion.y) << 16u), f32tof16(previous_depth - current_view.z));
+                                }
+                                rtxpt_prefix_aux_.write(dispatch_id(), aux);
+                                Bool delta = BxDFFlag::is_specular(sample.eval.flags) || ocarina::isinf(sample.eval.pdf());
+                                Float3 physical = spectrum()->linear_srgb(throughput * sample.eval.throughput(), sampled_wavelengths());
+                                capture.active = receiver.valid && sample.valid() && !delta && any(physical != make_float3(0.f));
+                                capture.receiver_bounce = bounce;
+                                $if(capture.active) {
+                                    HitBSDFVar proposal;
+                                    proposal.wi.set(sample.wi); proposal.bsdf.set(sample.eval.f.vec3()); proposal.pdf = sample.eval.pdf();
+                                    rtxpt_proposals_.write(dispatch_id(), proposal);
+                                    GISampleVar empty; empty.sp->set_position(make_float3(0.f)); empty.sp->set_normal(make_float3(0.f)); empty.Lo.set(Float3{make_float3(0.f)});
+                                    samples_.write(dispatch_id(), empty);
+                                };
                             };
                         };
                         $break;
                     };
                 };
+                $if(!terminal_seen) { match_planes(); };
+                sampled_branch = gi_prefix_next_branch(sampled_branch, sample.stable_lobe_index, sample.valid());
+                ideal_prefix = ideal_prefix && BxDFFlag::is_specular(sample.eval.flags) && sample.valid();
+            };
+            capture.on_emission = [&](const TriangleHitVar &hit, const Float3 &direction, const Uint &bounce,
+                                      const Float3 &radiance, const Float3 &) {
+                Bool represented = false;
+                $if(gi_prefix_stable_emission_allowed(ideal_prefix, bounce + 1u, sampled_branch,
+                    capture.first_reflection_covered_by_di)) {
+                    $for(plane, 3u) {
+                        $if(header[plane] == rtxpt_gi::PrefixInvalid || header[plane] == rtxpt_gi::PrefixQueued) { $continue; };
+                        auto node = storage.read(plane);
+                        $if(node.interiors_branch.y == 0u) { $continue; };
+                        Bool identity = hit->is_miss() && node.hit_words.x == InvalidUI32 && node.hit_words.y == InvalidUI32;
+                        $if(hit->is_hit()) {
+                            Float2 bary = as<float2>(Uint2{node.hit_words.zw()});
+                            identity = hit.inst_id == node.hit_words.x && hit.prim_id == node.hit_words.y &&
+                                length_squared(Float2{hit.bary} - bary) <= 1e-6f;
+                        };
+                        represented |= gi_prefix_emission_represented(ideal_prefix, sampled_branch, bounce + 1u,
+                            direction, header[plane], cast<uint>(node.direction_vertex.w), node.direction_vertex.xyz(), identity,
+                            capture.first_reflection_covered_by_di);
+                        $if(represented) { $break; };
+                    };
+                };
+                $if(represented) {
+                    sampled_stable += radiance;
+                };
+                sampled_stable_event = represented;
             };
             capture.on_endpoint = [&](const Interaction &it) {
                 GISampleVar sample;
@@ -392,6 +439,12 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                 spectrum()->one(), false, context, *this);
             Float3 indirect = total - make_float3(direct);
             Float3 bypass_specular = make_float3(total_specular) - direct_specular;
+            Float3 stable = make_float3(0.f);
+            if (!skip_observer) {
+                stable = storage.stable_radiance.read(dispatch_id()).xyz();
+                indirect -= sampled_stable;
+                bypass_specular -= sampled_stable * capture.camera_specular_fraction;
+            }
             $if(capture.active) {
                 auto sample = samples_.read(dispatch_id());
                 sample.Lo.set(ocarina::zero_if_nan_inf(capture.radiance));
@@ -413,14 +466,15 @@ void ReSTIRGI::compile_initial_samples() noexcept {
             };
             indirect = ocarina::zero_if_nan_inf(indirect);
             bypass_specular = ocarina::zero_if_nan_inf(bypass_specular);
-            rtxpt_bypass_.write(dispatch_id(), make_float4(indirect, 0.f));
+            rtxpt_bypass_.write(dispatch_id(), make_float4(indirect + stable, 0.f));
             if (work_counters) path_work_counters_.write(dispatch_id(), *work_counters);
             if (storage.denoiser.enabled()) {
                 for (uint p = 0u; p < 3u; ++p) storage.denoiser.write(dispatch_id(), Uint{p}, make_float4(0.f), make_float4(0.f));
                 storage.denoiser.write(dispatch_id(), signal_plane,
                     make_float4(indirect - bypass_specular, hit_distance.x), make_float4(bypass_specular, hit_distance.y));
-                // Camera PT already included every sampled stable-prefix term.
-                storage.denoiser.bypass->write(dispatch_id(), make_float4(0.f));
+                // Physical stable-prefix radiance is outside every noisy plane
+                // and receives no second multiplication by prefix throughput.
+                storage.denoiser.bypass->write(dispatch_id(), make_float4(stable, 0.f));
             }
         };
         kernel.function()->set_block_dim(64u, 1u, 1u);

@@ -7,6 +7,7 @@
 #include "base/import/param_schema.h"
 #include "base/scattering/material.h"
 #include "base/scattering/gi_principled_parameters.h"
+#include "base/scattering/gi_ideal_glass.h"
 #include "base/shader_graph/shader_node.h"
 #include "base/mgr/scene.h"
 #include "base/mgr/pipeline.h"
@@ -218,11 +219,87 @@ public:
     return weight * saturate(1 - max_comp);
 }
 
+// Created only by the lexical GI material path. Mixed and rough closures keep
+// the complete Corona dielectric; only complete ideal glass changes measure.
+class GIIdealDielectricLobe final : public DielectricLobe {
+private:
+    Bool ideal_;
+
+protected:
+    [[nodiscard]] ScatterEval evaluate_local_impl(const Float3 &wo, const Float3 &wi,
+                                                  MaterialEvalMode mode, const Uint &flags,
+                                                  TransportMode tm) const noexcept override {
+        return evaluate_local_impl(wo, wi, mode, flags, tm, nullptr);
+    }
+    [[nodiscard]] ScatterEval evaluate_local_impl(const Float3 &wo, const Float3 &wi,
+                                                  MaterialEvalMode mode, const Uint &flags,
+                                                  TransportMode tm, Float *eta) const noexcept override {
+        ScatterEval ret{*swl()};
+        $if(!ideal_) { ret = DielectricLobe::evaluate_local_impl(wo, wi, mode, flags, tm, eta); };
+        return ret;
+    }
+
+public:
+    GIIdealDielectricLobe(const SP<Fresnel> &fresnel, const SP<Microfacet<D>> &microfacet,
+                          SampledSpectrum color, const Uint &flag, const Bool &ideal,
+                          const ShadingFrame &frame)
+        : DielectricLobe(fresnel, microfacet, std::move(color), false, flag, frame), ideal_(ideal) {}
+    VS_MAKE_LOBE_ASSIGNMENT(GIIdealDielectricLobe)
+    [[nodiscard]] bool supports_prepared_local_evaluation() const noexcept override { return false; }
+    [[nodiscard]] Uint flag() const noexcept override {
+        return select(ideal_, Uint{BxDFFlag::SpecRefl | BxDFFlag::SpecTrans}, Uint{SurfaceData::Glossy});
+    }
+    [[nodiscard]] BSDFSample sample_delta_local(const Float3 &wo, TSampler &sampler) const noexcept override {
+        BSDFSample ret{*swl()};
+        Float eta = fresnel_->eta()[0u];
+        Float F = fresnel_dielectric(abs_cos_theta(wo), eta);
+        Float selector = sampler->next_1d();
+        $if(ideal_) {
+            $if(selector < F) { ret = gi_ideal_glass_branch(*swl(), wo, eta, kt_, false); }
+            $else { ret = gi_ideal_glass_branch(*swl(), wo, eta, kt_, true); };
+        };
+        return ret;
+    }
+    [[nodiscard]] StableLobes eval_stable_lobes(const Float3 &wo) const noexcept override {
+        StableLobes ret{*swl()};
+        $if(ideal_) {
+            ret.has_stochastic_remainder = false;
+            Float eta = fresnel_->eta()[0u];
+            for (uint k = 0u; k < 2u; ++k) {
+                auto sample = gi_ideal_glass_branch(*swl(), wo, eta, kt_, k == StableLobes::transmission_index);
+                auto &branch = ret.lobes[k];
+                $if(sample.valid()) {
+                    branch.wi = sample.wi;
+                    branch.probability = sample.eval.pdf();
+                    branch.weight = sample.eval.f * abs_cos_theta(sample.wi);
+                    branch.eta = sample.eta;
+                    branch.valid = true;
+                };
+            }
+        };
+        return ret;
+    }
+    void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                        Float2 &roughness) const noexcept override {
+        DielectricLobe::reuse_material(diffuse, specular, roughness);
+        roughness = select(ideal_, make_float2(0.f), roughness);
+    }
+    [[nodiscard]] SampledSpectrum albedo(const Float &cos_theta) const noexcept override {
+        auto result = DielectricLobe::albedo(cos_theta);
+        $if(ideal_) {
+            Float F = fresnel_dielectric(abs(cos_theta), fresnel_->eta()[0u]);
+            result = F + kt_.map([](const Float &v) { return sqrt(max(v, 0.f)); }) * (1.f - F);
+        };
+        return result;
+    }
+};
+
 // Keep the ordinary layered BSDF intact. Only a pure, near-delta base lobe
 // can replace the stochastic camera prefix with enumerated stable branches.
 class PrincipledLobeSet final : public LobeSet {
 private:
     Uint stable_lobe_{InvalidUI32};
+    optional<Bool> ideal_glass_{};
 
 protected:
     [[nodiscard]] uint64_t compute_topology_hash() const noexcept override {
@@ -230,11 +307,15 @@ protected:
     }
 
 public:
-    PrincipledLobeSet(Lobes lobes, Uint stable_lobe)
-        : LobeSet(std::move(lobes)), stable_lobe_(std::move(stable_lobe)) {}
+    PrincipledLobeSet(Lobes lobes, Uint stable_lobe, optional<Bool> ideal_glass = {})
+        : LobeSet(std::move(lobes)), stable_lobe_(std::move(stable_lobe)), ideal_glass_(std::move(ideal_glass)) {}
     VS_MAKE_LOBE_ASSIGNMENT(PrincipledLobeSet)
 
     [[nodiscard]] Uint flag() const noexcept override {
+        if (ideal_glass_) {
+            return select(*ideal_glass_, Uint{BxDFFlag::SpecRefl | BxDFFlag::SpecTrans},
+                          select(stable_lobe_ != InvalidUI32, Uint{SurfaceData::NearSpec}, LobeSet::flag()));
+        }
         return select(stable_lobe_ != InvalidUI32, SurfaceData::NearSpec, LobeSet::flag());
     }
 
@@ -662,6 +743,7 @@ public:
         Bool stable_layers = true;
         Float metallic = 0.f;
         Uint stable_lobe = InvalidUI32;
+        Bool ideal_glass = false;
 
         if (switches_[ESheen]) {
             outline("principled sheen", [&] {
@@ -725,10 +807,18 @@ public:
                 auto fresnel = make_shared<FresnelDielectric>(SampledSpectrum{swl, eta}, swl);
                 SampledSpectrum t_weight = trans_weight * weight;
                 SP<Fresnel> fresnel_schlick = make_shared<FresnelSchlick>(schlick_F0_from_ior(eta) * specular_tint, etas, swl);
-                UP<Lobe> dielectric = make_unique<DielectricLobe>(fresnel_schlick, microfacet, color, false,
-                                                                  flag, shading_frame);
+                // Preserve the original mixed-measure classification across
+                // FP16 parameter compression near the native roughness cutoff.
+                ideal_glass = gi_principled::reading()
+                    ? (gi_principled::flags() & gi_principled::IdealGlassBit) != 0u
+                    : gi_ideal_glass_enabled(true,
+                        stable_layers && metallic == 0.f && transmission == 1.f && iors.size() == 1u, roughness);
+                if (gi_principled::writing()) gi_principled::set_flags(gi_principled::flags() |
+                    select(ideal_glass, gi_principled::IdealGlassBit, 0u));
+                UP<Lobe> dielectric = make_unique<GIIdealDielectricLobe>(fresnel_schlick, microfacet, color,
+                                                                         flag, ideal_glass, shading_frame);
                 WeightedLobe trans_lobe(t_weight.average(), t_weight.average(), std::move(dielectric));
-                stable_lobe = select(stable_layers && metallic == 0.f && transmission == 1.f && flag == SurfaceData::NearSpec,
+                stable_lobe = select(ideal_glass,
                                      uint(lobes.size()), stable_lobe);
                 lobes.push_back(std::move(trans_lobe));
                 weight *= (1.0f - trans_weight);
@@ -756,7 +846,7 @@ public:
                 lobes.push_back(std::move(diffuse_lobe));
             });
         }
-        UP<LobeSet> ret = make_unique<PrincipledLobeSet>(std::move(lobes), stable_lobe);
+        UP<LobeSet> ret = make_unique<PrincipledLobeSet>(std::move(lobes), stable_lobe, ideal_glass);
         return ret;
     }
 };

@@ -2,6 +2,7 @@
 #include "rtxpt_gi_prefix.h"
 #include "indirect.h"
 #include "base/integral/integrator.h"
+#include "base/scattering/gi_ideal_glass.h"
 
 namespace vision::rtxpt_gi {
 namespace {
@@ -9,7 +10,7 @@ using namespace ocarina;
 
 void queue_pt_plane(const PrefixStorage &storage, const Uint &plane, const RayVar &ray,
                     const Float3 &beta, const Uint &depth, const Float &distance,
-                    const Uint &branch, const Bool &dominant, const Float &eta_scale,
+                    const Uint &branch, const Bool &dominant, const Bool &ideal_path, const Float &eta_scale,
                     const Float4x4 &matrix) {
     RtxptGIPrefixPlaneVar node;
     node.hit_words = as<uint4>(make_float4(matrix[0].xyz(), matrix[1].x));
@@ -17,7 +18,7 @@ void queue_pt_plane(const PrefixStorage &storage, const Uint &plane, const RayVa
     node.origin_distance = make_float4(ray->origin(), distance);
     node.direction_vertex = make_float4(ray->direction(), cast<float>(depth));
     node.throughput_flags = make_float4(beta, matrix[2].z);
-    node.interiors_branch = make_uint4(as<uint>(eta_scale), 0u, branch,
+    node.interiors_branch = make_uint4(as<uint>(eta_scale), cast<uint>(ideal_path), branch,
                                       select(dominant, PrefixDominantBit, 0u));
     storage.write(plane, node);
 }
@@ -30,6 +31,8 @@ void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env) noexcept {
     const auto &geometry = Toolkit::geometry();
     const auto &swl = env.sampled_wavelengths();
     auto &lights = Toolkit::renderer().light_sampler();
+    const auto primary_surface = Toolkit::frame_buffer().cur_surfaces_var(env.frame_index()).read(dispatch_id());
+    const Bool first_reflection_covered_by_di = !BxDFFlag::is_specular(primary_surface.flag);
     if (storage.denoiser.enabled()) {
         for (uint p = 0u; p < 3u; ++p) {
             reblur::GuideVar empty;
@@ -46,7 +49,7 @@ void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env) noexcept {
     Uint dominant_plane = 3u;
     Float3 stable = make_float3(0.f);
     queue_pt_plane(storage, Uint{0u}, camera, Float3{make_float3(1.f)}, Uint{0u}, Float{0.f},
-                   Uint{1u}, Bool{true}, Float{1.f}, identity());
+                   Uint{1u}, Bool{true}, Bool{true}, Float{1.f}, identity());
     Uint limit = min(env.integrator()->runtime_suffix_depth() + 1u, 5u);
     $for(plane, 3u) {
         $if(header[plane] != PrefixQueued) { $continue; };
@@ -57,6 +60,7 @@ void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env) noexcept {
         Uint depth = cast<uint>(queued.direction_vertex.w), branch = queued.interiors_branch.z;
         Float travelled = queued.origin_distance.w;
         Bool dominant = (queued.interiors_branch.w & PrefixDominantBit) != 0u;
+        Bool ideal_path = queued.interiors_branch.y != 0u;
         Float3 origin = queued.origin_distance.xyz(), direction = queued.direction_vertex.xyz();
         RayVar ray = make_ray(origin, direction, NativeMaxRayTravel);
         $if(plane == 0u) { ray = camera; };
@@ -69,22 +73,22 @@ void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env) noexcept {
             Float3 shading_normal = make_float3(0.f, 0.f, 1.f);
             Float3 guide_diffuse = make_float3(0.f), guide_specular = make_float3(0.f);
             Float roughness = 1.f;
-            // Falcor owns physical-primary emission/NEE and the emitter reached
-            // by the first physical BSDF ray. Deeper delta branches belong to GI.
-            Bool direct_owned = depth == 1u || (depth == 2u && (branch & 3u) == 2u);
             $if(hit->is_miss()) {
-                $if(!direct_owned) {
+                $if(gi_prefix_stable_emission_allowed(ideal_path, depth, branch, first_reflection_covered_by_di)) {
                     LightSampleContext ref; ref.pos = ray->origin(); ref.ng = ray->direction();
-                    stable += beta * Toolkit::spectrum()->linear_srgb(lights->evaluate_miss_wi(ref, ray->direction(), swl, LightEvalMode::L).L, swl);
+                    stable += beta * Toolkit::spectrum()->linear_srgb(lights->evaluate_miss_wi(ref, ray->direction(), swl, LightEvalMode::L).L, swl) *
+                        env.integrator()->correct_bsdf_weight(Float{1.f}, depth - 1u);
                 };
                 travelled += Toolkit::scene().world_diameter();
             } $else {
                 it = geometry.compute_surface_interaction(hit, ray);
                 point = it.pos;
                 travelled += length(it.pos - ray->origin());
-                $if(it.has_emission() && !direct_owned) {
+                $if(it.has_emission() && it.has_material() &&
+                    gi_prefix_stable_emission_allowed(ideal_path, depth, branch, first_reflection_covered_by_di)) {
                     LightSampleContext ref; ref.pos = ray->origin(); ref.ng = ray->direction();
-                    stable += beta * Toolkit::spectrum()->linear_srgb(lights->evaluate_hit_wi(ref, it, swl).L, swl);
+                    stable += beta * Toolkit::spectrum()->linear_srgb(lights->evaluate_hit_wi(ref, it, swl).L, swl) *
+                        env.integrator()->correct_bsdf_weight(Float{1.f}, depth - 1u);
                 };
                 $if(!it.has_material()) {
                     ray = it.spawn_ray(ray->direction()); depth -= 1u; $continue;
@@ -103,6 +107,7 @@ void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env) noexcept {
                         bsdf.reuse_material(d, s, r); roughness = r.y;
                     }
                     Bool t = lobes.lobes[0].valid, r = lobes.lobes[1].valid;
+                    Bool next_ideal_path = ideal_path && BxDFFlag::is_specular(bsdf.flag());
                     // Only complete delta distributions are enumerated. Mixed
                     // lobes remain whole and are sampled by ordinary PT.
                     $if(Bool{material->enable_delta()} && !has_remainder && depth < limit) {
@@ -114,21 +119,25 @@ void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env) noexcept {
                                     lobe.wi, ray->direction(), lobe.transmission);
                                 queue_pt_plane(storage, Uint{k + 1u}, it.spawn_ray(lobe.wi),
                                     beta * lobe.weight.vec3(), depth, travelled, (branch << 2u) | (k + 1u),
-                                    Bool{k == 0u}, eta_scale * sqr(lobe.eta), next_matrix);
+                                    Bool{k == 0u}, next_ideal_path, eta_scale * sqr(lobe.eta), next_matrix);
                                 header[k + 1u] = PrefixQueued;
                             }
                             consumed = true;
                         } $else {
-                            // Once all three slots are occupied a split remains
-                            // stochastic; never discard its other Fresnel branch.
-                            $if(t != r) {
+                            // Native stable-plane pruning keeps the first live
+                            // delta entry when reusing an occupied slot: transmit
+                            // through the glass exit, or reflect at TIR. This is
+                            // guide discovery; Fill still samples the full BSDF.
+                            $if(t || r) {
+                                Uint selected = gi_prefix_reuse_lobe(t, r);
                                 for (uint k = 0u; k < 2u; ++k) {
                                     auto &lobe = lobes.lobes[k];
-                                    $if(lobe.valid) {
+                                    $if(selected == k) {
                                         matrix = transform_frame(matrix, bsdf.shading_frame().x,
                                             bsdf.shading_frame().y, bsdf.shading_frame().z,
                                             lobe.wi, ray->direction(), lobe.transmission);
                                         beta *= lobe.weight.vec3(); eta_scale *= sqr(lobe.eta);
+                                        ideal_path = next_ideal_path;
                                         ray = it.spawn_ray(lobe.wi); branch = (branch << 2u) | (k + 1u);
                                         continued = true;
                                     };
@@ -145,18 +154,21 @@ void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env) noexcept {
             node.origin_distance = make_float4(ray->origin(), travelled);
             node.direction_vertex = make_float4(ray->direction(), cast<float>(depth));
             node.throughput_flags = make_float4(beta, select(consumed, 1.f, 0.f));
-            node.interiors_branch = make_uint4(as<uint>(eta_scale), 0u, branch, 0u);
+            node.interiors_branch = make_uint4(as<uint>(eta_scale), cast<uint>(ideal_path), branch, 0u);
             Float first = as<float>(header.w & 0xfffffffcu);
             Float3 pivot = camera->origin() + camera->direction() * first;
             Float3 virtual_point = virtual_position(matrix, point, pivot);
             Float view_depth = near_depth + dot(camera->direction() * travelled, Toolkit::scene().sensor()->device_forward());
             node.virtual_position = make_float4(virtual_point, view_depth);
             storage.write(plane, node); header[plane] = branch;
-            $if(!consumed && hit->is_hit() && has_remainder && (dominant_plane == 3u || dominant)) {
+            $if(gi_prefix_receiver_eligible(hit->is_hit(), consumed, has_remainder) && (dominant_plane == 3u || dominant)) {
                 dominant_plane = plane;
             };
             if (storage.denoiser.enabled()) {
-                $if(hit->is_hit() && !consumed) {
+                // Plane0 still filters residual camera-path radiance when its
+                // ideal split was consumed. Consumption excludes a GI receiver,
+                // while the physical-primary denoiser guide remains valid.
+                $if(gi_prefix_guide_eligible(hit->is_hit(), consumed, plane)) {
                     reblur::GuideVar guide;
                     auto &sensor = Toolkit::scene().sensor();
                     Float3 n = normalize(make_float3(dot(matrix[0].xyz(), shading_normal),

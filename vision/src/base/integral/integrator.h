@@ -235,7 +235,8 @@ public:
 
     [[nodiscard]] SampledSpectrum evaluate_miss(RayState &rs, const Float3 &normal,
                                                 const Float &scatter_pdf, const Uint &bounces,
-                                                const SampledWavelengths &swl, uint light_samples = 1u) const noexcept;
+                                                const SampledWavelengths &swl, uint light_samples = 1u,
+                                                const Bool *delta_scatter = nullptr) const noexcept;
 
     [[nodiscard]] Float3 Li(RayState rs, Float scatter_pdf, SampledSpectrum throughput,
                             const HitContext &hc, const RenderEnv &render_env) const noexcept override;

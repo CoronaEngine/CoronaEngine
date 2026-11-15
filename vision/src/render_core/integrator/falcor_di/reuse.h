@@ -48,7 +48,7 @@ struct ReceiverTargets {
 [[nodiscard]] inline Float target_at(const TriangleSample &sample, const MaterialEvaluator &bsdf, const Float3 &wo) {
     Float target = 0.f;
     $if(sample.pdf > 0.f) {
-        target = target_weight(bsdf.evaluate(wo, sample.direction, MaterialEvalMode::F), sample);
+        target = reflection_target_weight(bsdf, wo, sample);
     };
     return target;
 }
@@ -68,7 +68,7 @@ struct ReceiverTargets {
                 auto it = Toolkit::geometry().compute_surface_interaction(hit, camera->prev_device_position());
                 Toolkit::scene().materials().dispatch(it.material_id(), [&](const Material *material) {
                     const auto bsdf = material->create_evaluator(it, swl);
-                    target = target_weight(bsdf.evaluate(it.wo, sample.direction, MaterialEvalMode::F), sample);
+                    target = reflection_target_weight(bsdf, it.wo, sample);
                 });
             };
         };

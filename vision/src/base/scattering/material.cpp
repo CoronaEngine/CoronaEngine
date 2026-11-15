@@ -4,6 +4,7 @@
 
 #include "material.h"
 #include "prepared_bsdf.h"
+#include "gi_principled_parameters.h"
 #include "base/import/param_schema.h"
 #include "base/sampler.h"
 #include "base/mgr/scene.h"
@@ -137,6 +138,13 @@ StableLobes MaterialEvaluator::eval_stable_lobes(const Float3 &world_wo) const n
     dispatch([&](const Lobe *lobe) { ret = lobe->eval_stable_lobes(wo); });
     for (auto &branch : ret.lobes) {
         branch.wi = shading_frame_.to_world(branch.wi);
+        if (gi_principled::reading() || gi_principled::writing()) {
+            Bool discard = BxDFFlag::is_specular(flag()) &&
+                same_hemisphere(world_wo, branch.wi, ng_) == branch.transmission;
+            branch.valid = branch.valid && !discard;
+            branch.probability = select(discard, 0.f, branch.probability);
+            branch.weight *= select(discard, 0.f, 1.f);
+        }
     }
     return ret;
 }
@@ -385,24 +393,37 @@ BSDFSample MaterialEvaluator::sample_delta(const Float3 &world_wo,
 BSDFSample MaterialEvaluator::sample(const Float3 &world_wo, TSampler &sampler,
                                      const Uint &flag,
                                      TransportMode tm) const noexcept {
-    if (MaterialRegistry::instance().individual_ns()) {
-        Float3 wo = shading_frame_.to_local(world_wo);
+    auto ordinary = [&] {
+        if (MaterialRegistry::instance().individual_ns()) {
+            Float3 wo = shading_frame_.to_local(world_wo);
+            BSDFSample ret{*swl_};
+            dispatch([&](const Lobe *lobe) {
+                ret = lobe->sample(world_wo, flag, sampler, tm);
+            });
+            Bool discard = same_hemisphere(world_wo, ret.wi, ng_) == BxDFFlag::is_transmission(ret.eval.flags);
+            ret.eval.pdfs = select(discard, 0.f, ret.eval.pdfs);
+            return ret;
+        } else {
+            Float3 wo = shading_frame_.to_local(world_wo);
+            BSDFSample ret = sample_local(wo, flag, sampler, tm);
+            ret.eval.f *= abs_cos_theta(ret.wi);
+            ret.wi = shading_frame_.to_world(ret.wi);
+            Bool discard = same_hemisphere(world_wo, ret.wi, ng_) == BxDFFlag::is_transmission(ret.eval.flags);
+            ret.eval.pdfs = select(discard, 0.f, ret.eval.pdfs);
+            return ret;
+        }
+    };
+    if (gi_principled::reading() || gi_principled::writing()) {
         BSDFSample ret{*swl_};
-        dispatch([&](const Lobe *lobe) {
-            ret = lobe->sample(world_wo, flag, sampler, tm);
-        });
-        Bool discard = same_hemisphere(world_wo, ret.wi, ng_) == BxDFFlag::is_transmission(ret.eval.flags);
-        ret.eval.pdfs = select(discard, 0.f, ret.eval.pdfs);
-        return ret;
-    } else {
-        Float3 wo = shading_frame_.to_local(world_wo);
-        BSDFSample ret = sample_local(wo, flag, sampler, tm);
-        ret.eval.f *= abs_cos_theta(ret.wi);
-        ret.wi = shading_frame_.to_world(ret.wi);
-        Bool discard = same_hemisphere(world_wo, ret.wi, ng_) == BxDFFlag::is_transmission(ret.eval.flags);
-        ret.eval.pdfs = select(discard, 0.f, ret.eval.pdfs);
+        $if(BxDFFlag::is_specular(this->flag())) {
+            ret = sample_delta(world_wo, sampler);
+            Bool discard = same_hemisphere(world_wo, ret.wi, ng_) == BxDFFlag::is_transmission(ret.eval.flags);
+            ret.eval.pdfs = select(discard, 0.f, ret.eval.pdfs);
+        }
+        $else { ret = ordinary(); };
         return ret;
     }
+    return ordinary();
 }
 
 ///#endregion

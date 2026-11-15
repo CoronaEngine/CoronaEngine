@@ -342,17 +342,19 @@ class FalcorDIExperiment final : private Toolkit {
                             $if(falcor_di::visible(surface, sample)) {
                                 materials.dispatch(it.material_id(), [&](const Material *material) {
                                     auto bsdf = material->create_evaluator(it, swl);
-                                    if (lobe_signals_) {
-                                        const Float3 contribution = bsdf.evaluate(it.wo, sample.direction, MaterialEvalMode::F).f.vec3() * weighted_radiance;
-                                        value += contribution;
-                                        const auto split = falcor_di::split_denoiser_contribution(
-                                            contribution, bsdf.specular_fraction_rgb(it.wo, sample.direction));
-                                        *diffuse = split.diffuse;
-                                        *specular = split.specular;
-                                        *hit_distance = max(sample.distance, 1e-5f);
-                                    } else {
-                                        value += bsdf.evaluate(it.wo, sample.direction, MaterialEvalMode::F).f.vec3() * weighted_radiance;
-                                    }
+                                    $if(falcor_di::reflection_supported(bsdf, it.wo, sample.direction)) {
+                                        if (lobe_signals_) {
+                                            const Float3 contribution = bsdf.evaluate(it.wo, sample.direction, MaterialEvalMode::F).f.vec3() * weighted_radiance;
+                                            value += contribution;
+                                            const auto split = falcor_di::split_denoiser_contribution(
+                                                contribution, bsdf.specular_fraction_rgb(it.wo, sample.direction));
+                                            *diffuse = split.diffuse;
+                                            *specular = split.specular;
+                                            *hit_distance = max(sample.distance, 1e-5f);
+                                        } else {
+                                            value += bsdf.evaluate(it.wo, sample.direction, MaterialEvalMode::F).f.vec3() * weighted_radiance;
+                                        }
+                                    };
                                 });
                             };
                         };

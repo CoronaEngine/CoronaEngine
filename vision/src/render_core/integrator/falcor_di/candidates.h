@@ -76,14 +76,14 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
         !Toolkit::renderer().light_sampler()->env_light()->match(LightType::DeltaDirection);
     const auto offer_candidate = [&](const Uint &light_index, const Float2 &uv, const Float &light_probability,
                                      const TriangleSample &light, const Float &u, const Float *sampled_pdf = nullptr) {
-        $if(light.pdf > 0.f) {
+        $if(light.pdf > 0.f && reflection_supported(bsdf, wo, light.direction)) {
             const Float cosine = dot(surface.normal, light.direction);
-            const Bool bsdf_supported = use_bsdf && light.distance >= ray_epsilon && cosine > 0.f;
+            const Bool bsdf_supported = use_bsdf && light.distance >= ray_epsilon;
             Float target = 0.f;
             Float bsdf_probability = 0.f;
             if (use_proxy) {
                 // The nonzero floor keeps support for scattering that differs from this guide.
-                const Float angular_weight = select(BxDFFlag::is_transmission(flags), abs(cosine), max(0.f, cosine));
+                const Float angular_weight = abs(cosine);
                 target = luminance(abs(light.radiance)) * (angular_weight + 0.015625f);
                 if (sampled_pdf) {
                     bsdf_probability = *sampled_pdf;
@@ -168,7 +168,7 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
             gi_proposal->pdf = pdf;
         }
         const Bool eligible_for_di = gi_proposal ? use_bsdf : Bool{true};
-        $if(eligible_for_di && pdf > 0.f && finite(pdf) && dot(surface.normal, sample.wi) > 0.f) {
+        $if(eligible_for_di && pdf > 0.f && finite(pdf) && reflection_supported(bsdf, wo, sample.wi)) {
             const Float3 origin = Interaction::custom_offset_ray_origin(surface.position, surface.geometric_normal,
                                                                         sample.wi);
             const Uint4 hit = trace_light(ctx, origin, sample.wi, ray_epsilon, environment_ray_distance);
@@ -198,8 +198,7 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
         // Keep the RIS weight normalized by the target that selected this sample.
         // Reuse consumes the exact target with that weight and its ordinary MIS.
         $if(valid_reservoir(reservoir)) {
-            const auto eval = bsdf.evaluate(wo, winner_light.direction, MaterialEvalMode::F);
-            reservoir.target = target_weight(eval, winner_light);
+            reservoir.target = reflection_target_weight(bsdf, wo, winner_light);
         };
     }
     // Reuse receives one finalized estimate. Null draws still occupy their mixture slots.

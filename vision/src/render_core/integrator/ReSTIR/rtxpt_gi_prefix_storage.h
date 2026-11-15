@@ -12,7 +12,7 @@ struct RtxptGICameraParam {
 struct RtxptGIPrefixPlane {
     uint4 hit_words{};
     float4 origin_distance{}, direction_vertex{}, throughput_flags{};
-    uint4 interiors_branch{};
+    uint4 interiors_branch{}; // PT path: etaScale bits, incoming ideal-path flag, branch, flags
     float4 virtual_position{};
 };
 struct alignas(16) RtxptGIPrefixAux {
