@@ -13,6 +13,7 @@
 #include "rtxpt_gi_rays.h"
 #include "rtxpt_gi_prefix.h"
 #include "base/integral/restir_shadow.h"
+#include "rtxpt_gi_denoiser_prepare.h"
 #include "rtxpt_gi_pt.h"
 #include "denoiser_signals.h"
 #include "base/integral/integrator.h"
@@ -676,6 +677,16 @@ void ReSTIRGI::compile_initial_samples() noexcept {
         };
         kernel.function()->set_block_dim(64u, 1u, 1u);
         rtxpt_initial_samples_ = device().compile(kernel, "RTXPT GI shared PT initial candidates");
+        if (native_reblur_enabled_) {
+            Kernel prepare = [&](Uint2 resolution) {
+                Uint2 pixel = dispatch_idx().xy();
+                $if(any(pixel >= resolution)) { $return(); };
+                rtxpt_gi::prepare_native_reblur_guides(rtxpt_prefix_planes_.super(),
+                    rtxpt_prefix_headers_.super(), native_reblur_guides_, pixel, resolution);
+            };
+            prepare.function()->set_block_dim(8u, 8u, 1u);
+            rtxpt_native_reblur_prepare_ = device().compile(prepare, "RTXPT GI native guide conditioning");
+        }
         return;
     }
     const char *transport_override = std::getenv("VISION_RESTIR_GI_NATIVE_TRANSPORT");
@@ -1246,6 +1257,8 @@ CommandBatch ReSTIRGI::dispatch(uint frame_index, bool precise_lobes, bool denoi
         ret << temporal_pass_(param, frame_index).dispatch(rp->resolution());
         ret << spatial_shading_(param, frame_index).dispatch(rp->resolution());
     }
+    if (rtxpt_backend_ && native_reblur_enabled_)
+        ret << rtxpt_native_reblur_prepare_(rp->resolution()).dispatch(rp->resolution());
     return ret;
 }
 
@@ -1312,7 +1325,7 @@ void ReSTIRGI::restore(RuntimeObject *old_obj) noexcept {
                        initial_samples_, temporal_pass_, spatial_shading_, raw_radiance_, compact_radiance_, radiance_prepared_,
                        rtxpt_backend_, rtxpt_, rtxpt_proposals_, rtxpt_bypass_, rtxpt_lights_, rtxpt_materials_,
                        rtxpt_prefix_planes_, rtxpt_prefix_headers_, rtxpt_prefix_stable_, rtxpt_prefix_aux_, rtxpt_prefix_build_, rtxpt_initial_samples_,
-                       native_reblur_enabled_, native_reblur_diffuse_, native_reblur_specular_, native_reblur_bypass_, native_reblur_guides_)
+                       native_reblur_enabled_, native_reblur_diffuse_, native_reblur_specular_, native_reblur_bypass_, native_reblur_guides_, rtxpt_native_reblur_prepare_)
     if (rtxpt_) rtxpt_->rebind_owner(*this);
     if (rtxpt_lights_) rtxpt_lights_->rebind_owner(*this);
 }

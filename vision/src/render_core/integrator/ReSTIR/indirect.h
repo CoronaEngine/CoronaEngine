@@ -106,6 +106,7 @@ private:
     bool native_reblur_enabled_{};
     mutable Buffer<float4> native_reblur_diffuse_, native_reblur_specular_, native_reblur_bypass_;
     mutable Buffer<reblur::Guide> native_reblur_guides_;
+    Shader<void(uint2)> rtxpt_native_reblur_prepare_;
 
     [[nodiscard]] rtxpt_gi::PrefixStorage prefix_storage() const noexcept {
         auto &bindings = pipeline()->bindless_array();
