@@ -3,6 +3,7 @@
 //
 
 #include "direct.h"
+#include "base/integral/restir_shadow.h"
 #include "base/integral/integrator.h"
 
 namespace vision {
@@ -295,7 +296,9 @@ DIReservoirVar ReSTIRDI::RIS(const Bool &hit, const Interaction &it, const Var<D
 
     frame_buffer().hit_bsdfs().write(dispatch_id(), hit_bsdf);
     $if(hit && ret->valid() && selected_occluded_correction != 1.f) {
-        Bool occluded = pipeline()->geometry().occluded(it, ret.sample->p_light());
+        const Bool infinite = restir_shadow::is_infinite_light(*light_sampler, ret.sample.light_index);
+        Bool occluded = pipeline()->geometry().trace_occlusion(
+            restir_shadow::visibility_ray(it, ret.sample->p_light(), infinite));
         // Keep an unoccluded reservoir for reuse. The actual BSDF proposal is
         // q_bsdf * visibility, whereas candidate MIS uses the geometric PDF.
         // For an occluded light candidate only the light proposal has support;
@@ -819,7 +822,8 @@ Float3 ReSTIRDI::shading(vision::DIReservoirVar rsv, const SurfaceDataVar &surf,
             value = Li(it, nullptr, rsv.sample, std::addressof(ls)) * SampledSpectrum(throughput);
             // Environment endpoints depend on the receiver position; rebuild
             // the shadow endpoint with the same light evaluation used above.
-            Bool occluded = geometry.occluded(it, ls.p_light);
+            const Bool infinite = restir_shadow::is_infinite_light(*light_sampler, rsv.sample.light_index);
+            Bool occluded = geometry.trace_occlusion(restir_shadow::visibility_ray(it, ls.p_light, infinite));
             value = value * ocarina::select(occluded, 0.f, rsv.W);
             if (specular) {
                 Float3 wi = normalize(ls.p_light - it.pos);

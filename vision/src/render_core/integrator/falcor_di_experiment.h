@@ -339,8 +339,7 @@ class FalcorDIExperiment final : private Toolkit {
                         const auto sample = falcor_di::sample_light(ctx, reservoir.light_index, surface, reservoir->uv());
                         const Float3 weighted_radiance = sample.radiance * reservoir.weight;
                         $if(sample.distance > 0.f && any(weighted_radiance > make_float3(0.f))) {
-                            auto shadow = it.spawn_ray(sample.direction, max(0.f, sample.distance - 1e-4f));
-                            $if(!geo.trace_occlusion(shadow)) {
+                            $if(falcor_di::visible(surface, sample)) {
                                 materials.dispatch(it.material_id(), [&](const Material *material) {
                                     auto bsdf = material->create_evaluator(it, swl);
                                     if (lobe_signals_) {

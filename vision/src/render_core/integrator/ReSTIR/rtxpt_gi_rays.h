@@ -2,6 +2,7 @@
 
 #include "base/using.h"
 #include "base/scattering/interaction.h"
+#include "base/integral/restir_shadow.h"
 #include "base/mgr/geometry.h"
 #include "ast/function.h"
 
@@ -57,9 +58,7 @@ inline constexpr float NativeMaxRayTravel = 1e15f; // matched Config.h
     const Float3 delta = target - it.pos;
     const Float3 face = it.ng * select(dot(delta, it.ng) > 0.f, 1.f, -1.f);
     const Float3 origin = native_offset_origin(it.pos, face);
-    const Float3 segment = target - origin;
-    const Float distance = length(segment);
-    return make_ray(origin, segment / distance, max(0.f, distance - NativeRayEpsilon));
+    return restir_shadow::finite_ray(origin, target);
 }
 
 [[nodiscard]] inline Float4x4 native_closest_with_distance(const RayVar &ray) noexcept {

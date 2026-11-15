@@ -11,6 +11,7 @@
 #include "rtxpt_gi_lights.h"
 #include "rtxpt_gi_rays.h"
 #include "rtxpt_gi_prefix.h"
+#include "base/integral/restir_shadow.h"
 #include "rtxpt_gi_pt.h"
 #include "denoiser_signals.h"
 #include "base/integral/integrator.h"
@@ -170,6 +171,7 @@ GISampleVar ReSTIRGI::init_sample(const Interaction &it, const SensorSample &ss,
         sp_it.pos = make_float3(0.f);
         sp_it.ng = make_float3(0.f);
         HitContext hit_context{sp_it};
+        hit_context.restir_shadow_connections = true;
         const char *native = std::getenv("VISION_RESTIR_GI_NATIVE_ALIGNED_LAMBERT");
         const char *multibounce = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
         hit_context.aligned_lambert = native && native[0] == '1' && multibounce && multibounce[0] == '1';
@@ -266,6 +268,7 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                 cost_mode == "plain-no-bridge" || cost_mode == "plain-output48-no-bridge") {
                 RadType3Var direct, specular;
                 HitContext context{direct, specular};
+                context.restir_shadow_connections = true;
                 context.work_counters = work_counters ? &*work_counters : nullptr;
                 RayState ray = frame_buffer().rays().read(dispatch_id())->to_ray_state();
                 Float3 total = integrator()->Li(ray, Float{1e16f}, integrator()->runtime_suffix_depth() + 1u,
@@ -376,6 +379,7 @@ void ReSTIRGI::compile_initial_samples() noexcept {
             Float3 direct_specular = make_float3(0.f);
             Float2 hit_distance = make_float2(0.f);
             HitContext context{direct, total_specular};
+            context.restir_shadow_connections = true;
             if (!skip_observer) context.path_capture = &capture;
             context.work_counters = work_counters ? &*work_counters : nullptr;
             context.restir_direct_split = true;
@@ -507,7 +511,8 @@ Float ReSTIRGI::selected_sample_support(const Interaction &target_it,
         // A positive proposal can support a proxy winner even when F*Lo is zero.
         Float p_hat = ocarina::zero_if_nan_inf(luminance(sample.Lo.as_vec3()) * pdf);
         $if(p_hat > 0.f && eval.valid() && !ocarina::isinf(pdf)) {
-            support = cast<float>(pipeline()->geometry().visibility(source_it, sample.sp->position()));
+            support = cast<float>(!pipeline()->geometry().trace_occlusion(
+                restir_shadow::visibility_ray(source_it, sample.sp->position(), Bool{false})));
         };
     };
     return support;
@@ -534,7 +539,8 @@ GIReservoirVar ReSTIRGI::combine_temporal(const GIReservoirVar &cur_rsv, Surface
                 other_p_hat = compute_p_hat(it, other_rsv.sample, bsdf);
                 Float jacobian = Jacobian_det(it.pos, neighbor_it.pos, other_rsv.sample.sp);
                 $if(other_p_hat > 0.f && jacobian > 0.f) {
-                    Float visibility = pipeline()->geometry().visibility(it, other_rsv.sample.sp->position());
+                    Float visibility = cast<float>(!pipeline()->geometry().trace_occlusion(
+                        restir_shadow::visibility_ray(it, other_rsv.sample.sp->position(), Bool{false})));
                     other_weight = GIReservoir::safe_weight(other_rsv.C, other_p_hat * jacobian, other_rsv.W) * visibility;
                 };
             };
@@ -709,7 +715,8 @@ GIReservoirVar ReSTIRGI::constant_combine_cached(const GIReservoirVar &canonical
                 Float p_hat = donor_p_hat;
                 p_hat = p_hat * Jacobian_det(canonical_it.pos, neighbor_pos, rsv.sample.sp);
                 $if(p_hat > 0.f) {
-                    Float v = pipeline()->geometry().visibility(canonical_it, rsv.sample.sp->position());
+                    Float v = cast<float>(!pipeline()->geometry().trace_occlusion(
+                        restir_shadow::visibility_ray(canonical_it, rsv.sample.sp->position(), Bool{false})));
                     weight = GIReservoir::safe_weight(rsv.C, p_hat, rsv.W) * v;
                 };
             };

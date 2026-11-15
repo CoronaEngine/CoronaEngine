@@ -470,6 +470,9 @@ public:
     Float3 *captured_secondary_normal{};
     // ReSTIR's direct channel also owns emission reached by its first BSDF ray.
     bool restir_direct_split{false};
+    // Host opt-in: ReSTIR uses typed RTXPT shadow connections. Ordinary PT
+    // keeps its original light sampling and Geometry::occluded expressions.
+    bool restir_shadow_connections{false};
     // Explicit controlled PT comparison with the reference GI Lambert transport.
     bool aligned_lambert{false};
 

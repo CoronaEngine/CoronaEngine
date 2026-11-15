@@ -37,6 +37,7 @@
 #include "base/sensor/frame_buffer.h"
 #include "base/scattering/material.h"
 #include "base/illumination/lightsampler.h"
+#include "base/integral/restir_shadow.h"
 #include "math/warp.h"
 #include <cmath>
 #include <stdexcept>
@@ -147,6 +148,8 @@ struct TriangleSample {
     Float distance{0.f};
     Float3 radiance{make_float3(0.f)};
     Float pdf{0.f};
+    Float3 target{make_float3(0.f)};
+    Bool infinite{false};
 };
 
 [[nodiscard]] inline Bool finite(const Float &value) {
@@ -257,6 +260,7 @@ struct TriangleSample {
             $if(pdf > 0.f && finite(pdf)) {
                 sample.distance = length(to_light);
                 sample.direction = to_light / sample.distance;
+                sample.target = point.pos;
                 sample.radiance = emission / pdf;
                 sample.pdf = pdf;
             };
@@ -266,6 +270,7 @@ struct TriangleSample {
         $if(index == ctx.environment_index) {
             sample.direction = point.pos;
             sample.distance = environment_ray_distance;
+            sample.infinite = true;
             sample.pdf = uniform_sphere_PDF();
             sample.radiance = emission / sample.pdf;
         } $else { area_sample(); };
@@ -290,15 +295,13 @@ struct TriangleSample {
 
 [[nodiscard]] inline Bool visible(const Surface &surface, const TriangleSample &sample) {
     Bool unoccluded = false;
-    $if(sample.distance > ray_epsilon) {
+    $if(sample.distance > 0.f) {
         const Float3 origin = Interaction::custom_offset_ray_origin(surface.position, surface.geometric_normal,
                                                                     sample.direction);
-        const Float3 segment = sample.direction * sample.distance + (surface.position - origin);
-        const Float distance = length(segment);
-        $if(distance > ray_epsilon) {
-            unoccluded = !Toolkit::geometry().trace_occlusion(
-                make_light_ray(origin, segment / distance, Float{0.f}, distance - ray_epsilon));
-        };
+        RayVar ray;
+        $if(sample.infinite) { ray = restir_shadow::direction_ray(origin, sample.direction); }
+        $else { ray = restir_shadow::finite_ray(origin, sample.target); };
+        unoccluded = !Toolkit::geometry().trace_occlusion(ray);
     };
     return unoccluded;
 }

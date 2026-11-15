@@ -1,4 +1,5 @@
 #pragma once
+#include "base/integral/restir_shadow.h"
 
 #include "ReSTIR/indirect.h"
 #include "restir_gi/history.h"
@@ -182,12 +183,13 @@ class RestirGIExperiment final : private Toolkit {
                     auto bsdf=material->create_evaluator(it,swl);
                     hit_normal=bsdf.shading_frame().normal();
                     hit_normal=ocarina::select(dot(hit_normal,dir)>0.f,-hit_normal,hit_normal);
-                    LightSample light=lights->sample_wi(it,sampler,swl);
+                    Bool light_infinite=false;
+                    LightSample light=restir_shadow::sample_light(*lights,it,sampler,swl,light_infinite);
                     Float pdf=abs(light.eval.pdf);
                     $if(light.valid()&&pdf>0.f) {
                         Float3 wi=restir_gi::direction(light.p_light-it.pos);
                         auto eval=bsdf.evaluate(it.wo,wi);
-                        $if(eval.valid()&&!geo.occluded(it,light.p_light)) {
+                        $if(eval.valid()&&!geo.trace_occlusion(restir_shadow::visibility_ray(it,light.p_light,light_infinite))) {
                             radiance=spec->linear_srgb(light.eval.L*eval.f/pdf,swl);
                         };
                     };

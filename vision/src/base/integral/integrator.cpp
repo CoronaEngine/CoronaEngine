@@ -3,6 +3,7 @@
 //
 
 #include "integrator.h"
+#include "restir_shadow.h"
 #include "base/mgr/switch_profile.h"
 #include "base/mgr/pipeline.h"
 #include "math/warp.h"
@@ -499,15 +500,27 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         comment("estimate direct lighting");
         comment("sample light");
         LightSample light_sample{swl.dimension()};
+        optional<Bool> light_sample_infinite;
+        if (hc.restir_shadow_connections) light_sample_infinite.emplace(false);
         Bool occluded = false;
         SampledSpectrum tr = spectrum()->one();
         if (!hc.rtxpt_sampling) {
             if (hc.work_counters) hc.work_counters->bsdf.w += 1u;
-            light_sample = light_sampler->sample_wi(it, sampler, swl);
+            if (hc.restir_shadow_connections) {
+                light_sample = restir_shadow::sample_light(*light_sampler, it, sampler, swl, *light_sample_infinite);
+            } else {
+                light_sample = light_sampler->sample_wi(it, sampler, swl);
+            }
             if (!cost_skip_nee) {
                 RayState shadow_ray;
                 if (hc.work_counters) { hc.work_counters->trace.y += 1u; hc.work_counters->path.x += 1u; }
-                occluded = geometry.occluded(it, light_sample.p_light, &shadow_ray);
+                if (hc.restir_shadow_connections) {
+                    shadow_ray = it.spawn_ray_state(normalize(light_sample.p_light - it.pos));
+                    shadow_ray.ray = restir_shadow::visibility_ray(it, light_sample.p_light, *light_sample_infinite);
+                    occluded = geometry.trace_occlusion(shadow_ray.ray);
+                } else {
+                    occluded = geometry.occluded(it, light_sample.p_light, &shadow_ray);
+                }
                 tr = geometry.Tr(scene(), renderer().sampler(), swl, shadow_ray);
             }
         }
@@ -546,10 +559,19 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             evaluator.with_prepared_evaluation(it.wo, [&](const PreparedMaterialEvaluator &prepared) {
                 $for(shadow_sample, nee_full_samples) {
                     LightSample selected{swl.dimension()};
+                    optional<Bool> selected_infinite;
+                    if (hc.restir_shadow_connections) selected_infinite.emplace(false);
                     Float total_weight = 0.f, selected_weight = 0.f;
                     $for(candidate_index, nee_candidates) {
                         if (hc.work_counters) hc.work_counters->bsdf.w += 1u;
-                        LightSample candidate = light_sampler->sample_wi(it, sampler, swl);
+                        LightSample candidate{swl.dimension()};
+                        optional<Bool> candidate_infinite;
+                        if (hc.restir_shadow_connections) {
+                            candidate_infinite.emplace(false);
+                            candidate = restir_shadow::sample_light(*light_sampler, it, sampler, swl, *candidate_infinite);
+                        } else {
+                            candidate = light_sampler->sample_wi(it, sampler, swl);
+                        }
                         Float proposal_pdf = abs(candidate.eval.pdf);
                         Float target = 0.f;
                         $if(candidate.valid() && proposal_pdf > 0.f) {
@@ -564,6 +586,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                         $if(sampler->next_1d() * total_weight < target) {
                             selected = candidate;
                             selected_weight = target;
+                            if (hc.restir_shadow_connections) *selected_infinite = *candidate_infinite;
                         };
                     };
                     $if(selected_weight > 0.f) {
@@ -573,7 +596,14 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                         $if(eval.valid()) {
                             RayState selected_shadow;
                             if (hc.work_counters) { hc.work_counters->trace.y += 1u; hc.work_counters->path.x += 1u; }
-                            Bool blocked = geometry.occluded(it, selected.p_light, &selected_shadow);
+                            Bool blocked = false;
+                            if (hc.restir_shadow_connections) {
+                                selected_shadow = it.spawn_ray_state(normalize(selected.p_light - it.pos));
+                                selected_shadow.ray = restir_shadow::visibility_ray(it, selected.p_light, *selected_infinite);
+                                blocked = geometry.trace_occlusion(selected_shadow.ray);
+                            } else {
+                                blocked = geometry.occluded(it, selected.p_light, &selected_shadow);
+                            }
                             SampledSpectrum transmission = geometry.Tr(scene(), sampler, swl, selected_shadow);
                             Float pdf = abs(selected.eval.pdf);
                             Float mis = mis_mode_ == MISMode::ELight ? Float{1.f}
@@ -584,6 +614,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                             };
                         };
                         light_sample = selected;
+                        if (hc.restir_shadow_connections) *light_sample_infinite = *selected_infinite;
                     };
                 };
             }, MaterialEvalMode::All);
