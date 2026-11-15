@@ -500,11 +500,12 @@ def _native_scene_snapshot(scene_name):
         from api.editor_api import get_script_runtime_editor_api
 
         scene_api = get_script_runtime_editor_api().scene
-        getter = getattr(scene_api, "get_snapshot", None) if scene_api is not None else None
-        if callable(getter):
-            payload = _native_payload(getter(scene_name or ""))
-            if payload is not None:
-                return payload, errors
+        active = scene_api.read_active()
+        session = (active or {}).get("archive_session") or ""
+        payload = _native_payload(
+            scene_api.read_scene({"archive_session": session, "scene": scene_name or ""}))
+        if payload is not None:
+            return payload, errors
     except Exception as exc:
         errors.append(str(exc))
     return None, errors
@@ -566,9 +567,7 @@ class _NativeEditorActorProxy:
         from api.editor_api import get_script_runtime_editor_api
 
         scene_api = get_script_runtime_editor_api().scene
-        setter = getattr(scene_api, "set_actor_transform", None) if scene_api is not None else None
-        if not callable(setter):
-            raise RuntimeError("native set_actor_transform is unavailable")
+        setter = scene_api.set_actor_transform
         # Runtime scripts update the native actor in memory without persisting every frame.
         # Snapshot restore keeps the default persist=True behavior.
         try:
@@ -601,12 +600,12 @@ class _NativeEditorActorProxy:
         try:
             from api.editor_api import get_script_runtime_editor_api
 
-            scene_tools = get_script_runtime_editor_api().scene_tools
+            scene_api = get_script_runtime_editor_api().scene
             if operation in state_operations:
                 kind, state = state_operations[operation]()
-                result = scene_tools.set_actor_state(self.scene_route, self.name, state)
+                result = scene_api.update_actor(self.scene_route, self.name, state)
             elif operation in physics_operations:
-                result = scene_tools.set_actor_physics(
+                result = scene_api.set_actor_physics(
                     self.scene_route, self.name, physics_operations[operation]()
                 )
             else:
@@ -641,7 +640,7 @@ class _NativeEditorActorProxy:
                 raise ValueError(f"Animation index {index!r} is outside [0, {len(clips)})")
             selector = clips[index]["id"]
         from api.editor_api import get_script_runtime_editor_api
-        return get_script_runtime_editor_api().scene_tools.set_actor_animation(
+        return get_script_runtime_editor_api().scene.set_actor_animation(
             self.scene_route, self.actor_guid or self.name, selector, blend_seconds
         )
 
@@ -671,7 +670,8 @@ class _NativeEditorActorProxy:
         session = self._data.get("archive_session")
         if session and self.actor_guid:
             from api.editor_api import get_script_runtime_editor_api
-            state = get_script_runtime_editor_api().scene.read_transforms(session, [self.actor_guid])
+            state = get_script_runtime_editor_api().scene.read_transforms(
+                {"archive_session": session, "actors": [self.actor_guid]})
             if not state["actors"]:
                 raise RuntimeError(f"Actor disappeared: {self.actor_guid}")
             transform = state["actors"][0]
@@ -2669,10 +2669,8 @@ def _try_native_spawn(scene, template, name, pos, template_actor=None):
     try:
         from api.editor_api import get_script_runtime_editor_api
 
-        scene_tools = get_script_runtime_editor_api().scene_tools
-        create_actor = getattr(scene_tools, "create_actor", None) if scene_tools is not None else None
-        if not callable(create_actor):
-            return None
+        scene_api = get_script_runtime_editor_api().scene
+        create_actor = scene_api.create_actor
         route = getattr(template_actor, 'route', '') or str(template or '')
         actor_type = getattr(template_actor, 'actor_type', 'model') or 'model'
         if not route:
@@ -2699,8 +2697,7 @@ def _try_native_spawn(scene, template, name, pos, template_actor=None):
         raw = create_actor(
             getattr(scene, "route", ""),
             route,
-            actor_type,
-            actor_data,
+            {**actor_data, "actor_type": actor_type},
         )
         result = _json.loads(raw) if isinstance(raw, str) else raw
         if isinstance(result, dict) and result.get("status") == "error":

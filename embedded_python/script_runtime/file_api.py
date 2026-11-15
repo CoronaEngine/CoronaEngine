@@ -136,9 +136,9 @@ def translate_actor(name, dx, dy, dz):
 
     run = _run()
     scene = get_script_runtime_editor_api().scene
-    actor = scene.read_actor(run.session, name or run.actor_name)
+    actor = scene.read_actor({"archive_session": run.session, "actor": name or run.actor_name})
     guid = actor["actor_guid"]
-    transform = scene.read_transforms(run.session, [guid])["actors"][0]
+    transform = scene.read_transforms({"archive_session": run.session, "actors": [guid]})["actors"][0]
     position = [a + b for a, b in zip(transform["position"], (dx, dy, dz))]
     check_stop()
     scene.set_actor_transform(run.scene_name, guid, {"archive_session": run.session, "position": position})
