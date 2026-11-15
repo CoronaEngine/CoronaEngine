@@ -20,8 +20,8 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 命名空间按职责划分，不再是「一个方法一个命名空间」：项目文档与项目元数据在 `project`，
 视口配置在 `viewport`，脚本输入派发在 `input`，音频按身份分 `play`/`stop`。
 **键名规则**：过原生的键一律 snake_case（`panel_id`、`route_path`、`archive_session`），
-请求和回复用同一套写法；Web 内部保持自己的 camelCase，翻译只发生在
-`Frontend/src/services/appService.js` 一处。方法名是 JS 标识符，用 camelCase。
+请求和回复用同一套写法。窗口命令对象**本身就是线上对象**：`appService` 把命令参数
+原样交给绑定，没有 camelCase↔snake_case 的转换层。方法名是 JS 标识符，用 camelCase。
 
 ## Web 面
 

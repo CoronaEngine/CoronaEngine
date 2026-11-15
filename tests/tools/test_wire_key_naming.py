@@ -14,6 +14,7 @@ import re
 ROOT = Path(__file__).resolve().parents[2]
 BINDING = ROOT / "src/systems/ui/cef/cef_v8_binding.cpp"
 APP_SERVICE = ROOT / "CoronaEditor/editor/Frontend/src/services/appService.js"
+WINDOW_SESSION = ROOT / "CoronaEditor/editor/Frontend/src/services/editorWindowSession.js"
 
 # A data key, wherever a reader looks one up or writes one out. Method installation
 # (`SetValue("readScene", CefV8Value::CreateFunction(...))`) is excluded below.
@@ -42,11 +43,23 @@ def test_every_wire_key_in_the_binding_is_snake_case():
         "snake_case; translate internally, not at the wire")
 
 
-def test_the_web_translator_speaks_the_wire_spelling():
+def test_the_web_command_carries_the_wire_spelling():
+    """The command object IS the wire object: no translation helper, no second vocabulary."""
     source = APP_SERVICE.read_text(encoding="utf-8-sig")
-    assert "panelWire" in source, "the Web layer still hands its camelCase objects to native"
-    for key in ("panel_id", "route_path", "scene_id", "camera_id", "archive_session"):
-        assert key in source, f"appService.js no longer builds the '{key}' wire key"
+    assert "panelWire" not in source, "a translation helper came back; name the keys at the source"
+    for key in ("panel_id:", "scene_id:", "camera_id:", "archive_session:", "route_path:"):
+        assert key in source, f"appService.js no longer builds the '{key.rstrip(':')}' wire key"
+    session = WINDOW_SESSION.read_text(encoding="utf-8-sig")
+    for key in ("panel_id:", "scene_id:"):
+        assert key in session, f"editorWindowSession.js still speaks its own spelling for '{key.rstrip(':')}'"
+
+
+def test_window_ops_forward_the_command_untouched():
+    source = APP_SERVICE.read_text(encoding="utf-8-sig")
+    for call in ("editorApi.window.close(parameters)", "editorApi.window.focus(parameters)",
+                 "editorApi.window.createPanel(parameters)",
+                 "editorApi.window.setWindowPresentation(parameters)"):
+        assert call in source, f"the window op re-maps its arguments instead of forwarding: {call}"
 
 
 def test_web_window_calls_never_pass_a_camel_case_key():
