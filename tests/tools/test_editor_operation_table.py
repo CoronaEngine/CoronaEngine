@@ -1,12 +1,14 @@
 """The one operation table is the only place an operation name is declared.
 
-Every name the Web surface publishes is a row here, and the binding installs
-``camel_case(name)`` for it. The ScriptRuntime projection went with the script runtime and
-will be redesigned, so the table is Web-only. This guard pins the table's own shape: 55
-rows across the nine ``window.corona`` namespaces, each row naming the enum that owns it,
-unique (group, name), a summary for every row, and the camelCase derivation.
+Every name the Web surface publishes is a row here, and the binding publishes the row's
+own ``name`` - the wire spelling and the JS spelling are the same snake_case string. The
+ScriptRuntime projection went with the script runtime and will be redesigned, so the table
+is Web-only. This guard pins the table's own shape: 55 rows across the nine
+``window.corona`` namespaces, each row naming the enum that owns it, unique (group, name),
+a summary for every row, and a JS-safe identifier for every name.
 """
 from pathlib import Path
+import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -50,26 +52,12 @@ def test_group_and_name_are_unique():
     assert len(keys) == len(set(keys)), "duplicate (group, name) rows"
 
 
-def test_camel_case_matches_the_published_js_spelling():
-    # The C++ camel_case() must produce exactly these; they are the spellings
-    # test_typed_native_surface.EXPECTED_SURFACE already pins on the Web side.
-    expected = {
-        "read_scene": "readScene",
-        "read_active": "readActive",
-        "read_actor_properties": "readActorProperties",
-        "read_actor_rig": "readActorRig",
-        "set_actor_ik_chains": "setActorIkChains",
-        "select_model_file": "selectModelFile",
-        "is_vision_available": "isVisionAvailable",
-        "capture_screenshot": "captureScreenshot",
-        "read_camera_render_settings": "readCameraRenderSettings",
-        "create_panel": "createPanel",
-        "save_active_project_info": "saveActiveProjectInfo",
-        "on_close_requested": "onCloseRequested",
-        "set_project_root": "setProjectRoot",
-    }
-    derived = {name: table.camel_case(name) for name in expected}
-    assert derived == expected, f"camelCase rule drift: {derived}"
+def test_every_name_is_published_verbatim_as_a_js_identifier():
+    # The row name is the wire name now: it has to be a snake_case JS identifier, because the
+    # binding installs it as a property and the facade calls it as `editorApi.<ns>.<name>`.
+    bad = [f"{row['group']}.{row['name']}" for row in rows()
+           if not re.fullmatch(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*", row["name"])]
+    assert not bad, f"row names that are not snake_case identifiers: {bad}"
 
 
 def test_summaries_are_not_empty():

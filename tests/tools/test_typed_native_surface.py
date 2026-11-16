@@ -6,9 +6,10 @@ single `bridge.call` entry to Python. These guards pin that surface exactly, so
 a namespace cannot quietly grow a second transport or lose a method.
 
 Every name is installed from `editor_operation_table.h` now - the operation rows carry the
-enum that owns them, and the binding installs `camel_case(name)`. The scene rows still
-have a second half in the binding (`kSceneReaders`, the argument readers), which a row
-cannot name because a reader takes `CefV8ValueList` and cannot live in the CEF-free header.
+enum that owns them, and the binding publishes `name` verbatim (snake_case, like the wire
+keys). The scene rows still have a second half in the binding (`kSceneReaders`, the argument
+readers), which a row cannot name because a reader takes `CefV8ValueList` and cannot live in
+the CEF-free header.
 """
 from pathlib import Path
 import re
@@ -16,7 +17,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from native_surface import EXPECTED_SURFACE, camel_case
+from native_surface import EXPECTED_SURFACE
 import operation_table
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,10 +38,10 @@ def _reader_methods() -> list[str]:
 
 
 def _table_surface() -> dict[str, set[str]]:
-    """Names the table declares, with the camelCase spelling the binding derives."""
+    """Names the table declares: the spelling the binding publishes."""
     surface: dict[str, set[str]] = {}
     for row in operation_table.web_rows():
-        surface.setdefault(row["group"], set()).add(camel_case(row["name"]))
+        surface.setdefault(row["group"], set()).add(row["name"])
     return surface
 
 
@@ -102,16 +103,18 @@ def test_the_namespaces_are_created_before_the_table_fills_them():
     assert "kEditorOperations" in source, "the binding must install the shared table"
 
 
-def test_the_binding_derives_the_published_spelling():
-    # A loop that installed `spec.name` verbatim would publish `read_scene` instead of
-    # `readScene`, and the SetValue scan cannot see it: there are no literals left to
-    # compare. Pin the derivation and that the key and the function name are the same
-    # value, so the two cannot drift apart.
+def test_the_binding_publishes_the_row_name_verbatim():
+    # A loop that re-derived the spelling (camelCase, a prefix, anything) would publish a
+    # name the table does not declare, and the SetValue scan cannot see it: there are no
+    # literals left to compare. Pin the assignment and that the key and the function name are
+    # the same value, so the two cannot drift apart.
     source = _binding_source()
-    assert "const auto js_name = camel_case(spec.name);" in source, (
-        "the install loop stopped deriving the Web spelling from the row name")
+    assert "const std::string js_name(spec.name);" in source, (
+        "the install loop stopped publishing the row name")
+    assert not re.search(r"camel_case\s*\(", source), (
+        "the binding must not derive a spelling again")
     assert re.search(r"SetValue\(\s*js_name,\s*CefV8Value::CreateFunction\(\s*js_name,", source), (
-        "the published key and the function name must be the one derived spelling")
+        "the published key and the function name must be the one spelling")
 
 
 def test_corona_is_the_only_global_installed():

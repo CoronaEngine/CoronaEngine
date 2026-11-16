@@ -31,43 +31,43 @@ def run(port, root, runtime):
                 for section in config for key, value in config.items(section)}
 
     try:
-        archive = main.evaluate('corona.scene.readActive()')['archive_session']
+        archive = main.evaluate('corona.scene.read_active()')['archive_session']
         before_invalid = {path.resolve() for path in data.iterdir()} if data.exists() else set()
-        for method, request in [('createWorldProject', {'mode': 'story'}),
-                                ('createWorldProject', {'prompt': 12}),
-                                ('createMultiplayerProject', {'role': 'other'}),
-                                ('createMultiplayerProject', {'role': 'host', 'path': str(root)})]:
+        for method, request in [('create_world_project', {'mode': 'story'}),
+                                ('create_world_project', {'prompt': 12}),
+                                ('create_multiplayer_project', {'role': 'other'}),
+                                ('create_multiplayer_project', {'role': 'host', 'path': str(root)})]:
             code = main.evaluate(f'corona.project.{method}({json.dumps(request)}).catch(e=>e.code)')
             assert code == 'INVALID_ARGUMENT', (method, request, code)
         assert ({path.resolve() for path in data.iterdir()} if data.exists() else set()) == before_invalid
-        for method, request, prefix in [('createWorldProject', {'prompt': '测试星空世界'}, 'creative_world_'),
-                                        ('createMultiplayerProject', {'role': 'host'}, 'multiplayer_host_'),
-                                        ('createMultiplayerProject', {'role': 'guest'}, 'multiplayer_client_')]:
+        for method, request, prefix in [('create_world_project', {'prompt': '测试星空世界'}, 'creative_world_'),
+                                        ('create_multiplayer_project', {'role': 'host'}, 'multiplayer_host_'),
+                                        ('create_multiplayer_project', {'role': 'guest'}, 'multiplayer_client_')]:
             result = main.evaluate(f'corona.project.{method}({json.dumps(request, ensure_ascii=False)})')
             # Restore only the settings bytes produced by these test-owned calls.
             owned_ini = ini.read_bytes() if ini.exists() else None
             path = Path(result['path']).resolve()
             assert path.parent == data and path not in initial and path.name.startswith(prefix), result
             created.append(path)
-            assert set(result) == ({'name', 'path'} if method == 'createWorldProject' else {'name', 'path', 'role'}), result
+            assert set(result) == ({'name', 'path'} if method == 'create_world_project' else {'name', 'path', 'role'}), result
             config = configparser.ConfigParser(interpolation=None)
             config.read(path / 'scene.ini', encoding='utf-8')
             assert config['scene']['name'] == result['name']
-            if method == 'createWorldProject':
+            if method == 'create_world_project':
                 assert config['world']['type'] == 'creative'
                 assert config['world']['prompt'] == request['prompt']
             else:
                 assert result['role'] == request['role'] == config['multiplayer']['role']
             assert (path / 'assets.manifest.json').is_file()
-            assert main.evaluate('corona.scene.readActive()')['archive_session'] == archive
+            assert main.evaluate('corona.scene.read_active()')['archive_session'] == archive
         # Exercise the real creation view without creating an additional world.
         # Hold only the Web facade's delivery of an actual native readiness read.
         main.evaluate("""(async()=>{
           const m=await import(document.querySelector('script[type=module]').src);
-          const api=Object.values(m).find(v=>typeof v?.project?.getProjectLoadStatus==='function');
-          const original={read:api.project.getProjectLoadStatus,interval:window.setInterval,clear:window.clearInterval};
+          const api=Object.values(m).find(v=>typeof v?.project?.get_project_load_status==='function');
+          const original={read:api.project.get_project_load_status,interval:window.setInterval,clear:window.clearInterval};
           const p=window.__creationLifetime={reads:0,pending:[],intervals:new Set(),hold:true};
-          api.project.getProjectLoadStatus=(...args)=>{
+          api.project.get_project_load_status=(...args)=>{
             p.reads++;const result=original.read(...args);
             return p.hold?Promise.resolve(result).then(value=>new Promise(resolve=>p.pending.push(()=>resolve(value)))):result;
           };
@@ -75,7 +75,7 @@ def run(port, root, runtime):
             if(ms===250&&location.hash.startsWith('#/NewGame'))p.intervals.add(id);return id;};
           window.clearInterval=id=>{p.intervals.delete(id);return original.clear.call(window,id);};
           p.release=()=>{p.hold=false;for(const resume of p.pending.splice(0))resume();};
-          p.restore=()=>{p.release();api.project.getProjectLoadStatus=original.read;
+          p.restore=()=>{p.release();api.project.get_project_load_status=original.read;
             window.setInterval=original.interval;window.clearInterval=original.clear;};
           location.hash='/NewGame';return true;
         })()""")

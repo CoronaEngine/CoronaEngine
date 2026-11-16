@@ -5,8 +5,9 @@ window/panel requests and the window event payload were camelCase. Two spellings
 same concept (`panel_id` in a reply, `panelId` in the request that produces it) is the bug
 this guard prevents from coming back.
 
-Web keeps camelCase *internally*; `appService.js` is the translator. Method names are not
-covered here - those are camelCase JS identifiers, not data keys.
+Web keeps camelCase *internally*; `appService.js` is the translator. Method names are
+snake_case too now - the table publishes its rows verbatim - so the same rule covers them
+and there is no exemption left for method installation.
 """
 from pathlib import Path
 import re
@@ -18,28 +19,20 @@ WINDOW_SESSION = ROOT / "CoronaEditor/editor/Frontend/src/services/editorWindowS
 NATIVE_PANEL_HOSTS = ROOT / "CoronaEditor/editor/Frontend/src/services/nativePanelHosts.js"
 CAMEL_ID = re.compile(r"\b(panelId|windowToken|sceneId|cameraId|routePath|archiveSession)\b")
 
-# A data key, wherever a reader looks one up or writes one out. Method installation
-# (`SetValue("readScene", CefV8Value::CreateFunction(...))`) is excluded below.
+# A data key, wherever a reader looks one up or writes one out, and a method name, which the
+# binding publishes as a property.
 KEY_SITES = re.compile(
     r'(?:object_keys\([^;]*?\{|option_string\(\s*\w+\s*,|option_integer\(\s*\w+\s*,|'
     r'HasValue\(|GetValue\(|SetValue\()\s*"([A-Za-z_][A-Za-z0-9_]*)"')
 CAMEL = re.compile(r"[a-z][A-Z]")
-
-# The one place a camelCase literal is still correct on this side: installing a Web method.
-METHOD_INSTALL = "CefV8Value::CreateFunction"
 
 
 def test_every_wire_key_in_the_binding_is_snake_case():
     offenders = []
     for match in KEY_SITES.finditer(BINDING.read_text(encoding="utf-8-sig")):
         key = match.group(1)
-        if not CAMEL.search(key):
-            continue
-        # Skip method installation: `SetValue("readScene", CefV8Value::CreateFunction(...))`.
-        tail = match.string[match.end():match.end() + 80]
-        if METHOD_INSTALL in tail and key[:1].islower() and "." not in tail[:8]:
-            continue
-        offenders.append(key)
+        if CAMEL.search(key):
+            offenders.append(key)
     assert not offenders, (
         f"camelCase keys on the native boundary: {sorted(set(offenders))}. Web keys are "
         "snake_case; translate internally, not at the wire")
@@ -62,8 +55,8 @@ def test_the_window_layer_speaks_one_spelling():
 def test_window_ops_forward_the_command_untouched():
     source = APP_SERVICE.read_text(encoding="utf-8-sig")
     for call in ("editorApi.window.close(parameters)", "editorApi.window.focus(parameters)",
-                 "editorApi.window.createPanel(parameters)",
-                 "editorApi.window.setWindowPresentation(parameters)"):
+                 "editorApi.window.create_panel(parameters)",
+                 "editorApi.window.set_window_presentation(parameters)"):
         assert call in source, f"the window op re-maps its arguments instead of forwarding: {call}"
 
 

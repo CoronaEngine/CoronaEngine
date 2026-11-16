@@ -35,10 +35,10 @@ def run(port, root, engine_pid):
             'expression': "Boolean(getEventListeners(document).keydown?.some(e=>e.listener.toString().includes('new-tab-name')) && getEventListeners(window).blur?.length)",
             'includeCommandLineAPI': True, 'returnByValue': True,
         })['result'].get('value'), bool, 'MainPage input lifecycle ready')
-        scope = main.evaluate('corona.scene.readActive()')['archive_session']
+        scope = main.evaluate('corona.scene.read_active()')['archive_session']
 
         def cameras():
-            return main.evaluate('corona.scene.readScene({scene:"scene.ini",cameras:true,...' + json.dumps({'archive_session': scope}) + '})')['cameras']
+            return main.evaluate('corona.scene.read_scene({scene:"scene.ini",cameras:true,...' + json.dumps({'archive_session': scope}) + '})')['cameras']
 
         initial = cameras()[0]
         service = """(async()=>{const m=await import(document.querySelector('script[type=module]').src);
@@ -53,12 +53,12 @@ def run(port, root, engine_pid):
         wait(lambda: panel.evaluate("!!document.querySelector('[data-actor-name=Probe]')"), bool, 'SceneBar Actor row')
         monitor = """(async()=>{if(typeof corona.editor!=='undefined')throw Error('Generic native dispatch remains');
           const m=await import(document.querySelector('script[type=module]').src);
-          const api=Object.values(m).find(v=>typeof v?.scene?.updateCamera==='function');
+          const api=Object.values(m).find(v=>typeof v?.scene?.update_camera==='function');
           if(!api)throw Error('Shared camera properties facade missing');
           if(typeof api.scene.getSnapshot!=='undefined'||typeof api.sceneTools?.listCameraViews!=='undefined'||typeof api.sceneTools?.listSceneTree!=='undefined')
             throw Error('Retired scene read facade exists');
-          window.__cameraReads=[];window.__treeReads=[];const readScene=api.scene.readScene;
-          api.scene.readScene=(request)=>readScene(request).then(result=>{
+          window.__cameraReads=[];window.__treeReads=[];const read_scene=api.scene.read_scene;
+          api.scene.read_scene=(request)=>read_scene(request).then(result=>{
             if(request.cameras)window.__cameraReads.push({args:[request],result});
             if(request.actors==='tree')window.__treeReads.push({args:[request],result});return result;});
           if(typeof globalThis.coronaBridge?.cameraMove!=='undefined')throw Error('Retired camera Fast route exists');
@@ -70,8 +70,8 @@ def run(port, root, engine_pid):
           window.__scriptInputs=[];const dispatch=api.input.dispatch;
           api.input.dispatch=(...args)=>dispatch(...args).then(result=>{
             window.__scriptInputs.push({args,result});return result;});
-          window.__cameraMoveResults=[];window.__cameraMoveCalls=[];const move=api.scene.updateCamera;
-          api.scene.updateCamera=(...args)=>{window.__cameraMoveCalls.push(args);return move(...args).then(result=>{window.__cameraMoveResults.push({result});return result;},error=>{window.__cameraMoveResults.push({error:String(error),code:error.code});throw error;});};return true;})()"""
+          window.__cameraMoveResults=[];window.__cameraMoveCalls=[];const move=api.scene.update_camera;
+          api.scene.update_camera=(...args)=>{window.__cameraMoveCalls.push(args);return move(...args).then(result=>{window.__cameraMoveResults.push({result});return result;},error=>{window.__cameraMoveResults.push({error:String(error),code:error.code});throw error;});};return true;})()"""
         main.evaluate(monitor)
         panel.evaluate(monitor)
         time.sleep(.4)
@@ -185,7 +185,7 @@ def run(port, root, engine_pid):
             (main, initial['camera_id'], '[data-viewport-surface]', 'main'),
             (camera_view, 'focus-camera', '.input-layer', 'cameraView'),
         ]:
-            document.evaluate("corona.scene.updateCamera('scene.ini'," + json.dumps(camera_id)
+            document.evaluate("corona.scene.update_camera('scene.ini'," + json.dumps(camera_id)
                               + "," + json.dumps({'archive_session': scope, 'position': [-.25, -.25, 3],
                                                   'forward': [0, 0, -1], 'world_up': [0, 1, 0], 'fov': 60}) + ")")
             point = document.evaluate("(()=>{const el=document.querySelector(" + json.dumps(selector)

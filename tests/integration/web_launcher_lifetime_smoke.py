@@ -20,13 +20,13 @@ def run(port, root):
         main.evaluate("""(async()=>{
           const m=await import(document.querySelector('script[type=module]').src);
           const service=Object.values(m).find(v=>typeof v?.openNativePanel==='function');
-          const original={close:service.closeProcess,raf:window.requestAnimationFrame,cancel:window.cancelAnimationFrame,
+          const original={close:service.close_process,raf:window.requestAnimationFrame,cancel:window.cancelAnimationFrame,
             timeout:window.setTimeout,clear:window.clearTimeout,
             addWindow:window.addEventListener,removeWindow:window.removeEventListener,
             addDocument:document.addEventListener,removeDocument:document.removeEventListener};
           const p=window.__launcherLifetime={closed:0,frames:new Set(),timers:new Set(),listeners:new Set(),nodes:[]};
           // Observe the production exit action without terminating the test Job.
-          service.closeProcess=()=>{p.closed++;return Promise.resolve();};
+          service.close_process=()=>{p.closed++;return Promise.resolve();};
           window.requestAnimationFrame=callback=>{
             const owned=String(callback).includes('.getElapsedTime()');
             const id=original.raf.call(window,time=>{p.frames.delete(id);callback(time);});
@@ -47,7 +47,7 @@ def run(port, root):
           p.styles=()=>p.nodes.map(node=>node.getAttribute('style'));
           p.read=()=>({closed:p.closed,frames:p.frames.size,timers:p.timers.size,listeners:p.listeners.size});
           p.turn=ms=>new Promise(resolve=>original.timeout.call(window,()=>resolve(true),ms));
-          p.restore=()=>{service.closeProcess=original.close;window.requestAnimationFrame=original.raf;window.cancelAnimationFrame=original.cancel;
+          p.restore=()=>{service.close_process=original.close;window.requestAnimationFrame=original.raf;window.cancelAnimationFrame=original.cancel;
             window.setTimeout=original.timeout;window.clearTimeout=original.clear;
             window.addEventListener=original.addWindow;window.removeEventListener=original.removeWindow;
             document.addEventListener=original.addDocument;document.removeEventListener=original.removeDocument;};
@@ -75,7 +75,7 @@ def run(port, root):
             results.append(dict(action=action, **retired))
         hints = run_hint_lifetime(main)
         return dict(retirement=results, hintLifetime=hints, realVueActions=True, nativeDocumentPreserved=True,
-                    exitBoundary='Web closeProcess observed; native process exit deliberately intercepted')
+                    exitBoundary='Web close_process observed; native process exit deliberately intercepted')
     finally:
         try:
             main.evaluate("location.hash='/SceneBar';true")

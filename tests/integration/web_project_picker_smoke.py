@@ -81,8 +81,8 @@ def run(port, root, engine_pid):
     assert len(targets) == 1, targets
     main = Frontend(port, target_id=targets[0]['id'])
     try:
-        archive = main.evaluate('corona.scene.readActive()')['archive_session']
-        assert main.evaluate('corona.project.openProjectFile(1).catch(e=>e.code)') == 'INVALID_ARGUMENT'
+        archive = main.evaluate('corona.scene.read_active()')['archive_session']
+        assert main.evaluate('corona.project.open_project_file(1).catch(e=>e.code)') == 'INVALID_ARGUMENT'
         for selected in [True, False]:
             errors = []
 
@@ -99,7 +99,7 @@ def run(port, root, engine_pid):
             driver.start()
             evaluation_error = None
             try:
-                result = main.evaluate('corona.project.openProjectFile()')
+                result = main.evaluate('corona.project.open_project_file()')
             except Exception as error:
                 evaluation_error = error
             finally:
@@ -115,7 +115,7 @@ def run(port, root, engine_pid):
                 assert result['name'] == 'scene', result
             else:
                 assert result == {}, result
-            assert main.evaluate('corona.scene.readActive()')['archive_session'] == archive
+            assert main.evaluate('corona.scene.read_active()')['archive_session'] == archive
         return dict(selection=True, cancellation=True, archive_unchanged=True, direct_values=True)
     finally:
         for dialog in dialogs():

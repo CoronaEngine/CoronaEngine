@@ -35,7 +35,7 @@ def open_initial_test_world(client, world):
     # registered, or the registered Python archive service may still be loading.
     # A successful open and every genuine failure are terminal, never replayed.
     return web_environment_smoke.wait(
-        lambda: client.evaluate('corona.project.openProject(' + json.dumps(str(world)) + ')'),
+        lambda: client.evaluate('corona.project.open_project(' + json.dumps(str(world)) + ')'),
         lambda result: result.get('status') not in ('service_initializing', 'initializing'),
         'initial archive service readiness')
 
@@ -148,20 +148,20 @@ def main():
                     return None
             target = web_environment_smoke.wait(ready, bool, 'packaged editor target', seconds=90)
             client = Frontend(port, target_id=target['id'])
-            web_environment_smoke.wait(lambda: client.evaluate('typeof globalThis.corona?.scene?.readActive'),
+            web_environment_smoke.wait(lambda: client.evaluate('typeof globalThis.corona?.scene?.read_active'),
                                        lambda value: value == 'function', 'typed scene binding')
-            for suite, methods in [('creation', ['createWorldProject', 'createMultiplayerProject']),
-                                   ('picker', ['openProjectFile'])]:
+            for suite, methods in [('creation', ['create_world_project', 'create_multiplayer_project']),
+                                   ('picker', ['open_project_file'])]:
                 if args.suite in (suite, 'all'):
                     stage = f'{suite} binding availability'
                     for method in methods:
                         assert client.evaluate(f'typeof corona.project?.{method}') == 'function', method
-            assert client.evaluate('typeof corona.project?.openProject') == 'function', 'openProject'
+            assert client.evaluate('typeof corona.project?.open_project') == 'function', 'open_project'
             stage = 'open disposable creative world'
             opened = open_initial_test_world(client, world)
             assert opened.get('ok') and 'data' not in opened, opened
-            session = client.evaluate('corona.scene.readActive()')['archive_session']
-            created = client.evaluate('corona.scene.createActor("scene.ini",' + json.dumps(str(model)) + ','
+            session = client.evaluate('corona.scene.read_active()')['archive_session']
+            created = client.evaluate('corona.scene.create_actor("scene.ini",' + json.dumps(str(model)) + ','
                                       + json.dumps({'archive_session': session, 'actor_type': 'model', 'actor_name': 'Probe'}) + ')')
             assert created.get('name') == 'Probe' and created.get('archive_session') == session, created
             client.socket.close()
@@ -194,7 +194,7 @@ def main():
                 diagnostic = Frontend(port, target_id=target['id'])
                 evidence['last_document'] = diagnostic.evaluate(
                     '({url:location.href,text:document.body.innerText.slice(0,4000)})')
-                screenshot = diagnostic.call('Page.captureScreenshot', {'format': 'png'})
+                screenshot = diagnostic.call('Page.capture_screenshot', {'format': 'png'})
                 (output / 'failure.png').write_bytes(base64.b64decode(screenshot['data']))
             except Exception as error:
                 evidence['diagnostic_error'] = str(error)

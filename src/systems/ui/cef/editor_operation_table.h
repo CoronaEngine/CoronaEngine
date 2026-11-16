@@ -2,10 +2,10 @@
 
 // The Web surface, declared once.
 //
-// window.corona.<group>.<camel_case(name)> is the only thing this table projects: the
-// ScriptRuntime contract it used to share was removed with the script runtime and will be
-// redesigned. A row names the enum that owns its operation, so one table covers every
-// namespace the surface publishes; the V8 readers for the scene rows are looked up by
+// window.corona.<group>.<name> is the only thing this table projects, and `name` is
+// published verbatim: one spelling on the wire, in the ScriptRuntime contract it used to
+// share, and in the code. A row names the enum that owns its operation, so one table covers
+// every namespace the surface publishes; the V8 readers for the scene rows are looked up by
 // SceneMethod in cef_v8_binding.cpp.
 
 #include "cef_operations.h"
@@ -100,22 +100,6 @@ constexpr const EditorOperationSpec* find_editor_operation(std::string_view grou
         if (spec.group == group && spec.name == name) return &spec;
     }
     return nullptr;
-}
-
-/// "read_actor_rig" -> "readActorRig". The Web method name is derived, never declared.
-inline std::string camel_case(std::string_view snake) {
-    std::string result;
-    result.reserve(snake.size());
-    bool upper = false;
-    for (const char ch : snake) {
-        if (ch == '_') {
-            upper = true;
-            continue;
-        }
-        result.push_back(upper && ch >= 'a' && ch <= 'z' ? static_cast<char>(ch - 'a' + 'A') : ch);
-        upper = false;
-    }
-    return result;
 }
 
 }  // namespace Corona::Systems::UI

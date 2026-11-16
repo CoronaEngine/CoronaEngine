@@ -24,14 +24,14 @@ def wait(read, predicate, label, seconds=30):
 def main_render_retirement(main, controls):
     """Deliver a real DOM-initiated native mode reply after MainPage unmounts."""
     main.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.setCameraRenderSettings==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.set_camera_render_settings==='function');
       if(!api)throw Error('main render facade missing');
-      const p=window.__mainRenderLifetime={api,write:api.scene.setCameraRenderSettings,
+      const p=window.__mainRenderLifetime={api,write:api.scene.set_camera_render_settings,
         route:location.hash,ready:false,reads:0,phase:'before',versions:[],post:BroadcastChannel.prototype.postMessage};
       BroadcastChannel.prototype.postMessage=function(message){
         if(message.topic==='creative-controls-state')p.versions.push({phase:p.phase,revision:message.payload.revision});
         return p.post.call(this,message);};
-      api.scene.setCameraRenderSettings=(...args)=>p.write(...args).then(result=>{
+      api.scene.set_camera_render_settings=(...args)=>p.write(...args).then(result=>{
         if(args[2]?.render_backend!=='native')return result;
         return new Promise(resolve=>{p.release=()=>resolve(new Proxy(result,{get(target,key,receiver){
           if(['render_backend','vision','pending'].includes(key))p.reads++;
@@ -55,7 +55,7 @@ def main_render_retirement(main, controls):
         assert reads == 0, f'Retired MainPage consumed {reads} render reply fields'
     finally:
         main.evaluate("""(async()=>{const p=window.__mainRenderLifetime;
-          p.api.scene.setCameraRenderSettings=p.write;p.release?.();
+          p.api.scene.set_camera_render_settings=p.write;p.release?.();
           p.phase='after';
           try{await document.querySelector('#app').__vue_app__.config.globalProperties.$router.push(p.route.slice(1)||'/');
             await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
@@ -96,21 +96,21 @@ def main_selection_retirement(main, open_panel, root, session):
     try:
         tools = open_panel('SceneTools', '/SceneBar', '[data-guidance=scene-import-model]')
         main.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-          const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
+          const api=Object.values(m).find(v=>typeof v?.scene?.read_scene==='function');
           const dock=document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('dock');
-          if(!api?.scene?.readScene||!dock)throw Error('selection boundaries missing');
+          if(!api?.scene?.read_scene||!dock)throw Error('selection boundaries missing');
           await dock.closePanel('Object');
-          const p=window.__selectionLifetime={api,dock,read:api.scene.readScene,
+          const p=window.__selectionLifetime={api,dock,read:api.scene.read_scene,
             open:dock.openPanel,route:location.hash,ready:false,requests:0,releases:[],retired:false,effects:[]};
           p.release=()=>{for(const release of p.releases.splice(0))release();};
-          api.scene.readScene=(...args)=>{if(args[0]?.actors!=='index')return p.read(...args);p.requests++;
+          api.scene.read_scene=(...args)=>{if(args[0]?.actors!=='index')return p.read(...args);p.requests++;
             return p.read(...args).then(result=>new Promise(resolve=>{
               if(p.retired){resolve(result);return;}
               p.releases.push(()=>resolve(result));p.ready=true;}));};
           dock.openPanel=(...args)=>{if(p.retired&&args[0]==='Object')p.effects.push({kind:'open',args});return p.open(...args);};
           return true;})()""")
         try:
-            actor = main.evaluate("corona.scene.createActor('scene.ini'," + json.dumps(str(root / 'triangle.ply'))
+            actor = main.evaluate("corona.scene.create_actor('scene.ini'," + json.dumps(str(root / 'triangle.ply'))
                                   + ',' + json.dumps({'archive_session': session, 'actor_type': 'model',
                                                      'actor_name': 'SelectionLifetime'}) + ')')
             wait(lambda: tools.evaluate("!!document.querySelector('[data-actor-name=SelectionLifetime]')"),
@@ -128,7 +128,7 @@ def main_selection_retirement(main, open_panel, root, session):
             effects = main.evaluate('window.__selectionLifetime.effects')
             assert not effects, f'Retired main selection continued native/Dock effects: {effects}'
         finally:
-            main.evaluate("""(async()=>{const p=window.__selectionLifetime;p.retired=true;p.api.scene.readScene=p.read;
+            main.evaluate("""(async()=>{const p=window.__selectionLifetime;p.retired=true;p.api.scene.read_scene=p.read;
               p.dock.openPanel=p.open;p.release?.();
               await document.querySelector('#app').__vue_app__.config.globalProperties.$router.push(p.route.slice(1)||'/');
               return true;})()""")
@@ -140,28 +140,28 @@ def main_selection_retirement(main, open_panel, root, session):
         return dict(retired_effects=effects, normal_remount=True), tools
     finally:
         if actor:
-            main.evaluate("corona.scene.deleteActor('scene.ini'," + json.dumps(actor['actor_guid'])
+            main.evaluate("corona.scene.delete_actor('scene.ini'," + json.dumps(actor['actor_guid'])
                           + ',' + json.dumps({'archive_session': session}) + ')')
 
 
 def main_transform_baseline_race(main, tools, session):
     """A held real property sample must not replay an older transform baseline."""
     scope = {'archive_session': session}
-    original = main.evaluate("corona.scene.readActorProperties('scene.ini','Probe'," + json.dumps(scope) + ')')
+    original = main.evaluate("corona.scene.read_actor_properties('scene.ini','Probe'," + json.dumps(scope) + ')')
     entry = main.evaluate("document.querySelector('script[type=module]').src")
     chunks = list(Path(url2pathname(urlsplit(entry).path)).parent.glob('cabbageAssistantContextService-*.js'))
     assert len(chunks) == 1, chunks
     main.evaluate('window.__transformContextUrl=' + json.dumps(chunks[0].resolve().as_uri()))
     main.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.readActorProperties==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.read_actor_properties==='function');
       const services=await import(window.__transformContextUrl);
       const context=Object.values(services).find(v=>typeof v?.recordEvent==='function'&&typeof v?.notifySceneSaved==='function');
       if(!api||!context)throw Error('transform boundaries missing');
-      const p=window.__transformBaseline={api,context,read:api.scene.readActorProperties,
-        transforms:api.scene.readTransforms,record:context.recordEvent,held:false,ready:false,samples:[],events:[]};
-      api.scene.readActorProperties=(...args)=>{if(p.held||args[1]!=='Probe')return p.read(...args);p.held=true;
+      const p=window.__transformBaseline={api,context,read:api.scene.read_actor_properties,
+        transforms:api.scene.read_transforms,record:context.recordEvent,held:false,ready:false,samples:[],events:[]};
+      api.scene.read_actor_properties=(...args)=>{if(p.held||args[1]!=='Probe')return p.read(...args);p.held=true;
         return p.read(...args).then(result=>new Promise(resolve=>{p.release=()=>resolve(result);p.ready=true;}));};
-      api.scene.readTransforms=(...args)=>p.transforms(...args).then(result=>{p.samples.push(...result.actors);return result;});
+      api.scene.read_transforms=(...args)=>p.transforms(...args).then(result=>{p.samples.push(...result.actors);return result;});
       context.recordEvent=(event,...args)=>{if(event.type==='transform_position'&&event.details?.source==='viewport'
         &&event.details?.actorName==='Probe')p.events.push(event);return p.record(event,...args);};return true;})()""")
     try:
@@ -172,7 +172,7 @@ def main_transform_baseline_race(main, tools, session):
         main.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))')
         patch = {**scope, 'position': [original['geometry']['position'][0] + 4, *original['geometry']['position'][1:]]}
         def write():
-            return main.evaluate("corona.scene.setActorTransform('scene.ini','Probe'," + json.dumps(patch) + ')')
+            return main.evaluate("corona.scene.set_actor_transform('scene.ini','Probe'," + json.dumps(patch) + ')')
         write()
         wait(lambda: main.evaluate('window.__transformBaseline.events.length'), lambda count: count >= 1, 'live transform recorded')
         before = main.evaluate('window.__transformBaseline.events.length')
@@ -188,9 +188,9 @@ def main_transform_baseline_race(main, tools, session):
         assert after == before, f'Old property sample manufactured a second transform event: {before} -> {after}'
         return dict(live_transform_events=before, after_old_baseline_and_same_value=after)
     finally:
-        main.evaluate("(()=>{const p=window.__transformBaseline;p.api.scene.readActorProperties=p.read;"
-                      "p.api.scene.readTransforms=p.transforms;p.context.recordEvent=p.record;p.release?.();return true;})()")
-        main.evaluate("corona.scene.setActorTransform('scene.ini','Probe',"
+        main.evaluate("(()=>{const p=window.__transformBaseline;p.api.scene.read_actor_properties=p.read;"
+                      "p.api.scene.read_transforms=p.transforms;p.context.recordEvent=p.record;p.release?.();return true;})()")
+        main.evaluate("corona.scene.set_actor_transform('scene.ini','Probe',"
                       + json.dumps({**scope, **original['geometry']}) + ')')
 
 
@@ -198,9 +198,9 @@ def main_environment_projection_race(main, controls, settings, environment):
     """A mode refresh must not replay an environment sample older than a Dock edit."""
     original = environment()['grid']['enabled']
     main.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.readEnvironment==='function');
-      const p=window.__environmentRace={api,read:api.scene.readEnvironment,held:false,ready:false};
-      api.scene.readEnvironment=(...args)=>{if(p.held)return p.read(...args);p.held=true;p.args=args;
+      const api=Object.values(m).find(v=>typeof v?.scene?.read_environment==='function');
+      const p=window.__environmentRace={api,read:api.scene.read_environment,held:false,ready:false};
+      api.scene.read_environment=(...args)=>{if(p.held)return p.read(...args);p.held=true;p.args=args;
         return p.read(...args).then(result=>new Promise(resolve=>{p.release=()=>resolve(result);p.ready=true;}));};
       return true;})()""")
 
@@ -226,8 +226,8 @@ def main_environment_projection_race(main, controls, settings, environment):
         projected = main.evaluate(state)
         assert projected['gridEnabled'] is not original, f'Old environment sample rolled back grid UI: {projected}'
     finally:
-        main.evaluate("""(async()=>{const p=window.__environmentRace;p.api.scene.readEnvironment=p.read;p.release?.();
-          if(p.args)await corona.scene.setEnvironment(p.args[0],{...p.args[1],grid:{enabled:"""
+        main.evaluate("""(async()=>{const p=window.__environmentRace;p.api.scene.read_environment=p.read;p.release?.();
+          if(p.args)await corona.scene.set_environment(p.args[0],{...p.args[1],grid:{enabled:"""
                       + json.dumps(original) + "}});return true;})()")
         select_mode('Vision PT')
         wait(lambda: main.evaluate(state), lambda value: value['gridEnabled'] is original
@@ -244,9 +244,9 @@ def run(port, root):
     assert len(main_targets) == 1, main_targets
     main = Frontend(port, target_id=main_targets[0]["id"])
     clients, opened, panel_targets = [main], [], []
-    session = main.evaluate("corona.scene.readActive()")['archive_session']
+    session = main.evaluate("corona.scene.read_active()")['archive_session']
     def environment():
-        return main.evaluate("corona.scene.readEnvironment('scene.ini'," + json.dumps({'archive_session': session}) + ")")
+        return main.evaluate("corona.scene.read_environment('scene.ini'," + json.dumps({'archive_session': session}) + ")")
 
     service = """(async()=>{const module=await import(document.querySelector('script[type=module]').src);
       return Object.values(module).find(value=>typeof value?.openNativePanel==='function');})()"""
@@ -302,17 +302,17 @@ def run(port, root):
         for client in clients:
             assert client.evaluate('typeof corona.editor') == 'undefined'
         old_scope = session
-        reopened = main.evaluate('corona.project.openProject(' + json.dumps(str(root)) + ')')
+        reopened = main.evaluate('corona.project.open_project(' + json.dumps(str(root)) + ')')
         assert reopened['ok'] and 'data' not in reopened, reopened
         # Project replacement retires these tabs. Never close their obsolete
         # numeric IDs a second time from cleanup; verify document retirement.
         opened.clear()
         wait(lambda: {target['id'] for target in targets()}.intersection(panel_targets),
              lambda remaining: not remaining, 'old project panel documents retired')
-        session = main.evaluate('corona.scene.readActive()')['archive_session']
+        session = main.evaluate('corona.scene.read_active()')['archive_session']
         assert session != old_scope
         assert environment()['physics']['floor_y'] == 6
-        rejected = main.evaluate("corona.scene.setEnvironment('scene.ini'," + json.dumps({
+        rejected = main.evaluate("corona.scene.set_environment('scene.ini'," + json.dumps({
             'archive_session': old_scope, 'grid': {'enabled': original['grid']['enabled']},
         }) + ").catch(error=>error.code)")
         assert rejected == 'PROJECT_CONTEXT_CHANGED', rejected

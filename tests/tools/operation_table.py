@@ -46,9 +46,3 @@ def script_rows():
 
 def script_keys():
     return []
-
-
-def camel_case(snake):
-    """The derivation the C++ side uses: "read_actor_rig" -> "readActorRig"."""
-    head, *tail = snake.split("_")
-    return head + "".join(part.capitalize() for part in tail)

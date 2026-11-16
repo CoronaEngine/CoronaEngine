@@ -8,11 +8,11 @@ def run_camera(panel):
     """Deliver a real settings reply only after the production view unmounts."""
     panel.evaluate("""(async()=>{
       const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.read_scene==='function');
       const app=Object.values(m).find(v=>typeof v?.openNativePanel==='function');
-      const original={set:api.scene.updateCamera,resize:app.resizeThisCameraView};
+      const original={set:api.scene.update_camera,resize:app.resizeThisCameraView};
       const probe=window.__cameraLifetime={resizes:[],pending:[],delivered:0,route:location.hash};
-      api.scene.updateCamera=(...args)=>{
+      api.scene.update_camera=(...args)=>{
         const result=original.set(...args);
         return document.querySelector('.camera-overlay')&&'move_speed' in args[2]
           ?Promise.resolve(result).then(value=>new Promise(resolve=>probe.pending.push(()=>{probe.delivered++;resolve(value);})))
@@ -20,7 +20,7 @@ def run_camera(panel):
       };
       app.resizeThisCameraView=(...args)=>{probe.resizes.push(args);return original.resize(...args);};
       probe.restore=()=>{for(const deliver of probe.pending.splice(0))deliver();
-        api.scene.updateCamera=original.set;app.resizeThisCameraView=original.resize;};
+        api.scene.update_camera=original.set;app.resizeThisCameraView=original.resize;};
       return true;
     })()""")
     try:
@@ -52,11 +52,11 @@ def run_camera(panel):
 def run_camera_initialization(panel):
     panel.evaluate("""(async()=>{
       const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.read_scene==='function');
       const app=Object.values(m).find(v=>typeof v?.openNativePanel==='function');
       const runtime=window.__coronaObserverRuntime||Object.values(m).find(v=>typeof v?.observe==='function'&&typeof v?.off==='function'&&typeof v?.start==='function');
       if(!runtime)throw Error('observer runtime export is unavailable');
-      const original={read:api.scene.readScene,observe:runtime.observe,off:runtime.off};
+      const original={read:api.scene.read_scene,observe:runtime.observe,off:runtime.off};
       const probe=window.__cameraInit={route:location.hash,phase:null};
       const camera=()=>!!document.querySelector('.camera-overlay');
       const hold=(kind,result)=>{
@@ -64,7 +64,7 @@ def run_camera_initialization(panel):
         return p&&camera()&&p.kind===kind
           ?Promise.resolve(result).then(value=>new Promise(resolve=>p.pending.push(()=>resolve(value)))):result;
       };
-      api.scene.readScene=(...args)=>{if(probe.phase&&camera())probe.phase.reads++;
+      api.scene.read_scene=(...args)=>{if(probe.phase&&camera())probe.phase.reads++;
         return hold('read',original.read(...args));};
       runtime.observe=(...args)=>{
         if(!probe.phase||!camera())return original.observe(...args);
@@ -77,7 +77,7 @@ def run_camera_initialization(panel):
       probe.snapshot=()=>{const p=probe.phase;return {kind:p.kind,pending:p.pending.length,reads:p.reads,
         registrations:p.registrations,releases:p.releases,token:p.token};};
       probe.restore=()=>{probe.release();probe.phase=null;
-        api.scene.readScene=original.read;runtime.observe=original.observe;runtime.off=original.off;};
+        api.scene.read_scene=original.read;runtime.observe=original.observe;runtime.off=original.off;};
       return true;
     })()""")
     results = []
@@ -119,13 +119,13 @@ def run_node_graph(panel):
     panel.evaluate("window.__lifetimeQuery=location.hash.split('?')[1]||'';location.hash='/SceneBar?'+window.__lifetimeQuery;true")
     wait(lambda: panel.evaluate("!!document.querySelector('.scene-tools-panel')"), bool, 'lifecycle baseline route')
     panel.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.read_scene==='function');
       const runtime=window.__coronaObserverRuntime||Object.values(m).find(v=>typeof v?.observe==='function'&&typeof v?.off==='function'&&typeof v?.start==='function');
       if(!runtime)throw Error('observer runtime export is unavailable');
-      const original={read:api.scene.readActive,observe:runtime.observe,off:runtime.off,
-        load:api.projectFiles.load,tree:api.scene.readScene,resize:window.ResizeObserver};
+      const original={read:api.scene.read_active,observe:runtime.observe,off:runtime.off,
+        load:api.projectFiles.load,tree:api.scene.read_scene,resize:window.ResizeObserver};
       const probe=window.__viewLifetime={phase:null};
-      api.scene.readActive=(...args)=>{const phase=probe.phase;
+      api.scene.read_active=(...args)=>{const phase=probe.phase;
         const hold=phase&&document.querySelector('.node-graph-workspace');
         const result=original.read(...args);
         return hold?Promise.resolve(result).then(value=>new Promise(resolve=>phase.reads.push(()=>resolve(value)))):result;};
@@ -139,7 +139,7 @@ def run_node_graph(panel):
       runtime.off=token=>{for(const entry of probe.phase?.subscriptions||[])if(entry.token===token)entry.releases++;
         return original.off(token);};
       api.projectFiles.load=(...args)=>{if(probe.phase)probe.phase.loads++;return original.load(...args);};
-      api.scene.readScene=(...args)=>{if(probe.phase&&args[0]?.actors==='context')probe.phase.actorReads++;return original.tree(...args);};
+      api.scene.read_scene=(...args)=>{if(probe.phase&&args[0]?.actors==='context')probe.phase.actorReads++;return original.tree(...args);};
       window.ResizeObserver=class extends original.resize{
         constructor(callback){super(callback);this.phase=probe.phase&&document.querySelector('.node-graph-workspace')?probe.phase:null;
           if(this.phase)this.phase.observers++;}
@@ -153,9 +153,9 @@ def run_node_graph(panel):
       probe.read=()=>{const p=probe.phase;return {pendingReads:p.reads.length,loads:p.loads,actorReads:p.actorReads,
         observers:p.observers,disconnected:p.disconnected,
         subscriptions:p.subscriptions.map(({kind,token,releases})=>({kind,token,releases}))};};
-      probe.restore=()=>{if(probe.phase)probe.release();probe.phase=null;api.scene.readActive=original.read;
+      probe.restore=()=>{if(probe.phase)probe.release();probe.phase=null;api.scene.read_active=original.read;
         runtime.observe=original.observe;runtime.off=original.off;api.projectFiles.load=original.load;
-        api.scene.readScene=original.tree;window.ResizeObserver=original.resize;};
+        api.scene.read_scene=original.tree;window.ResizeObserver=original.resize;};
       return true;})()""")
     results = []
     try:

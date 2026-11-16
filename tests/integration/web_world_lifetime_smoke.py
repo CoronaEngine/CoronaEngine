@@ -28,53 +28,53 @@ def run(port, root):
         main.evaluate("location.hash='/SceneBar';true")
         wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-viewport-surface]')"),
              bool, 'main viewport retired before arming initialization')
-        initial = main.evaluate('corona.scene.readActive()')
+        initial = main.evaluate('corona.scene.read_active()')
         main.evaluate("""(async()=>{
           const m=await import(document.querySelector('script[type=module]').src);
-          const api=Object.values(m).find(v=>typeof v?.scene?.readScene==='function');
-          const launcher=Object.values(m).find(v=>typeof v?.openProject==='function'&&!v.createWorldProject);
+          const api=Object.values(m).find(v=>typeof v?.scene?.read_scene==='function');
+          const launcher=Object.values(m).find(v=>typeof v?.open_project==='function'&&!v.create_world_project);
           if(!launcher)throw Error('Production project launcher export missing');
           const probe=window.__worldLifetime={launcher,pendingRead:[],pendingOpen:[],commands:[],holdRead:true,holdOpen:true};
-          const original={read:api.scene.readScene,open:api.project.openProject,
-            properties:api.scene.updateCamera,render:api.scene.setCameraRenderSettings,viewport:api.viewport.configure};
-          api.scene.readScene=(...args)=>{
+          const original={read:api.scene.read_scene,open:api.project.open_project,
+            properties:api.scene.update_camera,render:api.scene.set_camera_render_settings,viewport:api.viewport.configure};
+          api.scene.read_scene=(...args)=>{
             const hold=probe.holdRead&&document.querySelector('[data-viewport-surface]');
             if(hold)probe.holdRead=false;
             const result=original.read(...args);
             return hold?Promise.resolve(result).then(value=>new Promise(resolve=>probe.pendingRead.push(()=>resolve(value)))):result;
           };
-          api.project.openProject=(...args)=>{
+          api.project.open_project=(...args)=>{
             const hold=probe.holdOpen;probe.holdOpen=false;
             const result=original.open(...args);
             return hold?Promise.resolve(result).then(value=>new Promise(resolve=>probe.pendingOpen.push(()=>resolve(value)))):result;
           };
-          for(const [kind,object,key] of [['properties',api.scene,'updateCamera'],
-            ['render',api.scene,'setCameraRenderSettings'],['viewport',api.viewport,'configure']]){
+          for(const [kind,object,key] of [['properties',api.scene,'update_camera'],
+            ['render',api.scene,'set_camera_render_settings'],['viewport',api.viewport,'configure']]){
             object[key]=(...args)=>{probe.commands.push({kind,args});return original[kind](...args);};
           }
           probe.release=key=>{for(const resume of probe[key].splice(0))resume();};
           probe.restore=()=>{probe.release('pendingRead');probe.release('pendingOpen');
-            api.scene.readScene=original.read;api.project.openProject=original.open;
-            api.scene.updateCamera=original.properties;api.scene.setCameraRenderSettings=original.render;
+            api.scene.read_scene=original.read;api.project.open_project=original.open;
+            api.scene.update_camera=original.properties;api.scene.set_camera_render_settings=original.render;
             api.viewport.configure=original.viewport;};
           return true;
         })()""")
         main.evaluate("location.hash='/';true")
         wait(lambda: main.evaluate('window.__worldLifetime.pendingRead.length'), lambda n: n == 1,
              'old MainPage real camera snapshot waiting for its consumer')
-        main.evaluate('window.__worldLifetime.first=window.__worldLifetime.launcher.openProject('
+        main.evaluate('window.__worldLifetime.first=window.__worldLifetime.launcher.open_project('
                       + json.dumps(str(worlds[0])) + ');true')
         wait(lambda: main.evaluate('window.__worldLifetime.pendingOpen.length'), lambda n: n == 1,
              'intermediate native open completed before its launcher continuation')
-        intermediate = main.evaluate('corona.scene.readActive()')
+        intermediate = main.evaluate('corona.scene.read_active()')
         assert intermediate['archive_session'] != initial['archive_session'], intermediate
-        main.evaluate('window.__worldLifetime.latest=window.__worldLifetime.launcher.openProject('
+        main.evaluate('window.__worldLifetime.latest=window.__worldLifetime.launcher.open_project('
                       + json.dumps(str(worlds[1])) + ');window.__worldLifetime.release("pendingOpen");true')
         first = main.evaluate('window.__worldLifetime.first')
         assert first == {'ok': False, 'status': 'superseded'}, first
         latest = main.evaluate('window.__worldLifetime.latest')
         assert latest.get('ok'), latest
-        current = main.evaluate('corona.scene.readActive()')
+        current = main.evaluate('corona.scene.read_active()')
         assert current['archive_session'] not in (initial['archive_session'], intermediate['archive_session']), current
         wait(lambda: main.call('Runtime.evaluate', {
             'expression': "Boolean(document.querySelector('[data-viewport-surface]')&&getEventListeners(document).keydown?.some(e=>e.listener.toString().includes('new-tab-name')))",
@@ -82,7 +82,7 @@ def run(port, root):
         })['result'].get('value'), bool, 'latest MainPage input fully initialized')
         main.evaluate('window.__worldLifetime.commands=[];window.__worldLifetime.release("pendingRead");true')
         # Read through the native boundary after the old continuation has run.
-        assert main.evaluate('corona.scene.readActive()')['archive_session'] == current['archive_session']
+        assert main.evaluate('corona.scene.read_active()')['archive_session'] == current['archive_session']
         commands = main.evaluate('window.__worldLifetime.commands')
         assert all(call['args'][2]['archive_session'] == current['archive_session'] for call in commands), commands
         main.evaluate("document.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,code:'KeyW',key:'w'}));true")

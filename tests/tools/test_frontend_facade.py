@@ -58,7 +58,7 @@ def load_facade() -> dict[str, list[str]]:
 def test_the_facade_loads_without_a_browser():
     facade = load_facade()
     assert {"window", "scene", "project", "bridge"} <= set(facade), sorted(facade)
-    assert "close" in facade["window"] and "createPanel" in facade["window"]
+    assert "close" in facade["window"] and "create_panel" in facade["window"]
 
 
 def test_the_facade_wraps_every_native_method():

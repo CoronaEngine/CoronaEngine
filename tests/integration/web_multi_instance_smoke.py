@@ -90,14 +90,14 @@ def main():
             wait(lambda: client.evaluate("!!document.querySelector('#app[data-v-app] button')"),
                  bool, f'engine {index} Vue mounted')
             assert client.evaluate('typeof corona.editor') == 'undefined'
-            opened = wait(lambda: client.evaluate('corona.project.openProject(' + json.dumps(str(world)) + ')'),
+            opened = wait(lambda: client.evaluate('corona.project.open_project(' + json.dumps(str(world)) + ')'),
                           lambda value: value.get('status') != 'service_initializing', 'open shared fixture')
             assert opened['ok'], opened
             client.evaluate("location.hash='/'")
             policy = wait(lambda: client.evaluate(f'{SERVICE}.then(s=>s.readEditorUiPolicy())'),
                           lambda value: value and value.get('enabled'), 'production owner ready')
             launch['policy'] = policy
-            launch['scene'] = client.evaluate('corona.scene.readActive()')
+            launch['scene'] = client.evaluate('corona.scene.read_active()')
             client.evaluate(f"{STORE}.openPanel('SceneControls')")
             peer = wait(lambda: next((item for item in targets(port)
                                       if '#/SceneControls?' in item['url'] and 'uiOwner=' in item['url']), None),
@@ -117,7 +117,7 @@ def main():
         assert first['scene']['archive_session'] != second['scene']['archive_session'], evidence
 
         def environment(launch):
-            return launch['main'].evaluate("corona.scene.readEnvironment('scene.ini'," + json.dumps(
+            return launch['main'].evaluate("corona.scene.read_environment('scene.ini'," + json.dumps(
                 {'archive_session': launch['scene']['archive_session']}) + ')')
 
         original = [environment(launch) for launch in launches]
@@ -129,7 +129,7 @@ def main():
             other = launches[1 - index]
             expected_other = original[1]['sun']['enabled'] if index == 0 else not original[0]['sun']['enabled']
             assert environment(other)['sun']['enabled'] == expected_other
-        foreign = second['main'].evaluate("corona.scene.setEnvironment('scene.ini'," + json.dumps({
+        foreign = second['main'].evaluate("corona.scene.set_environment('scene.ini'," + json.dumps({
             'archive_session': first['scene']['archive_session'], 'grid': {'enabled': True}})
             + ').catch(error=>error.code)')
         assert foreign == 'PROJECT_CONTEXT_CHANGED', foreign

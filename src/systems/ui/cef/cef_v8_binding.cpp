@@ -1722,7 +1722,7 @@ void reject(CefRefPtr<CefV8Context> context, CefRefPtr<CefV8Value> promise,
 // ---------------------------------------------------------------------------------------
 // The scene surface, declared once.
 //
-// The names live in editor_operation_table.h and are installed by camel_case(name); a table
+// The names live in editor_operation_table.h and are installed verbatim; a table
 // row names the operation (SceneMethod) but not its reader, because a reader takes
 // CefV8ValueList and cannot live in the CEF-free header. This table is the reader half of
 // that pair: one row per operation the Web surface dispatches.
@@ -2467,9 +2467,9 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     }
     auto root = CefV8Value::CreateObject(nullptr, nullptr);
     // The namespaces exist before the table fills them: every name is a row in
-    // editor_operation_table.h, so a rename there renames the Web method. Two rows install a
-    // handler class instead of an operation (the window events), which is what the visit below
-    // branches on.
+    // editor_operation_table.h and is published verbatim, so a rename there renames the Web
+    // method. Two rows install a handler class instead of an operation (the window events),
+    // which is what the visit below branches on.
     struct NativeNamespace {
         const char* name;
         CefRefPtr<CefV8Value> object;
@@ -2493,7 +2493,8 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
             if (spec.group == group) { target = object; break; }
         }
         if (!target) continue;
-        const auto js_name = camel_case(spec.name);
+        // The row's own spelling is the Web method name: no derivation, no second source.
+        const std::string js_name(spec.name);
         std::visit([&](auto method) {
             using Method = decltype(method);
             if constexpr (std::is_same_v<Method, NativeEventKind>)

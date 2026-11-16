@@ -30,13 +30,13 @@ def verify(port, project, peer):
                        "project_path": str(project), "op": op, "args": list(args)})
 
     def read_actor(actor, archive_session):
-        return v8("corona.scene.readActorProperties", "scene.ini", actor, {"archive_session": archive_session})
+        return v8("corona.scene.read_actor_properties", "scene.ini", actor, {"archive_session": archive_session})
 
     def open_project(root):
         opened = wait_for(lambda: open_web_project(web, root),
                           lambda r: r.get("status") != "service_initializing", "open archive")
         assert opened["ok"], opened
-        return web.evaluate("corona.scene.readActive()")["archive_session"]
+        return web.evaluate("corona.scene.read_active()")["archive_session"]
 
     def fingerprint():
         return {p.relative_to(project): (p.stat().st_mtime_ns, hashlib.sha256(p.read_bytes()).hexdigest())
@@ -64,7 +64,7 @@ def verify(port, project, peer):
         shutil.copyfile(project / original["model"], source / "shape.ply")
         descriptor = source / "object.actor"
         descriptor.write_text("[base]\nname=Spawned\npath=shape.ply\n[geometry]\nposition=2,3,4\n", encoding="utf8")
-        created = v8("corona.scene.createActor", "scene.ini", str(descriptor), {"archive_session": session, "actor_type": "actor", "actor_name": "Spawned"})
+        created = v8("corona.scene.create_actor", "scene.ini", str(descriptor), {"archive_session": session, "actor_type": "actor", "actor_name": "Spawned"})
         assert created["name"] == "Spawned" and created["actor_guid"], created
     assert v8("corona.scene.save", "scene.ini", {"archive_session": session})["status"] == "saved"
     open_project(peer)
@@ -88,8 +88,8 @@ def verify(port, project, peer):
     except Exception as error:
         assert "PROJECT_CONTEXT_CHANGED" in str(error), error
     for name, args in (
-        ("corona.scene.importResourceFile", ["scene.ini", {"archive_session": scope["archive_session"], "file_type": "model"}]),
-        ("corona.scene.createActor", ["scene.ini", original["model"], {"archive_session": scope["archive_session"], "actor_type": "model"}]),
+        ("corona.scene.import_resource_file", ["scene.ini", {"archive_session": scope["archive_session"], "file_type": "model"}]),
+        ("corona.scene.create_actor", ["scene.ini", original["model"], {"archive_session": scope["archive_session"], "actor_type": "model"}]),
     ):
         reply = web.evaluate(name + "(..." + json.dumps(args) +
                              ").then(value=>value, error=>({code:error.code,error:error.message}))")

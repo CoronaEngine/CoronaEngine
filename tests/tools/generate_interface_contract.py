@@ -37,7 +37,7 @@ NAMESPACE_NOTES = {
 GUARDS = [
     ("test_manifest_retirement.py", "已删除的 manifest 不许回来"),
     ("test_typed_native_surface.py", "Web 面方法 + 拒绝码词表"),
-    ("test_editor_operation_table.py", "唯一的操作表：55 行 / 九个命名空间 / camelCase 推导"),
+    ("test_editor_operation_table.py", "唯一的操作表：55 行 / 九个命名空间 / 名字原样发布"),
     ("test_wire_key_naming.py", "过原生的键一律 snake_case，Web 侧翻译只在 appService"),
     ("test_interface_contract_doc.py", "这份文档与代码一致"),
     ("test_docs_reference_live_files.py", "文档不指向已删除的文件"),
@@ -123,7 +123,8 @@ def build() -> str:
         "视口配置在 `viewport`，脚本输入派发在 `input`，音频按身份分 `play`/`stop`。",
         "**键名规则**：过原生的键一律 snake_case（`panel_id`、`route_path`、`archive_session`），",
         "请求和回复用同一套写法。窗口命令对象**本身就是线上对象**：`appService` 把命令参数",
-        "原样交给绑定，没有 camelCase↔snake_case 的转换层。方法名是 JS 标识符，用 camelCase。",
+        "原样交给绑定，没有 camelCase↔snake_case 的转换层。**方法名也是 snake_case**：表里的",
+        "`name` 原样发布成 `window.corona.<group>.<name>`，前端 facade 用同一个拼写，没有推导。",
         "",
         "## Web 面",
         "",

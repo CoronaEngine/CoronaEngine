@@ -19,7 +19,7 @@ def verify_startup(main, root, service, assistant, open_panel, close_panel, sele
     main.evaluate("location.hash='/SceneBar';true")
     wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-viewport-surface]')"),
          bool, 'startup fixture main view unmounted')
-    active = main.evaluate('corona.scene.readActive()')
+    active = main.evaluate('corona.scene.read_active()')
     scope = dict(project_path=str(root), archive_session=active['archive_session'], document='CabbageAssistant/context.json')
     saved = dict(schemaVersion=2, worldId=root.name, updatedAt=1,
                  worldGoal=dict(source='ai', status='ready'),

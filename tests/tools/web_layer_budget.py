@@ -72,7 +72,9 @@ TARGET_LINES = 13_807
 # rows now, so the table grew by 38 while the binding's install loop shrank by 40. The method
 # enums moved out of the window/script-input headers into editor_operation_methods.h (+28) so
 # the contract header can stay CEF-free; that is the only file this ledger gained.
-CORE_BUDGET = 13249
+# One spelling then made camel_case unnecessary: the table publishes its own names, so the
+# derivation left the header (-14) and the facade, the smoke scripts and the guards followed.
+CORE_BUDGET = 13234
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -111,7 +113,7 @@ INTERFACE_FILES = [
     # The single operation table, and the Python-value -> patch readers that replaced the
     # entry layer: a call now goes binder -> handler -> scene op, with no JSON in between.
     ("src/systems/ui/cef/editor_operation_methods.h", 28),
-    ("src/systems/ui/cef/editor_operation_table.h", 183),
+    ("src/systems/ui/cef/editor_operation_table.h", 105),
     ("src/systems/ui/cef/cef_scene_operations.h", 440),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),

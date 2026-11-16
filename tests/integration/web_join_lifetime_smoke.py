@@ -19,24 +19,24 @@ def run(port, root):
         wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')"), bool, 'discovery baseline route')
         main.evaluate("""(async()=>{
           const m=await import(document.querySelector('script[type=module]').src);
-          const api=Object.values(m).find(v=>typeof v?.network?.searchLan==='function');
-          const original={timeout:window.setTimeout,clear:window.clearTimeout,methods:{},create:api.project.createMultiplayerProject};
+          const api=Object.values(m).find(v=>typeof v?.network?.search_lan==='function');
+          const original={timeout:window.setTimeout,clear:window.clearTimeout,methods:{},create:api.project.create_multiplayer_project};
           const probe=window.__joinLifetime={phase:null};
-          for(const name of ['clearDiscoveredPeers','searchLan','getDiscoveredPeers','getSessionInfo','stopSession']){
+          for(const name of ['clear_discovered_peers','search_lan','get_discovered_peers','get_session_info','stop_session']){
             original.methods[name]=api.network[name];
             api.network[name]=(...args)=>{
               const p=probe.phase;
-              if(p?.kind==='room'&&p.retired&&name==='stopSession'){
+              if(p?.kind==='room'&&p.retired&&name==='stop_session'){
                 p.forbidden.push(name);return Promise.reject(Error('retired native operation blocked by acceptance probe'));
               }
               if(p){p.calls.push(name);p.inflight++;}
               const result=Promise.resolve(original.methods[name](...args)).finally(()=>{if(p)p.inflight--;});
-              return p?.kind===name||(p?.kind==='room'&&name==='getSessionInfo')
+              return p?.kind===name||(p?.kind==='room'&&name==='get_session_info')
                 ?result.then(value=>new Promise(resolve=>p.pending.push(()=>resolve(value)))):result;
             };
           }
-          api.project.createMultiplayerProject=(...args)=>{
-            if(probe.phase?.kind==='room'&&probe.phase.retired){probe.phase.forbidden.push('createMultiplayerProject');
+          api.project.create_multiplayer_project=(...args)=>{
+            if(probe.phase?.kind==='room'&&probe.phase.retired){probe.phase.forbidden.push('create_multiplayer_project');
               return Promise.reject(Error('retired project creation blocked by acceptance probe'));}
             return original.create(...args);
           };
@@ -54,11 +54,11 @@ def run(port, root):
           probe.turn=()=>new Promise(resolve=>original.timeout.call(window,()=>resolve(true),0));
           probe.restore=()=>{probe.release();probe.phase=null;
             for(const [name,method] of Object.entries(original.methods))api.network[name]=method;
-            api.project.createMultiplayerProject=original.create;
+            api.project.create_multiplayer_project=original.create;
             window.setTimeout=original.timeout;window.clearTimeout=original.clear;};
           return true;
         })()""")
-        for kind in ('clearDiscoveredPeers', 'searchLan', 'delay'):
+        for kind in ('clear_discovered_peers', 'search_lan', 'delay'):
             main.evaluate('window.__joinLifetime.arm(' + json.dumps(kind) + ");location.hash='/JoinGame';true")
             pending = wait(lambda: main.evaluate('window.__joinLifetime.read()'),
                            lambda p: p['delays'] == 1 if kind == 'delay' else p['pending'] == 1,
@@ -80,7 +80,7 @@ def run(port, root):
             main.evaluate("window.__joinLifetime.arm('mount');location.hash='/JoinGame';true")
             wait(lambda: main.evaluate("!!document.querySelector('input[placeholder=玩家名]')"), bool, 'room launcher mounted')
             wait(lambda: main.evaluate('window.__joinLifetime.read()'),
-                 lambda p: 'getSessionInfo' in p['calls'] and p['inflight'] == 0,
+                 lambda p: 'get_session_info' in p['calls'] and p['inflight'] == 0,
                  'mounted launcher session info delivered')
             main.evaluate("window.__joinLifetime.arm('room');true")
             if role == 'host':

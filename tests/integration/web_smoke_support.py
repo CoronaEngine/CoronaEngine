@@ -18,10 +18,10 @@ def open_web_project(web, path):
     """Use the production Web owner so old-window saves finish before replacement."""
     return web.evaluate("""(async()=>{
       const module=await import(document.querySelector('script[type=module]').src);
-      const launcher=Object.values(module).find(value=>typeof value?.openProject==='function'
-        &&!value.createWorldProject);
+      const launcher=Object.values(module).find(value=>typeof value?.open_project==='function'
+        &&!value.create_world_project);
       if(!launcher)throw Error('Production project launcher missing');
-      return launcher.openProject(""" + json.dumps(str(path)) + ");})()")
+      return launcher.open_project(""" + json.dumps(str(path)) + ");})()")
 
 def install_host_probe(editor, trace_path, *, delay_first=True):
     """Record the interpreter actually parsing the archive and executing the file."""

@@ -20,7 +20,8 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 视口配置在 `viewport`，脚本输入派发在 `input`，音频按身份分 `play`/`stop`。
 **键名规则**：过原生的键一律 snake_case（`panel_id`、`route_path`、`archive_session`），
 请求和回复用同一套写法。窗口命令对象**本身就是线上对象**：`appService` 把命令参数
-原样交给绑定，没有 camelCase↔snake_case 的转换层。方法名是 JS 标识符，用 camelCase。
+原样交给绑定，没有 camelCase↔snake_case 的转换层。**方法名也是 snake_case**：表里的
+`name` 原样发布成 `window.corona.<group>.<name>`，前端 facade 用同一个拼写，没有推导。
 
 ## Web 面
 
@@ -43,15 +44,15 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 
 | 命名空间 | 方法 |
 |---|---|
-| `app` | `closeProcess`、`isVisionAvailable` |
+| `app` | `close_process`、`is_vision_available` |
 | `audio` | `play`、`stop` |
 | `bridge` | `call` |
 | `input` | `dispatch` |
-| `network` | `clearDiscoveredPeers`、`connectToPeer`、`getDiscoveredPeers`、`getSessionInfo`、`searchLan`、`setProjectRoot`、`startSession`、`stopSession` |
-| `project` | `createMultiplayerProject`、`createWorldProject`、`getProjectLoadStatus`、`getRecentProjects`、`openDocument`、`openProject`、`openProjectFile`、`saveActiveProjectInfo` |
-| `scene` | `createActor`、`createCamera`、`deleteActor`、`deleteCamera`、`focusActor`、`importResourceFile`、`readActive`、`readActorProperties`、`readActorRig`、`readCameraRenderSettings`、`readEnvironment`、`readModelNodes`、`readScene`、`readTransforms`、`rebindActorResource`、`save`、`selectActor`、`selectModelFile`、`setActorIkChains`、`setActorTransform`、`setCameraRenderSettings`、`setEnvironment`、`setModelNodeState`、`updateActor`、`updateCamera` |
-| `viewport` | `captureScreenshot`、`configure` |
-| `window` | `close`、`createPanel`、`focus`、`onCloseRequested`、`onClosed`、`setWindowPresentation` |
+| `network` | `clear_discovered_peers`、`connect_to_peer`、`get_discovered_peers`、`get_session_info`、`search_lan`、`set_project_root`、`start_session`、`stop_session` |
+| `project` | `create_multiplayer_project`、`create_world_project`、`get_project_load_status`、`get_recent_projects`、`open_document`、`open_project`、`open_project_file`、`save_active_project_info` |
+| `scene` | `create_actor`、`create_camera`、`delete_actor`、`delete_camera`、`focus_actor`、`import_resource_file`、`read_active`、`read_actor_properties`、`read_actor_rig`、`read_camera_render_settings`、`read_environment`、`read_model_nodes`、`read_scene`、`read_transforms`、`rebind_actor_resource`、`save`、`select_actor`、`select_model_file`、`set_actor_ik_chains`、`set_actor_transform`、`set_camera_render_settings`、`set_environment`、`set_model_node_state`、`update_actor`、`update_camera` |
+| `viewport` | `capture_screenshot`、`configure` |
+| `window` | `close`、`create_panel`、`focus`、`on_close_requested`、`on_closed`、`set_window_presentation` |
 
 ### 面板与窗口：三个合并后的入口
 
@@ -143,7 +144,7 @@ Python 侧是单消费者串行：bridge 请求在同一个 worker 上依次执�
 |---|---|
 | [`test_manifest_retirement.py`](../tests/tools/test_manifest_retirement.py) | 已删除的 manifest 不许回来 |
 | [`test_typed_native_surface.py`](../tests/tools/test_typed_native_surface.py) | Web 面方法 + 拒绝码词表 |
-| [`test_editor_operation_table.py`](../tests/tools/test_editor_operation_table.py) | 唯一的操作表：55 行 / 九个命名空间 / camelCase 推导 |
+| [`test_editor_operation_table.py`](../tests/tools/test_editor_operation_table.py) | 唯一的操作表：55 行 / 九个命名空间 / 名字原样发布 |
 | [`test_wire_key_naming.py`](../tests/tools/test_wire_key_naming.py) | 过原生的键一律 snake_case，Web 侧翻译只在 appService |
 | [`test_interface_contract_doc.py`](../tests/tools/test_interface_contract_doc.py) | 这份文档与代码一致 |
 | [`test_docs_reference_live_files.py`](../tests/tools/test_docs_reference_live_files.py) | 文档不指向已删除的文件 |

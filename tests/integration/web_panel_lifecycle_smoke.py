@@ -44,12 +44,12 @@ def scene_camera_retirement(child):
     button = 'button[title="添加摄像头"]'
     wait(lambda: child.evaluate(f'!!document.querySelector({json.dumps(button)})'), bool, 'camera create button')
     child.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.createCamera==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.create_camera==='function');
       const app=Object.values(m).find(v=>typeof v?.openNativePanel==='function');
       if(!api||!app)throw Error('camera creation services missing');
-      const p=window.__sceneCameraLifetime={api,app,create:api.scene.createCamera,
+      const p=window.__sceneCameraLifetime={api,app,create:api.scene.create_camera,
         open:app.createCameraView,route:location.hash,ready:false,retiredOpens:0};
-      api.scene.createCamera=(...args)=>p.create(...args).then(result=>new Promise(resolve=>{
+      api.scene.create_camera=(...args)=>p.create(...args).then(result=>new Promise(resolve=>{
         p.args=args;p.camera=result.camera;p.release=()=>resolve(result);p.ready=true;}));
       app.createCameraView=(...args)=>{p.retiredOpens++;throw Error('probe blocked retired camera surface');};
       return true;})()""")
@@ -66,8 +66,8 @@ def scene_camera_retirement(child):
         assert retired_opens == 0, f'Retired SceneBar requested {retired_opens} camera surfaces'
     finally:
         child.evaluate("""(async()=>{const p=window.__sceneCameraLifetime;
-          p.api.scene.createCamera=p.create;p.app.createCameraView=p.open;p.release?.();
-          if(p.camera)await p.api.scene.deleteCamera(p.args[0],p.camera.camera_id,
+          p.api.scene.create_camera=p.create;p.app.createCameraView=p.open;p.release?.();
+          if(p.camera)await p.api.scene.delete_camera(p.args[0],p.camera.camera_id,
             {archive_session:p.args[1].archive_session});
           await document.querySelector('#app').__vue_app__.config.globalProperties.$router.push(p.route.slice(1));
           return true;})()""")
@@ -83,10 +83,10 @@ def model_node_retirement(child):
     button = '.model-node-list button[title="隐藏"],.model-node-list button[title="显示"]'
     wait(lambda: child.evaluate(f'!!document.querySelector({json.dumps(button)})'), bool, 'real model node row')
     child.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.setModelNodeState==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.set_model_node_state==='function');
       if(!api)throw Error('model node facade missing');
-      const p=window.__modelLifetime={api,write:api.scene.setModelNodeState,route:location.hash,reads:0,ready:false};
-      api.scene.setModelNodeState=(...args)=>p.write(...args).then(result=>new Promise(resolve=>{
+      const p=window.__modelLifetime={api,write:api.scene.set_model_node_state,route:location.hash,reads:0,ready:false};
+      api.scene.set_model_node_state=(...args)=>p.write(...args).then(result=>new Promise(resolve=>{
         p.identity=args[0];p.release=()=>resolve(new Proxy(result,{get(target,key,receiver){
           if(key==='actor_version'||key==='nodes')p.reads++;return Reflect.get(target,key,receiver);}}));
         p.ready=true;}));return true;})()""")
@@ -103,16 +103,16 @@ def model_node_retirement(child):
         reads = child.evaluate('window.__modelLifetime.reads')
         assert reads == 0, f'Retired ModelNodeHierarchy consumed {reads} mutation reply fields'
     finally:
-        child.evaluate("(()=>{const p=window.__modelLifetime;p.api.scene.setModelNodeState=p.write;p.release?.();location.hash=p.route;})()")
+        child.evaluate("(()=>{const p=window.__modelLifetime;p.api.scene.set_model_node_state=p.write;p.release?.();location.hash=p.route;})()")
     wait(lambda: child.evaluate(f'!!document.querySelector({json.dumps(tag)})'), bool, 'model node normal remount')
     child.evaluate(f'document.querySelector({json.dumps(tag)}).click()')
     if os.environ.get("CORONA_MODEL_NODE_DEBUG"):
         child.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-          const api=Object.values(m).find(v=>typeof v?.scene?.setModelNodeState==='function');
-          const original=api.scene.setModelNodeState;
+          const api=Object.values(m).find(v=>typeof v?.scene?.set_model_node_state==='function');
+          const original=api.scene.set_model_node_state;
           window.__mnDebug={calls:[],errors:[]};
           window.addEventListener('unhandledrejection', e=>window.__mnDebug.errors.push(String(e.reason)));
-          api.scene.setModelNodeState=async (...args)=>{ try { const r=await original(...args);
+          api.scene.set_model_node_state=async (...args)=>{ try { const r=await original(...args);
             window.__mnDebug.calls.push({identity:args[0],patch:args[1],reply:{visible:r.nodes?.[0]?.visible,version:r.actor_version,status:r.status}});
             return r; } catch (e) { window.__mnDebug.calls.push({identity:args[0],patch:args[1],error:String(e)}); throw e; } };
           return true;})()""")
@@ -211,7 +211,7 @@ def minimize_restore(engine_pid, main, child, targets, service):
     before = []
     for client in (main, child):
         before.append(client.evaluate("(async()=>({token:window.__minimizeProbe=crypto.randomUUID(),"
-                                      "scene:await corona.scene.readActive()}))()"))
+                                      "scene:await corona.scene.read_active()}))()"))
     try:
         for hwnd in windows:
             assert user.ShowWindowAsync(hwnd, 6), f'Minimize HWND failed: {hwnd}'
@@ -224,7 +224,7 @@ def minimize_restore(engine_pid, main, child, targets, service):
     assert sorted(target['id'] for target in targets()) == before_targets, 'Minimize recreated a CEF document'
     for client, previous in zip((main, child), before):
         after = client.evaluate("(async()=>({token:window.__minimizeProbe,"
-                                "scene:await corona.scene.readActive()}))()")
+                                "scene:await corona.scene.read_active()}))()")
         assert after['token'] == previous['token'], (previous, after)
         assert after['scene']['archive_session'] == previous['scene']['archive_session'], (previous, after)
     policy = child.evaluate(f'{service}.then(s=>s.readEditorUiPolicy())')
@@ -269,7 +269,7 @@ def run(port, root, engine_pid):
         wait(lambda: main.evaluate(f'{service}.then(s=>s.readEditorUiPolicy())'),
              lambda value: value and value.get('enabled'), 'panel owner ready')
         wait(lambda: main.evaluate(f'!!{store}'), bool, 'production Dock owner')
-        archive = main.evaluate('corona.scene.readActive()')['archive_session']
+        archive = main.evaluate('corona.scene.read_active()')['archive_session']
         assert archive
         for panel_id, route in panels:
             print(f'packaged panel {panel_id}', flush=True)
@@ -283,7 +283,7 @@ def run(port, root, engine_pid):
             wait(lambda: child.evaluate(f'!!document.querySelector({json.dumps(selectors[panel_id])})'),
                  bool, f'{panel_id} mounted')
             assert panel_id, 'a panel needs a stable id'
-            peer_scene = child.evaluate('corona.scene.readActive()')
+            peer_scene = child.evaluate('corona.scene.read_active()')
             assert peer_scene['archive_session'] == archive and peer_scene['scene'] == 'scene.ini', peer_scene
             settings_lifetime = editor_settings_retirement(child) if panel_id == 'EditorSettings' else None
             camera_lifetime = scene_camera_retirement(child) if panel_id == 'SceneTools' else None
@@ -323,12 +323,12 @@ def run(port, root, engine_pid):
                 file_crud = True
             settings_saved = False
             if panel_id == 'ProjectSettings':
-                original = child.evaluate('corona.scene.readActive()')
+                original = child.evaluate('corona.scene.read_active()')
                 name = original['name'] + ' UI save'
                 child.evaluate("(()=>{const input=document.querySelector('input');input.value=" + json.dumps(name)
                                + ";input.dispatchEvent(new Event('input',{bubbles:true}));"
                                  "document.querySelectorAll('button')[1].click();})()")
-                wait(lambda: child.evaluate('corona.scene.readActive()'),
+                wait(lambda: child.evaluate('corona.scene.read_active()'),
                      lambda value: value['name'] == name, 'settings UI save')
                 wait(lambda: child.evaluate("!document.querySelectorAll('button')[1].disabled"), bool, 'settings save settled')
                 child.evaluate("(()=>{const input=document.querySelector('input');input.value='unsaved';"
@@ -338,7 +338,7 @@ def run(port, root, engine_pid):
                 envelope = json.dumps({'service': 'project_archive', 'function': 'project_info',
                                        'args': [{'path': original['project_path']}]})
                 info = json.loads(child.evaluate('corona.bridge.call(' + json.dumps(envelope) + ')'))
-                child.evaluate('corona.project.saveActiveProjectInfo(' + json.dumps({
+                child.evaluate('corona.project.save_active_project_info(' + json.dumps({
                     'archive_session': original['archive_session'], 'project_path': original['project_path'],
                     'name': original['name'], 'core_version': info['core_version']}) + ')')
                 settings_saved = True
@@ -348,7 +348,7 @@ def run(port, root, engine_pid):
             matches = [value for value in targets() if f'#{route}?' in value['url'] and 'uiOwner=' in value['url']]
             assert [value['id'] for value in matches] == [target['id']], matches
             assert child.evaluate("new URLSearchParams(location.hash.split('?')[1]||'').get('uiWindow')") is not None
-            assert main.evaluate('corona.scene.readActive()')['archive_session'] == archive
+            assert main.evaluate('corona.scene.read_active()')['archive_session'] == archive
             # ImGui owns placement, so the panel keeps the same CEF document through open,
             # focus and close; there is no native detach transition left to exercise.
             assert child.evaluate(f'!!document.querySelector({json.dumps(selectors[panel_id])})')

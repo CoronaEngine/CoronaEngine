@@ -12,10 +12,10 @@ from web_environment_smoke import wait
 
 def alias_retirement(panel, main, scene, archive, guid):
     panel.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.updateActor==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.update_actor==='function');
       if(!api)throw Error('Actor rename facade missing');
-      const p=window.__aliasLifetime={api,rename:api.scene.updateActor,route:location.hash,reads:0,ready:false};
-      api.scene.updateActor=(...args)=>p.rename(...args).then(result=>new Promise(resolve=>{
+      const p=window.__aliasLifetime={api,rename:api.scene.update_actor,route:location.hash,reads:0,ready:false};
+      api.scene.update_actor=(...args)=>p.rename(...args).then(result=>new Promise(resolve=>{
         p.release=()=>resolve(new Proxy(result,{get(target,key,receiver){
           if(key==='actor')p.reads++;return Reflect.get(target,key,receiver);}}));p.ready=true;}));
       const input=document.querySelector('#actor-alias');input.value='Retired alias probe';
@@ -31,10 +31,10 @@ def alias_retirement(panel, main, scene, archive, guid):
         reads = panel.evaluate('window.__aliasLifetime.reads')
         assert reads == 0, f'Retired Object consumed {reads} rename reply fields'
     finally:
-        panel.evaluate("(()=>{const p=window.__aliasLifetime;p.api.scene.updateActor=p.rename;p.release?.();})()")
-        main.evaluate('corona.scene.updateActor(' + json.dumps(scene) + ',' + json.dumps(guid)
+        panel.evaluate("(()=>{const p=window.__aliasLifetime;p.api.scene.update_actor=p.rename;p.release?.();})()")
+        main.evaluate('corona.scene.update_actor(' + json.dumps(scene) + ',' + json.dumps(guid)
                       + ',' + json.dumps({'archive_session': archive, 'name': 'Probe'}) + ')')
-        main.evaluate('corona.scene.selectActor(' + json.dumps(scene) + ',"actor","Probe")')
+        main.evaluate('corona.scene.select_actor(' + json.dumps(scene) + ',"actor","Probe")')
         panel.evaluate('location.hash=window.__aliasLifetime.route')
     wait(lambda: panel.evaluate("document.querySelector('.object-heading h2')?.textContent"),
          lambda name: name == 'Probe', 'Object normal remount after rename')
@@ -47,15 +47,15 @@ def property_retirement(panel, main, scene, archive, guid):
     assert len(chunks) == 1, chunks
     panel.evaluate('window.__physicsContextUrl=' + json.dumps(chunks[0].resolve().as_uri()))
     panel.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-      const api=Object.values(m).find(v=>typeof v?.scene?.updateActor==='function');
+      const api=Object.values(m).find(v=>typeof v?.scene?.update_actor==='function');
       const services=await import(window.__physicsContextUrl);
       const context=Object.values(services).find(v=>typeof v?.recordEvent==='function'&&typeof v?.notifySceneSaved==='function');
       if(!api||!context)throw Error('Actor property/context services missing');
-      const p=window.__physicsLifetime={api,context,write:api.scene.updateActor,record:context.recordEvent,
+      const p=window.__physicsLifetime={api,context,write:api.scene.update_actor,record:context.recordEvent,
         route:location.hash,events:[],ready:false,retired:false};
       context.recordEvent=(event,...args)=>{if(p.retired&&event.type==='physics_changed')p.events.push(event);
         return p.record(event,...args);};
-      api.scene.updateActor=(...args)=>p.write(...args).then(result=>new Promise(resolve=>{
+      api.scene.update_actor=(...args)=>p.write(...args).then(result=>new Promise(resolve=>{
         p.release=()=>resolve(result);p.ready=true;}));
       [...document.querySelectorAll('#actor-body-type button')].find(b=>b.textContent.trim()==='静态').click();return true;})()""")
     try:
@@ -68,15 +68,15 @@ def property_retirement(panel, main, scene, archive, guid):
         events = panel.evaluate('window.__physicsLifetime.events')
         assert not events, f'Retired Object published physics events: {events}'
     finally:
-        panel.evaluate("(()=>{const p=window.__physicsLifetime;p.api.scene.updateActor=p.write;"
+        panel.evaluate("(()=>{const p=window.__physicsLifetime;p.api.scene.update_actor=p.write;"
                        "p.context.recordEvent=p.record;p.release?.();location.hash=p.route;})()")
     wait(lambda: panel.evaluate("document.querySelector('.object-heading h2')?.textContent"),
          lambda name: name == 'Probe', 'Object normal remount after physics patch')
     panel.evaluate("[...document.querySelectorAll('#actor-body-type button')].find(b=>b.textContent.trim()==='运动学').click()")
     request = json.dumps([scene, guid, {'archive_session': archive}])
-    wait(lambda: main.evaluate(f'corona.scene.readActorProperties(...{request})'),
+    wait(lambda: main.evaluate(f'corona.scene.read_actor_properties(...{request})'),
          lambda actor: actor['mechanics']['body_type'] == 'kinematic', 'live physics patch after remount')
-    main.evaluate('corona.scene.updateActor(' + json.dumps(scene) + ',' + json.dumps(guid) + ','
+    main.evaluate('corona.scene.update_actor(' + json.dumps(scene) + ',' + json.dumps(guid) + ','
                   + json.dumps({'archive_session': archive, 'mechanics': {'body_type': 'dynamic'}}) + ')')
     return dict(retired_physics_events=events, normal_remount=True, live_body_type_edit=True)
 
@@ -98,15 +98,15 @@ def run(port, root):
         main.evaluate("location.hash='/'")
         wait(lambda: main.evaluate(f'{service}.then(s=>s.readEditorUiPolicy())'),
              lambda policy: policy and policy.get('enabled'), 'Object owner ready')
-        scope = main.evaluate('corona.scene.readActive()')
+        scope = main.evaluate('corona.scene.read_active()')
         archive, scene = scope['archive_session'], scope['scene']
         arguments = json.dumps([scene, 'Probe', {'archive_session': archive}])
 
         def read():
-            return main.evaluate(f'corona.scene.readActorProperties(...{arguments})')
+            return main.evaluate(f'corona.scene.read_actor_properties(...{arguments})')
 
         initial = read()
-        main.evaluate(f'corona.scene.selectActor({json.dumps(scene)},"scene","")')
+        main.evaluate(f'corona.scene.select_actor({json.dumps(scene)},"scene","")')
         opened = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'Object',routePath:'/Object',width:600,height:900}}))")
         window_token = opened['window_token']
         target = wait(lambda: next((target for target in targets() if '#/Object?' in target['url']
@@ -114,14 +114,14 @@ def run(port, root):
         panel = Frontend(port, target_id=target['id'])
         wait(lambda: panel.evaluate("!!document.querySelector('.object-panel-shell')"), bool, 'Object mounted')
         panel.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-          const api=Object.values(m).find(v=>typeof v?.scene?.readActorProperties==='function');
+          const api=Object.values(m).find(v=>typeof v?.scene?.read_actor_properties==='function');
           if(!api)throw Error('Actor property facade missing');
           window.__propertyReads=[];
-          const read=api.scene.readActorProperties;
-          api.scene.readActorProperties=(...args)=>read(...args).then(result=>{window.__propertyReads.push({args,result});return result;});
+          const read=api.scene.read_actor_properties;
+          api.scene.read_actor_properties=(...args)=>read(...args).then(result=>{window.__propertyReads.push({args,result});return result;});
           if(typeof corona.editor!=='undefined')throw Error('Generic native dispatch remains');
           return true;})()""")
-        main.evaluate(f'corona.scene.selectActor({json.dumps(scene)},"actor","Probe")')
+        main.evaluate(f'corona.scene.select_actor({json.dumps(scene)},"actor","Probe")')
         wait(lambda: panel.evaluate("document.querySelector('.object-heading h2')?.textContent"),
              lambda name: name == 'Probe', 'Object property projection applied')
         assert panel.evaluate("Number(document.querySelector('[data-guidance=object-position-x]').value)") == initial['geometry']['position'][0]
@@ -134,9 +134,9 @@ def run(port, root):
           input.value='3.5';input.dispatchEvent(new Event('input',{bubbles:true}));
           input.dispatchEvent(new Event('change',{bubbles:true}));return true;})()""")
         wait(read, lambda actor: actor['mechanics']['mass'] == 3.5, 'Object mass patch')
-        main.evaluate(f'corona.scene.selectActor({json.dumps(scene)},"scene","")')
+        main.evaluate(f'corona.scene.select_actor({json.dumps(scene)},"scene","")')
         wait(lambda: panel.evaluate("!document.querySelector('.object-heading')"), bool, 'Object selection cleared')
-        main.evaluate(f'corona.scene.selectActor({json.dumps(scene)},"actor","Probe")')
+        main.evaluate(f'corona.scene.select_actor({json.dumps(scene)},"actor","Probe")')
         wait(lambda: panel.evaluate("document.querySelector('[data-guidance=object-physics-mass]')?.value"),
              lambda value: value == '3.5', 'Object reload preserves properties')
         calls = panel.evaluate('window.__propertyReads')

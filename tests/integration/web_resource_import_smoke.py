@@ -101,16 +101,16 @@ def run(port, root, engine_pid, repo):
         return web.evaluate(method + '(...' + json.dumps(args) + ')')
     try:
         wait(lambda: web.evaluate("!!document.querySelector('#app[data-v-app] button')"), bool, 'editor mounted')
-        opened = wait(lambda: v8('corona.project.openProject', str(root)),
+        opened = wait(lambda: v8('corona.project.open_project', str(root)),
                       lambda value: value.get('status') != 'service_initializing', 'open resource world')
         assert opened['ok'], opened
-        active = v8('corona.scene.readActive')
+        active = v8('corona.scene.read_active')
         scene, scope = active['scene'], {'archive_session': active['archive_session']}
         web.evaluate("location.hash='/SceneBar'")
         toolbar = "document.querySelector('[data-guidance=scene-import-model]')"
         wait(lambda: web.evaluate(f'!!{toolbar}'), bool, 'SceneBar mounted')
         def actors():
-            return v8('corona.scene.readScene', {**scope, 'scene': scene, 'actors': 'index'})['actors']
+            return v8('corona.scene.read_scene', {**scope, 'scene': scene, 'actors': 'index'})['actors']
         def imported_actor(label, source, actor_type):
             before = {a['actor_guid'] for a in actors()}
             web.evaluate(f"{toolbar}.querySelector('button').click()")
@@ -121,11 +121,11 @@ def run(port, root, engine_pid, repo):
             extension = source.suffix.lstrip('.').lower()
             result = wait(actors, lambda values: any(a['actor_guid'] not in before and a['type'] == extension for a in values), 'Vue resource import')
             actor = next(a for a in result if a['actor_guid'] not in before and a['type'] == extension)
-            properties = v8('corona.scene.readActorProperties', scene, actor['actor_guid'], scope)
+            properties = v8('corona.scene.read_actor_properties', scene, actor['actor_guid'], scope)
             assert properties['actor_type'] == actor_type, properties
             return actor
         before = actors()
-        cancelled = dialog.drive(lambda: v8('corona.scene.importResourceFile', scene, {**scope, 'file_type': 'model'}))
+        cancelled = dialog.drive(lambda: v8('corona.scene.import_resource_file', scene, {**scope, 'file_type': 'model'}))
         assert cancelled['status'] == 'canceled' and actors() == before, cancelled
         source = root.parent / 'acceptance-assets'
         source.mkdir(exist_ok=True)
@@ -133,20 +133,20 @@ def run(port, root, engine_pid, repo):
         wolf = source / 'WolfSource/fbx/Wolf.fbx'
         model = imported_actor('模型', wolf, 'model')
         def skeleton():
-            value = web.evaluate('corona.scene.readActorRig(...' + json.dumps([scene, model['actor_guid'], scope]) + ').catch(error=>({error:error.code}))')
+            value = web.evaluate('corona.scene.read_actor_rig(...' + json.dumps([scene, model['actor_guid'], scope]) + ').catch(error=>({error:error.code}))')
             value = value.get('skeleton', {})
             return value if value.get('is_skinned') and value.get('bone_count', 0) > 0 else None
         skel = wait(skeleton, bool, 'imported skeleton')
         leaf = next(node for node in skel['nodes'] if node['leaf'] and node['parent'] >= 0)
-        before_ik = v8('corona.scene.readActorRig', scene, model['actor_guid'], scope)['ik']
+        before_ik = v8('corona.scene.read_actor_rig', scene, model['actor_guid'], scope)['ik']
         chain = {'id': 'acceptance-foot', 'bone_name': leaf['name'], 'mode': 'foot_plant',
                  'chain_length': 2, 'weight': 0.5, 'enabled': False}
-        changed = v8('corona.scene.setActorIkChains', scene, model['actor_guid'], [chain], before_ik['revision'], scope)
+        changed = v8('corona.scene.set_actor_ik_chains', scene, model['actor_guid'], [chain], before_ik['revision'], scope)
         assert changed['revision'] > before_ik['revision'] and changed['chains'][0]['id'] == chain['id'], changed
-        conflict = web.evaluate('corona.scene.setActorIkChains(...' + json.dumps([scene, model['actor_guid'], [], before_ik['revision'], scope]) + ').catch(error=>error.code)')
+        conflict = web.evaluate('corona.scene.set_actor_ik_chains(...' + json.dumps([scene, model['actor_guid'], [], before_ik['revision'], scope]) + ').catch(error=>error.code)')
         assert conflict == 'CONFLICT', conflict
-        assert v8('corona.scene.readActorRig', scene, model['actor_guid'], scope)['ik']['revision'] == changed['revision']
-        restored = v8('corona.scene.setActorIkChains', scene, model['actor_guid'], before_ik['chains'], changed['revision'], scope)
+        assert v8('corona.scene.read_actor_rig', scene, model['actor_guid'], scope)['ik']['revision'] == changed['revision']
+        restored = v8('corona.scene.set_actor_ik_chains', scene, model['actor_guid'], before_ik['chains'], changed['revision'], scope)
         assert len(restored['chains']) == len(before_ik['chains']), restored
         image = source / 'AcceptanceImage.png'
         def chunk(kind, data):
@@ -159,7 +159,7 @@ def run(port, root, engine_pid, repo):
             stream.setparams((1, 2, 48000, 0, 'NONE', 'not compressed'))
             stream.writeframes(b''.join(struct.pack('<h', int(3000 * math.sin(2 * math.pi * 997 * n / 48000))) for n in range(48000)))
         audio = imported_actor('音频', tone, 'audio')
-        wait(lambda: next((actor for actor in v8('corona.scene.readScene', {**scope, 'scene': scene, 'actors': 'tree', 'cameras': True})['actors']
+        wait(lambda: next((actor for actor in v8('corona.scene.read_scene', {**scope, 'scene': scene, 'actors': 'tree', 'cameras': True})['actors']
                            if actor['actor_guid'] == audio['actor_guid']), {}),
              lambda value: bool(value.get('audio_resource_id')) and value.get('load_status') == 'loaded', 'audio resource loaded')
         # Capture only the output-device loopback in memory, never a microphone;

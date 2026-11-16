@@ -14,19 +14,19 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _web_scene_names() -> set[str]:
-    return {operation_table.camel_case(row["name"])
+    return {row["name"]
             for row in operation_table.web_rows() if row["group"] == "scene"}
 
 
 def test_scene_v8_has_only_the_consolidated_names():
     names = _web_scene_names()
     assert len(names) == 25, f"expected 25 published scene operations, found {len(names)}"
-    for name in ('readScene', 'updateActor', 'updateCamera', 'readActorRig',
-                 'readActive', 'readTransforms', 'setActorTransform', 'setActorIkChains'):
+    for name in ('read_scene', 'update_actor', 'update_camera', 'read_actor_rig',
+                 'read_active', 'read_transforms', 'set_actor_transform', 'set_actor_ik_chains'):
         assert name in names
-    for name in ('readTree', 'readActorIndex', 'readActorTree', 'readCameras',
-                 'setActorProperties', 'renameActor', 'setCameraProperties', 'renameCamera',
-                 'readActorSkeleton', 'readActorIkChains'):
+    for name in ('read_tree', 'read_actor_index', 'read_actor_tree', 'read_cameras',
+                 'set_actor_properties', 'rename_actor', 'set_camera_properties', 'rename_camera',
+                 'read_actor_skeleton', 'read_actor_ik_chains'):
         assert name not in names
 
 
