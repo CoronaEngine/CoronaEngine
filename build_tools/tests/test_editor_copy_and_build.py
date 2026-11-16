@@ -102,34 +102,6 @@ def test_editor_copy_union_cleanup_keeps_files_owned_by_any_source(tmp_path):
     assert not stale.exists()
 
 
-def test_editor_copy_materializes_block_program_into_frontend(tmp_path, monkeypatch):
-    module = _load_copy_module()
-    editor_source = tmp_path / "editor"
-    python_source = tmp_path / "embedded_python"
-    frontend, node, _ = _prepare_frontend_build(module, tmp_path)
-    (frontend / "dist").mkdir()
-    (frontend / "dist" / "index.html").write_text("built", encoding="utf-8")
-    (editor_source / "Frontend").mkdir(parents=True)
-    block_program = python_source / "frontend_assets" / "block_program.py"
-    block_program.parent.mkdir(parents=True)
-    block_program.write_text("BUNDLED = True\n", encoding="utf-8")
-    runner = Mock(return_value=0)
-    monkeypatch.setattr(module, "stream_run", runner)
-
-    result = module.main([
-        "--dest-root", str(tmp_path / "CabbageEditor"),
-        "--src-dir", str(editor_source),
-        "--python-dir", str(python_source),
-        "--merge-content",
-        "--frontend-dir", str(frontend),
-        "--node-dir", str(node),
-    ])
-
-    assert result == 0
-    deployed = tmp_path / "CabbageEditor" / "Frontend" / "src" / "blockly" / "generators" / "runtime" / "block_program.py"
-    assert deployed.read_text(encoding="utf-8") == "BUNDLED = True\n"
-
-
 def _prepare_frontend_build(module, tmp_path):
     frontend = tmp_path / "Frontend"
     node = tmp_path / "node"

@@ -5,7 +5,7 @@ namespace Corona::Systems::UI::SceneFolders {
 
 nlohmann::json archive_asset_request(nlohmann::json request) {
     const auto result = invoke_python_script_service(
-        {"ProjectArchive", "asset_operation", nlohmann::json::array({std::move(request)})},
+        {"project_archive", "asset_operation", nlohmann::json::array({std::move(request)})},
         "python-archive");
     if (!result.success) throw std::runtime_error(result.error);
     return result.data;

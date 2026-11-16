@@ -3,6 +3,19 @@
 `tests/integration/` 下的脚本启动真实引擎、真实 CEF 窗口和真实 Vue 页面，验证 Web 接口层与
 打包后的编辑器。它们不进入 ctest（需要 GPU、窗口和数分钟的运行时间），由本流程手动执行。
 
+## 改动接口层时的必跑清单
+
+任何改动 `window.corona.*` 的方法名、bridge 服务名、wire key 或事件负载的提交，合并前跑完这三条：
+
+| 顺序 | 命令 | 覆盖 |
+|---|---|---|
+| 1 | `pytest tests/tools` | 静态守卫 + 前端精选子集（`test_frontend_regressions.py` 逐个起 `node --test`） |
+| 2 | `npm run test:unit`（在 `CoronaEditor/editor/Frontend`） | 前端全量单测 |
+| 3 | `node tests/integration/web_messages_cef_smoke.mjs` | Web → 原生：窗口创建/关闭/焦点、事件负载、输入派发、截图、bridge 往返；自带引擎实例，跑完自动关闭 |
+
+第 3 条是唯一会真的把请求发到原生的测试。单元测试和静态守卫只检查 Web 内部的形状——
+键名或方法名对不上时只有它会红（例如 `Invalid native window operation arguments`），
+而且能定位到具体是哪个调用。
 ## 1. 前置条件
 
 | 项目 | 要求 |
@@ -98,9 +111,7 @@ python tests/integration/web_packaged_ui_smoke.py <runtime> --suite panels
 
 | 脚本 | 参数 |
 |---|---|
-| `scene_pull_smoke.py` | `port project control`（两个窗口、一个 Python 脚本控制目录） |
 | `python_archive_smoke.py` | `port project peer`（一个 peer 项目用于归档会话切换） |
-| `blockly_actor_file_smoke.py` | 内部 `verify(port, root, switch_root)`，需要两个世界 |
 
 ## 7. 已知失败与隔离
 

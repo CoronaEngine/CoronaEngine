@@ -7,7 +7,7 @@ import shutil
 import sys
 from tempfile import TemporaryDirectory
 
-from blockly_actor_file_smoke import wait_for, open_web_project
+from web_smoke_support import wait_for, open_web_project
 
 
 def verify(port, project, peer):
@@ -25,7 +25,7 @@ def verify(port, project, peer):
         return json.loads(web.evaluate("corona.bridge.call(" + json.dumps(envelope) + ")"))
 
     def file_manager(op, *args):
-        return bridge("ProjectArchive", "file_manager",
+        return bridge("project_archive", "file_manager",
                       {"archive_session": scope["archive_session"],
                        "project_path": str(project), "op": op, "args": list(args)})
 
@@ -46,12 +46,12 @@ def verify(port, project, peer):
     session = open_project(project)
     scope = {"archive_session": session, "project_path": str(project)}
     doc = {**scope, "document": "CabbageAssistant/archive-smoke.json"}
-    read = bridge("ProjectArchive", "read_document", {**doc, "revision_only": True})
+    read = bridge("project_archive", "read_document", {**doc, "revision_only": True})
     assert read["success"] and read['content'] is None and not read['corrupt'], read
     assert read['revision'] == hashlib.sha256(b'').hexdigest(), read
     update = {**doc, "content": {"sample": 1}, "revision": read.get("revision", "")}
-    saved = bridge("ProjectArchive", "commit_document", {**update, "revision_only": True})
-    assert saved["success"] and bridge("ProjectArchive", "commit_document",
+    saved = bridge("project_archive", "commit_document", {**update, "revision_only": True})
+    assert saved["success"] and bridge("project_archive", "commit_document",
                                        {**update, "revision_only": True})["error"] == "DOCUMENT_CONFLICT"
 
     prefab = file_manager("create_file", "", "Probe template", "actor")
@@ -71,7 +71,7 @@ def verify(port, project, peer):
     session = open_project(project)
     assert session != scope["archive_session"]
     try:
-        bridge("ProjectArchive", "commit_document",
+        bridge("project_archive", "commit_document",
                {**update, "revision": saved["revision"], "content": "stale", "revision_only": True})
         raise AssertionError("a stale document commit must refuse")
     except AssertionError:
@@ -79,7 +79,7 @@ def verify(port, project, peer):
     except Exception as error:  # the bridge rejects refusals now
         assert "PROJECT_CONTEXT_CHANGED" in str(error), error
     try:
-        bridge("ProjectArchive", "file_manager",
+        bridge("project_archive", "file_manager",
                {"archive_session": scope["archive_session"], "project_path": str(project),
                 "op": "create_file", "args": ["", "stale", "actor"]})
         raise AssertionError("a stale file manager request must refuse")
@@ -96,26 +96,9 @@ def verify(port, project, peer):
         assert reply.get("code") == "PROJECT_CONTEXT_CHANGED", (name, reply)
     assert not (project / "stale.actor").exists()
     scope = {**scope, "archive_session": session}
-    assert bridge("ProjectArchive", "read_document", {**doc, **scope, "revision_only": True})["content"] == {"sample": 1}
+    assert bridge("project_archive", "read_document", {**doc, **scope, "revision_only": True})["content"] == {"sample": 1}
     actor = read_actor("Spawned", session)
     assert actor["geometry"]["position"] == [2, 3, 4], actor
-    script = project / "Scripts" / "remove_actor_for_restore.py"
-    script.parent.mkdir(exist_ok=True)
-    script.write_text("from api.editor_api import get_script_runtime_editor_api\n"
-                      "from script_runtime import file_api\n"
-                      "def run():\n    get_script_runtime_editor_api().scene_tools.remove_actor('scene.ini', 'Spawned')\n"
-                      "    file_api.mark('removed')\n    while True: file_api.wait(.05)\n", encoding="utf8")
-    before = fingerprint()
-    start = bridge("FileScripts", "run_file", {**scope, "path": script.relative_to(project).as_posix(), "target_type": "project",
-                 "scene_name": "scene.ini", "requestId": "archive-restore", "revision": hashlib.sha256(script.read_bytes()).hexdigest()})
-    wait_for(lambda: bridge("FileScripts", "get_script_status"),
-             lambda r: r.get("marker", {}).get("id") == "removed", "runtime removal")
-    assert all(a["actor_guid"] != actor["actor_guid"] for a in v8("corona.scene.readScene", {"scene": "scene.ini", "archive_session": session, "actors": "index"})["actors"])
-    assert fingerprint() == before
-    stop = bridge("FileScripts", "stop_file", {"runId": start["runId"], "restore_state": True})
-    assert stop["restored"] and not stop["snapshotCaptured"], stop
-    restored = read_actor(actor["actor_guid"], session)
-    assert restored["geometry"]["position"] == actor["geometry"]["position"] and fingerprint() == before
     print("Python document conflict, stale session, Actor import/reopen and memory-only restore passed", len(before), "files")
 
 

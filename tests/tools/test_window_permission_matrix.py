@@ -16,7 +16,9 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-HEADER = ROOT / "src" / "systems" / "ui" / "cef" / "cef_window_operations.h"
+# WindowMethod moved to the CEF-free methods header the operation table can read; the
+# operations themselves and their caller checks stayed in cef_window_operations.cpp.
+HEADER = ROOT / "src" / "systems" / "ui" / "cef" / "editor_operation_methods.h"
 SOURCE = ROOT / "src" / "systems" / "ui" / "cef" / "cef_window_operations.cpp"
 
 EXCEPTIONS = {"CreatePanel", "CreateCameraView", "ConfigureViewport"}

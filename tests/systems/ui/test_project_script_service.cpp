@@ -20,39 +20,8 @@ void check(bool condition, const char* message) {
     }
 }
 
-void test_script_path() {
-    check(!validate_script_path(std::filesystem::path("scripts/main.py")), "relative py accepted");
-    check(!validate_script_path(std::filesystem::path("a/b/c.tool.py")), "nested py accepted");
 
-    auto error = validate_script_path(std::filesystem::path(""));
-    check(error && error.code == "INVALID_ARGUMENT" &&
-          error.message == "Script path must be a project-relative .py file", "empty path rejected");
 
-    check(static_cast<bool>(validate_script_path(std::filesystem::path("C:/abs/main.py"))),
-          "rooted path rejected");
-
-    check(static_cast<bool>(validate_script_path(std::filesystem::path("scripts/main.txt"))),
-          "non-py rejected");
-
-    check(static_cast<bool>(validate_script_path(std::filesystem::path("scripts/main"))),
-          "extension-less path rejected");
-}
-
-void test_script_project() {
-    check(!validate_script_project(false, true, true), "writable matching project accepted");
-
-    auto error = validate_script_project(true, true, true);
-    check(error && error.code == "PROJECT_CONTEXT_CHANGED" &&
-          error.message == "Script project changed or is read-only", "read-only project rejected");
-
-    check(static_cast<bool>(validate_script_project(false, false, true)), "missing project path rejected");
-    check(static_cast<bool>(validate_script_project(false, true, false)), "different project rejected");
-}
-
-void test_target_type() {
-    check(default_target_type("Hero") == "actor", "actor name selects the actor target");
-    check(default_target_type("") == "project", "no actor name runs the project");
-}
 
 void test_bridge_error_code() {
     check(bridge_error_code(504) == "EDITOR_API_TIMEOUT", "timeout mapped");
@@ -89,9 +58,6 @@ void test_project_settings_error_code() {
 }  // namespace
 
 int main() {
-    test_script_path();
-    test_script_project();
-    test_target_type();
     test_bridge_error_code();
     test_document_identity();
     test_writable_project();

@@ -1,7 +1,7 @@
 """Every code a Python bridge service refuses with is in the contract vocabulary.
 
 Refusals reach Web as Promise rejections now, so the Python-side codes are part of the
-same vocabulary as the C++ ones. Data-level codes (FileScripts run records, archive
+same vocabulary as the C++ ones. Data-level codes (run records, archive
 diagnostics) are not in the scan: they never reject.
 """
 
@@ -16,5 +16,5 @@ def test_python_refusal_codes_are_declared():
 
 
 def test_the_document_codes_are_declared():
-    for code in ("DOCUMENT_CONFLICT", "INVALID_PROJECT_DOCUMENT", "RUN_ACTIVE", "NO_ACTIVE_PROJECT"):
+    for code in ("DOCUMENT_CONFLICT", "INVALID_PROJECT_DOCUMENT", "NO_ACTIVE_PROJECT"):
         assert code in rejection_codes.ALL, code

@@ -1,6 +1,7 @@
 """Versioned JSON documents in the active project."""
 import hashlib
 import json
+from runtime.archive.arguments import require_keys
 from pathlib import PureWindowsPath
 from threading import RLock
 from uuid import uuid4
@@ -13,6 +14,9 @@ _LIMIT = 8 * 1024 * 1024
 
 
 def project_document(request, *, commit):
+    require_keys(request, required=('document',) + (('content',) if commit else ()),
+                 optional=('revision', 'version', 'revision_only',
+                           'archive_session', 'project_path'))
     with _lock:
         root, error = require_project_session(request)
         if error:
@@ -40,9 +44,6 @@ def project_document(request, *, commit):
             parsed, corrupt = None, True
         if not commit:
             return {"success": True, token: revision, "content": parsed, "corrupt": corrupt}
-        from script_runtime.file_runner import FileScripts
-        if FileScripts.has_restore_snapshot():
-            return {"success": False, "error": "RUN_ACTIVE"}
         if request.get(token) != revision:
             return {"success": False, "error": "DOCUMENT_CONFLICT"}
         content = json.dumps(request["content"], ensure_ascii=False, indent=2, allow_nan=False)

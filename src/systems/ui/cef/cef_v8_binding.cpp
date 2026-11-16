@@ -98,8 +98,6 @@ CefRefPtr<CefV8Value> json_to_v8(const nlohmann::json& value) {
     return result;
 }
 
-enum class BridgeMethod { Call };
-
 bool object_keys(CefRefPtr<CefV8Value> object, std::initializer_list<const char*> allowed);
 
 bool read_network(NetworkRequest& request, const CefV8ValueList& arguments) {
@@ -258,7 +256,6 @@ CefRefPtr<CefV8Value> project_settings_value(const ProjectSettingsReply& reply) 
     return json_to_v8(reply.value);
 }
 
-enum class NativeEventKind { Closed, CloseRequested };
 struct WindowEventData {
     NativeEventKind type;
     int window_token = -1;
@@ -2469,82 +2466,44 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
         endpoints.push_back(endpoint);
     }
     auto root = CefV8Value::CreateObject(nullptr, nullptr);
-    auto network = CefV8Value::CreateObject(nullptr, nullptr);
-    network->SetValue("startSession", CefV8Value::CreateFunction("startSession", new NativeHandler(endpoint, NetworkMethod::StartSession)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    network->SetValue("stopSession", CefV8Value::CreateFunction("stopSession", new NativeHandler(endpoint, NetworkMethod::StopSession)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    network->SetValue("getSessionInfo", CefV8Value::CreateFunction("getSessionInfo", new NativeHandler(endpoint, NetworkMethod::GetSessionInfo)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    network->SetValue("getDiscoveredPeers", CefV8Value::CreateFunction("getDiscoveredPeers", new NativeHandler(endpoint, NetworkMethod::GetDiscoveredPeers)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    network->SetValue("clearDiscoveredPeers", CefV8Value::CreateFunction("clearDiscoveredPeers", new NativeHandler(endpoint, NetworkMethod::ClearDiscoveredPeers)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    network->SetValue("searchLan", CefV8Value::CreateFunction("searchLan", new NativeHandler(endpoint, NetworkMethod::SearchLan)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    network->SetValue("connectToPeer", CefV8Value::CreateFunction("connectToPeer", new NativeHandler(endpoint, NetworkMethod::ConnectToPeer)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    network->SetValue("setProjectRoot", CefV8Value::CreateFunction("setProjectRoot", new NativeHandler(endpoint, NetworkMethod::SetProjectRoot)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("network", network, V8_PROPERTY_ATTRIBUTE_READONLY);
-
-    auto project = CefV8Value::CreateObject(nullptr, nullptr);
-    project->SetValue("openProject", CefV8Value::CreateFunction("openProject", new NativeHandler(endpoint, ProjectLauncherMethod::Open)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    project->SetValue("openProjectFile", CefV8Value::CreateFunction("openProjectFile", new NativeHandler(endpoint, ProjectLauncherMethod::SelectFile)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    project->SetValue("createWorldProject", CefV8Value::CreateFunction("createWorldProject", new NativeHandler(endpoint, ProjectLauncherMethod::CreateWorld)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    project->SetValue("createMultiplayerProject", CefV8Value::CreateFunction("createMultiplayerProject", new NativeHandler(endpoint, ProjectLauncherMethod::CreateMultiplayer)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    project->SetValue("getRecentProjects", CefV8Value::CreateFunction("getRecentProjects", new NativeHandler(endpoint, ProjectLauncherMethod::GetRecent)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    project->SetValue("getProjectLoadStatus", CefV8Value::CreateFunction("getProjectLoadStatus", new NativeHandler(endpoint, ProjectLauncherMethod::GetLoadStatus)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    // Opening a project document may reload the native scene; every other project file
-    // operation runs through the Web -> Python bridge.
-    project->SetValue("openDocument", CefV8Value::CreateFunction("openDocument", new NativeHandler(endpoint, FilesMethod::Open)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    project->SetValue("saveActiveProjectInfo", CefV8Value::CreateFunction("saveActiveProjectInfo", new NativeHandler(endpoint, ProjectSettingsMethod::SaveInfo)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("project", project, V8_PROPERTY_ATTRIBUTE_READONLY);
-    // The namespaces exist before the table fills them: every tab-installed name
-    // (scene, audio, app, viewport) is derived from editor_operation_table.h, so a
-    // rename there renames the Web method and the ScriptRuntime binding together.
-    auto scene = CefV8Value::CreateObject(nullptr, nullptr);
-    auto audio = CefV8Value::CreateObject(nullptr, nullptr);
-    auto app = CefV8Value::CreateObject(nullptr, nullptr);
-    auto viewport = CefV8Value::CreateObject(nullptr, nullptr);
-    root->SetValue("scene", scene, V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("audio", audio, V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("app", app, V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("viewport", viewport, V8_PROPERTY_ATTRIBUTE_READONLY);
-    const std::map<std::string_view, CefRefPtr<CefV8Value>> namespaces = {
-        {"scene", scene}, {"audio", audio}, {"app", app}, {"viewport", viewport}};
+    // The namespaces exist before the table fills them: every name is a row in
+    // editor_operation_table.h, so a rename there renames the Web method. Two rows install a
+    // handler class instead of an operation (the window events), which is what the visit below
+    // branches on.
+    struct NativeNamespace {
+        const char* name;
+        CefRefPtr<CefV8Value> object;
+    };
+    const NativeNamespace namespaces[] = {
+        {"scene", CefV8Value::CreateObject(nullptr, nullptr)},
+        {"audio", CefV8Value::CreateObject(nullptr, nullptr)},
+        {"app", CefV8Value::CreateObject(nullptr, nullptr)},
+        {"viewport", CefV8Value::CreateObject(nullptr, nullptr)},
+        {"network", CefV8Value::CreateObject(nullptr, nullptr)},
+        {"project", CefV8Value::CreateObject(nullptr, nullptr)},
+        {"window", CefV8Value::CreateObject(nullptr, nullptr)},
+        {"input", CefV8Value::CreateObject(nullptr, nullptr)},
+        {"bridge", CefV8Value::CreateObject(nullptr, nullptr)},
+    };
+    for (const auto& [group, object] : namespaces)
+        root->SetValue(group, object, V8_PROPERTY_ATTRIBUTE_READONLY);
     for (const auto& spec : kEditorOperations) {
-        if (!spec.web || !spec.method) continue;
-        const auto target = namespaces.find(spec.group);
-        if (target == namespaces.end()) continue;
+        CefRefPtr<CefV8Value> target;
+        for (const auto& [group, object] : namespaces) {
+            if (spec.group == group) { target = object; break; }
+        }
+        if (!target) continue;
         const auto js_name = camel_case(spec.name);
-        target->second->SetValue(
-            js_name, CefV8Value::CreateFunction(js_name, new NativeHandler(endpoint, *spec.method)),
-            V8_PROPERTY_ATTRIBUTE_READONLY);
+        std::visit([&](auto method) {
+            using Method = decltype(method);
+            if constexpr (std::is_same_v<Method, NativeEventKind>)
+                target->SetValue(js_name, CefV8Value::CreateFunction(
+                    js_name, new NativeEventHandler(endpoint, method)), V8_PROPERTY_ATTRIBUTE_READONLY);
+            else
+                target->SetValue(js_name, CefV8Value::CreateFunction(
+                    js_name, new NativeHandler(endpoint, method)), V8_PROPERTY_ATTRIBUTE_READONLY);
+        }, spec.method);
     }
-    // Input is its own surface: the camera is the target, not the namespace.
-    auto input = CefV8Value::CreateObject(nullptr, nullptr);
-    input->SetValue("dispatch", CefV8Value::CreateFunction("dispatch",
-        new NativeHandler(endpoint, ScriptInputMethod::Dispatch)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("input", input, V8_PROPERTY_ATTRIBUTE_READONLY);
-    auto window = CefV8Value::CreateObject(nullptr, nullptr);
-    // One verb for "close a window"; the identity decides which. See read_close_request.
-    window->SetValue("close", CefV8Value::CreateFunction("close",
-        new NativeHandler(endpoint, WindowMethod::Close)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    // focus({panelId}) targets the same stable identity close does.
-    window->SetValue("focus", CefV8Value::CreateFunction("focus",
-        new NativeHandler(endpoint, WindowMethod::Focus)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    window->SetValue("createPanel", CefV8Value::CreateFunction("createPanel",
-        new NativeHandler(endpoint, WindowMethod::CreatePanel)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    window->SetValue("setWindowPresentation", CefV8Value::CreateFunction("setWindowPresentation",
-        new NativeHandler(endpoint, WindowMethod::SetWindowPresentation)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    window->SetValue("onClosed", CefV8Value::CreateFunction("onClosed",
-        new NativeEventHandler(endpoint, NativeEventKind::Closed)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    window->SetValue("onCloseRequested", CefV8Value::CreateFunction("onCloseRequested",
-        new NativeEventHandler(endpoint, NativeEventKind::CloseRequested)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    app->SetValue("closeProcess", CefV8Value::CreateFunction("closeProcess",
-        new NativeHandler(endpoint, WindowMethod::CloseProcess)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    viewport->SetValue("configure", CefV8Value::CreateFunction("configure",
-        new NativeHandler(endpoint, WindowMethod::ConfigureViewport)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("window", window, V8_PROPERTY_ATTRIBUTE_READONLY);
-    // One function for every Web -> Python request.  JS builds the envelope and
-    // Python interprets it; no schema or business branch lives on this side.
-    auto bridge = CefV8Value::CreateObject(nullptr, nullptr);
-    bridge->SetValue("call", CefV8Value::CreateFunction("call",
-        new NativeHandler(endpoint, BridgeMethod::Call)), V8_PROPERTY_ATTRIBUTE_READONLY);
-    root->SetValue("bridge", bridge, V8_PROPERTY_ATTRIBUTE_READONLY);
     context->GetGlobal()->SetValue("corona", root, V8_PROPERTY_ATTRIBUTE_READONLY);
     return endpoint;
 }

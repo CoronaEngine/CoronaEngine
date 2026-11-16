@@ -10,7 +10,7 @@ from web_environment_smoke import wait
 
 def archive_call(main, function, request):
     """Ask the archive service through the one Web -> Python entry."""
-    envelope = json.dumps({"service": "ProjectArchive", "function": function, "args": [request]})
+    envelope = json.dumps({"service": "project_archive", "function": function, "args": [request]})
     return json.loads(main.evaluate("corona.bridge.call(" + json.dumps(envelope) + ")"))
 
 

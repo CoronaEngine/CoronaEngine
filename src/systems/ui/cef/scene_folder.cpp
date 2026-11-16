@@ -394,7 +394,7 @@ SceneAssetStore::SceneAssetStore(fs::path root, bool allow_missing)
 
 nlohmann::json SceneAssetStore::request(nlohmann::json payload) const {
     payload["root"] = path_utf8(root_);
-    payload["allowMissing"] = allow_missing_;
+    payload["allow_missing"] = allow_missing_;
     return archive_asset_request(std::move(payload));
 }
 
@@ -447,7 +447,7 @@ bool SceneAssetStore::contains_route(std::string_view route) const {
 
 CleanupResult cleanup_unreferenced_assets(const fs::path& root, const std::set<std::string>& referenced_routes, bool dry_run) {
     const auto response = archive_asset_request({{"root", path_utf8(root)}, {"op", "cleanup"},
-                                                 {"references", referenced_routes}, {"dryRun", dry_run}});
+                                                 {"references", referenced_routes}, {"dry_run", dry_run}});
     return {response.value("removedBundles", uint64_t{}), response.value("removedFiles", uint64_t{}),
             response.value("reclaimedBytes", uint64_t{}), diagnostics(response)};
 }

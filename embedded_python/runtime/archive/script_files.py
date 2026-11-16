@@ -4,6 +4,7 @@ import json
 import re
 from threading import RLock
 
+from runtime.archive.arguments import require_keys
 from runtime.archive.portable import atomic_replace
 from runtime.bridge_errors import BridgeError
 from runtime.project_context import require_project_session
@@ -20,6 +21,10 @@ class ProjectFiles:
                 raise BridgeError(error.get("code") or "SERVICE_FAILED",
                                   error.get("message") or "Project session refused")
             try:
+                require_keys(request, required=('code', 'document') if save else (),
+                             optional=('archive_session', 'project_path', 'identity', 'key'))
+                if 'identity' not in request and 'key' not in request:
+                    raise ValueError('Missing document identity or key')
                 if "identity" in request:
                     identity = request["identity"]
                     if (not isinstance(identity, list) or len(identity) != 4

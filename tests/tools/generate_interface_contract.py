@@ -1,6 +1,6 @@
 """Generate docs/interface-contract.md from the sources the guards already check.
 
-Run it after changing the Web surface or the ScriptRuntime table:
+Run it after changing the Web surface:
 
     python tests/tools/generate_interface_contract.py
 
@@ -14,10 +14,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import rejection_codes
+import operation_table
 
 ROOT = Path(__file__).resolve().parents[2]
-TABLE = ROOT / "src/systems/ui/cef/editor_operation_table.h"
-SURFACE = ROOT / "tests/tools/native_surface.py"
 OUT = ROOT / "docs/interface-contract.md"
 
 NAMESPACE_NOTES = {
@@ -38,9 +37,7 @@ NAMESPACE_NOTES = {
 GUARDS = [
     ("test_manifest_retirement.py", "已删除的 manifest 不许回来"),
     ("test_typed_native_surface.py", "Web 面方法 + 拒绝码词表"),
-    ("test_editor_operation_table.py", "唯一的操作表：36 行 / 11 双投影 / camelCase 推导"),
-    ("test_script_runtime_contract.py", "脚本绑定：表 ↔ nanobind ↔ Python 适配器"),
-    ("test_script_call_sites.py", "脚本调用点只使用表里发布的操作"),
+    ("test_editor_operation_table.py", "唯一的操作表：55 行 / 九个命名空间 / camelCase 推导"),
     ("test_wire_key_naming.py", "过原生的键一律 snake_case，Web 侧翻译只在 appService"),
     ("test_interface_contract_doc.py", "这份文档与代码一致"),
     ("test_docs_reference_live_files.py", "文档不指向已删除的文件"),
@@ -64,31 +61,39 @@ GUARDS = [
 ]
 
 
-TABLE_ROW = re.compile(
-    r'\{"(\w+)",\s*"(\w+)",\s*(SceneMethod::\w+|std::nullopt),\s*'
-    r'(true|false),\s*(true|false),\s*(\d+),\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\}'
-)
-
-
 def script_operations():
     """(namespace, name, arguments, arity, summary) for every script row, in table order."""
-    text = TABLE.read_text(encoding="utf-8-sig")
-    start = text.index("kEditorOperations[] = {")
-    end = text.index("};", start)
-    specs = []
-    for group, name, _method, _web, script, arity, arguments, summary in TABLE_ROW.findall(text[start:end]):
-        if script != "true":
-            continue
-        specs.append((group, name, arguments, int(arity), summary))
-    return specs
+    return [(row["group"], row["name"], row["arguments"], row["arity"], row["summary"])
+            for row in operation_table.script_rows()]
 
 
 def web_surface():
-    source = SURFACE.read_text(encoding="utf-8-sig")
-    block = source[source.index("EXPECTED_SURFACE = {"):source.index("\n}\n", source.index("EXPECTED_SURFACE"))]
-    entries = re.findall(r'^    "(\w+)": \{(.*?)\},?$', block, re.M | re.S)
-    return [(ns, sorted(set(re.findall(r'"(\w+)"', body)))) for ns, body in entries]
+    """(namespace, sorted method names) the binding installs, from the one table."""
+    import native_surface
 
+    return [(ns, sorted(names)) for ns, names in sorted(native_surface.EXPECTED_SURFACE.items())]
+
+
+def python_services():
+    """(service, module, functions) for every service the bridge may reach.
+
+    The allowlist lives in `editor_host.py`; the function list is parsed from the service
+    module, so adding a method or a service makes this document stale until regenerated.
+    """
+    editor = (ROOT / "embedded_python/runtime/editor_host.py").read_text(encoding="utf-8-sig")
+    allowed = re.findall(r"ALLOWED_SERVICES = frozenset\(\{([^}]*)\}\)", editor)
+    names = re.findall(r'"(\w+)"', allowed[0]) if allowed else []
+    registry = (ROOT / "embedded_python/runtime/registry.py").read_text(encoding="utf-8-sig")
+    mapping = dict(re.findall(r'"(\w+)": \("([\w.]+)",\s*"\w+"\)', registry))
+    services = []
+    for name in sorted(names):
+        module = mapping.get(name, "")
+        path = ROOT / "embedded_python" / (module.replace(".", "/") + ".py") if module else Path()
+        text = path.read_text(encoding="utf-8-sig") if module and path.is_file() else ""
+        functions = sorted(set(re.findall(r"^\s{4}def ([a-z]\w*)\(", text, re.M)) |
+                           set(re.findall(r"^\s{4}([a-z]\w*) = staticmethod\(", text, re.M)))
+        services.append((name, module, functions))
+    return services
 
 def build() -> str:
     specs = script_operations()
@@ -96,7 +101,7 @@ def build() -> str:
     method_total = sum(len(names) for _, names in surface)
 
     lines = [
-        "# 接口契约（Web / ScriptRuntime）",
+        "# 接口契约（Web）",
         "",
         "这份文档是接口层的**单一入口**。它不重复代码，只给出三条边界、各自的形状，以及",
         "**哪条测试在保护它**——契约信息散在守卫和注释里时，新人没有起点。",
@@ -109,7 +114,6 @@ def build() -> str:
         "| 边界 | 谁在说 | 落到哪里 | 传输 |",
         "|---|---|---|---|",
         "| Web → C++ | 编辑器前端 | `window.corona.*` | 同步值 / Promise |",
-        f"| ScriptRuntime → C++ | 角色脚本（Python） | {len(specs)} 条 `CoronaEngine.<namespace>.<name>` 具名绑定 | 真参数 / `EditorApiError` |",
         "| Web → Python | 前端与 C++ 都可能发起 | `corona.bridge.call` → Python 服务 | JSON 信封 |",
         "",
         "manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里没有任何按名字分发",
@@ -210,45 +214,50 @@ def build() -> str:
         "细节码会随实现改名或合并。稳定码的每一次增删都是契约变更，需要写进",
         "`docs/interface-decisions.md`。",
         "",
-        "Python 服务的**业务拒绝**统一是 Promise 拒绝，带 `error.code`：`ProjectArchive` 与",
-        "`ProjectFiles` 在 Python 侧抛 `BridgeError(code, message)`，dispatcher 把它写成",
-        "`CODE: message`，C++ 桥只从消息前缀取码，因此 `PROJECT_CONTEXT_CHANGED`、",
+        "Python 服务的**业务拒绝**统一是 Promise 拒绝，带 `error.code`：`project_archive` 与",
+        "`project_files` 在 Python 侧抛 `BridgeError(code, message)`，dispatcher 把它写成",
+        "符号码落在 `data.code`（与 C++ 场景层同一字段），C++ 桥不再解析消息，因此 `PROJECT_CONTEXT_CHANGED`、",
         "`DOCUMENT_CONFLICT`、`READ_ONLY_PROJECT`、`CONFLICT` 等业务码原样到达前端。",
-        "`FileScripts` 是例外：它的回复是**运行状态记录**（`status` 是",
-        "`starting/running/completed/error` 状态机），按值返回，由 Blockly 面板按状态渲染。",
-        "只有传输或服务本身失败（信封解析、服务未启动、Python 抛未知异常）才回落到",
-        "`SERVICE_FAILED`。",
         "同步方法**永不拒绝**：返回值，找不到时返回文档化的空值。",
         "",
-        "## ScriptRuntime 面",
-        "",
-        f"{len(specs)} 条具名绑定。名字、命名空间和参数位与 Web 面一一对应（这里用 snake_case）；",
-        "调用方传真参数，`arity` 是文档化的位置数（可选参数计入），真正的签名由 nanobind 强制。",
-        "",
-        "| 命名空间 | 绑定 | 参数 | arity | 说明 |",
-        "|---|---|---|---|---|",
     ]
-    for group, name, arguments, arity, summary in specs:
-        lines.append(f"| `{group}` | `{name}` | `{arguments}` | {arity} | {summary} |")
+
+    services = python_services()
+    lines += [
+        "",
+        "## Python 服务清单（bridge 可达）",
+        "",
+        "`corona.bridge.call` 只接受这些服务。白名单在 `runtime/editor_host.py` 的",
+        "`ALLOWED_SERVICES`；函数清单从服务源码解析，所以新增方法或服务后这份文档必须重新生成。",
+        "信封是 `{service, function, args}`，业务拒绝是带 `error.code` 的 Promise 拒绝。",
+        "",
+        "| 服务 | 模块 | 函数 |",
+        "|---|---|---|",
+    ]
+    ops = sorted(re.findall(r'"(\w+)": \{"required"',
+                           (ROOT / "embedded_python/runtime/archive/project_files.py").read_text(encoding="utf-8-sig")))
+    lines += [
+        "",
+        "`project_archive.file_manager` 是**带 op 判别**的服务：`op` 只能是 "
+        + "、".join(f"`{op}`" for op in ops) + "，其余按 `INVALID_ARGUMENT` 拒绝；",
+        "每个 op 的请求键由 `runtime/archive/arguments.py` 的 `require_keys` 白名单校验，",
+        "与 C++ reader 的 `object_keys` 同语义（未知键拒绝，不静默忽略）。",
+    ]
+    for name, module, functions in services:
+        lines.append(f"| `{name}` | `{module}` | " + "、".join(f"`{f}`" for f in functions) + " |")
 
     lines += [
         "",
-        "**失败形状**：方法抛 `api.errors.EditorApiError(code, message)`，`code` 就是 Web 面拒绝时",
-        "用的同一个符号码（`PROJECT_CONTEXT_CHANGED`、`ACTOR_NOT_FOUND`、`READ_ONLY`、",
-        "`INVALID_ARGUMENT`…）；C++ 侧把它放在 `data.code`，基础设施错误另有 `NATIVE_FAILURE` 与",
-        "`NATIVE_UNAVAILABLE`。成功时直接返回 `data` 本体，键为 snake_case。",
         "",
-        "C++ 侧同时保留数字类（**409** 归档过期、**403** 只读、**404** Actor 不存在、",
-        "**400** 参数不合法、**2** 其它）供行为测试断言；脚本只按符号码分支。",
+        "## 超时与并发",
         "",
-        "`read_scene` 要求 `archive_session` 非空：没传是 `INVALID_ARGUMENT`（400），",
-        "传了但属于另一个归档是 `PROJECT_CONTEXT_CHANGED`（409）。",
+        "传输层的超时只有一个语义：Python 运行时没有在期限内回应时，C++ 把回复状态映射成",
+        "`504`，Web 收到 `EDITOR_API_TIMEOUT`（`python_service_bridge.cpp`）。",
+        "**每个操作自己负责超时**——传输层不再叠加第二条 deadline，因为一个慢的解析和一个",
+        "挂死的进程要用不同的方式处理，混在传输层会让两者都不可诊断。",
         "",
-        "## 文件脚本路由",
-        "",
-        "测试探针用 `Scripts.*` 名字和 C++ 通信，但生产代码里没有名字分发：",
-        "[`file_script_api.h`](../include/corona/systems/ui/file_script_api.h) 提供五条具名入口，",
-        "名字到函数的映射留在探针内部。",
+        "Python 侧是单消费者串行：bridge 请求在同一个 worker 上依次执行，所以两个请求不会",
+        "并发改同一个项目；需要并行的工作由操作自己在内部派发。",
         "",
         "## 保护这份契约的守卫",
         "",
@@ -262,9 +271,8 @@ def build() -> str:
         "",
         "## 已知缺口",
         "",
-        "`embedded_python/script_runtime/BOUNDARY.md` 记录了脚本侧**有意保留**的能力缺口：",
-        "文件音频播放（Actor 自带音频已支持）、原生射线查询、指针捕获。补的时候要先在",
-        "`script_runtime_api.h` 加具名入口，而不是恢复\"探测一个不存在的函数再静默降级\"的写法。",
+        "脚本侧**有意保留**的能力缺口（文件音频播放、原生射线查询、指针捕获）随脚本运行时一起"
+        "删除了；重新设计时先加具名入口，不要恢复\"探测不存在的函数再静默降级\"的写法。",
         "",
         "接口侧的覆盖缺口（记录在此，避免被当成已完成）：",
         "",

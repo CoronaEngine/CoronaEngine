@@ -125,21 +125,19 @@ void report_stuck_native_api_request() {
         request.dispatcher_thread_id);
 }
 
-NativeResult native_success(nlohmann::json data, std::string route) {
+NativeResult native_success(nlohmann::json data) {
     NativeResult result;
     result.success = true;
     result.data = std::move(data);
-    result.route = std::move(route);
     return result;
 }
 
-NativeResult native_failure(std::string error, int error_code, std::string route) {
+NativeResult native_failure(std::string error, int error_code) {
     NativeResult result;
     result.handled = true;
     result.success = false;
     result.error_code = error_code;
     result.error = std::move(error);
-    result.route = std::move(route);
     return result;
 }
 

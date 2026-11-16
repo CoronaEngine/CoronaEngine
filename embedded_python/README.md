@@ -13,7 +13,6 @@ C++ manifest 聚合契约，Vue/Python 只做薄适配，不直接暴露 `camera
 - [API_OWNERSHIP.md](API_OWNERSHIP.md)：公共业务语义的 owner 和调用规则。
 - [config/BOUNDARY.md](config/BOUNDARY.md)：路径、活动项目和配置边界。
 - [runtime/BOUNDARY.md](runtime/BOUNDARY.md)：Python host、registry 和生命周期。
-- [script_runtime/BOUNDARY.md](script_runtime/BOUNDARY.md)：受限角色脚本与 Blockly 运行时。
 - [plugins/BOUNDARY.md](plugins/BOUNDARY.md)：编辑器插件边界。
 - [Frontend/src/BOUNDARY.md](Frontend/src/BOUNDARY.md)：Vue 源码目录和依赖方向。
 
@@ -26,7 +25,6 @@ C++ manifest 聚合契约，Vue/Python 只做薄适配，不直接暴露 `camera
 | `api` | Python 对 C++ manifest 的唯一公共契约 adapter |
 | `config` | 路径、活动项目和应用配置 |
 | `runtime` | 嵌入式 Python host、服务注册和生命周期 |
-| `script_runtime` | Blockly 生成文件的执行、输入与停止恢复 |
 | `plugins` | ProjectArchive 存档服务及原生项目模板 |
 | `data` | native 项目运行时数据，不是 Python 业务 owner |
 

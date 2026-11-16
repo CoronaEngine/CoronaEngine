@@ -335,7 +335,7 @@ def run(port, root, engine_pid):
                                "input.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('button').click();})()")
                 wait(lambda: child.evaluate("document.querySelector('input')?.value"),
                      lambda value: value == name, 'settings UI reset')
-                envelope = json.dumps({'service': 'ProjectArchive', 'function': 'project_info',
+                envelope = json.dumps({'service': 'project_archive', 'function': 'project_info',
                                        'args': [{'path': original['project_path']}]})
                 info = json.loads(child.evaluate('corona.bridge.call(' + json.dumps(envelope) + ')'))
                 child.evaluate('corona.project.saveActiveProjectInfo(' + json.dumps({

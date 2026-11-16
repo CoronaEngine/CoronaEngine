@@ -2,9 +2,9 @@
 
 #include <corona/systems/script/script_input.h>
 #include "cef_window_operations.h"
+#include "editor_operation_methods.h"
 
 namespace Corona::Systems::UI {
-enum class ScriptInputMethod { Dispatch };
 struct ScriptInputRequest {
     WindowRequest source{WindowMethod::ConfigureViewport, 0};
     InputEvent event;

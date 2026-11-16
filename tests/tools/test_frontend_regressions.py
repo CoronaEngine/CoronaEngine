@@ -25,6 +25,8 @@ FRONTEND = ROOT / "CoronaEditor" / "editor" / "Frontend"
 # when run alone.
 FILES = (
     "editorApiWindowWrapper.test.mjs",
+    "worldCreation.test.mjs",
+    "worldMode.test.mjs",
     "nativeWindowBindings.test.mjs",
     "editorWindowSession.test.mjs",
     "windowRetirement.test.mjs",

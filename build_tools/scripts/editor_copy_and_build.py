@@ -357,8 +357,6 @@ def main(argv: list[str] | None = None) -> int:
         copy_tree(source, dest_root, merge_content=args.merge_content, cleanup=False)
 
     # One union sweep so a file is only removed when no merge source owns it.
-    # Runs before materializing the block program: that file comes from
-    # frontend_assets/ and has no same-path owner in any merge source.
     _cleanup_stale_files(merge_sources, dest_root, _ignore)
 
     # Development-only python assets must not survive in a deployed tree.
@@ -367,16 +365,6 @@ def main(argv: list[str] | None = None) -> int:
         if stale.is_dir():
             shutil.rmtree(stale, ignore_errors=True)
             echo(f"[editor-copy] Removed deployed dev assets: {stale}")
-    if python_dir:
-        # The frontend imports the block program template with Vite's `?raw`
-        # loader, so it must exist inside the deployed Frontend tree before the
-        # npm build even though its source now lives in the engine repository.
-        block_program = python_dir / "frontend_assets" / "block_program.py"
-        if block_program.is_file():
-            target = dest_root / "Frontend" / "src" / "blockly" / "generators" / "runtime" / "block_program.py"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(block_program, target)
-            echo(f"[editor-copy] Materialized block program: {target}")
 
     # Run npm build last
     return maybe_run_npm(frontend_dir, node_dir)

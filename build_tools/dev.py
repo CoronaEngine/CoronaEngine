@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import shutil
 import sys
 from pathlib import Path
 
@@ -76,19 +75,6 @@ def pin_workspaces(repo_root: Path, keys: list[str], commit: str | None = None) 
         print(f"  next: python build_tools/dev.py {workspace.key}-sync")
 
 
-def materialize_editor_frontend_assets(repo_root: Path) -> None:
-    """Copy engine-owned raw templates into the editor checkout's Frontend tree.
-
-    `fileProgram.js` imports the block program template with Vite's `?raw`
-    loader, so frontend development and packaging both need the file even
-    though its source moved to the engine repository.
-    """
-    source = repo_root / "embedded_python" / "frontend_assets" / "block_program.py"
-    target = (repo_root / "CoronaEditor" / "editor" / "Frontend" / "src"
-              / "blockly" / "generators" / "runtime" / "block_program.py")
-    if source.is_file():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
 RECIPE_TOGGLE_ENV = "CORONA_CONAN_EXPORT_LOCAL_RECIPES"
 TARGET_FAMILY_OPTIONS: dict[str, tuple[str, ...]] = {
     "core": (
@@ -221,8 +207,6 @@ def execute(args: argparse.Namespace) -> None:
     elif args.command in WORKSPACE_COMMANDS:
         workspace = WORKSPACE_COMMANDS[args.command]
         sync_workspace(REPO_ROOT, workspace)
-        if workspace.key == "editor":
-            materialize_editor_frontend_assets(REPO_ROOT)
     elif args.command == "pin":
         targets = list(args.targets)
         # `pin editor <commit>` pins an explicit commit; `pin` alone uses HEAD.

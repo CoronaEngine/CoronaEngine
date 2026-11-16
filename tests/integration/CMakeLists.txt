@@ -149,8 +149,6 @@ add_test(NAME VisionReSTIRGISupport
     COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_restir_gi_support.py)
 set_tests_properties(VisionReSTIRPairwiseMIS VisionReSTIRGISupport PROPERTIES TIMEOUT 30)
 
-add_executable(corona_native_file_probe EXCLUDE_FROM_ALL native_file_probe.cpp)
-target_link_libraries(corona_native_file_probe PRIVATE corona::engine corona_ui_system)
 
 
 

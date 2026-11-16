@@ -22,7 +22,7 @@ class WebBridgeService:
     argument handling belong here, where the services themselves live.
     """
 
-    ALLOWED_SERVICES = frozenset({"ProjectArchive", "FileScripts", "ProjectFiles"})
+    ALLOWED_SERVICES = frozenset({"project_archive", "project_files"})
 
     @classmethod
     def call(cls, envelope):
@@ -59,10 +59,8 @@ class WebBridgeService:
         # {status:'error', code, message} (file ops, ProjectFiles) or
         # {success:False, error:<code>, message} (project documents). Raise either one so
         # the bridge rejects with that code instead of resolving a value; the C++ side
-        # then hands the same code to the Promise rejection. FileScripts is deliberately
-        # excluded: its replies are run-state records whose `status` is the state the
-        # Blockly panel renders, not a transport refusal.
-        if service != "FileScripts" and isinstance(data, dict):
+        # then hands the same code to the Promise rejection.
+        if isinstance(data, dict):
             if data.get("status") == "error":
                 raise BridgeError(
                     data.get("code") or "SERVICE_FAILED",
@@ -101,10 +99,9 @@ class CoronaEditor:
             result = getattr(module, func_name)(*args)
             return {"success": True, "data": result}
         except BridgeError as error:
-            # Keep the business code in front of the message: the C++ bridge extracts it
-            # and rejects with the code rather than flattening every refusal to
-            # SERVICE_FAILED.
-            return {"success": False, "error": f"{error.code}: {error.message}"}
+            # The code travels in "code", the same field the C++ scene layer uses;
+            # the message stays human-readable and is never parsed.
+            return {"success": False, "code": error.code, "error": error.message}
         except Exception as error:
             return {"success": False, "error": f"Error processing request: {error}"}
 
@@ -135,7 +132,7 @@ class CoronaEditor:
         register = getattr(cls.CoronaEngine, "register_python_script_service_dispatcher", None)
         if callable(register):
             register(cls.dispatch_script_request_from_cpp)
-        cls.module_list.setdefault("EditorBridge", WebBridgeService)
+        cls.module_list.setdefault("editor_bridge", WebBridgeService)
 
     @classmethod
     def unregister_script_dispatcher(cls):
@@ -331,17 +328,9 @@ class CoronaEditor:
         input_start = _time.perf_counter()
         try:
             import CoronaEngine
-            events = CoronaEngine.drain_input_events()
-            if events:
-                from script_runtime.file_runner import FileScripts
-                for e in events:
-                    if e.type == 0:      # keyDown
-                        FileScripts.key_event(e.arg0, e.arg1, e.arg2)
-                    elif e.type == 1:    # keyUp
-                        FileScripts.key_release(e.arg0, e.arg1 or e.arg0)
-                    elif e.type == 2:    # mouseEvent
-                        FileScripts.mouse_event(e.arg0, e.arg1, e.arg3, e.arg4,
-                                                e.viewport_x, e.viewport_y, e.viewport_width, e.viewport_height)
+            # The queue belongs to the native side; drain it so it cannot grow while no
+            # script host consumes the events.
+            CoronaEngine.drain_input_events()
         except RuntimeError:
             return False
         except Exception:

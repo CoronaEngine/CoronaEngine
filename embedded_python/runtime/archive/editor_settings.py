@@ -2,6 +2,7 @@
 import configparser
 import json
 import sys
+from runtime.archive.arguments import require_keys
 from pathlib import Path
 from threading import RLock
 
@@ -27,6 +28,9 @@ def default_ini_path():
 
 
 def editor_settings(request):
+    require_keys(request, required=('section',),
+                 optional=('ini', 'key', 'fallback', 'recent_projects', 'recent',
+                           'updates', 'archive_session', 'project_path'))
     path = Path(request["ini"]) if request.get("ini") else default_ini_path()
     with _lock:
         config = configparser.ConfigParser(interpolation=None, strict=False)

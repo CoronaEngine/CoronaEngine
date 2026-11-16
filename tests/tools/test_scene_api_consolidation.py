@@ -4,31 +4,18 @@ The scene names now live in `editor_operation_table.h`; this guard pins which of
 are still published and which retired spellings must not come back.
 """
 from pathlib import Path
-import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from native_surface import camel_case
+import operation_table
 
 ROOT = Path(__file__).resolve().parents[2]
-TABLE = ROOT / "src/systems/ui/cef/editor_operation_table.h"
-
-TABLE_ROW = re.compile(
-    r'\{"(\w+)",\s*"(\w+)",\s*(SceneMethod::\w+|std::nullopt),\s*'
-    r'(true|false),\s*(true|false),\s*(\d+),'
-)
 
 
 def _web_scene_names() -> set[str]:
-    text = TABLE.read_text(encoding="utf-8-sig")
-    start = text.index("kEditorOperations[] = {")
-    end = text.index("};", start)
-    names = set()
-    for group, name, _method, web, _script, _arity in TABLE_ROW.findall(text[start:end]):
-        if web == "true" and group == "scene":
-            names.add(camel_case(name))
-    return names
+    return {operation_table.camel_case(row["name"])
+            for row in operation_table.web_rows() if row["group"] == "scene"}
 
 
 def test_scene_v8_has_only_the_consolidated_names():

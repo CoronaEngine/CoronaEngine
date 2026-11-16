@@ -16,15 +16,12 @@ from urllib.request import urlopen
 REPO = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(REPO / 'tools'), str(REPO / 'tests/integration')]
 from profile_process import _Job
-import blockly_actor_file_smoke
 import python_archive_smoke
-import scene_pull_smoke
-import native_file_run_smoke
 
 parser = argparse.ArgumentParser()
 parser.add_argument('runtime', type=Path)
 parser.add_argument('fixtures', type=Path)
-parser.add_argument('stage', choices=['blockly', 'archive', 'scene-pull', 'native-file', 'resources'])
+parser.add_argument('stage', choices=['archive', 'resources'])
 args = parser.parse_args()
 runtime, fixtures = args.runtime.resolve(), args.fixtures.resolve()
 output = Path(tempfile.mkdtemp(prefix=args.stage + '-', dir=fixtures))
@@ -34,19 +31,9 @@ with socket.socket() as listener:
 env = dict(os.environ, CORONA_CEF_REMOTE_DEBUG_PORT=str(port),
            CORONA_CEF_ROOT_CACHE=str(output / 'cache'), CORONA_OPTICS_MAX_FPS='15')
 exe = runtime / 'corona_engine.exe'
-if args.stage == 'native-file':
-    # Run the newest host alongside the fully deployed engine dependencies.
-    source = REPO / 'build/conan/tests/relwithdebinfo/tests/integration/RelWithDebInfo/corona_native_file_probe.exe'
-    exe = runtime / source.name
-    shutil.copyfile(source, exe)
-    control = output / 'control'
-    control.mkdir()
-    env['CORONA_NATIVE_FILE_PROBE'] = str(control)
 evidence = dict(passed=False, stage=args.stage, output=str(output),
                 engine_sha256=hashlib.sha256((runtime / 'corona_engine.exe').read_bytes()).hexdigest(),
                 frontend_sha256=hashlib.sha256((runtime / 'CabbageEditor/Frontend/dist/index.html').read_bytes()).hexdigest())
-if args.stage == 'native-file':
-    evidence['native_host_sha256'] = hashlib.sha256(exe.read_bytes()).hexdigest()
 job, child = _Job(), None
 try:
     with (output / 'stdout.log').open('wb') as stdout, (output / 'stderr.log').open('wb') as stderr:
@@ -69,21 +56,8 @@ try:
             if time.monotonic() > deadline:
                 raise TimeoutError('CEF target missing')
             time.sleep(.2)
-        if args.stage == 'blockly':
-            evidence['result'] = blockly_actor_file_smoke.verify(port, fixtures / 'blockly', fixtures / 'peer')
-        elif args.stage == 'archive':
+        if args.stage == 'archive':
             evidence['result'] = python_archive_smoke.verify(port, fixtures / 'archive', fixtures / 'peer')
-        elif args.stage == 'scene-pull':
-            control = output / 'control'
-            control.mkdir()
-            evidence['result'] = scene_pull_smoke.run(port, fixtures / 'scene-pull', control)
-        elif args.stage == 'native-file':
-            reports = sorted(fixtures.glob('blockly-*/result.json'), key=lambda p: p.stat().st_mtime_ns)
-            successful = [json.loads(path.read_text(encoding='utf-8')) for path in reports
-                          if json.loads(path.read_text(encoding='utf-8')).get('passed')]
-            assert successful, 'A successful real Blockly generation is required first'
-            relative = successful[-1]['result']['path']
-            evidence['result'] = native_file_run_smoke.verify(port, fixtures / 'blockly', fixtures / 'peer', relative, control)
         else:
             import web_resource_import_smoke
             evidence['result'] = web_resource_import_smoke.run(port, fixtures / 'resources', child.pid, REPO)

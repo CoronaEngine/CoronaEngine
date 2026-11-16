@@ -11,7 +11,7 @@ namespace ArchiveFixture {
 using namespace Corona::Systems::UI::SceneFolders;
 using Json = nlohmann::json;
 namespace fs = std::filesystem;
-inline Json call(const char* method, Json data, const char* module = "ProjectArchive") {
+inline Json call(const char* method, Json data, const char* module = "project_archive") {
     static std::mutex mutex;
     std::lock_guard lock(mutex);
     std::cout << "ARCHIVE_RPC " << Json({{"module", module}, {"function", method},

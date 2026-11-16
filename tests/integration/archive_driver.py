@@ -43,11 +43,8 @@ def run_native(args, **kwargs):
                             atomic_replace(path, stream.getvalue().encode())
                         else:
                             raise AssertionError(req)
-                    elif req["module"] == "FileScripts":
-                        from script_runtime.file_runner import FileScripts
-                        result = getattr(FileScripts, req["function"])(*req["args"])
                     else:
-                        assert req["module"] == "ProjectArchive", req
+                        assert req["module"] == "project_archive", req
                         result = getattr(ProjectArchive, req["function"])(*req["args"])
                     reply = {"success": True, "data": result}
                 except (OSError, ValueError, configparser.Error) as exc:

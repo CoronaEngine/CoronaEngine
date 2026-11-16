@@ -18,11 +18,12 @@ def _resolve_native_engine(native_engine=None):
 
 def read_project_session() -> dict:
     """Read the current session without creating a scene or hydrating launcher history."""
-    if _resolve_native_engine() is None:
+    engine = _resolve_native_engine()
+    if engine is None:
         return {}
-    from api.editor_api import get_script_runtime_editor_api
-
-    return get_script_runtime_editor_api().scene.read_active()
+    path = getattr(engine, "active_project_path", None)
+    project_path = path() if callable(path) else ""
+    return {"project_path": project_path} if project_path else {}
 
 
 def get_active_project_path() -> str:

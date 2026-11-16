@@ -12,18 +12,16 @@ logger = logging.getLogger(__name__)
 
 
 PYTHON_SCRIPT_SERVICES = {
-    "ProjectArchive": ("plugins.ProjectArchive.main", "ProjectArchive"),
-    "FileScripts": ("script_runtime.file_runner", "FileScripts"),
-    "ProjectFiles": ("runtime.archive.script_files", "ProjectFiles"),
+    "project_archive": ("plugins.ProjectArchive.main", "ProjectArchive"),
+    "project_files": ("runtime.archive.script_files", "ProjectFiles"),
 }
 
 # Normal editor startup inventory.
 ACTIVE_PYTHON_SCRIPT_SERVICES = (
-    "ProjectArchive",
-    "FileScripts",
-    "ProjectFiles",
+    "project_archive",
+    "project_files",
 )
-LAZY_PYTHON_SCRIPT_SERVICES = {"ProjectArchive"}
+LAZY_PYTHON_SCRIPT_SERVICES = {"project_archive"}
 _managed_services = []
 _registered_service_names = set()
 _registry_shutdown_requested = threading.Event()

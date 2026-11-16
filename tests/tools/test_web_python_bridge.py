@@ -7,7 +7,7 @@ owns the reachable services.
 The C++ half is pinned too: `execute_bridge_operation` is a transport. It takes the
 envelope string, hands it to the Python service untouched and returns what the service
 said - no `json::parse`, no key inspection, no re-encoding. The two *other* interfaces
-(`window.corona.*` for Web, `CoronaEngine.<ns>.<name>` for the ScriptRuntime) are typed
+(`window.corona.*` for Web; the ScriptRuntime) are typed
 on both sides; this one is deliberately not.
 """
 
@@ -55,7 +55,7 @@ def test_cpp_forwards_the_envelope_without_parsing_or_rebuilding_it():
         assert forbidden not in request_leg, (
             f"C++ started interpreting the Web -> Python envelope ({forbidden}); "
             "the envelope schema belongs to JS and Python")
-    assert '{"EditorBridge", "call", nlohmann::json::array({envelope})}' in body, (
+    assert '{"editor_bridge", "call", nlohmann::json::array({envelope})}' in body, (
         "the envelope must reach the Python service as a single untouched argument")
 
 
@@ -86,17 +86,17 @@ def test_bridge_routes_an_allowlisted_service(monkeypatch):
     calls = []
     _record(monkeypatch, calls, {"success": True, "data": {"ok": True}})
     result = WebBridgeService.call(
-        json.dumps({"service": "ProjectFiles", "function": "load", "args": [{"path": "a"}]})
+        json.dumps({"service": "project_files", "function": "load", "args": [{"path": "a"}]})
     )
     assert result == {"ok": True}
-    assert calls == [("ProjectFiles", "load", [{"path": "a"}])]
+    assert calls == [("project_files", "load", [{"path": "a"}])]
 
 
 def test_bridge_defaults_missing_args_to_an_empty_list(monkeypatch):
     calls = []
     _record(monkeypatch, calls, {"success": True, "data": None})
-    assert WebBridgeService.call(json.dumps({"service": "FileScripts", "function": "get_status"})) is None
-    assert calls == [("FileScripts", "get_status", [])]
+    assert WebBridgeService.call(json.dumps({"service": "project_files", "function": "load"})) is None
+    assert calls == [("project_files", "load", [])]
 
 
 def test_bridge_rejects_services_outside_the_web_allowlist():
@@ -109,8 +109,8 @@ def test_bridge_rejects_malformed_envelopes():
         "not json",
         json.dumps([1, 2, 3]),
         json.dumps({"function": "load"}),
-        json.dumps({"service": "ProjectFiles"}),
-        json.dumps({"service": "ProjectFiles", "function": "load", "args": {"a": 1}}),
+        json.dumps({"service": "project_files"}),
+        json.dumps({"service": "project_files", "function": "load", "args": {"a": 1}}),
         123,
     ]:
         with pytest.raises((ValueError, TypeError)):
@@ -121,7 +121,7 @@ def test_bridge_surfaces_service_failures(monkeypatch):
     calls = []
     _record(monkeypatch, calls, {"success": False, "error": "boom"})
     with pytest.raises(RuntimeError, match="boom"):
-        WebBridgeService.call(json.dumps({"service": "ProjectArchive", "function": "open_scene"}))
+        WebBridgeService.call(json.dumps({"service": "project_archive", "function": "open_scene"}))
 
 
 def test_bridge_raises_a_status_error_refusal_with_its_code(monkeypatch):
@@ -132,7 +132,7 @@ def test_bridge_raises_a_status_error_refusal_with_its_code(monkeypatch):
     _record(monkeypatch, calls, {"success": True, "data": refusal})
     with pytest.raises(BridgeError) as raised:
         WebBridgeService.call(json.dumps({
-            "service": "ProjectArchive", "function": "file_manager",
+            "service": "project_archive", "function": "file_manager",
             "args": [{"archive_session": "old", "project_path": "P:/w", "op": "delete_item", "args": [""]}]}))
     assert raised.value.code == "PROJECT_CONTEXT_CHANGED"
     assert raised.value.message == "Project session is stale"
@@ -144,17 +144,8 @@ def test_bridge_raises_a_success_false_document_refusal(monkeypatch):
     _record(monkeypatch, calls, {"success": True, "data": refusal})
     with pytest.raises(BridgeError) as raised:
         WebBridgeService.call(json.dumps({
-            "service": "ProjectArchive", "function": "commit_document", "args": [{}]}))
+            "service": "project_archive", "function": "commit_document", "args": [{}]}))
     assert raised.value.code == "DOCUMENT_CONFLICT"
-
-
-def test_bridge_keeps_file_script_run_records_as_values(monkeypatch):
-    # FileScripts answers run-state records; `status` is the state the panel renders.
-    calls = []
-    record = {"status": "error", "code": "REQUEST_CONFLICT", "message": "requestId was reused"}
-    _record(monkeypatch, calls, {"success": True, "data": record})
-    assert WebBridgeService.call(json.dumps({
-        "service": "FileScripts", "function": "run_file", "args": [{}]})) == record
 
 
 def test_dispatcher_prefixes_a_bridge_error_with_its_code(monkeypatch):
@@ -165,10 +156,10 @@ def test_dispatcher_prefixes_a_bridge_error_with_its_code(monkeypatch):
 
     monkeypatch.setitem(CoronaEditor.module_list, "Probe", Probe)
     assert CoronaEditor.dispatch_script_values_from_cpp("Probe", "refuse", []) == {
-        "success": False, "error": "READ_ONLY_PROJECT: Project is read-only"}
+        "success": False, "code": "READ_ONLY_PROJECT", "error": "Project is read-only"}
 
 
 def test_register_script_dispatcher_exposes_the_bridge():
-    CoronaEditor.module_list.pop("EditorBridge", None)
+    CoronaEditor.module_list.pop("editor_bridge", None)
     CoronaEditor.register_script_dispatcher()
-    assert CoronaEditor.module_list["EditorBridge"] is WebBridgeService
+    assert CoronaEditor.module_list["editor_bridge"] is WebBridgeService

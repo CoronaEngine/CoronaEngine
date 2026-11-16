@@ -196,15 +196,15 @@ try {
   for (const [label, route] of [['panel-a', '/StartScreen'], ['panel-b', '/StartScreen']]) {
     stage = `creating ${label}`;
     console.log(`CEF smoke: ${stage}`);
-    const options = { panelId: `smoke-${label}`, title: label,
-      routePath: `${route}?uiOwner=${scope}&uiSession=smoke&uiWindow=${label}`, width: 320, height: 240,
+    const options = { panel_id: `smoke-${label}`, title: label,
+      route_path: `${route}?uiOwner=${scope}&uiSession=smoke&uiWindow=${label}`, width: 320, height: 240,
     };
     const created = await main.evaluate(`(async () => {
       JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); };
       return corona.window.createPanel(${JSON.stringify(options)});
     })()`);
     assert.equal(Number.isInteger(created.window_token), true);
-    assert.equal(created.panel_id, options.panelId);
+    assert.equal(created.panel_id, options.panel_id);
     createdPanels.push(created);
     const target = await waitFor(async () => (await targets()).find(item => item.url.includes(`uiWindow=${label}`)), 30_000);
     docs.push({ label, client: await connect(target) });
@@ -275,7 +275,7 @@ try {
       let timer;
       try {
         return await Promise.race([
-          Promise.all(Array.from({length: 512}, () => corona.window.close({sceneId:''}))),
+          Promise.all(Array.from({length: 512}, () => corona.window.close({scene_id:''}))),
           new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Native task queue starved')), 5000); }),
         ]).then(values => ({count: values.length, closedNothing: values.every(value => value.closed === 0)}));
       } finally { clearTimeout(timer); }
@@ -305,16 +305,16 @@ try {
     assert.equal(await main.evaluate('typeof window.coronaBridge?.dockCommand'), 'undefined');
     assert.equal(await main.evaluate('typeof window.__dockCallback'), 'undefined');
     assert.equal(await main.evaluate('typeof corona.window.createPanel'), 'function');
-    const cameraOptions = {kind:'camera',archiveSession:'missing-archive',sceneId:'scene.ini',cameraId:'camera-main',routePath:'/StartScreen'};
+    const cameraOptions = {kind:'camera',archive_session:'missing-archive',scene_id:'scene.ini',camera_id:'camera-main',route_path:'/StartScreen'};
     const cameraResult = await main.evaluate(`(async () => {
       JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); };
       try { await corona.window.createPanel(${JSON.stringify(cameraOptions)}); }
       catch(error) { return error.code; }
     })()`);
     assert.equal(cameraResult, 'PROJECT_CONTEXT_CHANGED');
-    for (const options of ['null', '[]', '{kind:"camera"}', '{kind:"camera",archiveSession:1}',
-      '{kind:"camera",archiveSession:"a",sceneId:"s",cameraId:"c",cameraHandle:1}',
-      '{kind:"camera",archiveSession:"a",sceneId:"s",cameraId:"c",width:0}',
+    for (const options of ['null', '[]', '{kind:"camera"}', '{kind:"camera",archive_session:1}',
+      '{kind:"camera",archive_session:"a",scene_id:"s",camera_id:"c",cameraHandle:1}',
+      '{kind:"camera",archive_session:"a",scene_id:"s",camera_id:"c",width:0}',
       '{kind:"Inspector"}', '{kind:4}']) {
       assert.equal(await main.evaluate(`corona.window.createPanel(${options}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
@@ -328,8 +328,8 @@ try {
       assert.equal(await doc.client.evaluate('typeof window.corona?.window?.close'), 'function', 'direct V8 binding is required');
       const result = await doc.client.evaluate(`(async () => {
         JSON.stringify = JSON.parse = () => { throw new Error('JSON transport is forbidden'); };
-        const before = await corona.window.close({sceneId:''});
-        const after = await corona.window.close({sceneId:''});
+        const before = await corona.window.close({scene_id:''});
+        const after = await corona.window.close({scene_id:''});
         let errorCode;
         try { await corona.window.close(null); } catch(error) { errorCode=error.code; }
         return {same: before.closed === after.closed, closed: before.closed, errorCode,
@@ -340,36 +340,36 @@ try {
         dragBinding: 'undefined', identity: 'undefined' });
       evidence.find(item => item.document === doc.label).nativeBindings = 'passed';
     }
-    const windowTokens = createdPanels.map(panel => panel.window_token);
-    assert.equal(new Set(windowTokens).size, windowTokens.length, 'every created panel owns a distinct window');
+    const window_tokens = createdPanels.map(panel => panel.window_token);
+    assert.equal(new Set(window_tokens).size, window_tokens.length, 'every created panel owns a distinct window');
     stage = 'typed panel validation and docking intents';
-    assert.deepEqual(await main.evaluate('corona.window.close({sceneId:""})'), {closed:0});
-    assert.deepEqual(await docs[1].client.evaluate('corona.window.close({sceneId:""})'), {closed:0});
+    assert.deepEqual(await main.evaluate('corona.window.close({scene_id:""})'), {closed:0});
+    assert.deepEqual(await docs[1].client.evaluate('corona.window.close({scene_id:""})'), {closed:0});
     const barrierOrder = await main.evaluate(`(async () => {
       const order = [];
       // A normal window operation answers in this turn; the plural close answers in the
       // next one. focus() on a missing panel is the cheapest normal operation available.
       await Promise.all([
-        corona.window.focus({panelId:'NoSuchPanel'}).then(() => order.push('before')),
-        corona.window.close({sceneId:''}).then(() => order.push('barrier')),
-        corona.window.focus({panelId:'NoSuchPanel'}).then(() => order.push('after')),
+        corona.window.focus({panel_id:'NoSuchPanel'}).then(() => order.push('before')),
+        corona.window.close({scene_id:''}).then(() => order.push('barrier')),
+        corona.window.focus({panel_id:'NoSuchPanel'}).then(() => order.push('after')),
       ]);
       return order;
     })()`);
     assert.deepEqual(barrierOrder, ['before', 'after', 'barrier'], 'barrier acknowledgment must occupy a second main-thread turn');
     evidence[0].twoTurnNativeBarrier = barrierOrder;
     for (const mode of ['toggle', 'borderless', 'maximized', 'windowed']) {
-      assert.equal(await main.evaluate(`corona.window.setWindowPresentation({sceneId:'missing-scene',cameraId:'missing-camera',mode:'${mode}'})`), false);
+      assert.equal(await main.evaluate(`corona.window.setWindowPresentation({scene_id:'missing-scene',camera_id:'missing-camera',mode:'${mode}'})`), false);
       assert.equal(await docs[1].client.evaluate(`corona.window.setWindowPresentation({mode:'${mode}'})`), false, 'non-camera panels must be unchanged');
     }
     for (const options of ['', 'null', '1', '"scene"', '[]', '{}', '{mode:1}', '{mode:"docked"}',
-      '{cameraId:"c",mode:"toggle"}', '{sceneId:"s",cameraId:"c",mode:"maximized",flag:1}',
-      '{sceneId:"s",cameraId:"c",width:800}', '{sceneId:"s",cameraId:"c",width:0,height:600}',
+      '{camera_id:"c",mode:"toggle"}', '{scene_id:"s",camera_id:"c",mode:"maximized",flag:1}',
+      '{scene_id:"s",camera_id:"c",width:800}', '{scene_id:"s",camera_id:"c",width:0,height:600}',
       '{target:"main",width:800,height:600}',
-      '{sceneId:"s",cameraId:"c",mode:"windowed",width:800,height:600}']) {
+      '{scene_id:"s",camera_id:"c",mode:"windowed",width:800,height:600}']) {
       assert.equal(await main.evaluate(`corona.window.setWindowPresentation(${options}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
-    assert.equal(await main.evaluate('corona.window.setWindowPresentation({sceneId:"missing-scene",cameraId:"missing-camera",width:800,height:600})'), false);
+    assert.equal(await main.evaluate('corona.window.setWindowPresentation({scene_id:"missing-scene",camera_id:"missing-camera",width:800,height:600})'), false);
     assert.equal(await docs[1].client.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle"}).catch(e=>e.code)'), 'PERMISSION_DENIED');
     assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle",unknownKey:1}).catch(e=>e.code)'), 'INVALID_ARGUMENT');
     assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"maximized"}).catch(e=>e.code)'), 'INVALID_ARGUMENT');
@@ -377,26 +377,26 @@ try {
     assert.equal(await main.evaluate('corona.window.setWindowPresentation({target:"main",mode:"toggle"})'), true);
     evidence[0].cameraWindowControls = 'passed validation, missing camera and non-camera isolation; positive lifecycle recorded under real-camera below';
     evidence[0].mainBorderless = 'passed toggle and restore with JSON disabled';
-    assert.deepEqual(await main.evaluate('corona.window.close({sceneId:"missing-scene",cameraId:"missing-camera"})'), {closed:0});
+    assert.deepEqual(await main.evaluate('corona.window.close({scene_id:"missing-scene",camera_id:"missing-camera"})'), {closed:0});
     // No argument is a legal self-close (rejected for the main window as a permission
     // error), so the invalid list starts with real invalid identities.
-    for (const args of ['null', '1', '"scene"', '{}', '{cameraId:"c"}',
-      '{panelId:"Object",sceneId:"s",cameraId:"c"}', '{panelId:""}', '{panelId:1}', '{sceneId:1}',
-      '{sceneId:"s",cameraId:""}']) {
+    for (const args of ['null', '1', '"scene"', '{}', '{camera_id:"c"}',
+      '{panel_id:"Object",scene_id:"s",camera_id:"c"}', '{panel_id:""}', '{panel_id:1}', '{scene_id:1}',
+      '{scene_id:"s",camera_id:""}']) {
       assert.equal(await main.evaluate(`corona.window.close(${args}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
     // Plural close: a scene that has no open camera view closes nothing.
-    assert.deepEqual(await main.evaluate('corona.window.close({sceneId:"missing-scene"})'), {closed:0});
+    assert.deepEqual(await main.evaluate('corona.window.close({scene_id:"missing-scene"})'), {closed:0});
     for (const options of ['null', '[]', '{width:0}', '{height:-1}', '{width:1.5}', '{x:Infinity}',
-      '{panelId:4}', '{width:2147483648}', '{dockingPos:"main"}', '{nativeDocked:"true"}',
+      '{panel_id:4}', '{width:2147483648}', '{dockingPos:"main"}', '{nativeDocked:"true"}',
       '{detached:true}', '{kind:"Inspector"}']) {
       assert.equal(await main.evaluate(`corona.window.createPanel(${options}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
     // A panel has no position: ImGui decides where a docked panel goes, so asking for
     // one is an invalid argument rather than a silently ignored option.
-    for (const options of ['{panelId:"Positioned",x:10}', '{panelId:"Positioned",y:10}',
-      '{panelId:"Positioned",x:10,y:10}', '{panelId:"Positioned",sceneId:"scene.ini"}',
-      '{panelId:"Positioned",cameraId:"camera"}', '{panelId:"Positioned",archiveSession:"s"}']) {
+    for (const options of ['{panel_id:"Positioned",x:10}', '{panel_id:"Positioned",y:10}',
+      '{panel_id:"Positioned",x:10,y:10}', '{panel_id:"Positioned",scene_id:"scene.ini"}',
+      '{panel_id:"Positioned",camera_id:"camera"}', '{panel_id:"Positioned",archive_session:"s"}']) {
       assert.equal(await main.evaluate(`corona.window.createPanel(${options}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
     // ImGui owns placement: there is no positioning request to call.
@@ -414,27 +414,27 @@ try {
     stage = 'refresh with pending native reads';
     const dock = docs[1].client;
     await dock.evaluate(`(() => { window.__oldNativeContext = true;
-      for(let i=0;i<8;i++) corona.window.close({sceneId:''}).catch(()=>{});
+      for(let i=0;i<8;i++) corona.window.close({scene_id:''}).catch(()=>{});
       return true; })()`);
     await dock.call('Page.reload', {});
     await waitFor(() => dock.evaluate('!window.__oldNativeContext && typeof window.corona?.window?.close === "function"'));
     evidence[1].refreshWithPendingReads = 'passed';
     stage = 'actual native window removal event';
     const closedTab = createdPanels[1];
-    assert.deepEqual(await main.evaluate(`corona.window.focus({panelId:${JSON.stringify(closedTab.panel_id)}})`), true);
-    assert.deepEqual(await main.evaluate('corona.window.focus({panelId:"NoSuchPanel"})'), false);
+    assert.deepEqual(await main.evaluate(`corona.window.focus({panel_id:${JSON.stringify(closedTab.panel_id)}})`), true);
+    assert.deepEqual(await main.evaluate('corona.window.focus({panel_id:"NoSuchPanel"})'), false);
     assert.equal(await main.evaluate('corona.window.close().catch(e=>e.code)'), 'PERMISSION_DENIED');
-    assert.equal(await docs[1].client.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panel_id)}}).catch(e=>e.code)`), 'PERMISSION_DENIED');
-    assert.deepEqual(await main.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panel_id)}})`), {closed:1});
+    assert.equal(await docs[1].client.evaluate(`corona.window.close({panel_id:${JSON.stringify(closedTab.panel_id)}}).catch(e=>e.code)`), 'PERMISSION_DENIED');
+    assert.deepEqual(await main.evaluate(`corona.window.close({panel_id:${JSON.stringify(closedTab.panel_id)}})`), {closed:1});
     stage = 'receiving actual native window removal event';
     console.log(`CEF smoke: ${stage}`);
     const completion = await waitFor(async () => {
       const events = await main.evaluate('({closed:window.__nativeClosed,unsubscribed:window.__unsubscribedEvents})');
       return events.closed.length ? events : null;
     }, 10_000);
-    assert.deepEqual(completion.closed, [{windowToken:closedTab.window_token, panelId:'smoke-panel-b'}]);
+    assert.deepEqual(completion.closed, [{window_token:closedTab.window_token, panel_id:'smoke-panel-b'}]);
     assert.deepEqual(completion.unsubscribed, []);
-    assert.deepEqual(await main.evaluate(`corona.window.close({panelId:${JSON.stringify(closedTab.panel_id)}})`), {closed:0});
+    assert.deepEqual(await main.evaluate(`corona.window.close({panel_id:${JSON.stringify(closedTab.panel_id)}})`), {closed:0});
     stage = 'self close settles its V8 promise before retiring the context';
     await main.evaluate(`window.__selfCloseSettled = []; window.__smoke.on('self-close-settled', value => window.__selfCloseSettled.push(value)); true`);
     await docs[1].client.evaluate(`(() => { ${source}
@@ -541,7 +541,7 @@ try {
     assert.equal(loadStatus.scene, sceneRead.scene);
     assert.equal(loadStatus.total, loadStatus.ready + loadStatus.failed + loadStatus.pending);
     assert.equal('data' in loadStatus, false);
-    const versionEnvelope = JSON.stringify({ service: 'ProjectArchive', function: 'editor_settings',
+    const versionEnvelope = JSON.stringify({ service: 'project_archive', function: 'editor_settings',
       args: [{ section: 'General', key: 'version', fallback: '1.2.0' }] });
     const versionReply = JSON.parse(await main.evaluate(`corona.bridge.call(${JSON.stringify(versionEnvelope)})`));
     assert.equal(typeof versionReply?.value, 'string', 'the editor version comes from the archive service');
@@ -575,7 +575,7 @@ try {
     // service keeps the legacy content-addressed folders and returns the same
     // {status, document, revision, code_path, document_path} record the native adapter did;
     // a refusal rejects with Error.code (the bridge raises it on the service side).
-    const fileCall = (method, request) => bridgeCall('ProjectFiles', method, [request]);
+    const fileCall = (method, request) => bridgeCall('project_files', method, [request]);
     const oldDocument = await fileCall('load', fileScope);
     assert.equal(oldDocument.status, 'loaded');
     assert.deepEqual(oldDocument.document, legacyDocument, 'existing key encoding must remain readable');
@@ -591,7 +591,7 @@ try {
     assert.deepEqual(await fileCall('load', fileScope), { ...savedDocument, status: 'loaded' });
     assert.equal((await fileCall('load', { ...fileScope, identity: ['node_graph', 'project', '', ''] })).status, 'missing');
     for (const changed of [{ archive_session: 'retired' }, { project_path: path.dirname(cameraWorld) }]) {
-      const code = await bridgeRefusal('ProjectFiles', 'save',
+      const code = await bridgeRefusal('project_files', 'save',
         [{ ...fileScope, ...changed, code: 'must not publish', document: {} }]);
       assert.equal(code, 'PROJECT_CONTEXT_CHANGED', 'a stale session rejects with its code');
     }
@@ -599,7 +599,7 @@ try {
 
     for (const invalid of [{ ...fileScope, identity: [] },
       { ...fileScope, identity: ['node_graph', 'actor', '', ''] }, { ...fileScope, identity: ['node_graph', 'project', 'wrong', ''] }]) {
-      assert.equal(await bridgeRefusal('ProjectFiles', 'load', [invalid]),
+      assert.equal(await bridgeRefusal('project_files', 'load', [invalid]),
         'INVALID_ARGUMENT', 'an invalid document identity is refused with its code');
     }
     // KNOWN GAP: the native adapter rejected a non-object or over-deep document with
@@ -692,7 +692,7 @@ try {
     // digest contract over the legacy raw-text one, and the response shape the assertions below
     // use - {success, revision, content} or {success: false, error} - is unchanged.
     const documentCall = (method, request) =>
-      bridgeCall('ProjectArchive', method, [{ ...request, revision_only: true }]);
+      bridgeCall('project_archive', method, [{ ...request, revision_only: true }]);
     const settingsCall = (method, request) => main.evaluate(`corona.project.saveActiveProjectInfo(${request === undefined ? '' : JSON.stringify(request)})`);
     const numericDocument = await documentCall('read_document', documentScope);
     assert.equal(numericDocument.success, true);
@@ -707,7 +707,7 @@ try {
     assert.deepEqual((await documentCall('read_document', documentScope)).content, newContent);
     // Refusals reject with the business code; read it inside the page.
     const documentRefusal = (method, request) =>
-      bridgeRefusal('ProjectArchive', method, [{ ...request, revision_only: true }]);
+      bridgeRefusal('project_archive', method, [{ ...request, revision_only: true }]);
     assert.equal(await documentRefusal('commit_document',
       { ...documentScope, revision: numericDocument.revision, content: {} }), 'DOCUMENT_CONFLICT');
     for (const badScope of [{ archive_session: 'retired' }, { project_path: cameraWorld + '-other' }]) {
@@ -731,7 +731,7 @@ try {
       const result = await main.evaluate(
         `(() => { if (window.__nativeJSON) { Object.assign(JSON, window.__nativeJSON); } return 0; })()`)
         .then(() => main.evaluate(
-          `corona.bridge.call(JSON.stringify({service:'ProjectArchive',function:'commit_document',`
+          `corona.bridge.call(JSON.stringify({service:'project_archive',function:'commit_document',`
           + `args:[{...${JSON.stringify(documentScope)},revision_only:true,`
           + `revision:${JSON.stringify(committed.revision)},content:${content}}]}))`
           + `.then(raw => typeof raw === 'string' ? JSON.parse(raw) : raw)`))
@@ -742,7 +742,7 @@ try {
     // metadata from the archive service.
     const activeProjectInfo = async () => {
       const active = await main.evaluate('corona.scene.readActive()');
-      return { ...await bridgeCall('ProjectArchive', 'project_info', [{ path: active.project_path }]),
+      return { ...await bridgeCall('project_archive', 'project_info', [{ path: active.project_path }]),
         archive_session: active.archive_session };
     };
     const metadata = await activeProjectInfo();
@@ -769,7 +769,7 @@ try {
     // - so callers compare scalars on success and read error.code instead of matching text.
     const filesCall = (method, request) => {
       const scope = { ...filesScope, ...request };
-      const manager = (op, args) => bridgeCall('ProjectArchive', 'file_manager',
+      const manager = (op, args) => bridgeCall('project_archive', 'file_manager',
         [{ archive_session: scope.archive_session, project_path: scope.project_path, op, args }]);
       switch (method) {
         case 'getFileTree': return manager('get_file_tree', [scope.path ?? '']);
@@ -807,7 +807,7 @@ try {
         renameItem: ['rename_item', [scope.path, scope.name]],
         deleteItem: ['delete_item', [scope.path]],
       }[method];
-      return JSON.stringify({ service: 'ProjectArchive', function: 'file_manager',
+      return JSON.stringify({ service: 'project_archive', function: 'file_manager',
         args: [{ archive_session: scope.archive_session, project_path: scope.project_path, op, args }] });
     };
     const managerRefusal = (method, request) => main.evaluate(
@@ -1290,11 +1290,11 @@ try {
     evidence[0].actorProperties = 'one typed V8 patch with JSON disabled: state/physics/camera-lock, partial preservation, animation source acceptance, invalid mixed patches atomic and all old CEF routes denied';
 
     evidence[0].sceneReadAndSelection = 'direct V8 with JSON disabled: empty/active state, uint64 identity, uint32 node index, validation/no mutation, old CEF query denied';
-    const options = { archiveSession: camera.archive_session, sceneId: opened.scene.path,
-      cameraId: camera.camera_id, width: 320, height: 240, x: 160, y: 160,
-      routePath: '/CameraView?uiWindow=real-camera&scene=scene.ini&camera=smoke-camera' };
-    const toolPanel = await main.evaluate(`corona.window.createPanel({panelId:'SceneTools',
-      routePath:'/SceneBar?uiWindow=camera-tools',width:320,height:240})`);
+    const options = { archive_session: camera.archive_session, scene_id: opened.scene.path,
+      camera_id: camera.camera_id, width: 320, height: 240, x: 160, y: 160,
+      route_path: '/CameraView?uiWindow=real-camera&scene=scene.ini&camera=smoke-camera' };
+    const toolPanel = await main.evaluate(`corona.window.createPanel({panel_id:'SceneTools',
+      route_path:'/SceneBar?uiWindow=camera-tools',width:320,height:240})`);
     const toolTarget = await waitFor(async () => (await targets()).find(item => item.url.includes('uiWindow=camera-tools')), 30_000);
     const toolClient = await connect(toolTarget);
   await toolClient.evaluate('window.__nativeJSON = { stringify: JSON.stringify, parse: JSON.parse }; true');
@@ -1438,86 +1438,16 @@ try {
       `{...${JSON.stringify(mouseInput)},event:'unknown'}`, `{...${JSON.stringify(mouseInput)},button:'unknown'}`]) {
       assert.equal(await main.evaluate(`corona.input.dispatch('scene.ini','smoke-camera',${input}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
     }
-    for (const [client, scene, cameraId, event, code] of [
+    for (const [client, scene, camera_id, event, code] of [
       [toolClient, 'scene.ini', 'smoke-camera', keyInput, 'PERMISSION_DENIED'],
       [cameraClient, 'scene.ini', 'main-camera', keyInput, 'PERMISSION_DENIED'],
       [main, 'wrong.ini', 'smoke-camera', keyInput, 'PROJECT_CONTEXT_CHANGED'],
       [main, 'scene.ini', 'smoke-camera', { ...keyInput, archive_session: 'retired' }, 'PROJECT_CONTEXT_CHANGED'],
       [main, 'scene.ini', camera.opaque_handle, keyInput, 'CAMERA_NOT_FOUND'],
     ]) {
-      assert.equal(await client.evaluate(`corona.input.dispatch(${JSON.stringify(scene)},${JSON.stringify(cameraId)},${JSON.stringify(event)}).catch(error=>error.code)`), code);
+      assert.equal(await client.evaluate(`corona.input.dispatch(${JSON.stringify(scene)},${JSON.stringify(camera_id)},${JSON.stringify(event)}).catch(error=>error.code)`), code);
     }
 
-    const tracePath = path.join(output, 'script-input.jsonl');
-    await rm(tracePath, { force: true });
-    const script = `import json\nfrom pathlib import Path\nfrom script_runtime import file_api\ndef run():\n    ctx = file_api.current_run()\n    ctx.keep_alive = lambda: True\n    def input_event(kind, *args):\n        with Path(${JSON.stringify(tracePath)}).open('a', encoding='utf-8') as stream:\n            stream.write(json.dumps([kind, args]) + '\\n')\n    ctx.on_input = input_event\n    file_api.mark('input-ready')\n`;
-    await writeFile(path.join(cameraWorld, 'input_probe.py'), script);
-    const scriptRequest = { archive_session: camera.archive_session, project_path: cameraWorld,
-      path: 'input_probe.py', revision: createHash('sha256').update(script).digest('hex'), requestId: `input-${Date.now()}`,
-      target_type: 'actor', scene_name: 'scene.ini', actor_name: actor.name };
-    // Scripts are a Python domain reached through the bridge. FileScripts takes one request
-    // object per call, so the positional shapes this section uses are adapted here.
-    const scriptCall = (method, args = []) => {
-      if (method === 'get_run') return bridgeOn(cameraClient, 'FileScripts', 'get_file_run', [{ requestId: args[0] }]);
-      if (method === 'get_status') return bridgeOn(cameraClient, 'FileScripts', 'get_script_status', []);
-      if (method === 'stop') {
-        return bridgeOn(cameraClient, 'FileScripts', 'stop_file',
-          [{ runId: args[0], restore_state: args[1] === true, requestId: args[2] }]);
-      }
-      return bridgeOn(cameraClient, 'FileScripts', method, args);
-    };
-    const started = await scriptCall('run_file', [scriptRequest]);
-    assert.ok(started.runId, JSON.stringify(started));
-    assert.equal((await scriptCall('run_file', [scriptRequest])).runId, started.runId, 'duplicate start must recover the same run');
-    assert.equal((await scriptCall('get_run', [scriptRequest.requestId])).runId, started.runId);
-    assert.equal((await scriptCall('run_file', [{ ...scriptRequest, actor_name: 'different-identity' }])).code, 'REQUEST_CONFLICT');
-    const cancelled = { ...scriptRequest, requestId: `cancelled-${Date.now()}` };
-    assert.equal((await scriptCall('get_run', [cancelled.requestId])).status, 'unknown');
-    assert.equal((await scriptCall('stop', ['', true, cancelled.requestId])).status, 'stopped');
-    assert.equal((await scriptCall('run_file', [cancelled])).status, 'cancelled', 'a late start cannot revive a closed panel');
-    assert.equal((await scriptCall('stop', ['foreign-run', false])).code, 'STALE_RUN');
-    assert.equal((await scriptCall('get_run', [scriptRequest.requestId])).runId, started.runId);
-    // Each case needs its own requestId: reusing the live one makes the identity check answer
-    // REQUEST_CONFLICT first, so the rule under test would never run.
-    for (const bad of [{ ...scriptRequest, requestId: '' },
-      { ...scriptRequest, requestId: `bad-revision-${Date.now()}`, revision: 'invalid' },
-      { ...scriptRequest, requestId: `bad-field-${Date.now()}`, unexpected: true }]) {
-      const refused = await bridgeOn(cameraClient, 'FileScripts', 'run_file', [bad]);
-      assert.equal(refused.status, 'error',
-        'a malformed run request must be refused: ' + JSON.stringify(refused));
-    }
-    assert.equal((await bridgeOn(cameraClient, 'FileScripts', 'run_file',
-      [{ ...scriptRequest, archive_session: 'foreign' }])).code, 'PROJECT_CONTEXT_CHANGED');
-
-    try {
-      await waitFor(async () => (await scriptCall('get_status')).marker?.id === 'input-ready');
-      assert.equal((await filesCall('getFileTree', { path: '' })).isDirectory, true);
-      for (const [method, request] of [
-        ['createFolder', { path: '', name: 'blocked-folder' }],
-        ['createActorTemplate', { path: '', name: 'blocked-template' }],
-        ['renameItem', { path: 'integer-boundaries.json', name: 'blocked.json' }],
-        ['deleteItem', { path: 'integer-boundaries.json' }],
-      ]) {
-        const refused = await managerRefusalDetail(method, request);
-        assert.equal(refused?.status, 'rejected', `${method}: ${JSON.stringify(refused)}`);
-        assert.equal(refused.code, 'CONFLICT', `${method}: ${refused.code}`);
-        assert.match(refused.message, /Stop and restore the file run/);
-      }
-      assert.deepEqual(await dispatchInput(main, keyInput), { status: 'queued' });
-      assert.deepEqual(await dispatchInput(cameraClient, { ...cameraScope, type: 'keyUp', code: 'KeyJ', key: 'd' }), { status: 'queued' });
-      assert.deepEqual(await dispatchInput(main, mouseInput), { status: 'queued' });
-      assert.deepEqual(await dispatchInput(cameraClient, { ...mouseInput, event: 'move' }), { status: 'queued' });
-      const rows = await waitFor(async () => {
-        try { const rows = (await readFile(tracePath, 'utf8')).trim().split('\n').map(row => JSON.parse(row)); return rows.length >= 4 && rows; }
-        catch { return false; }
-      });
-      assert.deepEqual(rows, [['key_down', ['KeyJ', ['Shift'], 'd']], ['key_up', ['KeyJ', [], 'd']],
-        ['mouse', ['click', 'LeftButton', 90, 80, 5, 6, 320, 240, actor.name]],
-        ['mouse', ['move', 'LeftButton', 90, 80, 5, 6, 320, 240, '']]]);
-    } finally {
-      await scriptCall('stop', [started.runId, false]);
-    }
-    evidence[0].scriptInput = 'one scoped typed V8 dispatch, JSON disabled, real Python file consumes keyboard display key and complete mouse context exactly once; invalid/retired/foreign scope and legacy routes denied';
     stage = 'native screenshot with JSON disabled and exact archive/camera identity';
     console.log(`CEF smoke: ${stage}`);
     const screenshotPath = path.join(output, 'native-screenshot.png');
@@ -1539,14 +1469,14 @@ try {
       ['scene.ini', 'smoke-camera', { ...screenshotOptions, camera: {} }]]) {
       assert.equal(await cameraClient.evaluate(`corona.viewport.captureScreenshot(...${JSON.stringify(invalid)}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
     }
-    for (const [scene, cameraId, scope, code] of [
+    for (const [scene, camera_id, scope, code] of [
       ['wrong.ini', 'smoke-camera', screenshotOptions, 'PROJECT_CONTEXT_CHANGED'],
       ['scene.ini', camera.name, screenshotOptions, 'CAMERA_NOT_FOUND'],
       ['scene.ini', camera.opaque_handle, screenshotOptions, 'CAMERA_NOT_FOUND'],
       ['scene.ini', 'smoke-camera', { ...screenshotOptions, archive_session: 'old' }, 'PROJECT_CONTEXT_CHANGED'],
       ['scene.ini', 'smoke-camera', { ...screenshotOptions, path: path.join(output, 'missing-parent', 'failed.png') }, 'CAPTURE_FAILED'],
     ]) {
-      assert.equal(await cameraClient.evaluate(`corona.viewport.captureScreenshot(...${JSON.stringify([scene, cameraId, scope])}).catch(error=>error.code)`), code);
+      assert.equal(await cameraClient.evaluate(`corona.viewport.captureScreenshot(...${JSON.stringify([scene, camera_id, scope])}).catch(error=>error.code)`), code);
     }
     assert.deepEqual((await listCameras()).data.cameras, beforeCapture);
     evidence[0].screenshot = 'typed direct V8 with JSON disabled: actual PNG signature/320x240 dimensions, exact identity, invalid options, capture failure, no pose/output changes';
@@ -1584,22 +1514,22 @@ try {
     }).then(value=>({id:value.id,bytes:Array.from(value.bytes),typed:value.bytes instanceof Uint8Array}))`),
     { id: '18446744073709551615', bytes: [7, 255], typed: true });
     assert.deepEqual(await main.evaluate(`window.__smoke.request('real-camera','echo',new Uint8Array([3,9])).then(value=>Array.from(value))`), [3, 9]);
-    await main.evaluate('corona.window.close({sceneId:""})');
+    await main.evaluate('corona.window.close({scene_id:""})');
     assert.deepEqual(await cameraClient.evaluate(`corona.window.createPanel({...${JSON.stringify(options)},kind:'camera'})`),
       { window_token: created.window_token, panel_id: '', existing: true });
     for (const mode of ['maximized', 'toggle', 'windowed', 'borderless', 'toggle']) {
-      assert.equal(await main.evaluate(`corona.window.setWindowPresentation({sceneId:"scene.ini",cameraId:"smoke-camera",mode:'${mode}'})`), true);
+      assert.equal(await main.evaluate(`corona.window.setWindowPresentation({scene_id:"scene.ini",camera_id:"smoke-camera",mode:'${mode}'})`), true);
     }
-    assert.equal(await main.evaluate('corona.window.setWindowPresentation({sceneId:"scene.ini",cameraId:"smoke-camera",width:400,height:300})'), true);
+    assert.equal(await main.evaluate('corona.window.setWindowPresentation({scene_id:"scene.ini",camera_id:"smoke-camera",width:400,height:300})'), true);
     assert.equal((await viewportPatch(cameraClient, JSON.stringify({ ...cameraScope, mode: 'stereo3d', pointer: pointerState }))).systemCursorHidden, true);
-    assert.deepEqual(await main.evaluate('corona.window.close({sceneId:"scene.ini",cameraId:"smoke-camera"})'), {closed:1});
+    assert.deepEqual(await main.evaluate('corona.window.close({scene_id:"scene.ini",camera_id:"smoke-camera"})'), {closed:1});
     assert.equal((await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d' }))).pointer.cursor, 'hidden',
       'native window removal must release the pointer even before renderer cleanup');
-    await main.evaluate('corona.window.close({sceneId:""})');
-    const recreated = await createCamera({ ...options, routePath: '/CameraView?uiWindow=retiring-camera' });
+    await main.evaluate('corona.window.close({scene_id:""})');
+    const recreated = await createCamera({ ...options, route_path: '/CameraView?uiWindow=retiring-camera' });
     assert.notEqual(recreated.window_token, created.window_token);
     assert.equal(recreated.existing, false);
-    assert.deepEqual(await main.evaluate('corona.window.close({sceneId:"scene.ini"})'), { closed: 1 });
+    assert.deepEqual(await main.evaluate('corona.window.close({scene_id:"scene.ini"})'), { closed: 1 });
     assert.equal((await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d', pointer: pointerState }))).systemCursorHidden, true);
     const reloaded = await main.evaluate(`corona.project.openProject(${JSON.stringify(cameraWorld)})`);
     assert.equal(reloaded.ok, true);
@@ -1638,14 +1568,14 @@ try {
     const stateOfCreated = async () => (await listCameras()).data.cameras
       .find(value => value.camera_id === object.camera.camera_id);
     assert.equal((await stateOfCreated()).view_open, false);
-    await createCamera({ ...options, archiveSession: activeAgain.archive_session, cameraId: object.camera.camera_id,
-      routePath: '/CameraView?uiWindow=typed-camera' });
+    await createCamera({ ...options, archive_session: activeAgain.archive_session, camera_id: object.camera.camera_id,
+      route_path: '/CameraView?uiWindow=typed-camera' });
     assert.equal((await stateOfCreated()).view_open, true);
-    assert.deepEqual(await main.evaluate(`corona.window.close({sceneId:'scene.ini',cameraId:${JSON.stringify(object.camera.camera_id)}})`), {closed:1});
+    assert.deepEqual(await main.evaluate(`corona.window.close({scene_id:'scene.ini',camera_id:${JSON.stringify(object.camera.camera_id)}})`), {closed:1});
     assert.equal((await stateOfCreated()).view_open, false);
-    assert.deepEqual(await main.evaluate(`corona.window.close({sceneId:'scene.ini',cameraId:${JSON.stringify(object.camera.camera_id)}})`), {closed:0});
+    assert.deepEqual(await main.evaluate(`corona.window.close({scene_id:'scene.ini',camera_id:${JSON.stringify(object.camera.camera_id)}})`), {closed:0});
     evidence[0].cameraCreation = 'typed archive-scoped camera object creation with JSON disabled; no window until one window operation, owner-published open/close state, idempotent close, retired CEF toggles rejected';
-    assert.deepEqual(await main.evaluate('corona.window.close({panelId:"SceneTools"})'), {closed:1});
+    assert.deepEqual(await main.evaluate('corona.window.close({panel_id:"SceneTools"})'), {closed:1});
     evidence.push({ document: 'real-camera', roundtrip: 'bidirectional structured-clone typed arrays with JSON disabled', nativeCameraLifecycle: 'passed with JSON disabled: create/existing, identity, permissions, geometry, close, recreate, suspend, archive replacement',
       fixtureScene: cameraWorld });
   }

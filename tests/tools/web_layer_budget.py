@@ -68,17 +68,21 @@ TARGET_LINES = 13_807
 # moved onto the geometry command channel (+38 in the scene service, core +34). Reading rules moved
 # to cef_request_rules.h so a plain test covers them (+9 in the binding), and closeProcess got
 # its main-window check (+7 in the window operations).
-CORE_BUDGET = 14304
+# One operation table, fifty-five rows: the twenty-six names the binding installed by hand are
+# rows now, so the table grew by 38 while the binding's install loop shrank by 40. The method
+# enums moved out of the window/script-input headers into editor_operation_methods.h (+28) so
+# the contract header can stay CEF-free; that is the only file this ledger gained.
+CORE_BUDGET = 13249
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
     ("src/systems/ui/cef/archive_load_policy.h", 21),
     ("src/systems/ui/cef/camera_window_lifetime.h", 46),
     ("src/systems/ui/cef/cef_operations.h", 130),
-    ("src/systems/ui/cef/editor_scene_service.cpp", 4425),
+    ("src/systems/ui/cef/editor_scene_service.cpp", 3957),
     ("src/systems/ui/cef/editor_paths.h", 22),
     ("src/systems/ui/cef/editor_paths.cpp", 31),
-    ("src/systems/ui/cef/editor_service_operations.cpp", 107),
+    ("src/systems/ui/cef/editor_service_operations.cpp", 105),
     ("src/systems/ui/cef/editor_network_state.h", 16),
     ("src/systems/ui/cef/editor_network_state.cpp", 219),
     ("src/systems/ui/cef/editor_actor_projection.h", 40),
@@ -100,17 +104,14 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/editor_text_utils.h", 35),
     ("src/systems/ui/cef/native_editor_state.h", 166),
     ("src/systems/ui/cef/editor_scene_service.h", 17),
-    ("src/systems/ui/cef/native_api_types.cpp", 250),
-    ("src/systems/ui/cef/native_api_types.h", 80),
+    ("src/systems/ui/cef/native_api_types.cpp", 248),
+    ("src/systems/ui/cef/native_api_types.h", 76),
     ("src/systems/ui/cef/cef_paths.h", 41),
-    ("src/systems/ui/cef/cef_py_bind.cpp", 318),
-    ("src/systems/ui/cef/script_runtime_api.h", 41),
-    # The single operation table and the typed entries behind CoronaEngine.<ns>.<name>.
-    # They carry lines the binding and the handler header used to hold, which is why the
-    # budget moved up: the same vocabulary now has one declaration instead of three.
+    ("src/systems/ui/cef/cef_py_bind.cpp", 35),
+    # The single operation table, and the Python-value -> patch readers that replaced the
+    # entry layer: a call now goes binder -> handler -> scene op, with no JSON in between.
+    ("src/systems/ui/cef/editor_operation_methods.h", 28),
     ("src/systems/ui/cef/editor_operation_table.h", 183),
-    ("src/systems/ui/cef/script_operation_entry.h", 67),
-    ("src/systems/ui/cef/script_operation_entry.cpp", 153),
     ("src/systems/ui/cef/cef_scene_operations.h", 440),
     ("src/systems/ui/cef/cef_script_input.cpp", 51),
     ("src/systems/ui/cef/cef_script_input.h", 17),
@@ -130,7 +131,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/editor_api/editor_api_services.h", 288),
     ("src/systems/ui/editor_api/camera_properties_service.cpp", 87),
     ("src/systems/ui/editor_api/camera_render_settings_service.cpp", 38),
-    ("src/systems/ui/editor_api/python_service_bridge.cpp", 90),
+    ("src/systems/ui/editor_api/python_service_bridge.cpp", 93),
     ("src/systems/ui/editor_api/python_service_bridge.h", 30),
     ("src/systems/ui/editor_api/editor_dispatch.h", 377),
     ("src/systems/ui/editor_api/project_script_service.cpp", 57),

@@ -1,104 +1,53 @@
 """The one operation table is the only place an operation name is declared.
 
-The Web surface derives its camelCase name from the table, and the ScriptRuntime binds
-by `(group, name)`. This guard pins the table's own shape: 36 rows, 11 of them dual,
-`web` implies a `SceneMethod`, arity agrees with the documented argument list, and the
-camelCase derivation reproduces the spellings the Web surface already publishes.
+Every name the Web surface publishes is a row here, and the binding installs
+``camel_case(name)`` for it. The ScriptRuntime projection went with the script runtime and
+will be redesigned, so the table is Web-only. This guard pins the table's own shape: 55
+rows across the nine ``window.corona`` namespaces, each row naming the enum that owns it,
+unique (group, name), a summary for every row, and the camelCase derivation.
 """
 from pathlib import Path
-import re
+import sys
 
-ROOT = Path(__file__).resolve().parents[2]
-TABLE = ROOT / "src/systems/ui/cef/editor_operation_table.h"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-ROW = re.compile(
-    r'\{"(\w+)",\s*"(\w+)",\s*(SceneMethod::\w+|std::nullopt),\s*'
-    r'(true|false),\s*(true|false),\s*(\d+),\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)"\}'
-)
+import operation_table as table
 
+rows = table.rows
 
-def rows():
-    text = TABLE.read_text(encoding="utf-8-sig")
-    start = text.index("kEditorOperations[] = {")
-    end = text.index("};", start)
-    parsed = []
-    for group, name, method, web, script, arity, arguments, summary in ROW.findall(text[start:end]):
-        parsed.append({
-            "group": group,
-            "name": name,
-            "method": None if method == "std::nullopt" else method.split("::", 1)[1],
-            "web": web == "true",
-            "script": script == "true",
-            "arity": int(arity),
-            "arguments": arguments,
-            "summary": summary,
-        })
-    return parsed
+# Window, project, network, input and bridge used to be installed by hand in the binding;
+# they are table rows now, which is what took the count from 29 to 55.
+NAMESPACES = {"app", "audio", "bridge", "input", "network", "project", "scene",
+              "viewport", "window"}
+
+# The enums `EditorMethod` (cef_v8_binding.cpp's std::visit) can dispatch, plus the window
+# event kind that installs a subscription instead of an operation.
+METHOD_OWNERS = {"SceneMethod", "NetworkMethod", "ProjectLauncherMethod", "FilesMethod",
+                 "ProjectSettingsMethod", "WindowMethod", "ScriptInputMethod",
+                 "BridgeMethod", "NativeEventKind"}
 
 
-def _items(spec):
-    """Top-level items of an argument list such as ``[scene, {a, b}]``."""
-    inner = spec.strip()
-    if not (inner.startswith("[") and inner.endswith("]")):
-        raise AssertionError(f"arguments must be a bracketed list: {spec}")
-    inner = inner[1:-1].strip()
-    if not inner:
-        return []
-    items, depth, current = [], 0, []
-    for char in inner:
-        if char in "{[":
-            depth += 1
-        elif char in "}]":
-            depth -= 1
-        if char == "," and depth == 0:
-            items.append("".join(current).strip())
-            current = []
-        else:
-            current.append(char)
-    items.append("".join(current).strip())
-    return items
+def test_the_table_is_fifty_five_rows():
+    assert len(rows()) == 55, f"expected 55 rows, found {len(rows())}"
 
 
-def test_the_table_is_thirty_six_rows():
-    assert len(rows()) == 36, f"expected 36 rows, found {len(rows())}"
+def test_every_row_names_a_method_owner_the_binding_dispatches():
+    # The parser only yields rows with a `Enum::Member` method, so a row whose enum is
+    # misspelt (`ScenMethod::ReadScene`) still parses - and only the build would catch it.
+    unknown = sorted({row["enum"] for row in rows()} - METHOD_OWNERS)
+    assert not unknown, f"rows naming an enum the binding cannot dispatch: {unknown}"
 
 
-def test_eleven_rows_are_projected_to_both_surfaces():
-    dual = [row for row in rows() if row["web"] and row["script"]]
-    assert len(dual) == 11, f"expected 11 dual rows, found {len(dual)}"
-
-
-def test_every_web_row_carries_a_scene_method():
-    missing = [f"{row['group']}.{row['name']}" for row in rows() if row["web"] and row["method"] is None]
-    assert not missing, f"web rows without a SceneMethod: {missing}"
-
-
-def test_every_script_only_row_has_no_scene_method():
-    extra = [f"{row['group']}.{row['name']}" for row in rows()
-             if row["script"] and not row["web"] and row["method"] is not None]
-    assert not extra, f"script-only rows must not name a SceneMethod: {extra}"
+def test_the_table_covers_the_nine_web_namespaces():
+    groups = {row["group"] for row in rows()}
+    assert groups == NAMESPACES, (
+        f"namespaces drifted: missing {sorted(NAMESPACES - groups)}, "
+        f"unknown {sorted(groups - NAMESPACES)}")
 
 
 def test_group_and_name_are_unique():
     keys = [(row["group"], row["name"]) for row in rows()]
     assert len(keys) == len(set(keys)), "duplicate (group, name) rows"
-
-
-def test_script_arity_matches_the_documented_positions():
-    problems = []
-    for row in rows():
-        if not row["script"]:
-            continue
-        expected = len(_items(row["arguments"]))
-        if expected != row["arity"]:
-            problems.append(f"{row['group']}.{row['name']}: arity {row['arity']} but {row['arguments']} lists {expected}")
-    assert not problems, problems
-
-
-def test_arguments_are_empty_for_web_only_rows():
-    problems = [f"{row['group']}.{row['name']}" for row in rows()
-                if row["web"] and not row["script"] and (row["arity"] or row["arguments"] != "[]")]
-    assert not problems, f"web-only rows must document no script positions: {problems}"
 
 
 def test_camel_case_matches_the_published_js_spelling():
@@ -114,11 +63,12 @@ def test_camel_case_matches_the_published_js_spelling():
         "is_vision_available": "isVisionAvailable",
         "capture_screenshot": "captureScreenshot",
         "read_camera_render_settings": "readCameraRenderSettings",
+        "create_panel": "createPanel",
+        "save_active_project_info": "saveActiveProjectInfo",
+        "on_close_requested": "onCloseRequested",
+        "set_project_root": "setProjectRoot",
     }
-    derived = {}
-    for name in expected:
-        head, *tail = name.split("_")
-        derived[name] = head + "".join(part.capitalize() for part in tail)
+    derived = {name: table.camel_case(name) for name in expected}
     assert derived == expected, f"camelCase rule drift: {derived}"
 
 

@@ -16,6 +16,7 @@ from runtime.archive.portable import recover_scene, validate_assets
 from runtime.archive.writer import save_scene
 from runtime.archive.project import (create_project, create_project_in, project_info,
                                      update_metadata, validate_project)
+from runtime.archive.arguments import require_keys
 from runtime.archive.assets import asset_operation
 from runtime.archive.documents import read_document, commit_document
 from runtime.archive.editor_settings import editor_settings
@@ -23,7 +24,7 @@ from runtime.archive.project_files import file_manager
 from runtime.plugin_base import PluginBase
 
 
-@PluginBase.register_web("ProjectArchive")
+@PluginBase.register_web("project_archive")
 class ProjectArchive(PluginBase):
     """Internal Script Service facade for the pure archive parser."""
 
@@ -39,14 +40,13 @@ class ProjectArchive(PluginBase):
 
     @staticmethod
     def update_metadata(request):
-        from script_runtime.file_runner import FileScripts
-        if FileScripts.has_restore_snapshot():
-            raise ValueError("请先停止脚本并恢复场景，再保存项目设置")
         return update_metadata(request)
 
     @staticmethod
     def parse(payload: dict | str) -> dict:
         request = payload if isinstance(payload, dict) else {"path": str(payload)}
+        require_keys(request, required=('path',),
+                     optional=('load_policy', 'archive_session', 'project_path'))
         path = str(request.get("path") or "").strip()
         load_policy = str(request.get("load_policy") or "prompt").strip().lower()
         if load_policy not in {"prompt", "degraded"}:
@@ -101,10 +101,7 @@ class ProjectArchive(PluginBase):
 
     @staticmethod
     def save(request: dict) -> dict:
-        from script_runtime.file_runner import FileScripts
 
-        if FileScripts.has_restore_snapshot():
-            return {"ok": False, "status": "run_active", "message": "请先停止脚本并恢复场景，再保存存档"}
         try:
             return save_scene(request)
         except ArchiveParseError as exc:
@@ -113,4 +110,4 @@ class ProjectArchive(PluginBase):
             return {"ok": False, "status": "error", "message": str(exc)}
 
 
-__all__ = ["ProjectArchive"]
+__all__ = ["project_archive"]

@@ -31,7 +31,7 @@ NativeResult save_project_info(const nlohmann::json& settings) {
     // Same call the handler unit wraps as project_archive_call(); inlined here because
     // the wrapper has another caller there and duplicating the symbol is worse.
     auto result = invoke_python_script_service(
-        {"ProjectArchive", "update_metadata",
+        {"project_archive", "update_metadata",
          nlohmann::json::array({{{"path", path_to_utf8(scene->project_root)}, {"settings", settings}}})},
         "python-archive");
     if (!result.success || !result.data.contains("name")) return native_failure("Project settings were not saved: " + result.error, 2);
@@ -66,14 +66,12 @@ ProjectSettingsReply execute_project_settings_operation(const ProjectSettingsReq
 // useful to the caller than the transport bucket, so prefer it when it looks like a code
 // (uppercase identifier) and keep the transport mapping as the fallback.
 std::string python_failure_code(const NativeResult& result) {
-    const auto colon = result.error.find(": ");
-    if (colon != std::string::npos && colon > 0 && colon <= 48) {
-        const auto candidate = result.error.substr(0, colon);
-        const bool identifier = std::all_of(candidate.begin(), candidate.end(), [](unsigned char ch) {
-            return (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_';
-        });
-        if (identifier && candidate.front() >= 'A' && candidate.front() <= 'Z') {
-            return candidate;
+    // The service's symbolic code arrives in data.code - the field the scene layer uses for
+    // its own codes. The message is never parsed; the transport buckets are the fallback.
+    if (result.data.is_object()) {
+        const auto it = result.data.find("code");
+        if (it != result.data.end() && it->is_string() && !it->get<std::string>().empty()) {
+            return it->get<std::string>();
         }
     }
     if (result.error_code == 504) return "EDITOR_API_TIMEOUT";
@@ -92,7 +90,7 @@ BridgeReply execute_bridge_operation(const std::string& envelope) {
     // The bridge is a transport: it does not invent a deadline. A service that hangs
     // hangs this call; per-operation timeouts belong to the operation, not the transport.
     const auto result = invoke_python_script_service(
-        {"EditorBridge", "call", nlohmann::json::array({envelope})},
+        {"editor_bridge", "call", nlohmann::json::array({envelope})},
         "python-bridge");
     if (!result.success) {
         reply.error_code = python_failure_code(result);

@@ -44,7 +44,7 @@ NativeResult invoke_python_script_service(const NativeRequest& request, const ch
     const std::string route_name = route && *route ? route : "python-script";
     auto* coordinator = Script::Python::active_python_runtime_coordinator();
     if (!coordinator) {
-        return native_failure("Python script runtime is not initialized", 503, route_name);
+        return native_failure("Python script runtime is not initialized", 503);
     }
 
     Script::Python::PythonRuntimeRequest runtime_request;
@@ -67,24 +67,27 @@ NativeResult invoke_python_script_service(const NativeRequest& request, const ch
         } else if (response.status == Script::Python::PythonRuntimeResponseStatus::RuntimeStopping) {
             error_code = 503;
         }
-        return native_failure(
-            response.error.empty() ? "Python script function call failed" : response.error,
-            error_code, route_name);
+        return native_failure(response.error.empty() ? "Python script function call failed" : response.error, error_code);
     }
 
     if (!response.service_result) {
-        return native_failure("Python script service returned no structured result", 500, route_name);
+        return native_failure("Python script service returned no structured result", 500);
     }
     const auto& parsed = *response.service_result;
     if (parsed.is_object() && parsed.value("success", true) == false) {
-        return native_failure(python_script_error_message(parsed), 500, route_name);
+        auto failure = native_failure(python_script_error_message(parsed), 500);
+        // The service code rides in data.code, the same field the scene layer uses.
+        if (parsed.contains("code") && parsed.at("code").is_string()) {
+            failure.data["code"] = parsed.at("code");
+        }
+        return failure;
     }
     if (parsed.is_object()) {
         if (auto it = parsed.find("data"); it != parsed.end()) {
-            return native_success(*it, route_name);
+            return native_success(*it);
         }
     }
-    return native_success(parsed, route_name);
+    return native_success(parsed);
 }
 
 }  // namespace Corona::Systems::UI

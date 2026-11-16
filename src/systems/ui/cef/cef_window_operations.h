@@ -3,15 +3,10 @@
 #include <corona/kernel/entity_id.h>
 #include "browser_manager.h"
 #include "camera_window_lifetime.h"
+#include "editor_operation_methods.h"
 #include <optional>
 
 namespace Corona::Systems::UI {
-
-// Web names the surface it wants and the identity it means (CreatePanel + kind,
-// Close + identity, SetWindowPresentation); the native host keeps the specialised
-// transitions behind those names.
-enum class WindowMethod { Close, Focus, CreatePanel, CreateCameraView,
-                          SetWindowPresentation, ConfigureViewport, CloseProcess };
 
 /// A window presentation is a state, not a toggle: the caller names the state it
 /// wants and the native host runs whichever transition reaches it.

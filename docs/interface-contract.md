@@ -1,4 +1,4 @@
-# 接口契约（Web / ScriptRuntime）
+# 接口契约（Web）
 
 这份文档是接口层的**单一入口**。它不重复代码，只给出三条边界、各自的形状，以及
 **哪条测试在保护它**——契约信息散在守卫和注释里时，新人没有起点。
@@ -11,7 +11,6 @@
 | 边界 | 谁在说 | 落到哪里 | 传输 |
 |---|---|---|---|
 | Web → C++ | 编辑器前端 | `window.corona.*` | 同步值 / Promise |
-| ScriptRuntime → C++ | 角色脚本（Python） | 18 条 `CoronaEngine.<namespace>.<name>` 具名绑定 | 真参数 / `EditorApiError` |
 | Web → Python | 前端与 C++ 都可能发起 | `corona.bridge.call` → Python 服务 | JSON 信封 |
 
 manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里没有任何按名字分发
@@ -97,7 +96,7 @@ ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web �
 |---|---|---|
 | 基础设施 | V8 绑定本体，原生工作开始前 | `CONTEXT_CHANGED`、`INVALID_ARGUMENT`、`NATIVE_FAILURE`、`NATIVE_UNAVAILABLE`、`PERMISSION_DENIED` |
 | 窗口 | 原生窗口宿主（窗口消失、建不出来） | `CREATE_FAILED`、`WINDOW_CLOSED` |
-| 场景/归档 | 场景与归档层（对象不存在、只读、冲突…） | `ACTOR_AUDIO_UNAVAILABLE`、`ACTOR_CREATE_FAILED`、`ACTOR_NOT_FOUND`、`ACTOR_NOT_READY`、`ACTOR_VERSION_CONFLICT`、`CAMERA_NOT_DELETABLE`、`CAMERA_NOT_FOUND`、`CAPTURE_FAILED`、`COMPONENT_NOT_FOUND`、`CONFLICT`、`DOCUMENT_CONFLICT`、`FILE_NOT_FOUND`、`FILE_OPERATION_FAILED`、`INVALID_BOUNDS`、`INVALID_PROJECT_DOCUMENT`、`INVALID_PROJECT_PATH`、`LAST_CAMERA`、`MODEL_DECODE_FAILED`、`NODE_EDIT_REJECTED`、`NODE_NOT_FOUND`、`NO_ACTIVE_PROJECT`、`PROJECT_CONTEXT_CHANGED`、`PROJECT_CREATION_FAILED`、`PROJECT_OPEN_FAILED`、`READ_ONLY`、`READ_ONLY_PROJECT`、`RESOURCE_NOT_FOUND`、`RUN_ACTIVE`、`SAVE_FAILED`、`UNSUPPORTED_RESOURCE_TYPE` |
+| 场景/归档 | 场景与归档层（对象不存在、只读、冲突…） | `ACTOR_AUDIO_UNAVAILABLE`、`ACTOR_CREATE_FAILED`、`ACTOR_NOT_FOUND`、`ACTOR_NOT_READY`、`ACTOR_VERSION_CONFLICT`、`CAMERA_NOT_DELETABLE`、`CAMERA_NOT_FOUND`、`CAPTURE_FAILED`、`COMPONENT_NOT_FOUND`、`CONFLICT`、`DOCUMENT_CONFLICT`、`FILE_NOT_FOUND`、`FILE_OPERATION_FAILED`、`INVALID_BOUNDS`、`INVALID_PROJECT_DOCUMENT`、`INVALID_PROJECT_PATH`、`LAST_CAMERA`、`MODEL_DECODE_FAILED`、`NODE_EDIT_REJECTED`、`NODE_NOT_FOUND`、`NO_ACTIVE_PROJECT`、`PROJECT_CONTEXT_CHANGED`、`PROJECT_CREATION_FAILED`、`PROJECT_OPEN_FAILED`、`READ_ONLY`、`READ_ONLY_PROJECT`、`RESOURCE_NOT_FOUND`、`SAVE_FAILED`、`UNSUPPORTED_RESOURCE_TYPE` |
 | Web → Python | bridge 传输与 Python 服务 | `EDITOR_API_TIMEOUT`、`SERVICE_BUSY`、`SERVICE_FAILED`、`SERVICE_UNAVAILABLE` |
 
 **可分支的稳定码**：`ACTOR_NOT_FOUND`、`ACTOR_VERSION_CONFLICT`、`CAMERA_NOT_FOUND`、`CONFLICT`、`CONTEXT_CHANGED`、`CREATE_FAILED`、`DOCUMENT_CONFLICT`、`EDITOR_API_TIMEOUT`、`FILE_NOT_FOUND`、`INVALID_ARGUMENT`、`NATIVE_UNAVAILABLE`、`PERMISSION_DENIED`、`PROJECT_CONTEXT_CHANGED`、`READ_ONLY`、`READ_ONLY_PROJECT`、`RESOURCE_NOT_FOUND`、`SERVICE_BUSY`、`SERVICE_FAILED`、`SERVICE_UNAVAILABLE`、`WINDOW_CLOSED`。
@@ -105,58 +104,38 @@ Web 可以按这些码决定重试、禁用控件或提示；其余是**细节�
 细节码会随实现改名或合并。稳定码的每一次增删都是契约变更，需要写进
 `docs/interface-decisions.md`。
 
-Python 服务的**业务拒绝**统一是 Promise 拒绝，带 `error.code`：`ProjectArchive` 与
-`ProjectFiles` 在 Python 侧抛 `BridgeError(code, message)`，dispatcher 把它写成
-`CODE: message`，C++ 桥只从消息前缀取码，因此 `PROJECT_CONTEXT_CHANGED`、
+Python 服务的**业务拒绝**统一是 Promise 拒绝，带 `error.code`：`project_archive` 与
+`project_files` 在 Python 侧抛 `BridgeError(code, message)`，dispatcher 把它写成
+符号码落在 `data.code`（与 C++ 场景层同一字段），C++ 桥不再解析消息，因此 `PROJECT_CONTEXT_CHANGED`、
 `DOCUMENT_CONFLICT`、`READ_ONLY_PROJECT`、`CONFLICT` 等业务码原样到达前端。
-`FileScripts` 是例外：它的回复是**运行状态记录**（`status` 是
-`starting/running/completed/error` 状态机），按值返回，由 Blockly 面板按状态渲染。
-只有传输或服务本身失败（信封解析、服务未启动、Python 抛未知异常）才回落到
-`SERVICE_FAILED`。
 同步方法**永不拒绝**：返回值，找不到时返回文档化的空值。
 
-## ScriptRuntime 面
 
-18 条具名绑定。名字、命名空间和参数位与 Web 面一一对应（这里用 snake_case）；
-调用方传真参数，`arity` 是文档化的位置数（可选参数计入），真正的签名由 nanobind 强制。
+## Python 服务清单（bridge 可达）
 
-| 命名空间 | 绑定 | 参数 | arity | 说明 |
-|---|---|---|---|---|
-| `scene` | `read_scene` | `[{archive_session, scene, actors?, cameras?}]` | 1 | The scene tree, cameras and actor projection the Web reads. |
-| `scene` | `read_active` | `[]` | 0 | Archive session, scene route, name, project path, tree revision, selection. |
-| `scene` | `create_actor` | `[scene, path, {archive_session, actor_type?, actor_name?, audio_resource_id?}]` | 3 | Creates an actor from an asset path. |
-| `scene` | `read_actor` | `[{archive_session, actor}]` | 1 | One actor by guid or name, projected the way the Web sees it. |
-| `scene` | `read_transforms` | `[{archive_session, actors[]}]` | 1 | Transforms for several guids; unknown guids are skipped, not an error. |
-| `scene` | `set_actor_transform` | `[scene, actor, {archive_session, position?, rotation?, scale?}]` | 3 | Writes transform components; omitted components keep their value. |
-| `scene` | `update_actor` | `[scene, actor, {archive_session, name?, visible?, ...}]` | 3 | Patches the actor's own state (not its body). |
-| `scene` | `delete_actor` | `[scene, actor, {archive_session}]` | 3 | Removes an actor and reports what was removed. |
-| `scene` | `read_environment` | `[scene, {archive_session}]` | 2 | The scene environment: sun, grid, physics scalars. |
-| `scene` | `set_environment` | `[scene, {archive_session?, sun?, grid?, physics?}]` | 2 | Patches the environment. |
-| `scene` | `read_archive_scene` | `[{archive_session}]` | 1 | The persisted scene values: actors, cameras, environment, terrain. |
-| `scene` | `set_actor_animation` | `[scene, actor, animation, blend_seconds?]` | 4 | Requests an animation clip; fails with ANIMATION_NOT_READY when no clip is loaded. |
-| `scene` | `pause_actor_animation` | `[scene, actor]` | 2 | Pauses the actor's animation player. |
-| `scene` | `resume_actor_animation` | `[scene, actor]` | 2 | Resumes the actor's animation player. |
-| `scene` | `set_actor_physics` | `[scene, actor, {archive_session?, mass?, body_type?, ...}]` | 3 | Patches the actor's body properties. |
-| `audio` | `play` | `[{scene, actor, archive_session?, loop?}]` | 1 | Plays the audio attached to an actor; the Web also plays a bare resource. |
-| `audio` | `stop` | `[{scene, actor, archive_session?}]` | 1 | Stops the audio attached to an actor; the Web also stops a bare resource. |
-| `viewport` | `set_camera_pose` | `[scene, camera, {position?, forward?, up?, fov?, ...}]` | 3 | Writes a camera pose. The script channel may write pose; it may not retarget cameras. |
+`corona.bridge.call` 只接受这些服务。白名单在 `runtime/editor_host.py` 的
+`ALLOWED_SERVICES`；函数清单从服务源码解析，所以新增方法或服务后这份文档必须重新生成。
+信封是 `{service, function, args}`，业务拒绝是带 `error.code` 的 Promise 拒绝。
 
-**失败形状**：方法抛 `api.errors.EditorApiError(code, message)`，`code` 就是 Web 面拒绝时
-用的同一个符号码（`PROJECT_CONTEXT_CHANGED`、`ACTOR_NOT_FOUND`、`READ_ONLY`、
-`INVALID_ARGUMENT`…）；C++ 侧把它放在 `data.code`，基础设施错误另有 `NATIVE_FAILURE` 与
-`NATIVE_UNAVAILABLE`。成功时直接返回 `data` 本体，键为 snake_case。
+| 服务 | 模块 | 函数 |
+|---|---|---|
 
-C++ 侧同时保留数字类（**409** 归档过期、**403** 只读、**404** Actor 不存在、
-**400** 参数不合法、**2** 其它）供行为测试断言；脚本只按符号码分支。
+`project_archive.file_manager` 是**带 op 判别**的服务：`op` 只能是 `create_file`、`create_folder`、`delete_item`、`get_file_tree`、`get_files`、`rename_item`，其余按 `INVALID_ARGUMENT` 拒绝；
+每个 op 的请求键由 `runtime/archive/arguments.py` 的 `require_keys` 白名单校验，
+与 C++ reader 的 `object_keys` 同语义（未知键拒绝，不静默忽略）。
+| `project_archive` | `plugins.ProjectArchive.main` | `asset_operation`、`commit_document`、`create_project`、`create_project_in`、`editor_settings`、`file_manager`、`parse`、`project_info`、`read_document`、`save`、`update_metadata`、`validate_project` |
+| `project_files` | `runtime.archive.script_files` | `load`、`save` |
 
-`read_scene` 要求 `archive_session` 非空：没传是 `INVALID_ARGUMENT`（400），
-传了但属于另一个归档是 `PROJECT_CONTEXT_CHANGED`（409）。
 
-## 文件脚本路由
+## 超时与并发
 
-测试探针用 `Scripts.*` 名字和 C++ 通信，但生产代码里没有名字分发：
-[`file_script_api.h`](../include/corona/systems/ui/file_script_api.h) 提供五条具名入口，
-名字到函数的映射留在探针内部。
+传输层的超时只有一个语义：Python 运行时没有在期限内回应时，C++ 把回复状态映射成
+`504`，Web 收到 `EDITOR_API_TIMEOUT`（`python_service_bridge.cpp`）。
+**每个操作自己负责超时**——传输层不再叠加第二条 deadline，因为一个慢的解析和一个
+挂死的进程要用不同的方式处理，混在传输层会让两者都不可诊断。
+
+Python 侧是单消费者串行：bridge 请求在同一个 worker 上依次执行，所以两个请求不会
+并发改同一个项目；需要并行的工作由操作自己在内部派发。
 
 ## 保护这份契约的守卫
 
@@ -164,9 +143,7 @@ C++ 侧同时保留数字类（**409** 归档过期、**403** 只读、**404** A
 |---|---|
 | [`test_manifest_retirement.py`](../tests/tools/test_manifest_retirement.py) | 已删除的 manifest 不许回来 |
 | [`test_typed_native_surface.py`](../tests/tools/test_typed_native_surface.py) | Web 面方法 + 拒绝码词表 |
-| [`test_editor_operation_table.py`](../tests/tools/test_editor_operation_table.py) | 唯一的操作表：36 行 / 11 双投影 / camelCase 推导 |
-| [`test_script_runtime_contract.py`](../tests/tools/test_script_runtime_contract.py) | 脚本绑定：表 ↔ nanobind ↔ Python 适配器 |
-| [`test_script_call_sites.py`](../tests/tools/test_script_call_sites.py) | 脚本调用点只使用表里发布的操作 |
+| [`test_editor_operation_table.py`](../tests/tools/test_editor_operation_table.py) | 唯一的操作表：55 行 / 九个命名空间 / camelCase 推导 |
 | [`test_wire_key_naming.py`](../tests/tools/test_wire_key_naming.py) | 过原生的键一律 snake_case，Web 侧翻译只在 appService |
 | [`test_interface_contract_doc.py`](../tests/tools/test_interface_contract_doc.py) | 这份文档与代码一致 |
 | [`test_docs_reference_live_files.py`](../tests/tools/test_docs_reference_live_files.py) | 文档不指向已删除的文件 |
@@ -190,9 +167,7 @@ C++ 侧同时保留数字类（**409** 归档过期、**403** 只读、**404** A
 
 ## 已知缺口
 
-`embedded_python/script_runtime/BOUNDARY.md` 记录了脚本侧**有意保留**的能力缺口：
-文件音频播放（Actor 自带音频已支持）、原生射线查询、指针捕获。补的时候要先在
-`script_runtime_api.h` 加具名入口，而不是恢复"探测一个不存在的函数再静默降级"的写法。
+脚本侧**有意保留**的能力缺口（文件音频播放、原生射线查询、指针捕获）随脚本运行时一起删除了；重新设计时先加具名入口，不要恢复"探测不存在的函数再静默降级"的写法。
 
 接口侧的覆盖缺口（记录在此，避免被当成已完成）：
 

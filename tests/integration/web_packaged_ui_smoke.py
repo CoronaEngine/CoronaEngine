@@ -19,7 +19,6 @@ from profile_process import _Job
 from vision_frontend_probe import Frontend
 import web_environment_smoke
 import web_focus_smoke
-import web_graph_target_smoke
 import web_actor_properties_smoke
 import web_panel_lifecycle_smoke
 import web_project_creation_smoke
@@ -168,7 +167,7 @@ def main():
             client.socket.close()
             client = None
             for name, suite in [('focus', web_focus_smoke), ('environment', web_environment_smoke),
-                                ('graph', web_graph_target_smoke), ('properties', web_actor_properties_smoke),
+                                ('properties', web_actor_properties_smoke),
                                 ('panels', web_panel_lifecycle_smoke),
                                 ('creation', web_project_creation_smoke), ('picker', web_project_picker_smoke),
                                 ('calibration', web_calibration_smoke), ('assistant', web_assistant_smoke),

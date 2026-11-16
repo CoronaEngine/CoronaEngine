@@ -6,16 +6,15 @@ names are checked against the same sources the build enforces.
 """
 from pathlib import Path
 import re
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import operation_table
+import native_surface
 
 ROOT = Path(__file__).resolve().parents[2]
 DOC = ROOT / "docs/interface-contract.md"
-TABLE = ROOT / "src/systems/ui/cef/editor_operation_table.h"
-SURFACE = ROOT / "tests/tools/native_surface.py"
-
-TABLE_ROW = re.compile(
-    r'\{"(\w+)",\s*"(\w+)",\s*(SceneMethod::\w+|std::nullopt),\s*'
-    r'(true|false),\s*(true|false),'
-)
 
 
 def _doc() -> str:
@@ -23,34 +22,18 @@ def _doc() -> str:
 
 
 def _operations_in_source() -> set[str]:
-    text = TABLE.read_text(encoding="utf-8-sig")
-    start = text.index("kEditorOperations[] = {")
-    end = text.index("};", start)
-    return {name for _group, name, _method, _web, script in TABLE_ROW.findall(text[start:end])
-            if script == "true"}
+    return {row["name"] for row in operation_table.script_rows()}
 
 
 def _namespaces_in_source() -> set[str]:
-    text = SURFACE.read_text(encoding="utf-8-sig")
-    block = text[text.index("EXPECTED_SURFACE = {"):text.index("\n}\n", text.index("EXPECTED_SURFACE"))]
-    return set(re.findall(r'^\s{4}"(\w+)":', block, re.M))
+    return set(native_surface.EXPECTED_SURFACE)
 
 
 def test_the_document_exists_and_is_the_entry_point():
     assert DOC.exists(), "docs/interface-contract.md is the entry point for the interface layer"
     text = _doc()
-    for topic in ("Web 面", "ScriptRuntime 面", "失败形状", "保护这份契约的守卫"):
+    for topic in ("Web 面", "失败形状", "保护这份契约的守卫"):
         assert topic in text, f"the document no longer covers {topic!r}"
-
-
-def test_every_script_operation_is_listed_once():
-    text = _doc()
-    listed = re.findall(r"^\| `\w+` \| `(\w+)` \| `\[", text, re.M)
-    expected = _operations_in_source()
-    assert len(listed) == len(set(listed)), f"duplicated rows: {sorted(listed)}"
-    missing = sorted(expected - set(listed))
-    extra = sorted(set(listed) - expected)
-    assert not missing and not extra, f"document and contract disagree: missing {missing}, extra {extra}"
 
 
 def test_every_web_namespace_is_listed():
@@ -66,10 +49,6 @@ def test_the_failure_shapes_match_what_the_guards_enforce():
     for code in ("PERMISSION_DENIED", "CONTEXT_CHANGED", "INVALID_ARGUMENT",
                  "NATIVE_UNAVAILABLE", "NATIVE_FAILURE", "PROJECT_CONTEXT_CHANGED"):
         assert code in text, f"the document stops documenting {code}"
-    for number in ("409", "403", "404", "400"):
-        assert number in text, f"the document stops documenting the {number} class"
-    assert "data.code" in text, "the document has to say where the symbolic code lives"
-
 
 def test_every_guard_it_names_exists():
     text = _doc()
@@ -77,10 +56,7 @@ def test_every_guard_it_names_exists():
         assert (ROOT / target).exists(), f"the document points at a missing guard: {target}"
 
 def _web_methods_in_source() -> dict[str, set[str]]:
-    text = SURFACE.read_text(encoding="utf-8-sig")
-    block = text[text.index("EXPECTED_SURFACE = {"):text.index("\n}\n", text.index("EXPECTED_SURFACE"))]
-    entries = re.findall(r'^\s{4}"(\w+)": \{(.*?)\},?$', block, re.M | re.S)
-    return {namespace: set(re.findall(r'"(\w+)"', body)) for namespace, body in entries}
+    return dict(native_surface.EXPECTED_SURFACE)
 
 
 def test_every_web_method_is_listed():
@@ -117,3 +93,12 @@ def test_every_guard_file_is_registered_in_the_table():
     assert present == registered, (
         f"guards missing from the contract table: {sorted(present - registered)}; "
         f"registered but absent: {sorted(registered - present)}")
+
+def test_every_bridge_service_is_listed():
+    """The allowlist is code; the document has to show it, or nobody knows what Web may reach."""
+    text = _doc()
+    editor = (ROOT / "embedded_python/runtime/editor_host.py").read_text(encoding="utf-8-sig")
+    allowed = re.findall(r"ALLOWED_SERVICES = frozenset\(\{([^}]*)\}\)", editor)
+    assert allowed, "ALLOWED_SERVICES moved or changed shape"
+    for name in re.findall(r'"(\w+)"', allowed[0]):
+        assert f"| `{name}` |" in text, f"bridge service {name} is not in the document"

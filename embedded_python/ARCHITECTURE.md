@@ -15,11 +15,8 @@
 
 - `include/corona/engine/engine_runtime_api.h`：C++ Engine Runtime 底层接口。
 - `src/systems/ui/cef/cef_v8_binding.cpp`：Web 唯一的 C++ 契约（typed V8 具名绑定）。
-- `src/systems/ui/cef/editor_operation_table.h`：唯一的操作表（名字、命名空间、投影）。
-- `src/systems/ui/cef/script_runtime_api.h`：Script Runtime 的 18 条 handler（内部实现）。
 - `embedded_python/api/editor_api.py`：Python 侧受限契约入口。
 - `editor/Frontend/src/api`：Vue 聚合契约 adapter。
-- `script_runtime/native_scene_adapter.py`：角色脚本可用的受限子集。
 
 JSON manifest（api-name 表 + caller 掩码 + `EditorApiRegistry`/`NativeApiRegistry`）
 已删除；Web 与 Script Runtime 各走一份具名契约。
@@ -34,7 +31,6 @@ V8 具名绑定；新增脚本语义加到 `script_runtime_api.h` 的具名入�
 | `api` | Python 公共契约 |
 | `config` | 路径和项目状态 |
 | `runtime` | host、registry、生命周期和运行时数据 |
-| `script_runtime` | Blockly 生成文件的受限执行环境 |
 | `plugins` | 项目存档服务和原生模板 |
 
 历史 `backend`、`CoronaCore`、`CoronaPlugin`、`utils`、`scripts` 目录已删除；仓内不再

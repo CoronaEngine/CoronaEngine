@@ -19,7 +19,6 @@
 #include "archive_load_policy.h"
 #include "../collaborative_editor_runtime.h"
 #include "cef_client.h"
-#include <corona/systems/ui/file_script_api.h>
 #include "python_service_bridge.h"
 #include "native_api_types.h"
 #include "native_editor_state.h"
@@ -40,7 +39,6 @@
 #include "editor_api_services.h"
 #include "cef_process.h"
 #include "editor_scene_service.h"
-#include "script_runtime_api.h"
 #include "editor_dispatch.h"
 #include <cef_task.h>
 #include "scene_folder.h"
@@ -629,7 +627,7 @@ NativeEditorScene& materialize_scene_snapshot_into_state(
 NativeResult invoke_project_archive_parser(const std::string& path,
                                            const std::string& load_policy) {
     NativeRequest parser_request;
-    parser_request.module = "ProjectArchive";
+    parser_request.module = "project_archive";
     parser_request.function = "parse";
     parser_request.args = nlohmann::json::array({{
         {"path", path},
@@ -701,15 +699,6 @@ PreparedArchiveLoad prepare_archive_load(const std::string& path,
 
 bool is_path_within(const std::filesystem::path& root, const std::filesystem::path& candidate);
 
-std::optional<std::string> stop_before_scene_replacement(const NativeEditorState& state) {
-    if (!state.scene) return std::nullopt;
-    const auto result = invoke_python_script_service({"FileScripts", "stop_script_execution", {true}});
-    if (!result.success) return result.error;
-    if (result.data.value("status", "") != "stopped" || result.data.value("snapshotCaptured", false)) {
-        return result.data.value("message", std::string{"Script restore incomplete"});
-    }
-    return std::nullopt;
-}
 
 NativeEditorScene* reload_native_editor_scene(const std::string& project_path_arg,
                                               const std::string& scene_route_arg) {
@@ -741,7 +730,6 @@ NativeEditorScene* reload_native_editor_scene(const std::string& project_path_ar
     if (!prepared.ready) {
         throw std::runtime_error("Archive reload requires user decision");
     }
-    if (auto error = stop_before_scene_replacement(state)) throw std::runtime_error(*error);
     return &materialize_scene_snapshot_into_state(
         state, prepared.snapshot, false, prepared.diagnostics);
 }
@@ -980,19 +968,6 @@ std::vector<std::string> prepare_animation_sources(const NativeEditorScene& scen
     return prepare_animation_sources(scene, AnimationConfig::parse_sources(value), memory_only);
 }
 
-
-NativeResult set_native_actor_animation_paused(const NativeRequest& request, bool paused) {
-    try {
-        auto* scene = scene_for_request_route(request);
-        auto* actor = find_native_actor(*scene, arg_string(request.args, 1));
-        if (!actor) return native_failure("Actor not found", 2);
-        auto player = actor_animation_player(*actor);
-        if (!player) return native_failure("Actor has no geometry", 2);
-        player->set_paused(paused);
-        return native_success({{"status", "success"}, {"scene", scene->route},
-                               {"actor", actor_to_json(*scene, *actor)}});
-    } catch (const std::exception& error) { return native_failure(error.what(), 2); }
-}
 
 NativeResult create_native_editor_actor(const std::string& scene_route_arg,
                                         const std::string& source_path,
@@ -1329,33 +1304,6 @@ NativeResult native_environment_result(const SceneRequest& request) {
 
 // JSON decoding/encoding belongs exclusively to the non-Web contracts.
 // Sun, grid and physics adapters all enter the same typed environment operation.
-NativeResult set_native_environment(const NativeRequest& request) {
-    try {
-        const auto state = arg_object(request.args, 1);
-        SceneRequest write{SceneMethod::SetEnvironment};
-        auto& patch = write.environment;
-        patch.scene = arg_string(request.args, 0);
-        if (state.contains("archive_session")) write.archive_session = state.at("archive_session").get<std::string>();
-        if (const auto value = state.find("sun"); value != state.end() && value->is_object()) {
-            EnvironmentSunPatch sun;
-            sun.enabled = actor_data_bool(*value, {"enabled"});
-            if (const auto direction = value->find("direction"); direction != value->end()) sun.direction = json_float3_value(*direction);
-            patch.sun = sun;
-        }
-        if (const auto value = state.find("grid"); value != state.end() && value->is_object())
-            patch.grid_enabled = actor_data_bool(*value, {"enabled"});
-        if (const auto value = state.find("physics"); value != state.end() && value->is_object()) {
-            EnvironmentPhysicsPatch physics;
-            if (const auto gravity = value->find("gravity"); gravity != value->end()) physics.gravity = json_float3_value(*gravity);
-            physics.floor_y = actor_data_float(*value, {"floor_y"});
-            physics.floor_restitution = actor_data_float(*value, {"floor_restitution"});
-            physics.fixed_dt = actor_data_float(*value, {"fixed_dt"});
-            patch.physics = physics;
-        }
-        return native_environment_result(write);
-    } catch (const std::exception& error) { return native_failure(error.what(), 2); }
-}
-
 SceneReply apply_native_actor_focus(const SceneRequest& request) {
     SceneReply reply;
     const auto fail = [&](const char* code, const char* message) {
@@ -1453,74 +1401,12 @@ SceneReply apply_native_actor_transform(const SceneRequest& request) {
 // Non-Web boundary adapters retain their own public argument shapes. All
 // component writes, version changes and camera side effects live above.
 enum class ActorPropertyAdapter { State, Mechanics, CameraLock };
-NativeResult set_native_actor_properties(const NativeRequest& request, ActorPropertyAdapter kind) {
-    try {
-        const auto values = arg_object(request.args, 2);
-        SceneRequest write{SceneMethod::UpdateActor};
-        auto& patch = write.properties;
-        patch.scene = arg_string(request.args, 0); patch.actor = arg_string(request.args, 1);
-        // The script channel owns no assets: whatever it imports stays in memory and is
-        // never written back to the scene archive.
-        patch.transient_assets = true;
-        if (values.contains("archive_session")) write.archive_session = values.at("archive_session").get<std::string>();
-        if (kind == ActorPropertyAdapter::State) {
-            patch.visible = actor_data_bool(values, {"visible"});
-            patch.follow_camera = actor_data_bool(values, {"follow_camera"});
-            if (values.contains("animation_sources")) patch.animation_sources = AnimationConfig::parse_sources(values.at("animation_sources"));
-        } else if (kind == ActorPropertyAdapter::Mechanics) {
-            ActorMechanicsPatch mechanics;
-            mechanics.mass = actor_data_float(values, {"mass"});
-            mechanics.restitution = actor_data_float(values, {"restitution"});
-            mechanics.damping = actor_data_float(values, {"damping"});
-            const auto body = json_string_value(values, {"body_type"});
-            if (!body.empty()) mechanics.body_type = normalize_body_type(body);
-            else if (const auto enabled = actor_data_bool(values, {"physics_enabled"})) mechanics.body_type = *enabled ? "dynamic" : "static";
-            const auto locks = [&](const char* key, auto& target) {
-                const auto value = values.find(key);
-                if (value != values.end() && value->is_array() && value->size() >= 3)
-                    target = std::array<bool, 3>{json_bool_at(*value, 0), json_bool_at(*value, 1), json_bool_at(*value, 2)};
-            };
-            locks("linear_lock", mechanics.linear_lock); locks("angular_lock", mechanics.angular_lock);
-            patch.mechanics = mechanics;
-        } else {
-            const auto enabled = actor_data_bool(values, {"enabled", "lock_to_camera"});
-            if (!enabled) return native_failure("Camera-lock requires boolean enabled", 2);
-            ActorCameraLockPatch lock; lock.enabled = *enabled;
-            const auto vector = [&](const char* key, auto& target) {
-                if (!values.contains(key)) return;
-                const auto& value = values.at(key);
-                if (!value.is_array() || value.size() != 3) throw std::invalid_argument("Camera offset requires three finite numbers");
-                std::array<float, 3> copy;
-                for (size_t index = 0; index < 3; ++index) {
-                    if (!value[index].is_number() || !std::isfinite(value[index].get<double>()) ||
-                        std::abs(value[index].get<double>()) > std::numeric_limits<float>::max())
-                        throw std::invalid_argument("Camera offset requires three finite numbers");
-                    copy[index] = value[index].get<float>();
-                }
-                target = copy;
-            };
-            vector("position_offset", lock.position_offset); vector("rotation_offset", lock.rotation_offset);
-            patch.camera_lock = lock;
-        }
-        const auto reply = apply_native_actor_properties(write);
-        if (!reply.error_code.empty()) return native_result_from_scene(reply);
-        auto* scene = native_editor_state().scene.get();
-        return native_success({{"status", "success"}, {"scene", scene->route},
-            {"actor", actor_to_json(*scene, *find_native_actor(*scene, reply.write.properties.actor_guid))}});
-    } catch (const std::exception& error) { return native_failure(error.what(), 2); }
-}
-
 // JSON is confined to the non-Web Python/network adapter. The write itself is
 // the same typed operation as V8, not another transform implementation.
-NativeResult set_native_editor_actor_transform(const std::string& scene_route_arg,
-                                               const std::string& actor_name,
-                                               const nlohmann::json& transform_data) {
+NativeResult set_native_editor_actor_transform(const ActorTransformPatch& patch, const std::string& archive_session) {
     SceneRequest request{SceneMethod::SetActorTransform};
-    request.transform = {scene_route_arg, actor_name,
-        transform_float3_value(transform_data, "position", "pos"),
-        transform_float3_value(transform_data, "rotation", "rot"),
-        transform_float3_value(transform_data, "scale", "scl")};
-    if (transform_data.contains("archive_session")) request.archive_session = transform_data.at("archive_session").get<std::string>();
+    request.transform = patch;
+    if (!archive_session.empty()) request.archive_session = archive_session;
     const auto reply = apply_native_actor_transform(request);
     if (!reply.error_code.empty()) return native_result_from_scene(reply);
     auto* scene = native_editor_state().scene.get();
@@ -1530,6 +1416,18 @@ NativeResult set_native_editor_actor_transform(const std::string& scene_route_ar
         {"scene", scene->route},
         {"actor", actor_to_json(*scene, *actor)},
     });
+}
+
+/// JSON stays for the non-Web adapters that carry a serialized transform (network replay);
+/// it is parsed once, here, and then the typed write above does the work.
+NativeResult set_native_editor_actor_transform(const std::string& scene_route_arg,
+                                               const std::string& actor_name,
+                                               const nlohmann::json& transform_data) {
+    ActorTransformPatch patch{scene_route_arg, actor_name,
+        transform_float3_value(transform_data, "position", "pos"),
+        transform_float3_value(transform_data, "rotation", "rot"),
+        transform_float3_value(transform_data, "scale", "scl")};
+    return set_native_editor_actor_transform(patch, transform_data.value("archive_session", std::string{}));
 }
 
 enum class PendingNetworkActorApplyResult {
@@ -2795,44 +2693,6 @@ SceneReply apply_native_camera_render_settings(const SceneRequest& request) {
 }
 
 // JSON is restricted to the existing non-Web caller boundary, never the V8 path.
-NativeResult apply_non_web_camera_properties(const NativeRequest& request, bool pose) {
-    auto* scene = scene_for_request_route(request);
-    const auto camera_name = arg_string(request.args, 1);
-    auto* camera = find_native_camera(*scene, camera_name);
-    if (!camera || !camera->engine_camera) return camera_not_found_result(camera_name);
-    SceneRequest write{SceneMethod::UpdateCamera};
-    write.archive_session = scene->archive_session;
-    auto& patch = write.camera_properties;
-    patch.scene = scene->route; patch.camera_id = camera->camera_id;
-    const auto data = arg_object(request.args, 2);
-    if (pose) {
-        const auto vector = [&](const char* key, auto& value) {
-            if (data.contains(key)) {
-                value = json_float3_value(data[key]);
-                if (!value) throw std::invalid_argument("Invalid camera vector");
-            }
-        };
-        vector("position", patch.position); vector("forward", patch.forward); vector("world_up", patch.world_up);
-        if (!patch.world_up) vector("up", patch.world_up);
-        if (data.contains("fov")) patch.fov = data["fov"].get<float>();
-        if (data.contains("projection_x_sign")) patch.projection_x_sign = data["projection_x_sign"].get<float>();
-        if (data.contains("near_plane")) patch.near_plane = data["near_plane"].get<float>();
-        if (data.contains("far_plane")) patch.far_plane = data["far_plane"].get<float>();
-    } else {
-        if (data.contains("view_open")) patch.view_open = data["view_open"].get<bool>();
-        if (data.contains("move_speed")) patch.move_speed = data["move_speed"].get<float>();
-        const auto integer = [&](const char* key, auto& value) { if (data.contains(key)) value = data[key].get<int>(); };
-        integer("width", patch.width); integer("height", patch.height); integer("view_x", patch.view_x); integer("view_y", patch.view_y);
-        integer("view_width", patch.view_width); integer("view_height", patch.view_height);
-    }
-    if (!patch.empty()) {
-        // Caller permissions are enforced by the registry. Runtime scripts own pose input.
-        const auto reply = apply_native_camera_properties(write, false);
-        if (!reply.error_code.empty()) return native_result_from_scene(reply);
-    }
-    return native_success({{"status", "success"}, {"scene", scene->route}, {"camera", camera_to_json(*camera)}});
-}
-
 namespace {
 
 nlohmann::json typed_ik_chain_json(const IkChainSnapshot& chain) {
@@ -2882,32 +2742,6 @@ std::vector<IkChainSnapshot> typed_ik_chains(const std::vector<Corona::Resource:
 }
 
 } // namespace
-
-static NativeResult start_native_script_file(nlohmann::json payload, bool by_path) {
-    const auto* scene = native_editor_state().scene.get();
-    if (!scene || !matches_archive_session(*scene, payload)) {
-        return native_scene_failure("PROJECT_CONTEXT_CHANGED", "PROJECT_CONTEXT_CHANGED");
-    }
-    if (by_path && !payload.contains("project_path")) payload["project_path"] = path_to_utf8(scene->project_root);
-    if (by_path && !payload.contains("target_type")) {
-        payload["target_type"] = ProjectScriptService::default_target_type(payload.value("actor_name", std::string{}));
-    }
-    const auto expected = path_from_utf8(payload.value("project_path", std::string{}));
-    if (const auto invalid = ProjectScriptService::validate_script_project(
-            scene->read_only, !expected.empty(),
-            !expected.empty() && absolute_normalized_path(expected) == absolute_normalized_path(scene->project_root))) {
-        return native_failure(invalid.message, 409);
-    }
-    const auto path = path_from_utf8(payload.value("path", std::string{}));
-    if (const auto invalid = ProjectScriptService::validate_script_path(path)) {
-        return native_failure(invalid.message, 400);
-    }
-    const auto root = absolute_normalized_path(scene->project_root);
-    // The Python file host resolves the path, checks containment and verifies
-    // the saved bytes against the revision before compiling them.
-    payload["project_path"] = path_to_utf8(root);
-    return invoke_python_script_service({"FileScripts", by_path ? "run_path" : "run_file", nlohmann::json::array({payload})});
-}
 
 SceneReply execute_scene_operation(const SceneRequest& request) {
     if (request.method == SceneMethod::ReadVisionAvailability) {
@@ -3905,12 +3739,6 @@ NativeResult open_launcher_project(const std::string& requested_path, const std:
     }
 
     auto& state = native_editor_state();
-    // A file run can start between the Web launcher's cleanup and this open.
-    // Fence the actual replacement on the editor thread with the old scene still installed.
-    if (auto error = stop_before_scene_replacement(state)) {
-        return native_success({{"ok", false}, {"status", "script_cleanup_failed"}, {"path", path},
-            {"message", *error}});
-    }
     try {
         materialize_scene_snapshot_into_state(
             state,
@@ -4042,189 +3870,6 @@ struct VisionToggleSpec {
 
 
 
-// Named entry points for the ScriptRuntime caller. The public spelling, the argument
-// packing and the Python binding live in editor_operation_table.h, script_operation_entry.h
-// and cef_py_bind.cpp; these functions are the implementation.
-
-NativeResult script_scene_get_environment(const NativeRequest& request) {
-            SceneRequest read{SceneMethod::GetEnvironment};
-            read.environment.scene = arg_string(request.args, 0);
-            return native_environment_result(read);
-}
-
-NativeResult script_scene_read_active_scene(const NativeRequest& request) {
-            const auto state = execute_scene_operation({SceneMethod::ReadActive}).read.active;
-            if (state.archive_session.empty()) return native_success({{"archive_session", ""}});
-            auto selection = nlohmann::json::object();
-            if (state.selection) {
-                const auto& selected = *state.selection;
-                selection = {{"scene", selected.scene}, {"actor_type", selected.actor_type}, {"actor", selected.actor},
-                    {"source_viewport", selected.source_viewport}, {"source_camera_id", selected.source_camera_id}};
-                if (selected.actor_guid) selection["actor_guid"] = *selected.actor_guid;
-                if (selected.node_index) selection["node_index"] = *selected.node_index;
-            }
-            return native_success({{"archive_session", state.archive_session}, {"scene", state.scene},
-                {"name", state.name}, {"project_path", state.project_path}, {"read_only", state.read_only},
-                {"tree_revision", state.tree_revision}, {"selection", std::move(selection)}});
-}
-
-NativeResult script_scene_read_actor(const NativeRequest& request) {
-            auto* scene = native_editor_state().scene.get();
-            const auto query = arg_object(request.args, 0);
-            if (!scene || !matches_archive_session(*scene, query)) return native_scene_failure("PROJECT_CONTEXT_CHANGED", "PROJECT_CONTEXT_CHANGED");
-            const auto id = query.value("actor", std::string{});
-            auto* actor = find_native_actor(*scene, id);
-            if (!actor) return native_failure("Actor not found: " + id, 404);
-            return native_success(actor_to_json(*scene, *actor));
-}
-
-NativeResult script_scene_read_transforms(const NativeRequest& request) {
-            const auto query = arg_object(request.args, 0);
-            auto* scene = native_editor_state().scene.get();
-            if (!scene || !matches_archive_session(*scene, query)) return native_scene_failure("PROJECT_CONTEXT_CHANGED", "PROJECT_CONTEXT_CHANGED");
-            auto values = nlohmann::json::array();
-            for (const auto& guid : query.at("actors").get<std::vector<std::string>>()) {
-                auto* actor = find_native_actor_by_guid(*scene, guid);
-                if (!actor) continue;
-                values.push_back({{"scene", scene->route}, {"actor", actor->name}, {"actor_guid", guid},
-                    {"position", actor->geometry ? actor->geometry->get_position() : actor->position},
-                    {"rotation", actor->geometry ? actor->geometry->get_rotation() : actor->rotation},
-                    {"scale", actor->geometry ? actor->geometry->get_scale() : actor->scale}});
-            }
-            return native_success({{"archive_session", scene->archive_session}, {"actors", std::move(values)}});
-}
-
-NativeResult script_scene_read_archive_scene(const NativeRequest& request) {
-            auto* scene = native_editor_state().scene.get();
-            if (!scene || !matches_archive_session(*scene, arg_object(request.args, 0)))
-                return native_scene_failure("PROJECT_CONTEXT_CHANGED", "PROJECT_CONTEXT_CHANGED");
-            return native_success({{"archive_session", scene->archive_session}, {"scene", archive_scene_values(*scene)}});
-}
-
-NativeResult script_scene_get_scene_snapshot(const NativeRequest& request) {
-            try {
-                const auto raw = native_editor_scene_snapshot_json(arg_string(request.args, 0));
-                const auto data = nlohmann::json::parse(raw);
-                if (data.value("status", std::string{}) == "error") {
-                    return native_failure(data.value("message", std::string{"Scene snapshot failed"}), 2);
-                }
-                return native_success(data);
-            } catch (const std::exception& e) {
-                return native_failure(e.what(), 2);
-            }
-}
-
-NativeResult script_scene_set_actor_transform(const NativeRequest& request) {
-            try {
-                const auto transform = arg_object(request.args, 2);
-                // The script channel may omit the archive; when it carries one it
-                // must name the archive the editor currently has open.
-                if (transform.contains("archive_session") &&
-                    !matches_archive_session(*scene_for_request_route(request), transform))
-                    return native_scene_failure("PROJECT_CONTEXT_CHANGED", "PROJECT_CONTEXT_CHANGED");
-                return set_native_editor_actor_transform(
-                    arg_string(request.args, 0), arg_string(request.args, 1), transform);
-            } catch (const std::exception& e) {
-                return native_failure(e.what(), 2);
-            }
-}
-
-NativeResult script_scene_set_environment(const NativeRequest& request) {
-            return set_native_environment(request);
-}
-
-NativeResult script_scene_set_actor_state(const NativeRequest& request) {
-            return set_native_actor_properties(request, ActorPropertyAdapter::State);
-}
-
-NativeResult script_scene_set_actor_animation(const NativeRequest& request) {
-            try {
-                auto* scene = scene_for_request_route(request);
-                auto* actor = find_native_actor(*scene, arg_string(request.args, 1));
-                if (!actor) return native_failure("Actor not found", 2);
-                auto player = actor_animation_player(*actor);
-                if (!player) return native_failure("Actor has no geometry", 2);
-                const auto animation = arg_string(request.args, 2);
-                if (animation.empty()) return native_failure("animation must be a non-empty id or name", 2);
-                const double seconds = request.args.size() > 3 && !request.args[3].is_null()
-                    ? request.args[3].get<double>() : 0.2;
-                player->request_switch(animation, seconds);
-                return native_success({{"status", "accepted"}, {"scene", scene->route},
-                                       {"actor", actor_to_json(*scene, *actor)}});
-            } catch (const std::exception& error) { return native_failure(error.what(), 2); }
-}
-
-NativeResult script_scene_pause_actor_animation(const NativeRequest& request) {
-            return set_native_actor_animation_paused(request, true);
-}
-
-NativeResult script_scene_resume_actor_animation(const NativeRequest& request) {
-            return set_native_actor_animation_paused(request, false);
-}
-
-NativeResult script_scene_set_actor_physics(const NativeRequest& request) {
-            return set_native_actor_properties(request, ActorPropertyAdapter::Mechanics);
-}
-
-NativeResult script_scene_set_camera_pose(const NativeRequest& request) {
-            return apply_non_web_camera_properties(request, true);
-}
-
-NativeResult script_scene_create_actor(const NativeRequest& request) {
-            const auto scene_route = arg_string(request.args, 0);
-            const auto source_path = arg_string(request.args, 1);
-            auto actor_type = normalize_route(arg_string(request.args, 2, "model"));
-            const auto actor_data = arg_object(request.args, 3);
-            const auto* scene = native_editor_state().scene.get();
-            // Only validate the archive the caller actually named: script code may
-            // import an actor into whatever world is open.
-            if (actor_data.contains("archive_session") &&
-                (!scene || !matches_archive_session(*scene, actor_data)))
-                return native_scene_failure("PROJECT_CONTEXT_CHANGED", "PROJECT_CONTEXT_CHANGED");
-            return create_native_editor_actor(scene_route, source_path, actor_type, actor_data,
-                                              /*transient_assets=*/true);
-}
-
-namespace {
-
-/// Shared by the two actor-audio entries: both need the same three scopes.
-NativeResult set_native_actor_audio(const NativeRequest& request, bool play) {
-    const auto scene_route = arg_string(request.args, 0);
-    const auto actor_name = arg_string(request.args, 1);
-    const auto payload = arg_object(request.args, 2);
-    SceneRequest write{play ? SceneMethod::PlayActorAudio : SceneMethod::StopActorAudio};
-    write.audio.scene = scene_route;
-    write.audio.actor = actor_name;
-    write.audio.loop = payload.value("loop", false);
-    if (payload.contains("archive_session") && payload.at("archive_session").is_string()) {
-        write.archive_session = payload.at("archive_session").get<std::string>();
-    } else if (const auto* active = native_editor_state().scene.get()) {
-        write.archive_session = active->archive_session;
-    }
-    const auto reply = execute_scene_operation(write);
-    if (!reply.error_code.empty()) return native_result_from_scene(reply);
-    return native_success({{"status", "success"},
-                           {"scene", reply.write.audio.scene},
-                           {"actor", reply.write.audio.actor},
-                           {"playing", reply.write.audio.playing},
-                           {"spatial", reply.write.audio.spatial}});
-}
-
-}  // namespace
-
-NativeResult script_scene_play_actor_audio(const NativeRequest& request) {
-    return set_native_actor_audio(request, true);
-}
-
-NativeResult script_scene_stop_actor_audio(const NativeRequest& request) {
-    return set_native_actor_audio(request, false);
-}
-
-NativeResult script_scene_remove_actor(const NativeRequest& request) {
-            const auto scene_route = arg_string(request.args, 0);
-            const auto actor_name = arg_string(request.args, 1);
-            return remove_native_editor_actor(scene_route, actor_name);
-}
 
 NetworkReply execute_network_operation(const NetworkRequest& request) {
     NetworkReply reply;
@@ -4304,39 +3949,9 @@ NetworkReply execute_network_operation(const NetworkRequest& request) {
 
 namespace {
 NativeResult project_archive_call(const char* method, nlohmann::json request) {
-    return invoke_python_script_service({"ProjectArchive", method, nlohmann::json::array({std::move(request)})},
+    return invoke_python_script_service({"project_archive", method, nlohmann::json::array({std::move(request)})},
                                         "python-archive");
 }
 
-nlohmann::json file_script_envelope(const NativeResult& result) {
-    return nlohmann::json{{"success", result.success},
-                          {"code", result.success ? 0 : result.error_code},
-                          {"data", result.data},
-                          {"error", result.error}};
-}
 }  // namespace
-
-nlohmann::json run_project_script_file(const nlohmann::json& payload) {
-    return file_script_envelope(start_native_script_file(arg_object(payload, 0), false));
-}
-
-nlohmann::json run_project_script_path(const nlohmann::json& payload) {
-    return file_script_envelope(start_native_script_file(arg_object(payload, 0), true));
-}
-
-nlohmann::json project_script_status(const nlohmann::json& request) {
-    return file_script_envelope(
-        invoke_python_script_service({"FileScripts", "get_script_status", request}));
-}
-
-nlohmann::json project_script_run(const nlohmann::json& request) {
-    return file_script_envelope(
-        invoke_python_script_service({"FileScripts", "get_file_run", request}));
-}
-
-nlohmann::json stop_project_script(const nlohmann::json& request) {
-    return file_script_envelope(
-        invoke_python_script_service({"FileScripts", "stop_file", request}));
-}
-
 }  // namespace Corona::Systems::UI

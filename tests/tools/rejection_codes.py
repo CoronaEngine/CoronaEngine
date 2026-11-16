@@ -56,7 +56,6 @@ SCENE = {
     "PROJECT_CREATION_FAILED",
     "DOCUMENT_CONFLICT",         # commit compare-and-swap lost; reload the document then retry
     "INVALID_PROJECT_DOCUMENT",  # the document route is outside the project or not JSON
-    "RUN_ACTIVE",                # a script run owns the scene; stop and restore it first
     "SAVE_FAILED",            # the scene could not be written
     "CAPTURE_FAILED",         # the screenshot could not be taken
     "COMPONENT_NOT_FOUND",    # the imported model has no such component

@@ -115,19 +115,6 @@ namespace Corona::Systems::UI::ProjectScriptService {
 
 using ValidationError = ::Corona::Systems::UI::ValidationError;
 
-// Script file launches must name a project-relative .py file.
-ValidationError validate_script_path(const std::filesystem::path& path);
-
-// Launches are rejected when the project is read-only, the payload omits the
-// project path, or the declared project differs from the active root.
-ValidationError validate_script_project(bool read_only,
-                                        bool has_project_path,
-                                        bool project_path_matches_root);
-
-// Defaults the launch target kind: an actor name selects the actor target,
-// otherwise the whole project runs.
-std::string default_target_type(const std::string& actor_name);
-
 // Maps Python-bridge failure codes onto the frozen Web error codes for the
 // Scripts namespace: 504 -> EDITOR_API_TIMEOUT, 409 -> PROJECT_CONTEXT_CHANGED,
 // else NATIVE_FAILURE.

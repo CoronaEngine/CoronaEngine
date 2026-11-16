@@ -1,3 +1,4 @@
+from runtime.archive.arguments import require_choice, require_keys
 """File-browser operations on the active archive."""
 import configparser
 from io import StringIO
@@ -61,33 +62,46 @@ def _refusal(message):
     raise BridgeError("FILE_OPERATION_FAILED", message)
 
 
+FILE_OPS = {
+    "get_file_tree": {"required": ("path",), "optional": ()},
+    "get_files": {"required": ("path",), "optional": ()},
+    "create_folder": {"required": ("path", "name"), "optional": ()},
+    "create_file": {"required": ("path", "name"), "optional": ("file_type",)},
+    "delete_item": {"required": ("path",), "optional": ()},
+    "rename_item": {"required": ("path", "name"), "optional": ()},
+}
+
+_SCOPE_KEYS = ("archive_session", "project_path")
+
+
 def _file_manager(request):
-    from script_runtime.file_runner import FileScripts
     root, error = require_project_session(request)
     if error:
         raise BridgeError(error.get("code") or "SERVICE_FAILED",
                           error.get("message") or "Project session refused")
     try:
-        op, args = request["op"], request["args"]
-        requested = root / (args[0] if args else "")
+        op = require_choice(request, "op", FILE_OPS)
+        spec = FILE_OPS[op]
+        require_keys(request, required=("op",) + spec["required"],
+                     optional=spec["optional"] + _SCOPE_KEYS)
+        requested = root / request["path"]
         path = requested.resolve()
         if not path.is_relative_to(root):
             raise ValueError("Path outside current project")
         if op == "get_file_tree":
-            return {**_entry(root, path, True, 0 if path == root else 1), "archive_session": request["archive_session"]}
+            entry = _entry(root, path, True, 0 if path == root else 1)
+            return {**entry, "archive_session": request.get("archive_session")}
         if op == "get_files":
             return [_entry(root, child) for child in path.iterdir()]
         if path != requested.absolute():
             raise ValueError("Cannot modify a linked project path")
-        if FileScripts.has_restore_snapshot():
-            raise ValueError("Stop and restore the file run before changing project files")
         if op == "create_folder":
-            (path / _filename(args[1])).mkdir(exist_ok=True)
+            (path / _filename(request["name"])).mkdir(exist_ok=True)
             return True
         if op == "create_file":
-            if args[2] != "actor" or not path.is_dir():
+            if request.get("file_type") != "actor" or not path.is_dir():
                 raise ValueError("Invalid Actor template request")
-            name = _filename(args[1])
+            name = _filename(request["name"])
             if not name.lower().endswith(".actor"):
                 name += ".actor"
             target = path / name
@@ -104,11 +118,12 @@ def _file_manager(request):
             stream = StringIO()
             config.write(stream)
             atomic_replace(target, stream.getvalue().encode())
-            return {"status": "success", "path": target.relative_to(root).as_posix(), "name": target.stem, "file_type": "actor"}
+            return {"status": "success", "path": target.relative_to(root).as_posix(),
+                    "name": target.stem, "file_type": "actor"}
         if path == root or path == root / "scene.ini":
             raise ValueError("Cannot change the archive root or scene.ini")
         if op == "rename_item":
-            target = path.with_name(_filename(args[1]))
+            target = path.with_name(_filename(request["name"]))
             if target.exists() or target.is_symlink():
                 raise ValueError("Target already exists")
             path.rename(target)
@@ -117,8 +132,6 @@ def _file_manager(request):
                 shutil.rmtree(path)
             else:
                 path.unlink()
-        else:
-            raise ValueError(f"Unsupported project file operation: {op}")
         return True
-    except (KeyError, OSError, TypeError, ValueError) as failure:
+    except (OSError, TypeError, ValueError) as failure:
         _refusal(str(failure))

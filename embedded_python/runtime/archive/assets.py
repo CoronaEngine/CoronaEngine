@@ -130,14 +130,11 @@ def _file_digest(path):
 
 
 def _import(root, manifest, req):
-    from script_runtime.file_runner import FileScripts
     # Files already in this project can be instantiated without publishing anything.
     source = Path(req.get("actor") or req["source"]).resolve()
     for bundle in manifest["bundles"]:
         if source == (root / bundle["main"]).resolve():
             return bundle
-    if FileScripts.has_restore_snapshot():
-        raise ArchiveParseError("run_active", "Cannot import new assets during script execution")
     before = len(manifest["bundles"])
     descriptor = actor_descriptor(source, root) if req.get("actor") else None
     installed = []
@@ -164,12 +161,9 @@ def _import(root, manifest, req):
 
 
 def _cleanup(root, manifest, references, dry_run):
-    from script_runtime.file_runner import FileScripts
     missing = validate_assets(root, {}, verify_hashes=True)
     if missing:
         return {"diagnostics": missing}
-    if not dry_run and FileScripts.has_restore_snapshot():
-        raise ArchiveParseError("run_active", "Cannot clean up assets during script execution")
     if (root / "scene.ini").is_file():
         from .project import validate_project
         scene = validate_project({"path": str(root)})
@@ -205,19 +199,31 @@ def _cleanup(root, manifest, references, dry_run):
             "reclaimedBytes": sum(f["size"] for f in files.values()), "diagnostics": []}
 
 
+ASSET_OPS = {
+    "descriptor": {"required": ("source",), "optional": ()},
+    "ensure": {"required": (), "optional": ("allow_missing",)},
+    "validate": {"required": (), "optional": ("hashes", "allow_missing")},
+    "contains": {"required": ("route",), "optional": ("allow_missing",)},
+    "cleanup": {"required": ("references", "dry_run"), "optional": ()},
+    "import": {"required": ("category", "files"), "optional": ("actor", "source", "allow_missing")},
+}
+
+
 def asset_operation(req):
+    op = req.get("op")
+    spec = ASSET_OPS.get(op)
+    if spec is None:
+        raise BridgeError("INVALID_ARGUMENT", f"Unknown asset operation {op}")
+    require_keys(req, required=("root", "op") + spec["required"], optional=spec["optional"])
     root = Path(req["root"]).resolve()
     with _lock:
         try:
             op = req["op"]
             if op == "descriptor":
                 return actor_descriptor(req["source"], root)
-            manifest = _read_manifest(root, req.get("allowMissing", False))
+            manifest = _read_manifest(root, req.get("allow_missing", False))
             if op == "ensure":
                 if not (root / "assets.manifest.json").exists():
-                    from script_runtime.file_runner import FileScripts
-                    if FileScripts.has_restore_snapshot():
-                        raise ArchiveParseError("run_active", "Cannot initialize an archive during script execution")
                     root.mkdir(parents=True, exist_ok=True)
                     _publish(root, manifest)
                 return {"ok": True}
@@ -226,7 +232,7 @@ def asset_operation(req):
             if op == "contains":
                 return {"found": any(f["path"] == req["route"] for b in manifest["bundles"] for f in b["files"])}
             if op == "cleanup":
-                return _cleanup(root, manifest, req["references"], req["dryRun"])
+                return _cleanup(root, manifest, req["references"], req["dry_run"])
             if op == "import":
                 return {"bundle": _import(root, manifest, req), "diagnostics": []}
             raise ValueError(f"Unknown asset operation {op}")

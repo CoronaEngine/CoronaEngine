@@ -22,15 +22,11 @@ struct NativeResult {
     int error_code = 1;
     std::string error;
     nlohmann::json data = nlohmann::json::object();
-    std::string route = "native-cpp";
 };
 
 
-NativeResult native_success(nlohmann::json data = nlohmann::json::object(),
-                            std::string route = "native-cpp");
-NativeResult native_failure(std::string error,
-                            int error_code = 1,
-                            std::string route = "native-cpp");
+NativeResult native_success(nlohmann::json data = nlohmann::json::object());
+NativeResult native_failure(std::string error, int error_code = 1);
 
 /// Marks one editor request as in flight for as long as it lives.
 ///

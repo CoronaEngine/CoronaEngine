@@ -3,6 +3,7 @@
 import configparser
 import io
 import json
+from runtime.archive.arguments import require_keys
 from pathlib import Path
 import tempfile
 import time
@@ -24,6 +25,7 @@ def _document(path):
 
 
 def project_info(request):
+    require_keys(request, required=('path',), optional=('archive_session', 'project_path'))
     root, _, config = _document(request["path"])
     return {"name": config.get("scene", "name", fallback=root.name),
             "mode": config.get("world", "type", fallback="creative"),
@@ -42,6 +44,8 @@ def create_project_in(request):
     stages its writes atomically, so this only has to pick a free name and retry when another
     creator wins the race.
     """
+    require_keys(request, required=('base_dir', 'dir_stem'),
+                 optional=('display_base', 'world', 'archive_session', 'project_path'))
     base = Path(request["base_dir"])
     stem = request["dir_stem"]
     display_base = request.get("display_base") or stem
@@ -63,6 +67,8 @@ def create_project_in(request):
 
 
 def create_project(request):
+    require_keys(request, required=('path', 'name'),
+                 optional=('world', 'multiplayer', 'archive_session', 'project_path'))
     target = Path(request["path"]).resolve()
     if target.exists():
         raise FileExistsError(str(target))
@@ -100,6 +106,7 @@ def create_project(request):
 
 
 def update_metadata(request):
+    require_keys(request, required=('path', 'settings'), optional=('archive_session', 'project_path'))
     from .writer import replace_sections
     _, path, original = _document(request["path"])
     fields = {k: v.strip() for k, v in request["settings"].items()
@@ -109,6 +116,7 @@ def update_metadata(request):
 
 
 def validate_project(request):
+    require_keys(request, required=('path',), optional=('references', 'verify_hashes', 'archive_session', 'project_path'))
     path = Path(request["path"])
     result = {"ok": False, "status": "invalid", "path": str(path), "assetCount": 0,
               "totalBytes": 0, "diagnostics": [], "references": []}
@@ -117,7 +125,7 @@ def validate_project(request):
         result.update(status="portable_v1", path=str(root))
         references = set()
         diagnostics = validate_assets(root, {s: dict(config[s]) for s in config.sections()},
-                                      verify_hashes=request.get("verifyHashes", True), references=references)
+                                      verify_hashes=request.get("verify_hashes", True), references=references)
         manifest = json.loads((root / "assets.manifest.json").read_bytes())
         files = [f for bundle in manifest["bundles"] for f in bundle["files"]]
         result.update(ok=not diagnostics, diagnostics=diagnostics, references=sorted(references),

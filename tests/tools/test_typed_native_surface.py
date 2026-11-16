@@ -5,9 +5,10 @@ C++: the `window.corona` object installed by `attach_corona_v8_binding`, plus it
 single `bridge.call` entry to Python. These guards pin that surface exactly, so
 a namespace cannot quietly grow a second transport or lose a method.
 
-Scene, audio, app and viewport names are installed from `editor_operation_table.h`
-(the camelCase spelling is derived there); the remaining namespaces are still
-installed by `SetValue` pairs in the binding.
+Every name is installed from `editor_operation_table.h` now - the operation rows carry the
+enum that owns them, and the binding installs `camel_case(name)`. The scene rows still
+have a second half in the binding (`kSceneReaders`, the argument readers), which a row
+cannot name because a reader takes `CefV8ValueList` and cannot live in the CEF-free header.
 """
 from pathlib import Path
 import re
@@ -16,37 +17,56 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from native_surface import EXPECTED_SURFACE, camel_case
+import operation_table
 
 ROOT = Path(__file__).resolve().parents[2]
 V8 = ROOT / "src/systems/ui/cef/cef_v8_binding.cpp"
-TABLE = ROOT / "src/systems/ui/cef/editor_operation_table.h"
 FRONTEND_SRC = ROOT / "CoronaEditor/editor/Frontend/src"
-
-TABLE_ROW = re.compile(
-    r'\{"(\w+)",\s*"(\w+)",\s*(SceneMethod::\w+|std::nullopt),\s*'
-    r'(true|false),\s*(true|false),\s*(\d+),'
-)
 
 
 def _binding_source() -> str:
     return V8.read_text(encoding="utf-8-sig")
 
 
+def _reader_methods() -> list[str]:
+    """The SceneMethods `kSceneReaders` knows how to decode arguments for."""
+    source = _binding_source()
+    start = source.index("kSceneReaders[] = {")
+    end = source.index("};", start)
+    return re.findall(r"\{SceneMethod::(\w+),", source[start:end])
+
+
 def _table_surface() -> dict[str, set[str]]:
-    """Names the binding installs from the operation table (web rows only)."""
-    text = TABLE.read_text(encoding="utf-8-sig")
-    start = text.index("kEditorOperations[] = {")
-    end = text.index("};", start)
+    """Names the table declares, with the camelCase spelling the binding derives."""
     surface: dict[str, set[str]] = {}
-    for group, name, _method, web, _script, _arity in TABLE_ROW.findall(text[start:end]):
-        if web != "true":
-            continue
-        surface.setdefault(group, set()).add(camel_case(name))
+    for row in operation_table.web_rows():
+        surface.setdefault(row["group"], set()).add(camel_case(row["name"]))
     return surface
 
 
+def test_the_table_publishes_exactly_the_pinned_surface():
+    # native_surface.EXPECTED_SURFACE is written by hand so that it stays an independent
+    # check: if this were derived from the table too, a wrong row would redefine the
+    # contract instead of failing here.
+    assert _table_surface() == EXPECTED_SURFACE
+
+
+def test_every_scene_operation_has_an_argument_reader():
+    # Without this, a row installed from the table but missing from kSceneReaders answers
+    # INVALID_ARGUMENT at run time, and nothing in the build says so. Only the scene rows
+    # have a reader here: the other namespaces' readers are chosen by the method's own type
+    # (`invoke(NetworkMethod)`, `invoke(WindowMethod)`, ...), so the compiler checks them.
+    readers = _reader_methods()
+    duplicates = sorted({name for name in readers if readers.count(name) > 1})
+    assert not duplicates, f"methods with more than one reader: {duplicates}"
+    missing = [f"{row['group']}.{row['name']} -> SceneMethod::{row['method']}"
+               for row in operation_table.web_rows()
+               if row["kind"] == "scene" and row["method"] not in readers]
+    assert not missing, f"scene operations without an argument reader: {missing}"
+
+
 def _literal_surface() -> dict[str, set[str]]:
-    """Names still installed with a SetValue pair in the binding."""
+    """Names still installed with a SetValue pair in the binding. Must be empty."""
     surface: dict[str, set[str]] = {}
     for namespace, name in re.findall(
             r'(\w+)->SetValue\("([^"]+)", CefV8Value::CreateFunction', _binding_source()):
@@ -56,7 +76,7 @@ def _literal_surface() -> dict[str, set[str]]:
 
 def _installed_surface() -> dict[str, set[str]]:
     surface = _literal_surface()
-    for namespace, names in _table_surface().items():
+    for namespace, names in EXPECTED_SURFACE.items():
         assert not (surface.get(namespace, set()) & names), (
             f"{namespace} installs {sorted(surface.get(namespace, set()) & names)} twice")
         surface.setdefault(namespace, set()).update(names)
@@ -67,16 +87,31 @@ def test_window_corona_surface_is_exactly_the_named_contract():
     assert _installed_surface() == EXPECTED_SURFACE
 
 
-def test_scene_names_are_installed_from_the_operation_table():
+def test_no_name_is_installed_outside_the_operation_table():
+    # A SetValue("createPanel", CreateFunction(...)) pair is a name the table does not own:
+    # it cannot be derived, renamed, or found by any other guard.
+    literal = _literal_surface()
+    assert not literal, f"names installed by hand instead of from the table: {literal}"
+
+
+def test_the_namespaces_are_created_before_the_table_fills_them():
     source = _binding_source()
-    for retired in ("kSceneOperations", "kAudioOperations", "kSceneExtraOperations"):
-        assert retired not in source, f"{retired} must be installed from kEditorOperations"
+    for namespace in EXPECTED_SURFACE:
+        assert re.search(r'\{"%s", CefV8Value::CreateObject' % namespace, source), (
+            f"the {namespace} namespace is not created by the install loop")
     assert "kEditorOperations" in source, "the binding must install the shared table"
-    # The table owns the spellings: no scene/audio name may also be written literally.
-    table_names = {name for names in _table_surface().values() for name in names}
-    literal = {name for names in _literal_surface().values() for name in names}
-    assert not (table_names & literal), (
-        f"table-installed names written literally again: {sorted(table_names & literal)}")
+
+
+def test_the_binding_derives_the_published_spelling():
+    # A loop that installed `spec.name` verbatim would publish `read_scene` instead of
+    # `readScene`, and the SetValue scan cannot see it: there are no literals left to
+    # compare. Pin the derivation and that the key and the function name are the same
+    # value, so the two cannot drift apart.
+    source = _binding_source()
+    assert "const auto js_name = camel_case(spec.name);" in source, (
+        "the install loop stopped deriving the Web spelling from the row name")
+    assert re.search(r"SetValue\(\s*js_name,\s*CefV8Value::CreateFunction\(\s*js_name,", source), (
+        "the published key and the function name must be the one derived spelling")
 
 
 def test_corona_is_the_only_global_installed():
