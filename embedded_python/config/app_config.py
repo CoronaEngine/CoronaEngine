@@ -80,9 +80,6 @@ def _build_app_config() -> AppConfig:
         enable_gpu=_as_bool(runtime_data.get("enable_gpu"), defaults["enable_gpu"]),
         log_level=str(runtime_data.get("log_level", defaults["log_level"])).upper(),
         debug_mode=_as_bool(runtime_data.get("debug_mode"), defaults["debug_mode"]),
-        InnerAgentWorkFlow=_as_bool(runtime_data.get("InnerAgentWorkFlow"), defaults["InnerAgentWorkFlow"]),
-        InnerAgentRepoUrl=str(runtime_data.get("InnerAgentRepoUrl", defaults["InnerAgentRepoUrl"])),
-        InnerAgentTargetDir=str(runtime_data.get("InnerAgentTargetDir", defaults["InnerAgentTargetDir"])),
     )
 
     return AppConfig(
