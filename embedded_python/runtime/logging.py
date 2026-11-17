@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import logging
-import os
 import sys
 import traceback
-from typing import Optional
 
 from config.app_config import get_app_config
 
@@ -26,23 +24,6 @@ _LEVEL_MAP = {
     "ERROR": "ERROR",
     "CRITICAL": "CRITICAL",
     "NOTICE": "NOTICE",
-}
-
-# 默认收敛的第三方 SDK 日志噪声。键是 logger 名，值是阈值。
-_DEFAULT_QUIET_LOGGERS = {
-    "openai": logging.WARNING,
-    "openai._base_client": logging.WARNING,
-    "httpx": logging.WARNING,
-    "httpcore": logging.WARNING,
-    "urllib3": logging.WARNING,
-    "asyncio": logging.WARNING,
-    "PIL": logging.WARNING,
-    "matplotlib": logging.WARNING,
-}
-
-# 即便根 logger 是 INFO，也希望这些业务模块默认 DEBUG 起来便于排查。
-# 可以通过环境变量 CORONA_VERBOSE_LOGGERS=name1=DEBUG,name2=INFO 覆盖。
-_DEFAULT_VERBOSE_LOGGERS = {
 }
 
 
@@ -110,30 +91,6 @@ def _install_stream_redirect() -> None:
     sys.stderr = _StreamToLogger(logging.getLogger("stderr"), logging.ERROR)
 
 
-def _apply_logger_levels(spec: dict[str, int]) -> None:
-    for name, level in spec.items():
-        logging.getLogger(name).setLevel(level)
-
-
-def _parse_env_logger_overrides(env_value: Optional[str]) -> dict[str, int]:
-    """解析 ``name1=DEBUG,name2=INFO`` 形式的环境变量。"""
-    if not env_value:
-        return {}
-    out: dict[str, int] = {}
-    for item in env_value.split(","):
-        item = item.strip()
-        if not item or "=" not in item:
-            continue
-        name, _, level_str = item.partition("=")
-        name, level_str = name.strip(), level_str.strip().upper()
-        if not name:
-            continue
-        level = getattr(logging, level_str, None)
-        if isinstance(level, int):
-            out[name] = level
-    return out
-
-
 def configure_logging() -> None:
     """初始化日志系统（幂等）。
 
@@ -172,10 +129,6 @@ def configure_logging() -> None:
                 format="%(asctime)s [%(levelname)s] %(name)s [%(filename)s:%(lineno)d] [%(threadName)s] %(message)s",
                 force=True,
             )
-
-        _apply_logger_levels(_DEFAULT_QUIET_LOGGERS)
-        _apply_logger_levels(_DEFAULT_VERBOSE_LOGGERS)
-        _apply_logger_levels(_parse_env_logger_overrides(os.getenv("CORONA_VERBOSE_LOGGERS")))
 
         _CONFIGURED = True
     except Exception:
