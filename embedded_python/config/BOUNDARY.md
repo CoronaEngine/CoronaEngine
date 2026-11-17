@@ -9,7 +9,7 @@
 |---|---|---|---|
 | `paths_config.py` | 路径 owner：只提供宿主持有的一个路径——编辑器（部署）根目录 | active | — |
 | ~~`project_state.py`~~ | 已删除：没有被任何模块引用，且与真正在用的 ini 通道重复 | — | — |
-| `app_config.py` | 应用级 `AppConfig` 单例、配置文件和 `CORONA_*` 环境覆盖 | active | 应用 host 配置 owner 完整替代并通过启动/环境变量回归 |
+| `app_config.py` | 应用级 `AppConfig` 单例与 `CORONA_*` 环境覆盖（默认值 + 环境变量，不读配置文件） | active | 应用 host 配置 owner 完整替代并通过启动/环境变量回归 |
 | `runtime_config.py` | 不可变运行时配置值对象和默认值 | active support | 被统一 app config schema 吸收后删除 |
 
 ## 依赖方向
@@ -30,9 +30,9 @@
 - `get_repository_assets_dir()` 只解析仓库随附的只读资源；运行时生成物和项目资源不得
   写回仓库 `assets/`；
 - `app_config.py` 组合 `RuntimeConfig` 和 `PathsConfig`，不拥有活动项目持久化状态；
-- 插件、runtime host 和 Script Runtime 可以读取 canonical config owner；
-- AITool API key 不属于本目录，必须由 `plugins/AITool/configuration` 从 `.env`/受控本地
-  配置加载；
+- 插件和 runtime host 可以读取 canonical config owner；
+- AI 与密钥不属于本目录：AI 业务已迁往 Web 会话运行时，密钥由前端持有；宿主 Python
+  不加载 `.env`，也不注册 AITool；
 - 路径实例只能从 `config.paths_config.get_default_paths()` 获取。
 
 ## 删除条件与验证
