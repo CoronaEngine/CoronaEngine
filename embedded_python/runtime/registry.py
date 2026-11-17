@@ -160,10 +160,6 @@ class LazyPythonScriptService:
             self._worker = worker
         worker.start()
 
-    def wait_for_initialization(self, timeout=None):
-        self.start_background_load()
-        return self._initialization_finished.wait(timeout)
-
     def _load_target(self):
         worker_ident = threading.get_ident()
         module = None
@@ -368,10 +364,6 @@ def _register_python_script_services(service_names):
                 class_name,
             )
     return registered
-
-
-def register_python_script_services():
-    return _register_python_script_services(PYTHON_SCRIPT_SERVICES)
 
 
 def register_active_python_script_services():

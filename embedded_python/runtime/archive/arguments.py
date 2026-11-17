@@ -9,10 +9,7 @@ at a time, and the guard test keeps the two sides' strictness in sync.
 """
 from __future__ import annotations
 
-try:  # the deployed runtime puts its root on sys.path
-    from runtime.bridge_errors import BridgeError
-except ImportError:  # pragma: no cover
-    from bridge_errors import BridgeError
+from runtime.bridge_errors import BridgeError
 
 
 def require_keys(request, required=(), optional=()):

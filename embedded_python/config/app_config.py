@@ -4,11 +4,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Optional
 import os
-import tomllib
-import configparser
 
 from .runtime_config import RuntimeConfig
 from .paths_config import PathsConfig, get_default_paths
@@ -22,59 +19,6 @@ class AppConfig:
     """应用全局配置"""
     runtime: RuntimeConfig
     paths: PathsConfig
-
-
-# ---------------------------------------------------------------------------
-# 文件加载辅助函数
-# ---------------------------------------------------------------------------
-
-
-def _load_toml(path: Path) -> Dict[str, Any]:
-    """加载 TOML 文件"""
-    if not path.exists():
-        return {}
-    try:
-        return tomllib.loads(path.read_text(encoding="utf-8"))
-    except Exception as e:
-        print(f"加载 TOML 配置失败 {path}: {e}")
-        return {}
-
-
-def _load_ini(path: Path) -> Dict[str, Any]:
-    """加载 INI 文件"""
-    if not path.exists():
-        return {}
-    try:
-        config = configparser.ConfigParser()
-        config.read(path, encoding="utf-8")
-
-        result = {}
-
-        # 解析 runtime section
-        if "runtime" in config:
-            result["runtime"] = {}
-            if "enable_gpu" in config["runtime"]:
-                result["runtime"]["enable_gpu"] = config["runtime"].getboolean("enable_gpu")
-            if "log_level" in config["runtime"]:
-                result["runtime"]["log_level"] = config["runtime"]["log_level"]
-            if "debug_mode" in config["runtime"]:
-                result["runtime"]["debug_mode"] = config["runtime"].getboolean("debug_mode")
-
-        return result
-    except Exception as e:
-        print(f"加载 INI 配置失败 {path}: {e}")
-        return {}
-
-
-def _deep_merge(base: Dict[str, Any], override: Mapping[str, Any]) -> Dict[str, Any]:
-    """深度合并字典"""
-    result = dict(base)
-    for key, value in override.items():
-        if isinstance(value, Mapping) and isinstance(result.get(key), Mapping):
-            result[key] = _deep_merge(result[key], value)
-        else:
-            result[key] = value
-    return result
 
 
 def _apply_env_overrides(data: Dict[str, Any]) -> None:

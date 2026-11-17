@@ -188,12 +188,3 @@ def configure_logging() -> None:
         except Exception:
             pass
         raise
-
-
-def get_logger(name: str) -> logging.Logger:
-    if not _CONFIGURED:
-        try:
-            configure_logging()
-        except Exception:
-            pass
-    return logging.getLogger(name)

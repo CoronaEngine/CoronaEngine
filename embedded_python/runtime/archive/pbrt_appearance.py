@@ -1,5 +1,4 @@
 """PBRT graphics-state appearance lowering to Corona Principled."""
-from pathlib import Path
 import math
 from .appearance import convert_material, expression, image, rgb
 from .texture_cache import checker_texture

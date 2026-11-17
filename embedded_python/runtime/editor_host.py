@@ -158,10 +158,6 @@ class CoronaEditor:
         return True
 
     @classmethod
-    def is_shutting_down(cls):
-        return cls._shutdown_requested
-
-    @classmethod
     def request_shutdown(cls):
         cls._shutdown_requested = True
         if cls._runtime_state not in ("stopped", "stopping"):
