@@ -18,7 +18,6 @@ import shutil
 import sys
 from pathlib import Path
 import subprocess
-import uuid
 from typing import Optional
 
 
@@ -78,36 +77,12 @@ def _ignore(dirpath: str, names: list[str]) -> set[str]:
     return {n for n in names if _should_ignore(n)}
 
 
-def _retire_removed_ai_packages(src_root: Path, dst_root: Path) -> None:
-    """Move obsolete deployed packages out of the import path, preserving local data."""
-    if not (src_root / "plugins" / "AITool" / "main.py").is_file():
-        return
-    destination = dst_root.resolve()
-    for name in ("Quasar", "cai_extensions"):
-        relative = Path("plugins") / "AITool" / name
-        retired = dst_root / relative
-        if (src_root / relative).exists() or not retired.exists():
-            continue
-        # Do not follow an old deployment junction outside the managed tree.
-        if not retired.resolve().is_relative_to(destination):
-            raise ValueError(f"Retired AI package is outside the deployment: {retired}")
-        archive = dst_root / ".retired-plugins"
-        if not archive.resolve().is_relative_to(destination):
-            raise ValueError(f"Retired plugin archive is outside the deployment: {archive}")
-        archive.mkdir(exist_ok=True)
-        backup = archive / f"{name}-{uuid.uuid4().hex}"
-        retired.rename(backup)
-        echo(f"[editor-copy] Retired {retired}; preserved previous files in {backup}")
-
-
 def _cleanup_stale_files(sources: list[Path], dst_root: Path, ignore_fn) -> None:
     """删除目标目录中存在但所有源目录中均不存在的源码文件（多源合并映射）。
     手动递归遍历以跳过 ignore 目录（如 node_modules），避免进入超长路径。"""
     source_roots = [source for source in sources if source.exists()]
     if not dst_root.exists() or not source_roots:
         return
-
-    _retire_removed_ai_packages(source_roots[0], dst_root)
 
     dirs_to_check: list[Path] = []
 

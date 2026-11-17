@@ -1,5 +1,6 @@
-# The editor AI services use the Python standard library.
-# This file is also the list of third-party distributions deployed next to the engine:
-# everything else in the dev environment (AI/ML and GUI stacks) stays out of the runtime.
+# Dev-environment packages used by the repository's tools and tests (ReBLUR output
+# comparison, SVGf image checks). `corona_python.cmake` verifies they are installed.
+# The engine's Python runtime imports only the standard library, so nothing here is
+# deployed next to the engine; the deployed list is runtime-requirements.txt.
 numpy
 Pillow
