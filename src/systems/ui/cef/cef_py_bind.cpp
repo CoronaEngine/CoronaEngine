@@ -18,9 +18,9 @@ namespace UI = Corona::Systems::UI;
 /// runtime and will be redesigned; what is left is the transport the Python host needs: the
 /// service dispatcher registration, and the one piece of editor state the host itself reads.
 void BindCef(nanobind::module_& m) {
-    m.def("register_python_script_service_dispatcher", [](nanobind::object dispatcher) {
-        UI::register_python_script_service_dispatcher(dispatcher.ptr());
-    }, nanobind::arg("dispatcher"));
+    m.def("register_python_script_service_dispatcher", [] {
+        UI::register_python_script_service_dispatcher();
+    });
     m.def("unregister_python_script_service_dispatcher", [] {
         UI::unregister_python_script_service_dispatcher();
     });

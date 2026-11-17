@@ -4,7 +4,6 @@ import threading
 
 from runtime.bridge_errors import BridgeError
 from runtime.native_engine import get_corona_engine
-from runtime.response_utils import create_error_response, create_success_response
 
 import logging
 
@@ -102,32 +101,10 @@ class CoronaEditor:
             return {"success": False, "error": f"Error processing request: {error}"}
 
     @classmethod
-    def _dispatch_script_request(cls, json_str):
-        # Retain the non-Web text adapter; both forms use the same service owner.
-        try:
-            request = json.loads(json_str)
-            if 'api' in request:
-                return create_error_response("Editor API payload is not accepted by Python script service dispatcher")
-            response = cls.dispatch_script_values_from_cpp(
-                request.get('module'), request.get('function'), request.get('args', []))
-            if response["success"]:
-                return create_success_response(response["data"])
-            return create_error_response(response["error"])
-        except json.JSONDecodeError as error:
-            return create_error_response(f"Invalid JSON: {error}")
-        except Exception as error:
-            return create_error_response(f"Error processing request: {error}")
-
-    @classmethod
-    def dispatch_script_request_from_cpp(cls, json_str):
-        """Compatibility adapter for existing non-Web dispatcher registrations."""
-        return cls._dispatch_script_request(json_str)
-
-    @classmethod
     def register_script_dispatcher(cls):
         register = getattr(cls.CoronaEngine, "register_python_script_service_dispatcher", None)
         if callable(register):
-            register(cls.dispatch_script_request_from_cpp)
+            register()
         cls.module_list.setdefault("editor_bridge", WebBridgeService)
 
     @classmethod

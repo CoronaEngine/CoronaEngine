@@ -9,7 +9,7 @@
 | `registry.py`、`plugin_loader.py`、`plugin_base.py` | service 注册、加载、初始化和关闭顺序 |
 | `project_context.py` | native 活动项目路径解析 |
 | `archive/` | 场景归档、项目文档和脚本文件 |
-| `native_engine.py`、`response_utils.py`、`logging.py` | host support |
+| `native_engine.py`、`logging.py` | host support |
 
 `runtime.registry` 是唯一 service registry，`ACTIVE_PYTHON_SCRIPT_SERVICES` 是正常启动
 清单；ProjectArchive 按 lazy 生命周期初始化。跨层业务只有一条通道：`WebBridgeService`

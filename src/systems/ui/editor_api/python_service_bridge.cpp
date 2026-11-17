@@ -26,10 +26,10 @@ std::string python_script_error_message(const nlohmann::json& payload) {
 
 }  // namespace
 
-void register_python_script_service_dispatcher(PyObject* dispatcher) {
-    g_python_script_service_dispatcher_registered.store(
-        PyGILState_Check() && dispatcher && PyCallable_Check(dispatcher),
-        std::memory_order_release);
+void register_python_script_service_dispatcher() {
+    // Nothing is stored but the fact: Python's service calls reach this side through the
+    // runtime coordinator, never through a callable handed over at registration.
+    g_python_script_service_dispatcher_registered.store(true, std::memory_order_release);
 }
 
 void unregister_python_script_service_dispatcher() {

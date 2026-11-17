@@ -6,8 +6,8 @@
 // and the two `_invoke_cpp_*` bindings). That contract is retired: Web calls the
 // typed V8 bindings, and the ScriptRuntime calls the named `script_scene_*` entry
 // points in `cef/script_runtime_api.h`. What is left here is the part that was never
-// the manifest's: handing a service request to the Python runtime and holding its
-// dispatcher registration.
+// the manifest's: handing a service request to the Python runtime and recording that
+// the Python service layer registered.
 
 #include "native_api_types.h"
 
@@ -17,7 +17,7 @@
 
 namespace Corona::Systems::UI {
 
-void register_python_script_service_dispatcher(PyObject* dispatcher);
+void register_python_script_service_dispatcher();
 void unregister_python_script_service_dispatcher();
 bool python_script_service_dispatcher_registered();
 
