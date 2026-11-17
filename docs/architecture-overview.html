@@ -539,7 +539,7 @@ svg{display:block;max-width:100%;height:auto}
 <tbody>
 <tr><td class="f">C++ ↔ C++</td><td class="s">EngineRuntimeApi</td><td class="s">直接函数调用 + 句柄。<code>Geometry</code>/<code>Mechanics</code>/<code>Optics</code>/<code>Acoustics</code>/<code>Actor</code>/<code>Camera</code>/<code>Scene</code> 类。写操作必须落到命令队列，读走快照或槽位。</td></tr>
 <tr><td class="f">Vue ↔ C++</td><td class="s">CEF V8 binding + JSON manifest</td><td class="s"><code>EditorApiMethodSpec</code> 描述的单一契约表；参数是 JSON，返回是 <code>NativeResult</code>。前端按 <code>js_wrapper</code> 查表校验参数类型，<b>不复制 schema</b>。</td></tr>
-<tr><td class="f">Python ↔ C++</td><td class="s">CPython C API</td><td class="s">同一份 manifest 的另一个 adapter（<code>editor/api/editor_api.py</code>），按 <code>caller=PythonScript</code> 校验权限位。</td></tr>
+<tr><td class="f">Python ↔ C++</td><td class="s">CPython C API（nanobind）</td><td class="s">宿主入口 <code>CabbageEditor/main.py</code>；服务调用经 <code>PythonRuntimeCoordinator</code> 串行到脚本线程，Web 只走 <code>editor_bridge.call</code>，服务白名单在 <code>runtime/editor_host.py</code>。manifest 与 <code>editor_api</code> adapter 已删除。</td></tr>
 <tr><td class="f">进程 ↔ 进程</td><td class="s">ENet（UDP）+ 自定义二进制</td><td class="s">4 条逻辑通道，1 字节 <code>MessageType</code> 前缀，小端定长字段 + 长度前缀字符串。版本号 <code>kProtocolVersion=1</code>。</td></tr>
 </tbody>
 </table>

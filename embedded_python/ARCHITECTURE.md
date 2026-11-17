@@ -15,11 +15,12 @@
 
 - `include/corona/engine/engine_runtime_api.h`：C++ Engine Runtime 底层接口。
 - `src/systems/ui/cef/cef_v8_binding.cpp`：Web 唯一的 C++ 契约（typed V8 具名绑定）。
-- `embedded_python/api/editor_api.py`：Python 侧受限契约入口。
 - `editor/Frontend/src/api`：Vue 聚合契约 adapter。
 
 JSON manifest（api-name 表 + caller 掩码 + `EditorApiRegistry`/`NativeApiRegistry`）
-已删除；Web 与 Script Runtime 各走一份具名契约。
+已删除；Web 与 Script Runtime 各走一份具名契约。Python 侧的 `api/editor_api.py`
+受限契约随 script runtime 一起删除，普通 Python 只剩 `runtime/editor_host.py` 的
+bridge 服务白名单。
 
 底层接口只有一个 owner；跨层 adapter 不复制业务状态机。新增 Web 语义直接加 typed
 V8 具名绑定；新增脚本语义加到 `script_runtime_api.h` 的具名入口。

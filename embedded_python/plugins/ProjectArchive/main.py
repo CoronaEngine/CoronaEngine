@@ -21,11 +21,9 @@ from runtime.archive.assets import asset_operation
 from runtime.archive.documents import read_document, commit_document
 from runtime.archive.editor_settings import editor_settings
 from runtime.archive.project_files import file_manager
-from runtime.plugin_base import PluginBase
 
 
-@PluginBase.register_web("project_archive")
-class ProjectArchive(PluginBase):
+class ProjectArchive:
     """Internal Script Service facade for the pure archive parser."""
 
     asset_operation = staticmethod(asset_operation)
