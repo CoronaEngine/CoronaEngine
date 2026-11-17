@@ -5,8 +5,8 @@
 
 | 路径 | 职责 |
 |---|---|
-| `bootstrap.py`、`editor_host.py` | Python host 启动、dispatcher、更新和关闭 |
-| `registry.py`、`plugin_loader.py`、`plugin_base.py` | service 注册、加载、初始化和关闭顺序 |
+| `bootstrap.py`、`editor_host.py` | Python host 启动、服务调用入口、更新和关闭 |
+| `registry.py`、`plugin_loader.py` | service 注册、加载、初始化和关闭顺序 |
 | `project_context.py` | native 活动项目路径解析 |
 | `archive/` | 场景归档、项目文档和脚本文件 |
 | `native_engine.py`、`logging.py` | host support |
