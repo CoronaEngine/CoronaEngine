@@ -164,6 +164,7 @@ Python 侧是单消费者串行：bridge 请求在同一个 worker 上依次执�
 | [`test_python_refusal_codes.py`](../tests/tools/test_python_refusal_codes.py) | Python 侧拒绝码都在契约词表内 |
 | [`test_lanchat_removal.py`](../tests/tools/test_lanchat_removal.py) | 局域网聊天接口已删除，不得回归 |
 | [`test_project_allocator.py`](../tests/tools/test_project_allocator.py) | 项目目录分配器：重名与原子创建 |
+| [`test_paths_have_no_write_side_effects.py`](../tests/tools/test_paths_have_no_write_side_effects.py) | 路径解析不写盘：启动 import 不留下空 media/models |
 | [`test_vision_thermal_run.py`](../tests/tools/test_vision_thermal_run.py) | Vision 热运行路径 |
 
 ## 已知缺口

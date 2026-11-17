@@ -17,6 +17,9 @@
 
 - `paths_config.py` 负责“路径是什么”，`settings.py` 负责“当前项目和项目配置是什么”，
   不应把两者重新合并成无边界的全局工具；
+- `paths_config.py` 只解析路径，**不创建目录**：它没有 `mkdir`/`makedirs`，需要目录的
+  写入点自己建父目录。启动期 import 不得产生文件系统写入，装在只读目录里也必须能启动
+  （`tests/tools/test_paths_have_no_write_side_effects.py` 会检查）；
 - `CoronaEditor.ini` 只有**一条**访问通道：C++ 的 `editor_ini_path()` 决定路径，通过 `ProjectArchive.editor_settings` 交给 Python 读写；
   Python 侧不得自己拼这个路径（`tests/tools/test_editor_settings_owner.py` 会检查）；
 - `PathsConfig.generated_script_dir` 是新生成脚本的 canonical 路径字段；

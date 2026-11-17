@@ -1,5 +1,9 @@
 """
 路径配置
+
+只解析路径,不接触文件系统:这里的函数都不创建目录。需要目录的写入点在自己的
+落盘路径上 ``mkdir(parents=True, exist_ok=True)``。启动期 import 不写盘是硬约束
+——程序装在只读目录里也必须能启动。
 """
 
 from dataclasses import dataclass
@@ -22,7 +26,7 @@ class PathsConfig:
     media_local_storage: Optional[Path] = None
 
 def get_default_paths() -> PathsConfig:
-    """获取默认路径配置"""
+    """获取默认路径配置(纯解析,不在磁盘上留下任何东西)"""
     # 从当前文件位置计算项目根目录
     repo_root = Path(__file__).resolve().parents[1]
     config_dir = repo_root / "config"
@@ -59,28 +63,22 @@ def _get_active_project_path() -> Path:
 
 
 def get_project_media_dir() -> Path:
-    """获取当前项目的媒体存储目录: <project_path>/media/"""
-    d = _get_active_project_path() / "media"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """返回当前项目的媒体目录 <project_path>/media/;不创建它。"""
+    return _get_active_project_path() / "media"
 
 
 def get_project_models_dir() -> Path:
-    """获取当前项目的模型目录: <project_path>/models/"""
-    d = _get_active_project_path() / "models"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """返回当前项目的模型目录 <project_path>/models/;不创建它。"""
+    return _get_active_project_path() / "models"
 
 
 def get_project_screenshots_dir() -> Path:
-    """获取当前项目的截图目录: <project_path>/screenshots/"""
-    d = _get_active_project_path() / "screenshots"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """返回当前项目的截图目录 <project_path>/screenshots/;不创建它。"""
+    return _get_active_project_path() / "screenshots"
 
 
 def get_project_recognition_db() -> Path:
-    """获取当前项目的物体识别数据库路径: <project_path>/models/database.db"""
+    """返回当前项目的物体识别数据库路径 <project_path>/models/database.db;不创建它。"""
     models_dir = get_project_models_dir()
     return models_dir / "database.db"
 
