@@ -1,4 +1,4 @@
-"""Resolving a path never touches the disk.
+"""Resolving a path never touches the disk, and the field set stays minimal.
 
 `paths_config` used to `mkdir` the active project's ``media/`` and ``models/``
 while resolving them, and `runtime.editor_host` calls `get_default_paths()` at
@@ -8,11 +8,13 @@ yet - even when nothing was ever written into them. In a read-only install
 directory the same ``mkdir`` turned startup into a ``PermissionError``.
 
 The replacement rule these guards pin: path helpers return paths and nothing
-else; the writer that needs a directory creates it. The nested directories that
-are genuinely produced at runtime (`documents`, `script_files`, `assets`,
-`project`) already create their own parent before writing.
+else, and the model carries only the paths the host actually reads. The
+project-scoped helpers and the ``frontend_dist`` copy had no reader anywhere in
+the tree: CEF resolves ``Frontend/dist/index.html`` from
+``Utils::editor_directory()`` itself, so Python keeps no second copy of it.
 """
 from pathlib import Path
+import dataclasses
 import os
 import subprocess
 import sys
@@ -28,30 +30,35 @@ def test_resolving_the_default_paths_creates_nothing(tmp_path, monkeypatch):
 
     config = paths_config.get_default_paths()
 
-    assert config.autosave_dir.name == "media"
-    assert config.assets_model_dir.name == "models"
-    assert config.object_recognition_db == config.assets_model_dir / "database.db"
-    assert not (tmp_path / "media").exists()
-    assert not (tmp_path / "models").exists()
-
-
-def test_every_project_path_helper_is_read_only(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-
-    resolved = [
-        paths_config.get_project_media_dir(),
-        paths_config.get_project_models_dir(),
-        paths_config.get_project_screenshots_dir(),
-        paths_config.get_project_recognition_db(),
-    ]
-
-    assert [path.parent for path in resolved] == [
-        tmp_path,
-        tmp_path,
-        tmp_path,
-        tmp_path / "models",
-    ]
+    assert config.repo_root == (ROOT / "embedded_python").resolve()
     assert list(tmp_path.iterdir()) == []
+
+
+def test_the_model_only_holds_the_path_the_host_reads():
+    """`bootstrap` reads repo_root to extend sys.path; that is the whole surface."""
+    fields = {field.name for field in dataclasses.fields(paths_config.PathsConfig)}
+
+    assert fields == {"repo_root"}
+
+
+def test_the_unused_project_path_helpers_stay_deleted():
+    """Re-adding one restores a second owner for "where does this project live"."""
+    retired = (
+        "get_project_media_dir",
+        "get_project_models_dir",
+        "get_project_screenshots_dir",
+        "get_project_recognition_db",
+        "_get_active_project_path",
+    )
+
+    assert [name for name in retired if hasattr(paths_config, name)] == []
+
+
+def test_the_host_does_not_publish_a_frontend_url():
+    """The frontend is CEF's to locate; a Python copy of that path had no reader."""
+    from runtime.editor_host import CoronaEditor
+
+    assert not hasattr(CoronaEditor, "url")
 
 
 def test_the_editor_startup_import_creates_nothing(tmp_path):

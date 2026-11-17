@@ -24,8 +24,8 @@ void BindCef(nanobind::module_& m) {
     m.def("unregister_python_script_service_dispatcher", [] {
         UI::unregister_python_script_service_dispatcher();
     });
-    // Host support, not a script API: `runtime.paths_config` resolves default project
-    // directories from the project the editor currently owns.
+    // Host support, not a script API: `runtime.project_context` reads the project this
+    // editor owns to resolve the active project path.
     m.def("active_project_path", [] {
         const auto* scene = UI::native_editor_state().scene.get();
         return scene ? UI::path_to_utf8(scene->project_root) : std::string{};

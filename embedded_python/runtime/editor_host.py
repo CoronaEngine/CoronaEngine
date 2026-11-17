@@ -4,10 +4,7 @@ import threading
 
 from runtime.bridge_errors import BridgeError
 from runtime.native_engine import get_corona_engine
-from config.paths_config import get_default_paths
 from runtime.response_utils import create_error_response, create_success_response
-
-core_path = get_default_paths()
 
 import logging
 
@@ -73,7 +70,6 @@ class WebBridgeService:
 
 class CoronaEditor:
     CoronaEngine = get_corona_engine()
-    url = core_path.frontend_dist
     module_list = {}
 
     _runtime_state = "created"
