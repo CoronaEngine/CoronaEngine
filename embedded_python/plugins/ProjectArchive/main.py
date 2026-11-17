@@ -14,8 +14,7 @@ from runtime.archive.errors import ArchiveParseError
 from runtime.archive.parser import parse_archive
 from runtime.archive.portable import recover_scene, validate_assets
 from runtime.archive.writer import save_scene
-from runtime.archive.project import (create_project, create_project_in, project_info,
-                                     update_metadata, validate_project)
+from runtime.archive.project import (create_project_in, project_info, update_metadata)
 from runtime.archive.arguments import require_keys
 from runtime.archive.assets import asset_operation
 from runtime.archive.documents import read_document, commit_document
@@ -31,10 +30,8 @@ class ProjectArchive:
     commit_document = staticmethod(commit_document)
     editor_settings = staticmethod(editor_settings)
     file_manager = staticmethod(file_manager)
-    create_project = staticmethod(create_project)
     create_project_in = staticmethod(create_project_in)
     project_info = staticmethod(project_info)
-    validate_project = staticmethod(validate_project)
 
     @staticmethod
     def update_metadata(request):
@@ -108,4 +105,4 @@ class ProjectArchive:
             return {"ok": False, "status": "error", "message": str(exc)}
 
 
-__all__ = ["project_archive"]
+__all__ = ["ProjectArchive"]

@@ -124,7 +124,7 @@ Python 服务的**业务拒绝**统一是 Promise 拒绝，带 `error.code`：`p
 `project_archive.file_manager` 是**带 op 判别**的服务：`op` 只能是 `create_file`、`create_folder`、`delete_item`、`get_file_tree`、`get_files`、`rename_item`，其余按 `INVALID_ARGUMENT` 拒绝；
 每个 op 的请求键由 `runtime/archive/arguments.py` 的 `require_keys` 白名单校验，
 与 C++ reader 的 `object_keys` 同语义（未知键拒绝，不静默忽略）。
-| `project_archive` | `plugins.ProjectArchive.main` | `asset_operation`、`commit_document`、`create_project`、`create_project_in`、`editor_settings`、`file_manager`、`parse`、`project_info`、`read_document`、`save`、`update_metadata`、`validate_project` |
+| `project_archive` | `plugins.ProjectArchive.main` | `asset_operation`、`commit_document`、`create_project_in`、`editor_settings`、`file_manager`、`parse`、`project_info`、`read_document`、`save`、`update_metadata` |
 | `project_files` | `runtime.archive.script_files` | `load`、`save` |
 
 

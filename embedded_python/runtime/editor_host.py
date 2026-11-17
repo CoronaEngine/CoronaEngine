@@ -207,32 +207,6 @@ class CoronaEditor:
         if module_name not in cls.module_list:
             cls.module_list[module_name] = c_cls
 
-    _editor_camera_input_locks = set()
-    _editor_camera_input_state_lock = threading.RLock()
-
-    @classmethod
-    def set_editor_camera_input_enabled(cls, enabled, reason="global"):
-        reason_key = str(reason or "global")
-        # Status RPCs can arrive on different bridge threads. Keep the reason set,
-        # aggregate value and native setter ordered as one operation so an older
-        # disable call cannot run after the final unlock.
-        with cls._editor_camera_input_state_lock:
-            if enabled:
-                cls._editor_camera_input_locks.discard(reason_key)
-            else:
-                cls._editor_camera_input_locks.add(reason_key)
-            input_enabled = not cls._editor_camera_input_locks
-            # Always re-apply the aggregate state. The native input gate can be
-            # recreated while this long-lived Python class still remembers the old
-            # value (for example after switching projects in the same editor process).
-            try:
-                import CoronaEngine
-                setter = getattr(CoronaEngine, "camera_follow_set_input_enabled", None)
-                if setter is not None:
-                    setter(input_enabled)
-            except Exception:
-                logger.debug("CameraFollowController input gate unavailable", exc_info=True)
-
     @classmethod
     def _set_native_runtime_phase(cls, phase):
         try:
@@ -324,8 +298,3 @@ class CoronaEditor:
             # enter Python to arm a new timer; this outstanding timer still dumps
             # every Python thread without requiring the GIL.
             cls._arm_runtime_watchdog()
-
-
-def set_editor_camera_input_enabled(enabled, *, reason="global"):
-    """Canonical runtime helper for the aggregated camera-input gate."""
-    return CoronaEditor.set_editor_camera_input_enabled(enabled, reason=reason)
