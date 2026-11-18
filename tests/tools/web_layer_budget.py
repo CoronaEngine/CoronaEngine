@@ -74,7 +74,9 @@ TARGET_LINES = 13_807
 # the contract header can stay CEF-free; that is the only file this ledger gained.
 # One spelling then made camel_case unnecessary: the table publishes its own names, so the
 # derivation left the header (-14) and the facade, the smoke scripts and the guards followed.
-CORE_BUDGET = 13234
+# The host-support session reader then added `active_project_session` to the binding (+12):
+# the archive/file guards need the `archive_session` a path-only reader cannot supply.
+CORE_BUDGET = 13246
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
@@ -109,7 +111,7 @@ INTERFACE_FILES = [
     ("src/systems/ui/cef/native_api_types.cpp", 248),
     ("src/systems/ui/cef/native_api_types.h", 76),
     ("src/systems/ui/cef/cef_paths.h", 41),
-    ("src/systems/ui/cef/cef_py_bind.cpp", 35),
+    ("src/systems/ui/cef/cef_py_bind.cpp", 47),
     # The single operation table, and the Python-value -> patch readers that replaced the
     # entry layer: a call now goes binder -> handler -> scene op, with no JSON in between.
     ("src/systems/ui/cef/editor_operation_methods.h", 28),

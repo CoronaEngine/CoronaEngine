@@ -1,8 +1,18 @@
-"""Read the active project from the current engine scene."""
+"""Read the active project from the current engine scene.
+
+Session identity is pulled from C++ on every call: `archive_session` is minted by the
+Python parser but owned by the scene afterwards, so a cached copy here would go stale the
+moment the editor reopens the project.
+"""
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+_path_only_binding_warned = False
 
 
 def _resolve_native_engine():
@@ -15,9 +25,24 @@ def _resolve_native_engine():
 
 def read_project_session() -> dict:
     """Read the current session without creating a scene or hydrating launcher history."""
+    global _path_only_binding_warned
     engine = _resolve_native_engine()
     if engine is None:
         return {}
+
+    reader = getattr(engine, "active_project_session", None)
+    if callable(reader):
+        session = reader()
+        return dict(session) if isinstance(session, dict) else {}
+
+    # An older native module only exposes the path. Callers that need the session
+    # identity (the archive/file guards) will refuse for safety; say so once so a
+    # mismatched deployment is diagnosable instead of looking like a closed project.
+    if not _path_only_binding_warned:
+        _path_only_binding_warned = True
+        logger.warning(
+            "event=runtime.session.binding_missing binding=active_project_session; "
+            "project requests cannot be validated against the open project")
     path = getattr(engine, "active_project_path", None)
     project_path = path() if callable(path) else ""
     return {"project_path": project_path} if project_path else {}

@@ -30,6 +30,18 @@ void BindCef(nanobind::module_& m) {
         const auto* scene = UI::native_editor_state().scene.get();
         return scene ? UI::path_to_utf8(scene->project_root) : std::string{};
     }, "Project root of the scene the editor owns, or an empty string");
+    // Host support: the session identity a Python service compares a request against.
+    // `archive_session` is minted by the Python parser and owned here afterwards, so this
+    // is the only authoritative copy; the path alone cannot tell a reopened project apart.
+    m.def("active_project_session", [] {
+        nanobind::dict session;
+        const auto* scene = UI::native_editor_state().scene.get();
+        if (!scene) return session;
+        session["project_path"] = UI::path_to_utf8(scene->project_root);
+        session["archive_session"] = scene->archive_session;
+        session["read_only"] = scene->read_only;
+        return session;
+    }, "Session identity of the project the editor owns, or an empty dict");
 }
 
 }  // namespace EngineScripts

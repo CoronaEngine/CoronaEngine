@@ -58,6 +58,7 @@ GUARDS = [
     ("test_lanchat_removal.py", "局域网聊天接口已删除，不得回归"),
     ("test_project_allocator.py", "项目目录分配器：重名与原子创建"),
     ("test_paths_have_no_write_side_effects.py", "路径解析不写盘；PathsConfig 只留宿主持有的 repo_root"),
+    ("test_project_session.py", "项目会话守卫：会话/路径/只读三种拒绝，旧绑定 fail-closed"),
     ("test_vision_thermal_run.py", "Vision 热运行路径"),
 ]
 
