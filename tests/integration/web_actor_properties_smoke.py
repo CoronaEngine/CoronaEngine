@@ -107,7 +107,7 @@ def run(port, root):
 
         initial = read()
         main.evaluate(f'corona.scene.select_actor({json.dumps(scene)},"scene","")')
-        opened = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'Object',routePath:'/Object',width:600,height:900}}))")
+        opened = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panel_id:'Object',route_path:'/Object',width:600,height:900}}))")
         window_token = opened['window_token']
         target = wait(lambda: next((target for target in targets() if '#/Object?' in target['url']
                                    and 'standalone=1' in target['url']), None), bool, 'Object Dock document')

@@ -188,8 +188,8 @@ def run(port, root):
     def open_panel(panel, selector):
         before = {p['id'] for p in targets()}
         route = {'CabbageChatPanel': '/CabbageChat', 'NodeGraphPanel': '/NodeGraph'}.get(panel, '/' + panel)
-        result = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:{json.dumps(panel)},"
-                               f"routePath:{json.dumps(route)},width:600,height:750}}))")
+        result = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panel_id:{json.dumps(panel)},"
+                               f"route_path:{json.dumps(route)},width:600,height:750}}))")
         assert result.get('window_token'), result
         opened.append(panel)
         target = wait(lambda: next((p for p in targets() if p['id'] not in before

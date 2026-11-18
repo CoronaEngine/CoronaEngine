@@ -45,7 +45,7 @@ def run(port, root, engine_pid):
           return Object.values(m).find(v=>typeof v?.openNativePanel==='function');})()"""
         wait(lambda: main.evaluate(f'{service}.then(s=>s.readEditorUiPolicy())'),
              lambda value: value and value.get('enabled'), 'Web owner ready')
-        opened = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panelId:'SceneTools',routePath:'/SceneBar',width:700,height:800}}))")
+        opened = main.evaluate(f"{service}.then(s=>s.openNativePanel({{panel_id:'SceneTools',route_path:'/SceneBar',width:700,height:800}}))")
         window_token = opened['window_token']
         target = wait(lambda: next((target for target in targets() if '#/SceneBar?' in target['url']
                                    and 'standalone=1' in target['url']), None), bool, 'SceneTools document')
