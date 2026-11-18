@@ -12,6 +12,7 @@ from time import sleep
 
 from .errors import ArchiveParseError
 from .portable import atomic_replace, validate_assets
+from runtime.archive.arguments import require_keys
 
 _lock = RLock()
 _categories = {"Models", "Actors", "Audio", "Images", "Scripts", "Terrain"}

@@ -96,6 +96,17 @@ def test_a_missing_script_document_is_data_not_a_refusal(project):
     assert script_files.ProjectFiles.load({"key": "workspace"}) == {"status": "missing"}
 
 
+def test_asset_operation_validates_its_request(project):
+    # `require_keys` runs before any manifest work; a missing import here is a NameError
+    # that the packaged smoke caught only when an actor with a model was created.
+    from runtime.archive.assets import asset_operation
+
+    assert asset_operation({
+        "root": str(project), "op": "contains", "route": "Assets/Models/x.ply",
+        "allow_missing": True,
+    }) == {"found": False}
+
+
 def test_an_initializing_service_refuses_with_a_retryable_code(monkeypatch):
     service = LazyPythonScriptService("demo", "no_such_module", "Thing")
     monkeypatch.setattr(service, "start_background_load", lambda: None)
