@@ -84,10 +84,16 @@ def main_render_retirement(main, controls):
 
 
 def main_selection_retirement(main, open_panel, root, session):
-    """A real SceneBar click must not reopen Object after unmount."""
+    """A real SceneBar click must not reopen Object after unmount.
+
+    The selection path no longer performs an index read: MainPage seeds the transform
+    baseline from `read_actor_properties` and opens the Object dock synchronously, so the
+    old "hold the index reply" lever cannot create a pending effect. What still must hold
+    is the retirement rule itself: after the main view unmounts, a real selection emitted
+    by the panel that survives it may not act on the retired view.
+    """
     # The viewport and controls appear before MainPage's final initialization
-    # snapshot. Wait for initialization, then gate every index reply before
-    # creating the Actor so a background refresh cannot cache it before click.
+    # snapshot. Wait for it so the selection subscription exists before clicking.
     wait(lambda: main.call('Runtime.evaluate', {
         'expression': "Boolean(getEventListeners(window)['cabbage-run-failed']?.length)",
         'includeCommandLineAPI': True, 'returnByValue': True,
@@ -96,18 +102,13 @@ def main_selection_retirement(main, open_panel, root, session):
     try:
         tools = open_panel('SceneTools', '/SceneBar', '[data-guidance=scene-import-model]')
         main.evaluate("""(async()=>{const m=await import(document.querySelector('script[type=module]').src);
-          const api=Object.values(m).find(v=>typeof v?.scene?.read_scene==='function');
           const dock=document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('dock');
-          if(!api?.scene?.read_scene||!dock)throw Error('selection boundaries missing');
-          await dock.closePanel('Object');
-          const p=window.__selectionLifetime={api,dock,read:api.scene.read_scene,
-            open:dock.openPanel,route:location.hash,ready:false,requests:0,releases:[],retired:false,effects:[]};
-          p.release=()=>{for(const release of p.releases.splice(0))release();};
-          api.scene.read_scene=(...args)=>{if(args[0]?.actors!=='index')return p.read(...args);p.requests++;
-            return p.read(...args).then(result=>new Promise(resolve=>{
-              if(p.retired){resolve(result);return;}
-              p.releases.push(()=>resolve(result));p.ready=true;}));};
-          dock.openPanel=(...args)=>{if(p.retired&&args[0]==='Object')p.effects.push({kind:'open',args});return p.open(...args);};
+          if(!dock)throw Error('selection boundaries missing');
+          const p=window.__selectionLifetime={dock,open:dock.openPanel,route:location.hash,
+            retired:false,effects:[]};
+          p.release=()=>{};
+          dock.openPanel=(...args)=>{p.effects.push({phase:p.retired?'retired':'live',args});
+            return p.open(...args);};
           return true;})()""")
         try:
             actor = main.evaluate("corona.scene.create_actor('scene.ini'," + json.dumps(str(root / 'triangle.ply'))
@@ -115,21 +116,28 @@ def main_selection_retirement(main, open_panel, root, session):
                                                      'actor_name': 'SelectionLifetime'}) + ')')
             wait(lambda: tools.evaluate("!!document.querySelector('[data-actor-name=SelectionLifetime]')"),
                  bool, 'new selection Actor row')
-            requests = main.evaluate('window.__selectionLifetime.requests')
+            # While the view is alive a real row click still opens the Object dock.
+            main.evaluate("""(async()=>{await window.__selectionLifetime.dock.closePanel('Object');return true;})()""")
             tools.evaluate("document.querySelector('[data-actor-name=SelectionLifetime]').click()")
-            wait(lambda: main.evaluate('window.__selectionLifetime.requests'),
-                 lambda value: value > requests, 'selection starts a fresh Actor index request')
-            wait(lambda: main.evaluate('window.__selectionLifetime.ready'), bool, 'real selection Actor index reply held')
+            wait(lambda: main.evaluate('window.__selectionLifetime.effects'),
+                 lambda values: any(item['phase'] == 'live' and item['args'][0] == 'Object'
+                                    for item in values),
+                 'live selection opens the Object dock')
+            # Retire the main view, then deliver a real selection from the panel that stays alive.
             main.evaluate("""(async()=>{const p=window.__selectionLifetime;
               await document.querySelector('#app').__vue_app__.config.globalProperties.$router.push('/ProjectSettings');
               if(document.querySelector('[data-viewport-surface]'))throw Error('MainPage still mounted');
-              p.retired=true;p.release();return true;})()""")
+              p.retired=true;return true;})()""")
+            wait(lambda: tools.evaluate("!!document.querySelector('[data-actor-name=Probe]')"),
+                 bool, 'SceneBar survives the main retirement')
+            tools.evaluate("document.querySelector('[data-actor-name=Probe]').click()")
             main.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))')
             effects = main.evaluate('window.__selectionLifetime.effects')
-            assert not effects, f'Retired main selection continued native/Dock effects: {effects}'
+            retired = [item for item in effects if item['phase'] == 'retired']
+            assert not retired, f'Retired main selection continued Dock effects: {retired}'
         finally:
-            main.evaluate("""(async()=>{const p=window.__selectionLifetime;p.retired=true;p.api.scene.read_scene=p.read;
-              p.dock.openPanel=p.open;p.release?.();
+            main.evaluate("""(async()=>{const p=window.__selectionLifetime;
+              p.dock.openPanel=p.open;p.retired=true;
               await document.querySelector('#app').__vue_app__.config.globalProperties.$router.push(p.route.slice(1)||'/');
               return true;})()""")
         wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-surface]')"), bool, 'MainPage selection remount')
@@ -137,7 +145,10 @@ def main_selection_retirement(main, open_panel, root, session):
             'expression': "Boolean(getEventListeners(window)['cabbage-run-failed']?.length)",
             'includeCommandLineAPI': True, 'returnByValue': True,
         })['result'].get('value'), bool, 'MainPage selection remount initialized')
-        return dict(retired_effects=effects, normal_remount=True), tools
+        # Leave no selection: the retired-view click above selected Probe, and the next
+        # phase needs its own click to be a real selection change.
+        main.evaluate("corona.scene.select_actor('scene.ini','scene','')")
+        return dict(live_selection_opened_object=True, retired_effects=[], normal_remount=True), tools
     finally:
         if actor:
             main.evaluate("corona.scene.delete_actor('scene.ini'," + json.dumps(actor['actor_guid'])
@@ -165,8 +176,18 @@ def main_transform_baseline_race(main, tools, session):
       context.recordEvent=(event,...args)=>{if(event.type==='transform_position'&&event.details?.source==='viewport'
         &&event.details?.actorName==='Probe')p.events.push(event);return p.record(event,...args);};return true;})()""")
     try:
-        tools.evaluate("document.querySelector('[data-actor-name=Probe]').click()")
+        # Selection seeds the baseline only once the remounted MainPage has a camera
+        # binding for the scene; click until that read is actually issued.
+        for _ in range(40):
+            tools.evaluate("document.querySelector('[data-actor-name=Probe]').click()")
+            if main.evaluate('window.__transformBaseline.ready'):
+                break
+            time.sleep(0.25)
         wait(lambda: main.evaluate('window.__transformBaseline.ready'), bool, 'real property baseline held')
+        print('DIAG transform baseline: ' + json.dumps({
+            'calls': main.evaluate('window.__transformBaseline.calls'),
+            'active': main.evaluate('corona.scene.read_active()'),
+        }), flush=True)
         wait(lambda: main.evaluate('window.__transformBaseline.samples'),
              lambda values: any(value['actor_guid'] == original['actor_guid'] for value in values), 'initial live transform echo')
         main.evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))')
