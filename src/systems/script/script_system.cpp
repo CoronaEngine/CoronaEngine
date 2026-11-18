@@ -1,4 +1,4 @@
-﻿#include <corona/events/engine_events.h>
+#include <corona/events/engine_events.h>
 #include <corona/events/script_system_events.h>
 #include <horizon/core/logging.h>
 #include <corona/kernel/event/i_event_bus.h>
@@ -22,16 +22,16 @@ ScriptSystem::ScriptSystem()
 ScriptSystem::~ScriptSystem() = default;
 
 bool ScriptSystem::initialize(Kernel::ISystemContext* ctx) {
-    CFW_LOG_NOTICE("ScriptSystem: Initializing...");
+    CFW_LOG_NOTICE("event=script.system.initializing");
 
     // JS/Python 业务能力走 C++ Editor API；ScriptSystem 不再订阅 UI 事件。
     if (ctx->event_bus() == nullptr) {
-        CFW_LOG_WARNING("ScriptSystem: No event bus available");
+        CFW_LOG_WARNING("event=script.system.event_bus_missing");
     }
 
 #ifdef CORONA_ENABLE_PYTHON_API
     if (!python_api_->initializeInterpreter()) {
-        CFW_LOG_ERROR("ScriptSystem: Python interpreter initialization failed");
+        CFW_LOG_ERROR("event=script.system.python_init_failed");
         return false;
     }
 #endif
@@ -68,7 +68,7 @@ void ScriptSystem::update() {
 }
 
 void ScriptSystem::shutdown() {
-    CFW_LOG_NOTICE("ScriptSystem: Shutting down...");
+    CFW_LOG_NOTICE("event=script.system.shutting_down");
 
     // 主动关闭 Python 解释器，避免在析构时阻塞
     python_api_->shutdown();

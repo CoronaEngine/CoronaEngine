@@ -57,7 +57,7 @@ void PythonAPI::begin_shutdown() {
         const auto response = runtime_coordinator_.submit_and_wait(
             std::move(request), std::chrono::milliseconds(2500));
         if (response.status != PythonRuntimeResponseStatus::Success) {
-            CFW_LOG_ERROR("PythonAPI: cooperative shutdown request failed: {}", response.error);
+            CFW_LOG_ERROR("event=python.lifecycle.shutdown_request_failed detail={}", response.error);
         }
     }
     shutting_down_.store(true);
@@ -67,7 +67,7 @@ void PythonAPI::begin_shutdown() {
     lifecycle_snapshot_.state = lifecycle_.state();
     lifecycle_snapshot_.shutting_down = true;
     lifecycle_snapshot_.phase = "shutdown_requested";
-    CFW_LOG_NOTICE("PythonAPI: lifecycle transition -> StopRequested");
+    CFW_LOG_NOTICE("event=python.lifecycle.state state=stop_requested");
 }
 
 PythonLifecycleSnapshot PythonAPI::lifecycle_snapshot() const {
@@ -110,7 +110,7 @@ std::string PythonAPI::shutdown_diagnostics() const {
 void PythonAPI::shutdown() {
     begin_shutdown();
 
-    CFW_LOG_INFO("PythonAPI: Shutting down Python runtime ownership...");
+    CFW_LOG_INFO("event=python.shutdown.begin");
     lifecycle_.transition(PythonLifecycleState::Stopping);
     runtime_coordinator_.begin_python_stopping();
 
@@ -133,7 +133,7 @@ void PythonAPI::shutdown() {
         lifecycle_snapshot_.shutting_down = true;
     }
 
-    CFW_LOG_INFO("PythonAPI: Python shutdown complete");
+    CFW_LOG_INFO("event=python.lifecycle.state state=stopped");
 }
 
 std::size_t PythonAPI::detach_python_objects_without_decref() {
@@ -178,7 +178,7 @@ bool PythonAPI::initializeInterpreterLocked() {
     if (!lifecycle_.transition(PythonLifecycleState::InterpreterInitializing)) {
         return lifecycle_.state() == PythonLifecycleState::InterpreterReady;
     }
-    CFW_LOG_INFO("PythonAPI: Initializing Python interpreter...");
+    CFW_LOG_INFO("event=python.interpreter.initializing");
 
     {
         const auto packaged = PathCfg::inspect_deployed_runtime();
@@ -197,17 +197,16 @@ bool PythonAPI::initializeInterpreterLocked() {
                 lifecycle_snapshot_.phase = phase;
                 lifecycle_snapshot_.error = message;
             }
-            CFW_LOG_CRITICAL("PythonAPI: {}", message);
+            CFW_LOG_CRITICAL("event=python.interpreter.bundled_incomplete detail={}", message);
         };
 
         switch (decision) {
             case PathCfg::PackagedRuntimeDecision::UsePackaged:
-                CFW_LOG_INFO("PythonAPI: {}", packaged.describe());
+                CFW_LOG_INFO("event=python.interpreter.packaged detail={}", packaged.describe());
                 break;
             case PathCfg::PackagedRuntimeDecision::UseFallback:
                 CFW_LOG_WARNING(
-                    "PythonAPI: {}; falling back to the build-machine Python at '{}'. "
-                    "This build output is NOT portable: it only runs where that interpreter exists.",
+                    "event=python.interpreter.fallback reason={} python_home={} portable=false",
                     packaged.describe(), configured_home);
                 break;
             case PathCfg::PackagedRuntimeDecision::RejectNoPackaged:
@@ -239,7 +238,7 @@ bool PythonAPI::initializeInterpreterLocked() {
             lifecycle_snapshot_.phase = step;
             lifecycle_snapshot_.error = status.err_msg ? status.err_msg : "unknown Python error";
         }
-        CFW_LOG_CRITICAL("PythonAPI: {} failed: {}", step, status.err_msg ? status.err_msg : "unknown Python error");
+        CFW_LOG_CRITICAL("event=python.interpreter.step_failed step={} detail={}", step, status.err_msg ? status.err_msg : "unknown Python error");
         PyConfig_Clear(&config);
         config = PyConfig{};
         return false;
@@ -276,7 +275,7 @@ bool PythonAPI::initializeInterpreterLocked() {
             lifecycle_snapshot_.phase = "bundled_runtime_validation";
             lifecycle_snapshot_.error = message;
         }
-        CFW_LOG_CRITICAL("PythonAPI: {}", message);
+        CFW_LOG_CRITICAL("event=python.interpreter.bundled_incomplete detail={}", message);
         PyConfig_Clear(&config);
         config = PyConfig{};
         return false;
@@ -314,8 +313,8 @@ bool PythonAPI::initializeInterpreterLocked() {
         lifecycle_snapshot_.state = lifecycle_.state();
         lifecycle_snapshot_.phase = "interpreter_ready";
     }
-    CFW_LOG_INFO("PythonAPI: Python interpreter initialized successfully");
-    CFW_LOG_INFO("PythonAPI: interpreter paths home='{}' lib='{}' dlls='{}' site-packages='{}'",
+    CFW_LOG_INFO("event=python.lifecycle.state state=interpreter_ready");
+    CFW_LOG_INFO("event=python.interpreter.paths home={} lib={} dlls={} site_packages={}",
                  bundled_home, bundled_lib, bundled_dlls, bundled_site_packages);
 
     return true;
@@ -373,7 +372,7 @@ bool PythonAPI::ensureInitialized() {
                 lifecycle_snapshot_.state = lifecycle_.state();
                 lifecycle_snapshot_.phase = "running";
             }
-            CFW_LOG_INFO("PythonAPI: Python backend initialized successfully");
+            CFW_LOG_INFO("event=python.lifecycle.state state=running");
         } catch (const nanobind::python_error& e) {
             lifecycle_.transition(PythonLifecycleState::Failed);
             log_python_error(e);
@@ -416,7 +415,7 @@ void PythonAPI::sendMessage(const std::string& message) const {
 void PythonAPI::runPythonScript() {
     const auto frame_start = std::chrono::steady_clock::now();
     if (!runtime_coordinator_.bind_consumer_thread()) {
-        CFW_LOG_CRITICAL("PythonAPI: runPythonScript called from a non-owner thread");
+        CFW_LOG_CRITICAL("event=python.runtime.non_owner_thread");
         return;
     }
     // 如果正在关闭，不执行任何 Python 代码
@@ -427,7 +426,7 @@ void PythonAPI::runPythonScript() {
     }
 
     if (!ensureInitialized()) {
-        CFW_LOG_ERROR("PythonAPI: Python initialization failed");
+        CFW_LOG_ERROR("event=python.runtime.initialize_failed");
         return;
     }
 
