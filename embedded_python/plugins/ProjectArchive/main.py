@@ -20,6 +20,7 @@ from runtime.archive.assets import asset_operation
 from runtime.archive.documents import read_document, commit_document
 from runtime.archive.editor_settings import editor_settings
 from runtime.archive.project_files import file_manager
+from runtime.bridge_errors import BridgeError
 
 
 class ProjectArchive:
@@ -45,20 +46,9 @@ class ProjectArchive:
         path = str(request.get("path") or "").strip()
         load_policy = str(request.get("load_policy") or "prompt").strip().lower()
         if load_policy not in {"prompt", "degraded"}:
-            return {
-                "ok": False,
-                "status": "invalid_archive",
-                "diagnostics": [
-                    {
-                        "severity": "error",
-                        "recoverable": False,
-                        "stage": "archive_parse",
-                        "code": "INVALID_LOAD_POLICY",
-                        "message": f"Unsupported load policy: {load_policy}",
-                        "path": path,
-                    }
-                ],
-            }
+            # A caller error, not an archive outcome: the diagnostics list below is for
+            # scenes that were read and found wanting.
+            raise BridgeError("INVALID_ARGUMENT", f"Unsupported load policy: {load_policy}")
         try:
             source = Path(path)
             if source.is_dir() or source.name == "scene.ini":
@@ -96,13 +86,19 @@ class ProjectArchive:
 
     @staticmethod
     def save(request: dict) -> dict:
+        """Write the live scene through the archive service.
 
+        A failed write is a refusal, not a value: the scene layer rejects with the code
+        instead of forwarding ``{"ok": false}`` for every caller to re-check.
+        """
         try:
             return save_scene(request)
-        except ArchiveParseError as exc:
-            return {"ok": False, "status": "error", "message": str(exc), "diagnostics": [exc.to_diagnostic()]}
-        except (KeyError, TypeError, ValueError, OSError, configparser.Error) as exc:
-            return {"ok": False, "status": "error", "message": str(exc)}
+        except ArchiveParseError as error:
+            raise BridgeError("SAVE_FAILED", str(error)) from error
+        except OSError as error:
+            raise BridgeError("SAVE_FAILED", str(error)) from error
+        except (KeyError, TypeError, ValueError, configparser.Error) as error:
+            raise BridgeError("INVALID_ARGUMENT", str(error)) from error
 
 
 __all__ = ["ProjectArchive"]

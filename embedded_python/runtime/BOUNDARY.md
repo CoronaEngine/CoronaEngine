@@ -57,9 +57,11 @@ begin_shutdown() ────→ 执行 LifecycleControl(shutdown)
   `code`，上下游都不解析消息。
 - 服务拒绝抛 `BridgeError(code, message)`；`code` 必须在
   `tests/tools/rejection_codes.py` 的词表内（`test_python_refusal_codes.py` 会检查）。
-  C++ 直连的服务（`parse` / `save` / `project_info` / `validate_project` /
-  `asset_operation`）返回自己的数据级结果（`ok` / `diagnostics` / `decision_required`），
-  不抛异常；它们不是 bridge 可达面，调用方按数据解析。
+- 失败一律抛码，包括 C++ 直连的服务：`save`（`SAVE_FAILED` / `INVALID_ARGUMENT`）、
+  `project_info`（`INVALID_PROJECT_PATH`）、`update_metadata`、`editor_settings`
+  （`FILE_OPERATION_FAILED`）。唯一保留数据级结果的是"读出来了但需要人决策"这一类：
+  `parse` 的 `invalid_archive` / `decision_required` + `diagnostics`，以及
+  `validate_project` / `asset_operation` 的校验报告；调用方按数据解析，不当作拒绝。
 
 ## 会话身份
 

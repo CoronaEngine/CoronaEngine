@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "embedded_python"))
 from runtime.archive import documents, project_files, script_files  # noqa: E402
 from runtime.bridge_errors import BridgeError  # noqa: E402
 from runtime.registry import LazyPythonScriptService  # noqa: E402
+from plugins.ProjectArchive.main import ProjectArchive  # noqa: E402
 
 
 @pytest.fixture
@@ -116,3 +117,61 @@ def test_a_degraded_service_refuses_with_the_initialization_error(monkeypatch):
 
     assert raised.value.code == "SERVICE_UNAVAILABLE"
     assert "boom" in raised.value.message
+
+
+def test_a_failed_scene_write_is_a_refusal_not_a_value(project):
+    with pytest.raises(BridgeError) as raised:
+        ProjectArchive.save({
+            "project_path": str(project / "missing"),
+            "actors_only": True,
+            "scene": {"id": "scene.ini", "actors": []},
+        })
+
+    assert raised.value.code == "SAVE_FAILED"
+
+
+def test_a_malformed_save_request_is_refused_as_invalid_argument(project):
+    with pytest.raises(BridgeError) as raised:
+        ProjectArchive.save({})
+
+    assert raised.value.code == "INVALID_ARGUMENT"
+
+
+def test_an_unsupported_load_policy_is_a_caller_error(project):
+    with pytest.raises(BridgeError) as raised:
+        ProjectArchive.parse({"path": str(project), "load_policy": "bogus"})
+
+    assert raised.value.code == "INVALID_ARGUMENT"
+
+
+def test_a_malformed_archive_is_still_a_data_outcome(project):
+    # An unreadable scene is an outcome with diagnostics (the Web asks the user what to
+    # do), not a refusal; only caller mistakes raise.
+    broken = project / "broken"
+    broken.mkdir()
+    (broken / "scene.ini").write_text("this is not an ini\n", encoding="utf-8")
+
+    result = ProjectArchive.parse({"path": str(broken)})
+
+    assert result["ok"] is False
+    assert result["status"] == "invalid_archive"
+    assert result["diagnostics"]
+
+
+def test_project_info_on_a_missing_project_is_refused(project):
+    with pytest.raises(BridgeError) as raised:
+        ProjectArchive.project_info({"path": str(project / "missing")})
+
+    assert raised.value.code == "INVALID_PROJECT_PATH"
+
+
+def test_an_unwritable_ini_is_a_file_operation_failure(project):
+    not_a_file = project / "ini_is_a_dir"
+    not_a_file.mkdir()
+
+    with pytest.raises(BridgeError) as raised:
+        ProjectArchive.editor_settings({
+            "ini": str(not_a_file), "section": "General", "updates": {"last_project": "P:/w"},
+        })
+
+    assert raised.value.code == "FILE_OPERATION_FAILED"

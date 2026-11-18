@@ -11,6 +11,7 @@ import time
 from .errors import ArchiveParseError
 from .parser import _resolve_source
 from .portable import atomic_replace, recover_scene, validate_assets
+from runtime.bridge_errors import BridgeError
 
 
 def _document(path):
@@ -26,7 +27,12 @@ def _document(path):
 
 def project_info(request):
     require_keys(request, required=('path',), optional=('archive_session', 'project_path'))
-    root, _, config = _document(request["path"])
+    try:
+        root, _, config = _document(request["path"])
+    except ArchiveParseError as error:
+        raise BridgeError("INVALID_PROJECT_PATH", str(error)) from error
+    except (OSError, ValueError, configparser.Error) as error:
+        raise BridgeError("INVALID_PROJECT_PATH", str(error)) from error
     return {"name": config.get("scene", "name", fallback=root.name),
             "mode": config.get("world", "type", fallback="creative"),
             "prompt": config.get("world", "prompt", fallback=""),
