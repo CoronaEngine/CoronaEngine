@@ -3081,7 +3081,9 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
         }
         const auto result = save_editor_scene(*scene, request.save_actors_only);
         if (!result.success || !result.data.value("ok", false)) {
-            reply.error_code = result.success ? "SAVE_FAILED" : "SAVE_FAILED";
+            // The archive service names the refusal (SAVE_FAILED / INVALID_ARGUMENT); the
+            // scene layer forwards it instead of flattening every write failure into one code.
+            reply.error_code = result.data.value("code", std::string{"SAVE_FAILED"});
             reply.error_message = result.error.empty()
                 ? result.data.value("message", std::string{"Scene save failed"})
                 : result.error;

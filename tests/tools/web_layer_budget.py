@@ -76,14 +76,16 @@ TARGET_LINES = 13_807
 # derivation left the header (-14) and the facade, the smoke scripts and the guards followed.
 # The host-support session reader then added `active_project_session` to the binding (+12):
 # the archive/file guards need the `archive_session` a path-only reader cannot supply.
-CORE_BUDGET = 13246
+# Forwarding the archive service's refusal code on a failed save cost two comment lines
+# (+2) in the scene service; the hardcoded SAVE_FAILED it replaced was already wrong.
+CORE_BUDGET = 13248
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
     ("src/systems/ui/cef/archive_load_policy.h", 21),
     ("src/systems/ui/cef/camera_window_lifetime.h", 46),
     ("src/systems/ui/cef/cef_operations.h", 130),
-    ("src/systems/ui/cef/editor_scene_service.cpp", 3957),
+    ("src/systems/ui/cef/editor_scene_service.cpp", 3959),
     ("src/systems/ui/cef/editor_paths.h", 22),
     ("src/systems/ui/cef/editor_paths.cpp", 31),
     ("src/systems/ui/cef/editor_service_operations.cpp", 105),

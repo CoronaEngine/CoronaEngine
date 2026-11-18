@@ -54,3 +54,14 @@ def test_engine_produced_converters_stay_typed():
         end = text.index("\n}", start)
         assert "SetValue(" in text[start:end], (
             f"{converter} projects live engine state; its converter is where that shape lives")
+
+
+def test_a_failed_save_forwards_the_archive_refusal_code():
+    """The write is the archive service's; the scene layer must not invent its own code."""
+    text = (ROOT / "src/systems/ui/cef/editor_scene_service.cpp").read_text(encoding="utf-8-sig")
+    start = text.index("const auto result = save_editor_scene(*scene, request.save_actors_only);")
+    end = text.index('saved.status = "saved";', start)
+    failure = text[start:end]
+
+    assert 'result.data.value("code"' in failure, (
+        "a failed save hardcodes its code again; forward the one the archive service raised")
