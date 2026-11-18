@@ -51,7 +51,7 @@ def create_project_in(request):
     creator wins the race.
     """
     require_keys(request, required=('base_dir', 'dir_stem'),
-                 optional=('display_base', 'world', 'archive_session', 'project_path'))
+                 optional=('display_base', 'world', 'multiplayer', 'archive_session', 'project_path'))
     base = Path(request["base_dir"])
     stem = request["dir_stem"]
     display_base = request.get("display_base") or stem

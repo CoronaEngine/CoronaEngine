@@ -5,6 +5,7 @@ Python to create the project - while Python creates its own directories anyway. 
 behaviour that replaced it: sequential names, occupied slots skipped, and the display name
 following the directory index so the two cannot disagree.
 """
+import configparser
 from pathlib import Path
 import sys
 
@@ -19,6 +20,21 @@ from runtime.archive.project import create_project_in  # noqa: E402
 def _request(base: Path, stem: str = "creative_world") -> dict:
     return {"base_dir": str(base), "dir_stem": stem, "display_base": "创造世界",
             "world": {"type": "creative", "prompt": "test"}}
+
+
+def test_a_multiplayer_project_accepts_the_role_key(tmp_path):
+    # The launcher sends `multiplayer` for host/guest worlds; the allocator has to forward
+    # the same keys `create_project` validates, or creation dies on the strict key check.
+    created = create_project_in({
+        "base_dir": str(tmp_path), "dir_stem": "multiplayer_host",
+        "display_base": "联机房主", "multiplayer": {"role": "host"}})
+
+    scene = Path(created["path"]) / "scene.ini"
+    config = configparser.ConfigParser(interpolation=None)
+    config.read(scene, encoding="utf-8")
+
+    assert Path(created["path"]).name == "multiplayer_host_1"
+    assert config["multiplayer"]["role"] == "host"
 
 
 def test_directories_are_sequential_and_the_name_follows(tmp_path):
