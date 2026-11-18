@@ -14,7 +14,7 @@
 
 namespace vision {
 
-// Static RGB, pinhole ReSTIR DI using the scene's area lights and environment.
+// Static RGB, pinhole ReSTIR DI using area lights, directional lights and sky.
 class FalcorDIExperiment final : private Toolkit {
     static constexpr uint has_history_bit = 1u;
     static constexpr uint same_geometry_bit = 2u;
@@ -22,6 +22,7 @@ class FalcorDIExperiment final : private Toolkit {
     FrameBuffer *frame_buffer_{};
     uint light_count_{};
     uint area_light_count_{};
+    uint directional_light_count_{};
     uint environment_index_{InvalidUI32};
     uint previous_frame_{InvalidUI32};
     WP<const GeometryGpuResource> previous_geometry_;
@@ -60,7 +61,8 @@ class FalcorDIExperiment final : private Toolkit {
         vector<uint4> primitives;
         vector<float> probabilities;
         const auto *environment = scene().light_manager().env_light();
-        const bool has_environment = environment && any(environment->average() != make_float3(0.f));
+        const bool has_environment = environment && !environment->match(LightType::DeltaDirection) &&
+                                     any(environment->average() != make_float3(0.f));
         for (uint i = 0; i < instances.size(); ++i) {
             const auto &shape = instances[i];
             if (!shape->has_emission()) continue;
@@ -79,9 +81,17 @@ class FalcorDIExperiment final : private Toolkit {
             }
         }
         area_light_count_ = static_cast<uint>(primitives.size());
+        // env_light() is only the selected background. Independent delta suns
+        // remain in the full list even when that background is a black sky.
+        for (const auto &light : scene().light_manager().lights()) {
+            if (!light->match(LightType::DeltaDirection)) continue;
+            primitives.push_back(make_uint4(InvalidUI32, 0u, light->index(), 0u));
+            probabilities.push_back(luminance(light->power()));
+            ++directional_light_count_;
+        }
         probabilities = falcor_di::light_selection_probabilities(probabilities, has_environment);
         if (has_environment) {
-            environment_index_ = area_light_count_;
+            environment_index_ = static_cast<uint>(primitives.size());
             primitives.push_back(make_uint4(InvalidUI32));
             // Reuse the framework's CPU alias builder; the uploaded snapshot owns
             // its entries after this temporary builder is destroyed.
@@ -165,6 +175,22 @@ class FalcorDIExperiment final : private Toolkit {
                 };
             }
             const Uint4 primitive = light_primitives_.read(index, false);
+            $if(primitive.x == InvalidUI32) {
+                falcor_di::LightTriangleGeometryVar directional;
+                const auto swl = spec->sample_wavelength(sampler);
+                const auto [type_id, inst_id] = lights->extract_light_id(primitive.z);
+                lights->dispatch_light(type_id, inst_id, [&](const Light *light) {
+                    if (!light->match(LightType::DeltaDirection)) return;
+                    LightSampleContext ref;
+                    ref.pos = make_float3(0.f);
+                    const auto sample = light->sample_wi(ref, make_float2(0.f), swl);
+                    directional.p0.set(normalize(sample.p_light - ref.pos));
+                    directional.emission.set(sample.eval.L.vec3());
+                    directional.pdf_pos = -1.f;
+                });
+                light_geometry_.write(index, directional, false);
+                $return();
+            };
             const auto p0 = geo.compute_light_eval_context(primitive.x, primitive.y, make_float2(1.f, 0.f));
             const auto p1 = geo.compute_light_eval_context(primitive.x, primitive.y, make_float2(0.f, 1.f));
             const auto p2 = geo.compute_light_eval_context(primitive.x, primitive.y, make_float2(0.f));
@@ -395,11 +421,9 @@ public:
         compile(direct, bias_mode);
         if (lobe_signals_)
             OC_INFO("Falcor DI denoiser outputs active: physical primary, original BSDF lobe split, emission/sky bypass, independent buffers");
-        const auto *environment = scene().light_manager().env_light();
-        const bool delta_environment = environment && environment->match(LightType::DeltaDirection);
-        OC_INFO_FORMAT("Falcor DI native route active: mode={}, {} triangles, {}x{}, environment={}, DI_proposals=10+1, env_pdf={}, env_uv=world_equal_area16, actual_scene_radiance, selection={}", mode,
+        OC_INFO_FORMAT("Falcor DI native route active: mode={}, {} triangles, {}x{}, environment={}, DI_proposals=10+1, env_pdf=hdr_importance, env_uv=world_equal_area16, actual_scene_radiance, directionals={}, delta_pdf=discrete, selection={}", mode,
                        area_light_count_, extent_.x, extent_.y, environment_index_ != InvalidUI32,
-                       delta_environment ? "legacy_uniform_delta" : "hdr_importance",
+                       directional_light_count_,
                        environment_index_ != InvalidUI32 ? "framework alias, area/env mass .5/.5 (env-only1)" : "original area CDF");
     }
 

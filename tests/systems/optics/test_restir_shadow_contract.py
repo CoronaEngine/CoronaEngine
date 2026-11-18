@@ -55,7 +55,7 @@ struct Interaction{Float3 pos,ng;
  static Float3 custom_offset_ray_origin(Float3 p,Float3 n,Float3 w){return offset_ray_origin(p,n*select(dot(n,w)>0,1.f,-1.f));}};
 struct Context{uint environment_index=2;};struct Surface{Float3 position;};
 struct LightEvalContext{Float3 pos,ng;float PDF_pos;};
-struct TriangleSample{Float3 direction{};float distance{};Float3 radiance{};float pdf{};Float3 target{};bool infinite=false;};
+struct TriangleSample{Float3 direction{};float distance{};Float3 radiance{};float pdf{};Float3 target{};bool infinite=false;bool delta=false;};
 constexpr float environment_ray_distance=1e16f;
 namespace vision{float PDF_wi(float pdf,Float3 normal,Float3 delta){return pdf*dot(delta,delta)/(std::abs(dot(normal,delta))/length(delta));}}
 __EVALUATE_POINT__

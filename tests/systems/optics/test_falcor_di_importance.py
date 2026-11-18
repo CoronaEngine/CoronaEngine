@@ -56,7 +56,7 @@ namespace vision{float PDF_wi(float p,Float3 n,Float3 delta){return p*dot(delta,
 struct Context{uint environment_index{5u};};
 struct LightEvalContext{Float3 pos{},ng{};float PDF_pos{};};
 struct Surface{Float3 position{};};
-struct TriangleSample{Float3 direction{};float distance{};Float3 radiance{};float pdf{};Float3 target{};bool infinite=false;};
+struct TriangleSample{Float3 direction{};float distance{};Float3 radiance{};float pdf{};Float3 target{};bool infinite=false;bool delta=false;};
 bool finite(float x){return std::isfinite(x);}
 __CANONICAL__
 __EVALUATE__
@@ -134,6 +134,79 @@ def run(canonical=False):
 
 def test_production_environment_sample_consumes_conditional_pdf():
     run()
+
+
+def test_production_directional_sample_uses_discrete_mass_and_infinite_shadow():
+    source=COMMON.read_text(encoding='utf-8-sig')
+    start=source.index('inline constexpr float environment_ray_distance')
+    constant=source[start:source.index(';',start)+1]
+    fixture=r'''
+void directional_test(){
+ Context ctx;Float3 emission{2.f,3.f,5.f};
+ // -1 is the framework's delta-direction marker, never a solid-angle PDF.
+ LightEvalContext point{{.6f,.8f,0.f},{},-1.f};
+ for(Float3 receiver:{Float3{0,0,0},Float3{-1000,700,21}}){
+  auto sample=evaluate_light_point(ctx,2u,emission,point,Surface{receiver});
+  require(sample.delta&&sample.infinite,"directional sample must use the discrete infinite-light measure");
+  near(sample.pdf,1.f,"one direction has unit conditional discrete mass");
+  near(sample.direction.x,.6f,"sun direction must not depend on receiver position");
+  near(sample.direction.y,.8f,"sun direction is not spherical UV quantized");
+  near(sample.radiance.x,2.f,"sun irradiance must not acquire4pi or inverse-square falloff");
+  near(sample.radiance.z,5.f,"directional spectrum retained");
+  near(sample.distance,environment_ray_distance,"directional samples use infinite visibility");
+ }
+ // Continuous background directions must not reinterpret invalid PDFs as a sun.
+ auto background=evaluate_light_point(ctx,ctx.environment_index,emission,point,Surface{});
+ require(!background.delta&&background.pdf==0.f,"negative continuous environment density remains invalid");
+ std::cout<<"PASS actual production directional measure, receiver invariance and continuous controls\n";
+}'''
+    program=SHIM.replace('__CANONICAL__','').replace('__EVALUATE__',constant+'\n'+definition(source,'[[nodiscard]] inline TriangleSample evaluate_light_point('))
+    program=program.replace('__CANONICAL_TEST__',fixture).replace('__MAIN__','directional_test();')
+    _run_directional_fixture(program,'directional')
+
+
+def _run_directional_fixture(program,name):
+    compiler=shutil.which('g++')
+    if not compiler: pytest.skip('g++ required for standalone CPU production-helper fixture')
+    directory=ROOT/'.workspace/tmp/dragon-gi-directional-20261118/tests'
+    directory.mkdir(parents=True,exist_ok=True)
+    source,binary=directory/f'{name}.cpp',directory/f'{name}.exe'
+    source.write_text(program,encoding='utf-8')
+    compiled=subprocess.run([compiler,'-std=c++20','-O2',str(source),'-o',str(binary)],text=True,capture_output=True)
+    assert compiled.returncode==0,compiled.stdout+compiled.stderr
+    result=subprocess.run([str(binary)],text=True,capture_output=True)
+    assert result.returncode==0,result.stdout+result.stderr
+
+
+def test_directional_mis_excludes_continuous_bsdf_density():
+    candidates=COMMON.with_name('candidates.h').read_text(encoding='utf-8-sig')
+    mixture=definition(candidates,'[[nodiscard]] inline Float initial_mixture_pdf(')
+    assert 'const Bool &delta' in mixture, 'Delta light proposals must exclude continuous BSDF density'
+    constants='\n'.join(line for line in candidates.splitlines() if line.startswith('inline constexpr uint initial_'))
+    program=r'''
+#include <algorithm>
+#include <cmath>
+#include <iostream>
+#include <stdexcept>
+using Float=float;using Bool=bool;using uint=unsigned;using std::max;
+template<class T>T select(bool c,T a,T b){return c?a:b;}
+__CONSTANTS__
+__MIXTURE__
+int main(){
+ for(float mass:{.1f,.5f,1.f})for(float bsdf_pdf:{0.f,.01f,1000.f}){
+  float p=initial_mixture_pdf(mass,bsdf_pdf,1.f,true);
+  float expected=10.f*mass/11.f;
+  if(std::abs(p-expected)>1e-6f)throw std::runtime_error("continuous BSDF density biased a delta proposal");
+  float lambert=2.f*.8f/3.14159265358979323846f;
+  if(std::abs((10.f/11.f)*mass*lambert/p-lambert)>1e-6f)
+   throw std::runtime_error("10-light/1-BSDF directional estimator changed irradiance");
+  float continuous=initial_mixture_pdf(mass,bsdf_pdf,.37f);
+  if(std::abs(continuous-(10.f*mass+bsdf_pdf/.37f)/11.f)>1e-5f)
+   throw std::runtime_error("continuous proposal control changed");
+ }
+ std::cout<<"PASS production discrete MIS estimator and continuous controls\n";
+}'''
+    _run_directional_fixture(program.replace('__CONSTANTS__',constants).replace('__MIXTURE__',mixture),'directional-mis')
 
 
 def test_production_environment_uv16_is_canonical_before_target():

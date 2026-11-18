@@ -173,6 +173,7 @@ struct TriangleSample {
     Float pdf{0.f};
     Float3 target{make_float3(0.f)};
     Bool infinite{false};
+    Bool delta{false};
 };
 
 [[nodiscard]] inline Bool finite(const Float &value) {
@@ -225,13 +226,19 @@ struct TriangleSample {
     const Float2 bary = make_float2(1.f - uv.x - uv.y, uv.x);
     LightEvalContext point;
     const auto area_point = [&] {
-        $if(triangle.pdf_pos > 0.f) {
-            point.pos = triangle_lerp(bary, triangle.p0.as_vec3(), triangle.p1.as_vec3(), triangle.p2.as_vec3());
-            point.ng = triangle.ng.as_vec3();
-            point.PDF_pos = triangle.pdf_pos;
+        $if(triangle.pdf_pos < 0.f) {
+            // Directional entries retain an exact world direction, not UV16.
+            point.pos = triangle.p0.as_vec3();
+            point.PDF_pos = -1.f;
         } $else {
-            const Uint4 primitive = ctx.light_primitives.read(index, false);
-            point = Toolkit::geometry().compute_light_eval_context(primitive.x, primitive.y, bary);
+            $if(triangle.pdf_pos > 0.f) {
+                point.pos = triangle_lerp(bary, triangle.p0.as_vec3(), triangle.p1.as_vec3(), triangle.p2.as_vec3());
+                point.ng = triangle.ng.as_vec3();
+                point.PDF_pos = triangle.pdf_pos;
+            } $else {
+                const Uint4 primitive = ctx.light_primitives.read(index, false);
+                point = Toolkit::geometry().compute_light_eval_context(primitive.x, primitive.y, bary);
+            };
         };
     };
     if (ctx.environment_index != InvalidUI32) {
@@ -250,7 +257,7 @@ struct TriangleSample {
                                           const LightTriangleGeometryVar &triangle, LightEvalContext &point) {
     Float3 emission = triangle.emission.as_vec3();
     const auto evaluate_area = [&] {
-        $if(triangle.pdf_pos <= 0.f) {
+        $if(triangle.pdf_pos == 0.f) {
             const auto swl = Toolkit::spectrum()->sample_wavelength(Toolkit::renderer().sampler());
             const Uint4 primitive = ctx.light_primitives.read(index, false);
             Toolkit::renderer().light_sampler()->dispatch_light(primitive.z, [&](const Light *light) {
@@ -286,16 +293,27 @@ struct TriangleSample {
                                                         const Surface &surface) {
     TriangleSample sample;
     const auto area_sample = [&] {
-        const Float3 to_light = point.pos - surface.position;
-        $if(dot(to_light, point.ng) < 0.f) {
-            // RIS accounts for selecting the triangle. Keep its conditional PDF.
-            const Float pdf = vision::PDF_wi(point.PDF_pos, point.ng, surface.position - point.pos);
-            $if(pdf > 0.f && finite(pdf)) {
-                sample.distance = length(to_light);
-                sample.direction = to_light / sample.distance;
-                sample.target = point.pos;
-                sample.radiance = emission / pdf;
-                sample.pdf = pdf;
+        $if(point.PDF_pos == -1.f) {
+            // Delta direction: unit conditional mass, with no solid-angle PDF
+            // or distance attenuation. The selector PMF remains separate.
+            sample.direction = point.pos;
+            sample.distance = environment_ray_distance;
+            sample.infinite = true;
+            sample.delta = true;
+            sample.pdf = 1.f;
+            sample.radiance = emission;
+        } $else {
+            const Float3 to_light = point.pos - surface.position;
+            $if(dot(to_light, point.ng) < 0.f) {
+                // RIS accounts for selecting the triangle. Keep its conditional PDF.
+                const Float pdf = vision::PDF_wi(point.PDF_pos, point.ng, surface.position - point.pos);
+                $if(pdf > 0.f && finite(pdf)) {
+                    sample.distance = length(to_light);
+                    sample.direction = to_light / sample.distance;
+                    sample.target = point.pos;
+                    sample.radiance = emission / pdf;
+                    sample.pdf = pdf;
+                };
             };
         };
     };

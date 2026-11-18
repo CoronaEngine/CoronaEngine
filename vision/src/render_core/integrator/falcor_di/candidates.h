@@ -12,8 +12,9 @@ inline constexpr uint screen_tile_size = 16u;
 inline constexpr uint ris_point_words = 3u;
 
 [[nodiscard]] inline Float initial_mixture_pdf(const Float &light_probability, const Float &bsdf_probability,
-                                               const Float &conditional_pdf) {
-    return (float(initial_light_count) * light_probability + max(0.f, bsdf_probability / conditional_pdf)) /
+                                               const Float &conditional_pdf, const Bool &delta = false) {
+    // A continuous BSDF proposal has zero mass at a delta light direction.
+    return (float(initial_light_count) * light_probability + select(delta, 0.f, max(0.f, bsdf_probability / conditional_pdf))) /
         float(initial_candidate_count);
 }
 
@@ -78,7 +79,7 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
                                      const TriangleSample &light, const Float &u, const Float *sampled_pdf = nullptr) {
         $if(light.pdf > 0.f && reflection_supported(bsdf, wo, light.direction)) {
             const Float cosine = dot(surface.normal, light.direction);
-            const Bool bsdf_supported = use_bsdf && light.distance >= ray_epsilon;
+            const Bool bsdf_supported = use_bsdf && !light.delta && light.distance >= ray_epsilon;
             Float target = 0.f;
             Float bsdf_probability = 0.f;
             if (use_proxy) {
@@ -103,7 +104,7 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
                 }
             }
             $if(target > 0.f && finite(target)) {
-                const Float mixture_pdf = initial_mixture_pdf(light_probability, bsdf_probability, light.pdf);
+                const Float mixture_pdf = initial_mixture_pdf(light_probability, bsdf_probability, light.pdf, light.delta);
                 $if(mixture_pdf > 0.f && finite(mixture_pdf)) {
                     const Float candidate_weight = target / mixture_pdf;
                     $if(finite(candidate_weight)) {
