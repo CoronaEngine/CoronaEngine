@@ -16,6 +16,36 @@
 加上服务白名单（`project_archive` / `project_files`）；`api/editor_api.py` 的 manifest
 adapter 已随 script runtime 删除。
 
+## 生命周期
+
+```
+C++ 主线程            Script 线程（唯一 Python 消费者）         lazy 初始化线程
+─────────             ────────────────────────────             ────────────────
+initializeInterpreter  （还没跑任何业务代码）
+  Py_InitializeFromConfig
+  PyEval_SaveThread    ← GIL 交还
+                       import main → bootstrap 模块级副作用：
+                         paths → config → logging → 注册 dispatcher
+                         → plugin_loader → registry（project_files 同步 import）
+                                                             project_archive import
+                       start_runtime() → update_runtime() 每帧
+                         ├ 处理队列（≤32 条 / 4ms）
+                         ├ drain_input_events
+                         └ 重挂 faulthandler 看门狗
+begin_shutdown() ────→ 执行 LifecycleControl(shutdown)
+                         request_shutdown → shutdown_runtime
+                         registry.shutdown（2s 预算）→ stopped
+```
+
+| 状态机 | 状态 | 规则 |
+|---|---|---|
+| `CoronaEditor._runtime_state` | created → initializing → initialized → running → stop_requested → stopping → stopped | 初始化幂等；关闭是终态，`start/initialize` 返回 False，`shutdown_runtime` 复用同一快照 |
+| `LazyPythonScriptService` | cold → initializing → ready / degraded → stop_requested → stopped / stop_timeout | 未就绪时调用抛 `SERVICE_UNAVAILABLE`（可重试）；降级信息进 `event=runtime.service.degraded` |
+| 超时预算 | C++ 等待 2.5s → registry 2s → `stop_for(3s)` → `TerminateProcess` | 超时会打 `python.lifecycle.shutdown_timeout` 诊断（含 coordinator 快照与全部 Python 线程） |
+
+关闭后到达的调用被拒绝为 `SERVICE_UNAVAILABLE`，不会被误报成"未知服务"；解释器不做
+`Py_Finalize`，清理必须发生在 `shutdown_runtime` 内。
+
 ## 日志与错误
 
 - 模块日志统一用 `logging.getLogger(__name__)`；事件行统一为
