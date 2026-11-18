@@ -47,22 +47,9 @@ class WebBridgeService:
             raise BridgeError(
                 str(response.get("code") or "SERVICE_FAILED"),
                 str(response.get("error") or f"{service}.{function} failed"))
-        data = response.get("data")
-        # ProjectArchive / ProjectFiles answer a refusal in one of two shapes:
-        # {status:'error', code, message} (file ops, ProjectFiles) or
-        # {success:False, error:<code>, message} (project documents). Raise either one so
-        # the bridge rejects with that code instead of resolving a value; the C++ side
-        # then hands the same code to the Promise rejection.
-        if isinstance(data, dict):
-            if data.get("status") == "error":
-                raise BridgeError(
-                    data.get("code") or "SERVICE_FAILED",
-                    data.get("message") or f"{service}.{function} refused the request")
-            if data.get("success") is False:
-                code = data.get("code") or data.get("error") or "SERVICE_FAILED"
-                raise BridgeError(str(code),
-                                  str(data.get("message") or f"{service}.{function} refused the request"))
-        return data
+        # Refusals are raised by the services themselves (see `BridgeError`), so whatever
+        # arrives here is the service's answer and is handed back verbatim.
+        return response.get("data")
 
 class CoronaEditor:
     CoronaEngine = get_corona_engine()
@@ -93,6 +80,8 @@ class CoronaEditor:
         rejection, so no caller parses the message and no generic bucket is invented here.
         """
         try:
+            if cls._shutdown_requested:
+                raise BridgeError("SERVICE_UNAVAILABLE", "Python runtime is shutting down")
             if not isinstance(module_name, str) or not module_name:
                 raise BridgeError("INVALID_ARGUMENT", "Service name is required")
             if not isinstance(func_name, str) or not func_name:

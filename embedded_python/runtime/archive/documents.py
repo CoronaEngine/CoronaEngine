@@ -7,6 +7,7 @@ from threading import RLock
 from uuid import uuid4
 
 from runtime.archive.portable import atomic_replace
+from runtime.bridge_errors import BridgeError
 from runtime.project_context import require_project_session
 
 _lock = RLock()
@@ -20,17 +21,18 @@ def project_document(request, *, commit):
     with _lock:
         root, error = require_project_session(request)
         if error:
-            return {"success": False, "error": error["code"]}
+            raise BridgeError(error.get("code") or "SERVICE_FAILED",
+                              error.get("message") or "Project session refused")
         relative = request["document"]
         route = PureWindowsPath(relative)
         path = (root / relative).resolve()
         if (route.anchor or ".." in route.parts or path.suffix != ".json"
                 or not path.is_relative_to(root) or path == root):
-            return {"success": False, "error": "INVALID_PROJECT_DOCUMENT"}
+            raise BridgeError("INVALID_PROJECT_DOCUMENT", f"Not a project document: {relative}")
         if path == root / "assets.manifest.json" or path.is_relative_to(root / "Scripts" / "files"):
-            return {"success": False, "error": "INVALID_PROJECT_DOCUMENT"}
+            raise BridgeError("INVALID_PROJECT_DOCUMENT", f"Reserved project document: {relative}")
         if path.exists() and path.stat().st_size > _LIMIT:
-            raise ValueError("Project document exceeds size limit")
+            raise BridgeError("INVALID_ARGUMENT", "Project document exceeds size limit")
         previous = path.read_bytes().decode("utf-8") if path.exists() else ""
         # The structured bridge carries a digest; legacy non-Web callers retain
         # their raw-text version contract. Serialization stays in this owner.
@@ -45,16 +47,20 @@ def project_document(request, *, commit):
         if not commit:
             return {"success": True, token: revision, "content": parsed, "corrupt": corrupt}
         if request.get(token) != revision:
-            return {"success": False, "error": "DOCUMENT_CONFLICT"}
-        content = json.dumps(request["content"], ensure_ascii=False, indent=2, allow_nan=False)
+            raise BridgeError("DOCUMENT_CONFLICT", "Document changed since it was read")
+        try:
+            content = json.dumps(request["content"], ensure_ascii=False, indent=2, allow_nan=False)
+        except (TypeError, ValueError) as error:
+            raise BridgeError("INVALID_ARGUMENT", f"Document is not JSON: {error}") from error
         encoded = content.encode("utf-8")
         if len(encoded) > _LIMIT:
-            raise ValueError("Project document exceeds size limit")
+            raise BridgeError("INVALID_ARGUMENT", "Project document exceeds size limit")
         path.parent.mkdir(parents=True, exist_ok=True)
         if corrupt:
             atomic_replace(path.with_name(f"{path.name}.{uuid4().hex}.corrupt.json"), previous.encode("utf-8"))
         atomic_replace(path, encoded)
         return {"success": True, token: hashlib.sha256(encoded).hexdigest() if revision_only else content}
+
 
 
 def read_document(request):

@@ -138,28 +138,24 @@ def test_bridge_uses_the_dispatcher_code_and_never_parses_the_message(monkeypatc
     assert raised.value.message == "NOT_A_CODE: text stays text"
 
 
-def test_bridge_raises_a_status_error_refusal_with_its_code(monkeypatch):
-    # A refusal is raised, not returned: Web branches on error.code in one try/catch.
-    calls = []
-    refusal = {"status": "error", "code": "PROJECT_CONTEXT_CHANGED",
-               "message": "Project session is stale"}
-    _record(monkeypatch, calls, {"success": True, "data": refusal})
+def test_bridge_returns_the_service_answer_verbatim(monkeypatch):
+    # Success values are data. A payload that carries "status" or "success" keys is still
+    # data: services raise refusals, so the bridge no longer sniffs shapes.
+    answer = {"status": "success", "path": "Actors/a.actor", "success": True}
+    _record(monkeypatch, [], {"success": True, "data": answer})
+    assert WebBridgeService.call(json.dumps({
+        "service": "project_archive", "function": "file_manager", "args": [{}]})) == answer
+
+
+def test_bridge_refuses_when_the_dispatcher_reports_a_code(monkeypatch):
+    # The dispatcher envelope is the only failure channel: code + message, no body shapes.
+    _record(monkeypatch, [], {"success": False, "code": "PROJECT_CONTEXT_CHANGED",
+                              "error": "Project session is stale"})
     with pytest.raises(BridgeError) as raised:
         WebBridgeService.call(json.dumps({
-            "service": "project_archive", "function": "file_manager",
-            "args": [{"archive_session": "old", "project_path": "P:/w", "op": "delete_item", "args": [""]}]}))
+            "service": "project_archive", "function": "file_manager", "args": [{}]}))
     assert raised.value.code == "PROJECT_CONTEXT_CHANGED"
     assert raised.value.message == "Project session is stale"
-
-
-def test_bridge_raises_a_success_false_document_refusal(monkeypatch):
-    calls = []
-    refusal = {"success": False, "error": "DOCUMENT_CONFLICT"}
-    _record(monkeypatch, calls, {"success": True, "data": refusal})
-    with pytest.raises(BridgeError) as raised:
-        WebBridgeService.call(json.dumps({
-            "service": "project_archive", "function": "commit_document", "args": [{}]}))
-    assert raised.value.code == "DOCUMENT_CONFLICT"
 
 
 def test_dispatcher_keeps_a_bridge_error_code(monkeypatch):

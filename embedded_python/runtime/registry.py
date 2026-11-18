@@ -5,6 +5,7 @@ import threading
 import time
 from importlib import import_module
 
+from runtime.bridge_errors import BridgeError
 from runtime.editor_host import CoronaEditor
 
 
@@ -298,20 +299,13 @@ class LazyPythonScriptService:
                 "error": str(self._initialization_error or ""),
             }
 
-    def _unavailable_result(self, state, error):
+    def _unavailable(self, state, error):
+        """Refuse with the retryable code: the service exists but is not serving yet."""
         if state == "degraded":
-            return {
-                "success": False,
-                "status": "degraded",
-                "message": (
-                    f"{self.module_name} initialization failed: {error}"
-                ),
-            }
-        return {
-            "success": False,
-            "status": "initializing",
-            "message": f"{self.module_name} is initializing",
-        }
+            raise BridgeError(
+                "SERVICE_UNAVAILABLE",
+                f"{self.module_name} initialization failed: {error}")
+        raise BridgeError("SERVICE_UNAVAILABLE", f"{self.module_name} is initializing")
 
     def __getattr__(self, name):
         def invoke(*args, **kwargs):
@@ -322,7 +316,7 @@ class LazyPythonScriptService:
                 error = self._initialization_error
             if target is not None:
                 return getattr(target, name)(*args, **kwargs)
-            return self._unavailable_result(state, error)
+            return self._unavailable(state, error)
 
         return invoke
 
