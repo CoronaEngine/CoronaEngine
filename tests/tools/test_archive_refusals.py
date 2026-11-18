@@ -186,3 +186,18 @@ def test_an_unwritable_ini_is_a_file_operation_failure(project):
         })
 
     assert raised.value.code == "FILE_OPERATION_FAILED"
+
+
+def test_the_ui_save_consumes_settings_before_reading_the_project_info(tmp_path):
+    # The ProjectSettings panel posts `{path, settings}`; the service consumes `settings`
+    # and then reads the stored metadata back through `project_info`, whose strict key check
+    # only accepts `path`. Forwarding the original request refused every UI save.
+    from runtime.archive.project import create_project, update_metadata
+
+    created = create_project({"path": str(tmp_path / "world"), "name": "Before"})
+    saved = update_metadata({"path": created["path"],
+                             "settings": {"archive_session": "session", "name": "After",
+                                          "core_version": "2.0.0"}})
+
+    assert saved["name"] == "After"
+    assert saved["core_version"] == "2.0.0"

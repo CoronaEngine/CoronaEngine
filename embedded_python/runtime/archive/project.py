@@ -118,7 +118,10 @@ def update_metadata(request):
     fields = {k: v.strip() for k, v in request["settings"].items()
               if k in {"name", "core_version"} and isinstance(v, str) and v.strip()}
     replace_sections(path, original, {"scene": fields})
-    return project_info(request)
+    # `project_info` validates its own request shape; forward only the keys it accepts
+    # instead of the `settings` body this call consumed.
+    return project_info({"path": request["path"],
+                         **{key: request[key] for key in ("archive_session", "project_path") if key in request}})
 
 
 def validate_project(request):
