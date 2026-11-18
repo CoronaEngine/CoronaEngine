@@ -77,7 +77,7 @@ def _install_initializer_cancel_monitor(thread_id, stop_token):
                 sys.monitoring.free_tool_id(tool_id)
             except Exception:
                 pass
-            logger.exception("Unable to install Python service cancellation monitor")
+            logger.exception("event=runtime.service.cancel_monitor_failed")
 
 
 def _remove_initializer_cancel_monitor(thread_id):
