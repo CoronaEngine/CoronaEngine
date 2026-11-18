@@ -172,7 +172,7 @@ class LazyPythonScriptService:
             import_started = time.perf_counter()
             module = import_module(self._module_path)
             logger.info(
-                "Python script service %s module import finished in %.1fms thread=%s",
+                "event=runtime.service.import.finished service=%s elapsed_ms=%.1f thread=%s",
                 self.module_name,
                 (time.perf_counter() - import_started) * 1000.0,
                 worker_ident,
@@ -188,7 +188,7 @@ class LazyPythonScriptService:
                     self._target = target
                     self._state = "ready"
                 logger.info(
-                    "Python script service %s published before background initialization thread=%s",
+                    "event=runtime.service.published service=%s thread=%s",
                     self.module_name,
                     worker_ident,
                 )
@@ -201,7 +201,7 @@ class LazyPythonScriptService:
                 else:
                     initialized = initializer()
                 logger.info(
-                    "Python script service %s initialization finished in %.1fms thread=%s",
+                    "event=runtime.service.initialized service=%s elapsed_ms=%.1f thread=%s",
                     self.module_name,
                     (time.perf_counter() - initialize_started) * 1000.0,
                     worker_ident,
@@ -220,7 +220,7 @@ class LazyPythonScriptService:
                     self._target = target
                     self._state = "ready"
             logger.info(
-                "Python script service %s initialized in background",
+                "event=runtime.service.ready service=%s",
                 self.module_name,
             )
         except _ServiceInitializationCancelled:
@@ -229,12 +229,13 @@ class LazyPythonScriptService:
                 self._cleanup_target(target)
             with self._state_lock:
                 self._state = "stopped"
+            logger.info("event=runtime.service.cancelled service=%s", self.module_name)
         except Exception as error:
             with self._state_lock:
                 self._initialization_error = error
                 self._state = "degraded"
             logger.exception(
-                "Failed to initialize Python script service %s from %s.%s",
+                "event=runtime.service.degraded service=%s module=%s class=%s",
                 self.module_name,
                 self._module_path,
                 self._class_name,
@@ -354,11 +355,14 @@ def _register_python_script_services(service_names):
             _managed_services.append(service)
             _registered_service_names.add(service_name)
             registered.append(service_name)
+            logger.info(
+                "event=runtime.service.registered service=%s module=%s lazy=%s",
+                service_name, module_path, isinstance(service, LazyPythonScriptService))
             if isinstance(service, LazyPythonScriptService):
                 service.start_background_load()
         except Exception:
             logger.exception(
-                "Failed to register Python script service %s from %s.%s",
+                "event=runtime.service.register_failed service=%s module=%s class=%s",
                 service_name,
                 module_path,
                 class_name,
@@ -379,7 +383,8 @@ def shutdown_python_script_services(timeout=2.0):
         try:
             service.request_shutdown()
         except Exception:
-            logger.exception("Failed to request shutdown for %s", getattr(service, "module_name", service))
+            logger.exception("event=runtime.service.shutdown_request_failed service=%s",
+                             getattr(service, "module_name", service))
 
     deadline = time.monotonic() + max(0.0, float(timeout))
     snapshots = []
@@ -387,7 +392,8 @@ def shutdown_python_script_services(timeout=2.0):
         try:
             snapshots.append(service.shutdown(max(0.0, deadline - time.monotonic())))
         except Exception as error:
-            logger.exception("Failed to shutdown %s", getattr(service, "module_name", service))
+            logger.exception("event=runtime.service.shutdown_failed service=%s",
+                             getattr(service, "module_name", service))
             snapshots.append({
                 "service": getattr(service, "module_name", type(service).__name__),
                 "state": "error",
@@ -395,4 +401,5 @@ def shutdown_python_script_services(timeout=2.0):
                 "error": str(error),
             })
     _managed_services.clear()
+    logger.info("event=runtime.services.stopped count=%d", len(snapshots))
     return snapshots

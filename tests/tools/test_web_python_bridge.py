@@ -117,11 +117,25 @@ def test_bridge_rejects_malformed_envelopes():
             WebBridgeService.call(envelope)
 
 
-def test_bridge_surfaces_service_failures(monkeypatch):
+def test_bridge_reports_a_codeless_failure_as_service_failed(monkeypatch):
     calls = []
     _record(monkeypatch, calls, {"success": False, "error": "boom"})
-    with pytest.raises(RuntimeError, match="boom"):
+    with pytest.raises(BridgeError) as raised:
         WebBridgeService.call(json.dumps({"service": "project_archive", "function": "open_scene"}))
+    assert raised.value.code == "SERVICE_FAILED"
+    assert raised.value.message == "boom"
+
+
+def test_bridge_uses_the_dispatcher_code_and_never_parses_the_message(monkeypatch):
+    # A message that happens to look like "CODE: text" must not become the code.
+    calls = []
+    _record(monkeypatch, calls, {"success": False, "code": "READ_ONLY_PROJECT",
+                                 "error": "NOT_A_CODE: text stays text"})
+    with pytest.raises(BridgeError) as raised:
+        WebBridgeService.call(json.dumps({
+            "service": "project_archive", "function": "save", "args": [{}]}))
+    assert raised.value.code == "READ_ONLY_PROJECT"
+    assert raised.value.message == "NOT_A_CODE: text stays text"
 
 
 def test_bridge_raises_a_status_error_refusal_with_its_code(monkeypatch):
@@ -148,7 +162,7 @@ def test_bridge_raises_a_success_false_document_refusal(monkeypatch):
     assert raised.value.code == "DOCUMENT_CONFLICT"
 
 
-def test_dispatcher_prefixes_a_bridge_error_with_its_code(monkeypatch):
+def test_dispatcher_keeps_a_bridge_error_code(monkeypatch):
     class Probe:
         @staticmethod
         def refuse(*_args):
@@ -157,6 +171,34 @@ def test_dispatcher_prefixes_a_bridge_error_with_its_code(monkeypatch):
     monkeypatch.setitem(CoronaEditor.module_list, "Probe", Probe)
     assert CoronaEditor.dispatch_script_values_from_cpp("Probe", "refuse", []) == {
         "success": False, "code": "READ_ONLY_PROJECT", "error": "Project is read-only"}
+
+
+def test_dispatcher_codes_an_unknown_service(monkeypatch):
+    monkeypatch.delitem(CoronaEditor.module_list, "Nope", raising=False)
+    assert CoronaEditor.dispatch_script_values_from_cpp("Nope", "call", []) == {
+        "success": False, "code": "INVALID_ARGUMENT",
+        "error": "Unknown Python service: Nope"}
+
+
+def test_dispatcher_codes_an_unknown_function(monkeypatch):
+    class Probe:
+        pass
+
+    monkeypatch.setitem(CoronaEditor.module_list, "Probe", Probe)
+    result = CoronaEditor.dispatch_script_values_from_cpp("Probe", "missing", [])
+    assert result["success"] is False
+    assert result["code"] == "INVALID_ARGUMENT"
+
+
+def test_dispatcher_codes_an_uncaught_exception_without_prefixing_the_message(monkeypatch):
+    class Probe:
+        @staticmethod
+        def explode(*_args):
+            raise RuntimeError("kaboom")
+
+    monkeypatch.setitem(CoronaEditor.module_list, "Probe", Probe)
+    assert CoronaEditor.dispatch_script_values_from_cpp("Probe", "explode", []) == {
+        "success": False, "code": "SERVICE_FAILED", "error": "kaboom"}
 
 
 def test_register_script_dispatcher_exposes_the_bridge():

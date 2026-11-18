@@ -42,14 +42,11 @@ class WebBridgeService:
             raise PermissionError(f"Editor Web layer may not call Python service {service}")
         response = CoronaEditor.dispatch_script_values_from_cpp(service, function, args)
         if not response.get("success", False):
-            message = response.get("error") or f"{service}.{function} failed"
-            # A service refusal already carries "CODE: message"; re-raise it as a typed
-            # error so the outer dispatcher keeps the code instead of prefixing
-            # "Error processing request: " in front of it.
-            code, separator, detail = message.partition(": ")
-            if separator and code.isupper() and all(ch.isalnum() or ch == "_" for ch in code):
-                raise BridgeError(code, detail)
-            raise RuntimeError(message)
+            # The dispatcher already turned the failure into a coded refusal, and the
+            # message is human text; nothing here parses it.
+            raise BridgeError(
+                str(response.get("code") or "SERVICE_FAILED"),
+                str(response.get("error") or f"{service}.{function} failed"))
         data = response.get("data")
         # ProjectArchive / ProjectFiles answer a refusal in one of two shapes:
         # {status:'error', code, message} (file ops, ProjectFiles) or
@@ -81,24 +78,42 @@ class CoronaEditor:
     _runtime_watchdog_file = None
 
     @classmethod
+    def _report_failure(cls, service, function, code, message, *, exc_info=False):
+        """One place owns the refusal line: every failure is logged with its code."""
+        logger.error(
+            "event=bridge.call.failed service=%s function=%s code=%s message=%s",
+            service, function, code, str(message or "").replace("\n", " "),
+            exc_info=exc_info)
+
+    @classmethod
     def dispatch_script_values_from_cpp(cls, module_name, func_name, args):
-        """Invoke the existing service with owned values, without JSON transport."""
+        """Invoke a registered service with owned values, without JSON transport.
+
+        Every failure carries a ``code``: the C++ bridge forwards it to the Promise
+        rejection, so no caller parses the message and no generic bucket is invented here.
+        """
         try:
-            if not isinstance(module_name, str) or not module_name or not isinstance(func_name, str) or not func_name:
-                raise ValueError("Please input script module and function")
+            if not isinstance(module_name, str) or not module_name:
+                raise BridgeError("INVALID_ARGUMENT", "Service name is required")
+            if not isinstance(func_name, str) or not func_name:
+                raise BridgeError("INVALID_ARGUMENT", "Function name is required")
             if not isinstance(args, (list, tuple)):
-                raise TypeError("Script service arguments must be an array")
+                raise BridgeError("INVALID_ARGUMENT", "Service arguments must be an array")
             module = cls.module_list.get(module_name)
-            if module is None or not hasattr(module, func_name):
-                raise ValueError("Not find script function")
-            result = getattr(module, func_name)(*args)
-            return {"success": True, "data": result}
+            if module is None:
+                raise BridgeError("INVALID_ARGUMENT", f"Unknown Python service: {module_name}")
+            handler = getattr(module, func_name, None)
+            if not callable(handler):
+                raise BridgeError(
+                    "INVALID_ARGUMENT", f"Unknown function for {module_name}: {func_name}")
+            return {"success": True, "data": handler(*args)}
         except BridgeError as error:
-            # The code travels in "code", the same field the C++ scene layer uses;
-            # the message stays human-readable and is never parsed.
+            cls._report_failure(module_name, func_name, error.code, error.message)
             return {"success": False, "code": error.code, "error": error.message}
         except Exception as error:
-            return {"success": False, "error": f"Error processing request: {error}"}
+            cls._report_failure(module_name, func_name, "SERVICE_FAILED", str(error),
+                                exc_info=True)
+            return {"success": False, "code": "SERVICE_FAILED", "error": str(error)}
 
     @classmethod
     def register_script_dispatcher(cls):
@@ -106,12 +121,20 @@ class CoronaEditor:
         if callable(register):
             register()
         cls.module_list.setdefault("editor_bridge", WebBridgeService)
+        logger.info("event=runtime.dispatcher.registered")
 
     @classmethod
     def unregister_script_dispatcher(cls):
         unregister = getattr(cls.CoronaEngine, "unregister_python_script_service_dispatcher", None)
         if callable(unregister):
             unregister()
+        logger.info("event=runtime.dispatcher.unregistered")
+
+    @classmethod
+    def _set_state(cls, state):
+        """Record and log one lifecycle transition."""
+        cls._runtime_state = state
+        logger.info("event=runtime.lifecycle.state state=%s", state)
 
     @classmethod
     def initialize_runtime(cls):
@@ -119,9 +142,9 @@ class CoronaEditor:
             return False
         if cls._runtime_initialized:
             return True
-        cls._runtime_state = "initializing"
+        cls._set_state("initializing")
         cls._runtime_initialized = True
-        cls._runtime_state = "initialized"
+        cls._set_state("initialized")
         return True
 
     @classmethod
@@ -131,14 +154,15 @@ class CoronaEditor:
         if not cls._runtime_initialized:
             cls.initialize_runtime()
         cls._runtime_started = True
-        cls._runtime_state = "running"
+        cls._set_state("running")
         return True
 
     @classmethod
     def request_shutdown(cls):
         cls._shutdown_requested = True
+        logger.info("event=runtime.lifecycle.shutdown_requested state=%s", cls._runtime_state)
         if cls._runtime_state not in ("stopped", "stopping"):
-            cls._runtime_state = "stop_requested"
+            cls._set_state("stop_requested")
 
     @classmethod
     def checkpoint(cls):
@@ -156,7 +180,7 @@ class CoronaEditor:
         if now - last < 5.0:
             return
         logger.warning(
-            "python.lifecycle.overrun phase=%s elapsed_ms=%.2f state=%s",
+            "event=python.lifecycle.overrun phase=%s elapsed_ms=%.2f state=%s",
             phase, elapsed_ms, cls._runtime_state)
         cls._last_runtime_warning[phase] = now
 
@@ -170,23 +194,23 @@ class CoronaEditor:
                 "python_threads": [],
             }
         cls.request_shutdown()
-        cls._runtime_state = "stopping"
+        cls._set_state("stopping")
         snapshots = []
         try:
             from runtime import registry as _service_registry
             snapshots = _service_registry.shutdown_python_script_services(2.0)
             alive = [item for item in snapshots if item.get("thread_alive")]
             if alive:
-                logger.error("Python services still alive during shutdown: %s", alive)
+                logger.error("event=runtime.shutdown.services_alive services=%s", alive)
         except Exception:
-            logger.exception("Python service registry shutdown failed")
+            logger.exception("event=runtime.shutdown.registry_failed")
         try:
             cls.unregister_script_dispatcher()
         except Exception:
-            logger.exception("Python dispatcher unregister failed")
+            logger.exception("event=runtime.shutdown.unregister_failed")
         cls.module_list.clear()
         cls._runtime_started = False
-        cls._runtime_state = "stopped"
+        cls._set_state("stopped")
         cls._shutdown_snapshot = {
             "runtime_state": cls._runtime_state,
             "services": snapshots,
@@ -214,7 +238,7 @@ class CoronaEditor:
             if callable(setter):
                 setter(str(phase))
         except Exception:
-            logger.debug("Unable to update native Python runtime phase", exc_info=True)
+            logger.debug("event=runtime.phase.set_failed phase=%s", phase, exc_info=True)
 
     @classmethod
     def _cancel_runtime_watchdog(cls):
@@ -246,7 +270,7 @@ class CoronaEditor:
                 cls._runtime_watchdog_file = output_path.open(
                     "a", encoding="utf-8", buffering=1)
                 faulthandler.enable(file=cls._runtime_watchdog_file, all_threads=True)
-                logger.info("Python runtime watchdog output: %s", output_path)
+                logger.info("event=runtime.watchdog.armed path=%s", output_path)
             faulthandler.cancel_dump_traceback_later()
             faulthandler.dump_traceback_later(
                 2.0, repeat=False, file=cls._runtime_watchdog_file)
@@ -256,7 +280,7 @@ class CoronaEditor:
             if output is not None:
                 output.close()
             if not cls._runtime_watchdog_error_logged:
-                logger.exception("Unable to arm Python runtime watchdog")
+                logger.exception("event=runtime.watchdog.arm_failed")
                 cls._runtime_watchdog_error_logged = True
 
     @classmethod
@@ -277,7 +301,7 @@ class CoronaEditor:
         except RuntimeError:
             return False
         except Exception:
-            logger.exception("Input event dispatch failed")
+            logger.exception("event=runtime.input.dispatch_failed")
         cls._warn_runtime_phase(
             "input_dispatch", (_time.perf_counter() - input_start) * 1000.0, 50.0)
 

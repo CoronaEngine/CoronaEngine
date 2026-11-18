@@ -1,9 +1,10 @@
-"""Typed refusals raised by the Web bridge services.
+"""Typed refusals raised by the Python bridge services.
 
 A refusal names the business code the Web caller branches on. ``CoronaEditor.
-dispatch_script_values_from_cpp`` turns it into a ``"CODE: message"`` failure, and the
-C++ bridge extracts that prefix so the Promise rejects with the code instead of the
-generic ``SERVICE_FAILED`` bucket.
+dispatch_script_values_from_cpp`` returns it in the ``code`` field of its failure
+envelope, next to a human-readable message; the C++ bridge copies ``code`` into the
+Promise rejection and never parses the message. Codes are declared once in
+``tests/tools/rejection_codes.py`` so the guard and the contract agree.
 """
 
 

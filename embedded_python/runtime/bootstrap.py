@@ -54,4 +54,4 @@ except Exception:
 def run():
     """Signal that the embedded Python runtime is ready for editor updates."""
 
-    logging.info("Python script runtime initialized; C++ UI owns the Vue/CEF frontend tab.")
+    logging.getLogger(__name__).info("event=runtime.started")

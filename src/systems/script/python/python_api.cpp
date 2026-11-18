@@ -1,4 +1,4 @@
-﻿#define PY_SSIZE_T_CLEAN
+#define PY_SSIZE_T_CLEAN
 #include <corona/events/script_system_events.h>
 #include <horizon/core/logging.h>
 #include <corona/kernel/core/kernel_context.h>
@@ -449,7 +449,7 @@ void PythonAPI::runPythonScript() {
     auto last = last_overrun_log_ms_.load(std::memory_order_relaxed);
     if (elapsed >= 50 && now - last >= 5000 &&
         last_overrun_log_ms_.compare_exchange_strong(last, now)) {
-        CFW_LOG_WARNING("PythonAPI: python.lifecycle.overrun phase=update elapsed_ms={} state={}",
+        CFW_LOG_WARNING("event=python.lifecycle.overrun phase=update elapsed_ms={} state={}",
                         elapsed, static_cast<int>(lifecycle_.state()));
     }
 }
