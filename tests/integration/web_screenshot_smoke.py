@@ -169,10 +169,10 @@ def run(port, root, engine_pid):
         for dialog in dialogs():
             dismiss(dialog)
         if camera_view:
-            main.evaluate("corona.window.close({sceneId:'scene.ini',cameraId:'focus-camera'})")
+            main.evaluate("corona.window.close({scene_id:'scene.ini',camera_id:'focus-camera'})")
             camera_view.socket.close()
         if window_token is not None:
-            main.evaluate("corona.window.close({panelId:'SceneTools'})")
+            main.evaluate("corona.window.close({panel_id:'SceneTools'})")
         if panel:
             panel.socket.close()
         main.socket.close()

@@ -322,6 +322,6 @@ def run(port, root):
                 'oldScopeRejected': rejected, 'retiredEnvironmentRequests': 0}
     finally:
         for panel_id in opened:
-            main.evaluate(f'corona.window.close({{panelId:{json.dumps(panel_id)}}})')
+            main.evaluate(f'corona.window.close({{panel_id:{json.dumps(panel_id)}}})')
         for client in clients:
             client.socket.close()

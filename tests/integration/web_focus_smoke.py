@@ -197,7 +197,9 @@ def run(port, root, engine_pid):
                               + "),r=el.getBoundingClientRect();el.dispatchEvent(new MouseEvent('click',"
                                 "{bubbles:true,detail:1,clientX:" + json.dumps(point['x'])
                               + ",clientY:" + json.dumps(point['y']) + "}));return true;})()")
-            inputs = wait(lambda: document.evaluate('window.__scriptInputs'), bool, f'{source} scoped script click')
+            inputs = wait(lambda: document.evaluate('window.__scriptInputs'),
+                          lambda values: any(call['args'][2].get('event') == 'click' for call in values),
+                          f'{source} scoped script click')
             clicks = [call for call in inputs if call['args'][2].get('event') == 'click']
             assert len(clicks) == 1, inputs
             assert clicks[0]['args'][0:2] == ['scene.ini', camera_id], clicks
@@ -254,8 +256,8 @@ def run(port, root, engine_pid):
         # owning runner still retires this launch's complete process tree.
         failed = sys.exc_info()[0] is not None
         cleanup_errors = []
-        for expression in (["corona.window.close({sceneId:'scene.ini',cameraId:'focus-camera'})"] if camera_view else []) + (
-                ["corona.window.close({panelId:'SceneTools'})"] if window_token is not None else []):
+        for expression in (["corona.window.close({scene_id:'scene.ini',camera_id:'focus-camera'})"] if camera_view else []) + (
+                ["corona.window.close({panel_id:'SceneTools'})"] if window_token is not None else []):
             try:
                 main.evaluate(expression)
             except Exception as error:

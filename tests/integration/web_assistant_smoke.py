@@ -293,7 +293,7 @@ def run(port, root):
                 except Exception:
                     pass
             for panel in opened:
-                main.evaluate(f'corona.window.close({{panelId:{json.dumps(panel)}}})')
+                main.evaluate(f'corona.window.close({{panel_id:{json.dumps(panel)}}})')
         finally:
             for client in clients:
                 client.socket.close()
