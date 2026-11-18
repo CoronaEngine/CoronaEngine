@@ -219,6 +219,73 @@ public:
     return weight * saturate(1 - max_comp);
 }
 
+[[nodiscard]] inline BSDFSample gi_ideal_metallic_branch(const SampledWavelengths &swl,
+                                                       const Float3 &wo,
+                                                       const SampledSpectrum &weight) noexcept {
+    BSDFSample ret{swl};
+    ret.wi = make_float3(-wo.x, -wo.y, wo.z);
+    $if(abs_cos_theta(ret.wi) >= 1e-6f) {
+        ret.eval.f = weight / abs_cos_theta(ret.wi);
+        ret.eval.pdfs = 1.f;
+        ret.eval.flags = BxDFFlag::SpecRefl;
+        ret.stable_lobe_index = StableLobes::reflection_index;
+    };
+    return ret;
+}
+
+// GI Build and Fill must use the same discrete measure for pure mirrors.
+// The ordinary NearSpec GGX closure remains unchanged outside the GI scope.
+class GIIdealMetallicLobe final : public MetallicLobe {
+private:
+    Bool ideal_;
+
+protected:
+    [[nodiscard]] ScatterEval evaluate_local_impl(const Float3 &wo, const Float3 &wi,
+                                                  MaterialEvalMode mode, const Uint &flags,
+                                                  TransportMode tm) const noexcept override {
+        ScatterEval ret{*swl()};
+        $if(!ideal_) { ret = MetallicLobe::evaluate_local_impl(wo, wi, mode, flags, tm); };
+        return ret;
+    }
+
+public:
+    GIIdealMetallicLobe(const SP<Fresnel> &fresnel, UP<MicrofacetBxDF> reflection,
+                        const Uint &flag, const Bool &ideal, const ShadingFrame &frame)
+        : MetallicLobe(fresnel, std::move(reflection), flag, frame), ideal_(ideal) {}
+    VS_MAKE_LOBE_ASSIGNMENT(GIIdealMetallicLobe)
+    [[nodiscard]] bool supports_prepared_local_evaluation() const noexcept override { return false; }
+    [[nodiscard]] const MicrofacetReflection *prepared_reflection_pdf() const noexcept override { return nullptr; }
+    [[nodiscard]] Uint flag() const noexcept override {
+        return select(ideal_, Uint{BxDFFlag::SpecRefl}, MetallicLobe::flag());
+    }
+    [[nodiscard]] Bool supports_stable_reflection(const Float3 &wo) const noexcept override { return ideal_; }
+    [[nodiscard]] BSDFSample sample_delta_local(const Float3 &wo, TSampler &sampler) const noexcept override {
+        BSDFSample ret{*swl()};
+        $if(ideal_) { ret = gi_ideal_metallic_branch(*swl(), wo, albedo(abs_cos_theta(wo))); };
+        return ret;
+    }
+    [[nodiscard]] StableLobes eval_stable_lobes(const Float3 &wo) const noexcept override {
+        StableLobes ret{*swl()};
+        $if(ideal_) {
+            ret.has_stochastic_remainder = false;
+            auto sample = gi_ideal_metallic_branch(*swl(), wo, albedo(abs_cos_theta(wo)));
+            auto &branch = ret.lobes[StableLobes::reflection_index];
+            $if(sample.valid()) {
+                branch.wi = sample.wi;
+                branch.probability = sample.eval.pdf();
+                branch.weight = sample.eval.f * abs_cos_theta(sample.wi);
+                branch.valid = true;
+            };
+        };
+        return ret;
+    }
+    void reuse_material(SampledSpectrum &diffuse, SampledSpectrum &specular,
+                        Float2 &roughness) const noexcept override {
+        MetallicLobe::reuse_material(diffuse, specular, roughness);
+        roughness = select(ideal_, make_float2(0.f), roughness);
+    }
+};
+
 // Created only by the lexical GI material path. Mixed and rough closures keep
 // the complete Corona dielectric; only complete ideal glass changes measure.
 class GIIdealDielectricLobe final : public DielectricLobe {
@@ -314,7 +381,7 @@ public:
     [[nodiscard]] Uint flag() const noexcept override {
         if (ideal_glass_) {
             return select(*ideal_glass_, Uint{BxDFFlag::SpecRefl | BxDFFlag::SpecTrans},
-                          select(stable_lobe_ != InvalidUI32, Uint{SurfaceData::NearSpec}, LobeSet::flag()));
+                          select(stable_lobe_ != InvalidUI32, Uint{BxDFFlag::SpecRefl}, LobeSet::flag()));
         }
         return select(stable_lobe_ != InvalidUI32, SurfaceData::NearSpec, LobeSet::flag());
     }
@@ -791,9 +858,17 @@ public:
                 fresnel_f82->init_from_F82(specular_tint);
                 UP<MicrofacetReflection> metal_refl = make_unique<MicrofacetReflection>(weight * metallic,
                                                                                         swl, microfacet);
+                // Cache the original measure: FP16 can round mixed metal or
+                // nonzero layer weights into an apparently pure mirror.
+                Bool ideal_metal = gi_principled::reading()
+                    ? (gi_principled::flags() & gi_principled::IdealMetalBit) != 0u
+                    : stable_layers && metallic == 1.f && flag == SurfaceData::NearSpec;
+                if (gi_principled::writing()) gi_principled::set_flags(gi_principled::flags() |
+                    select(ideal_metal, gi_principled::IdealMetalBit, 0u));
                 WeightedLobe metal_lobe(metallic * weight.average(),
-                                        make_unique<MetallicLobe>(fresnel_f82, std::move(metal_refl), flag, shading_frame));
-                stable_lobe = select(stable_layers && metallic == 1.f && flag == SurfaceData::NearSpec,
+                                        make_unique<GIIdealMetallicLobe>(fresnel_f82, std::move(metal_refl),
+                                                                        flag, ideal_metal, shading_frame));
+                stable_lobe = select(ideal_metal,
                                      uint(lobes.size()), stable_lobe);
                 lobes.push_back(std::move(metal_lobe));
                 weight *= (1.0f - metallic);

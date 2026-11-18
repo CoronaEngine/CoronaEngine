@@ -61,7 +61,7 @@ struct PTSurfaceView {
         PTSurfaceView rough = *this;
         rough.parameters[0].w = max(rough.parameters[0].w, minimum_roughness);
         rough.parameters[5].w = as<float>(as<uint>(rough.parameters[5].w) &
-            ~(gi_principled::BaseNearBit | gi_principled::IdealGlassBit));
+            ~(gi_principled::BaseNearBit | gi_principled::IdealGlassBit | gi_principled::IdealMetalBit));
         return rough.f(wi, swl);
     }
     [[nodiscard]] PTEval evaluate(const Float3 &wi, const SampledWavelengths &swl) const noexcept {
