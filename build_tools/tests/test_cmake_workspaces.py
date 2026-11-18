@@ -42,8 +42,10 @@ def workspace_build(tmp_path):
             "from dataclasses import replace\n"
             "from build_tools.source_workspaces import HORIZON, EDITOR\n"
             "WORKSPACES = (\n"
-            f"    replace(HORIZON, url={origin.as_posix()!r}, commit={horizon!r}),\n"
-            f"    replace(EDITOR, url={origin.as_posix()!r}, commit={editor!r}),\n"
+            # The fixture origin only carries this synthetic `main`. The real pins may
+            # name a feature branch, which the fixture cannot fetch.
+            f"    replace(HORIZON, url={origin.as_posix()!r}, ref='main', commit={horizon!r}),\n"
+            f"    replace(EDITOR, url={origin.as_posix()!r}, ref='main', commit={editor!r}),\n"
             ")\n",
             encoding="utf-8",
         )
