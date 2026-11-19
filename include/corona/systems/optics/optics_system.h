@@ -133,6 +133,7 @@ class OpticsSystem : public Kernel::SystemBase {
         std::uintptr_t scene_handle{};
         std::uintptr_t camera_handle{};
         CameraVisionRenderMode vision_mode{CameraVisionRenderMode::PathTracing};
+        bool participating_media{false};
     };
     struct LockedRenderView {
         SharedDataHub::SceneStorage::ReadHandle scene;
@@ -187,7 +188,8 @@ class OpticsSystem : public Kernel::SystemBase {
                                    const std::string& relax_settings = "{}",
                                    const std::string& pt_settings = "{}",
                                    const std::string& restir_settings = "{}",
-                                   VisionCameraFeedback* deferred_feedback = nullptr);
+                                   VisionCameraFeedback* deferred_feedback = nullptr,
+                                   std::size_t imported_media_count = 0);
     VisionPipelineKey make_vision_pipeline_key(Corona::CameraVisionRenderMode mode) const;
     std::shared_ptr<VisionSceneResource> get_or_create_vision_scene_resource();
     void release_unused_vision_scene_resources();
@@ -198,6 +200,8 @@ class OpticsSystem : public Kernel::SystemBase {
 
     void apply_vision_render_mode(Corona::CameraVisionRenderMode mode);
     bool load_engine_built_vision_scene(Corona::CameraVisionRenderMode mode);
+    bool initialize_engine_built_vision_runtime(VisionPipelineRuntime& runtime,
+                                                const VisionPipelineKey& key);
 
     /// 计算当前 SharedDataHub 场景的轻量签名，用于检测动态变化
     /// （几何拓扑 / transform / 材质参数 / materialColor / visible）。
@@ -365,14 +369,10 @@ class OpticsSystem : public Kernel::SystemBase {
     bool vision_initialized_{false};
 
     // ---- Vision 动态场景同步（脏标记 + 去抖全量重建）----
-    std::size_t vision_applied_signature_{0};   ///< 已同步到 Vision 的场景签名基线
-    std::size_t vision_pending_signature_{0};   ///< 最近一次检测到的（可能仍在变化的）签名
-    uint32_t vision_stable_frames_{0};          ///< 签名保持稳定的连续帧数，用于去抖
     static constexpr uint32_t kVisionRebuildDebounceFrames = 3;  ///< 稳定该帧数后才重建
 
     // Incomplete builds never advance the applied signature. Repeated failures
     // back off to a five-second retry while preserving the last complete scene.
-    uint32_t vision_rebuild_retries_{0};        ///< 数据未就绪导致的连续重试次数
     static constexpr uint32_t kVisionRebuildMaxRetries = 30;  ///< 重试上限（约 0.5s @60fps）
 
     // ---- Vision 外部场景加载（跨线程：事件写请求，渲染线程消费）----

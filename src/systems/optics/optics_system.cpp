@@ -80,6 +80,7 @@
 #include "vision/vision_camera_adapter.h"
 #include "vision/vision_diagnostic_adapter.h"
 #include "vision/vision_light_adapter.h"
+#include "vision/vision_medium_adapter.h"
 #include "vision/vision_render_mode_config.h"
 #include "vision/vision_interop_lifetime.h"
 #include "vision/vision_zero_copy_bridge.h"
@@ -1634,7 +1635,8 @@ void bind_pipeline_scene_resource_early(
 
 [[nodiscard]] auto create_vision_pipeline(
     Corona::CameraVisionRenderMode mode,
-    const std::shared_ptr<Corona::Systems::Vision::VisionSceneResource>& scene_resource = {})
+    const std::shared_ptr<Corona::Systems::Vision::VisionSceneResource>& scene_resource,
+    bool participating_media = false)
     -> ocarina::SP<vision::Pipeline> {
     auto project_desc = make_default_vision_project_desc();
     project_desc.renderer_desc.integrator_desc.sub_type =
@@ -1644,6 +1646,9 @@ void bind_pipeline_scene_resource_early(
         Corona::Systems::Vision::configure_vision_scene_for_mode(data, mode);
         project_desc.renderer_desc.integrator_desc.init(
             vision::ParameterSet{data["render"]["integrator"]});
+    } else if (participating_media) {
+        project_desc.renderer_desc.integrator_desc.init(vision::ParameterSet{
+            vision::DataWrap{{"type", "pt"}, {"param", {{"participating_media", true}}}}});
     }
     if (mode != Corona::CameraVisionRenderMode::SSAT) {
         project_desc.pipeline_desc.frame_buffer_desc.init(vision::ParameterSet{
@@ -1733,8 +1738,25 @@ struct VisionModeSelection {
 template<typename Views>
 [[nodiscard]] VisionModeSelection select_vision_render_mode(const Views& views) {
     VisionModeSelection selection;
-    for (const auto& view : views) selection.add(view.camera_handle, view.vision_mode);
+    for (const auto& view : views)
+        if (!view.participating_media) selection.add(view.camera_handle, view.vision_mode);
     return selection;
+}
+
+[[nodiscard]] bool camera_uses_vision_media(const Corona::CameraDevice& camera) {
+    using namespace Corona::Systems::Vision;
+    if (!vision_media_enabled(camera.vision_render_mode, camera.vision_accumulation,
+                              camera.vision_denoise, true)) return false;
+    const auto settings = vision::DataWrap::parse(camera.vision_pt_settings, nullptr, false);
+    const auto requested = settings.find("participating_media");
+    return requested != settings.end() && requested->is_boolean() && requested->get<bool>();
+}
+
+void add_vision_media_feedback(vision::DataWrap& settings, std::size_t imported_media_count,
+                               std::size_t boundary_count, bool enabled) {
+    settings["imported_media_count"] = imported_media_count;
+    settings["medium_boundary_count"] = boundary_count;
+    settings["media_enabled"] = enabled;
 }
 
 [[nodiscard]] std::optional<Corona::CameraDevice> active_scene_camera_values() {
@@ -1904,7 +1926,9 @@ void log_vision_pipeline_diagnostics(vision::Pipeline& pipeline,
 
 std::string describe_vision_pipeline_key(
     const Corona::Systems::Vision::VisionPipelineKey& key) {
-    return std::string(Corona::Systems::Vision::vision_render_mode_name(key.mode));
+    auto name = std::string(Corona::Systems::Vision::vision_render_mode_name(key.mode));
+    if (key.participating_media) name += " with participating media";
+    return name;
 }
 
 
@@ -2078,6 +2102,10 @@ struct OpticsSystem::VisionPipelineRuntime {
     uint64_t scene_gpu_transform_version{0};
     bool engine_geometry_ready{false};
     bool engine_geometry_available{false};
+    bool participating_media{false};
+    std::size_t applied_signature{0};
+    std::size_t pending_signature{0};
+    uint32_t rebuild_retries{0};
     Vision::VisionGeometrySyncDebounce geometry_debounce;
     std::optional<Vision::VisionLightingState> engine_lighting;
     std::chrono::steady_clock::time_point next_geometry_retry{};
@@ -2254,7 +2282,8 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
                                             const std::string& relax_settings,
                                             const std::string& pt_settings,
                                             const std::string& restir_settings,
-                                            VisionCameraFeedback* deferred_feedback) {
+                                            VisionCameraFeedback* deferred_feedback,
+                                            std::size_t imported_media_count) {
     vision::switch_profile::Scope profile{"view.prepare", "view"};
     auto& pipeline = runtime.pipeline;
     if (!pipeline || camera_handle == 0) return false;
@@ -2314,16 +2343,28 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
         runtime.mode == CameraVisionRenderMode::ProgressivePathTracing) {
         auto* integrator = pipeline->renderer().integrator().get();
         const auto &json = is_restir ? restir_settings : pt_settings;
-        const auto overrides = vision::DataWrap::parse(json, nullptr, false);
+        auto overrides = vision::DataWrap::parse(json, nullptr, false);
+        if (!is_restir) {
+            if (!overrides.is_object()) overrides = vision::DataWrap::object();
+            overrides["participating_media"] = runtime.participating_media;
+            if (!runtime.participating_media && overrides.contains("medium_diagnostics"))
+                overrides["medium_diagnostics"] = false;
+        }
         const bool changed = integrator->set_settings(overrides);
         if (changed) pipeline->invalidate();
         if (is_restir) {
             if (Vision::validate_restir_settings(overrides).empty()) {
-                feedback.restir_effective = integrator->settings().dump();
+                auto effective = integrator->settings();
+                add_vision_media_feedback(effective, imported_media_count, 0, false);
+                feedback.restir_effective = effective.dump();
                 feedback.restir_applied = json;
             }
-        } else if (view_created || changed) {
-            feedback.pt_effective = integrator->settings().dump();
+        } else {
+            auto effective = integrator->settings();
+            add_vision_media_feedback(effective, imported_media_count,
+                                      pipeline->scene().geometry().boundary_count(),
+                                      runtime.participating_media);
+            feedback.pt_effective = effective.dump();
         }
     }
     if (auto* illumination = dynamic_cast<vision::IlluminationIntegrator*>(pipeline->renderer().integrator().get())) {
@@ -2407,12 +2448,15 @@ OpticsSystem::VisionPipelineRuntime& OpticsSystem::get_or_create_runtime(
     auto [it, inserted] = vision_runtimes_.try_emplace(key);
     if (inserted || !it->second) {
         it->second = std::make_unique<VisionPipelineRuntime>();
-        it->second->scene_resource = get_or_create_vision_scene_resource();
+        it->second->scene_resource = key.participating_media
+            ? std::make_shared<VisionSceneResource>() : get_or_create_vision_scene_resource();
         it->second->mode = key.mode;
+        it->second->participating_media = key.participating_media;
         CFW_LOG_INFO("OpticsSystem: created Vision runtime ({})",
                      describe_vision_pipeline_key(key));
     } else if (!it->second->scene_resource) {
-        it->second->scene_resource = get_or_create_vision_scene_resource();
+        it->second->scene_resource = key.participating_media
+            ? std::make_shared<VisionSceneResource>() : get_or_create_vision_scene_resource();
     }
     it->second->interop_executor = hardware_ ? &hardware_->executor : nullptr;
     return *it->second;
@@ -2462,7 +2506,7 @@ void OpticsSystem::activate_single_vision_runtime_key(const VisionPipelineKey& k
     }
 
     for (auto it = vision_runtimes_.begin(); it != vision_runtimes_.end();) {
-        if (it->first == key) {
+        if (it->first == key || it->first.participating_media) {
             ++it;
             continue;
         }
@@ -3364,7 +3408,9 @@ OpticsSystem::RenderFramePlan OpticsSystem::build_render_frame_plan() {
             if (!scheduled.insert(handle).second) continue;
             auto& views = camera->render_backend == CameraRenderBackend::Vision
                 ? plan.vision_views : plan.native_views;
-            views.push_back({scene_handle, handle, camera->vision_render_mode});
+            const bool media = camera->render_backend == CameraRenderBackend::Vision &&
+                               camera_uses_vision_media(*camera);
+            views.push_back({scene_handle, handle, camera->vision_render_mode, media});
         }
     }
     return plan;
@@ -5777,6 +5823,8 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
 
     const auto mix_scene = [&](const SceneDevice& scene_dev) {
         if (!scene_dev.enabled) return;
+        mix(scene_dev.authored_media_revision);
+        mix(reinterpret_cast<std::size_t>(scene_dev.authored_media.get()));
         for (auto actor_handle : scene_dev.actor_handles) {
             auto actor = actor_storage.try_acquire_read(actor_handle);
             if (!actor) continue;
@@ -5795,6 +5843,7 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
                 // Material parameters bridged into the Vision principled BSDF.
                 mix(optics->principled ? optics->principled->revision : 0u);
                 mix(reinterpret_cast<std::size_t>(optics->material_overrides.get()));
+                mix(reinterpret_cast<std::size_t>(optics->medium_interface.get()));
                 mix_float(optics->metallic);
                 mix_float(optics->roughness);
                 mix_float(optics->subsurface);
@@ -5874,6 +5923,7 @@ Vision::VisionBuildResult OpticsSystem::rebuild_vision_scene(VisionPipelineRunti
     auto& pipeline = runtime.pipeline;
     if (!pipeline) return result;
     try {
+        pipeline->activate_global_context();
         runtime.wait_for_geometry_users();
         pipeline->activate_view_context(0u);
         auto& scene = pipeline->scene();
@@ -5914,26 +5964,24 @@ Vision::VisionBuildResult OpticsSystem::rebuild_vision_scene(VisionPipelineRunti
 void OpticsSystem::sync_vision_dynamic_scene(VisionPipelineRuntime& runtime) {
     if (!vision_initialized_) return;
     const std::size_t sig = compute_vision_scene_signature();
-    const bool revision_changed = sig != vision_pending_signature_;
+    const bool revision_changed = sig != runtime.pending_signature;
     if (revision_changed) {
-        vision_pending_signature_ = sig;
-        vision_stable_frames_ = 0;
-        vision_rebuild_retries_ = 0;
+        runtime.pending_signature = sig;
+        runtime.rebuild_retries = 0;
         runtime.engine_geometry_ready = false;
         runtime.next_geometry_retry = {};
     }
-    if (runtime.engine_geometry_ready && sig == vision_applied_signature_) {
+    if (runtime.engine_geometry_ready && sig == runtime.applied_signature) {
         runtime.geometry_debounce.reset();
         return;
     }
     const auto now = std::chrono::steady_clock::now();
     if (now < runtime.next_geometry_retry || !runtime.geometry_debounce.poll(revision_changed, now)) return;
     runtime.geometry_debounce.reset();
-    vision_stable_frames_ = 0;
     const auto result = rebuild_vision_scene(runtime);
     if (result.complete()) {
-        vision_applied_signature_ = sig;
-        vision_rebuild_retries_ = 0;
+        runtime.applied_signature = sig;
+        runtime.rebuild_retries = 0;
         runtime.engine_geometry_available = true;
         // Edits during CPU staging/GPU compilation still need a later snapshot.
         // Interactive views may display this complete snapshot; captures wait.
@@ -5942,12 +5990,12 @@ void OpticsSystem::sync_vision_dynamic_scene(VisionPipelineRuntime& runtime) {
                      result.candidate_count, result.instance_count);
     } else {
         runtime.engine_geometry_ready = false;
-        ++vision_rebuild_retries_;
+        ++runtime.rebuild_retries;
         // Preserve the last complete scene; never accept a partial build as the
         // new baseline. Back off instead of recompiling indefinitely at frame rate.
         runtime.next_geometry_retry = now + std::chrono::seconds(
-            vision_rebuild_retries_ < kVisionRebuildMaxRetries ? 1 : 5);
-        if (vision_rebuild_retries_ == 1 || vision_rebuild_retries_ == kVisionRebuildMaxRetries) {
+            runtime.rebuild_retries < kVisionRebuildMaxRetries ? 1 : 5);
+        if (runtime.rebuild_retries == 1 || runtime.rebuild_retries == kVisionRebuildMaxRetries) {
             CFW_LOG_WARNING("Vision bridge waiting: candidates={}, pending={}, invalid={}; no partial frame published",
                             result.candidate_count, result.skipped_no_data, result.invalid_data);
         }
@@ -6014,57 +6062,10 @@ bool OpticsSystem::init_vision_lazy() {
         vision::Global::instance().set_scene_path(std::filesystem::current_path());
 
         const auto key = make_vision_pipeline_key(current_vision_render_mode_);
-        auto scene_resource = get_or_create_vision_scene_resource();
-        auto pipeline = create_vision_pipeline(current_vision_render_mode_, scene_resource);
-        if (!pipeline) {
-            CFW_LOG_ERROR("OpticsSystem: Failed to create Vision pipeline without external scene import");
-            return false;
-        }
-        bind_pipeline_scene_gpu_resource(*pipeline,
-                                         *scene_resource,
-                                         current_vision_render_mode_);
-
-        // Populate Vision scene directly from CoronaEngine scene data.
-        auto& scene = pipeline->scene();
-        const auto build_signature = compute_vision_scene_signature();
-        const auto build_result = Vision::build_vision_geometry(scene);
-        sync_logical_instances_from_pipeline_scene(*scene_resource, scene);
-
-        // The adapter keeps a valid background entry even when it is black.
-        // No environment in Corona must never imply bright default lighting.
-        const auto env = engine_vision_environment();
-        Vision::setup_vision_lights(scene, env);
-
-        pipeline->prepare();
-
-        // Camera contexts prepare their own pixel buffers and display texture.
-        // The embedded base view only supplies scene data until actually used.
-
-        // sync_vision_camera uploads to GPU device buffers. Those device buffers are
-        // only allocated during Pipeline::prepare() (Scene::prepare -> Sensor::prepare
-        // -> EncodedObject::prepare_data -> reset_device_buffer). Running it
-        // before prepare() uploads into unallocated device memory and crashes the
-        // Vulkan device deterministically.
-        if (const auto camera = active_scene_camera_values()) {
-            Vision::sync_vision_camera(*pipeline, *camera);
-        }
-
+        auto& runtime = get_or_create_runtime(key);
+        if (!initialize_engine_built_vision_runtime(runtime, key)) return false;
         activate_single_vision_runtime_key(key);
-        auto& runtime = active_vision_runtime();
-        runtime.reset_pipeline(std::move(pipeline),
-                               current_vision_render_mode_);
         vision_initialized_ = true;
-
-        // Establish the dynamic-scene signature baseline so subsequent edits are
-        // detected as changes against the initially-built scene.
-        const auto current_signature = compute_vision_scene_signature();
-        runtime.engine_geometry_available = build_result.complete();
-        runtime.engine_geometry_ready = build_result.complete() && current_signature == build_signature;
-        runtime.engine_lighting = Vision::make_vision_lighting_state(env);
-        vision_applied_signature_ = build_result.complete() ? build_signature : 0;
-        vision_pending_signature_ = current_signature;
-        vision_stable_frames_ = 0;
-
         return true;
     } catch (const std::exception& e) {
         CFW_LOG_ERROR("OpticsSystem: Vision init failed: {}", e.what());
@@ -6085,6 +6086,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
             if (!pipeline) {
                 return;
             }
+            pipeline->activate_global_context();
 
             for (auto it = runtime.bridges.begin(); it != runtime.bridges.end();) {
                 if (active_contexts.contains(it->first)) {
@@ -6159,10 +6161,13 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
             const auto cam_handle = view.camera_handle;
             const auto& camera = locked.camera;
             const auto environment = vision_environment_for_scene(*locked.scene);
+            const auto imported_media_count = locked.scene->authored_media
+                ? locked.scene->authored_media->at("mediums").size() : 0u;
             auto& pipeline = runtime.pipeline;
             if (!pipeline) {
                 return;
             }
+            pipeline->activate_global_context();
 
             if ((!runtime.engine_geometry_available ||
                  (has_pending_screenshot(cam_handle) && !runtime.engine_geometry_ready))) return;
@@ -6181,7 +6186,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                                                camera.width, camera.height, denoise,
                                                camera.vision_accumulation, camera.vision_stable_planes, camera.vision_denoiser,
                                                camera.vision_reblur_settings, camera.vision_relax_settings, camera.vision_pt_settings,
-                                               camera.vision_restir_settings, &feedback)) {
+                                               camera.vision_restir_settings, &feedback, imported_media_count)) {
                     return;
                 }
 
@@ -6299,6 +6304,12 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                     stage_timings.flush();
                     if (!stage_timings) throw std::runtime_error("Cannot write screenshot stage CSV");
                 }
+                if (runtime.participating_media && capture) {
+                    auto effective = pipeline->renderer().integrator()->settings();
+                    add_vision_media_feedback(effective, imported_media_count,
+                                              pipeline->scene().geometry().boundary_count(), true);
+                    feedback.pt_effective = effective.dump();
+                }
                 const auto render_end = profile_now();
                 // display() already waits for GPU completion. Reuse its timing without
                 // adding a synchronization or including cross-API presentation work.
@@ -6377,6 +6388,11 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                 hardware_->last_receipt = vision_submit_receipt;
                 runtime.interop_submissions.insert_or_assign(cam_handle, vision_submit_receipt);
 
+                if (runtime.participating_media && capture) {
+                    // The screenshot response allows the caller to query these
+                    // counters immediately, so publish before resolving it.
+                    publish_vision_camera_feedback(cam_handle, feedback);
+                }
                 process_pending_screenshots(cam_handle, *presented);
                 if (!surface) return;
 
@@ -6440,7 +6456,8 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
         };
 
     auto render_vision_camera = [&](VisionPipelineRuntime& runtime, const RenderView& view,
-                                     std::unordered_set<std::uintptr_t>& active_contexts) {
+                                     std::unordered_set<std::uintptr_t>& active_contexts,
+                                     const VisionPipelineKey& key) {
         const bool profile_frame = env_flag_enabled("CORONA_VISION_FRAME_PROFILE");
         const auto start = profile_frame ? std::chrono::steady_clock::now()
                                          : std::chrono::steady_clock::time_point{};
@@ -6449,7 +6466,11 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
         {
             auto locked = lock_render_view(view, CameraRenderBackend::Vision);
             if (profile_frame) acquired = std::chrono::steady_clock::now();
-            if (!locked || locked->camera.vision_render_mode != view.vision_mode) return;
+            if (!locked || locked->camera.vision_render_mode != view.vision_mode ||
+                camera_uses_vision_media(locked->camera) != runtime.participating_media) return;
+            if (key.participating_media &&
+                (locked->scene->authored_media != key.authored_media ||
+                 locked->scene->authored_media_revision != key.authored_media_revision)) return;
             render_locked_vision_camera(runtime, view, *locked, active_contexts, feedback);
         }
         const auto feedback_start = profile_frame ? std::chrono::steady_clock::now() : start;
@@ -6480,40 +6501,66 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
         apply_vision_render_mode(mode_selection.mode);
     }
 
-    auto& runtime = active_vision_runtime();
-    auto& pipeline = runtime.pipeline;
-    if (!pipeline) return;
+    auto& surface_runtime = active_vision_runtime();
 
     if (mode_selection.has_visible_camera) {
-        sync_vision_dynamic_scene(runtime);
+        sync_vision_dynamic_scene(surface_runtime);
     }
 
-    runtime.last_used_frame = frame_index;
-    std::unordered_set<std::uintptr_t> active_contexts;
+    std::unordered_map<VisionPipelineRuntime*, std::unordered_set<std::uintptr_t>> active_contexts;
+    active_contexts.try_emplace(&surface_runtime);
     for (const auto& view : views) {
-        render_vision_camera(runtime, view, active_contexts);
+        auto* runtime = &surface_runtime;
+        VisionPipelineKey key{view.vision_mode, view.participating_media};
+        if (view.participating_media) {
+            {
+                auto scene = SharedDataHub::instance().scene_storage().try_acquire_read(view.scene_handle);
+                if (!scene || !scene->enabled) continue;
+                key.authored_media = scene->authored_media;
+                key.authored_media_revision = scene->authored_media_revision;
+            }
+            runtime = &get_or_create_runtime(key);
+            if (!runtime->pipeline && !initialize_engine_built_vision_runtime(*runtime, key)) {
+                fail_pending_screenshots(view.camera_handle);
+                continue;
+            }
+            if (!active_contexts.contains(runtime)) sync_vision_dynamic_scene(*runtime);
+        }
+        runtime->last_used_frame = frame_index;
+        render_vision_camera(*runtime, view, active_contexts[runtime], key);
     }
 
-    cleanup_runtime_contexts(runtime, active_contexts);
+    for (auto& [runtime, contexts] : active_contexts) cleanup_runtime_contexts(*runtime, contexts);
+    // Old media revisions and disabled views must release their histories.
+    for (auto it = vision_runtimes_.begin(); it != vision_runtimes_.end();) {
+        if (it->first.participating_media && !active_contexts.contains(it->second.get())) {
+            it->second->commit_and_clear_contexts();
+            it = vision_runtimes_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (surface_runtime.pipeline) surface_runtime.pipeline->activate_global_context();
     evict_idle_vision_runtimes(frame_index);
 }
 
 
-bool OpticsSystem::load_engine_built_vision_scene(CameraVisionRenderMode requested_mode) {
+bool OpticsSystem::initialize_engine_built_vision_runtime(VisionPipelineRuntime& runtime,
+                                                         const VisionPipelineKey& key) {
     auto previous_pipeline = vision::Global::instance().pipeline_shared();
     try {
-        const auto key = make_vision_pipeline_key(requested_mode);
-        auto scene_resource = get_or_create_vision_scene_resource();
-        auto pipeline = create_vision_pipeline(requested_mode, scene_resource);
+        const auto& scene_resource = runtime.scene_resource;
+        auto pipeline = create_vision_pipeline(key.mode, scene_resource, key.participating_media);
         if (!pipeline) {
             CFW_LOG_ERROR("OpticsSystem: failed to recreate engine-built Vision pipeline");
             if (previous_pipeline) previous_pipeline->activate_global_context();
             return false;
         }
-        bind_pipeline_scene_gpu_resource(*pipeline,
-                                         *scene_resource,
-                                         requested_mode);
+        bind_pipeline_scene_gpu_resource(*pipeline, *scene_resource, key.mode);
         auto& scene = pipeline->scene();
+        if (key.participating_media) {
+            Vision::configure_vision_media(scene, key.authored_media.get(), true);
+        }
         const auto build_signature = compute_vision_scene_signature();
         const auto build_result = Vision::build_vision_geometry(scene);
         sync_logical_instances_from_pipeline_scene(*scene_resource, scene);
@@ -6521,42 +6568,45 @@ bool OpticsSystem::load_engine_built_vision_scene(CameraVisionRenderMode request
         const auto env = engine_vision_environment();
         Vision::setup_vision_lights(scene, env);
         pipeline->prepare();
-        pipeline->set_output_denoise(
-            Vision::vision_render_mode_uses_denoise(requested_mode));
-
+        // Camera GPU buffers exist only after prepare().
         if (const auto camera = active_scene_camera_values()) {
             Vision::sync_vision_camera(*pipeline, *camera);
         }
 
-        activate_single_vision_runtime_key(key);
-        auto& runtime = active_vision_runtime();
-        runtime.reset_pipeline(std::move(pipeline),
-                               requested_mode);
+        runtime.reset_pipeline(std::move(pipeline), key.mode);
         runtime.pipeline->activate_global_context();
-        current_vision_render_mode_ = requested_mode;
         const auto current_signature = compute_vision_scene_signature();
         runtime.engine_geometry_available = build_result.complete();
         runtime.engine_geometry_ready = build_result.complete() && current_signature == build_signature;
         runtime.engine_lighting = Vision::make_vision_lighting_state(env);
-        vision_applied_signature_ = build_result.complete() ? build_signature : 0;
-        vision_pending_signature_ = current_signature;
-        vision_stable_frames_ = 0;
-        vision_rebuild_retries_ = 0;
-        if (requested_mode == CameraVisionRenderMode::SVGF ||
-            requested_mode == CameraVisionRenderMode::SSAT) {
-            CFW_LOG_WARNING(
-                "OpticsSystem: engine-built Vision scene can only toggle denoise in "
-                "Phase 2; requested mode '{}' does not change framebuffer or denoiser type",
-                std::string(Vision::vision_render_mode_name(requested_mode)));
-        }
-        CFW_LOG_INFO("OpticsSystem: restored engine-built Vision scene");
-        log_vision_pipeline_diagnostics(*runtime.pipeline, "engine-built mode switch");
+        runtime.applied_signature = build_result.complete() ? build_signature : 0;
+        runtime.pending_signature = current_signature;
+        runtime.rebuild_retries = 0;
         return true;
     } catch (const std::exception& e) {
         if (previous_pipeline) previous_pipeline->activate_global_context();
-        CFW_LOG_ERROR("OpticsSystem: restoring engine-built Vision scene failed: {}", e.what());
+        CFW_LOG_ERROR("OpticsSystem: initializing engine-built Vision scene failed: {}", e.what());
         return false;
     }
+}
+
+bool OpticsSystem::load_engine_built_vision_scene(CameraVisionRenderMode requested_mode) {
+    const auto key = make_vision_pipeline_key(requested_mode);
+    auto& runtime = get_or_create_runtime(key);
+    if (!initialize_engine_built_vision_runtime(runtime, key)) return false;
+    activate_single_vision_runtime_key(key);
+    runtime.pipeline->activate_global_context();
+    current_vision_render_mode_ = requested_mode;
+    if (requested_mode == CameraVisionRenderMode::SVGF ||
+        requested_mode == CameraVisionRenderMode::SSAT) {
+        CFW_LOG_WARNING(
+            "OpticsSystem: engine-built Vision scene can only toggle denoise in "
+            "Phase 2; requested mode '{}' does not change framebuffer or denoiser type",
+            std::string(Vision::vision_render_mode_name(requested_mode)));
+    }
+    CFW_LOG_INFO("OpticsSystem: restored engine-built Vision scene");
+    log_vision_pipeline_diagnostics(*runtime.pipeline, "engine-built mode switch");
+    return true;
 }
 
 void OpticsSystem::apply_vision_render_mode(CameraVisionRenderMode mode) {
