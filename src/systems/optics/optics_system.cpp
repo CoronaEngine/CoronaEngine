@@ -6258,6 +6258,80 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                     pipeline->invalidate();
                 }
                 const auto render_frames = capture ? capture->render_frames : 1u;
+                // BEGIN GI guide-reuse camera sequence parser
+                struct DiagnosticCaptureCameraPose {
+                    unsigned frame{};
+                    std::array<float, 3> position{}, forward{}, world_up{};
+                };
+                const auto load_diagnostic_camera_sequence = [](const char* path, unsigned frame_count) {
+                    std::ifstream input(std::filesystem::u8path(path));
+                    if (!input) throw std::runtime_error("Cannot open GI guide-reuse camera sequence");
+                    std::string row;
+                    if (!std::getline(input, row)) throw std::runtime_error("Empty GI guide-reuse camera sequence");
+                    if (!row.empty() && row.back() == '\r') row.pop_back();
+                    if (row != "frame,pos_x,pos_y,pos_z,forward_x,forward_y,forward_z,up_x,up_y,up_z")
+                        throw std::runtime_error("Invalid GI guide-reuse camera sequence header");
+                    std::vector<DiagnosticCaptureCameraPose> poses;
+                    while (std::getline(input, row)) {
+                        if (!row.empty() && row.back() == '\r') row.pop_back();
+                        if (row.empty()) continue;
+                        if (std::count(row.begin(), row.end(), ',') != 9)
+                            throw std::runtime_error("Invalid GI guide-reuse camera sequence column count");
+                        std::istringstream fields(row);
+                        std::string field;
+                        std::getline(fields, field, ',');
+                        if (field.empty() || !std::all_of(field.begin(), field.end(), [](char ch) { return ch >= '0' && ch <= '9'; }))
+                            throw std::runtime_error("Invalid GI guide-reuse camera sequence frame");
+                        const auto index = std::stoull(field);
+                        if (index >= frame_count || (!poses.empty() && index <= poses.back().frame))
+                            throw std::runtime_error("GI guide-reuse camera sequence frames must increase within the capture");
+                        DiagnosticCaptureCameraPose pose;
+                        pose.frame = static_cast<unsigned>(index);
+                        std::array<float, 9> values{};
+                        for (auto& value : values) {
+                            std::getline(fields, field, ',');
+                            std::istringstream number(field);
+                            if (!(number >> value) || !std::isfinite(value))
+                                throw std::runtime_error("Invalid GI guide-reuse camera sequence value");
+                            number >> std::ws;
+                            if (!number.eof()) throw std::runtime_error("Invalid GI guide-reuse camera sequence numeric suffix");
+                        }
+                        for (unsigned i = 0; i < 3; ++i) {
+                            pose.position[i] = values[i];
+                            pose.forward[i] = values[i + 3];
+                            pose.world_up[i] = values[i + 6];
+                        }
+                        const auto& f = pose.forward;
+                        const auto& u = pose.world_up;
+                        const std::array<float, 3> cross{f[1] * u[2] - f[2] * u[1],
+                            f[2] * u[0] - f[0] * u[2], f[0] * u[1] - f[1] * u[0]};
+                        const auto cross2 = cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2];
+                        if (!std::isfinite(cross2) || cross2 <= 1e-12f)
+                            throw std::runtime_error("Degenerate GI guide-reuse camera sequence axes");
+                        poses.push_back(pose);
+                    }
+                    if (!input.eof() || poses.empty()) throw std::runtime_error("Cannot read GI guide-reuse camera sequence");
+                    return poses;
+                };
+                // END GI guide-reuse camera sequence parser
+                std::vector<DiagnosticCaptureCameraPose> camera_sequence;
+                std::ofstream camera_sequence_audit;
+                auto sequence_camera = camera;
+                size_t camera_sequence_index = 0;
+                // The controlled diagnostic batch is192 frames. Its setup1 and
+                // context-primer4 batches must not consume the same schedule.
+                if (capture && render_frames == 192u) {
+                    if (const char* path = std::getenv("VISION_GI_GUIDE_REUSE_CAMERA_SEQUENCE"); path && *path) {
+                        camera_sequence = load_diagnostic_camera_sequence(path, render_frames);
+                        const auto directory = std::filesystem::u8path(capture->timings_path.empty()
+                            ? capture->file_path : capture->timings_path).parent_path();
+                        camera_sequence_audit.open(directory / "camera-sequence-audit.csv");
+                        if (!camera_sequence_audit) throw std::runtime_error("Cannot open GI guide-reuse camera sequence audit");
+                        camera_sequence_audit << "frame,capture_frame,event,integrator_before_sync,integrator_before,integrator_after,"
+                            "external_camera_revision,external_projection_revision,pos_x,pos_y,pos_z,forward_x,forward_y,forward_z,up_x,up_y,up_z\n"
+                            << std::setprecision(std::numeric_limits<float>::max_digits10);
+                    }
+                }
                 // Offline accumulation bypasses interaction/presentation pacing.
                 // Only the final frame continues through the normal viewport
                 // resolve, overlays and process_pending_screenshots below.
@@ -6269,6 +6343,22 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                     const auto frame_qpc_begin = stage_timings.is_open() ? capture_profile_qpc() : 0u;
                     // display() advances the host's previous-camera matrices.
                     // Publish them before every offline subframe reprojects history.
+                    const auto sequence_integrator_before_sync = pipeline->frame_index();
+                    bool camera_sequence_event = false;
+                    if (!camera_sequence.empty()) {
+                        if (camera_sequence_index < camera_sequence.size() &&
+                            camera_sequence[camera_sequence_index].frame == frame - 1u) {
+                            const auto& pose = camera_sequence[camera_sequence_index++];
+                            sequence_camera.position = ktm::fvec3{pose.position[0], pose.position[1], pose.position[2]};
+                            sequence_camera.forward = ktm::fvec3{pose.forward[0], pose.forward[1], pose.forward[2]};
+                            sequence_camera.world_up = ktm::fvec3{pose.world_up[0], pose.world_up[1], pose.world_up[2]};
+                            camera_sequence_event = true;
+                        }
+                        // Pose-only synchronization preserves realtime history;
+                        // projection, resolution and accumulation stay unchanged.
+                        Vision::sync_vision_camera(*pipeline, sequence_camera);
+                    }
+                    const auto sequence_integrator_before = pipeline->frame_index();
                     pipeline->upload_data();
                     if (diagnostic) {
                         auto& adapter = runtime.diagnostics[cam_handle];
@@ -6278,6 +6368,18 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                         pipeline->display(1.0 / 60.0);
                     }
                     const auto frame_qpc_end = stage_timings.is_open() ? capture_profile_qpc() : 0u;
+                    if (camera_sequence_audit.is_open()) {
+                        if (sequence_integrator_before_sync != frame - 1u ||
+                            sequence_integrator_before != frame - 1u || pipeline->frame_index() != frame)
+                            throw std::runtime_error("GI guide-reuse camera sequence unexpectedly reset history");
+                        const auto& sensor = pipeline->scene().sensor();
+                        camera_sequence_audit << frame << ',' << frame - 1u << ',' << camera_sequence_event << ','
+                            << sequence_integrator_before_sync << ',' << sequence_integrator_before << ',' << pipeline->frame_index() << ','
+                            << sensor->external_camera_revision() << ',' << sensor->external_projection_revision() << ','
+                            << sequence_camera.position.x << ',' << sequence_camera.position.y << ',' << sequence_camera.position.z << ','
+                            << sequence_camera.forward.x << ',' << sequence_camera.forward.y << ',' << sequence_camera.forward.z << ','
+                            << sequence_camera.world_up.x << ',' << sequence_camera.world_up.y << ',' << sequence_camera.world_up.z << '\n';
+                    }
                     if (frame_timings.is_open()) {
                         frame_timings << frame << ',' << pipeline->frame_index() << ','
                                       << pipeline->cur_render_time() << ','
@@ -6295,6 +6397,10 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                             << stages.postprocess_ms << ',' << stages.render_final_ms << ','
                             << frame_qpc_begin << ',' << frame_qpc_end << ',' << capture_qpc_frequency << '\n';
                     }
+                }
+                if (camera_sequence_audit.is_open()) {
+                    camera_sequence_audit.flush();
+                    if (!camera_sequence_audit) throw std::runtime_error("Cannot write GI guide-reuse camera sequence audit");
                 }
                 if (frame_timings.is_open()) {
                     frame_timings.flush();

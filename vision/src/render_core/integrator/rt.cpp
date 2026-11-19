@@ -681,12 +681,26 @@ public:
             const auto directory = evaluation_debug::directory(frame_index_);
             if (directory.empty()) return;
             fs::create_directories(directory);
-            if (native_denoising && use_falcor) {
+            if (native_denoising && use_falcor && !string_view(stage).starts_with("composite_")) {
                 rtxpt_gi::NativeReblurDiagnosticViews views;
                 views.di_diffuse = falcor_di_->denoiser_diffuse();
                 views.di_specular = falcor_di_->denoiser_specular();
                 views.di_bypass = falcor_di_->denoiser_bypass();
                 views.gi_stable = indirect_->native_reblur_bypass();
+                if (string_view(stage) == "producer" && std::getenv("VISION_GI_GUIDE_REUSE_FULL_READBACK")) {
+                    auto prefix_view = indirect_->native_reblur_prefix().view_as<RtxptGIPrefixPlane>();
+                    auto header_view = indirect_->native_reblur_headers();
+                    vector<RtxptGIPrefixPlane> prefix(prefix_view.size());
+                    vector<uint4> headers(header_view.size());
+                    stream << prefix_view.download(prefix.data()) << header_view.download(headers.data())
+                           << synchronize() << commit();
+                    auto write = [&](const char *name, const auto &values) {
+                        std::ofstream file(directory / name, std::ios::binary);
+                        file.write(reinterpret_cast<const char *>(values.data()), values.size() * sizeof(values[0]));
+                        if (!file) throw std::runtime_error("GI prefix diagnostic write failed");
+                    };
+                    write("pt_prefix_records.bin", prefix); write("pt_prefix_headers.bin", headers);
+                }
                 // Readback-only materialization; normal rendering has no Guide array.
                 auto guides = device().create_buffer<reblur::Guide>(size_t(pipeline()->pixel_num()) * StablePlaneCount,
                     "RTXPT GI diagnostic-only decoded guides");
@@ -849,6 +863,7 @@ public:
             submit(native_reblur_compose_(p).dispatch(pipeline()->resolution()), &cur_stage_profile_.combine_ms);
             end_denoise_timing(stream);
             debug_readback("filtered");
+            debug_readback("composite_native", false);
         } else {
         // Keep the explicit raw lobe contract observable with denoising off,
         // just as PT does. This path exists only when Denoiser was selected.
