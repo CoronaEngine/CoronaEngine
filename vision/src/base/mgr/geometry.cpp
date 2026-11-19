@@ -7,6 +7,7 @@
 #include "scene.h"
 #include "base/scattering/medium.h"
 #include "pipeline.h"
+#include <stdexcept>
 
 namespace vision {
 using namespace ocarina;
@@ -207,6 +208,28 @@ void Geometry::bind_gpu_resource(SP<GeometryGpuResource> resource) noexcept {
     gpu_resource_ = std::move(resource);
 }
 
+void Geometry::set_medium_boundaries(const vector<MediumBoundary> &boundaries) {
+    vector<MediumBoundaryData> data;
+    data.reserve(boundaries.size());
+    for (const auto &boundary : boundaries) {
+        auto world_to_object = inverse(boundary.object_to_world);
+        for (uint column = 0; column < 4u; ++column) {
+            for (uint row = 0; row < 4u; ++row) {
+                if (!std::isfinite(boundary.object_to_world[column][row]) ||
+                    !std::isfinite(world_to_object[column][row])) {
+                    throw std::invalid_argument("Medium boundary requires a finite invertible transform");
+                }
+            }
+        }
+        const auto &matrix = boundary.object_to_world;
+        const float volume = 8.f * std::abs(dot(cross(make_float3(matrix[0]), make_float3(matrix[1])), make_float3(matrix[2])));
+        data.push_back({world_to_object, boundary.inside, boundary.outside, volume});
+    }
+    medium_boundaries_.set_host(std::move(data));
+    medium_boundaries_.reset_device_buffer_immediately(gpu_resource_->device(), "PT null medium boundaries");
+    if (!medium_boundaries_.empty()) medium_boundaries_.upload_immediately();
+}
+
 void Geometry::update_instances(const vector<SP<ShapeInstance>> &instances) {
     auto &geometry_data = gpu_resource_->data();
     geometry_data.clear_host();
@@ -277,6 +300,7 @@ void Geometry::upload_bindless_array(Stream &stream) {
 }
 
 void Geometry::clear() noexcept {
+    medium_boundaries_.clear_all();
     if (!gpu_resource_) {
         return;
     }
@@ -297,7 +321,7 @@ Interaction Geometry::compute_surface_interaction(const TriangleHitVar &hit, boo
     auto [v0, v1, v2] = get_vertices(mesh.vertex_buffer, tri);
     it.set_light(inst.light_id);
     it.set_material(inst.mat_id);
-    it.set_medium(inst.inside_medium, inst.outside_medium);
+    it.set_medium(inst.inside_medium, inst.outside_medium, inst.medium_transition != 0u);
     
     outline("Geometry::compute_surface_interaction", [&] {
         comment("compute pos");
@@ -402,6 +426,89 @@ Bool Geometry::trace_occlusion(const RayVar &ray) const noexcept {
     return gpu_resource_->accel().trace_occlusion(ray);
 }
 
+MediumBoundaryEvent Geometry::trace_medium_boundary(const RayVar &ray, const Float &cursor) const noexcept {
+    MediumBoundaryEvent nearest{ray->t_max()};
+    // A zero-trip DSL loop still generates its body. Keep an empty transport
+    // view from capturing an unallocated GPU buffer while generating the AST.
+    if (medium_boundaries_.host_buffer().empty()) return nearest;
+    $for(index, uint(medium_boundaries_.host_buffer().size())) {
+        auto boundary = medium_boundaries_.read(index);
+        Float3 origin = transform_point(boundary.world_to_object, ray->origin());
+        Float3 direction = transform_vector(boundary.world_to_object, ray->direction());
+        Float2 interval = medium_cube_interval(origin, direction);
+        Bool entry = interval.x > cursor;
+        Float t = select(entry, interval.x, interval.y);
+        $if(interval.y > interval.x && t > cursor && t < nearest.t) {
+            nearest.t = t;
+            nearest.medium = select(entry, boundary.inside, boundary.outside);
+            nearest.before = select(entry, boundary.outside, boundary.inside);
+            nearest.hit = true;
+        };
+    };
+    return nearest;
+}
+
+Uint Geometry::initial_medium(const Float3 &position, const Uint &fallback) const noexcept {
+    if (medium_boundaries_.host_buffer().empty()) return fallback;
+    // Classify position directly, including points for which a fixed probe ray
+    // misses every cube. For nested regions, volume orders the inner/outer
+    // interfaces independently of source order; disjoint exteriors must agree.
+    Uint medium = fallback;
+    Float inner_volume = 0.f, outer_volume = 0.f;
+    Bool contained = false;
+    $for(index, uint(medium_boundaries_.host_buffer().size())) {
+        auto boundary = medium_boundaries_.read(index);
+        Float3 local = transform_point(boundary.world_to_object, position);
+        Bool inside = abs(local.x) < 1.f && abs(local.y) < 1.f && abs(local.z) < 1.f;
+        $if(boundary.volume > outer_volume) {
+            outer_volume = boundary.volume;
+            $if(!contained) { medium = boundary.outside; };
+        };
+        $if(inside && (!contained || boundary.volume < inner_volume)) {
+            inner_volume = boundary.volume;
+            medium = boundary.inside;
+            contained = true;
+        };
+    };
+    return medium;
+}
+
+TriangleHitVar Geometry::trace_transport(Scene &scene, TSampler &sampler, const SampledWavelengths &swl,
+                                        RayState &rs, Interaction &it, SampledSpectrum &weight,
+                                        Uint2 *medium_events) const noexcept {
+    it = Interaction{true};
+    TriangleHitVar hit = trace_closest(rs.ray);
+    $if(hit->is_hit()) {
+        // This overload also clamps rs.ray.t_max to the true surface distance,
+        // so every free flight below ends at the nearer surface or boundary.
+        it = compute_surface_interaction(hit, rs.ray);
+    };
+    Float cursor = 0.f;
+    // A line crosses a convex cube at most twice. Keep the original ray origin
+    // and advance an exact parameter cursor: no epsilon gaps, IOR changes or
+    // duplicate boundary hits, and no consumption of scattering depth.
+    $for(segment_index, uint(2u * medium_boundaries_.host_buffer().size() + 1u)) {
+        auto boundary = trace_medium_boundary(rs.ray, cursor);
+        RayState segment = rs;
+        segment.ray = make_ray(rs.origin() + rs.direction() * cursor, rs.direction(), boundary.t - cursor);
+        $if(segment.in_medium()) {
+            scene.mediums().dispatch(segment.medium, [&](const Medium *medium) {
+                weight *= medium->sample(segment, it, sampler, swl);
+            });
+        };
+        $if(it.has_phase()) {
+            if (medium_events) medium_events->y += 1u;
+            $break;
+        };
+        $if(!boundary.hit) { $break; };
+        if (medium_events) medium_events->x += 1u;
+        rs.medium = boundary.medium;
+        cursor = boundary.t;
+    };
+    it.set_incident_state(rs);
+    return hit;
+}
+
 Bool Geometry::occluded(const Interaction &it, const Float3 &pos, RayState *rs) const noexcept {
     RayVar shadow_ray;
     if (rs) {
@@ -417,10 +524,20 @@ SampledSpectrum Geometry::Tr(Scene &scene, TSampler &sampler, const SampledWavel
                              const RayState &ray_state) const noexcept {
     SampledSpectrum ret{swl.dimension(), 1.f};
     if (scene.process_mediums()) {
-        $if(ray_state.in_medium()) {
-            scene.mediums().dispatch(ray_state.medium, [&](const Medium *medium) {
-                ret = medium->Tr(ray_state.ray, swl, sampler);
-            });
+        RayState segment = ray_state;
+        Float cursor = 0.f;
+        $for(segment_index, uint(2u * medium_boundaries_.host_buffer().size() + 1u)) {
+            auto boundary = trace_medium_boundary(ray_state.ray, cursor);
+            segment.ray = make_ray(ray_state.origin() + ray_state.direction() * cursor,
+                                   ray_state.direction(), boundary.t - cursor);
+            $if(segment.in_medium()) {
+                scene.mediums().dispatch(segment.medium, [&](const Medium *medium) {
+                    ret *= medium->Tr(segment.ray, swl, sampler);
+                });
+            };
+            $if(!boundary.hit) { $break; };
+            segment.medium = boundary.medium;
+            cursor = boundary.t;
         };
     }
     return ret;

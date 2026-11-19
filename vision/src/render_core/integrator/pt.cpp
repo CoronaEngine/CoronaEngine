@@ -29,6 +29,8 @@ namespace {
 class PathTracingIntegrator : public IlluminationIntegrator, public Observer{
 private:
     SP<ConvergenceInspector> inspector_;
+    bool participating_media_{false};
+    bool medium_diagnostics_{false};
     DataWrap scene_pt_settings_;
     Shader<void(uint)> combine_;
     Shader<void()> merge_indirect_into_direct_;
@@ -46,10 +48,17 @@ public:
     explicit PathTracingIntegrator(const IntegratorDesc &desc)
         : IlluminationIntegrator(desc),
           inspector_(make_shared<ConvergenceInspector>(desc.value("adaptive"))),
+          participating_media_(desc["participating_media"].as_bool(false)),
+          medium_diagnostics_(desc["medium_diagnostics"].as_bool(false)),
           scene_pt_settings_(illumination_settings()),
-          taa_history_(make_shared<ScreenBuffer>("taa_history")) {}
+          taa_history_(make_shared<ScreenBuffer>("taa_history")) {
+        scene_pt_settings_["participating_media"] = participating_media_;
+        scene_pt_settings_["medium_diagnostics"] = medium_diagnostics_;
+    }
 
     VS_MAKE_PLUGIN_NAME_FUNC
+    [[nodiscard]] bool participating_media_enabled() const noexcept override { return participating_media_; }
+    [[nodiscard]] bool medium_diagnostics_enabled() const noexcept override { return medium_diagnostics_; }
     [[nodiscard]] bool jitter_primary_samples() const noexcept override {
         const char *value = std::getenv("VISION_PT_PRIMARY_JITTER");
         return value == nullptr || value[0] == '\0' || value[0] != '0';
@@ -72,6 +81,13 @@ public:
     [[nodiscard]] DataWrap settings() const override {
         auto result = illumination_settings();
         result["adaptive"] = inspector_->settings();
+        result["participating_media"] = participating_media_;
+        result["medium_diagnostics"] = medium_diagnostics_;
+        result["medium_diagnostics_state"] = {
+            {"instrumentation", medium_diagnostics_compiled_},
+            {"boundary_crossings", medium_diagnostics_totals_->boundary_crossings},
+            {"scattering_events", medium_diagnostics_totals_->scattering_events},
+            {"sampled_frames", medium_diagnostics_totals_->sampled_frames}};
         return result;
     }
 
@@ -79,12 +95,24 @@ public:
         if (!overrides.is_object()) return false;
         auto candidate = scene_pt_settings_;
         for (const auto &[key, value] : overrides.items()) {
+            if (key == "participating_media" || key == "medium_diagnostics") {
+                if (!value.is_boolean()) return false;
+                candidate[key] = value;
+                continue;
+            }
             if (!merge_illumination_setting(candidate, key, value)) return false;
         }
-        if (candidate == illumination_settings()) return false;
+        auto current = illumination_settings();
+        current["participating_media"] = participating_media_;
+        current["medium_diagnostics"] = medium_diagnostics_;
+        if (candidate == current) return false;
         // Li specializes the direct-only branch when the kernel is compiled.
-        const bool recompile = (max_depth_.hv() < 2u) != (candidate["max_depth"].get<uint>() < 2u);
+        const bool recompile = (max_depth_.hv() < 2u) != (candidate["max_depth"].get<uint>() < 2u) ||
+            participating_media_ != candidate["participating_media"].get<bool>() ||
+            medium_diagnostics_ != candidate["medium_diagnostics"].get<bool>();
         apply_illumination_settings(candidate);
+        participating_media_ = candidate["participating_media"].get<bool>();
+        medium_diagnostics_ = candidate["medium_diagnostics"].get<bool>();
         if (recompile) {
             // Material DSL evaluation needs the same scene LUT bindings as a
             // normal pipeline compile, including during live parameter edits.
@@ -92,6 +120,7 @@ public:
                 scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
             compile_path_tracing(needs_lobe_signals());
         }
+        IlluminationIntegrator::invalidation();
         return true;
     }
     
@@ -122,7 +151,7 @@ public:
         if (denoiser_ && denoiser_->requires_lobe_signals()) frame_buffer().prepare_denoiser_signals();
 //        frame_buffer().prepare_screen_buffer(taa_history_);
     }
-    VS_HOTFIX_MAKE_RESTORE(IlluminationIntegrator, inspector_, scene_pt_settings_)
+    VS_HOTFIX_MAKE_RESTORE(IlluminationIntegrator, inspector_, scene_pt_settings_, participating_media_, medium_diagnostics_)
     OC_ENCODABLE_FUNC(IlluminationIntegrator, inspector_)
     VS_MAKE_GUI_STATUS_FUNC(IlluminationIntegrator, inspector_)
     void update_runtime_object(const vision::IObjectConstructor *constructor) noexcept override {

@@ -22,7 +22,9 @@ public:
         : Medium(desc),
           sigma_a_(desc.sigma_a["value"].as_float3()),
           sigma_s_(desc.sigma_s["value"].as_float3()),
-          g_(ocarina::clamp(desc.g["value"].as_float(), -g_clamp, g_clamp)) {}
+          g_(desc.g["value"].as_float()) {
+        validate_homogeneous_parameters(sigma_a_.hv(), sigma_s_.hv(), scale_.hv(), g_.hv());
+    }
 
     VS_MAKE_PLUGIN_NAME_FUNC
     OC_ENCODABLE_FUNC(Medium, sigma_a_, sigma_s_, g_)
@@ -33,7 +35,7 @@ public:
 
     [[nodiscard]] SampledSpectrum Tr(const Float &t, const SampledWavelengths &swl) const noexcept {
         SampledSpectrum sigma_t_sp = spectrum()->decode_to_unbound_spectrum(sigma_t(), swl).sample;
-        return exp(-sigma_t_sp * min(RayTMax, t));
+        return sigma_t_sp.map([&](Float sigma) { return homogeneous_transmittance(sigma, t); });
     }
 
     void render_sub_UI(Widgets *widgets) noexcept override {
@@ -45,7 +47,7 @@ public:
 
     [[nodiscard]] SampledSpectrum Tr(const RayVar &ray, const SampledWavelengths &swl,
                                      TSampler &sampler) const noexcept override {
-        return Tr(length(ray->direction()) * ray->t_max(), swl);
+        return Tr(medium_world_distance(ray->t_max(), length(ray->direction())), swl);
     }
 
     [[nodiscard]] SampledSpectrum sample(const RayState &rs, Interaction &it, TSampler &sampler,
@@ -54,19 +56,31 @@ public:
         Uint medium_id = rs.medium;
         SampledSpectrum sigma_t_sp = spectrum()->decode_to_unbound_spectrum(sigma_t(), swl).sample;
         SampledSpectrum sigma_s_sp = spectrum()->decode_to_unbound_spectrum(sigma_s(), swl).sample;
-        Uint channel = min(cast<uint>(sampler->next_1d() * swl.dimension()), swl.dimension() - 1);
-        Float dist = -log(1 - sampler->next_1d()) / sigma_t_sp[channel];
-        Float t = min(dist / length(ray->direction()), ray->t_max());
-        Bool sampled_medium = t < ray->t_max();
-        $if(sampled_medium) {
-            it = Interaction(ray->at(t), -ray->direction(), true);
-            it.init_phase(*g_, swl);
-            it.set_medium(medium_id, medium_id);
+        Float direction_length = length(ray->direction());
+        SampledSpectrum ret{swl.dimension(), 1.f};
+        $if(sigma_s_sp.is_zero()) {
+            // Pure absorption has no scattering proposal. Its exact Beer law
+            // also handles a zero-extinction medium without divisions by zero.
+            ret = Tr(medium_world_distance(ray->t_max(), direction_length), swl);
+        }
+        $else {
+            Uint channel = min(cast<uint>(sampler->next_1d() * swl.dimension()), swl.dimension() - 1);
+            Float sigma = sigma_t_sp[channel];
+            Float dist = homogeneous_sample_distance(sigma, sampler->next_1d());
+            Float t = min(dist / direction_length, ray->t_max());
+            Bool sampled_medium = sigma > 0.f && t < ray->t_max();
+            $if(sampled_medium) {
+                it = Interaction(ray->at(t), normalize(-ray->direction()), true);
+                it.ng = make_float3(0.f);
+                it.init_phase(*g_, swl);
+                it.set_medium(medium_id, medium_id);
+            };
+            SampledSpectrum tr = Tr(medium_world_distance(t, direction_length), swl);
+            SampledSpectrum density = select(sampled_medium, sigma_t_sp * tr, tr);
+            Float pdf = density.average();
+            Float safe_pdf = select(pdf > 0.f, pdf, 1.f);
+            ret = select(sampled_medium, tr * sigma_s_sp, tr) / safe_pdf;
         };
-        SampledSpectrum tr = Tr(t, swl);
-        SampledSpectrum density = select(sampled_medium, sigma_t_sp * tr, tr);
-        Float pdf = density.average();
-        SampledSpectrum ret = select(sampled_medium, tr * sigma_s_sp / pdf, tr / pdf);
         return ret;
     }
 };

@@ -59,7 +59,7 @@ struct LightEval{SampledSpectrum L=SampledSpectrum{7.f};float pdf=.25f;};
 struct LightSampler{LightSampler*operator->(){return this;}LightEval evaluate_hit_wi(LightSampleContext,const Interaction&,int){return{};}};
 struct Geometry{SampledSpectrum Tr(int,int,int,RayState){return{1.f};}};
 int scene(){return 0;}struct Renderer{int sampler(){return 0;}};Renderer renderer(){return{};}
-struct Spectrum{Float3 linear_srgb(SampledSpectrum s,int){return s.vec3();}};Spectrum*spectrum(){static Spectrum s;return&s;}
+struct Spectrum{SampledSpectrum one(){return{1.f};}Float3 linear_srgb(SampledSpectrum s,int){return s.vec3();}};Spectrum*spectrum(){static Spectrum s;return&s;}
 template<int>float MIS_weight(float,float){return 1;}
 template<int>float MIS_weight_n(int,float,int,float){return 1;}
 float correct_bsdf_weight(float w,uint){return w;}

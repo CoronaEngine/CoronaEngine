@@ -26,6 +26,7 @@ struct InstanceData {
     uint mesh_id{InvalidUI32};
     uint inside_medium{InvalidUI32};
     uint outside_medium{InvalidUI32};
+    uint medium_transition{false};
     float4x3 o2w_transposed;
     [[nodiscard]] auto o2w() const noexcept {
         return make_float4x4(transpose(o2w_transposed));
@@ -36,7 +37,7 @@ struct InstanceData {
 
 // clang-format off
 OC_STRUCT(vision, InstanceData, light_id, mat_id,
-          mesh_id, inside_medium, outside_medium, o2w_transposed){
+          mesh_id, inside_medium, outside_medium, medium_transition, o2w_transposed){
     [[nodiscard]] auto o2w() const noexcept {
         return make_float4x4(transpose(o2w_transposed));
     }
@@ -167,8 +168,12 @@ public:
     }
     virtual void update_inside_medium_id(uint id) noexcept {
         handle_.inside_medium = id;
+        handle_.medium_transition = true;
     }
-    virtual void update_outside_medium_id(uint id) noexcept { handle_.outside_medium = id; }
+    virtual void update_outside_medium_id(uint id) noexcept {
+        handle_.outside_medium = id;
+        handle_.medium_transition = true;
+    }
     virtual void update_material_id(uint id) noexcept { handle_.mat_id = id; }
     virtual void update_light_id(uint id) noexcept { handle_.light_id = id; }
     [[nodiscard]] vector<float> surface_areas() const noexcept;

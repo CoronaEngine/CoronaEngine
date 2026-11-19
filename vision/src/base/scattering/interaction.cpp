@@ -10,21 +10,23 @@ namespace vision {
 using namespace ocarina;
 
 Float HenyeyGreenstein::f(const Float3 &wo, const Float3 &wi) const noexcept {
-    return phase_HG(dot(wo, wi), g_);
+    return medium_phase_hg(dot(wo, wi), g_);
 }
 
 PhaseSample HenyeyGreenstein::sample(const Float3 &wo, TSampler &sampler) const noexcept {
     Float2 u = sampler->next_2d();
-    Float sqr_term = (1 - sqr(g_)) / (1 + g_ - 2 * g_ * u.x);
-    Float cos_theta = -(1 + sqr(g_) - sqr(sqr_term)) / (2 * g_);
-    cos_theta = select(abs(g_) < 1e-3f, 1 - 2 * u.x, cos_theta);
+    Float cos_theta = 1.f - 2.f * u.x;
+    $if(abs(g_) >= 1e-3f) {
+        Float sqr_term = (1.f - sqr(g_)) / (1.f + g_ - 2.f * g_ * u.x);
+        cos_theta = -(1.f + sqr(g_) - sqr(sqr_term)) / (2.f * g_);
+    };
 
     Float sin_theta = safe_sqrt(1 - sqr(cos_theta));
     Float phi = 2 * Pi * u.y;
     Float3 v1, v2;
     coordinate_system(wo, v1, v2);
     Float3 wi = spherical_direction(sin_theta, cos_theta, phi, v1, v2, wo);
-    Float f = phase_HG(cos_theta, g_);
+    Float f = medium_phase_hg(cos_theta, g_);
     PhaseSample phase_sample{swl_->dimension()};
     phase_sample.eval = {{swl_->dimension(), f}, f, 0};
     phase_sample.wi = wi;
@@ -113,24 +115,26 @@ RayVar Interaction::spawn_ray(const Float3 &dir, const Float &t) const noexcept 
 
 RayState Interaction::spawn_ray_state(const Float3 &dir) const noexcept {
     RayVar ray = vision::spawn_ray(pos, ng, dir);
-    Uint medium;
+    Uint medium{InvalidUI32};
+    Float ior{1.f};
     if (mi_) {
-        medium = select(dot(ng, dir) > 0, mi().outside, mi().inside);
-    } else {
-        medium = InvalidUI32;
+        Uint incident = incident_medium_ ? *incident_medium_ : Uint{InvalidUI32};
+        medium = medium_after_surface(incident, mi().inside, mi().outside, mi().declared, dot(ng, dir));
+        if (incident_ior_) ior = *incident_ior_;
     }
-    return {.ray = ray, .ior = 1.f, .medium = medium};
+    return {.ray = ray, .ior = ior, .medium = medium};
 }
 
 RayState Interaction::spawn_ray_state_to(const Float3 &p) const noexcept {
     RayVar ray = vision::spawn_ray_to(pos, ng, p);
-    Uint medium;
+    Uint medium{InvalidUI32};
+    Float ior{1.f};
     if (mi_) {
-        medium = select(dot(ng, ray->direction()) > 0, mi().outside, mi().inside);
-    } else {
-        medium = InvalidUI32;
+        Uint incident = incident_medium_ ? *incident_medium_ : Uint{InvalidUI32};
+        medium = medium_after_surface(incident, mi().inside, mi().outside, mi().declared, dot(ng, ray->direction()));
+        if (incident_ior_) ior = *incident_ior_;
     }
-    return {.ray = ray, .ior = 1.f, .medium = medium};
+    return {.ray = ray, .ior = ior, .medium = medium};
 }
 
 Float3 Interaction::robust_position() const noexcept {
@@ -145,12 +149,19 @@ RayVar Interaction::spawn_ray_to(const Float3 &p) const noexcept {
     return vision::spawn_ray_to(pos, ng, p);
 }
 
-void Interaction::set_medium(const Uint &inside, const Uint &outside) {
+void Interaction::set_medium(const Uint &inside, const Uint &outside, const Bool &declared) {
     if (!mi_) {
         return;
     }
     (*mi_).inside = inside;
     (*mi_).outside = outside;
+    (*mi_).declared = declared;
+}
+
+void Interaction::set_incident_state(const RayState &state) noexcept {
+    if (!mi_) return;
+    incident_medium_.emplace(state.medium);
+    incident_ior_.emplace(state.ior);
 }
 
 void AttrEvalContext::init(const vision::Interaction &it) noexcept {

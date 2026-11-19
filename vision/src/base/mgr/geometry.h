@@ -17,6 +17,34 @@ class Scene;
 class Pipeline;
 class ShapeInstance;
 
+// Physical null boundaries are a transport-only view. They never enter the
+// surface acceleration structure used by GBuffer and real-time visibility.
+struct MediumBoundary {
+    float4x4 object_to_world;
+    uint inside{InvalidUI32};
+    uint outside{InvalidUI32};
+};
+
+struct MediumBoundaryData {
+    float4x4 world_to_object;
+    uint inside{InvalidUI32};
+    uint outside{InvalidUI32};
+    float volume{};
+};
+
+struct MediumBoundaryEvent {
+    Float t;
+    Uint medium{InvalidUI32};
+    Uint before{InvalidUI32};
+    Bool hit{false};
+};
+
+}// namespace vision
+
+OC_STRUCT(vision, MediumBoundaryData, world_to_object, inside, outside, volume) {};
+
+namespace vision {
+
 class GeometryData {
 private:
     Device *device_{};
@@ -94,6 +122,7 @@ class Geometry {
 private:
     SP<GeometryGpuResource> gpu_resource_;
     bool process_mediums_{false};
+    ocarina::Managed<MediumBoundaryData> medium_boundaries_;
 
 public:
     Geometry();
@@ -102,6 +131,8 @@ public:
     [[nodiscard]] bool has_gpu_resource() const noexcept { return gpu_resource_ != nullptr; }
     void set_process_mediums(bool process_mediums) noexcept { process_mediums_ = process_mediums; }
     [[nodiscard]] bool process_mediums() const noexcept { return process_mediums_; }
+    void set_medium_boundaries(const vector<MediumBoundary> &boundaries);
+    [[nodiscard]] size_t boundary_count() const noexcept { return medium_boundaries_.host_buffer().size(); }
     [[nodiscard]] SP<GeometryGpuResource> gpu_resource() noexcept { return gpu_resource_; }
     [[nodiscard]] SP<const GeometryGpuResource> gpu_resource() const noexcept { return gpu_resource_; }
 
@@ -123,6 +154,13 @@ public:
     // DSL methods
     [[nodiscard]] TriangleHitVar trace_closest(const RayVar &ray) const noexcept;
     [[nodiscard]] Bool trace_occlusion(const RayVar &ray) const noexcept;
+    [[nodiscard]] MediumBoundaryEvent trace_medium_boundary(const RayVar &ray, const Float &cursor) const noexcept;
+    // Regions may be disjoint or strictly nested, with consistent exterior
+    // references. Composition of intersecting, non-nested media is unsupported.
+    [[nodiscard]] Uint initial_medium(const Float3 &position, const Uint &fallback = Uint{InvalidUI32}) const noexcept;
+    [[nodiscard]] TriangleHitVar trace_transport(Scene &scene, TSampler &sampler, const SampledWavelengths &swl,
+                                                RayState &rs, Interaction &it, SampledSpectrum &weight,
+                                                Uint2 *medium_events = nullptr) const noexcept;
     [[nodiscard]] Bool occluded(const Interaction &it, const Float3 &pos, RayState *rs = nullptr) const noexcept;
     template<typename ...Args>
     [[nodiscard]] auto visibility(Args &&...args) const noexcept {

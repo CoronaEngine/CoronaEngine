@@ -88,6 +88,8 @@ public:
     [[nodiscard]] virtual bool has_denoiser() const noexcept { return false; }
     // Subpixel film samples need accumulation or reconstruction before display.
     [[nodiscard]] virtual bool jitter_primary_samples() const noexcept { return true; }
+    [[nodiscard]] virtual bool participating_media_enabled() const noexcept { return false; }
+    [[nodiscard]] virtual bool medium_diagnostics_enabled() const noexcept { return false; }
     virtual void set_denoise_enabled(bool enabled) noexcept {}
     // Optional ReSTIR capability; other integrators ignore the camera preference.
     virtual void set_stable_planes_enabled(bool enabled) noexcept {}
@@ -176,6 +178,14 @@ protected:
     HotfixSlot<SP<Denoiser>> denoiser_{};
     ocarina::Shader<void(PTParam)> path_tracing_;
     ocarina::Buffer<path_cost::PathWorkCounters> path_work_counters_;
+    struct MediumDiagnosticTotals {
+        uint64_t boundary_crossings{};
+        uint64_t scattering_events{};
+        uint64_t sampled_frames{};
+    };
+    bool medium_diagnostics_compiled_{false};
+    ocarina::Buffer<uint> medium_diagnostic_counters_;
+    mutable SP<MediumDiagnosticTotals> medium_diagnostics_totals_{make_shared<MediumDiagnosticTotals>()};
 
     [[nodiscard]] DataWrap illumination_settings() const;
     [[nodiscard]] static bool merge_illumination_setting(DataWrap &candidate, const std::string &key,
@@ -197,6 +207,10 @@ public:
     [[nodiscard]] const Denoiser *denoiser() const noexcept { return denoiser_.get(); }
     // Read-only effective settings for integrators with private denoisers.
     [[nodiscard]] virtual DataWrap reblur_context_settings() const { return DataWrap::object(); }
+    void invalidation() const noexcept override {
+        Integrator::invalidation();
+        medium_diagnostics_totals_ = make_shared<MediumDiagnosticTotals>();
+    }
     bool render_UI(Widgets *widgets) noexcept override;
     void set_denoise_enabled(bool enabled) noexcept override {
         if (denoiser_) {

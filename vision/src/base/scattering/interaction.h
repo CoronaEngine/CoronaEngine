@@ -12,6 +12,7 @@
 #include "base/using.h"
 #include "half_storage.h"
 #include "base/integral/path_work_diagnostic.h"
+#include "medium_transport.h"
 #include <functional>
 
 namespace vision {
@@ -241,11 +242,12 @@ struct MediumInterface {
 public:
     Uint inside{InvalidUI32};
     Uint outside{InvalidUI32};
+    Bool declared{false};
 
 public:
     MediumInterface() = default;
-    MediumInterface(Uint in, Uint out) : inside(in), outside(out) {}
-    explicit MediumInterface(Uint medium_id) : inside(medium_id), outside(medium_id) {}
+    MediumInterface(Uint in, Uint out) : inside(in), outside(out), declared(true) {}
+    explicit MediumInterface(Uint medium_id) : inside(medium_id), outside(medium_id), declared(true) {}
     [[nodiscard]] Bool is_transition() const noexcept { return inside != outside; }
     [[nodiscard]] Bool has_inside() const noexcept { return inside != InvalidUI32; }
     [[nodiscard]] Bool has_outside() const noexcept { return outside != InvalidUI32; }
@@ -342,6 +344,8 @@ private:
     // todo optimize volpt and pt
     optional<MediumInterface> mi_{};
     optional<HenyeyGreenstein> phase_{};
+    optional<Uint> incident_medium_{};
+    optional<Float> incident_ior_{};
 
 public:
     explicit Interaction(bool has_medium);
@@ -352,7 +356,8 @@ public:
     [[nodiscard]] float_array correct_eta(const float_array &ior) const noexcept;
     [[nodiscard]] Float correct_eta(const Float &ior) const noexcept;
     void update_wo(const Float3 &view_pos) noexcept { wo = normalize(view_pos - pos); }
-    void set_medium(const Uint &inside, const Uint &outside);
+    void set_medium(const Uint &inside, const Uint &outside, const Bool &declared = true);
+    void set_incident_state(const RayState &state) noexcept;
     void set_material(const Uint &mat) noexcept { mat_id_ = mat; }
     void set_light(const Uint &light) noexcept { light_id_ = light; }
     [[nodiscard]] Float3 local_wo() const noexcept;
@@ -458,6 +463,7 @@ struct PTPathCapture {
 
 struct HitContext {
 public:
+    Uint2 *medium_events{};
     // Host-only opt-in capture pointer. nullptr generates no diagnostic shader AST.
     path_cost::PathWorkCountersVar *work_counters{};
     PTPathCapture *path_capture{};
