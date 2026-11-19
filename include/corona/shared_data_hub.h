@@ -7,6 +7,7 @@
 #include <corona/systems/display/image_frame_metadata.h>
 #include <corona/systems/optics/viewport_gizmo_math.h>
 #include <corona/systems/optics/material_source.h>
+#include <nlohmann/json_fwd.hpp>
 
 #include <ktm/ktm.h>
 #include <corona/systems/geometry/model_node_state.h>
@@ -258,6 +259,8 @@ struct OpticsDevice {
     std::uintptr_t geometry_handle{};
     std::shared_ptr<const Materials::Overrides> material_overrides;
     std::shared_ptr<const Materials::Principled> principled;
+    // Absent means inherit the incident medium; explicit null references mean vacuum.
+    std::shared_ptr<const nlohmann::json> medium_interface;
 
     bool visible{true};  // 控制模型是否参与渲染
 
@@ -658,6 +661,9 @@ struct SceneDevice {
     std::vector<std::uintptr_t> visible_actor_handles;
     std::vector<std::uintptr_t> camera_handles;
     std::uintptr_t active_camera_handle{};
+    // Authored scene.media is retained even when the current renderer disables it.
+    std::shared_ptr<const nlohmann::json> authored_media;
+    std::size_t authored_media_revision{};
     ktm::fvec3 min_world;
     ktm::fvec3 max_world;
     ktm::fvec3 center_world;

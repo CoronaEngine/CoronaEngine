@@ -2,6 +2,7 @@
 
 #include <corona/systems/geometry/model_node_state.h>
 #include <corona/resource/model_import_options.h>
+#include <nlohmann/json_fwd.hpp>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -428,6 +429,9 @@ class Scene {
    public:
     Scene();
     ~Scene();
+
+    // Retain authored media independently of the current renderer's policy.
+    void set_authored_media(std::shared_ptr<const nlohmann::json> media);
 
     // ========== Environment 管理 ==========
     void set_environment(Environment* env);

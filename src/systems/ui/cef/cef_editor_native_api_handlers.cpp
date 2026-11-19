@@ -475,6 +475,7 @@ struct NativeEditorActor {
     std::string model_node_current_resource;
     nlohmann::json model_node_unmatched = nlohmann::json::array();
     NativeEditorActorOpticsState persisted_optics;
+    std::shared_ptr<const nlohmann::json> medium_interface;
     std::unique_ptr<Corona::API::Geometry> geometry;
     std::unique_ptr<Corona::API::Optics> optics;
     std::unique_ptr<Corona::API::Mechanics> mechanics;
@@ -601,6 +602,7 @@ struct NativeEditorScene {
     std::array<float, 3> sun_direction{1.0f, 1.0f, 1.0f};
     bool sun_enabled{true};
     nlohmann::json authored_lighting;
+    std::shared_ptr<const nlohmann::json> authored_media;
     bool floor_grid_enabled{true};
     std::vector<NativeEditorActor> actors;
     std::vector<NativeEditorCamera> cameras;
@@ -811,6 +813,7 @@ void apply_native_actor_optics_state(NativeEditorActor& item) {
                     if (write->geometry_handle != item.geometry->get_handle()) continue;
                     write->material_overrides = overrides;
                     write->principled = principled;
+                    write->medium_interface = item.medium_interface;
                 }
             }
         }
@@ -1014,6 +1017,150 @@ void validate_snapshot_finite_number(const nlohmann::json& object,
     }
 }
 
+void validate_authored_medium_interface(
+    const nlohmann::json& value,
+    const std::unordered_set<std::string>& medium_ids) {
+    if (!value.is_object() || !value.contains("inside") || !value.contains("outside")) {
+        throw std::invalid_argument("Medium interface requires inside and outside references");
+    }
+    for (const auto* side : {"inside", "outside"}) {
+        const auto& reference = value.at(side);
+        if (reference.is_null()) continue;
+        if (!reference.is_string() || !medium_ids.contains(reference.get<std::string>())) {
+            throw std::invalid_argument(std::string{"Unknown medium reference: "} + side);
+        }
+    }
+}
+
+std::unordered_set<std::string> validate_authored_media(const nlohmann::json& media) {
+    if (!media.is_object() || !media.contains("schema") ||
+        !media.at("schema").is_number_integer() || media.at("schema") != 1 ||
+        !media.contains("mediums") || !media.at("mediums").is_array() ||
+        !media.contains("boundaries") || !media.at("boundaries").is_array()) {
+        throw std::invalid_argument("Invalid scene.media schema");
+    }
+    constexpr std::size_t kMaxMediaItems = 100000;
+    if (media.at("mediums").size() > kMaxMediaItems ||
+        media.at("boundaries").size() > kMaxMediaItems) {
+        throw std::invalid_argument("scene.media exceeds the item safety limit");
+    }
+    const auto finite_float = [](const nlohmann::json& value) {
+        return value.is_number() && std::isfinite(value.get<double>()) &&
+               std::abs(value.get<double>()) <= std::numeric_limits<float>::max();
+    };
+    const auto nonnegative_float = [&](const nlohmann::json& value) {
+        return finite_float(value) && value.get<double>() >= 0.0;
+    };
+    std::unordered_set<std::string> medium_ids;
+    for (const auto& medium : media.at("mediums")) {
+        if (!medium.is_object() || !medium.contains("id") || !medium.at("id").is_string() ||
+            medium.at("id").get<std::string>().empty() ||
+            !medium_ids.insert(medium.at("id").get<std::string>()).second) {
+            throw std::invalid_argument("Medium requires a unique non-empty id");
+        }
+        if (!medium.contains("type") || medium.at("type") != "homogeneous") {
+            throw std::invalid_argument("Unsupported medium type; expected homogeneous");
+        }
+        if (!medium.contains("scale") || !nonnegative_float(medium.at("scale")) ||
+            !medium.contains("g") || !finite_float(medium.at("g")) ||
+            !std::isfinite(medium.at("g").get<float>()) ||
+            std::abs(medium.at("g").get<float>()) >= 1.0f) {
+            throw std::invalid_argument("Medium requires nonnegative finite scale and -1 < g < 1");
+        }
+        for (const auto* name : {"sigma_a", "sigma_s"}) {
+            if (!medium.contains(name) || !medium.at(name).is_array() || medium.at(name).size() != 3) {
+                throw std::invalid_argument(std::string{name} + " requires three coefficients");
+            }
+            for (const auto& coefficient : medium.at(name)) {
+                if (!nonnegative_float(coefficient) ||
+                    coefficient.get<double>() * medium.at("scale").get<double>() >
+                        std::numeric_limits<float>::max()) {
+                    throw std::invalid_argument(std::string{name} + " requires finite nonnegative coefficients");
+                }
+            }
+        }
+        // Match HomogeneousMedium's float arithmetic: addition precedes scale.
+        const float scale = medium.at("scale").get<float>();
+        for (std::size_t channel = 0; channel < 3; ++channel) {
+            const float extinction = medium.at("sigma_a")[channel].get<float>() +
+                                     medium.at("sigma_s")[channel].get<float>();
+            const float scaled_extinction = extinction * scale;
+            if (!std::isfinite(extinction) || !std::isfinite(scaled_extinction)) {
+                throw std::invalid_argument("Medium extinction must remain finite in float precision");
+            }
+        }
+    }
+    std::unordered_set<std::string> boundary_ids;
+    for (const auto& boundary : media.at("boundaries")) {
+        if (!boundary.is_object() || !boundary.contains("id") || !boundary.at("id").is_string() ||
+            boundary.at("id").get<std::string>().empty() ||
+            !boundary_ids.insert(boundary.at("id").get<std::string>()).second) {
+            throw std::invalid_argument("Medium boundary requires a unique non-empty id");
+        }
+        if (!boundary.contains("shape") || boundary.at("shape") != "cube") {
+            throw std::invalid_argument("Unsupported medium boundary shape; expected cube");
+        }
+        validate_authored_medium_interface(boundary, medium_ids);
+        if (!boundary.contains("object_to_world") || !boundary.at("object_to_world").is_array() ||
+            boundary.at("object_to_world").size() != 16) {
+            throw std::invalid_argument("Medium boundary requires a row-major matrix with 16 values");
+        }
+        const auto& matrix = boundary.at("object_to_world");
+        for (const auto& value : matrix) {
+            if (!finite_float(value)) throw std::invalid_argument("Medium boundary matrix must be finite");
+        }
+        for (const auto index : {12, 13, 14, 15}) {
+            if (std::abs(matrix[index].get<double>() - (index == 15 ? 1.0 : 0.0)) > 1e-6) {
+                throw std::invalid_argument("Medium boundary row-major matrix must be affine");
+            }
+        }
+        const auto m = [&](int row, int column) { return matrix[row * 4 + column].get<double>(); };
+        const auto determinant =
+            m(0, 0) * (m(1, 1) * m(2, 2) - m(1, 2) * m(2, 1)) -
+            m(0, 1) * (m(1, 0) * m(2, 2) - m(1, 2) * m(2, 0)) +
+            m(0, 2) * (m(1, 0) * m(2, 1) - m(1, 1) * m(2, 0));
+        if (!std::isfinite(determinant) || determinant == 0.0) {
+            throw std::invalid_argument("Medium boundary matrix must be invertible");
+        }
+    }
+    return medium_ids;
+}
+
+std::string validate_native_pt_settings(const nlohmann::json& settings) {
+    if (!settings.is_object()) return "Expected PT settings object";
+    for (auto it = settings.begin(); it != settings.end(); ++it) {
+        if (it.key() == "participating_media" || it.key() == "medium_diagnostics") {
+            if (!it->is_boolean()) return "PT " + it.key() + " must be a boolean";
+            continue;
+        }
+        const double maximum = it.key() == "max_depth" ? 128 : it.key() == "min_depth" ? 20 : 1;
+        if ((it.key() != "max_depth" && it.key() != "min_depth" && it.key() != "rr_threshold") || !it->is_number())
+            return "Invalid PT parameter: " + it.key();
+        const double value = it->get<double>();
+        if (!std::isfinite(value) || value < 0 || value > maximum ||
+            (it.key() != "rr_threshold" && value != std::floor(value)))
+            return "PT parameter out of range: " + it.key();
+    }
+    return {};
+}
+
+nlohmann::json native_pt_settings_payload(nlohmann::json effective, const nlohmann::json& overrides) {
+    if (!effective.is_object()) effective = nlohmann::json::object();
+    const bool ready = effective.contains("max_depth") && effective.contains("min_depth") && effective.contains("rr_threshold");
+    auto settings = effective;
+    auto adaptive = settings.value("adaptive", nlohmann::json::object());
+    settings.erase("adaptive");
+    if (overrides.is_object()) {
+        for (auto it = overrides.begin(); it != overrides.end(); ++it) {
+            // Runtime mode policy may deny this request; only the integrator can report it effective.
+            if (it.key() != "participating_media" && it.key() != "medium_diagnostics") settings[it.key()] = it.value();
+        }
+    }
+    return {{"settings", std::move(settings)}, {"adaptive", std::move(adaptive)}, {"ready", ready},
+            {"effective", std::move(effective)},
+            {"requested", overrides.is_object() ? overrides : nlohmann::json::object()}};
+}
+
 void validate_archive_snapshot(const nlohmann::json& snapshot) {
     if (!snapshot.is_object() || snapshot.value("schema_version", 0) != 1) {
         throw std::runtime_error("Unsupported or malformed ArchiveSnapshot schema_version");
@@ -1036,9 +1183,14 @@ void validate_archive_snapshot(const nlohmann::json& snapshot) {
         scene["cameras"].size() > kMaxSnapshotItems) {
         throw std::runtime_error("ArchiveSnapshot exceeds the item safety limit");
     }
+    const auto medium_ids = scene.contains("media")
+        ? validate_authored_media(scene.at("media")) : std::unordered_set<std::string>{};
 
     std::unordered_set<std::string> actor_guids;
     for (const auto& actor : scene["actors"]) {
+        if (actor.is_object() && actor.contains("medium_interface")) {
+            validate_authored_medium_interface(actor.at("medium_interface"), medium_ids);
+        }
         if (!actor.is_object() || !actor.contains("actor_guid") ||
             !actor["actor_guid"].is_string() || actor["actor_guid"].get<std::string>().empty()) {
             throw std::runtime_error("ArchiveSnapshot actor requires a non-empty actor_guid");
@@ -1123,6 +1275,11 @@ void validate_archive_snapshot(const nlohmann::json& snapshot) {
         if (!camera_ids.insert(camera["id"].get<std::string>()).second) {
             throw std::runtime_error("Duplicate camera id in ArchiveSnapshot");
         }
+        if (camera.contains("vision_pt_settings")) {
+            if (const auto error = validate_native_pt_settings(camera.at("vision_pt_settings")); !error.empty()) {
+                throw std::invalid_argument(error);
+            }
+        }
         validate_snapshot_float3(camera.value("position", nlohmann::json()), "camera.position");
         validate_snapshot_float3(camera.value("forward", nlohmann::json()), "camera.forward");
         validate_snapshot_float3(camera.value("world_up", nlohmann::json()), "camera.world_up");
@@ -1178,6 +1335,9 @@ void validate_archive_snapshot(const nlohmann::json& snapshot) {
 NativeEditorActor native_actor_from_snapshot(const nlohmann::json& actor_data) {
     NativeEditorActor item;
     item.persisted_snapshot = actor_data;
+    if (actor_data.contains("medium_interface")) {
+        item.medium_interface = std::make_shared<const nlohmann::json>(actor_data.at("medium_interface"));
+    }
     item.persisted_animation_sources = AnimationConfig::parse_sources(actor_data.value("animation_sources", nlohmann::json::array()));
     item.persisted_model_node_overrides = ModelNodeConfig::normalize(
         actor_data.value("model_node_overrides", nlohmann::json::array()));
@@ -1451,11 +1611,15 @@ NativeEditorScene& materialize_scene_snapshot_into_state(
     scene.terrain_path = terrain.value("path", std::string{});
     scene.sun_enabled = environment.value("sun_enabled", true);
     scene.authored_lighting = environment.value("authored_lighting",nlohmann::json{});
+    if (data.contains("media")) {
+        scene.authored_media = std::make_shared<const nlohmann::json>(data.at("media"));
+    }
     scene.sun_direction = snapshot_float3(
         environment.value("sun_direction", nlohmann::json::array()), {1.0f, 1.0f, 1.0f});
     scene.floor_grid_enabled = environment.value("floor_grid_enabled", true);
     try {
         scene.engine_scene = std::make_unique<Corona::API::Scene>();
+        scene.engine_scene->set_authored_media(scene.authored_media);
         scene.environment = std::make_unique<Corona::API::Environment>();
         apply_native_scene_environment(scene);
         if (const auto display = environment.find("vision_display"); display != environment.end()) {
@@ -1827,6 +1991,7 @@ nlohmann::json actor_to_json(const NativeEditorScene& scene, const NativeEditorA
     item["model"] = actor.route;
     item["model_dependencies"] = nlohmann::json::array();
     item["actor_type"] = actor.actor_type;
+    if (actor.medium_interface) item["medium_interface"] = *actor.medium_interface;
     if (actor.actor_type == "actor") item["resolved_model"] = actor.resolved_asset_path;
     item["ik_chains"] = native_actor_ik_configuration(actor);
     if (auto player = actor_animation_player(actor)) item.update(AnimationConfig::serialize(player->snapshot()));
@@ -1957,7 +2122,7 @@ nlohmann::json scene_to_json(const NativeEditorScene& scene) {
     const auto active_camera = scene.cameras.empty()
                                    ? nlohmann::json(nullptr)
                                    : camera_to_json(scene.cameras[active_index]);
-    return {
+    nlohmann::json snapshot = {
         {"id", scene.route},
         {"scene_id", scene.route},
         {"name", scene.name},
@@ -1972,6 +2137,8 @@ nlohmann::json scene_to_json(const NativeEditorScene& scene) {
         {"script", scene.script_path},
         {"actors", actors},
     };
+    if (scene.authored_media) snapshot["media"] = *scene.authored_media;
+    return snapshot;
 }
 
 // Send current values only. ProjectArchive owns the on-disk schema and atomic commit.
@@ -3114,6 +3281,20 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
         auto merged_actor_data = actor_to_json(*scene, *actor);
         merged_actor_data.merge_patch(actor_data);
         merged_actor_data["actor_guid"] = actor_guid;
+        // The interface is one authored transition; JSON Merge Patch would delete
+        // its explicit vacuum references because those sides are null.
+        if (actor_data.contains("medium_interface") && !actor_data.at("medium_interface").is_null()) {
+            merged_actor_data["medium_interface"] = actor_data.at("medium_interface");
+        }
+        if (merged_actor_data.contains("medium_interface")) {
+            const auto medium_ids = scene->authored_media
+                ? validate_authored_media(*scene->authored_media) : std::unordered_set<std::string>{};
+            try {
+                validate_authored_medium_interface(merged_actor_data.at("medium_interface"), medium_ids);
+            } catch (const std::invalid_argument& error) {
+                return pending_actor_outcome(PendingNetworkActorApplyResult::Discard, error.what());
+            }
+        }
         auto desired = native_actor_from_snapshot(merged_actor_data);
         const auto desired_route = normalize_route(desired.route);
         const bool replacing_resource = !desired_route.empty() && desired_route != normalize_route(actor->route);
@@ -3215,6 +3396,7 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
             actor_data.value("source_scene_version", actor->source_scene_version), 1);
         actor->actor_version = std::max(actor_data.value("actor_version", actor->actor_version), 1);
         actor->persisted_snapshot = actor_data;
+        if (!replacing_resource) actor->medium_interface = desired.medium_interface;
 
         if (auto value = actor_data_float3(actor_data, "position")) {
             actor->position = *value;
@@ -4623,7 +4805,7 @@ std::string get_editor_scene_snapshot_from_python(const std::string& scene_name)
         const auto active_camera = scene->cameras.empty()
                                        ? nlohmann::json(nullptr)
                                        : cameras[active_index];
-        return nlohmann::json{
+        nlohmann::json snapshot = {
             {"status", "success"},
             {"scene", scene->route},
             {"scene_name", scene->name},
@@ -4638,7 +4820,9 @@ std::string get_editor_scene_snapshot_from_python(const std::string& scene_name)
 
             {"scene_aabb", scene_aabb ? aabb_to_json(*scene_aabb) : nlohmann::json(nullptr)},
             {"bounds_ready", static_cast<bool>(scene_aabb)},
-        }.dump();
+        };
+        if (scene->authored_media) snapshot["media"] = *scene->authored_media;
+        return snapshot.dump();
     } catch (const std::exception& e) {
         return nlohmann::json{
             {"status", "error"},
@@ -6485,13 +6669,8 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             auto* camera = find_native_camera(*scene, arg_string(request.args, 1));
             if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
             auto settings = nlohmann::json::parse(camera->engine_camera->get_effective_vision_pt_settings(), nullptr, false);
-            if (!settings.is_object()) settings = nlohmann::json::object();
-            const bool ready = settings.contains("max_depth") && settings.contains("min_depth") && settings.contains("rr_threshold");
-            auto adaptive = settings.value("adaptive", nlohmann::json::object());
-            settings.erase("adaptive");
             const auto overrides = nlohmann::json::parse(camera->engine_camera->get_requested_vision_pt_settings(), nullptr, false);
-            if (overrides.is_object()) settings.update(overrides);
-            return native_success({{"settings", std::move(settings)}, {"adaptive", std::move(adaptive)}, {"ready", ready}});
+            return native_success(native_pt_settings_payload(std::move(settings), overrides));
         }},
         {"set_pt_settings", [](const NativeRequest& request, const NativeContext&) {
             auto* scene = resolve_native_editor_scene_request(ensure_native_editor_scene(), normalize_route(arg_string(request.args, 0)));
@@ -6499,15 +6678,7 @@ void register_scene_tools_api_handlers(NativeApiRegistry& registry) {
             if (!camera || !camera->engine_camera) return native_failure("Camera not found", 2);
             if (request.args.size() < 3 || !request.args[2].is_object()) return native_failure("Expected PT settings object", 2);
             const auto& settings = request.args[2];
-            for (auto it = settings.begin(); it != settings.end(); ++it) {
-                const double maximum = it.key() == "max_depth" ? 128 : it.key() == "min_depth" ? 20 : 1;
-                if ((it.key() != "max_depth" && it.key() != "min_depth" && it.key() != "rr_threshold") || !it->is_number())
-                    return native_failure("Invalid PT parameter: " + it.key(), 2);
-                const double value = it->get<double>();
-                if (!std::isfinite(value) || value < 0 || value > maximum ||
-                    (it.key() != "rr_threshold" && value != std::floor(value)))
-                    return native_failure("PT parameter out of range: " + it.key(), 2);
-            }
+            if (const auto error = validate_native_pt_settings(settings); !error.empty()) return native_failure(error, 2);
             camera->engine_camera->set_vision_pt_settings(settings.dump());
             return native_success({{"status", "success"}, {"pending", true}, {"settings", settings}});
         }},

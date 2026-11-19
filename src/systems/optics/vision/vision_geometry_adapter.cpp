@@ -21,6 +21,7 @@
 #include "base/using.h"
 #include "math/basic_types.h"
 #include "vision_material_adapter.h"
+#include "vision_medium_adapter.h"
 
 namespace Corona::Systems::Vision {
 
@@ -422,6 +423,7 @@ void append_prepared_group(::vision::Scene& scene, PreparedGroup& prepared_group
             instance->set_o2w(source.o2w);
             instance->set_name("corona-node:" + std::to_string(prepared.geometry_handle) + ":" + std::to_string(source.draw_index));
             instance->set_material(materials.at(source.mesh_index));
+            if (scene.process_mediums()) attach_vision_medium_interface(scene, *instance, prepared.optics);
             MeshDevice material_source;
             const auto& mesh=prepared.meshes.at(source.mesh_index);
             material_source.material=mesh.material;

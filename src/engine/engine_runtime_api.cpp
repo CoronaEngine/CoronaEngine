@@ -217,6 +217,16 @@ Corona::API::Scene::~Scene() {
     }
 }
 
+void Corona::API::Scene::set_authored_media(std::shared_ptr<const nlohmann::json> media) {
+    if (auto accessor = SharedDataHub::instance().scene_storage().acquire_write(handle_)) {
+        if (accessor->authored_media == media) return;
+        accessor->authored_media = std::move(media);
+        ++accessor->authored_media_revision;
+    } else {
+        CFW_LOG_ERROR("[Scene::set_authored_media] Failed to acquire write access to scene storage");
+    }
+}
+
 void Corona::API::Scene::set_environment(Environment* env) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Scene::set_environment] Invalid scene handle");
