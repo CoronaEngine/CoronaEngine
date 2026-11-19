@@ -12,6 +12,7 @@
 #include "ReSTIR/indirect.h"
 #include "ReSTIR/rtxpt_gi_lights.h"
 #include "ReSTIR/rtxpt_gi_denoiser_diagnostic.h"
+#include "ReSTIR/rtxpt_gi_denoiser_prepare.h"
 #include "ReSTIR/rtxpt_gi_shadow_diagnostic.h"
 #include "ReSTIR/rtxpt_gi_primary_light_diagnostic.h"
 #include "ReSTIR/stable_planes.h"
@@ -686,10 +687,28 @@ public:
                 views.di_specular = falcor_di_->denoiser_specular();
                 views.di_bypass = falcor_di_->denoiser_bypass();
                 views.gi_stable = indirect_->native_reblur_bypass();
+                // Readback-only materialization; normal rendering has no Guide array.
+                auto guides = device().create_buffer<reblur::Guide>(size_t(pipeline()->pixel_num()) * StablePlaneCount,
+                    "RTXPT GI diagnostic-only decoded guides");
+                auto prefixes = indirect_->native_reblur_prefix().view_as<RtxptGIPrefixPlane>();
+                auto headers = indirect_->native_reblur_headers();
+                auto motion_y = indirect_->native_reblur_motion_y();
+                Kernel decode = [&](BufferVar<RtxptGIPrefixPlane> prefix_records, BufferVar<uint4> prefix_headers,
+                                    BufferVar<float> prefix_motion_y, BufferVar<reblur::Guide> output, Uint2 resolution) {
+                    Uint2 pixel = dispatch_idx().xy();
+                    $if(any(pixel >= resolution)) { $return(); };
+                    for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
+                        auto guide = rtxpt_gi::load_pt_reblur_guide(prefix_records, prefix_headers, prefix_motion_y, pixel, resolution, Uint{layer},
+                            [&](const Uint &instance) { return pipeline()->geometry().data()->instances().read(instance).mat_id; });
+                        output.write(layer * resolution.x * resolution.y + pixel.y * resolution.x + pixel.x, guide);
+                    }
+                };
+                auto decode_shader = device().compile(decode, "RTXPT GI diagnostic-only Guide decode");
+                stream << decode_shader(prefixes, headers, motion_y, guides.view(), rp->resolution()).dispatch(rp->resolution());
                 for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
                     views.gi_diffuse[layer] = indirect_->native_reblur_diffuse(layer);
                     views.gi_specular[layer] = indirect_->native_reblur_specular(layer);
-                    views.gi_guides[layer] = indirect_->native_reblur_guides(layer);
+                    views.gi_guides[layer] = guides.view(size_t(layer) * pipeline()->pixel_num(), pipeline()->pixel_num()).view_as<std::byte>();
                 }
                 rtxpt_gi::download_native_reblur_diagnostics(device(), stream, views, rp->resolution(), directory, stage);
                 if (string_view(stage) == "raw") {
@@ -810,7 +829,9 @@ public:
                 gi.allow_fused_composition = false; gi.compose_only = false;
                 auto d = indirect_->native_reblur_diffuse(layer), sp = indirect_->native_reblur_specular(layer);
                 gi.lobe_signals = {d, sp, d, sp};
-                gi.prepared_reblur_guides = indirect_->native_reblur_guides(layer);
+                gi.prepared_reblur_prefix = indirect_->native_reblur_prefix();
+                gi.prepared_reblur_headers = indirect_->native_reblur_headers();
+                gi.prepared_reblur_motion_y = indirect_->native_reblur_motion_y();
                 submit(denoiser_->dispatch(gi), &cur_stage_profile_.spatial_angular_ms);
             }
             NativeReblurComposeParam p;

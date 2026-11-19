@@ -9,6 +9,7 @@
 #include "base/denoiser.h"
 #include "params.h"
 #include "filter.h"
+#include "render_core/integrator/ReSTIR/rtxpt_gi_prefix_storage.h"
 #ifdef VISION_REBLUR_EDSL
 #include "edsl_nrd.h"
 #include "edsl_nrd_params.h"
@@ -25,6 +26,10 @@ struct GuideParam {
     BufferDesc<> output;
     BufferDesc<float4> diffuse, specular;
     BufferDesc<Guide> prepared_guides;
+    BufferDesc<RtxptGIPrefixPlane> prepared_prefix;
+    BufferDesc<uint4> prepared_headers;
+    BufferDesc<float> prepared_motion_y;
+    uint prepared_plane{};
     uint2 size{};
     uint layered{}, stable{}, frame{}, prepared{};
 };
@@ -39,7 +44,7 @@ struct GuidePackParam {
 };
 #endif
 }
-OC_PARAM_STRUCT(vision::reblur, GuideParam, visibility, planes, surfaces, extensions, motion, output, diffuse, specular, prepared_guides, size, layered, stable, frame, prepared) {};
+OC_PARAM_STRUCT(vision::reblur, GuideParam, visibility, planes, surfaces, extensions, motion, output, diffuse, specular, prepared_guides, prepared_prefix, prepared_headers, prepared_motion_y, prepared_plane, size, layered, stable, frame, prepared) {};
 OC_PARAM_STRUCT(vision::reblur, PublishParam, diffuse, specular, bypass, direct, indirect) {};
 #ifdef VISION_REBLUR_EDSL
 OC_PARAM_STRUCT(vision::reblur, GuidePackParam, guide, pack) {};

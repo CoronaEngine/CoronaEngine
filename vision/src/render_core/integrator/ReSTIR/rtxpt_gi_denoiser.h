@@ -22,9 +22,10 @@ static_assert(offsetof(reblur::Guide, normal_roughness) == 32u && offsetof(reblu
 // Disabled storage captures no resource and creates no extra GPU expressions.
 struct NativeReblurStorage {
     Buffer<float4> *diffuse{}, *specular{}, *bypass{};
-    Buffer<reblur::Guide> *guides{};
+    Buffer<reblur::Guide> *guides{}; // legacy standard-prefix producer only
+    Buffer<float> *motion_y{};
     uint pixels{};
-    [[nodiscard]] bool enabled() const noexcept { return guides != nullptr; }
+    [[nodiscard]] bool enabled() const noexcept { return diffuse != nullptr; }
     [[nodiscard]] Uint address(const Uint &pixel, const Uint &plane) const noexcept { return plane * pixels + pixel; }
     void write(const Uint &pixel, const Uint &plane, const Float4 &d, const Float4 &s) const noexcept {
         const Uint i = address(pixel, plane); diffuse->write(i, d); specular->write(i, s);
@@ -32,6 +33,7 @@ struct NativeReblurStorage {
     [[nodiscard]] Float4 read_diffuse(const Uint &pixel, const Uint &plane) const noexcept { return diffuse->read(address(pixel, plane)); }
     [[nodiscard]] Float4 read_specular(const Uint &pixel, const Uint &plane) const noexcept { return specular->read(address(pixel, plane)); }
     void write_guide(const Uint &pixel, const Uint &plane, const reblur::GuideVar &guide) const noexcept { guides->write(address(pixel, plane), guide); }
+    void write_motion_y(const Uint &pixel, const Uint &plane, const Float &value) const noexcept { motion_y->write(address(pixel, plane), value); }
 };
 
 [[nodiscard]] inline Float native_reblur_hit_t(const Float &previous, const Float &segment,

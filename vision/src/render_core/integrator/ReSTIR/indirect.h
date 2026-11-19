@@ -105,8 +105,7 @@ private:
     ocarina::Buffer<path_cost::PathWorkCounters> path_work_counters_;
     bool native_reblur_enabled_{};
     mutable Buffer<float4> native_reblur_diffuse_, native_reblur_specular_, native_reblur_bypass_;
-    mutable Buffer<reblur::Guide> native_reblur_guides_;
-    Shader<void(uint2)> rtxpt_native_reblur_prepare_;
+    mutable Buffer<float> native_reblur_motion_y_;
 
     [[nodiscard]] rtxpt_gi::PrefixStorage prefix_storage() const noexcept {
         auto &bindings = pipeline()->bindless_array();
@@ -181,12 +180,18 @@ public:
         return native_reblur_specular_.view(size_t(layer) * pipeline()->pixel_num(), pipeline()->pixel_num());
     }
     [[nodiscard]] BufferView<float4> native_reblur_bypass() const noexcept { return native_reblur_bypass_.view(); }
-    [[nodiscard]] BufferView<std::byte> native_reblur_guides(uint layer) const noexcept {
-        return native_reblur_guides_.view(size_t(layer) * pipeline()->pixel_num(), pipeline()->pixel_num()).view_as<std::byte>();
+    [[nodiscard]] BufferView<std::byte> native_reblur_prefix() const noexcept {
+        return rtxpt_prefix_planes_.view().view_as<std::byte>();
+    }
+    [[nodiscard]] BufferView<uint4> native_reblur_headers() const noexcept {
+        return rtxpt_prefix_headers_.view();
+    }
+    [[nodiscard]] BufferView<float> native_reblur_motion_y() const noexcept {
+        return native_reblur_motion_y_.view();
     }
     [[nodiscard]] rtxpt_gi::NativeReblurStorage native_reblur_storage() const noexcept {
         return native_reblur_enabled_ ? rtxpt_gi::NativeReblurStorage{&native_reblur_diffuse_, &native_reblur_specular_,
-            &native_reblur_bypass_, &native_reblur_guides_, pipeline()->pixel_num()} : rtxpt_gi::NativeReblurStorage{};
+            &native_reblur_bypass_, nullptr, &native_reblur_motion_y_, pipeline()->pixel_num()} : rtxpt_gi::NativeReblurStorage{};
     }
     [[nodiscard]] const RegistrableBuffer<GISample> &sample_buffer() const noexcept { return samples_; }
     [[nodiscard]] const RegistrableBuffer<HitBSDF> &rtxpt_proposals() const noexcept { return rtxpt_proposals_; }

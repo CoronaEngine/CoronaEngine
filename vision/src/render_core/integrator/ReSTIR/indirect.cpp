@@ -13,7 +13,6 @@
 #include "rtxpt_gi_rays.h"
 #include "rtxpt_gi_prefix.h"
 #include "base/integral/restir_shadow.h"
-#include "rtxpt_gi_denoiser_prepare.h"
 #include "rtxpt_gi_pt.h"
 #include "denoiser_signals.h"
 #include "base/integral/integrator.h"
@@ -416,7 +415,7 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                         $if(header[plane] == rtxpt_gi::PrefixInvalid || header[plane] == rtxpt_gi::PrefixQueued) { $continue; };
                         auto node = storage.read(plane);
                         $if(!gi_prefix_endpoint_matches(sampled_branch, bounce + 1u, -it.wo,
-                            header[plane], cast<uint>(node.direction_vertex.w), node.direction_vertex.xyz())) { $continue; };
+                            header[plane], rtxpt_gi::pt_prefix_depth(node), node.direction_vertex.xyz())) { $continue; };
                         Float2 bary = as<float2>(Uint2{node.hit_words.zw()});
                         $if(hit.inst_id != node.hit_words.x || hit.prim_id != node.hit_words.y ||
                             length_squared(Float2{hit.bary} - bary) > 1e-6f) { $continue; };
@@ -438,7 +437,7 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                             }
                         }
                         gi_signal_switch_plane(capture, signal_plane, plane, bounce);
-                        $if(!terminal_seen && node.throughput_flags.w == 0.f) {
+                        $if(!terminal_seen && !rtxpt_gi::pt_prefix_consumed(node)) {
                             terminal_seen = true;
                             $if(plane == dominant) {
                                 rtxpt_gi::PTSurfaceView receiver;
@@ -523,7 +522,7 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                     $for(plane, 3u) {
                         $if(header[plane] == rtxpt_gi::PrefixInvalid || header[plane] == rtxpt_gi::PrefixQueued) { $continue; };
                         auto node = storage.read(plane);
-                        $if(node.interiors_branch.y == 0u) { $continue; };
+                        $if(!rtxpt_gi::pt_prefix_ideal_path(node)) { $continue; };
                         Bool identity = hit->is_miss() && node.hit_words.x == InvalidUI32 && node.hit_words.y == InvalidUI32;
                         $if(hit->is_hit()) {
                             Float2 bary = as<float2>(Uint2{node.hit_words.zw()});
@@ -531,7 +530,7 @@ void ReSTIRGI::compile_initial_samples() noexcept {
                                 length_squared(Float2{hit.bary} - bary) <= 1e-6f;
                         };
                         represented |= gi_prefix_emission_represented(ideal_prefix, sampled_branch, bounce + 1u,
-                            direction, header[plane], cast<uint>(node.direction_vertex.w), node.direction_vertex.xyz(), identity,
+                            direction, header[plane], rtxpt_gi::pt_prefix_depth(node), node.direction_vertex.xyz(), identity,
                             capture.first_reflection_covered_by_di);
                         $if(represented) { $break; };
                     };
@@ -677,16 +676,6 @@ void ReSTIRGI::compile_initial_samples() noexcept {
         };
         kernel.function()->set_block_dim(64u, 1u, 1u);
         rtxpt_initial_samples_ = device().compile(kernel, "RTXPT GI shared PT initial candidates");
-        if (native_reblur_enabled_) {
-            Kernel prepare = [&](Uint2 resolution) {
-                Uint2 pixel = dispatch_idx().xy();
-                $if(any(pixel >= resolution)) { $return(); };
-                rtxpt_gi::prepare_native_reblur_guides(rtxpt_prefix_planes_.super(),
-                    rtxpt_prefix_headers_.super(), native_reblur_guides_, pixel, resolution);
-            };
-            prepare.function()->set_block_dim(8u, 8u, 1u);
-            rtxpt_native_reblur_prepare_ = device().compile(prepare, "RTXPT GI native guide conditioning");
-        }
         return;
     }
     const char *transport_override = std::getenv("VISION_RESTIR_GI_NATIVE_TRANSPORT");
@@ -1257,8 +1246,6 @@ CommandBatch ReSTIRGI::dispatch(uint frame_index, bool precise_lobes, bool denoi
         ret << temporal_pass_(param, frame_index).dispatch(rp->resolution());
         ret << spatial_shading_(param, frame_index).dispatch(rp->resolution());
     }
-    if (rtxpt_backend_ && native_reblur_enabled_)
-        ret << rtxpt_native_reblur_prepare_(rp->resolution()).dispatch(rp->resolution());
     return ret;
 }
 
@@ -1325,7 +1312,7 @@ void ReSTIRGI::restore(RuntimeObject *old_obj) noexcept {
                        initial_samples_, temporal_pass_, spatial_shading_, raw_radiance_, compact_radiance_, radiance_prepared_,
                        rtxpt_backend_, rtxpt_, rtxpt_proposals_, rtxpt_bypass_, rtxpt_lights_, rtxpt_materials_,
                        rtxpt_prefix_planes_, rtxpt_prefix_headers_, rtxpt_prefix_stable_, rtxpt_prefix_aux_, rtxpt_prefix_build_, rtxpt_initial_samples_,
-                       native_reblur_enabled_, native_reblur_diffuse_, native_reblur_specular_, native_reblur_bypass_, native_reblur_guides_, rtxpt_native_reblur_prepare_)
+                       native_reblur_enabled_, native_reblur_diffuse_, native_reblur_specular_, native_reblur_bypass_, native_reblur_motion_y_)
     if (rtxpt_) rtxpt_->rebind_owner(*this);
     if (rtxpt_lights_) rtxpt_lights_->rebind_owner(*this);
 }
@@ -1425,11 +1412,12 @@ void ReSTIRGI::prepare_rtxpt_candidate_buffers() noexcept {
 
 void ReSTIRGI::prepare_native_reblur_buffers() noexcept {
     const uint pixels = pipeline()->pixel_num();
-    if (native_reblur_guides_.size() == size_t(pixels) * 3u) return;
+    if (native_reblur_diffuse_.size() == size_t(pixels) * 3u &&
+        native_reblur_motion_y_.size() == size_t(pixels) * 3u) return;
     native_reblur_diffuse_ = device().create_buffer<float4>(size_t(pixels) * 3u, "RTXPT GI native REBLUR diffuse x3");
     native_reblur_specular_ = device().create_buffer<float4>(size_t(pixels) * 3u, "RTXPT GI native REBLUR specular x3");
     native_reblur_bypass_ = device().create_buffer<float4>(pixels, "RTXPT GI native deterministic stable radiance");
-    native_reblur_guides_ = device().create_buffer<reblur::Guide>(size_t(pixels) * 3u, "RTXPT GI native REBLUR AOS guides x3");
+    native_reblur_motion_y_ = device().create_buffer<float>(size_t(pixels) * 3u, "RTXPT GI native REBLUR FP32 motion Y x3");
 }
 
 bool ReSTIRGI::set_native_reblur_enabled(bool enabled) noexcept {
@@ -1442,9 +1430,10 @@ bool ReSTIRGI::set_native_reblur_enabled(bool enabled) noexcept {
         rtxpt_->compile_native_reblur_final();
     }
     invalidate_history();
-    if (!enabled && native_reblur_guides_.size() != 0u) {
+    if (!enabled && native_reblur_diffuse_.size() != 0u) {
         native_reblur_diffuse_.destroy(); native_reblur_specular_.destroy();
-        native_reblur_bypass_.destroy(); native_reblur_guides_.destroy();
+        native_reblur_bypass_.destroy();
+        native_reblur_motion_y_.destroy();
     }
     return true;
 }

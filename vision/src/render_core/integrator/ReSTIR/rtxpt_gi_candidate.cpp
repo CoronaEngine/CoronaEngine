@@ -33,14 +33,6 @@ void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env) noexcept {
     auto &lights = Toolkit::renderer().light_sampler();
     const auto primary_surface = Toolkit::frame_buffer().cur_surfaces_var(env.frame_index()).read(dispatch_id());
     const Bool first_reflection_covered_by_di = !BxDFFlag::is_specular(primary_surface.flag);
-    if (storage.denoiser.enabled()) {
-        for (uint p = 0u; p < 3u; ++p) {
-            reblur::GuideVar empty;
-            empty.position = make_float4(0.f); empty.identity = make_uint4(0u);
-            empty.normal_roughness = make_float4(0.f, 0.f, 1.f, 1.f);
-            storage.denoiser.write_guide(dispatch_id(), Uint{p}, empty);
-        }
-    }
     RayVar camera = Toolkit::frame_buffer().rays().read(dispatch_id())->to_ray();
     Float near_depth = camera->t_min() * dot(camera->direction(), Toolkit::scene().sensor()->device_forward());
     camera->update_origin(camera->origin() + camera->direction() * camera->t_min());
@@ -160,7 +152,8 @@ void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env) noexcept {
             Float3 virtual_point = virtual_position(matrix, point, pivot);
             Float view_depth = near_depth + dot(camera->direction() * travelled, Toolkit::scene().sensor()->device_forward());
             node.virtual_position = make_float4(virtual_point, view_depth);
-            storage.write(plane, node); header[plane] = branch;
+            pt_prefix_store_controls(node, depth, consumed, ideal_path);
+            header[plane] = branch;
             $if(gi_prefix_receiver_eligible(hit->is_hit(), consumed, has_remainder) && (dominant_plane == 3u || dominant)) {
                 dominant_plane = plane;
             };
@@ -180,9 +173,11 @@ void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env) noexcept {
                     guide.normal_roughness = make_float4(n, roughness);
                     guide.diffuse_factor = make_float4(guide_diffuse, native_reblur_half_signed(Float{motion.x}));
                     guide.specular_factor = make_float4(guide_specular, native_reblur_half_signed(Float{motion.y}));
-                    storage.denoiser.write_guide(dispatch_id(), plane, guide);
+                    pt_prefix_store_guide(node, guide);
+                    storage.denoiser.write_motion_y(dispatch_id(), plane, Float{guide.specular_factor.w});
                 };
             }
+            storage.write(plane, node);
             $break;
         };
     };
