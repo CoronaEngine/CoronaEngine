@@ -26,6 +26,7 @@ import python_surface
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 MODULE = ROOT / "src/systems/script/python/corona_engine_module.cpp"
+LOADER = "embedded_python/runtime/native_engine.py"
 
 # The translation units that add names to the CoronaEngine module. `cef_py_bind.cpp` lives in
 # the UI system but binds into the script module, which is why the discovery cannot be limited
@@ -196,6 +197,27 @@ def test_every_host_support_name_is_a_snake_case_identifier():
     bad = sorted(name for name in python_surface.HOST_SUPPORT_FUNCTIONS
                  if not re.fullmatch(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*", name))
     assert not bad, f"host-support names that are not snake_case: {bad}"
+
+
+def test_the_loader_recognises_the_module_by_a_name_the_module_binds():
+    """The Python loader must not depend on a name a refactor can delete.
+
+    `runtime/native_engine.py` decides whether `import CoronaEngine` yielded the engine by
+    looking for marker attributes. It used to look for `Scene`, which the object-model removal
+    deleted: recognition then returned None for every optional binding, and the editor sat on
+    "archive service initialising" with nothing raising. At least one marker has to name
+    something the pinned surface actually binds; `Scene` may stay as a legacy marker only.
+    """
+    source = (ROOT / LOADER).read_text(encoding="utf-8")
+    markers = set(re.findall(r"hasattr\(mod, '(\w+)'\)", source))
+    declared = re.search(r"LOADER_MARKERS\s*=\s*\(([^)]*)\)", source)
+    assert declared, "the loader no longer declares its markers as LOADER_MARKERS"
+    markers |= set(re.findall(r"'(\w+)'", declared.group(1)))
+    bound = markers & set(python_surface.HOST_SUPPORT_FUNCTIONS)
+    assert bound, (
+        f"the loader recognises the module by {sorted(markers)}, none of which the module binds "
+        f"({sorted(python_surface.HOST_SUPPORT_FUNCTIONS)}); a deleted marker silently disables "
+        "every optional binding")
 
 
 def test_the_module_installs_the_two_groups_in_order():

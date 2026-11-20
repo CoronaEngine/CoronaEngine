@@ -540,6 +540,11 @@ try {
     assert.equal(loadStatus.active, true);
     assert.equal(loadStatus.scene, sceneRead.scene);
     assert.equal(loadStatus.total, loadStatus.ready + loadStatus.failed + loadStatus.pending);
+    // The start screen polls this flag to enable "create world"; it turns true only once the
+    // Python host registered its service dispatcher. A module the loader fails to recognise
+    // (a marker attribute deleted with a refactor) leaves it false forever - without raising.
+    assert.equal(loadStatus.archive_service_ready, true,
+      'the embedded host registered the Python service dispatcher');
     assert.equal('data' in loadStatus, false);
     const versionEnvelope = JSON.stringify({ service: 'project_archive', function: 'editor_settings',
       args: [{ section: 'General', key: 'version', fallback: '1.2.0' }] });

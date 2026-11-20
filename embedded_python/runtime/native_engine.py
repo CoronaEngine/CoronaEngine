@@ -3,6 +3,15 @@ from importlib import import_module
 from typing import Optional
 
 
+# A marker has to be a name the module actually binds, and one whose absence is reported.
+# The loader used to recognise the module by `Scene`, which the object-model removal deleted:
+# recognition then returned None for *every* optional binding (send_log, the service
+# dispatcher registration, the project session), leaving the editor on "archive service
+# initialising" while nothing raised. `send_log` is host support, so it survives engine
+# generations that come and go above it; `Scene` stays only for older binaries.
+LOADER_MARKERS = ('send_log', 'Scene')
+
+
 def load_corona_engine() -> Optional[object]:
     candidates = [
         'CoronaEngine',
@@ -16,8 +25,8 @@ def load_corona_engine() -> Optional[object]:
                 return getattr(mod, 'CoronaEngine')
 
             # 否则，检查模块是否本身就是 CoronaEngine（原生C++模块的情况）
-            # 如果模块有 Scene 属性，说明它是可用的引擎模块
-            if hasattr(mod, 'Scene'):
+            # 用宿主必然绑定的入口认模块，而不是用某个可能被删掉的类
+            if any(hasattr(mod, marker) for marker in LOADER_MARKERS):
                 return mod
         except Exception:
             continue
