@@ -8,7 +8,7 @@
 #include <GLFW/glfw3.h>
 #include "core/util/logging.h"
 
-namespace vision::detail {
+namespace vision::gui_gl_detail {
 [[nodiscard]] inline auto gl_error_string(GLenum error) noexcept {
     OC_USING_SV;
     switch (error) {
@@ -19,7 +19,7 @@ namespace vision::detail {
         default: return "unknown error"sv;
     }
 }
-}// namespace vision::detail
+}// namespace vision::gui_gl_detail
 
 #define VISION_CHECK_GL(...)                                   \
     [&] {                                                      \
@@ -27,11 +27,11 @@ namespace vision::detail {
         if (auto error = glGetError(); error != GL_NO_ERROR) { \
             OC_ERROR_FORMAT(                                   \
                 "OpenGL error: {}.",                          \
-                ::vision::detail::gl_error_string(error));     \
+                ::vision::gui_gl_detail::gl_error_string(error));     \
         }                                                      \
     }()
 
-namespace vision::detail {
+namespace vision::gui_gl_detail {
 
 inline GLuint create_gl_shader(const std::string &source, GLuint shader_type) {
     GLuint shader = glCreateShader(shader_type);
@@ -95,4 +95,4 @@ inline GLuint create_gl_program(const std::string &vert_source, const std::strin
     return program;
 }
 
-}// namespace vision::detail
+}// namespace vision::gui_gl_detail

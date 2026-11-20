@@ -25,6 +25,8 @@ protected:
 
 protected:
     EncodedObject();
+    // Replacement construction can run under another cached pipeline's context.
+    void restore_owner(const EncodedObject &previous) noexcept;
 
 public:
     [[nodiscard]] RegistrableManaged<buffer_ty> &datas() noexcept { return datas_; }

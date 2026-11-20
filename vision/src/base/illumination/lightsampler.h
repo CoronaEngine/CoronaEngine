@@ -42,7 +42,7 @@ public:
     LightSampler() = default;
     explicit LightSampler(const LightSamplerDesc &desc);
     void set_light_manager(LightManager *lm) noexcept { light_manager_ = lm; }
-    VS_HOTFIX_MAKE_RESTORE(Node, env_separate_, env_prob_)
+    VS_HOTFIX_MAKE_RESTORE(Node, light_manager_, env_separate_, env_prob_)
     virtual void prepare(BindlessArray &bindless_array, Device &device) noexcept;
     void prepare() noexcept override;
     void update_device_data() const noexcept;

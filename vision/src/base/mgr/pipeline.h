@@ -65,6 +65,7 @@ protected:
 
     mutable double delta_time_{};
     mutable double total_time_{};
+    uint64_t hotfix_revision_{};
 
     PipelineUI ui_{this};
     mutable vector<UP<ocarina::ShaderBase>> shaders_;
@@ -76,6 +77,9 @@ protected:
 
 public:
     explicit Pipeline(const PipelineDesc &desc);
+    ~Pipeline() override;
+    static void synchronize_hotfix_streams() noexcept;
+    void refresh_hotfix() noexcept;
     void activate_global_context() noexcept;
     void init() noexcept;
     void initialize_(const vision::NodeDesc &node_desc) noexcept override;

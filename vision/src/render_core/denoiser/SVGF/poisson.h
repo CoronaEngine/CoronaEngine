@@ -68,6 +68,7 @@ private:
     Buffer<RadType4> temp_buffer_indirect_;
 
 public:
+    void set_svgf(SVGF *svgf) noexcept { svgf_ = svgf; }
     explicit PoissonFilter(SVGF *svgf)
         : svgf_(svgf) {}
     VS_HOTFIX_MAKE_RESTORE(RuntimeObject, svgf_, combined_shader_, guide_shader_, layer_guide_shader_, legacy_combined_shader_,

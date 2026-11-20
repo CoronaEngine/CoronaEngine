@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "hotfix/support.h"
 #include "core/stl.h"
 #include "core/util/hash.h"
 #include "core/util/string_util.h"
@@ -40,11 +41,8 @@ using ocarina::pair;
 using ocarina::make_pair;
 using ocarina::span;
 using ocarina::function;
-using ocarina::tuple;
 
 // Smart pointers
-using ocarina::SP;
-using ocarina::UP;
 using ocarina::WP;
 using ocarina::shared_ptr;
 using ocarina::unique_ptr;
@@ -107,7 +105,6 @@ using ocarina::to_upper;
 using ocarina::DynamicModule;
 using ocarina::thread_safety;
 using ocarina::ptr_t;
-using ocarina::parent_path;
 using ocarina::Device;
 using ocarina::RHIContext;
 using ocarina::DataAccessor;

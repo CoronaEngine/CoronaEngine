@@ -21,6 +21,18 @@ function(vision_add_plugin name)
 #            WINDOWS_EXPORT_ALL_SYMBOLS ON
             UNITY_BUILD OFF
             DEBUG_POSTFIX "")
+
+    # Only modules with runtime constructors participate in hot reload. An empty
+    # patch registry cannot be applied by Horizon's transactional runtime.
+    foreach(source IN LISTS PLUGIN_SOURCES)
+        if(source MATCHES "[.]cpp$")
+            file(READ "${source}" source_text)
+            if(source_text MATCHES "VS_(REGISTER_HOTFIX|MAKE_CLASS_CREATOR_HOTFIX)")
+                corona_add_hotfix_patch("${lib_name}")
+                break()
+            endif()
+        endif()
+    endforeach()
 endfunction()
 
 # Horizon (ocarina) is resolved at the CoronaEngine root level

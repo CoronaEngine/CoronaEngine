@@ -42,7 +42,7 @@ function(corona_configure_test_runtime directory)
     endforeach()
     # These libraries share the renderer runtime directory. Resolve it per
     # configuration rather than assuming a single-config bin directory.
-    foreach(_runtime_target IN ITEMS vision-base ocarina-core horizon-hotfix)
+    foreach(_runtime_target IN ITEMS vision-base ocarina-core corona-hotfix-runtime)
         if(TARGET ${_runtime_target})
             list(APPEND _runtime_directories "$<TARGET_FILE_DIR:${_runtime_target}>")
         endif()

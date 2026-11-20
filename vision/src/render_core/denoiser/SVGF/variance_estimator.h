@@ -49,6 +49,7 @@ private:
     Shader<variance_signature> variance_shader_;
 
 public:
+    void set_svgf(SVGF *svgf) noexcept { svgf_ = svgf; }
     explicit VarianceEstimator(SVGF *svgf)
         : svgf_(svgf) {}
 

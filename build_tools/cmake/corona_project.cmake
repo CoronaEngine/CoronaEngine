@@ -44,6 +44,8 @@ if(BUILD_CORONA_EXAMPLES)
     add_subdirectory(examples)      # Example applications
 endif()
 
+corona_finalize_hotfix()
+
 # Apply after all subdirectories have registered their tests, including tests
 # contributed by dependency projects such as Horizon.
 include(corona_test_runtime)

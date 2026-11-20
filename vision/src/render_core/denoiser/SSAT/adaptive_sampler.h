@@ -65,6 +65,7 @@ private:
     Buffer<float> shear_magnitude_;   // Shear magnitude λ(p) per subpixel
     
 public:
+    void set_ssat(SSAT *ssat) noexcept { ssat_ = ssat; }
     explicit AdaptiveSampler(SSAT *ssat)
         : ssat_(ssat) {}
     

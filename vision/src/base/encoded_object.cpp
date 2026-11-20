@@ -24,6 +24,15 @@ EncodedObject::~EncodedObject() {
     }
 }
 
+void EncodedObject::restore_owner(const EncodedObject &previous) noexcept {
+    auto owner = previous.owner_pipeline_.lock();
+    if (auto current = owner_pipeline_.lock(); current != owner) {
+        if (current) current->deregister_encoded_object(this);
+        owner_pipeline_ = owner;
+        if (owner) owner->register_encoded_object(this);
+    }
+}
+
 void EncodedObject::encode_data() noexcept {
     auto size = aligned_size();
     datas_.host_buffer().resize(size / sizeof(buffer_ty));
