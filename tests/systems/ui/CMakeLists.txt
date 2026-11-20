@@ -368,3 +368,10 @@ target_include_directories(corona_transform_command_merge_tests
     PRIVATE ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(corona_transform_command_merge_tests PRIVATE corona::engine)
 add_test(NAME TransformCommandMergeTests COMMAND corona_transform_command_merge_tests)
+
+# 部分 transform patch 的补全来源：缺的字段取设备的当前值（物理/快照也会写它），
+# 而不是加载时缓存——否则只改 scale 会把被物理推开的 actor 拉回作者位置。
+add_executable(corona_transform_patch_completion_tests test_transform_patch_completion.cpp)
+target_include_directories(corona_transform_patch_completion_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/src/systems/ui)
+add_test(NAME TransformPatchCompletionTests COMMAND corona_transform_patch_completion_tests)

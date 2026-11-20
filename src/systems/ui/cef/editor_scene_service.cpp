@@ -30,6 +30,7 @@
 #include "editor_actor_properties.h"
 #include "editor_request_values.h"
 #include "editor_platform_dialogs.h"
+#include "transform_patch.h"
 #include "editor_archive_snapshot.h"
 #include "editor_paths.h"
 #include "editor_text_utils.h"
@@ -1379,20 +1380,28 @@ SceneReply apply_native_actor_transform(const SceneRequest& request) {
     if (!actor && patch.actor.rfind("__shell_", 0) != 0) actor = find_native_actor(*scene, "__shell_" + patch.actor);
     if (!actor) return fail("ACTOR_NOT_FOUND", "Actor not found: " + patch.actor);
 
-    // The patch fills the actor's authoritative TRS cache, then the geometry takes one complete
-    // write: Geometry only accepts a whole transform, so the fields this patch omits come from the
-    // cache. Three separate writes used to lose every field but the last.
-    if (patch.position) actor->position = *patch.position;
-    if (patch.rotation) actor->rotation = *patch.rotation;
-    if (patch.scale) actor->scale = *patch.scale;
-    if (actor->geometry) actor->geometry->set_transform(actor->position, actor->rotation, actor->scale);
+    // Geometry only accepts a whole transform, so a partial patch has to be completed from
+    // something. Complete it from the device the caller is looking at, not from the authored
+    // cache: the cache is written on load and by patches and is never read back from the device,
+    // so completing a scale-only patch from it snapped back an actor that physics had moved.
+    // The cache keeps its job - the initial value for an actor without geometry.
+    const TransformTriple device = actor->geometry
+        ? TransformTriple{actor->geometry->get_position(), actor->geometry->get_rotation(),
+                          actor->geometry->get_scale()}
+        : TransformTriple{actor->position, actor->rotation, actor->scale};
+    const auto complete = complete_transform(
+        TransformPatchValues{patch.position, patch.rotation, patch.scale}, device);
+    if (patch.position) actor->position = complete.position;
+    if (patch.rotation) actor->rotation = complete.rotation;
+    if (patch.scale) actor->scale = complete.scale;
+    if (actor->geometry) {
+        actor->geometry->set_transform(complete.position, complete.rotation, complete.scale);
+    }
     actor->actor_version = std::max(actor->actor_version + 1, 1);
     // Read back through the geometry: with one complete command queued, transform_view() merges the
     // pending write immediately, so this reports the value just applied rather than the old snapshot.
     reply.write.transform = {scene->route, actor->name, actor->actor_guid, actor->actor_version,
-        actor->geometry ? actor->geometry->get_position() : actor->position,
-        actor->geometry ? actor->geometry->get_rotation() : actor->rotation,
-        actor->geometry ? actor->geometry->get_scale() : actor->scale};
+        complete.position, complete.rotation, complete.scale};
     return reply;
 }
 
