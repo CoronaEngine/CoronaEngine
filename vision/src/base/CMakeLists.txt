@@ -8,7 +8,10 @@ target_link_libraries(vision-base PUBLIC
         vision-window
         vision-UI
         vision-ext
-        ocarina-include)
+        ocarina-include
+        horizon-hotfix-runtime-api)
+# Include the runtime objects in this DLL so Vision plugins share its registry.
+target_link_libraries(vision-base PRIVATE horizon-hotfix-runtime)
 
 target_compile_definitions(vision-base PRIVATE
         VISION_BASE_EXPORT_DLL=1

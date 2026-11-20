@@ -151,4 +151,4 @@ public:
 VS_MAKE_CLASS_CREATOR_HOTFIX_FUNC(vision, TextureCoordinate, tex_coord)
 VS_MAKE_CLASS_CREATOR_HOTFIX_FUNC(vision, GeometryNode, geometry)
 VS_MAKE_CLASS_CREATOR_HOTFIX_FUNC(vision, CameraData, camera)
-VS_REGISTER_CURRENT_FILE
+VS_REGISTER_CURRENT_PLUGIN(0)

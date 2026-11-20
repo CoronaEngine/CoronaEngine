@@ -7,7 +7,7 @@ from conan.tools.files import copy, get
 
 class SlangConan(ConanFile):
     name = "slang"
-    version = "2026.10"
+    version = "2026.11"
     package_type = "shared-library"
     license = "Apache-2.0 WITH LLVM-exception"
     homepage = "https://github.com/shader-slang/slang"
@@ -17,11 +17,11 @@ class SlangConan(ConanFile):
     _assets = {
         ("Windows", "x86_64"): (
             "windows-x86_64",
-            "4d681fd6c40a028939d4907d714fb633a16895bd7ae8b8ef288401b805c17aa4",
+            "e070e239290108dd7a83094cf72fb94ae753b2d5331adba76874bf17dd5c8b6a",
         ),
         ("Windows", "armv8"): (
             "windows-aarch64",
-            "54b88155e5d94ddf63ef5013a59a8a49f35a7b415048fc57078d9eecdf2ccc7d",
+            "8380746b38cff5c727f7ff6a73a9d9608eee7230a886540244b977af3596d8ec",
         ),
     }
 

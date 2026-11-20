@@ -1044,4 +1044,4 @@ CommandBatch ReSTIRDI::dispatch(uint frame_index, bool precise_lobes) const noex
 
 }// namespace vision
 VS_REGISTER_HOTFIX(vision, ReSTIRDI)
-VS_REGISTER_CURRENT_PATH(1, "vision-integrator-ReSTIR.dll")
+VS_REGISTER_CURRENT_PATH(1, "vision-integrator-ReSTIR")

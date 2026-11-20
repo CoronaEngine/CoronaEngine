@@ -13,7 +13,6 @@ function(corona_add_horizon_workspace)
     set(HORIZON_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(HORIZON_BUILD_OCARINA_TESTS OFF CACHE BOOL "" FORCE)
     set(HORIZON_BUILD_OCARINA ON CACHE BOOL "" FORCE)
-    set(HORIZON_BUILD_VISION_HOTFIX ON CACHE BOOL "" FORCE)
 
     add_subdirectory(
         "${_corona_horizon_source}"

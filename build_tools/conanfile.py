@@ -72,7 +72,7 @@ class CoronaEngineConan(ConanFile):
         self.requires("vulkan-loader/1.4.350.0", transitive_headers=True)
         self.requires("vulkan-memory-allocator/3.4.0", transitive_headers=True)
         self.requires("quill/11.0.2", transitive_headers=True, transitive_libs=True)
-        self.requires("slang/2026.10", transitive_headers=True, transitive_libs=True)
+        self.requires("slang/2026.11", transitive_headers=True, transitive_libs=True)
         self.requires("tracy/0.13.1", options={"on_demand": True})
         # Required by Horizon core (as of commit 5b4d13fa)
         self.requires("fmt/12.1.0", transitive_headers=True, transitive_libs=True)
