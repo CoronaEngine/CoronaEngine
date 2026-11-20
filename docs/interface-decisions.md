@@ -60,10 +60,13 @@
 
 ## 5. 失败形状
 
-拒绝码的**唯一声明处**是 `tests/tools/rejection_codes.py`（基础设施 5 个、窗口 2 个、场景/归档 29 个、
-bridge 4 个，共 40 个），守卫 `tests/tools/test_rejection_vocabulary.py` 保证源码只发这些码，契约文档的失败码表
-由它生成。扫描器覆盖 `error_code = "…"`、`fail("…")`、`reject(…, "…")`、`RejectPromise("…")` 等写法；
-`fail("…")` 这条是补上的——它漏掉了 `ACTOR_VERSION_CONFLICT` 和另外 6 个场景码。
+拒绝码的**唯一声明处**是 `tests/tools/rejection_codes.py`（基础设施 5 个、窗口 2 个、场景/归档 31 个、
+bridge 4 个，共 42 个），守卫 `tests/tools/test_rejection_vocabulary.py` 保证源码只发这些码，契约文档的失败码表
+由它生成。扫描器覆盖 `error_code = "…"`、`fail("…")`、`reject(…, "…")`、`RejectPromise("…")` 和
+`ValidationError` 的 `return {"CODE", "message"}` 等写法。后两条都是漏了之后补上的：
+`fail("…")` 漏掉过 `ACTOR_VERSION_CONFLICT` 和另外 6 个场景码；花括号形式漏掉了
+`DUPLICATE_ACTOR_NAME`、`DUPLICATE_CAMERA_NAME` —— 这两个码一直经
+`fail(invalid.code.c_str(), …)` 原样到达 Promise 拒绝，却不在词表也不在契约里。
 
 Python 服务的失败分成两类，分界是"谁的问题"：
 

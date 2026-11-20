@@ -18,9 +18,12 @@ import rejection_codes
 def test_sources_only_emit_declared_codes():
     emitted = rejection_codes.emitted_codes()
     undeclared = sorted(set(emitted) - rejection_codes.ALL)
+    # The message is built outside the assert: an f-string holding a dict comprehension
+    # inside a set literal is evaluated eagerly and raises instead of reporting, so the
+    # first code this guard ever caught crashed on its own message.
+    detail = "；".join(f"{code}（{', '.join(sorted(emitted[code]))}）" for code in undeclared)
     assert not undeclared, (
-        f"these rejection codes are emitted but not declared in rejection_codes.py: "
-        f"{ {{code: sorted(emitted[code]) for code in undeclared}} }")
+        "these rejection codes are emitted but not declared in rejection_codes.py: " + detail)
 
 
 def test_every_declared_code_is_still_emitted():
@@ -77,3 +80,22 @@ def test_infrastructure_codes_are_the_five_the_binding_owns():
         "PERMISSION_DENIED", "CONTEXT_CHANGED", "INVALID_ARGUMENT",
         "NATIVE_UNAVAILABLE", "NATIVE_FAILURE",
     }
+
+
+def test_codes_written_as_a_brace_initialised_error_are_scanned():
+    """The `ValidationError` services refuse with `return {"CODE", "message"}`.
+
+    That spelling used to be invisible to the scanner: it only knew
+    `error_code = "CODE"`, `fail("CODE")` and `return "CODE"`. Three codes reached a Web
+    rejection in `data.code` without being declared, so the vocabulary and the generated
+    contract could both claim a smaller set than the code actually emits.
+    """
+    import re
+
+    source = (rejection_codes.ROOT / "src/systems/ui/editor_api/camera_properties_service.cpp"
+              ).read_text(encoding="utf-8-sig")
+    written = set(re.findall(r'\{"([A-Z][A-Z_]+)"\s*,', source))
+    assert written, "the camera properties service no longer writes a brace-initialised code"
+    missed = sorted(written - set(rejection_codes.emitted_codes()))
+    assert not missed, f"the scanner cannot see these emitted codes: {missed}"
+

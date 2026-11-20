@@ -62,6 +62,11 @@ SCENE = {
     "INVALID_BOUNDS",         # the requested rectangle is degenerate
     "NODE_EDIT_REJECTED",     # the geometry owner refused the node write
     "NODE_NOT_FOUND",         # the model node index is unknown
+    # Rename refusals. The editor_api services return these as a
+    # `ValidationError` value (`{"CODE", "message"}`) and their caller forwards `.code`
+    # verbatim, so they reach Web through the same rejection channel as the ones above.
+    "DUPLICATE_ACTOR_NAME",   # another Actor in the scene already uses that name; pick another
+    "DUPLICATE_CAMERA_NAME",  # another camera in the scene already uses that name
 }
 
 BRIDGE = {
@@ -113,7 +118,8 @@ DETAIL = ALL - STABLE
 
 
 # A code is written directly, as an argument to the failure helper, as the reject
-# argument, or as one branch of a status-to-code mapping. All four spellings reach Web.
+# argument, as one branch of a status-to-code mapping, or as a `ValidationError`
+# return. Every spelling reaches Web.
 PATTERNS = (
     re.compile(r'error_code\s*=\s*"([A-Z][A-Z_]+)"'),
     re.compile(r'native_failure\("([A-Z][A-Z_]+)"'),
@@ -122,6 +128,10 @@ PATTERNS = (
     re.compile(r'RejectPromise\(\s*"([A-Z][A-Z_]+)"'),
     re.compile(r'[?:]\s*"([A-Z][A-Z_]+)"'),
     re.compile(r'return\s+"([A-Z][A-Z_]+)"'),
+    # `return {"CODE", "message"}`: the editor_api services refuse this way and their
+    # caller forwards `.code` verbatim, so the code reaches a Promise rejection without
+    # a helper or a literal assignment the other patterns can see.
+    re.compile(r'return\s*\{\s*"([A-Z][A-Z_]+)"\s*,'),
 )
 
 
