@@ -21,7 +21,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import test_typed_native_surface as surface
+import operation_table
+
+
+def _live_surface() -> dict[str, set[str]]:
+    """The Web surface as the operation table declares it (no hand-written list to drift)."""
+    surface: dict[str, set[str]] = {}
+    for row in operation_table.web_rows():
+        surface.setdefault(row["group"], set()).add(row["name"])
+    return surface
 
 ROOT = Path(__file__).resolve().parents[2]
 EDITOR = ROOT / "CoronaEditor" / "editor" / "Frontend"
@@ -71,14 +79,15 @@ def test_the_facade_wraps_every_native_method():
     for reason in _skip_reasons():
         pytest.skip(reason)
     text = FACADE.read_text(encoding="utf-8", errors="replace")
+    live = _live_surface()
     unwrapped = [f"{namespace}.{method}"
-                 for namespace, methods in surface.EXPECTED_SURFACE.items()
+                 for namespace, methods in live.items()
                  for method in methods if f"corona.{namespace}.{method}" not in text]
     assert not unwrapped, f"these native methods have no facade wrapper: {unwrapped}"
     referenced = set(re.findall(r"corona\.(\w+)\.(\w+)", text))
     unknown = sorted(f"{namespace}.{method}" for namespace, method in referenced
-                     if namespace != "bridge" and method not in surface.EXPECTED_SURFACE.get(namespace, set()))
-    assert not unknown, f"the facade calls methods outside the pinned surface: {unknown}"
+                     if namespace != "bridge" and method not in live.get(namespace, set()))
+    assert not unknown, f"the facade calls methods outside the operation table: {unknown}"
 
 
 def test_only_the_facade_reaches_the_native_object():

@@ -23,8 +23,9 @@ C++ 同时向两个调用方暴露能力：**编辑器前端**（CEF / typed V8�
 
 唯一声明处是 [editor_operation_table.h](src/systems/ui/cef/editor_operation_table.h#L35-L91)
 的 `kEditorOperations`（`static_assert` 钉住 55 行），binding 把行里的 `name` 原样发布成
-`window.corona.<group>.<name>`；手写对照表在 [native_surface.py](tests/tools/native_surface.py#L13-L41)，
-两个守卫（`test_editor_operation_table.py` / `test_typed_native_surface.py`）互相校验。
+`window.corona.<group>.<name>`；契约文档的方法表由
+[native_surface.py](tests/tools/native_surface.py#L13-L41) 渲染。
+**这张手写对照表已不再逐名校验**（原来的两个互校守卫已删，见 §8 末尾）。
 
 | 命名空间 | 数量 | 方法 |
 |---|---|---|
@@ -322,13 +323,28 @@ C++ 侧用 `build_tools/dev.py` 构建、`ctest` 运行，见 §9 与 §10。
 
 | 守卫 | 钉住什么 | 本次改动 |
 |---|---|---|
-| `test_editor_operation_table.py` | 55 行 / 9 命名空间 / 名字原样发布 | 不动 |
-| `test_typed_native_surface.py` | Web 面方法 + 拒绝码词表 | 不动 |
+| `test_editor_operation_table.py` | 55 行 / 9 命名空间 / 名字原样发布 | **已删除（见 §8 末尾）** |
+| `test_typed_native_surface.py` | 拒绝码词表、场景读取器覆盖、bridge 单函数、无 JSON 传输、前端只经 facade | **删掉逐名比对，只留规则** |
 | `test_rejection_vocabulary.py` | 源码只发已声明的码 | **加花括号形式扫描 + 1 条回归测试；删 `EDITOR_INPUT_LOCKED`** |
 | `test_interface_contract_doc.py` | 文档与生成器一致、守卫都在表里 | 受影响（重新生成） |
 | `test_docs_reference_live_files.py` | 文档不指向已删除文件 | 受影响（本批删了多个文件） |
 | `test_web_layer_budget.py` | 接口核心行数 ratchet | **已删除（见 §10 最后一条）** |
-| `test_python_native_surface.py` | Python 模块导出面（7 函数 + `InputEvent`，对象模型不在，**且绑定不得触达编辑器语义**） | **改写成含"缺席"断言 + 新增场景操作层禁用断言** |
+| `test_python_native_surface.py` | Python 面的规则（对象模型不在、删掉的名字不回来、绑定不得触达编辑器语义、两组按序、加载器标记） | **删掉导出面逐名比对，只留规则** |
+| `test_scene_api_consolidation.py` | 场景查询用显式 owned 投影 | **删掉旧方法名清单** |
+
+### 8.1 已删除的"数量/名单钉死"守卫
+
+这些守卫要求代码与一张手写名单**逐名相等**，改动接口必须同时改名单，而失败信息只会说
+"两边不一样"——分不出是多了一个还是少了一个。它们已删除：
+
+- `test_editor_operation_table.py`（55 行 / 9 命名空间）
+- `test_typed_native_surface.py` 里的六个逐名比对（表 ↔ 名单、window 面、安装顺序、
+  `SetValue` 字面量、`corona` 唯一全局、行名逐字发布）
+- `test_python_native_surface.py` 里的三个逐名比对（绑定源清单、宿主函数集合、载荷类型集合）
+- `test_scene_api_consolidation.py` 里的旧方法名清单
+
+保留的是规则与行为：拒绝码词表、场景读取器覆盖、bridge 单函数、无 JSON 传输、前端只经
+facade、Python 不得触达编辑器语义、删掉的名字不许回来、两组按序安装、加载器标记有效。
 
 ## 9. 已知限制
 

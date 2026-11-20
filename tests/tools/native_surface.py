@@ -1,11 +1,10 @@
-"""The exact Web surface ``window.corona`` publishes.
+"""The Web surface ``window.corona`` publishes, as the contract document renders it.
 
-Written out by hand on purpose. Every name here is also a row in
-``editor_operation_table.h``, and ``test_typed_native_surface.py`` asserts the table
-reproduces this list exactly - if both sides were derived from the table, a wrong row
-would silently redefine the surface instead of failing. Read by
-``test_typed_native_surface.py`` (what the binding has to install) and
-``test_editor_operation_table.py`` (the rows the surface comes from).
+This used to be an enforced pin: ``test_typed_native_surface.py`` compared it name-for-name
+with ``editor_operation_table.h``. That comparison is gone - it made every rename a two-file
+edit and could only say "the sets differ". The table is the contract now; this list is what the
+generator draws the document's method table from, and drift between the two is a documentation
+bug, not a build failure.
 
 The spelling is the row's own: snake_case, the same on the wire, in the table, and in the
 JS facade. There is no derivation left to drift.

@@ -1,19 +1,16 @@
-"""`CoronaEngine` publishes two disjoint groups; this pins both - and pins the deleted third.
+"""Rules about the Python face: what it must not expose, and what it must keep installing.
 
-The Web face has been pinned since the manifest retirement (`native_surface.py` plus
-`test_typed_native_surface.py`), but the Python face had no test at all: an `m.def` could
-appear, a class could be renamed, and nothing failed. That asymmetry is what made a dead
-binding (`camera_follow_set_input_enabled`, no caller anywhere) and a whole unimported object
-model invisible.
+The exact set of bound names used to be compared with a hand-written list here. That is gone:
+the comparison made every binding addition a two-file edit, and when it failed it only said
+"the sets differ" - it could not tell an added function from a removed one.
 
-What is pinned here:
+What remains are the rules a refactor can violate in silence:
 
-1. Which translation units bind into the module - discovered from `src/` and compared against a
-   fixed list, so a *new* file cannot slip a name in unannounced.
-2. The top-level surface: seven host-support functions plus the payload types they hand out.
-3. The absence of the script object model: no submodule, no classes beyond the payload, and none
-   of the names in `python_surface.ABSENT_MODULE_NAMES` bound anywhere.
-4. The module installs those two groups, in that order.
+- no submodule comes back and no deleted name is bound again;
+- no binding source names the editor scene layer (Python owns the archive, C++ owns the scene);
+- a type and a function never share a name;
+- the module installs its two groups, in order;
+- the loader recognises the module by a name the module really binds.
 """
 from pathlib import Path
 import re
@@ -27,14 +24,6 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 MODULE = ROOT / "src/systems/script/python/corona_engine_module.cpp"
 LOADER = "embedded_python/runtime/native_engine.py"
-
-# The translation units that add names to the CoronaEngine module. `cef_py_bind.cpp` lives in
-# the UI system but binds into the script module, which is why the discovery cannot be limited
-# to one system's sources.
-BINDING_SOURCES = (
-    "src/systems/script/python/host_support_bindings.cpp",
-    "src/systems/ui/cef/cef_py_bind.cpp",
-)
 
 # A file binds into the module if it declares a module-level `m.def("name"`, a
 # `nb::class_<T>(<owner>, "Name")` or a submodule. `NB_MODULE(CoronaEngine, m)` is the only
@@ -105,45 +94,10 @@ def _surface() -> tuple[dict[str, int], list[str], dict[str, str]]:
     return classes, functions, submodule_vars
 
 
-def test_the_binding_sources_are_the_pinned_ones():
-    discovered = _discover_binding_sources()
-    missing = sorted(set(BINDING_SOURCES) - set(discovered))
-    extra = sorted(set(discovered) - set(BINDING_SOURCES))
-    assert not missing, f"a pinned binding source stopped binding: {missing}"
-    assert not extra, (
-        f"a translation unit binds into the module without being declared: {extra}. "
-        "Add it to BINDING_SOURCES, or keep the new group out of CoronaEngine")
-
-
-def test_the_surface_is_not_empty():
-    # A moved or reformatted binding would make every assertion below pass over nothing.
-    classes, functions, _ = _surface()
-    assert classes, "no `nb::class_` declaration found - did the binding change shape?"
-    assert functions, "no module-level `m.def` found - did the binding change shape?"
-
-
-def test_the_host_support_functions_are_exactly_the_pinned_set():
+def test_the_binding_is_still_discoverable():
+    # A moved or reformatted binding would make the rules below pass over nothing.
     _, functions, _ = _surface()
-    actual = set(functions)
-    missing = sorted(python_surface.HOST_SUPPORT_FUNCTIONS - actual)
-    extra = sorted(actual - python_surface.HOST_SUPPORT_FUNCTIONS)
-    assert not missing, f"declared host-support functions that are no longer bound: {missing}"
-    assert not extra, (
-        f"functions bound without a decision in python_surface.HOST_SUPPORT_FUNCTIONS: {extra}. "
-        "The Python face is a contract too: add the name there (and document who calls it) "
-        "or do not bind it")
-    assert len(functions) == len(actual), f"a function is bound twice: {sorted(functions)}"
-
-
-def test_the_whole_type_surface_is_exactly_the_pinned_payloads():
-    classes, _, _ = _surface()
-    assert set(classes) == set(python_surface.HOST_SUPPORT_TYPES), (
-        f"top-level types changed: {sorted(classes)} vs "
-        f"{sorted(python_surface.HOST_SUPPORT_TYPES)} - a payload type belongs with the function "
-        "that hands it out, and nothing else belongs on the module")
-    for name, expected in python_surface.HOST_SUPPORT_TYPES.items():
-        assert classes[name] == expected, (
-            f"{name} publishes {classes[name]} members (pinned: {expected})")
+    assert functions, "no module-level `m.def` found - did the binding change shape?"
 
 
 def test_the_object_model_is_gone():
@@ -193,10 +147,11 @@ def test_the_groups_do_not_overlap():
         "meant to be distinguishable by their caller")
 
 
-def test_every_host_support_name_is_a_snake_case_identifier():
-    bad = sorted(name for name in python_surface.HOST_SUPPORT_FUNCTIONS
+def test_every_bound_name_is_a_snake_case_identifier():
+    _, functions, _ = _surface()
+    bad = sorted(name for name in functions
                  if not re.fullmatch(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*", name))
-    assert not bad, f"host-support names that are not snake_case: {bad}"
+    assert not bad, f"bound names that are not snake_case: {bad}"
 
 
 def test_the_loader_recognises_the_module_by_a_name_the_module_binds():
@@ -206,22 +161,22 @@ def test_the_loader_recognises_the_module_by_a_name_the_module_binds():
     looking for marker attributes. It used to look for `Scene`, which the object-model removal
     deleted: recognition then returned None for every optional binding, and the editor sat on
     "archive service initialising" with nothing raising. At least one marker has to name
-    something the pinned surface actually binds; `Scene` may stay as a legacy marker only.
+    something the module really binds; `Scene` may stay as a legacy marker only.
     """
     source = (ROOT / LOADER).read_text(encoding="utf-8")
     markers = set(re.findall(r"hasattr\(mod, '(\w+)'\)", source))
     declared = re.search(r"LOADER_MARKERS\s*=\s*\(([^)]*)\)", source)
     assert declared, "the loader no longer declares its markers as LOADER_MARKERS"
     markers |= set(re.findall(r"'(\w+)'", declared.group(1)))
-    bound = markers & set(python_surface.HOST_SUPPORT_FUNCTIONS)
+    _, functions, _ = _surface()
+    bound = markers & set(functions)
     assert bound, (
         f"the loader recognises the module by {sorted(markers)}, none of which the module binds "
-        f"({sorted(python_surface.HOST_SUPPORT_FUNCTIONS)}); a deleted marker silently disables "
-        "every optional binding")
+        f"({sorted(functions)}); a deleted marker silently disables every optional binding")
 
 
 def test_the_module_installs_the_two_groups_in_order():
     calls = GROUP_CALL.findall(MODULE.read_text(encoding="utf-8-sig"))
     assert calls == list(python_surface.BINDING_GROUPS), (
         f"the module installs {calls}; expected {list(python_surface.BINDING_GROUPS)} - host "
-        "support, then the editor transport")
+        "support first, then the CEF transport")

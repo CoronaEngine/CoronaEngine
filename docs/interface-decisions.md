@@ -13,8 +13,10 @@
 | C++ → Python | `CoronaEngine` 模块的 host-support `m.def` | 7 个具名入口 + `InputEvent` 载荷 |
 
 所有名字都是具名函数；没有任何"按名字分发"的通用入口（见第 3 节）。Web 面与 Python 的
-两组导出互不重叠，两侧的名单各由一张手写表钉死（Web 是 `native_surface.py`，Python 是
-`python_surface.py`）。脚本对象模型（`CoronaEngine.script`）曾作为第三条 Python 边界存在，
+两组导出互不重叠，各自的声明处是唯一的：Web 是 `editor_operation_table.h`，Python 是
+`embedded_python/runtime` 里真正调用它们的代码。**手写名单的逐名校验已删除**（见第 6 节
+末尾）——`native_surface.py` 现在只用来渲染契约文档，`python_surface.py` 只剩"不许回来"的
+名字和分组顺序。脚本对象模型（`CoronaEngine.script`）曾作为第三条 Python 边界存在，
 因仓内无消费者而删除——要不要重新给 Python 场景读写能力是产品决定，不是本契约的一部分。
 
 ## 2. 演进记录
@@ -107,13 +109,19 @@ settlement；C++ 侧的所有者另走 `cancel_context` 取消工作。
 ## 6. 改动一个接口的固定流程
 
 1. 改 `src/systems/ui/cef/`：读者、注册、执行三处。
-2. 更新 `tests/tools/test_typed_native_surface.py` 的 `EXPECTED_SURFACE`。
-3. `python tests/tools/generate_interface_contract.py` 重新生成契约。
-4. 改 `tests/integration/web_messages_cef_smoke.mjs`（调用与 `typeof` 断言都会被守卫检查）。
+2. 如果要改方法名，只改 `editor_operation_table.h`（`static_assert` 会盯行数）。
+3. `python tests/tools/generate_interface_contract.py` 重新生成契约——如果方法表变了，顺手把
+   `native_surface.py` 也改掉，否则文档会过时（不再有守卫拦这一步，见下方说明）。
+4. 改 `tests/integration/web_messages_cef_smoke.mjs`（调用与 `typeof` 断言会被守卫检查）。
 5. 前端：改 facade → 推送 CoronaEditor → `python build_tools/dev.py pin editor <sha>` →
    `python build_tools/dev.py editor-sync`。
 6. `python -m pytest tests/tools` 与 `ctest`。
 7. 真机验证：按 [integration-smoke.md](integration-smoke.md) 构建 examples 运行时并跑冒烟套件与 CEF 冒烟。
+
+**已删除的两类机械校验**：接口行数 ratchet（测文件大小）与"代码 ↔ 手写名单逐名相等"
+（`test_editor_operation_table.py` 及另两个守卫里的逐名比对）。它们共有的毛病是"改接口必改
+名单"，而失败信息只说两边不一样。现在方法集合的事实来源是操作表本身，文档只是它的投影；
+名字真的写错时，编译期（`static_assert`、`SetValue` 拼写）与冒烟会先报。
 
 ## 7. 现在的守卫
 

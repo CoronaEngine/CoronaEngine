@@ -20,9 +20,9 @@ JSON manifest 与脚本运行时契约都已删除；随脚本运行时一起留
    Python 服务；跨层 adapter 不复制校验、状态机或错误码。这条规则有可执行断言兜底：
    `test_python_native_surface.py` 拒绝任何引用场景操作层（`execute_scene_operation`、
    `SceneRequest`、`SceneMethod`、`cef_scene_operations.h` 等）的 Python 绑定。
-4. 新增语义：Web 加一份 V8 具名绑定，宿主支持再加一个 `m.def`；两者都要在
-   `tests/tools/` 的钉死表里登记（Web 是 `native_surface.py`，Python 是
-   `python_surface.py`）。禁止新增第二份 schema。
+4. 新增语义：Web 加一份 V8 具名绑定（`editor_operation_table.h` 里的一行），宿主支持再加
+   一个 `m.def`；两者都不再需要在 `tests/tools/` 的手写名单里逐名登记（逐名校验已删除），
+   但契约文档要重新生成，`native_surface.py` 的文档投影要跟着改。禁止新增第二份 schema。
 5. 服务调用只有一个入口：`corona.bridge.call` 经 `WebBridgeService` 白名单进入 Python，
    Python 结果按 `{success, data, code}` 原样回传，不在中途重建 schema。
 6. **载荷类型跟着产出它的函数走**：`drain_input_events()` 是顶层函数，`InputEvent` 就留在

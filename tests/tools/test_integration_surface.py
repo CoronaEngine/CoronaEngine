@@ -18,7 +18,15 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import test_typed_native_surface as surface
+import operation_table
+
+
+def _live_surface() -> dict[str, set[str]]:
+    """The Web surface as the operation table declares it (no hand-written list to drift)."""
+    surface: dict[str, set[str]] = {}
+    for row in operation_table.web_rows():
+        surface.setdefault(row["group"], set()).add(row["name"])
+    return surface
 
 ROOT = Path(__file__).resolve().parents[2]
 INTEGRATION = ROOT / "tests/integration"
@@ -51,7 +59,7 @@ def stale_calls() -> dict[str, set[str]]:
                 namespace, method = match.group(1), match.group(2)
                 if namespace in NON_RPC_ROOTS:
                     continue
-                if method not in surface.EXPECTED_SURFACE.get(namespace, set()):
+                if method not in _live_surface().get(namespace, set()):
                     stale.setdefault(path.name, set()).add(f"{namespace}.{method}")
     return stale
 
@@ -70,7 +78,7 @@ def test_typeof_assertions_only_describe_live_methods():
             namespace, method = match.group(1), match.group(2)
             if namespace in NON_RPC_ROOTS:
                 continue
-            if method not in surface.EXPECTED_SURFACE.get(namespace, set()):
+            if method not in _live_surface().get(namespace, set()):
                 stale.setdefault(path.name, set()).add(f"{namespace}.{method}")
     assert not stale, (
         "these scripts assert a function that the surface does not have: "
@@ -95,3 +103,4 @@ def test_every_retired_script_has_a_reason_to_be_there():
     unexplained = sorted(RETIRED_PRE_BRIDGE - set(stale))
     assert not unexplained, (
         f"RETIRED_PRE_BRIDGE lists scripts that are not stale any more: {unexplained}")
+

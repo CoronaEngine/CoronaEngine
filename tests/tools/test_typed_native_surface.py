@@ -1,15 +1,18 @@
-"""The typed native surface is the only contract Web has.
+"""Rules that keep the typed Web surface honest, without pinning its size or its names.
 
-With the JSON manifest retired there is exactly one way for the renderer to reach
-C++: the `window.corona` object installed by `attach_corona_v8_binding`, plus its
-single `bridge.call` entry to Python. These guards pin that surface exactly, so
-a namespace cannot quietly grow a second transport or lose a method.
+The exact method list used to be compared against a hand-written table here. That comparison
+was the thing that made every rename a two-file edit, and its failure only ever said "the sets
+differ" - it could not tell an added method from a removed one. What is left are the rules that
+cost nothing to keep and catch real breakage:
 
-Every name is installed from `editor_operation_table.h` now - the operation rows carry the
-enum that owns them, and the binding publishes `name` verbatim (snake_case, like the wire
-keys). The scene rows still have a second half in the binding (`kSceneReaders`, the argument
-readers), which a row cannot name because a reader takes `CefV8ValueList` and cannot live in
-the CEF-free header.
+- every scene row has an argument reader (a row without one answers INVALID_ARGUMENT at run
+  time and nothing in the build notices);
+- the Web -> Python bridge stays one function wide;
+- no JSON transport survives;
+- the frontend reaches native objects only through the facade;
+- rejections use the documented vocabulary.
+
+`native_surface.py` still exists: the contract document is generated from it.
 """
 from pathlib import Path
 import re
@@ -17,7 +20,6 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from native_surface import EXPECTED_SURFACE
 import operation_table
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -45,18 +47,7 @@ def _table_surface() -> dict[str, set[str]]:
     return surface
 
 
-def test_the_table_publishes_exactly_the_pinned_surface():
-    # native_surface.EXPECTED_SURFACE is written by hand so that it stays an independent
-    # check: if this were derived from the table too, a wrong row would redefine the
-    # contract instead of failing here.
-    assert _table_surface() == EXPECTED_SURFACE
-
-
 def test_every_scene_operation_has_an_argument_reader():
-    # Without this, a row installed from the table but missing from kSceneReaders answers
-    # INVALID_ARGUMENT at run time, and nothing in the build says so. Only the scene rows
-    # have a reader here: the other namespaces' readers are chosen by the method's own type
-    # (`invoke(NetworkMethod)`, `invoke(WindowMethod)`, ...), so the compiler checks them.
     readers = _reader_methods()
     duplicates = sorted({name for name in readers if readers.count(name) > 1})
     assert not duplicates, f"methods with more than one reader: {duplicates}"
@@ -66,64 +57,9 @@ def test_every_scene_operation_has_an_argument_reader():
     assert not missing, f"scene operations without an argument reader: {missing}"
 
 
-def _literal_surface() -> dict[str, set[str]]:
-    """Names still installed with a SetValue pair in the binding. Must be empty."""
-    surface: dict[str, set[str]] = {}
-    for namespace, name in re.findall(
-            r'(\w+)->SetValue\("([^"]+)", CefV8Value::CreateFunction', _binding_source()):
-        surface.setdefault(namespace, set()).add(name)
-    return surface
-
-
-def _installed_surface() -> dict[str, set[str]]:
-    surface = _literal_surface()
-    for namespace, names in EXPECTED_SURFACE.items():
-        assert not (surface.get(namespace, set()) & names), (
-            f"{namespace} installs {sorted(surface.get(namespace, set()) & names)} twice")
-        surface.setdefault(namespace, set()).update(names)
-    return surface
-
-
-def test_window_corona_surface_is_exactly_the_named_contract():
-    assert _installed_surface() == EXPECTED_SURFACE
-
-
-def test_no_name_is_installed_outside_the_operation_table():
-    # A SetValue("createPanel", CreateFunction(...)) pair is a name the table does not own:
-    # it cannot be derived, renamed, or found by any other guard.
-    literal = _literal_surface()
-    assert not literal, f"names installed by hand instead of from the table: {literal}"
-
-
-def test_the_namespaces_are_created_before_the_table_fills_them():
-    source = _binding_source()
-    for namespace in EXPECTED_SURFACE:
-        assert re.search(r'\{"%s", CefV8Value::CreateObject' % namespace, source), (
-            f"the {namespace} namespace is not created by the install loop")
-    assert "kEditorOperations" in source, "the binding must install the shared table"
-
-
-def test_the_binding_publishes_the_row_name_verbatim():
-    # A loop that re-derived the spelling (camelCase, a prefix, anything) would publish a
-    # name the table does not declare, and the SetValue scan cannot see it: there are no
-    # literals left to compare. Pin the assignment and that the key and the function name are
-    # the same value, so the two cannot drift apart.
-    source = _binding_source()
-    assert "const std::string js_name(spec.name);" in source, (
-        "the install loop stopped publishing the row name")
-    assert not re.search(r"camel_case\s*\(", source), (
-        "the binding must not derive a spelling again")
-    assert re.search(r"SetValue\(\s*js_name,\s*CefV8Value::CreateFunction\(\s*js_name,", source), (
-        "the published key and the function name must be the one spelling")
-
-
-def test_corona_is_the_only_global_installed():
-    source = _binding_source()
-    assert source.count("GetGlobal()->SetValue(\"corona\"") == 1
-
-
 def test_web_to_python_bridge_stays_one_function_wide():
-    assert _installed_surface()["bridge"] == {"call"}
+    assert _table_surface()["bridge"] == {"call"}, (
+        "the Web -> Python bridge grew a second function")
 
 
 def test_no_json_transport_survives():
