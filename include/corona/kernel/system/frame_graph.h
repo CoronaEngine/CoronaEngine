@@ -1,8 +1,12 @@
 #pragma once
+
+#include <corona/kernel/system/component_access.h>
+
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace Corona::Kernel {
@@ -54,6 +58,10 @@ struct FrameNodeDesc {
     std::uint32_t phase = 0;                ///< 速率门控相位，必须 < period_ticks
     bool enabled = true;                    ///< 关闭时连同下游子树一起不执行
     std::function<FrameNodeStatus(const FrameTick&)> body;  ///< 节点体；为空按 idle 处理
+
+    /// 组件访问声明：compile() 据此推导**额外**依赖边（声明序在前 → 在后）。
+    /// 与手写 dependencies 合并后一起做拓扑排序，因此可以逐系统迁移。
+    ComponentAccess access;
 };
 
 /**
@@ -214,6 +222,16 @@ class FrameGraph {
      */
     [[nodiscard]] const std::vector<FrameNodeId>& execution_order() const;
 
+    /**
+     * @brief 由组件访问声明推导出的额外边（编译成功后有效）
+     *
+     * 每条边 `{from, to}` 表示"from 声明序在 to 之前，且两者访问冲突"。
+     * 手写 dependencies 不在此列表中；诊断与测试据此区分"人工拓扑"与"数据拓扑"。
+     */
+    [[nodiscard]] const std::vector<std::pair<FrameNodeId, FrameNodeId>>& derived_edges() const {
+        return derived_edges_;
+    }
+
     // ========================================
     // 执行
     // ========================================
@@ -283,6 +301,7 @@ class FrameGraph {
 
     std::vector<Node> nodes_;
     std::vector<FrameNodeId> order_;
+    std::vector<std::pair<FrameNodeId, FrameNodeId>> derived_edges_;  ///< 访问声明推导出的边
     std::vector<std::uint8_t> dependents_mark_;  ///< 每个节点的下游掩码（run_tick 复用）
     bool compiled_ = false;
     std::function<void(FrameNodeId, const FrameTick&)> boundary_hook_;

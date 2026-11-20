@@ -78,6 +78,7 @@ bool FrameGraph::compile(std::string* error) {
     };
 
     order_.clear();
+    derived_edges_.clear();
     compiled_ = false;
 
     if (nodes_.empty()) {
@@ -87,6 +88,21 @@ bool FrameGraph::compile(std::string* error) {
 
     std::vector<std::size_t> indegree(nodes_.size(), 0);
     std::vector<std::vector<FrameNodeId>> outgoing(nodes_.size());
+    std::vector<std::vector<FrameNodeId>> incoming(nodes_.size());  // 环诊断需要反向边
+
+    // 加边并去重：手写依赖与访问推导可能命中同一条边。
+    const auto add_edge = [&](FrameNodeId from, FrameNodeId to, bool derived) {
+        auto& outs = outgoing[from];
+        if (std::find(outs.begin(), outs.end(), to) != outs.end()) {
+            return;
+        }
+        outs.push_back(to);
+        incoming[to].push_back(from);
+        ++indegree[to];
+        if (derived) {
+            derived_edges_.emplace_back(from, to);
+        }
+    };
 
     for (std::size_t index = 0; index < nodes_.size(); ++index) {
         const auto id = static_cast<FrameNodeId>(index);
@@ -100,8 +116,18 @@ bool FrameGraph::compile(std::string* error) {
             if (dep == id) {
                 return fail("node '" + nodes_[index].desc.name + "' depends on itself");
             }
-            outgoing[dep].push_back(id);
-            ++indegree[index];
+            add_edge(dep, id, false);
+        }
+    }
+
+    // 组件访问推导：只按声明序加"前 → 后"的边，因此推导本身不会成环；
+    // 与手写依赖合并后仍可能成环，交给下面的环检测报错。
+    for (std::size_t before = 0; before < nodes_.size(); ++before) {
+        for (std::size_t after = before + 1; after < nodes_.size(); ++after) {
+            if (!access_conflicts(nodes_[before].desc.access, nodes_[after].desc.access)) {
+                continue;
+            }
+            add_edge(static_cast<FrameNodeId>(before), static_cast<FrameNodeId>(after), true);
         }
     }
 
@@ -136,7 +162,7 @@ bool FrameGraph::compile(std::string* error) {
                 seen[cursor] = 1;
                 cycle.push_back(cursor);
                 FrameNodeId next = kInvalidFrameNodeId;
-                for (const auto dep : nodes_[cursor].desc.dependencies) {
+                for (const auto dep : incoming[cursor]) {
                     if (indegree[dep] != 0) {
                         next = dep;
                         break;

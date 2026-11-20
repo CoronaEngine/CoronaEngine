@@ -416,6 +416,14 @@ void test_idle_and_stats() {
 
 }  // namespace
 
+// 新增用例定义在文件末尾，main 需要先看到声明。
+void test_access_derives_edges();
+void test_access_read_write_does_not_add_edge();
+void test_access_readers_do_not_conflict();
+void test_access_writers_conflict();
+void test_access_structural_orders_everything();
+void test_manual_and_derived_edges_merge();
+
 int main() {
     test_stable_topological_order();
     test_invalid_graphs();
@@ -427,6 +435,12 @@ int main() {
     test_failure_counter_resets_after_success();
     test_boundary_hook();
     test_idle_and_stats();
+    test_access_derives_edges();
+    test_access_read_write_does_not_add_edge();
+    test_access_readers_do_not_conflict();
+    test_access_writers_conflict();
+    test_access_structural_orders_everything();
+    test_manual_and_derived_edges_merge();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " check(s) failed\n";
@@ -434,4 +448,140 @@ int main() {
     }
     std::cout << "FrameGraphTests: all checks passed\n";
     return 0;
+}
+
+// ============================================================================
+// 组件访问声明（E0）：由数据访问推导依赖边
+// ============================================================================
+
+namespace {
+
+struct CompTransform {};
+struct CompMesh {};
+struct CompCamera {};
+
+FrameNodeDesc access_node(std::string name, Corona::Kernel::ComponentAccess access) {
+    FrameNodeDesc desc;
+    desc.name = std::move(name);
+    desc.access = std::move(access);
+    return desc;
+}
+
+bool has_edge(const FrameGraph& graph, std::string_view from, std::string_view to) {
+    const auto from_id = graph.find_node(from);
+    const auto to_id = graph.find_node(to);
+    if (from_id == Corona::Kernel::kInvalidFrameNodeId ||
+        to_id == Corona::Kernel::kInvalidFrameNodeId) {
+        return false;
+    }
+    return std::ranges::find(graph.derived_edges(),
+                             std::pair{from_id, to_id}) != graph.derived_edges().end();
+}
+
+}  // namespace
+
+void test_access_derives_edges() {
+    FrameGraph graph;
+    Corona::Kernel::ComponentAccess writer;
+    writer.write<CompTransform>();
+    Corona::Kernel::ComponentAccess reader;
+    reader.read<CompTransform>();
+    Corona::Kernel::ComponentAccess independent;
+    independent.read<CompCamera>();
+
+    graph.add_node(access_node("Writer", writer));
+    graph.add_node(access_node("Reader", reader));
+    graph.add_node(access_node("Independent", independent));
+
+    std::string error;
+    CHECK_MSG(graph.compile(&error), error);
+    CHECK(has_edge(graph, "Writer", "Reader"));
+    CHECK(!has_edge(graph, "Writer", "Independent"));
+    CHECK(!has_edge(graph, "Reader", "Independent"));
+
+    const auto names = order_names(graph);
+    const auto writer_pos = std::ranges::find(names, "Writer");
+    const auto reader_pos = std::ranges::find(names, "Reader");
+    CHECK(writer_pos != names.end() && reader_pos != names.end() && writer_pos < reader_pos);
+}
+
+void test_access_read_write_does_not_add_edge() {
+    FrameGraph graph;
+    Corona::Kernel::ComponentAccess reader;
+    reader.read<CompMesh>();
+    Corona::Kernel::ComponentAccess later_writer;
+    later_writer.write<CompMesh>();
+
+    // 声明序：先读后写 —— 前者已经执行完，WAR 无危害，不应连边。
+    graph.add_node(access_node("EarlyReader", reader));
+    graph.add_node(access_node("LateWriter", later_writer));
+
+    std::string error;
+    CHECK_MSG(graph.compile(&error), error);
+    CHECK(graph.derived_edges().empty());
+    const auto names = order_names(graph);
+    CHECK(std::ranges::find(names, "EarlyReader") != names.end());
+}
+
+void test_access_readers_do_not_conflict() {
+    FrameGraph graph;
+    Corona::Kernel::ComponentAccess first;
+    first.read<CompTransform, CompMesh>();
+    Corona::Kernel::ComponentAccess second;
+    second.read<CompTransform>();
+
+    graph.add_node(access_node("A", first));
+    graph.add_node(access_node("B", second));
+
+    std::string error;
+    CHECK_MSG(graph.compile(&error), error);
+    CHECK(graph.derived_edges().empty());
+}
+
+void test_access_writers_conflict() {
+    FrameGraph graph;
+    Corona::Kernel::ComponentAccess first;
+    first.write<CompCamera>();
+    Corona::Kernel::ComponentAccess second;
+    second.write<CompCamera>();
+
+    graph.add_node(access_node("First", first));
+    graph.add_node(access_node("Second", second));
+
+    std::string error;
+    CHECK_MSG(graph.compile(&error), error);
+    CHECK(has_edge(graph, "First", "Second"));
+}
+
+void test_access_structural_orders_everything() {
+    FrameGraph graph;
+    Corona::Kernel::ComponentAccess structural;
+    structural.mark_structural().write<CompTransform>();
+    Corona::Kernel::ComponentAccess reader;
+    reader.read<CompCamera>();
+
+    graph.add_node(access_node("Boundary", structural));
+    graph.add_node(access_node("Consumer", reader));
+
+    std::string error;
+    CHECK_MSG(graph.compile(&error), error);
+    CHECK(has_edge(graph, "Boundary", "Consumer"));
+}
+
+void test_manual_and_derived_edges_merge() {
+    FrameGraph graph;
+    Corona::Kernel::ComponentAccess writer;
+    writer.write<CompTransform>();
+    Corona::Kernel::ComponentAccess reader;
+    reader.read<CompTransform>();
+
+    const auto first = graph.add_node(access_node("Writer", writer));
+    const auto second = graph.add_node(access_node("Reader", reader));
+    // 手写边与推导边指向同一条，不能重复计入入度。
+    CHECK(graph.set_dependencies(second, {first}));
+
+    std::string error;
+    CHECK_MSG(graph.compile(&error), error);
+    CHECK(graph.execution_order().size() == 2);
+    CHECK(graph.execution_order().front() == first);
 }
