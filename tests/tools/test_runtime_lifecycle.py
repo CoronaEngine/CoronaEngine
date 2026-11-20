@@ -77,7 +77,7 @@ def test_a_call_after_shutdown_is_retryable(host):
     assert result["code"] == "SERVICE_UNAVAILABLE"
 
 
-def test_registering_the_bridge_is_idempotent(host):
+def test_registering_the_bridge_is_idempotent(host, caplog):
     calls = []
 
     class FakeEngine:
@@ -88,12 +88,33 @@ def test_registering_the_bridge_is_idempotent(host):
             calls.append("unregister")
 
     host.CoronaEngine = FakeEngine()
-    host.register_script_dispatcher()
-    host.register_script_dispatcher()
-    host.unregister_script_dispatcher()
+    with caplog.at_level("INFO"):
+        host.register_script_dispatcher()
+        host.register_script_dispatcher()
+        host.unregister_script_dispatcher()
 
     assert calls == ["register", "register", "unregister"]
     assert [name for name in host.module_list if name == "editor_bridge"] == ["editor_bridge"]
+    assert "event=runtime.dispatcher.unavailable" not in caplog.text
+
+
+def test_a_missing_dispatcher_binding_is_reported_not_claimed(host, caplog):
+    """The host used to log "registered" whether or not it could register anything.
+
+    A loader that no longer recognised the native module left the C++ readiness flag false
+    while the log said the opposite, so the only visible symptom was a start screen waiting
+    forever. The binding's absence is the diagnosable fact; say it.
+    """
+    host.CoronaEngine = None
+    with caplog.at_level("INFO"):
+        host.register_script_dispatcher()
+
+    assert "event=runtime.dispatcher.unavailable" in caplog.text
+    assert "binding=register_python_script_service_dispatcher" in caplog.text
+    assert "engine=None" in caplog.text
+    assert "event=runtime.dispatcher.registered" not in caplog.text
+    # The bridge service is a Python-side registration; it does not depend on the native flag.
+    assert "editor_bridge" in host.module_list
 
 
 def test_lifecycle_transitions_are_logged_as_events(host, caplog):

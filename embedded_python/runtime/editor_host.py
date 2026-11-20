@@ -107,17 +107,26 @@ class CoronaEditor:
     @classmethod
     def register_script_dispatcher(cls):
         register = getattr(cls.CoronaEngine, "register_python_script_service_dispatcher", None)
+        cls.module_list.setdefault("editor_bridge", WebBridgeService)
         if callable(register):
             register()
-        cls.module_list.setdefault("editor_bridge", WebBridgeService)
-        logger.info("event=runtime.dispatcher.registered")
+            logger.info("event=runtime.dispatcher.registered")
+        else:
+            # Saying "registered" here regardless made a loader that no longer recognised the
+            # native module look healthy: the flag stayed false, the start screen waited
+            # forever, and this line was the only trace of it. Report what actually happened.
+            logger.warning(
+                "event=runtime.dispatcher.unavailable "
+                "binding=register_python_script_service_dispatcher engine=%s; "
+                "native_engine.load_corona_engine did not return the module",
+                type(cls.CoronaEngine).__name__ if cls.CoronaEngine is not None else "None")
 
     @classmethod
     def unregister_script_dispatcher(cls):
         unregister = getattr(cls.CoronaEngine, "unregister_python_script_service_dispatcher", None)
         if callable(unregister):
             unregister()
-        logger.info("event=runtime.dispatcher.unregistered")
+            logger.info("event=runtime.dispatcher.unregistered")
 
     @classmethod
     def _set_state(cls, state):
