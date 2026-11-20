@@ -81,8 +81,28 @@ class World {
         return registry_.get<T>(entity);
     }
 
+    template <typename T>
+    [[nodiscard]] const T& get(Entity entity) const {
+        return registry_.get<T>(entity);
+    }
+
+    template <typename T>
+    void remove(Entity entity) {
+        registry_.remove<T>(entity);
+    }
+
+    template <typename T, typename... Args>
+    T& emplace_or_replace(Entity entity, Args&&... args) {
+        return registry_.emplace_or_replace<T>(entity, std::forward<Args>(args)...);
+    }
+
     template <typename... T>
     [[nodiscard]] auto view() {
+        return registry_.view<T...>();
+    }
+
+    template <typename... T>
+    [[nodiscard]] auto view() const {
         return registry_.view<T...>();
     }
 

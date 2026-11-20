@@ -17,6 +17,7 @@
 /// 为什么应用在 **tick 边界**：Mechanics 在 DAG 里排在 Geometry 之前，
 /// 若在 Geometry::update 里应用，Mechanics 会晚一帧看到成员变更。
 
+#include <corona/ecs/actor_world.h>
 #include <corona/kernel/command/command_buffer.h>
 #include <corona/shared_data_hub.h>
 
@@ -109,15 +110,41 @@ inline bool apply_pending_scene_commands() {
             case SceneCommandKind::SetEnvironment:
                 scene->environment = command.target;
                 break;
-            case SceneCommandKind::AddActor:
+            case SceneCommandKind::AddActor: {
                 scene->actor_handles.push_back(command.target);
+                // E1：tick 边界是 DAG 线程，在这里同步 ECS 实体与场景归属，
+                // 满足"registry 单写者"约束（CEF/脚本只发命令）。
+                auto& actors = Ecs::ActorWorld::instance();
+                actors.bind_owner_thread();
+                const auto scene_entity = actors.ensure_scene(command.scene_handle);
+                const auto actor_entity =
+                    actors.ensure_actor(static_cast<EntityId>(command.target));
+                actors.attach_to_scene(
+                    actor_entity, scene_entity,
+                    static_cast<std::uint32_t>(scene->actor_handles.size() - 1));
                 break;
-            case SceneCommandKind::RemoveActor:
+            }
+            case SceneCommandKind::RemoveActor: {
                 std::erase(scene->actor_handles, command.target);
+                auto& actors = Ecs::ActorWorld::instance();
+                const auto actor_entity =
+                    actors.find(static_cast<EntityId>(command.target));
+                if (actor_entity != Ecs::kNullEntity) {
+                    actors.detach_from_scene(actor_entity);
+                }
                 break;
-            case SceneCommandKind::ClearActors:
+            }
+            case SceneCommandKind::ClearActors: {
+                auto& actors = Ecs::ActorWorld::instance();
+                for (const auto handle : scene->actor_handles) {
+                    const auto actor_entity = actors.find(static_cast<EntityId>(handle));
+                    if (actor_entity != Ecs::kNullEntity) {
+                        actors.detach_from_scene(actor_entity);
+                    }
+                }
                 scene->actor_handles.clear();
                 break;
+            }
             case SceneCommandKind::AddCamera:
                 scene->camera_handles.push_back(command.target);
                 // 与旧的同步实现一致：第一台相机自动成为 active。

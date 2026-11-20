@@ -10,6 +10,17 @@ target_link_libraries(corona_entity_world_tests PRIVATE EnTT::EnTT)
 add_test(NAME EntityWorldTests
          COMMAND corona_entity_world_tests)
 
+# ECS E1：actor/profile/scene 实体模型（header-only，链接 entt + ktm）。
+add_executable(corona_actor_world_tests
+    test_actor_world.cpp
+)
+target_include_directories(corona_actor_world_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(corona_actor_world_tests PRIVATE EnTT::EnTT ktm::ktm)
+add_test(NAME ActorWorldTests
+         COMMAND corona_actor_world_tests)
+
 add_executable(corona_system_stop_timeout_tests
     test_system_stop_timeout.cpp
 )
