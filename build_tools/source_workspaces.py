@@ -53,7 +53,7 @@ EDITOR = SourceWorkspace(
     name="CoronaEditor",
     directory=Path("CoronaEditor"),
     url="https://github.com/CoronaEngine/CoronaEditor.git",
-    ref="main",
+    ref="codex/volumetric-caustic-media",
     commit="2b735da431bdeae209f757080c8550e5058c0a97",
 )
 
