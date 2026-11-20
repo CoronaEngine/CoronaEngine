@@ -220,8 +220,11 @@ bool read_files(FilesMethod, const CefV8ValueList& arguments, FilesRequest& requ
     };
     if (!text("archive_session", request.archive_session) || !text("project_path", request.project_path) ||
         !text("path", request.path)) return false;
-    if (!text("file_type", request.file_type) ||
-        (request.file_type != "scene" && request.file_type != "actor")) return false;
+    // `open_document` reloads the *current scene source* from disk; it is not a file opener.
+    // An Actor document has no native effect (the file is a prefab, and "opening" it means
+    // focusing the instance placed in the scene - a Web-side intent), so the type is refused
+    // here instead of being accepted and ignored.
+    if (!text("file_type", request.file_type) || request.file_type != "scene") return false;
     return true;
 }
 

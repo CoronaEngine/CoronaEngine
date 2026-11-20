@@ -796,7 +796,8 @@ try {
     assert.equal((await filesCall('createActorTemplate', { path: '文件测试', name: '单位' })).path, '文件测试/单位_1.actor');
     assert.equal((await filesCall('getFileTree', { path: '文件测试' })).children.length, 2);
     assert.equal(await filesCall('renameItem', { path: template.path, name: '改名.actor' }), true);
-    assert.equal((await filesCall('openFile', { path: '文件测试/改名.actor', file_type: 'actor' })).ok, true);
+    assert.equal(await main.evaluate(`corona.project.open_document(${JSON.stringify({ ...filesScope, path: '文件测试/改名.actor', file_type: 'actor' })}).catch(e=>e.code)`), 'INVALID_ARGUMENT',
+      'an Actor document is a focus intent, not a native document open');
     const sceneBytes = await readFile(path.join(cameraWorld, 'scene.ini'));
     const managerEnvelope = (method, request) => {
       const scope = { ...filesScope, ...request };
@@ -839,8 +840,8 @@ try {
         assert.equal(code, 'PROJECT_CONTEXT_CHANGED', `a stale project scope must not succeed: ${method}`);
       }
     }
-    assert.equal(await main.evaluate(`corona.project.open_document(${JSON.stringify({ ...filesScope, path: '../escape.actor', file_type: 'actor' })}).catch(e=>e.code)`), 'INVALID_PROJECT_PATH');
-    assert.equal(await main.evaluate(`corona.project.open_document(${JSON.stringify({ ...filesScope, path: '文件测试/missing.actor', file_type: 'actor' })}).catch(e=>e.code)`), 'FILE_NOT_FOUND');
+    assert.equal(await main.evaluate(`corona.project.open_document(${JSON.stringify({ ...filesScope, path: '../escape.actor', file_type: 'scene' })}).catch(e=>e.code)`), 'INVALID_PROJECT_PATH');
+    assert.equal(await main.evaluate(`corona.project.open_document(${JSON.stringify({ ...filesScope, path: '文件测试/missing.actor', file_type: 'scene' })}).catch(e=>e.code)`), 'FILE_NOT_FOUND');
     assert.equal(await filesCall('deleteItem', { path: '文件测试/改名.actor' }), true);
     assert.equal(await filesCall('deleteItem', { path: '文件测试' }), true);
     assert.equal((await filesCall('getFileTree', { path: '' })).children.some(entry => entry.name === '文件测试'), false);
@@ -1579,6 +1580,20 @@ try {
     evidence.push({ document: 'real-camera', roundtrip: 'bidirectional structured-clone typed arrays with JSON disabled', nativeCameraLifecycle: 'passed with JSON disabled: create/existing, identity, permissions, geometry, close, recreate, suspend, archive replacement',
       fixtureScene: cameraWorld });
   }
+  stage = 'project document contract';
+  console.log(`CEF smoke: ${stage}`);
+  // A real scene reload is not exercised here: the smoke's scene is closed by the camera
+  // lifecycle above, and a mid-run reload would discard the in-memory scene later stages
+  // assert on. The contract is pinned without one:
+  //   `scene` passes argument parsing and reaches the archive fence (PROJECT_CONTEXT_CHANGED,
+  //   not INVALID_ARGUMENT), while an Actor document is refused at the reader.
+  const staleScope = { archive_session: 'no-scene', project_path: 'no-scene', path: 'scene.ini' };
+  assert.equal(await main.evaluate(`corona.project.open_document(${JSON.stringify({ ...staleScope, file_type: 'scene' })}).catch(e=>e.code)`),
+    'PROJECT_CONTEXT_CHANGED', 'a scene document reaches the archive fence');
+  assert.equal(await main.evaluate(`corona.project.open_document(${JSON.stringify({ ...staleScope, file_type: 'actor' })}).catch(e=>e.code)`),
+    'INVALID_ARGUMENT', 'an Actor document is never a native open');
+  evidence.push({ document: 'open-document-contract',
+    openDocument: 'file_type is accepted only as `scene`; an Actor document is a Web focus intent' });
   result = { date: new Date().toISOString(), passed: true, documents: evidence, nativeBindings: testNativeBindings,
     engineSha256: createHash('sha256').update(await readFile(path.join(runtime, 'corona_engine.exe'))).digest('hex'),
     fixture: 'file-origin HTML in production BrowserManager windows; test-owned scene loaded through named project V8 binding; no user world',

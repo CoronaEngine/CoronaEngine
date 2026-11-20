@@ -78,7 +78,7 @@ inline constexpr EditorOperationSpec kEditorOperations[] = {
     {"project", "create_multiplayer_project", ProjectLauncherMethod::CreateMultiplayer, "Creates a multiplayer project."},
     {"project", "get_recent_projects", ProjectLauncherMethod::GetRecent, "The recent-project list the launcher renders."},
     {"project", "get_project_load_status", ProjectLauncherMethod::GetLoadStatus, "Whether the project the launcher asked for has finished loading."},
-    {"project", "open_document", FilesMethod::Open, "Opens a project document; the native scene may reload behind it."},
+    {"project", "open_document", FilesMethod::Open, "Reloads the current scene source (scene.ini) from disk; the only file type it accepts."},
     {"project", "save_active_project_info", ProjectSettingsMethod::SaveInfo, "Writes the active project's metadata."},
     {"window", "close", WindowMethod::Close, "Closes a window or panel; the identity decides which."},
     {"window", "focus", WindowMethod::Focus, "Focuses the window the panel identity belongs to."},
