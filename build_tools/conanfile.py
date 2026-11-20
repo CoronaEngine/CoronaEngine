@@ -83,7 +83,6 @@ class CoronaEngineConan(ConanFile):
         self.requires("sdl/3.4.0", transitive_headers=True, transitive_libs=True)
         self.requires("corona-imgui/1.92.5")
         self.requires("enet/1.3.18", transitive_headers=True, transitive_libs=True)
-        self.requires("onetbb/2022.3.0", transitive_headers=True, transitive_libs=True)
         self.requires("miniaudio/0.11.21", transitive_headers=True)
         self.requires("nlohmann_json/3.12.0", transitive_headers=True)
         self.requires("tinyexr/1.0.7", transitive_headers=True, transitive_libs=True)

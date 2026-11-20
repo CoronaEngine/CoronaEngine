@@ -1,8 +1,9 @@
 #pragma once
-#include <oneapi/tbb/task_arena.h>
-#include <oneapi/tbb/task_group.h>
 
+#include <atomic>
 #include <future>
+
+#include <corona/concurrency/thread_pool.h>
 
 #include "parser_registry.h"
 #include "resource.h"
@@ -18,7 +19,7 @@ using AnimationSources = std::vector<std::shared_ptr<const AnimationSource>>;
  * @brief 资源管理器类（单例模式）
  *
  * 负责资源的加载、卸载、缓存、导入、导出以及读写操作。
- * 支持同步和异步操作，并使用 TBB 进行并发任务管理。
+ * 支持同步和异步操作，异步任务提交到引擎线程池的 Background 类。
  */
 class ResourceManager final {
    public:
@@ -250,10 +251,12 @@ class ResourceManager final {
     TResourceID load_internal(const std::filesystem::path& path, ModelImportOptions options = {});
 
    private:
-    // 模型/场景导入通常同时触发多个大任务。将导入任务限制在小型 arena
-    // 内，避免一次打开场景时占满所有 worker 并阻塞渲染线程。
-    tbb::task_arena import_arena_{2};
-    tbb::task_group async_tasks_{};  ///< TBB任务组，用于管理异步任务
+    // 异步导入/导出/动画任务统一提交到引擎线程池的 Background 类：
+    // 该类不与 Realtime 抢道，也不会独占全部共享 worker（默认 2 条）。
+    Corona::Concurrency::TaskGroup async_tasks_;
+
+    /// 析构开始后置位：已在队列中的任务直接回填失败值，不再触碰成员。
+    std::atomic<bool> shutting_down_{false};
 
     ParserRegistry parser_registry_;
     ResourceCache resource_cache_;

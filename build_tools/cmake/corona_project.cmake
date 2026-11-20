@@ -23,7 +23,6 @@ include(corona_nodejs)              # Install/check editor Node.js in the same C
 include(corona_msvc_dependencies)   # Stable Ninja header tracking across console encodings
 include(corona_compile_config)      # Compiler settings, standards, and shared definitions
 include(corona_third_party)         # Conan-provided external dependency targets
-include(corona_tbb)                 # Engine-owned TBB discovery and runtime copy helpers
 include(corona_add_system)          # Helper for adding system modules
 include(corona_runtime_deps)        # Runtime dependency collection and copy helpers
 include(corona_cef)

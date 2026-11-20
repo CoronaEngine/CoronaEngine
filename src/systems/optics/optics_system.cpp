@@ -56,8 +56,6 @@
 #include <utility>
 #include <vector>
 
-#include <oneapi/tbb/task_group.h>
-
 #include "hardware.h"
 #include "../common/render_resource_bindings.h"
 #include "native_diagnostics.h"
@@ -4403,25 +4401,24 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     const auto native_shadow_start = PerfClock::now();
                     std::array<std::exception_ptr, kShadowCascadeCount>
                         cascade_errors{};
-                    oneapi::tbb::task_group cascade_tasks;
+                    // 4 级 cascade 曾由 TBB task_group 并行录制；为移除 TBB 改为
+                    // 顺序录制。若该段被实测为瓶颈，可改投线程池 Realtime 任务
+                    // 并用 TaskGroup::wait() 汇合。
                     Corona::Systems::OpticsDetail::for_each_enabled_shadow_cascade(
                         diag.shadow_cascade_mask,
                         kShadowCascadeCount,
                         [&](std::uint32_t cascade) {
-                            cascade_tasks.run([&, cascade] {
-                                try {
-                                    record_shadow_cascade(
-                                        hardware_->shadowInfoBufferObjects
-                                            .lightViewProj[cascade],
-                                        hardware_->shadowCascadeImages[cascade],
-                                        cascade);
-                                } catch (...) {
-                                    cascade_errors[cascade] =
-                                        std::current_exception();
-                                }
-                            });
+                            try {
+                                record_shadow_cascade(
+                                    hardware_->shadowInfoBufferObjects
+                                        .lightViewProj[cascade],
+                                    hardware_->shadowCascadeImages[cascade],
+                                    cascade);
+                            } catch (...) {
+                                cascade_errors[cascade] =
+                                    std::current_exception();
+                            }
                         });
-                    cascade_tasks.wait();
 
                     Corona::Systems::OpticsDetail::for_each_enabled_shadow_cascade(
                         diag.shadow_cascade_mask,

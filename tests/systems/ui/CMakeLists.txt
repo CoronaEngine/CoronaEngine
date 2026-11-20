@@ -211,10 +211,6 @@ endif()
 unset(_corona_cef_configuration)
 get_filename_component(_CORONA_CEF_TESTS_PYTHON_DIR "${Python_EXECUTABLE}" DIRECTORY)
 set(_CORONA_CEF_TESTS_PATH_DIRS "${_CORONA_CEF_TESTS_PYTHON_DIR}")
-foreach(_tbb_runtime IN LISTS CORONA_TBB_REDIS_DLLS)
-    get_filename_component(_tbb_runtime_dir "${_tbb_runtime}" DIRECTORY)
-    list(APPEND _CORONA_CEF_TESTS_PATH_DIRS "${_tbb_runtime_dir}")
-endforeach()
 list(REMOVE_DUPLICATES _CORONA_CEF_TESTS_PATH_DIRS)
 set(_CORONA_CEF_TESTS_ENVIRONMENT)
 foreach(_runtime_dir IN LISTS _CORONA_CEF_TESTS_PATH_DIRS)
@@ -244,7 +240,6 @@ unset(_cef_lifecycle_test)
 unset(_CORONA_CEF_TESTS_PYTHON_DIR)
 unset(_CORONA_CEF_TESTS_PATH_DIRS)
 unset(_CORONA_CEF_TESTS_ENVIRONMENT)
-unset(_tbb_runtime_dir)
 
 add_executable(corona_cef_popup_overlay_tests
     test_cef_popup_overlay.cpp
@@ -334,7 +329,6 @@ add_test(NAME NativeApiTimingTests COMMAND corona_native_api_timing_tests)
 # 放在 UI 测试树里，因为被钉住的正是"绘制/输入线程不得无界等待"这条规则。
 add_executable(corona_resource_cache_nowait_tests test_resource_cache_nowait.cpp)
 target_link_libraries(corona_resource_cache_nowait_tests PRIVATE corona::resource::manager)
-corona_copy_tbb_runtime_artifacts(corona_resource_cache_nowait_tests)
 add_test(NAME ResourceCacheNowaitTests COMMAND corona_resource_cache_nowait_tests)
 
 # 编辑器状态派发契约：所有 handler 只在 owner（CEF UI）线程执行，跨线程调用必须

@@ -227,7 +227,7 @@ endfunction()
 # Function: collect runtime dependencies during configuration
 # ------------------------------------------------------------------------------
 # Copy the shared libraries this executable actually links, including imported SHARED
-# targets that arrive through a private link chain (TBB, FFmpeg, the Vulkan loader).
+# targets that arrive through a private link chain (FFmpeg, the Vulkan loader).
 # corona_install_runtime_deps copies the engine-owned dependency list, which does not
 # include every Conan-provided DLL; this closes that gap without hard-coded paths.
 function(corona_copy_target_runtime_dlls target_name)

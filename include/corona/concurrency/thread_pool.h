@@ -13,6 +13,8 @@
  * - **专用道**：前 `realtime_workers` 个 worker 只跑 Realtime，空闲时帮忙跑
  *   Compute，**永远不取 Background**。Background 是秒级的资源导入与磁盘写入，
  *   这样它们不会挡住拾取回读这类亚帧级任务。
+ * - **默认 3 条 worker**：1 条 Realtime 专用道 + 2 条共享道，共享道为资源导入
+ *   保留原 tbb::task_arena{2} 的 2 路并发。
  * - **加权公平**：其余 worker 在 Compute / Background 之间比较
  *   `已派发数 / 权重`（交叉相乘，无浮点），近似 WFQ。
  * - **老化**：某类最老任务等待超过 `aging_dispatches` 次派发时强制优先，
@@ -62,9 +64,9 @@ inline constexpr std::size_t kTaskClassCount = 3;
     return "unknown";
 }
 
-/// 池配置：默认 2 条 worker，其中 1 条 Realtime 专用道（运行前可改）。
+/// 池配置：默认 3 条 worker（1 条 Realtime 专用道 + 2 条共享道），运行前可改。
 struct PoolConfig {
-    std::uint32_t workers{2};            ///< worker 总数（>=1）
+    std::uint32_t workers{3};            ///< worker 总数（>=1）
     std::uint32_t realtime_workers{1};   ///< 专用道数量；>= workers 时退化为无专用道
     std::uint32_t compute_weight{3};     ///< Compute 相对权重
     std::uint32_t background_weight{1};  ///< Background 相对权重

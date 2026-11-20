@@ -291,7 +291,7 @@ bool GeometrySystem::initialize(Kernel::ISystemContext* ctx) {
 
 void GeometrySystem::update() {
     // Every stage of this loop can block on a lock with no timeout (storage slot
-    // locks, Vulkan queue acquires, TBB arenas).  Naming the stage on entry makes
+    // locks, Vulkan queue acquires, pool queues).  Naming the stage on entry makes
     // such a stall visible as "Geometry stuck in phase X" instead of silence.
     Corona::Diagnostics::PhaseScope update_phase{"Geometry", "update"};
     // DAG 降级路径（CORONA_SYSTEMS_DAG=0）没有 tick 边界钩子：在这里兜底应用
@@ -1059,7 +1059,7 @@ void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {
                 }  // unique_lock 释放
 
                 // 取消该 lod_key 的在途异步构建：LOD1..N 已被释放，
-                // 若 TBB worker 稍后完成构建，process_pending_lod_builds 回写
+                // 若线程池 worker 稍后完成构建，process_pending_lod_builds 回写
                 // 会重新设 ready=true，撤销本次淘汰。
                 //
                 // 线程安全：evict_lods_for_actor 仅在几何线程 update() 中调用，
@@ -2909,7 +2909,7 @@ void GeometrySystem::process_pending_geometry_imports() {
     // ---- 阶段 2：为新的 PendingImport 发起 import_async（距离排序 + 每帧预算）----
     // 仅对尚无在途任务的 PendingImport geometry 发起，避免重复 import。
     // 近处对象先 import（流式体验），且每帧最多发起 kMaxImportsPerFrame 个，
-    // 避免一次性把大量模型全压进 TBB 线程池造成内存/解析突发。
+    // 避免一次性把大量模型全压进线程池的 Background 道造成内存/解析突发。
     struct ToImport {
         EntityId geom_handle;
         std::string    path;

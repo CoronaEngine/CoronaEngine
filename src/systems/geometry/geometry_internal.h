@@ -265,7 +265,7 @@ struct GeometrySystem::Impl {
     // LOD 异步构建（方案 C）
     // ========================================
     // reconcile 不再在几何线程同帧 make_geometry_buffer（×4，阻塞帧）；改为发起一个
-    // TBB 任务在 worker 线程构建 GPU 缓冲（HardwareBuffer 构造走持久映射 memcpy+flush，
+    // 线程池任务在 worker 线程构建 GPU 缓冲（HardwareBuffer 构造走持久映射 memcpy+flush，
     // 经 Horizon ResourceManager 单 mutex 全序列化，任意线程安全），完成后由
     // process_pending_lod_builds() 在几何线程轮询回写。构建期间渲染端就近回退显示已驻级。
     //

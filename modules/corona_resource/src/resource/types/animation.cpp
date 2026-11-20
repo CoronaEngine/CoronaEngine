@@ -16,8 +16,13 @@ std::shared_future<AnimationSources> ResourceManager::import_animations_async(st
     static const auto cache = std::make_shared<Cache>();
     auto promise = std::make_shared<std::promise<AnimationSources>>();
     auto result = promise->get_future().share();
-    import_arena_.execute([this, paths = std::move(paths), promise, cache = cache]() {
-        async_tasks_.run([paths, promise, cache]() {
+    const bool queued = async_tasks_.submit(
+        Corona::Concurrency::TaskClass::Background,
+        [this, paths = std::move(paths), promise, cache = cache]() {
+            if (shutting_down_.load(std::memory_order_acquire)) {
+                promise->set_value(AnimationSources{});
+                return;
+            }
             try {
                 // Weak entries retain no unused animation data. Timestamp/size
                 // changes create a new version while existing players pin the old one.
@@ -44,7 +49,9 @@ std::shared_future<AnimationSources> ResourceManager::import_animations_async(st
                 promise->set_value(std::move(sources));
             } catch (...) { promise->set_exception(std::current_exception()); }
         });
-    });
+    if (!queued) {
+        promise->set_value(AnimationSources{});
+    }
     return result;
 }
 

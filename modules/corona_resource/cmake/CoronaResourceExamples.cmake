@@ -12,7 +12,6 @@ include_guard(GLOBAL)
 #   SOURCES - List of source files
 #   LIBRARIES - List of libraries to link
 #   USD_MODULES - List of USD modules to link (optional)
-#   NEEDS_TBB - Whether to copy TBB runtime artifacts (default: OFF)
 #   NEEDS_ASSIMP - Whether to copy Assimp runtime artifacts (default: OFF)
 #   NEEDS_USD_COPY - Whether to copy USD files (default: OFF)
 #
@@ -21,12 +20,11 @@ include_guard(GLOBAL)
 #       NAME SceneExample
 #       SOURCES scene_example.cpp
 #       LIBRARIES corona::resource::manager
-#       NEEDS_TBB ON
 #       NEEDS_ASSIMP ON
 #   )
 function(corona_add_example)
     # Parse arguments
-    set(options NEEDS_TBB NEEDS_ASSIMP)
+    set(options NEEDS_ASSIMP)
     set(oneValueArgs NAME)
     set(multiValueArgs SOURCES LIBRARIES)
     cmake_parse_arguments(EXAMPLE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -65,11 +63,6 @@ function(corona_add_example)
                 corona_copy_runtime_files(${_lib} ${EXAMPLE_NAME})
             endif()
         endforeach()
-    endif()
-
-    # Copy TBB runtime artifacts if needed
-    if(EXAMPLE_NEEDS_TBB)
-        corona_copy_tbb_runtime_artifacts(${EXAMPLE_NAME})
     endif()
 
     # Copy Assimp runtime artifacts if needed (if not already copied via LIBRARIES)

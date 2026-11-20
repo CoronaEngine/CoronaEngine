@@ -6,7 +6,6 @@ corona_add_example(
     NAME MediaExample
     SOURCES media_example.cpp
     LIBRARIES corona::resource::manager
-    NEEDS_TBB ON
 )
 
 # Copy FFmpeg (and other transitive) runtime DLLs next to the binary.

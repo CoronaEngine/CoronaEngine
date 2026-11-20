@@ -21,7 +21,7 @@ function(corona_configure_test_runtime directory)
         return()
     endif()
 
-    set(_runtime_files ${CORONA_TBB_REDIS_DLLS})
+    set(_runtime_files)
     if(TARGET Helicon)
         get_target_property(_slang_files Helicon INTERFACE_HELICON_RUNTIME_DEPS)
         if(_slang_files)
