@@ -54,7 +54,7 @@ EDITOR = SourceWorkspace(
     directory=Path("CoronaEditor"),
     url="https://github.com/CoronaEngine/CoronaEditor.git",
     ref="codex/remove-story-world",
-    commit="c7131d851aadf84ae46e175cc0ea382e1e14efe3",
+    commit="4f88e7950f5416fa36899f9f9d901c178014a063",
 )
 
 WORKSPACES = (HORIZON, EDITOR)
