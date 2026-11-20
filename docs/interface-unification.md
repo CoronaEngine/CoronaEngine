@@ -327,7 +327,7 @@ C++ 侧用 `build_tools/dev.py` 构建、`ctest` 运行，见 §9 与 §10。
 | `test_rejection_vocabulary.py` | 源码只发已声明的码 | **加花括号形式扫描 + 1 条回归测试；删 `EDITOR_INPUT_LOCKED`** |
 | `test_interface_contract_doc.py` | 文档与生成器一致、守卫都在表里 | 受影响（重新生成） |
 | `test_docs_reference_live_files.py` | 文档不指向已删除文件 | 受影响（本批删了多个文件） |
-| `test_web_layer_budget.py` | 接口核心行数 ratchet | **+7 行（D1）；清理 1–3 后回落** |
+| `test_web_layer_budget.py` | 接口核心行数 ratchet | **已删除（见 §10 最后一条）** |
 | `test_python_native_surface.py` | Python 模块导出面（7 函数 + `InputEvent`，对象模型不在，**且绑定不得触达编辑器语义**） | **改写成含"缺席"断言 + 新增场景操作层禁用断言** |
 
 ## 9. 已知限制
@@ -447,9 +447,9 @@ ctest -C RelWithDebInfo -j 4 --output-on-failure
 9. **`InputEvent` 留在顶层而不是 `.script`。** 规则是"载荷类型跟着产出它的函数走"：
    `drain_input_events()` 是宿主支持函数，它的返回值不该跨子模块去拿。这条规则同时决定了
    `test_python_native_surface.py` 里 `HOST_SUPPORT_TYPES` 与 `.script` 类表的划分。
-10. **预算 +7 行是主动的预算决定，不是漂移。** `web_layer_budget.py` 的 ratchet 本来就允许
-   "涨要有理由"，这次的理由写在 `CORE_BUDGET` 上方的注释里：具名输入事件换来的是可读的载荷。
-   顺带注意到该文件里 5 个 per-file ceiling 比实测值高（历史遗留），本轮没有动它们以免扩大改动面。
+10. **预算 +7 行曾是主动的预算决定，不是漂移。** 当时 `web_layer_budget.py` 的 ratchet 允许
+   "涨要有理由"，理由写在 `CORE_BUDGET` 上方的注释里：具名输入事件换来的是可读的载荷。
+   该守卫后来整条删除（见 §10 最后一条）——它测的是文件行数，而接口形状由两张名单钉死。
 11. **修了一个与本批无关的坏测试。** `test_camera_window_identity.cpp` 自 `script_runtime_api.h`
    被删起就编译不过，只是没人构建过这个目标。D1 的验证必须构建它，所以顺手修好——
    改的是"回调走当前 API"与删掉指向已删 API 的断言，不是把测试削弱成能过。

@@ -159,7 +159,6 @@ Python 侧是单消费者串行：bridge 请求在同一个 worker 上依次执�
 | [`test_source_pins.py`](../tests/tools/test_source_pins.py) | pin 改写幂等；只有已推送到远程的提交才算可 pin |
 | [`test_frontend_facade.py`](../tests/tools/test_frontend_facade.py) | 原生方法↔facade 一一对应；前端只经 facade 触达原生对象 |
 | [`test_frontend_regressions.py`](../tests/tools/test_frontend_regressions.py) | 逐个跑前端窗口/音频/facade 回归文件（带超时） |
-| [`test_web_layer_budget.py`](../tests/tools/test_web_layer_budget.py) | 接口核心行数 ratchet（度量在 web_layer_budget.py） |
 | [`test_scene_api_consolidation.py`](../tests/tools/test_scene_api_consolidation.py) | 场景 V8 只保留合并后的方法名与总数 |
 | [`test_web_python_bridge.py`](../tests/tools/test_web_python_bridge.py) | Web→Python 信封原样转发：C++ 不解析、不重建，服务白名单在 Python |
 | [`test_python_refusal_codes.py`](../tests/tools/test_python_refusal_codes.py) | Python 侧拒绝码都在契约词表内 |
