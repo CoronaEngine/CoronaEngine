@@ -83,14 +83,18 @@ TARGET_LINES = 13_807
 # archive/scene/camera the request was accepted for, so the Python side can tell which camera
 # produced an event. That is +7 lines in the binding for a payload that used to be positional
 # and anonymous; the queue itself (cef_script_input.*) did not move.
-CORE_BUDGET = 13255
+# The exit request writes the live scene: both `close_process` and the window button reach
+# `request_application_exit`, which calls `save_scene_for_quit` once before queueing the quit.
+# That is +19 lines in the scene service (the write, its log line and the once-per-process
+# guard) plus one line in the window operation that calls it; the total moves 13255 -> 13275.
+CORE_BUDGET = 13275
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),
     ("src/systems/ui/cef/archive_load_policy.h", 21),
     ("src/systems/ui/cef/camera_window_lifetime.h", 46),
     ("src/systems/ui/cef/cef_operations.h", 130),
-    ("src/systems/ui/cef/editor_scene_service.cpp", 3959),
+    ("src/systems/ui/cef/editor_scene_service.cpp", 3978),
     ("src/systems/ui/cef/editor_paths.h", 22),
     ("src/systems/ui/cef/editor_paths.cpp", 31),
     ("src/systems/ui/cef/editor_service_operations.cpp", 105),
