@@ -111,7 +111,9 @@ NetworkReply execute_network_operation(const NetworkRequest& request);
 enum class ProjectLauncherMethod { GetRecent, GetLoadStatus, CreateWorld, CreateMultiplayer, SelectFile, Open };
 struct ProjectLauncherRequest {
     ProjectLauncherMethod method;
-    std::string prompt, role = "guest", path, load_policy = "prompt";
+    // CreateWorld carries no payload: there is no world description to name, and the archive
+    // service picks the project name. `role` belongs to CreateMultiplayer only.
+    std::string role = "guest", path, load_policy = "prompt";
 };
 
 struct ProjectLauncherReply {

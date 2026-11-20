@@ -194,18 +194,19 @@ bool read_project_launcher(ProjectLauncherRequest& request, const CefV8ValueList
     }
     const bool world = request.method == ProjectLauncherMethod::CreateWorld;
     if (!world && request.method != ProjectLauncherMethod::CreateMultiplayer) return arguments.empty();
-    if (arguments.size() != 1 || !object_keys(arguments[0], world
-        ? std::initializer_list<const char*>{"prompt"} : std::initializer_list<const char*>{"role"})) return false;
+    // Creating a world takes no fields: the archive has no world description any more, and the
+    // archive service names the project. A caller still sending `prompt` is refused like any
+    // other unknown key, so the field cannot come back through a lenient reader.
+    if (world) return arguments.size() == 1 && object_keys(arguments[0], {});
+    if (arguments.size() != 1 || !object_keys(arguments[0], {"role"})) return false;
     const auto value = arguments[0];
-    const char* key = world ? "prompt" : "role";
-    if (value->HasValue(key)) {
-        const auto item = value->GetValue(key);
+    if (value->HasValue("role")) {
+        const auto item = value->GetValue("role");
         if (!item || !item->IsString()) return false;
-        auto& text = world ? request.prompt : request.role;
-        text = item->GetStringValue().ToString();
-        if (text.find('\0') != std::string::npos) return false;
+        request.role = item->GetStringValue().ToString();
+        if (request.role.find('\0') != std::string::npos) return false;
     }
-    return world || request.role == "host" || request.role == "guest";
+    return request.role == "host" || request.role == "guest";
 }
 
 bool read_files(FilesMethod, const CefV8ValueList& arguments, FilesRequest& request) {

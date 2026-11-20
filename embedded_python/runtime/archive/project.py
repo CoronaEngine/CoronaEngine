@@ -35,7 +35,6 @@ def project_info(request):
         raise BridgeError("INVALID_PROJECT_PATH", str(error)) from error
     return {"name": config.get("scene", "name", fallback=root.name),
             "mode": config.get("world", "type", fallback="creative"),
-            "prompt": config.get("world", "prompt", fallback=""),
             "core_version": config.get("scene", "core_version", fallback=""),
             "create_time": config.get("scene", "create_time", fallback=""),
             "last_opened": config.get("scene", "last_opened", fallback=""),
@@ -75,6 +74,10 @@ def create_project_in(request):
 def create_project(request):
     require_keys(request, required=('path', 'name'),
                  optional=('world', 'multiplayer', 'archive_session', 'project_path'))
+    # The archive has no world description: `[world]` carries the mode only. A caller still
+    # sending `prompt` is refused here rather than having it written back into scene.ini.
+    if "world" in request:
+        require_keys(request["world"], optional=('type',))
     target = Path(request["path"]).resolve()
     if target.exists():
         raise FileExistsError(str(target))

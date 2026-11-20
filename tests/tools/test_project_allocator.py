@@ -19,7 +19,7 @@ from runtime.archive.project import create_project_in  # noqa: E402
 
 def _request(base: Path, stem: str = "creative_world") -> dict:
     return {"base_dir": str(base), "dir_stem": stem, "display_base": "创造世界",
-            "world": {"type": "creative", "prompt": "test"}}
+            "world": {"type": "creative"}}
 
 
 def test_a_multiplayer_project_accepts_the_role_key(tmp_path):

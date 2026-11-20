@@ -40,7 +40,7 @@ def run(port, root, runtime):
             code = main.evaluate(f'corona.project.{method}({json.dumps(request)}).catch(e=>e.code)')
             assert code == 'INVALID_ARGUMENT', (method, request, code)
         assert ({path.resolve() for path in data.iterdir()} if data.exists() else set()) == before_invalid
-        for method, request, prefix in [('create_world_project', {'prompt': '测试星空世界'}, 'creative_world_'),
+        for method, request, prefix in [('create_world_project', {}, 'creative_world_'),
                                         ('create_multiplayer_project', {'role': 'host'}, 'multiplayer_host_'),
                                         ('create_multiplayer_project', {'role': 'guest'}, 'multiplayer_client_')]:
             result = main.evaluate(f'corona.project.{method}({json.dumps(request, ensure_ascii=False)})')
@@ -55,7 +55,8 @@ def run(port, root, runtime):
             assert config['scene']['name'] == result['name']
             if method == 'create_world_project':
                 assert config['world']['type'] == 'creative'
-                assert config['world']['prompt'] == request['prompt']
+                # The archive has no world description any more; `[world]` carries the mode only.
+                assert 'prompt' not in config['world'], dict(config['world'])
             else:
                 assert result['role'] == request['role'] == config['multiplayer']['role']
             assert (path / 'assets.manifest.json').is_file()
@@ -81,9 +82,9 @@ def run(port, root, runtime):
         })()""")
         wait(lambda: main.evaluate('window.__creationLifetime.pending.length'), lambda n: n > 0,
              'NewGame real native readiness result waiting')
-        assert main.evaluate("!!document.querySelector('textarea')")
+        assert main.evaluate("!!document.querySelector('[data-creation-page]')")
         main.evaluate("location.hash='/SceneBar';true")
-        wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('textarea')"),
+        wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-creation-page]')"),
              bool, 'actual NewGame unmounted')
         retired = main.evaluate('({reads:window.__creationLifetime.reads,intervals:window.__creationLifetime.intervals.size})')
         assert retired['intervals'] == 0, retired
@@ -93,7 +94,7 @@ def run(port, root, runtime):
         wait(lambda: main.evaluate("[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='创造世界'&&!b.disabled)"),
              bool, 'normal creation remount readiness')
         main.evaluate("location.hash='/SceneBar';true")
-        wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('textarea')"),
+        wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('[data-creation-page]')"),
              bool, 'creation remount retired')
         assert main.evaluate('window.__creationLifetime.intervals.size') == 0
         return dict(created_worlds=3, roles=['host', 'guest'], invalid_requests_rejected=4,

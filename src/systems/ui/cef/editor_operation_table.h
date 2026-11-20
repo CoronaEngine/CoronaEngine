@@ -74,7 +74,7 @@ inline constexpr EditorOperationSpec kEditorOperations[] = {
     {"network", "set_project_root", NetworkMethod::SetProjectRoot, "Scopes discovery to one project root."},
     {"project", "open_project", ProjectLauncherMethod::Open, "Opens a recent project in the editor."},
     {"project", "open_project_file", ProjectLauncherMethod::SelectFile, "Asks the native launcher for a project file to open."},
-    {"project", "create_world_project", ProjectLauncherMethod::CreateWorld, "Creates a world project."},
+    {"project", "create_world_project", ProjectLauncherMethod::CreateWorld, "Creates a world project; it takes no fields - the archive service names it."},
     {"project", "create_multiplayer_project", ProjectLauncherMethod::CreateMultiplayer, "Creates a multiplayer project."},
     {"project", "get_recent_projects", ProjectLauncherMethod::GetRecent, "The recent-project list the launcher renders."},
     {"project", "get_project_load_status", ProjectLauncherMethod::GetLoadStatus, "Whether the project the launcher asked for has finished loading."},
@@ -103,3 +103,4 @@ constexpr const EditorOperationSpec* find_editor_operation(std::string_view grou
 }
 
 }  // namespace Corona::Systems::UI
+
