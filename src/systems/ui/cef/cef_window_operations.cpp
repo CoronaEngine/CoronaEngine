@@ -1,5 +1,6 @@
 #include "cef_window_operations.h"
 #include "cef_client.h"
+#include "editor_scene_service.h"
 #include <corona/systems/ui/camera_viewport_manager.h>
 #include <corona/shared_data_hub.h>
 #include <cmath>
@@ -519,6 +520,9 @@ WindowReply apply_viewport_configuration(const WindowRequest& request, BrowserTa
 }
 
 bool request_application_exit() {
+    // Write before stopping: the archive only changes when the scene service asks it to, and a
+    // quit is the last moment anyone can. The window button and close_process both end up here.
+    save_scene_for_quit();
     SDL_Event event{};
     event.type = SDL_EVENT_QUIT;
     return SDL_PushEvent(&event);

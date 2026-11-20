@@ -8,6 +8,7 @@
 #include "cef/browser_manager.h"
 #include "cef/cef_client.h"
 #include "cef/cef_process.h"
+#include "cef/cef_window_operations.h"
 #include "sdl/sdl_utils.h"
 #include <imgui.h>
 #include <imgui_internal.h> // DockBuilder default layout; pinned with the core library.
@@ -73,8 +74,14 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL3_ProcessEvent(&event);
-        if (event.type == SDL_EVENT_QUIT || (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
-            event.window.windowID == SDL_GetWindowID(context.window))) *context.running = false;
+        if (event.type == SDL_EVENT_QUIT) *context.running = false;
+        // The title-bar button goes through the same exit request the Web's close_process uses,
+        // so the scene is written before the process stops. If the request cannot be queued,
+        // stop anyway - a window that cannot be closed is worse than an unsaved scene.
+        else if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
+                 event.window.windowID == SDL_GetWindowID(context.window)) {
+            if (!request_application_exit()) *context.running = false;
+        }
         if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
             if (auto* captured = manager.get_tab(captured_tab_); captured && captured->client)
                 if (auto browser = captured->client->GetBrowser()) browser->GetHost()->SendCaptureLostEvent();

@@ -2438,6 +2438,30 @@ NativeEditorState& native_editor_state() {
     return *state;
 }
 
+bool save_scene_for_quit() {
+    // One write per process: the window button and the Web's close_process both land here, and a
+    // second click must not start a second write while the first is still on its way to disk.
+    static std::atomic<bool> attempted{false};
+    if (attempted.exchange(true)) return true;
+
+    auto* scene = native_editor_state().scene.get();
+    if (!scene || scene->read_only) return false;
+    try {
+        const auto result = save_editor_scene(*scene, false);
+        if (result.success && result.data.value("ok", false)) {
+            CFW_LOG_INFO("event=editor.quit.saved scene={}", scene->route);
+            return true;
+        }
+        CFW_LOG_WARNING("event=editor.quit.save_failed scene={} detail={}", scene->route,
+                        result.error.empty() ? result.data.value("status", std::string{"unknown"})
+                                             : result.error);
+    } catch (const std::exception& error) {
+        // A failed write must not trap the user in a process that cannot close.
+        CFW_LOG_WARNING("event=editor.quit.save_failed detail={}", error.what());
+    }
+    return false;
+}
+
 CameraPropertiesSnapshot camera_properties_snapshot(const NativeEditorScene& scene, const NativeEditorCamera& camera) {
     CameraPropertiesSnapshot result;
     const auto& engine = *camera.engine_camera;

@@ -39,6 +39,9 @@ const clients = [];
 let stage = 'starting engine';
 let result;
 let forcedTermination = false;
+// Set when the run leaves an unsaved change in a live scene, so the assertion after the engine
+// exits knows which archive to inspect.
+let quitSaveScene = null;
 const waitFor = async (fn, timeout = 90_000) => {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
@@ -1585,6 +1588,28 @@ try {
     evidence.push({ document: 'real-camera', roundtrip: 'bidirectional structured-clone typed arrays with JSON disabled', nativeCameraLifecycle: 'passed with JSON disabled: create/existing, identity, permissions, geometry, close, recreate, suspend, archive replacement',
       fixtureScene: cameraWorld });
   }
+  // The last thing this run leaves in memory has to reach the archive when the process exits, not
+  // when some autosave timer happens to fire. This fixture page runs no renderer policy, so the
+  // only writer left is the quit path itself - which is what makes this a real test of it.
+  stage = 'quit writes the live scene';
+  console.log(`CEF smoke: ${stage}`);
+  {
+    const quitWorld = path.join(output, `quit-save-world-${Date.now()}`);
+    await mkdir(path.join(quitWorld, 'Assets'), { recursive: true });
+    await writeFile(path.join(quitWorld, 'scene.ini'), '[format]\ntype=corona_scene_folder\nversion=1\n[scene]\nname=CEF quit save smoke\n[world]\ntype=creative\n[actors]\n[scripts]\npath=\n[terrain]\ntype=\npath=\n[camera]\ncount=1\ncamera0.id=main-camera\n');
+    await writeFile(path.join(quitWorld, 'assets.manifest.json'), '{"format":"corona_scene_assets","version":1,"bundles":[]}');
+    await writeFile(path.join(quitWorld, 'quit-probe.ply'), 'ply\nformat ascii 1.0\nelement vertex 3\nproperty float x\nproperty float y\nproperty float z\nelement face 1\nproperty list uchar int vertex_indices\nend_header\n0 0 0\n1 0 0\n0 1 0\n3 0 1 2\n');
+    const quitOpened = await main.evaluate(`corona.project.open_project(${JSON.stringify(quitWorld)})`);
+    assert.equal(quitOpened.ok, true);
+    const quitActive = await main.evaluate('corona.scene.read_active()');
+    assert.ok(quitActive.archive_session);
+    const quitProbe = await main.evaluate(`corona.scene.create_actor('scene.ini',${JSON.stringify(path.join(quitWorld, 'quit-probe.ply'))},${JSON.stringify({ archive_session: quitActive.archive_session, actor_type: 'model', actor_name: 'QuitSaveProbe' })})`);
+    assert.equal(quitProbe.name, 'QuitSaveProbe');
+    const beforeQuit = await readFile(path.join(quitWorld, 'scene.ini'), 'utf8');
+    assert.equal(beforeQuit.includes('QuitSaveProbe'), false,
+      'nothing writes the Actor before the process quits');
+    quitSaveScene = quitWorld;
+  }
   stage = 'project document contract';
   console.log(`CEF smoke: ${stage}`);
   // A real scene reload is not exercised here: the smoke's scene is closed by the camera
@@ -1655,6 +1680,13 @@ try {
 // taskkill accepting termination does not mean the child has already exited.
 assert.equal(forcedTermination, false, 'Engine must shut down without forced termination');
 assert.equal(child.exitCode, 0, 'Engine must exit normally after the named quit request');
+// The quit path writes the live scene before the process stops; nothing else in this run does.
+if (quitSaveScene) {
+  const quitScene = await readFile(path.join(quitSaveScene, 'scene.ini'), 'utf8');
+  assert.match(quitScene, /QuitSaveProbe/,
+    'the Actor created after the last write reached the archive when the process quit');
+  result.quitSave = 'the live scene is written by the exit request, after the process has stopped';
+}
 result.cleanup_ok = true;
 result.graceful_exit = true;
 await writeFile(path.join(output, 'result.json'), JSON.stringify(result, null, 2));
