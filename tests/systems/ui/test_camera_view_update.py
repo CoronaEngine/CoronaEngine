@@ -30,8 +30,6 @@ def camera_update_harness():
     source = (ROOT / "src/systems/ui/cef/editor_scene_service.cpp").read_text(encoding="utf-8")
     operation_start = source.index("SceneReply apply_native_camera_properties(")
     operation_end = source.index("\nSceneReply apply_native_camera_render_settings(", operation_start)
-    adapter_start = source.index("NativeResult apply_non_web_camera_properties(")
-    adapter_end = source.index("\nnamespace {", adapter_start)
     header = (ROOT / "src/systems/ui/cef/cef_scene_operations.h").read_text(encoding="utf-8")
     patch = header[header.index("struct CameraPropertiesPatch {"):header.index("struct CameraPropertiesSnapshot :")]
     # The camera property validation lives in a CEF-free domain service now; the
@@ -81,7 +79,6 @@ struct SceneRequest {
  std::optional<std::string> archive_session;
  CameraPropertiesPatch camera_properties;
 };
-namespace Corona::API { bool is_editor_camera_input_enabled() { return true; } }
 namespace Corona::API { struct CameraViewState {
     std::optional<bool> open;
     int x=120, y=120, width=960, height=540;
@@ -157,37 +154,29 @@ struct NativeRequest { Json args; }; struct NativeContext {};
 Scene* scene_for_request_route(const NativeRequest&) { return &scene; }
 std::string arg_string(const Json& a,int i) { return a[i].get<std::string>(); }
 Camera* find_native_camera(Scene&,const std::string&) { return &camera; }
-Json arg_object(const Json& a,int i) { return a[i]; }
-std::optional<std::array<float,3>> json_float3_value(const Json& j) { return j.get<std::array<float,3>>(); }
-Json native_failure(const std::string& message,int) { return {{"status","error"},{"message",message}}; }
-Json camera_not_found_result(const std::string&) { return {{"status","error"}}; }
-bool json_bool_value(const Json& j,const char* k,bool v) { return j.value(k,v); }
-int json_int_value(const Json& j,const char* k,int v) { return j.value(k,v); }
-float json_float_value(const Json& j,const char* k,float v) { return j.value(k,v); }
-void persist_native_scene_cameras(Scene&) {}
-Json camera_to_json(Camera&) { return Json::object(); }
-Json native_success(Json j) { return j; }
-// The extracted adapter funnels its failure path through the scene layer's shaper;
-// the harness only asserts successful replies, so a minimal shaper is enough.
-Json native_result_from_scene(const SceneReply& reply) {
-    return {{"status","error"},{"code",reply.error_code},{"message",reply.error_message}};
-}
 // The extracted handler body is namespace-qualified in the engine; this alias
 // keeps the snippet compiling at global scope in the harness.
 namespace CameraPropertiesService = Corona::Systems::UI::CameraPropertiesService;
 OPERATION
-ADAPTER
 int main(int argc,char** argv) {
-    if (argc > 2) {
-        SceneRequest request{SceneMethod::UpdateCamera};
-        request.archive_session=scene.archive_session;
-        request.camera_properties.scene=scene.route;
-        request.camera_properties.camera_id=camera.camera_id;
-        request.camera_properties.move_speed=Json::parse(argv[1])["move_speed"].get<float>();
-        const auto reply=apply_native_camera_properties(request);
-        if (!reply.error_code.empty()) return 2;
-    } else {
-        apply_non_web_camera_properties({Json::array({"scene","source-camera",Json::parse(argv[1])})}, false);
+    const auto state=Json::parse(argv[1]);
+    SceneRequest request{SceneMethod::UpdateCamera};
+    request.archive_session=scene.archive_session;
+    auto& patch=request.camera_properties;
+    patch.scene=scene.route;
+    patch.camera_id=camera.camera_id;
+    if (state.contains("move_speed")) patch.move_speed=state["move_speed"].get<float>();
+    if (state.contains("width")) patch.width=state["width"].get<int>();
+    if (state.contains("height")) patch.height=state["height"].get<int>();
+    if (state.contains("view_open")) patch.view_open=state["view_open"].get<bool>();
+    if (state.contains("view_x")) patch.view_x=state["view_x"].get<int>();
+    if (state.contains("view_y")) patch.view_y=state["view_y"].get<int>();
+    if (state.contains("view_width")) patch.view_width=state["view_width"].get<int>();
+    if (state.contains("view_height")) patch.view_height=state["view_height"].get<int>();
+    const auto reply=apply_native_camera_properties(request);
+    if (!reply.error_code.empty()) {
+        std::cout << Json{{"error_code",reply.error_code}}.dump();
+        return 0;
     }
     std::cout << Json{{"width",engine.width},{"height",engine.height},
       {"rect",{engine.x,engine.y,engine.view_width,engine.view_height}},
@@ -197,7 +186,6 @@ int main(int argc,char** argv) {
 '''.replace("PATCH", patch)
     cpp = cpp.replace("SERVICE", service)
     cpp = cpp.replace("OPERATION", source[operation_start:operation_end])
-    cpp = cpp.replace("ADAPTER", source[adapter_start:adapter_end])
     cpp = cpp.replace("CONSUME_VIEW_STATE", optics[consume_start:consume_end])
     cpp = cpp.replace("RUNTIME_VIEW_METHODS", runtime[runtime_start:runtime_end].replace("Corona::API::Camera::", "EngineCamera::"))
     temporary_root = ROOT / ".workspace/tmp/view-state-regression"
@@ -212,9 +200,9 @@ int main(int argc,char** argv) {
         yield executable
 
 
-def run_update(executable, state, *, typed=False):
+def run_update(executable, state):
     import json
-    result = subprocess.run([str(executable), json.dumps(state), *(["typed"] if typed else [])], capture_output=True, text=True)
+    result = subprocess.run([str(executable), json.dumps(state)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 
@@ -226,9 +214,8 @@ def test_resolution_only_keeps_live_viewport_rect(camera_update_harness):
     assert actual["geometry_calls"] == 0
 
 
-@pytest.mark.parametrize("typed", [False, True], ids=["non-web-adapter", "typed-scene-operation"])
-def test_speed_only_keeps_live_viewport_and_render_size(camera_update_harness, typed):
-    actual = run_update(camera_update_harness, {"move_speed": 3.5}, typed=typed)
+def test_speed_only_keeps_live_viewport_and_render_size(camera_update_harness):
+    actual = run_update(camera_update_harness, {"move_speed": 3.5})
     assert actual["rect"] == [0, 0, 1536, 825]
     assert actual["speed"] == 3.5
     assert actual["size_calls"] == 0
@@ -236,18 +223,25 @@ def test_speed_only_keeps_live_viewport_and_render_size(camera_update_harness, t
 
 
 def test_empty_update_does_not_replay_saved_window_state(camera_update_harness):
+    # A patch with no property at all is refused before it touches the camera, so the
+    # saved window state cannot be replayed into the live viewport.
     actual = run_update(camera_update_harness, {})
-    assert actual["rect"] == [0, 0, 1536, 825]
-    assert actual["size_calls"] == 0
+    assert actual["error_code"] == "INVALID_ARGUMENT"
+
+
+def test_explicit_window_geometry_updates_the_rect_without_owning_the_open_state(camera_update_harness):
+    actual = run_update(camera_update_harness, {
+        "view_x": 40, "view_y": 50, "view_width": 800, "view_height": 600,
+    })
+    assert actual["rect"] == [40, 50, 800, 600]
+    # Only the rectangle moved: the open state is not this patch's to change, so no
+    # ViewState command reached the geometry side.
+    assert actual["open"] is False
     assert actual["geometry_calls"] == 0
 
 
-@pytest.mark.parametrize("opened", [True, False])
-def test_explicit_window_geometry_preserves_open_close_semantics(camera_update_harness, opened):
-    actual = run_update(camera_update_harness, {
-        "view_open": opened, "view_x": 40, "view_y": 50,
-        "view_width": 800, "view_height": 600,
-    })
-    assert actual["rect"] == [40, 50, 800, 600]
-    assert actual["open"] is opened
-    assert actual["geometry_calls"] == 1
+def test_a_camera_patch_cannot_drive_the_window_lifecycle(camera_update_harness):
+    # `view_open` belongs to window operations; the non-Web caller that used to be
+    # exempt went with the script runtime, so the patch refuses it like any other.
+    actual = run_update(camera_update_harness, {"view_open": True})
+    assert actual["error_code"] == "INVALID_ARGUMENT"
