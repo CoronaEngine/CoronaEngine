@@ -72,7 +72,7 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
     std::optional<std::vector<std::string>> sources;
     if (patch.animation_sources) {
         try {
-            sources = prepare_animation_sources(*scene, *patch.animation_sources, patch.transient_assets);
+            sources = prepare_animation_sources(*scene, *patch.animation_sources);
             request_actor_animation_sources(*scene, *actor, *sources);
         } catch (const std::exception& error) { return fail("INVALID_ARGUMENT", error.what()); }
     }

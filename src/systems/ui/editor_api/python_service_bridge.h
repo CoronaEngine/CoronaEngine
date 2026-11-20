@@ -4,10 +4,10 @@
 //
 // This file used to own the JSON editor manifest (an api-name table, caller masks
 // and the two `_invoke_cpp_*` bindings). That contract is retired: Web calls the
-// typed V8 bindings, and the ScriptRuntime calls the named `script_scene_*` entry
-// points in `cef/script_runtime_api.h`. What is left here is the part that was never
-// the manifest's: handing a service request to the Python runtime and recording that
-// the Python service layer registered.
+// typed V8 bindings, and Python supplies the services the editor invokes here. The
+// `script_scene_*` entry points that sat next to this channel went with the script
+// runtime. What is left is the part that was never the manifest's: handing a service
+// request to the Python runtime and recording that the Python service layer registered.
 
 #include "native_api_types.h"
 

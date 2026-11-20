@@ -285,15 +285,15 @@ bool read_script_input(const CefV8ValueList& arguments, ScriptInputRequest& requ
         out = v->GetStringValue().ToString();
         return out.find('\0') == std::string::npos;
     };
-    std::string type;
-    if (!text("archive_session", request.source.archive_session) || request.source.archive_session.empty() || !text("type", type)) return false;
+    std::string kind;
+    if (!text("archive_session", request.source.archive_session) ||
+        request.source.archive_session.empty() || !text("type", kind)) return false;
     request.source.scene_id = arguments[0]->GetStringValue().ToString();
     request.source.camera_id = arguments[1]->GetStringValue().ToString();
     std::vector<CefString> keys;
     if (!value->GetKeys(keys)) return false;
-    auto& event = request.event;
-    const bool mouse = type == "mouse", key_down = type == "keyDown";
-    if (!mouse && !key_down && type != "keyUp") return false;
+    const bool mouse = kind == "mouse", key_down = kind == "keyDown";
+    if (!mouse && !key_down && kind != "keyUp") return false;
     if (keys.size() != (mouse ? 10u : key_down ? 5u : 4u)) return false;
     for (const auto& k : keys) {
         if (k == "archive_session" || k == "type") continue;
@@ -302,23 +302,30 @@ bool read_script_input(const CefV8ValueList& arguments, ScriptInputRequest& requ
                 k != "viewport_width" && k != "viewport_height") return false;
         } else if (k != "code" && k != "key" && !(key_down && k == "modifiers")) return false;
     }
+    // The queue carries the names the request used, plus the identity the request was
+    // accepted for. A consumer never has to remember a slot order, and it can tell which
+    // camera produced the event without asking the editor again.
+    auto& event = request.event;
+    event.kind = kind;
+    event.archive_session = request.source.archive_session;
+    event.scene_id = request.source.scene_id;
+    event.camera_id = request.source.camera_id;
     if (!mouse) {
-        event.type = key_down ? 0 : 1;
-        std::string key;
-        if (!text("code", event.arg0) || event.arg0.empty() || !text("key", key) || key.empty()) return false;
-        if (key_down) { event.arg2 = key; return text("modifiers", event.arg1); }
-        event.arg1 = key; return true;
+        if (!text("code", event.code) || event.code.empty() ||
+            !text("key", event.key) || event.key.empty()) return false;
+        return key_down ? text("modifiers", event.modifiers) : true;
     }
-    event.type = 2;
-    if (!text("event", event.arg0) || !text("button", event.arg1)) return false;
-    if (event.arg0 != "move" && event.arg0 != "mousedown" && event.arg0 != "mouseup" && event.arg0 != "click" && event.arg0 != "wheel") return false;
-    if (!event.arg1.empty() && event.arg1 != "LeftButton" && event.arg1 != "MiddleButton" && event.arg1 != "RightButton") return false;
+    if (!text("event", event.event) || !text("button", event.button)) return false;
+    if (event.event != "move" && event.event != "mousedown" && event.event != "mouseup" &&
+        event.event != "click" && event.event != "wheel") return false;
+    if (!event.button.empty() && event.button != "LeftButton" && event.button != "MiddleButton" &&
+        event.button != "RightButton") return false;
     const auto number = [&](const char* key, double& out) {
         const auto v = value->GetValue(key);
         if (!v || !(v->IsInt() || v->IsUInt() || v->IsDouble())) return false;
         out = v->GetDoubleValue(); return std::isfinite(out);
     };
-    return number("x", event.arg3) && number("y", event.arg4) && number("viewport_x", event.viewport_x) &&
+    return number("x", event.x) && number("y", event.y) && number("viewport_x", event.viewport_x) &&
         number("viewport_y", event.viewport_y) && number("viewport_width", event.viewport_width) &&
         number("viewport_height", event.viewport_height) && event.viewport_width > 0 && event.viewport_height > 0;
 }

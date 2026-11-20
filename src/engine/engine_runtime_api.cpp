@@ -2341,14 +2341,6 @@ std::array<int, 2> Corona::API::Camera::get_size() const {
 
 
 namespace Corona::API {
-void set_editor_camera_input_enabled(bool enabled) {
-    Systems::CameraFollowController::instance().set_input_enabled(enabled);
-}
-
-bool is_editor_camera_input_enabled() {
-    return Systems::CameraFollowController::instance().is_input_enabled();
-}
-
 void set_default_surface(void* surface) {
     g_default_surface.store(surface, std::memory_order_relaxed);
 

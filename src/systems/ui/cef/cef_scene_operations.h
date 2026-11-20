@@ -76,7 +76,6 @@ struct ActorPropertiesPatch {
     std::optional<ActorMechanicsPatch> mechanics;
     std::optional<ActorCameraLockPatch> camera_lock;
     std::optional<std::vector<std::string>> animation_sources;
-    bool transient_assets = false; // Non-Web ScriptRuntime imports remain memory-only.
 };
 struct ActorMechanicsSnapshot {
     float mass = 1, restitution = 0.8f, damping = 0.99f;

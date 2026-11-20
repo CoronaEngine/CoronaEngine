@@ -37,6 +37,7 @@ NAMESPACE_NOTES = {
 GUARDS = [
     ("test_manifest_retirement.py", "已删除的 manifest 不许回来"),
     ("test_typed_native_surface.py", "Web 面方法 + 拒绝码词表"),
+    ("test_python_native_surface.py", "Python 面：7 个宿主支持入口 + `InputEvent`，且对象模型不在、绑定不得触达编辑器语义"),
     ("test_editor_operation_table.py", "唯一的操作表：55 行 / 九个命名空间 / 名字原样发布"),
     ("test_wire_key_naming.py", "过原生的键一律 snake_case，Web 侧翻译只在 appService"),
     ("test_interface_contract_doc.py", "这份文档与代码一致"),

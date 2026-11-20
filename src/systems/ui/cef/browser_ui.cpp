@@ -43,24 +43,6 @@ std::string scratch_key_modifiers(SDL_Keymod modifiers) {
     return result;
 }
 
-bool is_gameplay_key(SDL_Keycode key) {
-    switch (key) {
-        case SDLK_SPACE:
-        case SDLK_W:
-        case SDLK_A:
-        case SDLK_S:
-        case SDLK_D:
-        case SDLK_F:
-        case SDLK_LEFT:
-        case SDLK_RIGHT:
-        case SDLK_UP:
-        case SDLK_DOWN:
-            return true;
-        default:
-            return false;
-    }
-}
-
 ScratchKeyNames scratch_key_names(const SDL_KeyboardEvent& event) {
     const SDL_Keycode key = event.key;
     if (key >= SDLK_A && key <= SDLK_Z) {
@@ -166,21 +148,12 @@ void BrowserInputHandler::process_sdl_key_event(const SDL_Event& event) {
     // Scratch input must not depend on which CEF tab currently owns DOM focus.
     const ScratchKeyNames scratch_key = scratch_key_names(event.key);
     InputEvent scratch_event{};
-    scratch_event.type = pressed ? 0 : 1;
-    scratch_event.arg0 = scratch_key.code;
-    scratch_event.arg1 = pressed
-        ? scratch_key_modifiers(static_cast<SDL_Keymod>(event.key.mod))
-        : scratch_key.display;
-    scratch_event.arg2 = pressed ? scratch_key.display : std::string{};
+    scratch_event.kind = pressed ? "keyDown" : "keyUp";
+    scratch_event.code = scratch_key.code;
+    scratch_event.key = scratch_key.display;
+    // Modifiers are part of the key-down payload only; SDL input has no Web identity.
+    if (pressed) scratch_event.modifiers = scratch_key_modifiers(static_cast<SDL_Keymod>(event.key.mod));
     enqueue_input_event(std::move(scratch_event));
-
-    // While a Blockly game preview owns gameplay input, do not mirror its control
-    // keys into the focused CEF tab. Scratch already received the SDL event above;
-    // forwarding Space/WASD as DOM input can reactivate a focused editor button
-    // (notably the global Run/Stop button) and interrupt the game.
-    if (!Corona::API::is_editor_camera_input_enabled() && is_gameplay_key(event.key.key)) {
-        return;
-    }
 
     int scan_code = static_cast<int>(event.key.scancode);
     int modifiers = 0;

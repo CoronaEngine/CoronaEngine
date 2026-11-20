@@ -39,11 +39,6 @@ struct GeometryRenderStatus {
 void set_default_surface(void* surface);
 [[nodiscard]] void* get_default_surface();
 
-// Editor camera input ownership. Blockly/game runtimes disable only editor
-// camera controls; keyboard and mouse events continue to reach script input.
-void set_editor_camera_input_enabled(bool enabled);
-[[nodiscard]] bool is_editor_camera_input_enabled();
-
 // ============================================================================
 // Geometry: 作为所有组件的锚点，存储位置/旋转/缩放和模型数据
 // ============================================================================

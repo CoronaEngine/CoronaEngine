@@ -78,7 +78,12 @@ TARGET_LINES = 13_807
 # the archive/file guards need the `archive_session` a path-only reader cannot supply.
 # Forwarding the archive service's refusal code on a failed save cost two comment lines
 # (+2) in the scene service; the hardcoded SAVE_FAILED it replaced was already wrong.
-CORE_BUDGET = 13248
+# The script input reader now names what it reads: instead of flattening a Web event into
+# arg0..arg4 it fills `code`/`key`/`modifiers` or `event`/`button`/`x`/`y`, and stamps the
+# archive/scene/camera the request was accepted for, so the Python side can tell which camera
+# produced an event. That is +7 lines in the binding for a payload that used to be positional
+# and anonymous; the queue itself (cef_script_input.*) did not move.
+CORE_BUDGET = 13255
 INTERFACE_FILES = [
     ("src/systems/ui/cef/actor_selection_routing.h", 56),
     ("src/systems/ui/cef/animation_config.h", 45),

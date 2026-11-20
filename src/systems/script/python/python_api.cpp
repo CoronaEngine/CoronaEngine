@@ -492,7 +492,6 @@ PythonRuntimeResponse PythonAPI::execute_runtime_request(const PythonRuntimeRequ
                         nanobind::getattr(json, "dumps")(result));
                 }
             }
-            EngineScripts::clear_python_callback_registry();
             pStartFunc.reset();
             runtimeUpdateFunc.reset();
             pEditor.reset();

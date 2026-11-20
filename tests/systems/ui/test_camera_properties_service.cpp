@@ -38,11 +38,13 @@ CameraPropertiesPatch base_patch() {
 void test_view_lifecycle() {
     auto patch = base_patch();
     patch.view_open = true;
-    auto error = validate_view_lifecycle(patch, true);
+    auto error = validate_view_lifecycle(patch);
     check(error && error.code == "INVALID_ARGUMENT" &&
           error.message == "Camera window lifecycle belongs to window operations",
-          "editor input rejects view lifecycle");
-    check(!validate_view_lifecycle(patch, false), "non-editor input may drive the window lifecycle");
+          "a camera patch never owns the window lifecycle");
+    auto without_lifecycle = base_patch();
+    without_lifecycle.name = "Renamed";
+    check(!validate_view_lifecycle(without_lifecycle), "a patch without view_open is accepted");
 }
 
 void test_identity() {
@@ -112,17 +114,6 @@ void test_numeric() {
     check(static_cast<bool>(validate_numeric(bad_near, kProjection)), "non-positive near plane rejected");
 }
 
-void test_editor_input() {
-    auto pose = base_patch();
-    pose.position = std::array<float, 3>{0.f, 1.f, 0.f};
-    check(validate_editor_input(pose, true, false).code == "EDITOR_INPUT_LOCKED", "runtime owns camera input");
-    check(!validate_editor_input(pose, true, true), "editor input allowed while enabled");
-    check(!validate_editor_input(pose, false, false), "non-editor callers are not gated");
-    auto name_only = base_patch();
-    name_only.name = "Renamed";
-    check(!validate_editor_input(name_only, true, false), "rename is not pose input");
-}
-
 }  // namespace
 
 int main() {
@@ -130,7 +121,6 @@ int main() {
     test_identity();
     test_rename();
     test_numeric();
-    test_editor_input();
     std::cout << "camera_properties_service: " << checks << " checks passed\n";
     return 0;
 }

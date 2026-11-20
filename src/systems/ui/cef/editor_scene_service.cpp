@@ -2546,13 +2546,13 @@ SceneReply apply_native_model_node(const SceneRequest& request) {
     return reply;
 }
 
-SceneReply apply_native_camera_properties(const SceneRequest& request, bool editor_input = true) {
+SceneReply apply_native_camera_properties(const SceneRequest& request) {
     SceneReply reply;
     const auto fail = [&](const char* code, const std::string& message) {
         reply.error_code = code; reply.error_message = message; return reply;
     };
     const auto& patch = request.camera_properties;
-    if (const auto invalid = CameraPropertiesService::validate_view_lifecycle(patch, editor_input))
+    if (const auto invalid = CameraPropertiesService::validate_view_lifecycle(patch))
         return fail(invalid.code.c_str(), invalid.message);
     if (const auto invalid = CameraPropertiesService::validate_identity(
             patch, request.archive_session.has_value() && !request.archive_session->empty()))
@@ -2581,9 +2581,6 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
     const auto projection = engine.get_projection();
     if (const auto invalid = CameraPropertiesService::validate_numeric(patch, projection))
         return fail(invalid.code.c_str(), invalid.message);
-    if (const auto invalid = CameraPropertiesService::validate_editor_input(
-            patch, editor_input, Corona::API::is_editor_camera_input_enabled()))
-        return fail(invalid.code.c_str(), invalid.message);
     const auto sign = patch.projection_x_sign.value_or(projection[0]);
     const auto near_plane = patch.near_plane.value_or(projection[1]);
     const auto far_plane = patch.far_plane.value_or(projection[2]);
@@ -2607,11 +2604,9 @@ SceneReply apply_native_camera_properties(const SceneRequest& request, bool edit
         camera.view_x = patch.view_x.value_or(camera.view_x); camera.view_y = patch.view_y.value_or(camera.view_y);
         camera.view_width = patch.view_width.value_or(camera.view_width); camera.view_height = patch.view_height.value_or(camera.view_height);
         camera.move_speed = patch.move_speed.value_or(camera.move_speed);
-        if (!editor_input && patch.view_open) {
-            camera.window_state->requested_open.store(camera.view_open ? 1 : 0);
-            engine.set_view({camera.view_open, camera.view_x, camera.view_y, camera.view_width,
-                             camera.view_height, camera.move_speed});
-        } else if (patch.view_x || patch.view_y || patch.view_width || patch.view_height) {
+        // `view_open` was refused above: a camera patch never drives the window lifecycle,
+        // so this branch only moves the rectangle or the speed of the live viewport.
+        if (patch.view_x || patch.view_y || patch.view_width || patch.view_height) {
             engine.set_view({std::nullopt, camera.view_x, camera.view_y, camera.view_width,
                              camera.view_height, camera.move_speed});
         } else if (patch.move_speed) {

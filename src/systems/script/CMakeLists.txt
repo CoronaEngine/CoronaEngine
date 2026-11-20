@@ -28,8 +28,7 @@ corona_add_system(script
         script_system.cpp
         ${PROJECT_SOURCE_DIR}/src/engine/engine_runtime_api.cpp
         python/corona_engine_module.cpp
-        python/engine_bindings.cpp
-        python/editor_host_bindings.cpp
+        python/host_support_bindings.cpp
         python/python_api.cpp
         python/python_path_config.cpp
         python/python_error_handler.cpp

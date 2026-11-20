@@ -24,8 +24,8 @@ std::string trim_ascii(std::string value) {
 
 }  // namespace
 
-ValidationError validate_view_lifecycle(const CameraPropertiesPatch& patch, bool editor_input) {
-    if (editor_input && patch.view_open) {
+ValidationError validate_view_lifecycle(const CameraPropertiesPatch& patch) {
+    if (patch.view_open) {
         return {"INVALID_ARGUMENT", "Camera window lifecycle belongs to window operations"};
     }
     return {};
@@ -71,15 +71,6 @@ ValidationError validate_numeric(const CameraPropertiesPatch& patch,
         !std::isfinite(sign) || std::abs(sign) != 1 || !std::isfinite(near_plane) || !std::isfinite(far_plane) ||
         near_plane <= 0 || far_plane <= near_plane) {
         return {"INVALID_ARGUMENT", "Invalid camera properties"};
-    }
-    return {};
-}
-
-ValidationError validate_editor_input(const CameraPropertiesPatch& patch,
-                                      bool editor_input,
-                                      bool editor_camera_input_enabled) {
-    if (editor_input && patch.has_pose() && !editor_camera_input_enabled) {
-        return {"EDITOR_INPUT_LOCKED", "Runtime owns camera input"};
     }
     return {};
 }

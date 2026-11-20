@@ -8,7 +8,6 @@
 #include <corona/systems/ui/camera_viewport_manager.h>
 #include <corona/systems/script/python_runtime_coordinator.h>
 #include "cef/native_api_types.h"
-#include "cef/script_runtime_api.h"
 #include "cef/cef_editor_native_api_test_support.h"
 #include "cef/cef_window_operations.h"
 #include "cef/cef_scene_operations.h"
@@ -59,13 +58,13 @@ void test_native_script_service_wait_does_not_hold_editor_state(bool queued_befo
         if (auto request = coordinator.wait_pop(5s)) {
             request_seen = true;
             queue_changed.notify_all();
-            // FileScripts restoration calls back into the actual scene registry.
-            // A Native handler holding editor_state_mutex while waiting for this
-            // consumer prevents the callback from completing until service timeout.
-            auto callback = UI::script_scene_read_active_scene(
-                UI::NativeRequest{});
-            auto response = callback.success ? Python::PythonRuntimeResponse::success()
-                                             : Python::PythonRuntimeResponse::failure(callback.error);
+            // A Python service callback re-enters the editor's scene API through the same
+            // dispatch protocol. If an owner-side handler held editor_state_mutex while
+            // waiting for this consumer, the callback would block until the service timeout.
+            const auto callback = UI::execute_scene_operation({UI::SceneMethod::ReadActive});
+            auto response = callback.error_code.empty()
+                ? Python::PythonRuntimeResponse::success()
+                : Python::PythonRuntimeResponse::failure(callback.error_code);
             response.service_result = std::make_shared<const Json>(
                 Json{{"status", "stopped"}, {"restored", true}});
             coordinator.complete(request->request_id, std::move(response));
@@ -414,19 +413,6 @@ void test_one_native_transform_authority() {
     require(UI::execute_scene_operation(bad).error_code == "ACTOR_NOT_FOUND", "missing transform target must fail");
     bad = write; bad.transform.rotation = std::array<float,3>{0,std::numeric_limits<float>::infinity(),0};
     require(UI::execute_scene_operation(bad).error_code == "INVALID_ARGUMENT", "invalid mixed patch cannot partially apply");
-    const auto read = UI::script_scene_read_actor(
-        UI::NativeRequest{{}, {},
-                          Json::array({Json{{"archive_session", "camera-test-archive"},
-                                            {"actor", "transform-probe"}}})});
-    require(read.success && read.data["actor_version"] == 2 && read.data["geometry"]["position"] == Json({0,8,-3}),
-            "unmigrated readers must observe the same geometry and version without any invalid write");
-    const Json args = {"scene.ini","transform-probe",{{"archive_session","camera-test-archive"},{"rotation",{7,8,9}}}};
-    const auto script = UI::script_scene_set_actor_transform(
-        UI::NativeRequest{{}, {}, args});
-    require(script.success && script.data["actor"]["actor_version"] == 3 &&
-            script.data["actor"]["geometry"]["position"] == Json({0,8,-3}) &&
-            script.data["actor"]["geometry"]["rotation"] == Json({7,8,9}),
-            "ScriptRuntime must share the same typed transform authority and retain its non-Web snapshot");
 }
 
 void test_viewport_configuration_shares_identity_and_applies_atomically() {
@@ -479,21 +465,23 @@ void test_viewport_configuration_shares_identity_and_applies_atomically() {
 void test_script_input_queue_has_one_owner_and_drops_retired_scopes() {
     UI::drain_input_events();
     bool active = true;
-    UI::InputEvent key{}; key.type = 0; key.arg0 = "KeyJ"; key.arg2 = "d";
+    UI::InputEvent key{}; key.kind = "keyDown"; key.code = "KeyJ"; key.key = "d";
     UI::enqueue_input_event(key);
-    UI::InputEvent mouse{}; mouse.type = 2; mouse.arg0 = "click"; mouse.arg1 = "LeftButton";
-    mouse.arg3 = 70; mouse.arg4 = 80; mouse.viewport_x = 5; mouse.viewport_y = 6;
+    UI::InputEvent mouse{}; mouse.kind = "mouse"; mouse.event = "click"; mouse.button = "LeftButton";
+    mouse.x = 70; mouse.y = 80; mouse.viewport_x = 5; mouse.viewport_y = 6;
     mouse.viewport_width = 400; mouse.viewport_height = 200;
     UI::enqueue_input_event(mouse, [&] { return active; });
     const auto events = UI::drain_input_events();
-    require(events.size() == 2 && events[0].arg0 == "KeyJ" && events[0].arg2 == "d", "SDL and Web share ordered typed input");
+    require(events.size() == 2 && events[0].code == "KeyJ" && events[0].key == "d", "SDL and Web share ordered typed input");
     require(events[1].viewport_x == 5 && events[1].viewport_height == 200,
         "mouse viewport values must survive the native queue");
+    require(events[1].kind == "mouse" && events[1].event == "click" && events[1].button == "LeftButton",
+        "a queued mouse event keeps the names it was accepted with");
     require(UI::drain_input_events().empty(), "input must be consumed once");
     UI::enqueue_input_event(mouse, [&] { return active; }); active = false;
     UI::enqueue_input_event(key);
     const auto after_retirement = UI::drain_input_events();
-    require(after_retirement.size() == 1 && after_retirement[0].type == 0, "retired Web work must be dropped without dropping SDL input");
+    require(after_retirement.size() == 1 && after_retirement[0].kind == "keyDown", "retired Web work must be dropped without dropping SDL input");
     UI::BrowserInputHandler keyboard;
     SDL_Event native_key{};
     native_key.type = SDL_EVENT_KEY_DOWN; native_key.key.key = SDLK_D;
@@ -502,8 +490,12 @@ void test_script_input_queue_has_one_owner_and_drops_retired_scopes() {
     native_key.type = SDL_EVENT_KEY_UP;
     keyboard.process_sdl_key_event(native_key);
     const auto sdl = UI::drain_input_events();
-    require(sdl.size() == 2 && sdl[0].type == 0 && sdl[1].type == 1 && sdl[0].arg0 == "KeyD" && sdl[1].arg0 == "KeyD",
+    require(sdl.size() == 2 && sdl[0].kind == "keyDown" && sdl[1].kind == "keyUp" && sdl[0].code == "KeyD" && sdl[1].code == "KeyD",
         "real SDL keyboard processing must enqueue exactly one down and one up without a Web owner");
+    require(sdl[0].archive_session.empty() && sdl[0].scene_id.empty() && sdl[0].camera_id.empty(),
+        "SDL input carries no Web identity");
+    require(sdl[0].modifiers == "Shift" && sdl[1].modifiers.empty(),
+        "modifiers belong to keyDown only");
 }
 
 void test_optics_queue_merges_independent_fields() {

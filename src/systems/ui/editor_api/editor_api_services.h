@@ -65,8 +65,9 @@ namespace Corona::Systems::UI::CameraPropertiesService {
 
 using ValidationError = ::Corona::Systems::UI::ValidationError;
 
-// Window lifecycle does not belong to a camera property patch.
-ValidationError validate_view_lifecycle(const CameraPropertiesPatch& patch, bool editor_input);
+// Window lifecycle does not belong to a camera property patch, and there is no
+// non-editor caller left to exempt: `view_open` is always refused.
+ValidationError validate_view_lifecycle(const CameraPropertiesPatch& patch);
 
 // A non-empty patch must identify an archive, scene, camera and carry fields.
 ValidationError validate_identity(const CameraPropertiesPatch& patch, bool has_archive_session);
@@ -84,11 +85,6 @@ std::string normalized_name(const std::string& requested_name);
 // back to the current projection, mirroring the native camera.
 ValidationError validate_numeric(const CameraPropertiesPatch& patch,
                                  const std::array<float, 3>& current_projection);
-
-// Runtime owns camera input while a game/script is running.
-ValidationError validate_editor_input(const CameraPropertiesPatch& patch,
-                                      bool editor_input,
-                                      bool editor_camera_input_enabled);
 
 }  // namespace Corona::Systems::UI::CameraPropertiesService
 
