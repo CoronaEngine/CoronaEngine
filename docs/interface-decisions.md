@@ -1,18 +1,21 @@
 # Web 接口层的决定记录
 
-契约本身是生成的，见 [interface-contract.md](interface-contract.md)：8 个命名空间、58 个方法，
-以及三个边界和失败码表。这份文档只记**为什么**它长成这样——哪些看似能合并的东西合并了，哪些
+契约本身是生成的，见 [interface-contract.md](interface-contract.md)：9 个命名空间、55 个方法，
+以及三条边界和失败码表。这份文档只记**为什么**它长成这样——哪些看似能合并的东西合并了，哪些
 被明确否决并保留。
 
 ## 1. 三条边界
 
 | 边界 | 形态 | 规模 |
 |---|---|---|
-| Web → C++ | `window.corona.<ns>.<method>`，typed V8 | 8 命名空间 / 58 方法 |
-| Web → Python | `corona.bridge.call(信封)`，JSON | 3 个服务 + bridge |
-| C++ → Python | `python_service_bridge` | 18 个 `script_scene_*` |
+| Web → C++ | `window.corona.<ns>.<method>`，typed V8 | 9 命名空间 / 55 方法 |
+| Web → Python | `corona.bridge.call(信封)`，JSON | 2 个服务 + bridge |
+| C++ → Python | `CoronaEngine` 模块的 host-support `m.def` | 7 个具名入口 + `InputEvent` 载荷 |
 
-所有名字都是具名函数；没有任何"按名字分发"的通用入口（见第 3 节）。
+所有名字都是具名函数；没有任何"按名字分发"的通用入口（见第 3 节）。Web 面与 Python 的
+两组导出互不重叠，两侧的名单各由一张手写表钉死（Web 是 `native_surface.py`，Python 是
+`python_surface.py`）。脚本对象模型（`CoronaEngine.script`）曾作为第三条 Python 边界存在，
+因仓内无消费者而删除——要不要重新给 Python 场景读写能力是产品决定，不是本契约的一部分。
 
 ## 2. 演进记录
 
@@ -30,7 +33,8 @@
 | 删 `getCurrent` | 没有产品消费者；身份来自 `createPanel` 返回值和 URL 参数 |
 | 删 `minimized` 等死字段与死函数 | 没有写入路径或没有读取方 |
 
-结果：**65 → 58 个方法**，窗口面从 18 降到 6。
+结果：**65 → 58 个方法**，窗口面从 18 降到 6。（此后又收敛到 55 个方法 / 9 个命名空间，
+见第 1 节表与第 4 节的边界表；本行保留当时的迁移结果。）
 
 ## 3. 明确否决并保留
 
