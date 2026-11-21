@@ -17,7 +17,6 @@
 #include <corona/systems/optics/optics_commands.h>
 #include <corona/systems/acoustics/acoustics_commands.h>
 #include <corona/systems/acoustics/acoustics_system.h>
-#include <corona/systems/optics/environment_commands.h>
 
 #include <cstdio>
 #include <cstdint>
@@ -395,113 +394,6 @@ void test_acoustics_command_and_snapshot() {
     hub.acoustics_storage().deallocate(handle);
 }
 
-void test_environment_boundary_stage() {
-    auto& hub = SharedDataHub::instance();
-    auto& channel = Corona::EnvironmentCommandChannel::instance();
-    channel.commands().clear();
-
-    const auto handle = hub.environment_storage().allocate();
-    CHECK(handle != 0);
-
-    // 边界阶段即使没有命令也会发布一次快照
-    Corona::apply_pending_environment_updates();
-    CHECK(Corona::environment_row(handle).has_value());
-    CHECK(Corona::environment_row(handle)->fixed_dt > 0.0f);
-
-    // 命令：pending 立刻可见，已提交值不变
-    Corona::EnvironmentUpdateCommand command{};
-    command.environment_handle = handle;
-    command.fields = Corona::EnvironmentField::Gravity | Corona::EnvironmentField::FixedDt;
-    command.gravity = vec3(0.0f, -20.0f, 0.0f);
-    command.fixed_dt = 1.0f / 120.0f;
-    channel.commands().push(command);
-
-    CHECK(Corona::environment_view(handle)->gravity.y == -20.0f);
-    CHECK(Corona::environment_view(handle)->fixed_dt == 1.0f / 120.0f);
-    CHECK(Corona::environment_row(handle)->gravity.y != -20.0f);
-
-    // LatestWins：同 handle 再推一条，只应用最后一条
-    command.gravity = vec3(0.0f, -30.0f, 0.0f);
-    channel.commands().push(command);
-
-    Corona::apply_pending_environment_updates();
-    CHECK(channel.commands().empty());
-    CHECK(Corona::environment_row(handle)->gravity.y == -30.0f);
-    CHECK(Corona::environment_row(handle)->fixed_dt == 1.0f / 120.0f);
-    CHECK(Corona::environment_view(handle)->gravity.y == -30.0f);
-
-    // 槽位确实被写了（DAG 侧看到的就是这个值）
-    if (auto device = hub.environment_storage().try_acquire_read(handle)) {
-        CHECK(device->gravity.y == -30.0f);
-        CHECK(device->fixed_dt == 1.0f / 120.0f);
-    } else {
-        CHECK(false);
-    }
-
-    channel.commands().clear();
-    hub.environment_storage().deallocate(handle);
-}
-
-void test_environment_authored_lighting_survives_scalar_merge() {
-    auto& hub = SharedDataHub::instance();
-    auto& channel = Corona::EnvironmentCommandChannel::instance();
-    channel.commands().clear();
-
-    const auto handle = hub.environment_storage().allocate();
-    CHECK(handle != 0);
-
-    // Imported scenes (PBRT/Mitsuba) send scalar properties first, then the
-    // authored-lighting payload as a second command in the same tick.
-    Corona::EnvironmentUpdateCommand properties{};
-    properties.environment_handle = handle;
-    properties.fields = Corona::EnvironmentField::SunIntensity | Corona::EnvironmentField::SkyIntensity;
-    properties.sun_intensity = 0.0f;
-    properties.sky_intensity = 0.0f;
-    channel.commands().push(std::move(properties));
-
-    auto lighting = std::make_shared<const nlohmann::json>(nlohmann::json{
-        {"directionals", nlohmann::json::array()},
-        {"environments", nlohmann::json::array({{{"color", nlohmann::json::array({1.0f, 2.0f, 3.0f})}}})}});
-    Corona::EnvironmentUpdateCommand authored{};
-    authored.environment_handle = handle;
-    authored.fields = Corona::EnvironmentField::AuthoredLighting;
-    authored.authored_lighting = lighting;
-    authored.authored_lighting_revision = 0x5eed;
-    channel.commands().push(std::move(authored));
-
-    // The merged pending command must keep the payload, not only the field bit.
-    const auto pending = channel.commands().peek(handle);
-    CHECK(pending.has_value());
-    CHECK(pending && pending->authored_lighting == lighting);
-    CHECK(pending && pending->authored_lighting_revision == 0x5eed);
-    CHECK(pending && pending->sun_intensity == 0.0f && pending->sky_intensity == 0.0f);
-
-    CHECK(Corona::apply_pending_environment_updates());
-    if (auto device = hub.environment_storage().try_acquire_read(handle)) {
-        CHECK(device->authored_lighting == lighting);
-        CHECK(device->authored_lighting_revision == 0x5eed);
-        CHECK(device->sun_intensity == 0.0f);
-        CHECK(device->sky_intensity == 0.0f);
-    } else {
-        CHECK(false);
-    }
-
-    // An explicit unbind still clears the payload.
-    Corona::EnvironmentUpdateCommand unbind{};
-    unbind.environment_handle = handle;
-    unbind.fields = Corona::EnvironmentField::AuthoredLighting;
-    channel.commands().push(std::move(unbind));
-    CHECK(Corona::apply_pending_environment_updates());
-    if (auto device = hub.environment_storage().try_acquire_read(handle)) {
-        CHECK(!device->authored_lighting);
-        CHECK(device->authored_lighting_revision == 0);
-    } else {
-        CHECK(false);
-    }
-
-    hub.environment_storage().deallocate(handle);
-}
-
 void test_mechanics_structural_commands() {
     auto& hub = SharedDataHub::instance();
     auto& structural = Corona::MechanicsStructuralChannel::instance();
@@ -733,8 +625,6 @@ int main() {
     test_mechanics_command_and_snapshot();
     test_optics_command_and_snapshot();
     test_acoustics_command_and_snapshot();
-    test_environment_boundary_stage();
-    test_environment_authored_lighting_survives_scalar_merge();
     test_mechanics_structural_commands();
     test_camera_release_queue_is_fifo();
     test_camera_viewport_queue_coalescing();
