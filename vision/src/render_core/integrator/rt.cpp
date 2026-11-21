@@ -585,13 +585,26 @@ public:
         }
         const char *falcor_mode = std::getenv("VISION_FALCOR_DI_MODE");
         const bool gi_enabled = indirect_->open();
+        const char *reference_gi_mode = std::getenv("VISION_RESTIR_GI_MODE");
+        const char *multibounce_value = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
+        const bool multibounce_reference = multibounce_value && multibounce_value[0] == '1';
+        const bool reference_depth_supported = suffix_depth() == 1u ||
+            (multibounce_reference && suffix_depth() == 15u && min_depth_.hv() == 5u && rr_threshold_.hv() == 1.f);
+        const bool reference_gi_requested = reference_gi_mode && *reference_gi_mode && gi_enabled &&
+            direct_->open() && reference_depth_supported && direct_->max_recursion() == 1u &&
+            !denoiser_enabled && !shared_stable_planes_enabled() && !jitter_primary_samples() &&
+            spectrum()->impl_type() == "srgb" && frame_buffer().impl_type() == "normal" &&
+            scene().sensor()->supports_screen_position_reconstruction() &&
+            !pipeline()->geometry().process_mediums();
+        const bool publish_gi_proposal = gi_enabled &&
+            (!native_gi_planes() || reference_gi_requested || rtxpt_gi::primary_light_diagnostic_enabled());
         const bool falcor_requested = falcor_mode && *falcor_mode && direct_->open() &&
             (!denoiser_enabled || native_denoising) && !shared_stable_planes_enabled() && !jitter_primary_samples() &&
             (gi_enabled ? suffix_depth() > 0u : suffix_depth() == 0u) && direct_->max_recursion() == 1u &&
             spectrum()->impl_type() == "srgb" && frame_buffer().impl_type() == "normal" &&
             !pipeline()->geometry().process_mediums();
         const bool prepare_falcor = falcor_requested && (falcor_di_needs_compile_ ||
-            (falcor_di_ && !falcor_di_->matches(rp->resolution(), falcor_mode, gi_enabled, native_denoising)));
+            (falcor_di_ && !falcor_di_->matches(rp->resolution(), falcor_mode, gi_enabled, publish_gi_proposal, native_denoising)));
         if (prepare_falcor) {
             stream << synchronize() << commit();
             Global::SceneGpuContextScope scene_gpu_context{
@@ -599,7 +612,7 @@ public:
             falcor_di_needs_compile_ = false;
             falcor_di_.reset();
             try {
-                falcor_di_ = std::make_unique<FalcorDIExperiment>(*direct_, falcor_mode, gi_enabled, native_denoising);
+                falcor_di_ = std::make_unique<FalcorDIExperiment>(*direct_, falcor_mode, gi_enabled, publish_gi_proposal, native_denoising);
             } catch (const std::exception &error) {
                 OC_WARNING_FORMAT("Falcor DI unavailable, using native ReSTIR DI: {}", error.what());
             }
@@ -622,17 +635,6 @@ public:
             indirect_->invalidate_history();
         }
         falcor_di_was_active_ = use_falcor;
-        const char *reference_gi_mode = std::getenv("VISION_RESTIR_GI_MODE");
-        const char *multibounce_value = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
-        const bool multibounce_reference = multibounce_value && multibounce_value[0] == '1';
-        const bool reference_depth_supported = suffix_depth() == 1u ||
-            (multibounce_reference && suffix_depth() == 15u && min_depth_.hv() == 5u && rr_threshold_.hv() == 1.f);
-        const bool reference_gi_requested = reference_gi_mode && *reference_gi_mode && gi_enabled &&
-            direct_->open() && reference_depth_supported && direct_->max_recursion() == 1u &&
-            !denoiser_enabled && !shared_stable_planes_enabled() && !jitter_primary_samples() &&
-            spectrum()->impl_type() == "srgb" && frame_buffer().impl_type() == "normal" &&
-            scene().sensor()->supports_screen_position_reconstruction() &&
-            !pipeline()->geometry().process_mediums();
         const bool reference_gi_rejected = reference_gi_mode && *reference_gi_mode && !reference_gi_requested;
         if (reference_gi_rejected && !reference_gi_rejected_) {
             OC_WARNING("Reference GI inactive: requires DI+GI, max_depth=2 (or explicit multibounce benchmark5/16/1), max_recursion=1, zero-aperture perspective camera, RGB normal framebuffer, "

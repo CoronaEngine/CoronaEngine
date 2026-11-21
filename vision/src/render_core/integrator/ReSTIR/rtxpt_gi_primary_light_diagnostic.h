@@ -13,13 +13,17 @@ static_assert(sizeof(RtxptGIPrimaryLightDiagnostic) == 368u);
 OC_STRUCT(vision, RtxptGIPrimaryLightDiagnostic, values, ids) {};
 
 namespace vision::rtxpt_gi {
+[[nodiscard]] inline bool primary_light_diagnostic_enabled() noexcept {
+    const char *enabled = std::getenv("VISION_GI_PRIMARY_LIGHT_DIAGNOSTIC");
+    return enabled && enabled[0] == '1';
+}
+
 // Observe the original, already generated Falcor/GI BSDF proposal. No new
 // samples, reservoir writes or image writes; each valid proposal traces two rays.
 inline void download_primary_light_diagnostics(Device &device, Stream &stream, FrameBuffer &fb,
                                                uint frame, uint2 size, const ReSTIRDI &direct,
                                                const std::filesystem::path &directory) {
-    const char *enabled = std::getenv("VISION_GI_PRIMARY_LIGHT_DIAGNOSTIC");
-    if (!enabled || enabled[0] != '1') return;
+    if (!primary_light_diagnostic_enabled()) return;
     auto &diagnostic_geometry = Toolkit::scene().geometry();
     Global::SceneGpuContextScope scene_gpu_context{diagnostic_geometry.bindless_array(),
                                                   diagnostic_geometry.gpu_resource()->device()};

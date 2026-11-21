@@ -29,6 +29,7 @@ class FalcorDIExperiment final : private Toolkit {
     uint64_t previous_geometry_revision_{};
     std::string mode_;
     bool publish_gi_{};
+    bool publish_gi_proposal_{};
     bool lobe_signals_{};
     Buffer<float4> denoiser_diffuse_, denoiser_specular_, denoiser_bypass_;
     // Non-owning typed descriptors captured by the compiled shaders.
@@ -294,7 +295,7 @@ class FalcorDIExperiment final : private Toolkit {
                 });
             };
             falcor_di::store_reservoir(ctx, pixel, slice, reservoir);
-            if (publish_gi_) fb.hit_bsdfs().write(dispatch_id(), gi_proposal);
+            if (publish_gi_proposal_) fb.hit_bsdfs().write(dispatch_id(), gi_proposal);
         };
         const uint candidate_block_size = !publish_gi_ && environment_index_ != InvalidUI32 ? 8u : 16u;
         candidates.function()->set_block_dim(candidate_block_size, candidate_block_size);
@@ -408,8 +409,9 @@ class FalcorDIExperiment final : private Toolkit {
     }
 
 public:
-    FalcorDIExperiment(ReSTIRDI &direct, std::string_view mode, bool publish_gi, bool lobe_signals = false)
-        : extent_{pipeline()->resolution()}, frame_buffer_{&frame_buffer()}, mode_{mode}, publish_gi_{publish_gi}, lobe_signals_{lobe_signals} {
+    FalcorDIExperiment(ReSTIRDI &direct, std::string_view mode, bool publish_gi, bool publish_gi_proposal, bool lobe_signals)
+        : extent_{pipeline()->resolution()}, frame_buffer_{&frame_buffer()}, mode_{mode}, publish_gi_{publish_gi},
+          publish_gi_proposal_{publish_gi_proposal}, lobe_signals_{lobe_signals} {
         uint bias_mode = 0u;
         if (mode == "basic") bias_mode = 1u;
         else if (mode == "pairwise") bias_mode = 2u;
@@ -431,10 +433,10 @@ public:
     [[nodiscard]] BufferView<float4> denoiser_specular() const { return denoiser_specular_.view(); }
     [[nodiscard]] BufferView<float4> denoiser_bypass() const { return denoiser_bypass_.view(); }
 
-    [[nodiscard]] bool matches(uint2 extent, std::string_view mode, bool publish_gi, bool lobe_signals = false) const noexcept {
+    [[nodiscard]] bool matches(uint2 extent, std::string_view mode, bool publish_gi, bool publish_gi_proposal, bool lobe_signals) const noexcept {
         // A replacement FrameBuffer owns different storage even when the extent is unchanged.
         return frame_buffer_ == &frame_buffer() && extent.x == extent_.x && extent.y == extent_.y &&
-               mode == mode_ && publish_gi == publish_gi_ && lobe_signals == lobe_signals_;
+               mode == mode_ && publish_gi == publish_gi_ && publish_gi_proposal == publish_gi_proposal_ && lobe_signals == lobe_signals_;
     }
 
     [[nodiscard]] CommandBatch dispatch(uint frame) {
