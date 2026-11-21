@@ -73,7 +73,7 @@ def run(port, root, runtime):
             return p.hold?Promise.resolve(result).then(value=>new Promise(resolve=>p.pending.push(()=>resolve(value)))):result;
           };
           window.setInterval=(fn,ms,...args)=>{const id=original.interval.call(window,fn,ms,...args);
-            if(ms===250&&location.hash.startsWith('#/NewGame'))p.intervals.add(id);return id;};
+            if(ms===500&&location.hash.startsWith('#/NewGame'))p.intervals.add(id);return id;};
           window.clearInterval=id=>{p.intervals.delete(id);return original.clear.call(window,id);};
           p.release=()=>{p.hold=false;for(const resume of p.pending.splice(0))resume();};
           p.restore=()=>{p.release();api.project.get_project_load_status=original.read;

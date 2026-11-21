@@ -60,7 +60,7 @@ def run(port, root):
             active = main.evaluate('window.__launcherLifetime.read()')
             assert active['frames'] == 1 and active['listeners'] == 2, active
             main.evaluate("document.querySelectorAll('.nav-btn')[0].click();true")
-            wait(lambda: main.evaluate("!!document.querySelector('.page-panel')"), bool, 'real launcher panel mounted')
+            wait(lambda: main.evaluate("!!document.querySelector('.page-panel.is-open')"), bool, 'real launcher panel opened')
             main.evaluate("window.__launcherLifetime.nodes=[document.querySelector('.nav-container'),document.querySelector('.page-panel')];true")
             main.evaluate("window.dispatchEvent(new Event('resize'));location.hash='/SceneBar';true")
             wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('.start-screen-root')"),
