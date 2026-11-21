@@ -840,7 +840,6 @@ class SharedDataHub {
     using ProfileStorage = Kernel::Utils::EntityStorage<ProfileDevice, 128, 2>;
     using ActorStorage = Kernel::Utils::EntityStorage<ActorDevice, 128, 2>;
     using CameraStorage = Kernel::Utils::EntityStorage<CameraDevice, 128, 2>;
-    using EnvironmentStorage = Kernel::Utils::EntityStorage<EnvironmentDevice, 128, 2>;
     using SceneStorage = Kernel::Utils::EntityStorage<SceneDevice, 128, 2>;
     using ImageStorage = Kernel::Utils::EntityStorage<ImageDevice, 128, 2>;
 
@@ -881,8 +880,11 @@ class SharedDataHub {
     CameraStorage& camera_storage();
     const CameraStorage& camera_storage() const;
 
-    EnvironmentStorage& environment_storage();
-    const EnvironmentStorage& environment_storage() const;
+    // environment 已删除 Storage：组件直接挂在实体上，句柄就是实体句柄。
+    EntityId create_environment();
+    void destroy_environment(EntityId handle);
+    [[nodiscard]] EnvironmentDevice* try_environment(EntityId handle);
+    [[nodiscard]] const EnvironmentDevice* try_environment(EntityId handle) const;
 
     SceneStorage& scene_storage();
     const SceneStorage& scene_storage() const;
@@ -992,7 +994,6 @@ class SharedDataHub {
     ActorStorage actor_storage_;
     mutable std::mutex actor_metadata_mutex_;
     std::unordered_map<EntityId, std::string> actor_guids_;
-    EnvironmentStorage environment_storage_;
     CameraStorage camera_storage_;
     Kernel::SnapshotChannel<CameraSnapshot> camera_snapshot_;
     Kernel::CommandBuffer<TransformUpdateCommand, TransformUpdateKey,

@@ -1634,7 +1634,7 @@ template<typename Views>
 
 [[nodiscard]] Corona::EnvironmentDevice vision_environment_for_scene(const Corona::SceneDevice& scene) {
     if (scene.environment != 0) {
-        if (auto env = Corona::SharedDataHub::instance().environment_storage().try_acquire_read(scene.environment)) {
+        if (const auto* env = Corona::SharedDataHub::instance().try_environment(scene.environment)) {
             return *env;
         }
     }
@@ -4019,8 +4019,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         native_environment.sun_intensity=0.f;
         native_environment.sky_intensity=0.f;
         if (scene.environment != 0) {
-            if (auto env = SharedDataHub::instance().environment_storage().try_acquire_read(
-                    scene.environment)) {
+            if (const auto* env = SharedDataHub::instance().try_environment(scene.environment)) {
                 sun_dir = env->sun_position;
                 floor_grid_enabled = env->floor_grid_enabled;
                 sun_color = env->sun_color;

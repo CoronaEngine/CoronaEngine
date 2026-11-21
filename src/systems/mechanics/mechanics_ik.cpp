@@ -35,7 +35,7 @@ void MechanicsSystem::refresh_foot_ground_cache() {
     }
     for (const auto& scene : scenes) {
         float floor = 0.0f;
-        if (auto environment = hub.environment_storage().try_acquire_read(scene.environment)) floor = environment->floor_y;
+        if (const auto* environment = hub.try_environment(scene.environment)) floor = environment->floor_y;
         if (std::isfinite(floor)) impl_->ik_scene_floors[scene.handle] = floor;
         for (auto actor_handle : scene.actors) {
             if (impl_->shutdown_requested.load(std::memory_order_acquire)) return;

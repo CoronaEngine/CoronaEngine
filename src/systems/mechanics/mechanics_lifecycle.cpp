@@ -157,10 +157,9 @@ struct PerformanceReport {
 float resolve_fixed_dt() {
     auto& hub = SharedDataHub::instance();
     const auto& scenes = hub.scene_storage();
-    auto& environments = hub.environment_storage();
     for (const auto& scene : scenes) {
         if (!scene.enabled || !scene.simulation_enabled || scene.environment == 0) continue;
-        if (auto environment = environments.try_acquire_read(scene.environment)) {
+        if (const auto* environment = hub.try_environment(scene.environment)) {
             return std::clamp(environment->fixed_dt, kMinFixedDt, kMaxFixedDt);
         }
     }

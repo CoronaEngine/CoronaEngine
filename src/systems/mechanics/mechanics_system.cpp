@@ -91,7 +91,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     const auto& scene_storage = SharedDataHub::instance().scene_storage();              // 场景与 actor 列表（const → cbegin/cend 读锁遍历）
     auto& actor_storage = SharedDataHub::instance().actor_storage();
     auto& profile_storage = SharedDataHub::instance().profile_storage();          // actor→mechanics 映射
-    auto& environment_storage = SharedDataHub::instance().environment_storage();  // 全局 dt/重力等
 
     ktm::fvec3 gravity = make_fvec3(0.0f, -9.8f, 0.0f);  // m/s²
 
@@ -118,7 +117,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
         // 若绑定了 environment：覆盖重力；接触只来自场景三角形。
         if (scene.environment != 0) {
-            if (auto env = environment_storage.try_acquire_read(scene.environment)) {
+            if (const auto* env = SharedDataHub::instance().try_environment(scene.environment)) {
                 gravity = env->gravity;
             }
         }

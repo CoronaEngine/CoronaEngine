@@ -1,4 +1,5 @@
 #include <corona/shared_data_hub.h>
+#include <corona/ecs/access.h>
 #include <corona/utils/scene_path_key.h>
 
 #include <algorithm>
@@ -132,8 +133,14 @@ void SharedDataHub::clear_actor_metadata(EntityId actor_handle) {
 SharedDataHub::CameraStorage& SharedDataHub::camera_storage() { return camera_storage_; }
 const SharedDataHub::CameraStorage& SharedDataHub::camera_storage() const { return camera_storage_; }
 
-SharedDataHub::EnvironmentStorage& SharedDataHub::environment_storage() { return environment_storage_; }
-const SharedDataHub::EnvironmentStorage& SharedDataHub::environment_storage() const { return environment_storage_; }
+EntityId SharedDataHub::create_environment() { return Ecs::emplace<EnvironmentDevice>(); }
+void SharedDataHub::destroy_environment(EntityId handle) { Ecs::destroy(handle); }
+EnvironmentDevice* SharedDataHub::try_environment(EntityId handle) {
+    return Ecs::try_get<EnvironmentDevice>(handle);
+}
+const EnvironmentDevice* SharedDataHub::try_environment(EntityId handle) const {
+    return Ecs::try_get_const<EnvironmentDevice>(handle);
+}
 
 SharedDataHub::SceneStorage& SharedDataHub::scene_storage() { return scene_storage_; }
 const SharedDataHub::SceneStorage& SharedDataHub::scene_storage() const { return scene_storage_; }

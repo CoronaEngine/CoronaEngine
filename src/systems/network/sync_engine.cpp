@@ -1,4 +1,5 @@
 #include <corona/systems/network/sync_engine.h>
+#include <corona/ecs/access.h>
 
 #include <corona/shared_data_hub.h>
 #include <corona/systems/optics/environment_commands.h>
@@ -369,10 +370,9 @@ struct SyncEngine::Impl {
 
         env_seq_to_id.clear();
         {
-            auto& store = hub.environment_storage();
-            for (auto it = store.cbegin(); it != store.cend(); ++it) {
-                const auto obj_id = it.id();
-                env_seq_to_id[store.seq_id(obj_id)] = obj_id;
+            for (const auto entity : Corona::Ecs::view<EnvironmentDevice>()) {
+                const auto obj_id = Corona::Ecs::to_handle(entity);
+                env_seq_to_id[Corona::Ecs::seq_of(obj_id)] = obj_id;
             }
         }
     }
@@ -739,11 +739,10 @@ void SyncEngine::poll_and_sync() {
 
     // --- EnvironmentDevice ---
     {
-        auto& store = hub.environment_storage();
-        for (auto it = store.cbegin(); it != store.cend(); ++it) {
-            const EnvironmentDevice& data = *it;
-            const auto obj_id = it.id();
-            auto ent_seq = store.seq_id(obj_id);
+        for (const auto entity : Corona::Ecs::view<EnvironmentDevice>()) {
+            const auto obj_id = Corona::Ecs::to_handle(entity);
+            const EnvironmentDevice& data = Corona::Ecs::get<EnvironmentDevice>(obj_id);
+            auto ent_seq = Corona::Ecs::seq_of(obj_id);
 
             std::string cur_hash = hash_env(data, ent_seq);
             std::string snap_key = impl_->make_key(StorageID::ST_ENVIRONMENT, ent_seq, "env");

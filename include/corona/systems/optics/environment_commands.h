@@ -14,6 +14,7 @@
 #include <corona/kernel/command/command_buffer.h>
 #include <corona/kernel/command/snapshot_channel.h>
 #include <corona/shared_data_hub.h>
+#include <corona/ecs/access.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -154,12 +155,11 @@ inline EnvironmentSnapshotRow make_environment_row(EntityId handle,
 
 /// 从槽位重建整份快照（只应在 tick 边界、应用完命令之后调用）
 inline void publish_environment_snapshot_from_storage() {
-    auto& storage = SharedDataHub::instance().environment_storage();
     EnvironmentSnapshot snapshot;
     snapshot.tick = EnvironmentCommandChannel::instance().snapshots().revision() + 1;
-    for (auto device_it = storage.cbegin(); device_it != storage.cend(); ++device_it) {
-        const auto handle = device_it.id();
-        const auto& device = *device_it;
+    for (const auto entity : Corona::Ecs::view<EnvironmentDevice>()) {
+        const auto handle = Corona::Ecs::to_handle(entity);
+        const auto& device = Corona::Ecs::get<EnvironmentDevice>(handle);
         if (handle == 0) {
             continue;
         }
@@ -177,9 +177,8 @@ inline bool apply_pending_environment_updates() {
 
     if (!commands.empty()) {
         applied = true;
-        auto& storage = SharedDataHub::instance().environment_storage();
         for (const auto& command : commands) {
-            auto device = storage.try_acquire_write(command.environment_handle);
+            auto* device = SharedDataHub::instance().try_environment(command.environment_handle);
             if (!device) {
                 continue;
             }

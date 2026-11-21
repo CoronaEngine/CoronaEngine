@@ -479,9 +479,9 @@ bool Corona::API::Scene::is_simulation_enabled() const {
 // ########################
 Corona::API::Environment::Environment()
     : handle_(0) {
-    handle_ = SharedDataHub::instance().environment_storage().allocate();
+    handle_ = SharedDataHub::instance().create_environment();
     if (handle_ != 0) {
-        if (auto accessor = SharedDataHub::instance().environment_storage().acquire_write(handle_)) {
+        if (auto* accessor = SharedDataHub::instance().try_environment(handle_)) {
             accessor->sun_position.x = 1.0f;
             accessor->sun_position.y = 1.0f;
             accessor->sun_position.z = 1.0f;
@@ -492,7 +492,7 @@ Corona::API::Environment::Environment()
 
 Corona::API::Environment::~Environment() {
     if (handle_ != 0) {
-        SharedDataHub::instance().environment_storage().deallocate(handle_);
+        SharedDataHub::instance().destroy_environment(handle_);
         handle_ = 0;
     }
 }
