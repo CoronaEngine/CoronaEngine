@@ -20,13 +20,11 @@ def run(port, root):
         main.evaluate("""(async()=>{
           const m=await import(document.querySelector('script[type=module]').src);
           const service=Object.values(m).find(v=>typeof v?.openNativePanel==='function');
-          const original={close:service.close_process,raf:window.requestAnimationFrame,cancel:window.cancelAnimationFrame,
+          const original={raf:window.requestAnimationFrame,cancel:window.cancelAnimationFrame,
             timeout:window.setTimeout,clear:window.clearTimeout,
             addWindow:window.addEventListener,removeWindow:window.removeEventListener,
             addDocument:document.addEventListener,removeDocument:document.removeEventListener};
-          const p=window.__launcherLifetime={closed:0,frames:new Set(),timers:new Set(),listeners:new Set(),nodes:[]};
-          // Observe the production exit action without terminating the test Job.
-          service.close_process=()=>{p.closed++;return Promise.resolve();};
+          const p=window.__launcherLifetime={frames:new Set(),timers:new Set(),listeners:new Set(),nodes:[]};
           window.requestAnimationFrame=callback=>{
             const owned=String(callback).includes('.getElapsedTime()');
             const id=original.raf.call(window,time=>{p.frames.delete(id);callback(time);});
@@ -53,29 +51,29 @@ def run(port, root):
             document.addEventListener=original.addDocument;document.removeEventListener=original.removeDocument;};
           return true;
         })()""")
-        for action in ('exit', 'panel', 'cancel'):
+        # One action is left: opening a panel. The launcher no longer has an exit entry (the
+        # title-bar close writes the scene and quits), so there is no process boundary to observe
+        # from this page.
+        for action in ('panel',):
             main.evaluate("location.hash='/StartScreen';true")
             wait(lambda: main.evaluate("!!document.querySelector('.start-screen-root canvas')"), bool, 'real launcher rendered')
             active = main.evaluate('window.__launcherLifetime.read()')
             assert active['frames'] == 1 and active['listeners'] == 2, active
-            main.evaluate(f"document.querySelectorAll('.nav-btn')[{0 if action == 'panel' else 3}].click();true")
+            main.evaluate("document.querySelectorAll('.nav-btn')[0].click();true")
             wait(lambda: main.evaluate("!!document.querySelector('.page-panel')"), bool, 'real launcher panel mounted')
             main.evaluate("window.__launcherLifetime.nodes=[document.querySelector('.nav-container'),document.querySelector('.page-panel')];true")
-            if action != 'panel':
-                main.evaluate('document.querySelector(' + json.dumps('.exit-action.confirm' if action == 'exit' else '.exit-action.cancel') + ').click();true')
             main.evaluate("window.dispatchEvent(new Event('resize'));location.hash='/SceneBar';true")
             wait(lambda: main.evaluate("!!document.querySelector('.scene-tools-panel')&&!document.querySelector('.start-screen-root')"),
                  bool, 'actual launcher retired during ' + action)
             retired_styles = main.evaluate('window.__launcherLifetime.styles()')
             main.evaluate('window.__launcherLifetime.turn(900)')
             retired = main.evaluate('window.__launcherLifetime.read()')
-            assert retired['closed'] == 0, 'retired launcher attempted process exit: ' + repr(retired)
-            assert retired == dict(closed=0, frames=0, timers=0, listeners=0), retired
+            assert retired == dict(frames=0, timers=0, listeners=0), retired
             assert main.evaluate('window.__launcherLifetime.styles()') == retired_styles, 'retired GSAP tween still mutates detached DOM'
             results.append(dict(action=action, **retired))
         hints = run_hint_lifetime(main)
         return dict(retirement=results, hintLifetime=hints, realVueActions=True, nativeDocumentPreserved=True,
-                    exitBoundary='Web close_process observed; native process exit deliberately intercepted')
+                    processExit='the launcher has no exit path; the title-bar close writes the scene first')
     finally:
         try:
             main.evaluate("location.hash='/SceneBar';true")
