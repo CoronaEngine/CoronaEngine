@@ -14,7 +14,7 @@ from runtime.archive.errors import ArchiveParseError
 from runtime.archive.parser import parse_archive
 from runtime.archive.portable import recover_scene, validate_assets
 from runtime.archive.writer import save_scene
-from runtime.archive.project import (create_project_in, project_info, update_metadata)
+from runtime.archive.project import (create_project_in, project_info, recent_projects, update_metadata)
 from runtime.archive.arguments import require_keys
 from runtime.archive.assets import asset_operation
 from runtime.archive.documents import read_document, commit_document
@@ -33,6 +33,7 @@ class ProjectArchive:
     file_manager = staticmethod(file_manager)
     create_project_in = staticmethod(create_project_in)
     project_info = staticmethod(project_info)
+    recent_projects = staticmethod(recent_projects)
 
     @staticmethod
     def update_metadata(request):
@@ -102,3 +103,4 @@ class ProjectArchive:
 
 
 __all__ = ["ProjectArchive"]
+

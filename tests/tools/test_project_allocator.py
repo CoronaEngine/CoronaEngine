@@ -6,6 +6,7 @@ behaviour that replaced it: sequential names, occupied slots skipped, and the di
 following the directory index so the two cannot disagree.
 """
 import configparser
+import json
 from pathlib import Path
 import sys
 
@@ -70,3 +71,34 @@ def test_cpp_no_longer_allocates_the_directory():
     assert "create_directories" not in body, "C++ must not create the project directory"
     assert "std::filesystem::exists" not in body, "C++ must not probe for a free name"
     assert "create_project_in" in body, "creation goes through the archive service allocator"
+
+
+def test_the_recent_list_is_resolved_in_one_call(tmp_path):
+    """The launcher asks once, not once per entry.
+
+    C++ used to read the history, then call `project_info` for every item - each a blocking
+    service round trip from the CEF UI thread (10 entries measured 190ms before the panel drew).
+    `recent_projects` reads the ini and resolves every entry itself, and reports a missing
+    project instead of refusing the whole list.
+    """
+    from runtime.archive.project import recent_projects
+
+    created = create_project_in(_request(tmp_path))
+    ini = tmp_path / "CoronaEditor.ini"
+    ini.write_text("[History]\nrecent_projects = [%s, %s]\n"
+                   % (json.dumps(created["path"]), json.dumps(str(tmp_path / "gone"))),
+                   encoding="utf-8")
+
+    listed = recent_projects({"ini": str(ini)})
+    entries = listed["projects"]
+    assert [entry["if_exists"] for entry in entries] == [True, False]
+    assert entries[0]["path"] == created["path"]
+    assert entries[0]["name"] == created["name"]
+    assert entries[1]["name"] == "gone"
+    assert entries[1]["last_edited"] == "-"
+
+    service = (ROOT / "src/systems/ui/cef/editor_scene_service.cpp").read_text(encoding="utf-8-sig")
+    start = service.index("nlohmann::json recent_projects_native()")
+    body = service[start:service.index("\n}\n", start)]
+    assert '"recent_projects"' in body, "the launcher must use the batched call"
+    assert '"project_info"' not in body, "the per-entry round trip must stay gone"

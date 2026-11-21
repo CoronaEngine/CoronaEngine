@@ -2207,25 +2207,15 @@ void add_recent_project_native(const std::filesystem::path& project_dir) {
 
 
 nlohmann::json recent_projects_native() {
-    auto history = project_archive_call("editor_settings", {{"ini", path_to_utf8(editor_ini_path())},
-                                                           {"section", "History"}, {"recent_projects", true}});
-    const auto recent = history.success ? history.data.value("projects", nlohmann::json::array()) : nlohmann::json::array();
-    nlohmann::json result = nlohmann::json::array();
-    for (const auto& item : recent) {
-        if (!item.is_string()) {
-            continue;
-        }
-        const auto project_dir = canonical_project_dir_for_settings(path_from_utf8(item.get<std::string>()));
-        auto metadata = project_archive_call("project_info", {{"path", path_to_utf8(project_dir)}});
-        const bool exists = metadata.success && metadata.data.contains("project_path");
-        result.push_back({
-            {"name", exists ? metadata.data.value("name", std::string{}) : path_to_utf8(project_dir.filename())},
-            {"path", path_to_utf8(project_dir)},
-            {"if_exists", exists},
-            {"last_edited", exists ? metadata.data.value("last_opened", std::string{"-"}) : "-"},
-        });
+    // One service call, not one per entry. The loop this replaced asked `project_info` for every
+    // history item; each ask is a blocking call from the CEF UI thread (~19ms), and ten entries
+    // measured 190ms before the launcher panel could draw. The archive service now reads the
+    // history file and resolves every entry in a single reply.
+    const auto listed = project_archive_call("recent_projects", {{"ini", path_to_utf8(editor_ini_path())}});
+    if (!listed.success) {
+        return nlohmann::json::array();
     }
-    return result;
+    return listed.data.value("projects", nlohmann::json::array());
 }
 
 

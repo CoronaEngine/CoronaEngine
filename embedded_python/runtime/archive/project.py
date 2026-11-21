@@ -11,6 +11,7 @@ import time
 from .errors import ArchiveParseError
 from .parser import _resolve_source
 from .portable import atomic_replace, recover_scene, validate_assets
+from runtime.archive.editor_settings import editor_settings
 from runtime.bridge_errors import BridgeError
 
 
@@ -39,6 +40,41 @@ def project_info(request):
             "create_time": config.get("scene", "create_time", fallback=""),
             "last_opened": config.get("scene", "last_opened", fallback=""),
             "project_path": str(root)}
+
+
+def recent_projects(request):
+    """The recent-project list, resolved in one call.
+
+    The launcher used to read the history and then ask `project_info` once per entry. Each ask is
+    a blocking service call from the CEF UI thread, so ten entries meant eleven round trips
+    (~190ms) before the panel could draw. Reading and resolving the list here makes it one call,
+    and the entries are read as plain ini (`[scene] name` / `last_opened`) instead of a full
+    archive parse - a listing needs two keys, not a scene.
+
+    A history entry whose directory is gone is reported (`if_exists: false`) rather than refused:
+    a deleted project in the history is normal, not an error.
+    """
+    require_keys(request, optional=('ini', 'archive_session', 'project_path'))
+    history = editor_settings({"section": "History", "recent_projects": True,
+                               **({"ini": request["ini"]} if request.get("ini") else {})})
+    entries = []
+    for item in history.get("projects", []):
+        root = Path(item).expanduser()
+        if root.name == "scene.ini" and not root.is_dir():
+            root = root.parent
+        try:
+            config = configparser.ConfigParser(interpolation=None, strict=False)
+            if not config.read(root / "scene.ini", encoding="utf-8-sig"):
+                raise FileNotFoundError(str(root / "scene.ini"))
+        except (OSError, ValueError, configparser.Error):
+            entries.append({"path": str(root), "name": root.name, "if_exists": False,
+                            "last_edited": "-"})
+            continue
+        entries.append({"path": str(root),
+                        "name": config.get("scene", "name", fallback=root.name),
+                        "if_exists": True,
+                        "last_edited": config.get("scene", "last_opened", fallback="-")})
+    return {"projects": entries}
 
 
 def create_project_in(request):
