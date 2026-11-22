@@ -72,6 +72,61 @@ inline void destroy(EntityId handle) {
     return static_cast<std::int64_t>(static_cast<std::uint64_t>(handle) - 1);
 }
 
+/// 单组件只读遍历器：保留旧 Storage 迭代器的形状（`*it` / `it->field` / `it.id()`）。
+///
+/// 构造时收集指针；遍历期间不得做结构性变更（命令统一在 tick 边界应用）。
+template <typename T>
+class ComponentRange {
+   public:
+    struct Entry {
+        EntityId handle;
+        T* value;
+    };
+
+    class iterator {
+       public:
+        iterator() = default;
+        explicit iterator(const Entry* slot) : slot_(slot) {}
+
+        [[nodiscard]] EntityId id() const { return slot_->handle; }
+        [[nodiscard]] T& operator*() const { return *slot_->value; }
+        [[nodiscard]] T* operator->() const { return slot_->value; }
+        iterator& operator++() {
+            ++slot_;
+            return *this;
+        }
+        [[nodiscard]] bool operator!=(const iterator& other) const { return slot_ != other.slot_; }
+        [[nodiscard]] bool operator==(const iterator& other) const { return slot_ == other.slot_; }
+
+       private:
+        const Entry* slot_{nullptr};
+    };
+
+    ComponentRange() {
+        const auto entities = view<T>();
+        items_.reserve(entities.size());
+        for (const auto entity : entities) {
+            const auto handle = to_handle(entity);
+            items_.push_back(Entry{handle, &World::instance().get<T>(entity)});
+        }
+    }
+
+    [[nodiscard]] iterator begin() const { return iterator(items_.data()); }
+    [[nodiscard]] iterator end() const { return iterator(items_.data() + items_.size()); }
+    [[nodiscard]] iterator cbegin() const { return begin(); }
+    [[nodiscard]] iterator cend() const { return end(); }
+    [[nodiscard]] std::size_t size() const { return items_.size(); }
+    [[nodiscard]] bool empty() const { return items_.empty(); }
+
+   private:
+    std::vector<Entry> items_;
+};
+
+template <typename T>
+[[nodiscard]] inline ComponentRange<T> all_components() {
+    return ComponentRange<T>{};
+}
+
 /// 指定组件的视图（遍历时用 `entity` 取回句柄：`to_handle(entity)`）。
 template <typename... T>
 [[nodiscard]] auto view() {

@@ -48,11 +48,11 @@ ktm::fvec3 vec3(float x, float y, float z) {
 
 void test_camera_seed_and_committed_read() {
     auto& hub = SharedDataHub::instance();
-    const auto handle = hub.camera_storage().allocate();
+    const auto handle = hub.create_camera();
     CHECK(handle != 0);
 
     {
-        auto camera = hub.camera_storage().acquire_write(handle);
+        auto camera = Corona::find_camera(handle);
         camera->position = vec3(1.0f, 2.0f, 3.0f);
         camera->fov = 61.0f;
         camera->width = 800;
@@ -71,14 +71,14 @@ void test_camera_seed_and_committed_read() {
 
     hub.remove_camera_snapshot_row(handle);
     CHECK(!hub.camera_row(handle).has_value());
-    hub.camera_storage().deallocate(handle);
+    hub.destroy_camera(handle);
 }
 
 void test_camera_pending_overlay() {
     auto& hub = SharedDataHub::instance();
-    const auto handle = hub.camera_storage().allocate();
+    const auto handle = hub.create_camera();
     {
-        auto camera = hub.camera_storage().acquire_write(handle);
+        auto camera = Corona::find_camera(handle);
         camera->position = vec3(0.0f, 0.0f, 0.0f);
         camera->fov = 45.0f;
         camera->width = 800;
@@ -109,7 +109,7 @@ void test_camera_pending_overlay() {
     CHECK(hub.camera_row(handle)->width == 800);
 
     for (const auto& incoming : hub.drain_camera_moves()) {
-        if (auto camera = hub.camera_storage().try_acquire_write(incoming.camera_handle)) {
+        if (auto camera = Corona::find_camera(incoming.camera_handle)) {
             camera->position = incoming.position;
             camera->forward = incoming.forward;
             camera->world_up = incoming.world_up;
@@ -117,7 +117,7 @@ void test_camera_pending_overlay() {
         }
     }
     for (const auto& update : hub.drain_camera_state_updates()) {
-        if (auto camera = hub.camera_storage().try_acquire_write(update.camera_handle)) {
+        if (auto camera = Corona::find_camera(update.camera_handle)) {
             if (Corona::has_camera_state_field(update.fields,
                                                Corona::CameraStateUpdateField::Size)) {
                 camera->width = update.width;
@@ -132,12 +132,12 @@ void test_camera_pending_overlay() {
     CHECK(hub.camera_row(handle)->width == 1024);
 
     hub.remove_camera_snapshot_row(handle);
-    hub.camera_storage().deallocate(handle);
+    hub.destroy_camera(handle);
 }
 
 void test_camera_move_coalescing() {
     auto& hub = SharedDataHub::instance();
-    const auto handle = hub.camera_storage().allocate();
+    const auto handle = hub.create_camera();
 
     for (int i = 0; i < 5; ++i) {
         Corona::CameraMoveCommand move{};
@@ -153,7 +153,7 @@ void test_camera_move_coalescing() {
     CHECK(moves[0].position.x == 4.0f);
 
     // 出队顺序 = 各 key 最后一次提交的顺序（与线程调度无关）
-    const auto other = hub.camera_storage().allocate();
+    const auto other = hub.create_camera();
     auto push_move = [&hub](std::uintptr_t camera, float x) {
         Corona::CameraMoveCommand move{};
         move.camera_handle = camera;
@@ -172,8 +172,8 @@ void test_camera_move_coalescing() {
     CHECK(ordered[1].camera_handle == handle);
     CHECK(ordered[1].position.x == 11.0f);
 
-    hub.camera_storage().deallocate(other);
-    hub.camera_storage().deallocate(handle);
+    hub.destroy_camera(other);
+    hub.destroy_camera(handle);
 }
 
 void test_transform_command_and_snapshot() {
@@ -456,8 +456,8 @@ void test_camera_release_queue_is_fifo() {
     auto& hub = SharedDataHub::instance();
     (void)hub.drain_camera_releases();  // 清掉其它用例可能残留的释放命令
 
-    const auto first = hub.camera_storage().allocate();
-    const auto second = hub.camera_storage().allocate();
+    const auto first = hub.create_camera();
+    const auto second = hub.create_camera();
     CHECK(first != 0 && second != 0);
 
     // 释放时要顺手清掉该相机的遥测
@@ -474,15 +474,15 @@ void test_camera_release_queue_is_fifo() {
     CHECK(!hub.camera_frame_timing(first).has_value());
     CHECK(hub.drain_camera_releases().empty());  // 取空后不重复投递
 
-    hub.camera_storage().deallocate(first);
-    hub.camera_storage().deallocate(second);
+    hub.destroy_camera(first);
+    hub.destroy_camera(second);
 }
 
 void test_camera_viewport_queue_coalescing() {
     auto& hub = SharedDataHub::instance();
     (void)hub.drain_camera_viewport_updates();
 
-    const auto camera = hub.camera_storage().allocate();
+    const auto camera = hub.create_camera();
     for (int i = 0; i < 4; ++i) {
         hub.enqueue_camera_viewport_update({
             .camera_handle = camera,
@@ -523,13 +523,13 @@ void test_camera_viewport_queue_coalescing() {
     CHECK(latest->width == 30);
     CHECK(latest->height == 40);
 
-    hub.camera_storage().deallocate(camera);
+    hub.destroy_camera(camera);
 }
 
 void test_viewport_ui_mode_and_calibration_are_per_camera() {
     auto& hub = SharedDataHub::instance();
-    const auto camera = hub.camera_storage().allocate();
-    const auto other = hub.camera_storage().allocate();
+    const auto camera = hub.create_camera();
+    const auto other = hub.create_camera();
     CHECK(hub.viewport_ui_state(camera).mode == Corona::ViewportUiMode::Flat2D);
 
     hub.set_viewport_ui_mode(camera, Corona::ViewportUiMode::Stereo3D);
@@ -546,8 +546,8 @@ void test_viewport_ui_mode_and_calibration_are_per_camera() {
     CHECK(peer.mode == Corona::ViewportUiMode::Flat2D);
     CHECK(peer.calibration.lenticular_pitch != 6.f);
 
-    hub.camera_storage().deallocate(other);
-    hub.camera_storage().deallocate(camera);
+    hub.destroy_camera(other);
+    hub.destroy_camera(camera);
 }
 
 void test_camera_api_construction_does_not_self_deadlock() {

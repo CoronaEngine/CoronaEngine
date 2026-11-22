@@ -1360,7 +1360,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     for (const auto& enabled_scene : Corona::all_scenes()) {
         if (!enabled_scene.enabled) continue;
         for (auto camera_handle : enabled_scene.camera_handles) {
-            auto camera = hub.camera_storage().try_acquire_read(camera_handle);
+            auto camera = Corona::find_camera(camera_handle);
             if (camera && camera->surface && camera->render_backend == CameraRenderBackend::Vision) {
                 vision_readback = true;
                 break;

@@ -573,7 +573,7 @@ void apply_pending_camera_viewport_updates() {
     for (const auto& update : updates) {
         // 只在视口真的变化时打一条 INFO；重复的相同更新不再刷屏。
         bool viewport_changed = false;
-        if (auto camera = hub.camera_storage().try_acquire_read(update.camera_handle)) {
+        if (auto camera = Corona::find_camera(update.camera_handle)) {
             viewport_changed = camera->surface != update.surface ||
                                camera->view_open != update.view_open ||
                                camera->view_x != update.x || camera->view_y != update.y ||
@@ -596,9 +596,9 @@ std::vector<Corona::CameraStateUpdateCommand> apply_pending_camera_state_updates
         return updates;
     }
 
-    auto& camera_storage = hub.camera_storage();
+    auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
     for (const auto& update : updates) {
-        if (auto camera = camera_storage.acquire_write(update.camera_handle)) {
+        if (auto camera = Corona::find_camera(update.camera_handle)) {
             if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::Projection)) {
                 camera->projection_x_sign = update.projection_x_sign;
                 camera->near_plane = update.near_plane;
@@ -714,9 +714,9 @@ void apply_pending_camera_moves() {
         return;
     }
 
-    auto& camera_storage = hub.camera_storage();
+    auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
     for (const auto& move : moves) {
-        if (auto camera = camera_storage.try_acquire_write(move.camera_handle)) {
+        if (auto camera = Corona::find_camera(move.camera_handle)) {
             camera->position = move.position;
             camera->forward = move.forward;
             camera->world_up = move.world_up;
@@ -764,7 +764,7 @@ void apply_pending_camera_releases() {
     auto& hub = Corona::SharedDataHub::instance();
     for (const auto& release : hub.drain_camera_releases()) {
         hub.clear_camera_state_updates(release.camera_handle);
-        hub.camera_storage().deallocate(release.camera_handle);
+        hub.destroy_camera(release.camera_handle);
     }
 }
 
@@ -1576,7 +1576,7 @@ void apply_pending_default_surface_camera_update() {
     if (!update) return;
     for (const auto& scene : Corona::all_scenes()) {
         if (!scene.enabled) continue;
-        auto camera = hub.camera_storage().try_acquire_write(select_scene_camera_handle(scene));
+        auto camera = Corona::find_camera(select_scene_camera_handle(scene));
         if (!camera || !camera->follows_default_surface ||
             (camera->surface && camera->surface != update->surface)) continue;
         camera->surface = update->surface;
@@ -1621,7 +1621,7 @@ template<typename Views>
     for (const auto& scene : Corona::all_scenes()) {
         if (!scene.enabled) continue;
         const auto handle = select_scene_camera_handle(scene);
-        if (auto camera = hub.camera_storage().try_acquire_read(handle)) return *camera;
+        if (auto camera = Corona::find_camera(handle)) return *camera;
     }
     return std::nullopt;
 }
@@ -1657,13 +1657,13 @@ constexpr std::size_t kVisionInteractiveInstanceLimit = 1024;
 void fallback_large_scenes_to_native_renderer() {
     auto& hub = Corona::SharedDataHub::instance();
     auto& geometry_storage = hub.geometry_storage();
-    auto& camera_storage = hub.camera_storage();
+    auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
 
     for (const auto& scene : Corona::all_scenes()) {
         if (!scene.enabled) continue;
         const bool has_vision_camera = std::any_of(scene.camera_handles.begin(), scene.camera_handles.end(),
             [&](auto handle) {
-                const auto camera = camera_storage.try_acquire_read(handle);
+                const auto camera = Corona::find_camera(handle);
                 return camera && camera->render_backend == Corona::CameraRenderBackend::Vision;
             });
         if (!has_vision_camera) continue;
@@ -1697,7 +1697,7 @@ void fallback_large_scenes_to_native_renderer() {
         if (instance_count <= kVisionInteractiveInstanceLimit) continue;
 
         for (const auto camera_handle : scene.camera_handles) {
-            const auto camera = camera_storage.try_acquire_write(camera_handle);
+            const auto camera = Corona::find_camera(camera_handle);
             if (!camera || camera->render_backend != Corona::CameraRenderBackend::Vision) continue;
             camera->render_backend = Corona::CameraRenderBackend::Native;
             CFW_LOG_WARNING(
@@ -1715,7 +1715,7 @@ void fallback_large_scenes_to_native_renderer() {
         if (!scene.enabled) continue;
         for (const auto camera_handle : scene.camera_handles) {
             auto camera =
-                Corona::SharedDataHub::instance().camera_storage().try_acquire_read(camera_handle);
+                Corona::find_camera(camera_handle);
             if (!camera || camera->render_backend != Corona::CameraRenderBackend::Vision ||
                 (camera->surface == nullptr && (!pending_capture || !pending_capture(camera_handle)))) {
                 continue;
@@ -2252,7 +2252,7 @@ void OpticsSystem::publish_vision_camera_feedback(EntityId camera_handle,
                                                  const VisionCameraFeedback& feedback) {
     if (!feedback.restir_effective && !feedback.pt_effective &&
         !feedback.reblur_effective && !feedback.relax_effective) return;
-    auto camera = SharedDataHub::instance().camera_storage().try_acquire_write(camera_handle);
+    auto camera = Corona::find_camera(camera_handle);
     if (!camera) return;
     if (feedback.restir_effective) camera->vision_restir_effective_settings = *feedback.restir_effective;
     if (feedback.restir_applied) camera->vision_restir_applied_settings = *feedback.restir_applied;
@@ -2313,7 +2313,7 @@ void OpticsSystem::evict_idle_vision_runtimes(uint64_t frame_index) {
         const bool has_open_view = std::any_of(
             runtime->view_denoise_states.begin(), runtime->view_denoise_states.end(),
             [](const auto& view) {
-                auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(view.first);
+                auto camera = Corona::find_camera(view.first);
                 return camera && camera->surface != nullptr &&
                        camera->render_backend == CameraRenderBackend::Vision;
             });
@@ -2844,7 +2844,7 @@ bool OpticsSystem::initialize(Kernel::ISystemContext* ctx) {
         screenshot_request_sub_id_ = event_bus->subscribe<Events::ScreenshotRequestEvent>(
             [this](const Events::ScreenshotRequestEvent& event) {
                 if (event.camera_handle == 0 || event.file_path.empty() ||
-                    !SharedDataHub::instance().camera_storage().try_acquire_read(event.camera_handle)) {
+                    !Corona::find_camera(event.camera_handle)) {
                     if (event.completion_promise) {
                         event.completion_promise->set_value(false);
                     }
@@ -3061,7 +3061,7 @@ void OpticsSystem::update() {
         }
         for (const auto camera_handle : scene.camera_handles) {
             if (auto camera =
-                    SharedDataHub::instance().camera_storage().try_acquire_read(camera_handle);
+                    Corona::find_camera(camera_handle);
                 camera) {
                 if (camera->render_backend == CameraRenderBackend::Vision &&
                     (camera->surface != nullptr || has_pending_screenshot(camera_handle))) {
@@ -3085,7 +3085,7 @@ void OpticsSystem::update() {
             CFW_LOG_WARNING("OpticsSystem: Vision init failed, falling back affected cameras to Native");
             for (const auto camera_handle : requested_vision_cameras) {
                 if (auto camera =
-                        SharedDataHub::instance().camera_storage().acquire_write(camera_handle)) {
+                        Corona::find_camera(camera_handle)) {
                     camera->render_backend = CameraRenderBackend::Native;
                 }
             }
@@ -3120,7 +3120,7 @@ OpticsSystem::RenderFramePlan OpticsSystem::build_render_frame_plan() {
         // 场景句柄直接来自实体句柄（entt 里引用地址不是实体 ID）。
         const auto scene_handle = scene_it.id();
         for (const auto handle : scene.camera_handles) {
-            auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(handle);
+            auto camera = Corona::find_camera(handle);
             if (!camera) continue;
             plan.has_vision_cameras |= camera->render_backend == CameraRenderBackend::Vision;
             if (!camera->surface && !has_pending_screenshot(handle)) continue;
@@ -3141,7 +3141,7 @@ std::optional<OpticsSystem::LockedRenderView> OpticsSystem::lock_render_view(
     if (!scene || !scene->enabled ||
         std::find(scene->camera_handles.begin(), scene->camera_handles.end(), view.camera_handle) ==
             scene->camera_handles.end()) return std::nullopt;
-    auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(view.camera_handle);
+    auto camera = Corona::find_camera(view.camera_handle);
     if (!camera || camera->render_backend != backend ||
         (!camera->surface && !has_pending_screenshot(view.camera_handle))) return std::nullopt;
     return LockedRenderView{scene, *camera};
@@ -4930,7 +4930,7 @@ void OpticsSystem::fail_unrenderable_pending_screenshots() {
     }
 
     for (const auto camera_handle : pending_handles) {
-        if (!SharedDataHub::instance().camera_storage().try_acquire_read(camera_handle)) {
+        if (!Corona::find_camera(camera_handle)) {
             fail_pending_screenshots(camera_handle);
             continue;
         }
@@ -5409,7 +5409,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                 const auto camera_handle = it->first;
                 bool camera_exists = false;
                 bool retain_bridge = false;
-                if (auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(
+                if (auto camera = Corona::find_camera(
                         camera_handle)) {
                     camera_exists = true;
                     retain_bridge = camera->surface != nullptr;
@@ -5444,7 +5444,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
             }
             for (auto it = runtime.retained_contexts.begin();
                  it != runtime.retained_contexts.end();) {
-                if (SharedDataHub::instance().camera_storage().try_acquire_read(*it)) {
+                if (Corona::find_camera(*it) != nullptr) {
                     ++it;
                     continue;
                 }

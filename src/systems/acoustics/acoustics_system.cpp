@@ -258,13 +258,13 @@ void AcousticsSystem::update_spatial() {
     // --- (a) listener ← 场景活动相机 ---
     {
     auto scene_storage = Corona::all_scenes();
-        auto& camera_storage = hub.camera_storage();
+        auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
         for (const auto& scene : scene_storage) {
             if (!scene.enabled || scene.active_camera_handle == 0) {
                 continue;
             }
-            auto cam = camera_storage.try_acquire_read(scene.active_camera_handle);
-            if (cam.valid()) {
+            auto cam = Corona::find_camera(scene.active_camera_handle);
+            if (cam != nullptr) {
                 ma_engine_listener_set_position(&engine_, 0, cam->position.x, cam->position.y, cam->position.z);
                 ma_engine_listener_set_direction(&engine_, 0, cam->forward.x, cam->forward.y, cam->forward.z);
                 ma_engine_listener_set_world_up(&engine_, 0, cam->world_up.x, cam->world_up.y, cam->world_up.z);

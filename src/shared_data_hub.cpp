@@ -187,8 +187,17 @@ void SharedDataHub::clear_actor_metadata(EntityId actor_handle) {
     actor_guids_.erase(actor_handle);
 }
 
-SharedDataHub::CameraStorage& SharedDataHub::camera_storage() { return camera_storage_; }
-const SharedDataHub::CameraStorage& SharedDataHub::camera_storage() const { return camera_storage_; }
+EntityId SharedDataHub::create_camera() { return Ecs::emplace<CameraDevice>(); }
+void SharedDataHub::destroy_camera(EntityId handle) { Ecs::destroy(handle); }
+CameraDevice* SharedDataHub::try_camera(EntityId handle) {
+    return Ecs::try_get<CameraDevice>(handle);
+}
+const CameraDevice* SharedDataHub::try_camera(EntityId handle) const {
+    return Ecs::try_get_const<CameraDevice>(handle);
+}
+CameraDevice* find_camera(EntityId handle) {
+    return SharedDataHub::instance().try_camera(handle);
+}
 
 EntityId SharedDataHub::create_environment() { return Ecs::emplace<EnvironmentDevice>(); }
 void SharedDataHub::destroy_environment(EntityId handle) { Ecs::destroy(handle); }
@@ -278,8 +287,8 @@ void SharedDataHub::publish_camera_snapshot(CameraSnapshot snapshot) {
 void SharedDataHub::publish_camera_snapshot_from_storage() {
     CameraSnapshot snapshot;
     snapshot.tick = camera_snapshot_.revision() + 1;
-    const auto& storage = camera_storage_;
-    for (auto camera_it = storage.cbegin(); camera_it != storage.cend(); ++camera_it) {
+    auto cameras = Ecs::all_components<Corona::CameraDevice>();
+    for (auto camera_it = cameras.begin(); camera_it != cameras.end(); ++camera_it) {
         const auto handle = camera_it.id();
         if (handle == 0) {
             continue;
@@ -301,7 +310,7 @@ void SharedDataHub::seed_camera_snapshot_from_storage(EntityId camera_handle) {
     // 建相机时槽位刚分配，除创建者外无人持有引用；这里读一次把首行播种下去，
     // 避免"创建后到首个 Optics tick 之间"的 get_* 读到默认值。
     std::optional<CameraSnapshotRow> seeded;
-    if (auto camera = camera_storage_.try_acquire_read(camera_handle)) {
+    if (const auto* camera = try_camera(camera_handle)) {
         seeded = make_camera_row(camera_handle, *camera);
     }
     if (!seeded.has_value()) {

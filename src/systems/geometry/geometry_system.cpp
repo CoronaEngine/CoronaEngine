@@ -303,7 +303,7 @@ void GeometrySystem::update() {
     impl_->pump_lod_disk_writes();
     auto& hub = SharedDataHub::instance();
     auto scene_storage = Corona::all_scenes();
-    auto& camera_storage = hub.camera_storage();
+    auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
     auto& geometry_storage = hub.geometry_storage();
     std::vector<std::uintptr_t> scene_handles;
     {
@@ -537,8 +537,8 @@ void GeometrySystem::update() {
         std::unordered_set<Impl::Payload> visible_actors;
         double visible_query_ms_total = 0.0;
         for (EntityId camera_handle : camera_handles) {
-            auto cam_read = camera_storage.try_acquire_read_nowait(camera_handle);
-            if ( !cam_read.valid() ) continue;
+            auto cam_read = Corona::find_camera(camera_handle);
+            if ( cam_read == nullptr ) continue;
 
             // 填充相机位置和视锥
             const CameraDevice& cam_dev = *cam_read;
@@ -2742,11 +2742,11 @@ namespace {
 // 收集所有场景所有相机的世界位置（用于流式加载的距离排序）。
 [[nodiscard]] std::vector<ktm::fvec3> collect_camera_positions() {
     auto& hub = SharedDataHub::instance();
-    auto& camera_storage = hub.camera_storage();
+    auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
     std::vector<ktm::fvec3> positions;
     for (const auto& scene : Corona::all_scenes()) {
         for (EntityId cam_handle : scene.camera_handles) {
-            if (auto cam = camera_storage.try_acquire_read_nowait(cam_handle)) {
+            if (auto cam = Corona::find_camera(cam_handle)) {
                 positions.push_back(cam->position);
             }
         }
@@ -3444,10 +3444,10 @@ void GeometrySystem::reconcile_lod_residency() {
     struct Viewer { ktm::fvec3 pos; float epsilon; };
     std::vector<Viewer> viewers;
     {
-        auto& camera_storage = hub.camera_storage();
+        auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
         for (const auto& scene : Corona::all_scenes()) {
             for (EntityId cam_handle : scene.camera_handles) {
-                if (auto cam = camera_storage.try_acquire_read_nowait(cam_handle)) {
+                if (auto cam = Corona::find_camera(cam_handle)) {
                     const float eps = compute_angular_epsilon(
                         lod_pixel_budget, cam->fov,
                         static_cast<float>(cam->height));

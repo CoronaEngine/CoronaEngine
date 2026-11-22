@@ -1831,8 +1831,8 @@ Corona::API::Camera::Camera()
 
     float fov = 45.0f;
 
-    handle_ = SharedDataHub::instance().camera_storage().allocate();
-    if (auto accessor = SharedDataHub::instance().camera_storage().acquire_write(handle_)) {
+    handle_ = SharedDataHub::instance().create_camera();
+    if (auto accessor = Corona::find_camera(handle_)) {
         accessor->position = pos_vec;
         accessor->forward = fwd_vec;
         accessor->world_up = up_vec;
@@ -1843,7 +1843,7 @@ Corona::API::Camera::Camera()
         accessor->surface = get_default_surface();
     } else {
         CFW_LOG_ERROR("[Camera::Camera] Failed to acquire write access to camera storage");
-        SharedDataHub::instance().camera_storage().deallocate(handle_);
+        SharedDataHub::instance().destroy_camera(handle_);
         handle_ = 0;
     }
 
@@ -1871,8 +1871,8 @@ Corona::API::Camera::Camera(const std::array<float, 3>& position, const std::arr
     up_vec.y = world_up[1];
     up_vec.z = world_up[2];
 
-    handle_ = SharedDataHub::instance().camera_storage().allocate();
-    if (auto accessor = SharedDataHub::instance().camera_storage().acquire_write(handle_)) {
+    handle_ = SharedDataHub::instance().create_camera();
+    if (auto accessor = Corona::find_camera(handle_)) {
         accessor->position = pos_vec;
         accessor->forward = fwd_vec;
         accessor->world_up = up_vec;
@@ -1883,7 +1883,7 @@ Corona::API::Camera::Camera(const std::array<float, 3>& position, const std::arr
         accessor->surface = get_default_surface();
     } else {
         CFW_LOG_ERROR("[Camera::Camera] Failed to acquire write access to camera storage");
-        SharedDataHub::instance().camera_storage().deallocate(handle_);
+        SharedDataHub::instance().destroy_camera(handle_);
         handle_ = 0;
     }
 
@@ -2097,7 +2097,7 @@ std::string Corona::API::Camera::get_output_mode() const {
         return "final_color";
     }
 
-    if (auto accessor = SharedDataHub::instance().camera_storage().acquire_read(handle_)) {
+    if (auto accessor = Corona::find_camera(handle_)) {
         switch (accessor->output_mode) {
             case CameraOutputMode::BaseColor:
                 return "base_color";
@@ -2346,7 +2346,7 @@ void set_default_surface(void* surface) {
     // 这里只**读** follows_default_surface，写一律走相机命令通道——
     // 原来的 `camera.surface = surface` 是未加锁的跨线程写。
     std::vector<std::uintptr_t> targets;
-    auto& camera_storage_ref = SharedDataHub::instance().camera_storage();
+    auto camera_storage_ref = Corona::Ecs::all_components<Corona::CameraDevice>();
     for (auto camera_it = camera_storage_ref.cbegin(); camera_it != camera_storage_ref.cend(); ++camera_it) {
         if (camera_it->follows_default_surface) {
             targets.push_back(camera_it.id());
@@ -2518,26 +2518,26 @@ nlohmann::json get_requested_vision_settings(VisionSettingsFamily family, Entity
     switch (family) {
     case VisionSettingsFamily::Pt:
         if (const auto pending = hub.requested_camera_vision_pt_settings(handle)) return *pending;
-        if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_pt_settings;
+        if (auto camera = Corona::find_camera(handle)) return camera->vision_pt_settings;
         break;
     case VisionSettingsFamily::Restir:
         if (const auto pending = hub.requested_camera_vision_restir_settings(handle)) return *pending;
-        if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_restir_settings;
+        if (auto camera = Corona::find_camera(handle)) return camera->vision_restir_settings;
         break;
     case VisionSettingsFamily::Reblur:
         if (const auto pending = hub.requested_camera_vision_reblur_settings(handle)) return *pending;
-        if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_reblur_settings;
+        if (auto camera = Corona::find_camera(handle)) return camera->vision_reblur_settings;
         break;
     case VisionSettingsFamily::Relax:
         if (const auto pending = hub.requested_camera_vision_relax_settings(handle)) return *pending;
-        if (auto camera = hub.camera_storage().acquire_read(handle)) return camera->vision_relax_settings;
+        if (auto camera = Corona::find_camera(handle)) return camera->vision_relax_settings;
         break;
     }
     return nlohmann::json::object();
 }
 
 nlohmann::json get_effective_vision_settings(VisionSettingsFamily family, EntityId camera_handle) {
-    if (auto camera = SharedDataHub::instance().camera_storage().acquire_read(resolve_camera_handle(camera_handle))) {
+    if (auto camera = Corona::find_camera(resolve_camera_handle(camera_handle))) {
         switch (family) {
         case VisionSettingsFamily::Pt: return camera->vision_pt_effective_settings;
         case VisionSettingsFamily::Restir: return camera->vision_restir_effective_settings;

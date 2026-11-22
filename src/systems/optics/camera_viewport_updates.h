@@ -15,9 +15,9 @@ inline bool apply_camera_viewport_update(SharedDataHub& hub, const CameraViewpor
         lease = std::unique_lock(update.authority->mutex);
         if (!update.authority->active) return false;
     }
-    auto& storage = hub.camera_storage();
+    auto storage = Corona::Ecs::all_components<Corona::CameraDevice>();
     {
-        auto camera = storage.try_acquire_write(update.camera_handle);
+        auto camera = hub.try_camera(update.camera_handle);
         if (!camera) return false;
         camera->surface = update.surface;
         camera->follows_default_surface = false;
@@ -42,7 +42,7 @@ inline bool apply_camera_viewport_update(SharedDataHub& hub, const CameraViewpor
                 obsolete.push_back(handle);
         }
         for (const auto handle : obsolete) {
-            if (auto camera = storage.try_acquire_write(handle)) {
+            if (auto camera = hub.try_camera(handle)) {
                 if (camera->surface == update.surface && !camera->view_open) {
                     camera->surface = nullptr;
                     camera->follows_default_surface = false;

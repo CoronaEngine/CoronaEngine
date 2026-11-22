@@ -837,56 +837,13 @@ struct ImageDevice {
 /// 便捷：按句柄取 SceneDevice 组件（无锁）。
 [[nodiscard]] SceneDevice* find_scene(EntityId handle);
 
-/// 场景组件的只读视图：替代 `scene_storage()` 的遍历用法。
-/// 构造时收集指针，遍历期间不得做结构性变更（命令统一在 tick 边界应用）。
-class SceneRange {
-   public:
-    struct Entry {
-        EntityId handle;
-        const SceneDevice* value;
-    };
+/// 场景组件的只读视图（通用组件范围的别名）。
+using SceneRange = Ecs::ComponentRange<SceneDevice>;
 
-    /// 与旧 Storage 迭代器语义一致：`*it` 得到组件引用，`it->field` 直接取字段。
-    class iterator {
-       public:
-        iterator() = default;
-        explicit iterator(const Entry* slot) : slot_(slot) {}
+[[nodiscard]] inline SceneRange all_scenes() { return Ecs::all_components<SceneDevice>(); }
 
-        [[nodiscard]] EntityId id() const { return slot_->handle; }
-        [[nodiscard]] const SceneDevice& operator*() const { return *slot_->value; }
-        [[nodiscard]] const SceneDevice* operator->() const { return slot_->value; }
-        iterator& operator++() {
-            ++slot_;
-            return *this;
-        }
-        [[nodiscard]] bool operator!=(const iterator& other) const { return slot_ != other.slot_; }
-        [[nodiscard]] bool operator==(const iterator& other) const { return slot_ == other.slot_; }
-
-       private:
-        const Entry* slot_{nullptr};
-    };
-
-    SceneRange() {
-        const auto entities = Ecs::view<SceneDevice>();
-        items_.reserve(entities.size());
-        for (const auto entity : entities) {
-            const auto handle = Ecs::to_handle(entity);
-            items_.push_back(Entry{handle, &Ecs::get<SceneDevice>(handle)});
-        }
-    }
-
-    [[nodiscard]] iterator begin() const { return iterator(items_.data()); }
-    [[nodiscard]] iterator end() const { return iterator(items_.data() + items_.size()); }
-    [[nodiscard]] iterator cbegin() const { return begin(); }
-    [[nodiscard]] iterator cend() const { return end(); }
-    [[nodiscard]] std::size_t size() const { return items_.size(); }
-    [[nodiscard]] bool empty() const { return items_.empty(); }
-
-   private:
-    std::vector<Entry> items_;
-};
-
-[[nodiscard]] inline SceneRange all_scenes() { return SceneRange{}; }
+/// 便捷：按句柄取 CameraDevice 组件（无锁）。
+[[nodiscard]] CameraDevice* find_camera(EntityId handle);
 
 class SharedDataHub {
    public:
@@ -905,7 +862,6 @@ class SharedDataHub {
    public:
     // 新的 Storage 类型定义，包含默认的容量和内存池参数
     using GeometryStorage = Kernel::Utils::EntityStorage<GeometryDevice, 128, 2>;
-    using CameraStorage = Kernel::Utils::EntityStorage<CameraDevice, 128, 2>;
     using ImageStorage = Kernel::Utils::EntityStorage<ImageDevice, 128, 2>;
 
     // model_resource 已删除 Storage：组件直接挂在实体上。
@@ -963,8 +919,11 @@ class SharedDataHub {
     // Explicit scene reload also refreshes retained actors (e.g. directory links).
     void clear_actor_metadata(EntityId actor_handle);
 
-    CameraStorage& camera_storage();
-    const CameraStorage& camera_storage() const;
+    // camera 已删除 Storage：组件直接挂在实体上。
+    EntityId create_camera();
+    void destroy_camera(EntityId handle);
+    [[nodiscard]] CameraDevice* try_camera(EntityId handle);
+    [[nodiscard]] const CameraDevice* try_camera(EntityId handle) const;
 
     // environment 已删除 Storage：组件直接挂在实体上，句柄就是实体句柄。
     EntityId create_environment();
@@ -1076,7 +1035,6 @@ class SharedDataHub {
     GeometryStorage geometry_storage_;
     mutable std::mutex actor_metadata_mutex_;
     std::unordered_map<EntityId, std::string> actor_guids_;
-    CameraStorage camera_storage_;
     Kernel::SnapshotChannel<CameraSnapshot> camera_snapshot_;
     Kernel::CommandBuffer<TransformUpdateCommand, TransformUpdateKey,
                           Kernel::CoalescePolicy::LatestWins>

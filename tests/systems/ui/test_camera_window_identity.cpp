@@ -153,15 +153,15 @@ void test_camera_release_discards_queued_viewport_updates() {
     auto& hub = Corona::SharedDataHub::instance();
     hub.drain_camera_viewport_updates();
     hub.drain_camera_releases();
-    const auto retired = hub.camera_storage().allocate();
-    const auto live = hub.camera_storage().allocate();
+    const auto retired = hub.create_camera();
+    const auto live = hub.create_camera();
     hub.enqueue_camera_viewport_update({.camera_handle = retired, .width = 400});
     hub.enqueue_camera_viewport_update({.camera_handle = live, .width = 800});
     hub.enqueue_camera_release({.camera_handle = retired});
     const auto updates = hub.drain_camera_viewport_updates();
     const auto releases = hub.drain_camera_releases();
-    hub.camera_storage().deallocate(retired);
-    hub.camera_storage().deallocate(live);
+    hub.destroy_camera(retired);
+    hub.destroy_camera(live);
     require(releases.size() == 1 && releases[0].camera_handle == retired,
         "viewport cleanup must preserve the render owner's release command");
     require(updates.size() == 1 && updates[0].camera_handle == live && updates[0].width == 800,
@@ -170,10 +170,10 @@ void test_camera_release_discards_queued_viewport_updates() {
 
 void test_deferred_viewports_use_the_original_camera_authority() {
     auto& hub = Corona::SharedDataHub::instance();
-    const auto camera_handle = hub.camera_storage().allocate();
-    const auto peer_handle = hub.camera_storage().allocate();
+    const auto camera_handle = hub.create_camera();
+    const auto peer_handle = hub.create_camera();
     auto* surface = reinterpret_cast<void*>(std::uintptr_t{0x1234});
-    { auto peer = hub.camera_storage().acquire_write(peer_handle); peer->surface = surface; }
+    { auto peer = Corona::find_camera(peer_handle); peer->surface = surface; }
     UI::CameraWindowLifetime old_scene;
     const auto retired = old_scene.token();
     old_scene.retire();
@@ -185,30 +185,30 @@ void test_deferred_viewports_use_the_original_camera_authority() {
         .render_width = 800, .render_height = 600, .authority = retired,
     };
     const bool retired_applied = Corona::Systems::apply_camera_viewport_update(hub, command);
-    { auto camera = hub.camera_storage().acquire_read(camera_handle);
-      auto peer = hub.camera_storage().acquire_read(peer_handle);
+    { auto camera = Corona::find_camera(camera_handle);
+      auto peer = Corona::find_camera(peer_handle);
       require(!retired_applied && !camera->viewport_rect_active && peer->surface == surface,
           "retired viewport commands cannot mutate a reused camera address or detach a live peer"); }
     UI::CameraWindowLifetime current_scene;
     command.authority = current_scene.token();
     require(Corona::Systems::apply_camera_viewport_update(hub, command), "live scoped viewport updates must apply");
-    { auto camera = hub.camera_storage().acquire_read(camera_handle);
-      auto peer = hub.camera_storage().acquire_read(peer_handle);
+    { auto camera = Corona::find_camera(camera_handle);
+      auto peer = Corona::find_camera(peer_handle);
       require(camera->surface == surface && camera->view_x == 10 && camera->view_y == 20 &&
           camera->view_width == 400 && camera->width == 800 && camera->height == 600 &&
           camera->aspect == 800.0f / 600 && !camera->follows_default_surface && !peer->surface,
           "valid viewport updates preserve geometry, resolution, aspect and exclusive embedded-surface ownership"); }
-    { auto peer = hub.camera_storage().acquire_write(peer_handle); peer->surface = surface; peer->view_open = true; }
+    { auto peer = Corona::find_camera(peer_handle); peer->surface = surface; peer->view_open = true; }
     require(Corona::Systems::apply_camera_viewport_update(hub, command), "live viewport updates remain idempotent");
-    { auto peer = hub.camera_storage().acquire_read(peer_handle);
+    { auto peer = Corona::find_camera(peer_handle);
       require(peer->surface == surface, "embedded viewport updates cannot detach a floating camera"); }
-    hub.camera_storage().deallocate(camera_handle);
+    hub.destroy_camera(camera_handle);
     command.authority.reset();
     require(!Corona::Systems::apply_camera_viewport_update(hub, command),
         "an unscoped late viewport for missing storage must not abort the Optics tick");
-    { auto peer = hub.camera_storage().acquire_read(peer_handle);
+    { auto peer = Corona::find_camera(peer_handle);
       require(peer->surface == surface, "missing-camera commands cannot perform surface cleanup"); }
-    hub.camera_storage().deallocate(peer_handle);
+    hub.destroy_camera(peer_handle);
 }
 
 void test_cached_web_viewport_binding_retires_with_its_camera() {

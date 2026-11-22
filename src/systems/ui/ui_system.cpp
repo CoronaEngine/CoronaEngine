@@ -153,7 +153,7 @@ void UiSystem::stop() {
     while (!camera_handles.empty() && std::chrono::steady_clock::now() < deadline) {
         std::erase_if(camera_handles, [](const EntityId camera_handle) {
             auto camera =
-                SharedDataHub::instance().camera_storage().try_acquire_read(camera_handle);
+                Corona::find_camera(camera_handle);
             return !camera || camera->surface == nullptr;
         });
         if (!camera_handles.empty()) {
