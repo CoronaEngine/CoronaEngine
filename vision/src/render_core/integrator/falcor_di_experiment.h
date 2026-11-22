@@ -433,6 +433,9 @@ public:
     [[nodiscard]] BufferView<float4> denoiser_specular() const { return denoiser_specular_.view(); }
     [[nodiscard]] BufferView<float4> denoiser_bypass() const { return denoiser_bypass_.view(); }
 
+    // A full-surface GI producer exposes no separate primary flags.
+    [[nodiscard]] BufferView<uint> primary_flags() const noexcept { return {}; }
+
     [[nodiscard]] bool matches(uint2 extent, std::string_view mode, bool publish_gi, bool publish_gi_proposal, bool lobe_signals) const noexcept {
         // A replacement FrameBuffer owns different storage even when the extent is unchanged.
         return frame_buffer_ == &frame_buffer() && extent.x == extent_.x && extent.y == extent_.y &&

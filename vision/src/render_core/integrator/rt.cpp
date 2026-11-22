@@ -249,7 +249,14 @@ public:
             denoiser_->prepare();
         }
         frame_buffer().prepare_hit_bsdfs();
-        frame_buffer().prepare_surfaces();
+        // Kernels index two consecutive slots. Reserve them before compilation,
+        // but wait for the active DI producer before allocating their backing.
+        auto &surfaces = frame_buffer().surfaces();
+        if (!surfaces.has_registered()) {
+            surfaces.set_bindless_array(frame_buffer().bindless_array());
+            surfaces.register_self();
+            surfaces.register_view(0u);
+        }
         frame_buffer().prepare_surface_exts();
         frame_buffer().prepare_surface_ext_history();
         frame_buffer().prepare_visibility_buffer();
@@ -475,8 +482,10 @@ public:
         ret.prev_visibility = frame_buffer().prev_visibility_buffer_view(frame_index_);
         ret.motion_vec = frame_buffer().motion_vectors();
         ret.use_stable_planes = direct_->uses_stable_planes() && !native_gi_planes();
-        ret.stable_surfaces = frame_buffer().cur_surfaces_view(frame_index_);
-        ret.prev_stable_surfaces = frame_buffer().prev_surfaces_view(frame_index_);
+        if (frame_buffer().surfaces_size() != 0u) {
+            ret.stable_surfaces = frame_buffer().cur_surfaces_view(frame_index_);
+            ret.prev_stable_surfaces = frame_buffer().prev_surfaces_view(frame_index_);
+        }
         if (!direct_->compact_radiance()) ret.direct = direct_->radiance()->view();
         if (!indirect_->compact_radiance()) ret.indirect = indirect_->radiance()->view();
         if (shared_stable_planes_enabled()) {
@@ -578,11 +587,6 @@ public:
         // GBuffer does not write extensions. Save the previous receiver before
         // either stable-plane build or DI overwrites the full current record.
         submit(frame_buffer().save_surface_exts_history(frame_index_), &cur_stage_profile_.gbuffer_ms);
-        if (shared_stable_planes_enabled()) {
-            const bool copy_history = retain_history && denoiser_->needs_stable_plane_history(frame_index_);
-            submit(stable_planes_->build(frame_index_, jitter_primary_samples(), copy_history, raw_stable_outputs), &cur_stage_profile_.stable_build_ms);
-            submit(stable_planes_->fill(frame_index_, direct_->factor(), indirect_->factor(), raw_stable_outputs), &cur_stage_profile_.stable_fill_ms);
-        }
         const char *falcor_mode = std::getenv("VISION_FALCOR_DI_MODE");
         const bool gi_enabled = indirect_->open();
         const char *reference_gi_mode = std::getenv("VISION_RESTIR_GI_MODE");
@@ -620,6 +624,25 @@ public:
         const bool use_falcor = falcor_requested && falcor_di_;
         OC_ERROR_IF(native_denoising && !use_falcor,
                     "RTXPT GI + REBLUR requires active Falcor DI: RGB, normal framebuffer, max_recursion=1, centered primary rays and no media.");
+        const size_t primary_flag_bytes = use_falcor ? falcor_di_->primary_flags().size_in_byte() : 0u;
+        const bool full_surfaces = !use_falcor || (gi_enabled && primary_flag_bytes == 0u);
+        auto &surfaces = frame_buffer().surfaces();
+        const bool surface_storage_changed = full_surfaces != (surfaces.size() != 0u);
+        if (surface_storage_changed) {
+            stream << synchronize() << commit();
+            if (full_surfaces) {
+                frame_buffer().init_buffer_impl(surfaces, true, "FrameBuffer::surfaces", 2u);
+            } else {
+                surfaces.update_buffer({});
+                surfaces.register_view_index(1u, 0u);
+            }
+            pipeline()->upload_bindless_array();
+        }
+        if (shared_stable_planes_enabled()) {
+            const bool copy_history = retain_history && denoiser_->needs_stable_plane_history(frame_index_);
+            submit(stable_planes_->build(frame_index_, jitter_primary_samples(), copy_history, raw_stable_outputs), &cur_stage_profile_.stable_build_ms);
+            submit(stable_planes_->fill(frame_index_, direct_->factor(), indirect_->factor(), raw_stable_outputs), &cur_stage_profile_.stable_fill_ms);
+        }
         if (!use_falcor && legacy_di_needs_compile_) {
             // Legacy shader0 also prepares GI receivers when DI is disabled.
             // Falcor publishes those records itself, so compile the legacy
@@ -630,7 +653,8 @@ public:
             direct_->compile();
             legacy_di_needs_compile_ = false;
         }
-        if (prepare_falcor || use_falcor != falcor_di_was_active_) {
+        if (surface_storage_changed || prepare_falcor || use_falcor != falcor_di_was_active_) {
+            OC_INFO_FORMAT("ReSTIR surface storage: full_bytes={}, primary_flag_bytes={}", surfaces.size_in_byte(), primary_flag_bytes);
             direct_->invalidate_history();
             indirect_->invalidate_history();
         }
