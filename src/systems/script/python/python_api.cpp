@@ -52,11 +52,16 @@ void PythonAPI::request_stop() {
     // No request crosses threads: the owner of the loop polls this flag through
     // CoronaEngine.should_stop() and runs shutdown_runtime() on its way out.
     runtime_coordinator_.request_stop();
-    lifecycle_.transition(PythonLifecycleState::StopRequested);
+    // PythonLifecycle::request_stop() is idempotent and refuses to move a Failed or
+    // Stopped runtime; a bare transition(StopRequested) would do neither. A recorded
+    // failure phase/error (policies 1 and 2) must survive this call.
+    const bool stop_requested = lifecycle_.request_stop();
     std::lock_guard lock(lifecycle_mtx_);
     lifecycle_snapshot_.state = lifecycle_.state();
     lifecycle_snapshot_.shutting_down = true;
-    lifecycle_snapshot_.phase = "shutdown_requested";
+    if (stop_requested && lifecycle_snapshot_.error.empty()) {
+        lifecycle_snapshot_.phase = "shutdown_requested";
+    }
     CFW_LOG_NOTICE("event=python.lifecycle.state state=stop_requested");
 }
 
@@ -75,6 +80,8 @@ std::string PythonAPI::shutdown_diagnostics() const {
     out << "python.lifecycle.shutdown_timeout"
         << " lifecycle_state=" << static_cast<int>(lifecycle_.state())
         << " lifecycle_phase=" << lifecycle_snapshot_.phase
+        << " lifecycle_error="
+        << (lifecycle_snapshot_.error.empty() ? "none" : lifecycle_snapshot_.error)
         << " coordinator_state=" << static_cast<int>(runtime.state)
         << " queued=" << runtime.queued_count
         << " pending=" << runtime.pending_count

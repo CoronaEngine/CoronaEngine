@@ -104,9 +104,13 @@ void BindCefServiceQueue(nanobind::module_& m) {
                 } else {
                     auto* args = Corona::Script::Python::json_to_python(*request.service_args);
                     if (!args) {
-                        // The conversion owns the pending Python error; consume it and
-                        // settle the request rather than dropping it.
-                        settle_failure(*coordinator, request.request_id, take_python_error());
+                        // The conversion owns the pending Python error; consume it, name
+                        // the request in the log, and settle it rather than dropping it.
+                        const auto error = take_python_error();
+                        PY_LOG_WARNING(
+                            "python service request id {} arguments failed to convert: {}",
+                            request.request_id, error);
+                        settle_failure(*coordinator, request.request_id, error);
                         continue;
                     }
                     entry["args"] = nb::steal(nb::handle(args));

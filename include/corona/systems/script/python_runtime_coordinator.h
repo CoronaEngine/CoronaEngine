@@ -118,8 +118,10 @@ class PythonRuntimeCoordinator {
     PythonRuntimeResponse submit_and_wait(PythonRuntimeRequest request);
     std::optional<PythonRuntimeRequest> wait_pop(std::chrono::milliseconds timeout);
     /// Non-blocking pull of the front `limit` queued requests. Only the bound consumer
-    /// thread may drain; any other thread gets an empty vector. Tickets stay pending
-    /// until complete() is called for their request ids.
+    /// thread may drain; any other thread gets an empty vector. A drained entry may
+    /// already be dead: its ticket can be cancelled, timed out, or settled by a terminal
+    /// transition before the drain. Callers must still complete() every drained id;
+    /// a second complete for an already-settled id changes nothing and returns false.
     std::vector<PythonRuntimeRequest> drain_pending(std::size_t limit = 64);
     bool complete(std::uint64_t request_id, PythonRuntimeResponse response);
 

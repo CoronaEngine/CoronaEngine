@@ -17,13 +17,43 @@ def test_the_loop_entries_are_bound():
 
 API = ROOT / "src/systems/script/python/python_api.cpp"
 GETATTR = re.compile(r'getattr\((?:\w+|\w+\.\w+),\s*"(\w+)"\)')
+INITIALIZE_INTERPRETER = "bool PythonAPI::initializeInterpreter()"
+
+
+def _function_span(source, signature):
+    """Return the [start, end) span of a function definition, brace-matched."""
+    start = source.index(signature)
+    brace = source.index("{", start)
+    depth = 0
+    for offset in range(brace, len(source)):
+        if source[offset] == "{":
+            depth += 1
+        elif source[offset] == "}":
+            depth -= 1
+            if depth == 0:
+                return start, offset + 1
+    raise AssertionError(f"unterminated function definition: {signature}")
 
 
 def test_the_only_name_lookups_are_the_two_entries():
-    names = GETATTR.findall(API.read_text(encoding="utf-8-sig"))
+    source = API.read_text(encoding="utf-8-sig")
+    start, end = _function_span(source, INITIALIZE_INTERPRETER)
+    matches = list(GETATTR.finditer(source))
+    names = [match.group(1) for match in matches]
     assert sorted(names) == ["loop", "run"], (
         f"python_api.cpp looks up {sorted(names)}; only the two entry names may be resolved by "
         "string, and every other hook is now called from inside Python")
+    outside = [match.group(1) for match in matches if not start <= match.start() < end]
+    assert not outside, (
+        f"python_api.cpp resolves {outside} outside initializeInterpreter(); the two entry "
+        "names may only be resolved there")
+
+
+def test_python_api_never_probes_hooks_with_hasattr():
+    source = API.read_text(encoding="utf-8-sig")
+    assert "hasattr" not in source, (
+        "python_api.cpp probes a hook with hasattr; a missing hook must fail loudly, "
+        "not be skipped as if it were optional")
 
 
 def test_bootstrap_exports_both_entries():

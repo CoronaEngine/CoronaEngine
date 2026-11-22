@@ -18,6 +18,10 @@ namespace Corona::Systems {
  *
  * 负责管理窗口、输入事件和显示设备。
  * 运行在独立线程，以 60 FPS 响应输入事件。
+ *
+ * 这个系统的线程会阻塞在 `PythonAPI::enter_runtime()` 里直到进程结束，因此
+ * `pause()`/`resume()` 不会影响它，`get_actual_fps()` 与帧统计也不描述 Python
+ * 循环自己的节奏（循环在 Python 侧按约 4 ms 轮询、60 Hz `update_runtime()`）。
  */
 class ScriptSystem : public Kernel::SystemBase {
    public:
