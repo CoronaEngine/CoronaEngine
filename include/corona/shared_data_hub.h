@@ -830,6 +830,9 @@ struct ImageDevice {
 /// 便捷：按句柄取 MechanicsDevice 组件（无锁）。
 [[nodiscard]] MechanicsDevice* find_mechanics(EntityId handle);
 
+/// 便捷：按句柄取 OpticsDevice 组件（无锁）。
+[[nodiscard]] OpticsDevice* find_optics(EntityId handle);
+
 class SharedDataHub {
    public:
     static SharedDataHub& instance();
@@ -847,7 +850,6 @@ class SharedDataHub {
    public:
     // 新的 Storage 类型定义，包含默认的容量和内存池参数
     using GeometryStorage = Kernel::Utils::EntityStorage<GeometryDevice, 128, 2>;
-    using OpticsStorage = Kernel::Utils::EntityStorage<OpticsDevice, 128, 2>;
     using CameraStorage = Kernel::Utils::EntityStorage<CameraDevice, 128, 2>;
     using SceneStorage = Kernel::Utils::EntityStorage<SceneDevice, 128, 2>;
     using ImageStorage = Kernel::Utils::EntityStorage<ImageDevice, 128, 2>;
@@ -879,8 +881,11 @@ class SharedDataHub {
     [[nodiscard]] AcousticsDevice* try_acoustics(EntityId handle);
     [[nodiscard]] const AcousticsDevice* try_acoustics(EntityId handle) const;
 
-    OpticsStorage& optics_storage();
-    const OpticsStorage& optics_storage() const;
+    // optics 已删除 Storage：组件直接挂在实体上。
+    EntityId create_optics();
+    void destroy_optics(EntityId handle);
+    [[nodiscard]] OpticsDevice* try_optics(EntityId handle);
+    [[nodiscard]] const OpticsDevice* try_optics(EntityId handle) const;
 
     // profile 已删除 Storage：组件直接挂在实体上，句柄就是实体句柄。
     EntityId create_profile_component();
@@ -1012,7 +1017,6 @@ class SharedDataHub {
 
    private:
     GeometryStorage geometry_storage_;
-    OpticsStorage optics_storage_;
     mutable std::mutex actor_metadata_mutex_;
     std::unordered_map<EntityId, std::string> actor_guids_;
     CameraStorage camera_storage_;

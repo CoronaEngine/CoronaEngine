@@ -1297,14 +1297,14 @@ struct VisionEngineSceneTest {
         const auto model = hub.create_model_resource();
         const auto transform = hub.create_model_transform();
         const auto geometry = hub.geometry_storage().allocate();
-        const auto optics = hub.optics_storage().allocate();
+        const auto optics = hub.create_optics();
         const auto profile = hub.create_profile_component();
         const auto actor = hub.create_actor_component();
         const auto environment = hub.create_environment();
         const auto scene = hub.scene_storage().allocate();
         { auto* w = hub.try_model_resource(model); w->model_id = id; }
         { auto w = hub.geometry_storage().acquire_write(geometry); w->model_resource_handle = model; w->transform_handle = transform; }
-        { auto w = hub.optics_storage().acquire_write(optics); w->geometry_handle = geometry; }
+        { auto w = Corona::find_optics(optics); w->geometry_handle = geometry; }
         { auto w = hub.try_profile(profile); w->geometry_handle = geometry; w->optics_handle = optics; }
         { auto w = Corona::find_actor(actor); w->profile_handles = {profile}; }
         { auto* w = hub.try_environment(environment); w->sun_intensity = 0; w->sky_intensity = 1; }
@@ -1332,7 +1332,7 @@ struct VisionEngineSceneTest {
             queue.push(appearance);
             queue.push(visible);
             for (const auto& update : queue.drain()) {
-                auto w = hub.optics_storage().acquire_write(update.optics_handle);
+                auto w = Corona::find_optics(update.optics_handle);
                 apply_optics_update(*w, update);
             }
             auto* env = hub.try_environment(environment);
@@ -1392,7 +1392,7 @@ struct VisionEngineSceneTest {
         hub.destroy_environment(environment);
         hub.destroy_actor_component(actor);
         hub.destroy_profile_component(profile);
-        hub.optics_storage().deallocate(optics);
+        hub.destroy_optics(optics);
         hub.geometry_storage().deallocate(geometry);
         hub.destroy_model_transform(transform);
         hub.destroy_model_resource(model);

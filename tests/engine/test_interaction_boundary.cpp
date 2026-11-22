@@ -278,10 +278,10 @@ void test_optics_command_and_snapshot() {
     auto& channel = Corona::OpticsCommandChannel::instance();
     channel.commands().clear();
 
-    const auto handle = hub.optics_storage().allocate();
+    const auto handle = hub.create_optics();
     CHECK(handle != 0);
     {
-        auto device = hub.optics_storage().acquire_write(handle);
+        auto device = Corona::find_optics(handle);
         device->metallic = 0.25f;
         device->roughness = 0.75f;
     }
@@ -314,7 +314,7 @@ void test_optics_command_and_snapshot() {
     CHECK(Corona::has_optics_field(drained[0].fields, Corona::OpticsField::Visible));
 
     for (const auto& incoming : drained) {
-        if (auto device = hub.optics_storage().try_acquire_write(incoming.optics_handle)) {
+        if (auto device = Corona::find_optics(incoming.optics_handle)) {
             if (Corona::has_optics_field(incoming.fields, Corona::OpticsField::Metallic)) {
                 device->metallic = incoming.metallic;
             }
@@ -329,7 +329,7 @@ void test_optics_command_and_snapshot() {
     CHECK(Corona::optics_row(handle)->visible == false);
 
     channel.commands().clear();
-    hub.optics_storage().deallocate(handle);
+    hub.destroy_optics(handle);
 }
 
 void test_acoustics_command_and_snapshot() {

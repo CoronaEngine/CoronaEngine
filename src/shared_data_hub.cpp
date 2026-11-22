@@ -89,8 +89,17 @@ const AcousticsDevice* SharedDataHub::try_acoustics(EntityId handle) const {
     return Ecs::try_get_const<AcousticsDevice>(handle);
 }
 
-SharedDataHub::OpticsStorage& SharedDataHub::optics_storage() { return optics_storage_; }
-const SharedDataHub::OpticsStorage& SharedDataHub::optics_storage() const { return optics_storage_; }
+EntityId SharedDataHub::create_optics() { return Ecs::emplace<OpticsDevice>(); }
+void SharedDataHub::destroy_optics(EntityId handle) { Ecs::destroy(handle); }
+OpticsDevice* SharedDataHub::try_optics(EntityId handle) {
+    return Ecs::try_get<OpticsDevice>(handle);
+}
+const OpticsDevice* SharedDataHub::try_optics(EntityId handle) const {
+    return Ecs::try_get_const<OpticsDevice>(handle);
+}
+OpticsDevice* find_optics(EntityId handle) {
+    return SharedDataHub::instance().try_optics(handle);
+}
 
 EntityId SharedDataHub::create_profile_component() { return Ecs::emplace<ProfileDevice>(); }
 void SharedDataHub::destroy_profile_component(EntityId handle) { Ecs::destroy(handle); }
@@ -140,8 +149,7 @@ std::vector<std::uintptr_t> SharedDataHub::resolve_actor_geometry_handles(
         if (const auto* mechanics = try_mechanics(profile->mechanics_handle)) {
             append_geometry(mechanics->geometry_handle);
         }
-        if (const auto optics =
-                optics_storage_.try_acquire_read(profile->optics_handle)) {
+        if (const auto* optics = try_optics(profile->optics_handle)) {
             append_geometry(optics->geometry_handle);
         }
         if (const auto* acoustics = try_acoustics(profile->acoustics_handle)) {

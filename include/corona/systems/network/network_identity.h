@@ -173,7 +173,7 @@ private:
             out.model_resource_seq = Corona::Ecs::seq_of(out.model_resource_handle);
         }
         if (out.optics_handle != 0) {
-            out.optics_seq = hub_.optics_storage().seq_id(out.optics_handle);
+            out.optics_seq = Corona::Ecs::seq_of(out.optics_handle);
         }
         if (out.mechanics_handle != 0) {
             out.mechanics_seq = Corona::Ecs::seq_of(out.mechanics_handle);
@@ -188,8 +188,8 @@ private:
     EntityId geometry_from_component_handles(
         const ActorNetworkIdentity& identity) const {
         if (identity.optics_handle != 0) {
-            auto optics = hub_.optics_storage().try_acquire_read(identity.optics_handle);
-            if (optics.valid() && optics->geometry_handle != 0) {
+            auto optics = Corona::find_optics(identity.optics_handle);
+            if (optics != nullptr && optics->geometry_handle != 0) {
                 return optics->geometry_handle;
             }
         }

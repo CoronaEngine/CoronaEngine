@@ -987,7 +987,7 @@ void test_network_identity_registry_resolves_actor_components() {
 
     auto transform = hub.create_model_transform();
     auto geometry = hub.geometry_storage().allocate();
-    auto optics = hub.optics_storage().allocate();
+    auto optics = hub.create_optics();
     auto profile = hub.create_profile_component();
     auto actor = hub.create_actor_component();
 
@@ -996,7 +996,7 @@ void test_network_identity_registry_resolves_actor_components() {
         g->transform_handle = transform;
     }
     {
-        auto o = hub.optics_storage().acquire_write(optics);
+        auto o = Corona::find_optics(optics);
         o->geometry_handle = geometry;
     }
     {
@@ -1024,7 +1024,7 @@ void test_network_identity_registry_resolves_actor_components() {
 
     hub.destroy_actor_component(actor);
     hub.destroy_profile_component(profile);
-    hub.optics_storage().deallocate(optics);
+    hub.destroy_optics(optics);
     hub.geometry_storage().deallocate(geometry);
     hub.destroy_model_transform(transform);
 }
@@ -1180,7 +1180,7 @@ void test_sync_engine_emits_optics_but_not_local_handles() {
     auto transform = hub.create_model_transform();
     auto model_resource = hub.create_model_resource();
     auto geometry = hub.geometry_storage().allocate();
-    auto optics = hub.optics_storage().allocate();
+    auto optics = hub.create_optics();
     auto profile = hub.create_profile_component();
     auto actor = hub.create_actor_component();
 
@@ -1194,7 +1194,7 @@ void test_sync_engine_emits_optics_but_not_local_handles() {
         g->model_resource_handle = model_resource;
     }
     {
-        auto o = hub.optics_storage().acquire_write(optics);
+        auto o = Corona::find_optics(optics);
         o->geometry_handle = geometry;
     }
     {
@@ -1241,7 +1241,7 @@ void test_sync_engine_emits_optics_but_not_local_handles() {
     sync.shutdown();
     hub.destroy_actor_component(actor);
     hub.destroy_profile_component(profile);
-    hub.optics_storage().deallocate(optics);
+    hub.destroy_optics(optics);
     hub.geometry_storage().deallocate(geometry);
     hub.destroy_model_resource(model_resource);
     hub.destroy_model_transform(transform);

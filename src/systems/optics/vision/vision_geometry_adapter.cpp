@@ -211,7 +211,7 @@ void stage_actor_geometry(EntityId actor_handle,
             continue;
         }
         if (profile->optics_handle == 0) continue;
-        auto optics = hub.optics_storage().try_acquire_read(profile->optics_handle);
+        auto optics = Corona::find_optics(profile->optics_handle);
         if (!optics) {
             ++result.skipped_no_data;
             continue;

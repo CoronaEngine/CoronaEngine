@@ -1203,7 +1203,6 @@ bool collect_actor_instances_for_visibility(
     const auto& diag = optics_diag_config();
 
     auto& hub = Corona::SharedDataHub::instance();
-    auto& optics_storage = hub.optics_storage();
     auto& geom_storage = hub.geometry_storage();
 
     bool has_instances = false;
@@ -1244,7 +1243,7 @@ bool collect_actor_instances_for_visibility(
             auto profile = Corona::find_profile(profile_handle);
             if (!profile || profile->optics_handle == 0) continue;
 
-            auto optics_acc = optics_storage.try_acquire_read(profile->optics_handle);
+            auto optics_acc = Corona::find_optics(profile->optics_handle);
             if (!optics_acc) continue;
             const auto& optics = *optics_acc;
 
@@ -1657,7 +1656,6 @@ constexpr std::size_t kVisionInteractiveInstanceLimit = 1024;
 
 void fallback_large_scenes_to_native_renderer() {
     auto& hub = Corona::SharedDataHub::instance();
-    auto& optics_storage = hub.optics_storage();
     auto& geometry_storage = hub.geometry_storage();
     auto& camera_storage = hub.camera_storage();
 
@@ -1677,7 +1675,7 @@ void fallback_large_scenes_to_native_renderer() {
             for (const auto profile_handle : actor->profile_handles) {
                 const auto profile = Corona::find_profile(profile_handle);
             if (!profile || profile->optics_handle == 0) continue;
-                const auto optics = optics_storage.try_acquire_read(profile->optics_handle);
+                const auto optics = Corona::find_optics(profile->optics_handle);
                 const auto geometry = optics ? geometry_storage.try_acquire_read(optics->geometry_handle)
                                              : decltype(geometry_storage.try_acquire_read(0)){};
                 if (!optics || !optics->visible || !geometry) continue;
@@ -2983,9 +2981,8 @@ void apply_pending_optics_updates() {
         return;
     }
 
-    auto& storage = Corona::SharedDataHub::instance().optics_storage();
     for (const auto& command : commands) {
-        auto device = storage.try_acquire_write(command.optics_handle);
+        auto* device = Corona::find_optics(command.optics_handle);
         if (!device) {
             continue;
         }
@@ -3309,7 +3306,6 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         visibility.visibilityData = hardware_->visibilityImage;
         visibility.bind_depth_target(hardware_->depthImage);
 
-        auto& optics_storage = SharedDataHub::instance().optics_storage();
         auto& geom_storage = SharedDataHub::instance().geometry_storage();
         const auto& diag = optics_diag_config();
 
@@ -3393,7 +3389,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     auto profile = Corona::find_profile(profile_handle);
                     if (!profile || profile->optics_handle == 0) continue;
 
-                    auto optics_acc = optics_storage.try_acquire_read(profile->optics_handle);
+                    auto optics_acc = Corona::find_optics(profile->optics_handle);
                     if (!optics_acc) continue;
                     const auto& optics = *optics_acc;
 
@@ -3692,7 +3688,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                         profile->mechanics_handle == 0) {
                         continue;
                     }
-                    auto optics_acc = optics_storage.try_acquire_read(profile->optics_handle);
+                    auto optics_acc = Corona::find_optics(profile->optics_handle);
                     if (!optics_acc || !optics_acc->visible ||
                         !diag_geometry_allowed(optics_acc->geometry_handle)) {
                         continue;
@@ -3788,7 +3784,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                         caster.cascade_slots[cascade] = std::move(slots[cascade]);
                     }
                     auto profile=Corona::find_profile(caster.profile_handle);
-                    auto optics=SharedDataHub::instance().optics_storage().acquire_read(profile->optics_handle);
+                    auto optics=Corona::find_optics(profile->optics_handle);
                     caster.material_revision=optics->principled?optics->principled->revision:0;
                     for(const auto& cascade_slots:caster.cascade_slots)for(const auto& slot:cascade_slots) {
                         if(caster.material_ids.contains(slot.mesh_index))continue;
@@ -5099,7 +5095,6 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
     };
 
     auto& hub = SharedDataHub::instance();
-    auto& optics_storage = hub.optics_storage();
     auto& geom_storage = hub.geometry_storage();
 
     const auto mix_scene = [&](const SceneDevice& scene_dev) {
@@ -5112,7 +5107,7 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
                 auto profile = Corona::find_profile(profile_handle);
                 if (!profile || profile->optics_handle == 0) continue;
 
-                auto optics = optics_storage.try_acquire_read(profile->optics_handle);
+                auto optics = Corona::find_optics(profile->optics_handle);
                 if (!optics) continue;
 
                 // visible toggle changes topology of the Vision scene.

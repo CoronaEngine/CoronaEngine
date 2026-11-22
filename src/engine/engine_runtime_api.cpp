@@ -1121,19 +1121,19 @@ Corona::API::Optics::Optics(Geometry& geo)
         return;
     }
 
-    handle_ = SharedDataHub::instance().optics_storage().allocate();
-    if (auto accessor = SharedDataHub::instance().optics_storage().acquire_write(handle_)) {
+    handle_ = SharedDataHub::instance().create_optics();
+    if (auto accessor = Corona::find_optics(handle_)) {
         accessor->geometry_handle = geo.get_handle();
     } else {
         CFW_LOG_ERROR("[Optics::Optics] Failed to acquire write access to optics storage");
-        SharedDataHub::instance().optics_storage().deallocate(handle_);
+        SharedDataHub::instance().destroy_optics(handle_);
         handle_ = 0;
     }
 }
 
 Corona::API::Optics::~Optics() {
     if (handle_ != 0) {
-        SharedDataHub::instance().optics_storage().deallocate(handle_);
+        SharedDataHub::instance().destroy_optics(handle_);
     }
 }
 

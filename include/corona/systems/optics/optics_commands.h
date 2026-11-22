@@ -12,6 +12,7 @@
 #include <corona/systems/optics/material_source.h>
 #include <corona/kernel/command/snapshot_channel.h>
 #include <corona/shared_data_hub.h>
+#include <corona/ecs/access.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -217,12 +218,11 @@ inline OpticsSnapshotRow make_optics_row(EntityId handle, const OpticsDevice& de
 
 /// 拥有者线程：从槽位重建整份快照（Optics 的写入完成之后调用）
 inline void publish_optics_snapshot_from_storage() {
-    auto& storage = SharedDataHub::instance().optics_storage();
     OpticsSnapshot snapshot;
     snapshot.tick = OpticsCommandChannel::instance().snapshots().revision() + 1;
-    for (auto device_it = storage.cbegin(); device_it != storage.cend(); ++device_it) {
-        const auto handle = device_it.id();
-        const auto& device = *device_it;
+    for (const auto entity : Corona::Ecs::view<OpticsDevice>()) {
+        const auto handle = Corona::Ecs::to_handle(entity);
+        const auto& device = Corona::Ecs::get<OpticsDevice>(handle);
         if (handle == 0) {
             continue;
         }

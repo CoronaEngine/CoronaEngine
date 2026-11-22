@@ -70,7 +70,7 @@ void MechanicsSystem::process_mesh_moves() {
                             for(unsigned k=0;k<3;++k){local.low[k]=body->min_xyz[k];local.high[k]=body->max_xyz[k];}local.valid=true;
                         }
                         if(profile->optics_handle) {
-                            auto optics=hub.optics_storage().try_acquire_read(profile->optics_handle);
+                            auto optics=Corona::find_optics(profile->optics_handle);
                             if(!optics) return unavailable("optics",profile->optics_handle);
                             if(actor_handle!=q.actor && !optics->visible) continue;
                             if(!geometry_handle) geometry_handle=optics->geometry_handle;

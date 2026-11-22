@@ -1003,7 +1003,7 @@ void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {
             if (auto m = Corona::find_mechanics(profile->mechanics_handle))
                 if (m->geometry_handle) geom_handles.push_back(m->geometry_handle);
         if (profile->optics_handle)
-            if (auto o = hub.optics_storage().try_acquire_read(profile->optics_handle))
+            if (auto o = Corona::find_optics(profile->optics_handle))
                 if (o->geometry_handle) geom_handles.push_back(o->geometry_handle);
         if (profile->acoustics_handle)
             if (const auto* a = hub.try_acoustics(profile->acoustics_handle))
@@ -1358,7 +1358,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
         }
         // 路径 B：OpticsDevice（视觉渲染设备）→ geometry
         if (profile->optics_handle != 0) {
-            if (auto optics = hub.optics_storage().try_acquire_read(profile->optics_handle)) {
+            if (auto optics = Corona::find_optics(profile->optics_handle)) {
                 if (optics->geometry_handle != 0) {
                     geom_handles.push_back(optics->geometry_handle);
                 }
@@ -1473,7 +1473,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
         }
         // 路径 B：光学设备 → geometry
         if (profile->optics_handle != 0) {
-            if (auto optics = hub.optics_storage().try_acquire_read(profile->optics_handle)) {
+            if (auto optics = Corona::find_optics(profile->optics_handle)) {
                 if (optics->geometry_handle != 0) {
                     geom_handles.push_back(optics->geometry_handle);
                 }
@@ -2122,7 +2122,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
 
         // 从首个有效 profile 收集 optics_visible
         if (!optics_captured && profile->optics_handle) {
-            auto optics = hub.optics_storage().try_acquire_read(profile->optics_handle);
+            auto optics = Corona::find_optics(profile->optics_handle);
             if (optics) {
                 rec.optics_visible = optics->visible;
                 optics_captured = true;
@@ -2263,7 +2263,7 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
 
                 // 恢复 optics_visible
                 if (profile->optics_handle) {
-                    auto optics = hub.optics_storage().try_acquire_write(
+                    auto optics = Corona::find_optics(
                         profile->optics_handle);
                     if (optics) {
                         optics->visible = rec->optics_visible;
@@ -5362,7 +5362,7 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
         std::vector<std::uintptr_t> geom_handles;
         if (profile->geometry_handle) geom_handles.push_back(profile->geometry_handle);
         if (profile->optics_handle) {
-            if (auto o = hub.optics_storage().try_acquire_read(profile->optics_handle))
+            if (auto o = Corona::find_optics(profile->optics_handle))
                 if (o->geometry_handle) geom_handles.push_back(o->geometry_handle);
         }
         if (profile->mechanics_handle) {
