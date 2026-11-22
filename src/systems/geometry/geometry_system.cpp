@@ -71,8 +71,11 @@ void refresh_geometry_resource_bounds(EntityId geometry_handle, std::uint64_t mo
     for (auto handle : handles) {
         if (auto* value = Corona::find_mechanics(handle);
             value != nullptr && value->geometry_handle == geometry_handle) {
-            value->min_xyz = make_fvec3(bounds.min[0], bounds.min[1], bounds.min[2]);
-            value->max_xyz = make_fvec3(bounds.max[0], bounds.max[1], bounds.max[2]);
+            if (auto* mech_bounds = Corona::find_bounds(handle)) {
+                mech_bounds->min = make_fvec3(bounds.min[0], bounds.min[1], bounds.min[2]);
+                mech_bounds->max = make_fvec3(bounds.max[0], bounds.max[1], bounds.max[2]);
+                mech_bounds->valid = true;
+            }
         }
     }
 }
@@ -433,8 +436,11 @@ void GeometrySystem::update() {
                         make_fvec3(bounds[0], bounds[1], bounds[2]),
                         make_fvec3(bounds[3], bounds[4], bounds[5]), aabb);
                 } else {
-                    world_aabb_from_local_bounds(*transform_read,
-                        mechanics_dev.min_xyz, mechanics_dev.max_xyz, aabb);
+                    const auto* mech_bounds = Corona::find_bounds(mechanics_handle);
+                    if (mech_bounds != nullptr) {
+                        world_aabb_from_local_bounds(*transform_read, mech_bounds->min,
+                                                     mech_bounds->max, aabb);
+                    }
                 }
                 octree_entries.push_back({actor_handle,aabb});
                 added_actors.insert(actor_handle);

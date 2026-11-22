@@ -335,10 +335,11 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         const auto& t = snapshot->second;
         if (!geom_acc->ik_chains.empty()) contact_observers.insert(h);
 
+        const auto* mech_bounds = Corona::find_bounds(h);
         ktm::fvec3 e_local = make_fvec3(  // mechanics 局部半棱长
-            (m.max_xyz.x - m.min_xyz.x) * 0.5f,
-            (m.max_xyz.y - m.min_xyz.y) * 0.5f,
-            (m.max_xyz.z - m.min_xyz.z) * 0.5f);
+            mech_bounds ? (mech_bounds->max.x - mech_bounds->min.x) * 0.5f : 0.0f,
+            mech_bounds ? (mech_bounds->max.y - mech_bounds->min.y) * 0.5f : 0.0f,
+            mech_bounds ? (mech_bounds->max.z - mech_bounds->min.z) * 0.5f : 0.0f);
 
         // 获取 model_id 用于碰撞网格查找
         std::uint64_t entry_model_id = 0;
@@ -351,8 +352,8 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         entry.geom_handle = m.geometry_handle;             // geometry actor 句柄（蒙皮缓存键）
         entry.transform_handle = geom_acc->transform_handle;  // 之后写位置修正用同一 handle
         entry.model_id = entry_model_id;
-        entry.local_min = m.min_xyz;
-        entry.local_max = m.max_xyz;
+        entry.local_min = mech_bounds ? mech_bounds->min : ktm::fvec3{};
+        entry.local_max = mech_bounds ? mech_bounds->max : ktm::fvec3{};
 
         // 蒙皮物体（P4）：用每帧蒙皮顶点算出的动态 local AABB 覆盖静态 min/max，
         // 使碰撞包围盒跟随当前动画姿态（如挥臂时 AABB 变大）。AABB 由 GeometrySystem

@@ -231,8 +231,7 @@ inline BodyType body_type_from_string(std::string_view s) {
 
 struct MechanicsDevice {
     EntityId geometry_handle{};
-    ktm::fvec3 max_xyz;
-    ktm::fvec3 min_xyz;
+    // min/max 已迁到 Ecs::Bounds 组件。
 
     // 物体级物理参数
     float mass{1.0f};
@@ -831,6 +830,9 @@ struct ImageDevice {
 /// 便捷：按句柄取 MechanicsDevice 组件（无锁）。
 [[nodiscard]] MechanicsDevice* find_mechanics(EntityId handle);
 
+/// 便捷：按句柄取 Bounds 组件（无锁）。
+[[nodiscard]] Ecs::Bounds* find_bounds(EntityId handle);
+
 /// 便捷：按句柄取 OpticsDevice 组件（无锁）。
 [[nodiscard]] OpticsDevice* find_optics(EntityId handle);
 
@@ -928,6 +930,7 @@ class SharedDataHub {
     void destroy_mechanics(EntityId handle);
     [[nodiscard]] MechanicsDevice* try_mechanics(EntityId handle);
     [[nodiscard]] const MechanicsDevice* try_mechanics(EntityId handle) const;
+    [[nodiscard]] Ecs::Bounds* try_bounds(EntityId handle);
 
     // acoustics 已删除 Storage：组件直接挂在实体上，句柄就是实体句柄。
     EntityId create_acoustics();

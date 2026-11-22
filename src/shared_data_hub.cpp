@@ -77,7 +77,10 @@ GeometryDevice* find_geometry(EntityId handle) {
     return SharedDataHub::instance().try_geometry(handle);
 }
 
-EntityId SharedDataHub::create_mechanics() { return Ecs::emplace<MechanicsDevice>(); }
+EntityId SharedDataHub::create_mechanics() {
+    const auto entity = Ecs::World::instance().create<MechanicsDevice, Ecs::Bounds>();
+    return Ecs::to_handle(entity);
+}
 void SharedDataHub::destroy_mechanics(EntityId handle) { Ecs::destroy(handle); }
 MechanicsDevice* SharedDataHub::try_mechanics(EntityId handle) {
     return Ecs::try_get<MechanicsDevice>(handle);
@@ -87,6 +90,12 @@ const MechanicsDevice* SharedDataHub::try_mechanics(EntityId handle) const {
 }
 MechanicsDevice* find_mechanics(EntityId handle) {
     return SharedDataHub::instance().try_mechanics(handle);
+}
+Ecs::Bounds* SharedDataHub::try_bounds(EntityId handle) {
+    return Ecs::try_get<Ecs::Bounds>(handle);
+}
+Ecs::Bounds* find_bounds(EntityId handle) {
+    return SharedDataHub::instance().try_bounds(handle);
 }
 
 EntityId SharedDataHub::create_acoustics() { return Ecs::emplace<AcousticsDevice>(); }

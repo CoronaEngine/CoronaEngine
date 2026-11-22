@@ -67,7 +67,8 @@ void MechanicsSystem::process_mesh_moves() {
                             if(!body) return unavailable("mechanics",profile->mechanics_handle);
                             if(actor_handle!=q.actor && body->body_type==BodyType::Phantom) continue;
                             if(!geometry_handle) geometry_handle=body->geometry_handle;
-                            for(unsigned k=0;k<3;++k){local.low[k]=body->min_xyz[k];local.high[k]=body->max_xyz[k];}local.valid=true;
+                            const auto* body_bounds=Corona::find_bounds(profile->mechanics_handle);
+                            if(body_bounds){for(unsigned k=0;k<3;++k){local.low[k]=body_bounds->min[k];local.high[k]=body_bounds->max[k];}local.valid=true;}
                         }
                         if(profile->optics_handle) {
                             auto optics=Corona::find_optics(profile->optics_handle);

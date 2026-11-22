@@ -1327,8 +1327,11 @@ Corona::API::Mechanics::Mechanics(Geometry& geo)
     handle_ = SharedDataHub::instance().create_mechanics();
     if (auto accessor = Corona::find_mechanics(handle_)) {
         accessor->geometry_handle = geo.get_handle();
-        accessor->max_xyz = max_xyz;
-        accessor->min_xyz = min_xyz;
+        if (auto* bounds = SharedDataHub::instance().try_bounds(handle_)) {
+            bounds->min = min_xyz;
+            bounds->max = max_xyz;
+            bounds->valid = true;
+        }
     } else {
         CFW_LOG_ERROR("[Mechanics::Mechanics] Failed to acquire write access to mechanics storage");
         SharedDataHub::instance().destroy_mechanics(handle_);

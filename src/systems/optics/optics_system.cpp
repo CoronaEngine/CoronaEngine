@@ -3455,10 +3455,10 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     float bounding_radius = 1.0f;
                     bool  have_bounds     = false;
                     if (geometry_system_) {
-                        if (auto mech = Corona::find_mechanics(profile->mechanics_handle)) {
-                            float dx = mech->max_xyz.x - mech->min_xyz.x;
-                            float dy = mech->max_xyz.y - mech->min_xyz.y;
-                            float dz = mech->max_xyz.z - mech->min_xyz.z;
+                        if (const auto* mech = Corona::find_bounds(profile->mechanics_handle)) {
+                            float dx = mech->max.x - mech->min.x;
+                            float dy = mech->max.y - mech->min.y;
+                            float dz = mech->max.z - mech->min.z;
                             bounding_radius = std::sqrt(dx*dx + dy*dy + dz*dz) * 0.5f;
                             have_bounds = true;
                         }
@@ -3741,8 +3741,11 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                         1.0e-6f}) * std::max(
                             std::abs(geom->native_local_correction_scale), 1.0e-6f);
 
-                    for (const auto& corner :
-                         bounds_corners(mech->min_xyz, mech->max_xyz)) {
+                    const auto* mech_bounds = Corona::find_bounds(profile->mechanics_handle);
+                    const auto corners = mech_bounds != nullptr
+                                             ? bounds_corners(mech_bounds->min, mech_bounds->max)
+                                             : bounds_corners(ktm::fvec3{}, ktm::fvec3{});
+                    for (const auto& corner : corners) {
                         const auto point = transform_point(snapshot.model_matrix, corner);
                         if (!snapshot.bounds.valid) {
                             snapshot.bounds.world_bounds.min = point;
