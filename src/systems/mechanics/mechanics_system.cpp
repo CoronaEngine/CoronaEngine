@@ -237,7 +237,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         needs_solver |= !geometry->ik_chains.empty();
         const auto transform_handle = geometry->transform_handle;
         if (!step_transforms.contains(transform_handle)) {
-            auto transform = Corona::find_model_transform(transform_handle);
+            auto transform = Corona::find_transform(transform_handle);
             if (!transform) continue;
             step_transforms.emplace(transform_handle, *transform);
         }
@@ -1043,7 +1043,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             if (!final_pose_inputs[j].advance) continue;
             // Use the blocking write lock, as before: contention must not skip
             // a physical step. An invalidated transform still skips its body.
-            auto tx_w = Corona::find_model_transform(data.transform_handle);
+            auto tx_w = Corona::find_transform(data.transform_handle);
             if (!tx_w) continue;
             auto& expected = step_transforms.at(data.transform_handle);
             if (!same_transform(*tx_w, expected)) {
@@ -1175,7 +1175,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                     ktm::fvec3 cur_pos = make_fvec3(0.f, 0.f, 0.f);
                     bool has_pos = false;
                     if (auto geom = Corona::find_geometry(mech_acc->geometry_handle)) {
-                        if (auto tx_r = Corona::find_model_transform(geom->transform_handle)) {
+                        if (auto tx_r = Corona::find_transform(geom->transform_handle)) {
                             cur_pos = tx_r->position;
                             has_pos = true;
                         }
@@ -1625,7 +1625,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         ktm::fmat4x4 world_to_model{};
         bool have_transform = false;
         {
-            auto tx = Corona::find_model_transform(ik_transform_handle);
+            auto tx = Corona::find_transform(ik_transform_handle);
             if (tx && std::abs(tx->scale.x) > 1e-8f && std::abs(tx->scale.y) > 1e-8f && std::abs(tx->scale.z) > 1e-8f) {
                 world_to_model = ktm::inverse(tx->compute_matrix());
                 have_transform = true;
@@ -1847,7 +1847,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         if (prepared_mesh || !impl_->gpu_collision.ready()) continue;
         ModelTransform transform;
         {
-            auto current = Corona::find_model_transform(transform_handle);
+            auto current = Corona::find_transform(transform_handle);
             if (!current) continue;
             transform = *current;
         }

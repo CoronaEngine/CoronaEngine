@@ -304,7 +304,7 @@ void AcousticsSystem::update_spatial() {
             if (geo == nullptr || geo->transform_handle == 0) {
                 continue;
             }
-            auto xf = Corona::find_model_transform(geo->transform_handle);
+            auto xf = Corona::find_transform(geo->transform_handle);
             if (xf != nullptr) {
                 ma_sound_set_position(&ap.sound, xf->position.x, xf->position.y, xf->position.z);
             }

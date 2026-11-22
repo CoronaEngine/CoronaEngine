@@ -1295,7 +1295,7 @@ struct VisionEngineSceneTest {
         auto id = Resource::ResourceManager::get_instance().import_sync(base / "receiver.obj", options);
         expect(id != 0, "Corona must import the mesh fixture");
         const auto model = hub.create_model_resource();
-        const auto transform = hub.create_model_transform();
+        const auto transform = hub.create_transform();
         const auto geometry = hub.create_geometry();
         const auto optics = hub.create_optics();
         const auto profile = hub.create_profile_component();
@@ -1368,7 +1368,7 @@ struct VisionEngineSceneTest {
                 check_independent_accumulation(system, *pt, "pt");
                 // Rebuild from the edited Corona resources: no proxy actor or
                 // external scene cache is involved in either mode.
-                { auto w = Corona::find_model_transform(transform); w->position.x = 0.2f; }
+                { auto w = Corona::find_transform(transform); w->position.x = 0.2f; }
                 system.apply_vision_render_mode(CameraVisionRenderMode::ProgressivePathTracing);
                 auto progressive = vision::Global::instance().pipeline_shared();
                 Vision::sync_vision_camera(*progressive, camera);
@@ -1394,7 +1394,7 @@ struct VisionEngineSceneTest {
         hub.destroy_profile_component(profile);
         hub.destroy_optics(optics);
         hub.destroy_geometry(geometry);
-        hub.destroy_model_transform(transform);
+        hub.destroy_transform(transform);
         hub.destroy_model_resource(model);
         if (!shared_display_only && !imported_emission_only) {
             // Exercise the embedded base fallback after removing the fixture's

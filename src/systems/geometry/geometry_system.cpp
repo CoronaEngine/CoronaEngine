@@ -412,7 +412,7 @@ void GeometrySystem::update() {
                     pinned_not_ready.insert(actor_handle);
                 }
 
-                auto transform_read = Corona::find_model_transform(geometry_read->transform_handle);
+                auto transform_read = Corona::find_transform(geometry_read->transform_handle);
                 if (transform_read == nullptr) continue;
 
                 const MechanicsDevice& mechanics_dev = *mechanics_read;
@@ -2107,7 +2107,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
                     if (!transform_captured) {
                         auto geom = Corona::find_geometry(mech->geometry_handle);
                         if (geom && geom->transform_handle) {
-                            auto xform = Corona::find_model_transform(geom->transform_handle);
+                            auto xform = Corona::find_transform(geom->transform_handle);
                             if (xform) {
                                 rec.transform = *xform;
                                 transform_captured = true;
@@ -2242,7 +2242,7 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
                     auto geom = Corona::find_geometry(
                         profile->geometry_handle);
                     if (geom && geom->transform_handle) {
-                        auto xform = Corona::find_model_transform(
+                        auto xform = Corona::find_transform(
                             geom->transform_handle);
                         if (xform) {
                             *xform = rec->transform;
@@ -2924,7 +2924,7 @@ void GeometrySystem::process_pending_geometry_imports() {
 
         ktm::fvec3 world_pos = make_fvec3(0.0f, 0.0f, 0.0f);
         if (geom_dev.transform_handle != 0) {
-            if (auto tr = Corona::find_model_transform(geom_dev.transform_handle)) {
+            if (auto tr = Corona::find_transform(geom_dev.transform_handle)) {
                 world_pos = tr->position;
             }
         }
@@ -3120,7 +3120,7 @@ void GeometrySystem::process_pending_geometry_builds() {
         // 读取世界位置（transform 缺失时退化为原点，仍可构建、只是排序权重为 0）
         ktm::fvec3 world_pos = make_fvec3(0.0f, 0.0f, 0.0f);
         if (geom_dev.transform_handle != 0) {
-            if (auto tr = Corona::find_model_transform(geom_dev.transform_handle)) {
+            if (auto tr = Corona::find_transform(geom_dev.transform_handle)) {
                 world_pos = tr->position;
             }
         }
@@ -3778,7 +3778,7 @@ void GeometrySystem::reconcile_lod_residency() {
         bool have_transform = false;
         float scale_factor = 1.0f;
         if (transform_handle) {
-            if (auto tr = Corona::find_model_transform(transform_handle)) {
+            if (auto tr = Corona::find_transform(transform_handle)) {
                 transform = *tr;
                 have_transform = true;
                 scale_factor = std::max({std::abs(tr->scale.x),

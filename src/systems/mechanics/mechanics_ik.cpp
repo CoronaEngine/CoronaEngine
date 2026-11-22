@@ -64,7 +64,7 @@ void MechanicsSystem::refresh_foot_ground_cache() {
                 { auto resource = Corona::find_model_resource(resource_handle); if (resource) model_id = resource->model_id; }
                 if (!model_id) continue;
                 ModelTransform transform;
-                { auto tx = Corona::find_model_transform(transform_handle); if (!tx || !invertible_transform(*tx)) continue; transform = *tx; }
+                { auto tx = Corona::find_transform(transform_handle); if (!tx || !invertible_transform(*tx)) continue; transform = *tx; }
                 auto& ground = impl_->foot_ground_cache[gh];
                 if (ground.model_id != model_id || ground.mesh.triangles.empty()) {
                     ground = {};
@@ -137,7 +137,7 @@ void MechanicsSystem::update_foot_targets(std::span<const FootPose> poses, float
         { auto geometry = Corona::find_geometry(pose.geometry); if (geometry) transform_handle = geometry->transform_handle; }
         ktm::fmat4x4 model_to_world{}, world_to_model{};
         bool have_transform = false;
-        { auto transform = Corona::find_model_transform(transform_handle);
+        { auto transform = Corona::find_transform(transform_handle);
           if (transform && invertible_transform(*transform)) {
               model_to_world = transform->compute_matrix();
               world_to_model = ktm::inverse(model_to_world);

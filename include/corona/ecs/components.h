@@ -63,28 +63,32 @@ struct Children {
 // 变换与空间
 // ============================================================================
 
-/// 可编辑 TRS + 导入带来的线性基。
+/// 可编辑 TRS + 导入带来的线性基（原 `ModelTransform`，现在是 ECS 组件本体）。
 ///
-/// 与 `ModelTransform` 字段一一对应，迁移时可直接搬运；`compute_matrix()` 的结果
-/// 每 tick 由几何/物理系统写入 `WorldMatrix`，消费者只读 WorldMatrix。
+/// `compute_matrix()` 每 tick 的产物写入 `WorldMatrix`，消费者只读 WorldMatrix
+/// 或按需调用；实现放在 shared_data_hub.cpp（避免 ktm 与 vision 头栈的
+/// 重载歧义）。
 struct Transform {
+    // Authored linear transform, composed after editable TRS. Translation lives
+    // in position so streaming/picking retain the correct actor origin.
+    ktm::fmat4x4 affine_basis{ktm::fmat4x4::from_eye()};
     ktm::fvec3 position;
-    ktm::fvec3 rotation;
+    ktm::fvec3 euler_rotation;
     ktm::fvec3 scale;
-    ktm::fmat4x4 affine_basis;
 
     Transform() {
         position.x = 0.0f;
         position.y = 0.0f;
         position.z = 0.0f;
-        rotation.x = 0.0f;
-        rotation.y = 0.0f;
-        rotation.z = 0.0f;
+        euler_rotation.x = 0.0f;
+        euler_rotation.y = 0.0f;
+        euler_rotation.z = 0.0f;
         scale.x = 1.0f;
         scale.y = 1.0f;
         scale.z = 1.0f;
-        affine_basis = ktm::fmat4x4::from_eye();
     }
+
+    [[nodiscard]] ktm::fmat4x4 compute_matrix() const;
 };
 
 /// 每 tick 计算出的世界矩阵：只写一次、被多个消费者读。

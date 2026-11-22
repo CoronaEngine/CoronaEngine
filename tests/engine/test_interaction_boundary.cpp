@@ -178,10 +178,10 @@ void test_camera_move_coalescing() {
 
 void test_transform_command_and_snapshot() {
     auto& hub = SharedDataHub::instance();
-    const auto handle = hub.create_model_transform();
+    const auto handle = hub.create_transform();
     CHECK(handle != 0);
     {
-        auto transform = Corona::find_model_transform(handle);
+        auto transform = Corona::find_transform(handle);
         transform->position = vec3(5.0f, 5.0f, 5.0f);
     }
 
@@ -210,7 +210,7 @@ void test_transform_command_and_snapshot() {
     CHECK(hub.transform_view(handle)->position.x == 5.0f);
     CHECK(hub.drain_transform_updates().empty());
 
-    hub.destroy_model_transform(handle);
+    hub.destroy_transform(handle);
 }
 
 void test_mechanics_command_and_snapshot() {

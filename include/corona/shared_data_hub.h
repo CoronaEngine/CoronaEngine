@@ -1,5 +1,6 @@
 #pragma once
 #include <corona/ecs/access.h>
+#include <corona/ecs/components.h>
 #include <nlohmann/json.hpp>
 #include <corona/camera_command_authority.h>
 #include <corona/kernel/entity_id.h>
@@ -115,34 +116,8 @@ struct MeshInstanceDevice {
     ModelNodes::Matrix node_delta_prefix{ModelNodes::identity()};
 };
 
-struct ModelTransform {
-    // Authored linear transform, composed after editable TRS. Translation lives
-    // in position so streaming/picking retain the correct actor origin.
-    ktm::fmat4x4 affine_basis{ktm::fmat4x4::from_eye()};
-    ktm::fvec3 position;
-    ktm::fvec3 euler_rotation;
-    ktm::fvec3 scale;
-
-    ModelTransform() {
-        position.x = 0.0f;
-        position.y = 0.0f;
-        position.z = 0.0f;
-
-        euler_rotation.x = 0.0f;
-        euler_rotation.y = 0.0f;
-        euler_rotation.z = 0.0f;
-
-        scale.x = 1.0f;
-        scale.y = 1.0f;
-        scale.z = 1.0f;
-    }
-
-    // Definition lives in shared_data_hub.cpp to avoid instantiating
-    // ktm::affine3d::rotate in translation units that also pull in
-    // ocarina/vision headers (which define a global operator* on iterable
-    // types and would cause ambiguous-overload errors against ktm).
-    [[nodiscard]] ktm::fmat4x4 compute_matrix() const;
-};
+/// 变换组件已并入 ECS（`Corona::Ecs::Transform`），保留旧名以免调用点全量翻新。
+using ModelTransform = Ecs::Transform;
 
 struct ModelResource {
     std::uint64_t model_id;
@@ -851,7 +826,7 @@ struct ImageDevice {
 [[nodiscard]] ActorDevice* find_actor(EntityId handle);
 
 /// 便捷：按句柄取 ModelTransform 组件（无锁）。
-[[nodiscard]] ModelTransform* find_model_transform(EntityId handle);
+[[nodiscard]] ModelTransform* find_transform(EntityId handle);
 
 /// 便捷：按句柄取 MechanicsDevice 组件（无锁）。
 [[nodiscard]] MechanicsDevice* find_mechanics(EntityId handle);
@@ -933,11 +908,11 @@ class SharedDataHub {
     [[nodiscard]] ModelResource* try_model_resource(EntityId handle);
     [[nodiscard]] const ModelResource* try_model_resource(EntityId handle) const;
 
-    // model_transform 已删除 Storage：组件直接挂在实体上。
-    EntityId create_model_transform();
-    void destroy_model_transform(EntityId handle);
-    [[nodiscard]] ModelTransform* try_model_transform(EntityId handle);
-    [[nodiscard]] const ModelTransform* try_model_transform(EntityId handle) const;
+    // transform：`Corona::Ecs::Transform` 组件本体（旧 ModelTransform）。
+    EntityId create_transform();
+    void destroy_transform(EntityId handle);
+    [[nodiscard]] ModelTransform* try_transform(EntityId handle);
+    [[nodiscard]] const ModelTransform* try_transform(EntityId handle) const;
 
     // geometry 已删除 Storage：组件直接挂在实体上。
     EntityId create_geometry();

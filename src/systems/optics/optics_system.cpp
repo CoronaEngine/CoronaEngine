@@ -733,7 +733,7 @@ void apply_pending_transform_updates() {
     }
 
     for (const auto& update : updates) {
-        if (auto transform = Corona::find_model_transform(update.transform_handle)) {
+        if (auto transform = Corona::find_transform(update.transform_handle)) {
             if (Corona::has_transform_field(update.fields, Corona::TransformField::Position)) {
                 transform->position = update.position;
             }
@@ -1265,7 +1265,7 @@ bool collect_actor_instances_for_visibility(
             }
 
             ktm::fmat4x4 model_matrix{ktm::fmat4x4::from_eye()};
-            if (auto transform = Corona::find_model_transform(transform_handle_a)) {
+            if (auto transform = Corona::find_transform(transform_handle_a)) {
                 model_matrix = transform->compute_matrix();
                 // ����ȡ�� nlc �������� apply_native_local_correction �߼�
                 if (std::abs(nlc_scale_a - 1.0f) > 1e-6f ||
@@ -3410,7 +3410,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
 
                     ktm::fmat4x4 model_matrix{ktm::fmat4x4::from_eye()};
                     ktm::fvec3   world_center{0.0f, 0.0f, 0.0f};
-                    if (auto transform = Corona::find_model_transform(transform_handle_b)) {
+                    if (auto transform = Corona::find_transform(transform_handle_b)) {
                         model_matrix = transform->compute_matrix();
                         world_center = transform->position;
                         if (std::abs(nlc_scale_b - 1.0f) > 1e-6f ||
@@ -3697,7 +3697,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     auto geom = Corona::find_geometry(optics_acc->geometry_handle);
                     if (!geom || geom->transform_handle == 0) continue;
                     auto transform =
-                        Corona::find_model_transform(geom->transform_handle);
+                        Corona::find_transform(geom->transform_handle);
                     const auto* mech = Corona::find_mechanics(profile->mechanics_handle);
                     if (!transform || !mech) continue;
 
@@ -5166,7 +5166,7 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
 
                 // Hash the actual affine transform, including authored shear and
                 // reflection. TRS alone misses matrix-only external-scene edits.
-                if (auto transform = Corona::find_model_transform(geom->transform_handle)) {
+                if (auto transform = Corona::find_transform(geom->transform_handle)) {
                     const auto matrix = transform->compute_matrix();
                     for (int column = 0; column < 4; ++column)
                         for (int row = 0; row < 4; ++row) mix_float(matrix[column][row]);

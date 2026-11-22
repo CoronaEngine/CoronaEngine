@@ -245,7 +245,7 @@ void stage_actor_geometry(EntityId actor_handle,
         prepared.optics = *optics;
         auto object_to_world = ::vision::make_float4x4(1.f);
         if (geometry->transform_handle != 0) {
-            auto transform = Corona::find_model_transform(geometry->transform_handle);
+            auto transform = Corona::find_transform(geometry->transform_handle);
             if (!transform) {
                 ++result.skipped_no_data;
                 continue;

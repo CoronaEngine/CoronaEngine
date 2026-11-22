@@ -21,7 +21,7 @@ ktm::fmat4x4 TransformSnapshotRow::compute_matrix() const {
     return result * affine_basis;
 }
 
-ktm::fmat4x4 ModelTransform::compute_matrix() const {
+ktm::fmat4x4 Ecs::Transform::compute_matrix() const {
     ktm::fquat qx = ktm::fquat::from_angle_x(euler_rotation.x);
     ktm::fquat qy = ktm::fquat::from_angle_y(euler_rotation.y);
     ktm::fquat qz = ktm::fquat::from_angle_z(euler_rotation.z);
@@ -53,16 +53,16 @@ ModelResource* find_model_resource(EntityId handle) {
     return SharedDataHub::instance().try_model_resource(handle);
 }
 
-EntityId SharedDataHub::create_model_transform() { return Ecs::emplace<ModelTransform>(); }
-void SharedDataHub::destroy_model_transform(EntityId handle) { Ecs::destroy(handle); }
-ModelTransform* SharedDataHub::try_model_transform(EntityId handle) {
+EntityId SharedDataHub::create_transform() { return Ecs::emplace<ModelTransform>(); }
+void SharedDataHub::destroy_transform(EntityId handle) { Ecs::destroy(handle); }
+ModelTransform* SharedDataHub::try_transform(EntityId handle) {
     return Ecs::try_get<ModelTransform>(handle);
 }
-const ModelTransform* SharedDataHub::try_model_transform(EntityId handle) const {
+const ModelTransform* SharedDataHub::try_transform(EntityId handle) const {
     return Ecs::try_get_const<ModelTransform>(handle);
 }
-ModelTransform* find_model_transform(EntityId handle) {
-    return SharedDataHub::instance().try_model_transform(handle);
+ModelTransform* find_transform(EntityId handle) {
+    return SharedDataHub::instance().try_transform(handle);
 }
 
 EntityId SharedDataHub::create_geometry() { return Ecs::emplace<GeometryDevice>(); }
