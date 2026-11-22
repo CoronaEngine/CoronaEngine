@@ -1,6 +1,6 @@
 #include "rtxpt_gi_pt.h"
 #include "rtxpt_gi_prefix.h"
-#include "indirect.h"
+#include "rtxpt_gi.h"
 #include "base/integral/integrator.h"
 #include "base/scattering/gi_ideal_glass.h"
 
@@ -26,7 +26,7 @@ void queue_pt_plane(const PrefixStorage &storage, const Uint &plane, const RayVa
 
 }
 
-void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env, const Uint &primary_flag) noexcept {
+void build_pt_prefix(const PrefixStorage &storage, RtxptGI &env, const Uint &primary_flag) noexcept {
     using namespace prefix_detail;
     const auto &geometry = Toolkit::geometry();
     const auto &swl = env.sampled_wavelengths();

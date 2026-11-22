@@ -29,6 +29,7 @@
 #endif
 
 void check_restir_reservoir_lifetimes(vision::Pipeline& pipeline);
+void check_populated_gi_restore(vision::Pipeline& pipeline);
 void check_stable_plane_storage_restore(vision::Pipeline& pipeline);
 void check_restir_gi_depth_one_continuation(vision::Pipeline& pipeline);
 void check_principled_stable_planes(vision::Pipeline& pipeline);
@@ -490,6 +491,7 @@ int main(int argc, char **argv) {
         expect(bounced.samples == 8u * 8u * 8u, "two-plane GI must complete eight frames of 8x8 receiver samples");
         // The known-good renderer produced a mean of 0.205 on this fixture.
         expect(bounced.mean() > 0.05, "RTXPT GI must return indirect energy from the second surface");
+        check_populated_gi_restore(*bounce_pipeline);
 
         fs::remove(fixture / "receiver.obj");
         fs::remove(fixture / "bounce.obj");

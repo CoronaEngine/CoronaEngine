@@ -64,7 +64,7 @@ int main(){try{
 
 
 def test_actual_per_plane_signal_events_keep_prefix_and_remove_fresh_once():
-    source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/indirect.cpp').read_text(encoding='utf-8-sig')
+    source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/rtxpt_gi.cpp').read_text(encoding='utf-8-sig')
     helpers = []
     for signature in ('void gi_signal_switch_plane(', 'void gi_signal_commit(', 'void gi_signal_commit_visit('):
         assert signature in source, f'GI per-plane production helper missing: {signature}'

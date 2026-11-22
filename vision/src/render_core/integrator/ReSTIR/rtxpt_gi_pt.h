@@ -171,5 +171,5 @@ struct PTSurfaceView {
     return s;
 }
 
-void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env, const Uint &primary_flag) noexcept;
+void build_pt_prefix(const PrefixStorage &storage, RtxptGI &env, const Uint &primary_flag) noexcept;
 }

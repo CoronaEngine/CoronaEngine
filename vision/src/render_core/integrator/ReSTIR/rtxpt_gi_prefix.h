@@ -17,7 +17,7 @@
 #include "rtxpt_gi_rays.h"
 #include "rtxpt_gi_payload.h"
 #include "render_core/integrator/ReSTIR/rtxpt_gi_lights.h"
-#include "render_core/integrator/ReSTIR/indirect.h"
+#include "render_core/integrator/ReSTIR/rtxpt_gi.h"
 #include "base/integral/integrator.h"
 
 #include "rtxpt_gi_prefix_storage.h"
@@ -133,7 +133,7 @@ inline void queue_node(const PrefixStorage &storage, const Uint &plane, const Ra
 // Matched default benchmark: three planes, stable-depth5, primary replacement
 // enabled. This performs deterministic native delta enumeration, not a sampled
 // delta chain. Its separate producer cost must be included in candidate+GI.
-inline void build_standard_prefix(const PrefixStorage &storage, ReSTIRGI &env) noexcept {
+inline void build_standard_prefix(const PrefixStorage &storage, RtxptGI &env) noexcept {
     using namespace prefix_detail;
     const auto &materials = env.rtxpt_materials();
     const auto &lights = env.rtxpt_lights();
@@ -354,6 +354,6 @@ struct PrefixTraceResult {
     Uint dominant_plane{0u}, vertex_depth{0u};
 };
 
-[[nodiscard]] PrefixTraceResult trace_standard_prefix_candidate(const PrefixStorage &storage, ReSTIRGI &env,
+[[nodiscard]] PrefixTraceResult trace_standard_prefix_candidate(const PrefixStorage &storage, RtxptGI &env,
                                                                  path_cost::PathWorkCountersVar *work_counters = nullptr) noexcept;
 }// namespace vision::rtxpt_gi

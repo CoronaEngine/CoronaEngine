@@ -3,7 +3,7 @@
 #include "common.h"
 
 namespace vision {
-class ReSTIRGI;
+class RtxptGI;
 }
 
 namespace vision::rtxpt_gi {
@@ -28,7 +28,7 @@ struct NativeEmission {
 class NativeLightSampler final : private Toolkit {
     static constexpr uint environment_resolution = 1024u;
     static constexpr uint environment_light_count = 4096u;
-    ReSTIRGI *owner_{};
+    RtxptGI *owner_{};
     uint2 extent_{};
     uint light_count_{}, triangle_count_{};
     bool has_environment_{}, prepared_{}, initialized_{}, feedback_enabled_{};
@@ -58,8 +58,8 @@ class NativeLightSampler final : private Toolkit {
     [[nodiscard]] Float3 environment_radiance(const Float3 &world_dir, const Float &mip) const noexcept;
 
 public:
-    explicit NativeLightSampler(ReSTIRGI &owner) noexcept : owner_(&owner) {}
-    void rebind_owner(ReSTIRGI &owner) noexcept { owner_ = &owner; }
+    explicit NativeLightSampler(RtxptGI &owner) noexcept : owner_(&owner) {}
+    void rebind_owner(RtxptGI &owner) noexcept { owner_ = &owner; }
     void prepare();
     void compile();
     void update_resolution(uint2 resolution) noexcept;

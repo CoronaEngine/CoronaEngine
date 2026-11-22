@@ -1,6 +1,6 @@
 #include "rtxpt_gi_lights.h"
 #include "rtxpt_gi_lighting_dsl.h"
-#include "indirect.h"
+#include "rtxpt_gi.h"
 #include "dsl/data/shared_array.h"
 #include <bit>
 #include <cmath>

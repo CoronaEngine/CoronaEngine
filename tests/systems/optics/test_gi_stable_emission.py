@@ -214,7 +214,7 @@ int main(){try{
 
 
 def test_actual_gi_emission_callback_counts_represented_energy_once_and_preserves_suffix():
-    source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/indirect.cpp').read_text(encoding='utf-8-sig')
+    source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/rtxpt_gi.cpp').read_text(encoding='utf-8-sig')
     declaration, implementation = body(source, 'capture.on_emission =')
     callback = declaration + implementation + ';'
     helpers = []

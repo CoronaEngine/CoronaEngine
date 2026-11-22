@@ -309,7 +309,7 @@ def _binary():
     header = HEADER.read_text(encoding='utf-8-sig')
     program = SHIM.replace('__PRODUCTION_HELPERS__', helpers)
     program = program.replace('__SIMILAR__', body(source, 'Bool RtxptGI::similar(')[1])
-    dispatch = body(source, 'CommandBatch RtxptGI::dispatch(')[1]
+    dispatch = body(source, 'CommandBatch RtxptGI::dispatch_reuse(')[1]
     program = program.replace('__DISPATCH_HISTORY__', dispatch[1:dispatch.index('uint2 padded')])
     program = program.replace('__RESET_HISTORY__', body(source, 'void RtxptGI::reset_history(')[1])
     program = program.replace('__STORAGE__', _struct(header, 'RtxptGIStorage'))

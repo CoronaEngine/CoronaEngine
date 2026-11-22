@@ -105,17 +105,17 @@ struct Surface{
     }
 };
 struct Params{uint rtxpt_final_visibility{},rtxpt_final_mis{1};};
-struct Owner{
+struct Result{Float3 diffuse,specular;float distance;};
+struct FinalShading{
     SampledWavelengths sampled_wavelengths()const{return{};}
     int rtxpt_materials()const{return 0;}
-};
-struct Result{Float3 diffuse,specular;float distance;};
-Result combine_production(Surface surface,Reservoir selected,Reservoir fresh,Params param={}){
-    Owner owner;Owner*owner_=&owner;Interaction it;float hit_distance=0;
+    Result combine_production(Surface surface,Reservoir selected,Reservoir fresh,Params param={})const{
+        Interaction it;float hit_distance=0;
 __FINAL_COMBINATION__
-    hit_distance=hit_distance*selected_weight+initial_distance*initial_weight;
-    return{diffuse_result,specular_result,hit_distance};
-}
+        hit_distance=hit_distance*selected_weight+initial_distance*initial_weight;
+        return{diffuse_result,specular_result,hit_distance};
+    }
+};
 Reservoir reservoir(Float3 position,float radiance,float weight){
     Reservoir r;r.sample.sp.p=position;r.sample.Lo.v=make_float3(radiance);r.weight=weight;return r;
 }
@@ -135,7 +135,7 @@ void final_test(const std::string&which){
     }else if(which=="sharp"){
         surface.selected_rough=surface.fresh_rough=make_float3(0);
     }else if(which=="off")param.rtxpt_final_mis=0;
-    auto r=combine_production(surface,selected,fresh,param);
+    auto r=FinalShading{}.combine_production(surface,selected,fresh,param);
     if(which=="lambert"){
         near(r.diffuse.x,1.31875,"equal true/rough final diffuse must use 7/8 reused plus 1/8 fresh");
         near(r.specular.x,.80625,"equal true/rough final specular split");

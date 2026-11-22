@@ -4,7 +4,7 @@
 #include "base/scattering/interaction.h"
 
 namespace vision {
-class ReSTIRGI;
+class RtxptGI;
 }
 
 namespace vision::rtxpt_gi {

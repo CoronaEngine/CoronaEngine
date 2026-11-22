@@ -11,7 +11,7 @@
 #include "ReSTIR/di_settings.h"
 #include "ReSTIR/di_radiance.h"
 #include "ReSTIR/gi_receiver.h"
-#include "ReSTIR/indirect.h"
+#include "ReSTIR/rtxpt_gi.h"
 #include "ReSTIR/rtxpt_gi_lights.h"
 #include "ReSTIR/rtxpt_gi_denoiser_diagnostic.h"
 #include "ReSTIR/rtxpt_gi_denoiser_prepare.h"
@@ -108,7 +108,7 @@ private:
 
     SP<DISettings> di_settings_;
     SP<DIRadiance> di_radiance_;
-    SP<ReSTIRGI> indirect_;
+    SP<RtxptGI> indirect_;
     DataWrap scene_restir_settings_;
     Shader<void(uint, float, float, uint)> combine_;
     Shader<void(float, float)> prepare_denoiser_;
@@ -206,7 +206,7 @@ public:
         const Desc &desc = static_cast<const Desc &>(node_desc);
         di_settings_ = make_shared<DISettings>(shared_from_this(), desc["direct"]);
         di_radiance_ = make_shared<DIRadiance>();
-        indirect_ = make_shared<ReSTIRGI>(shared_from_this(), desc["indirect"]);
+        indirect_ = make_shared<RtxptGI>(shared_from_this(), desc["indirect"]);
         // The RTXPT candidate path uses inline full BSDF evaluation.
         separate_ = false;
         OC_INFO("RTXPT GI candidate material layout: inline full BSDF (separate=false)");
@@ -216,6 +216,11 @@ public:
     VS_MAKE_GUI_STATUS_FUNC(IlluminationIntegrator, di_settings_, indirect_)
 
     void restore(vision::RuntimeObject *old_obj) noexcept override {
+        const auto *previous = hotfix::hotfix_detail::restore_source(*this, old_obj);
+        if (!previous) return;
+        const RuntimeObject *previous_gi = previous->indirect_.get();
+        OC_ERROR_IF(previous_gi && string_view{previous_gi->class_name()} != hotfix::type_string<RtxptGI>(),
+                    "GI runtime object layout changed; restart the engine before reloading the integrator.");
         IlluminationIntegrator::restore(old_obj);
         VS_HOTFIX_MOVE_ATTRS(di_settings_, di_radiance_, indirect_, scene_restir_settings_,
                              combine_, prepare_denoiser_, stage_falcor_di_lobes_, compose_denoiser_, denoiser_factors_, denoiser_,

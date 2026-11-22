@@ -2,11 +2,13 @@
 // including GPU allocation sizes, readback, resize and restore.
 #define VISION_PLUGIN_NAME "ReSTIR"
 #define VISION_CATEGORY "integrator"
-#include "render_core/integrator/ReSTIR/indirect.h"
+#include "render_core/integrator/ReSTIR/rtxpt_gi.h"
 #include "render_core/integrator/ReSTIR/di_radiance.h"
+#include "hotfix/hotfix.h"
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -232,7 +234,7 @@ void check_radiance_storage(vision::Pipeline& pipeline, const char *kind) {
     const auto original_resolution = pipeline.resolution();
     const uint first_slot = pipeline.bindless_array().buffer_num();
     auto di = std::make_unique<Restir>();
-    if constexpr (std::is_same_v<Restir, ReSTIRGI>) {
+    if constexpr (std::is_same_v<Restir, RtxptGI>) {
         auto unprepared = std::make_unique<Restir>();
         if (std::getenv("CORONA_TEST_GI_RADIANCE_OLD_ABI"))
             unprepared->radiance()->set_name("ReSTIRGI::radiance_ legacy");
@@ -295,7 +297,7 @@ void check_radiance_storage(vision::Pipeline& pipeline, const char *kind) {
         }
     };
     exercise(true); exercise(false); exercise(true);
-    if constexpr (std::is_same_v<Restir, ReSTIRGI>) {
+    if constexpr (std::is_same_v<Restir, RtxptGI>) {
         auto restored = std::make_unique<Restir>();
         restored->restore(di.get());
         di = std::move(restored);
@@ -329,5 +331,45 @@ void check_restir_reservoir_lifetimes(vision::Pipeline& pipeline) {
     vision::Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
     half_motion_storage_checks::run(pipeline);
     check_radiance_storage<vision::DIRadiance>(pipeline, "DI");
-    check_radiance_storage<vision::ReSTIRGI>(pipeline, "GI");
+    check_radiance_storage<vision::RtxptGI>(pipeline, "GI");
+}
+
+void check_populated_gi_restore(vision::Pipeline& pipeline) {
+    using namespace vision;
+    pipeline.activate_global_context();
+    Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
+    pipeline.stream() << synchronize() << commit();
+
+    struct Constructor final : ObjectConstructor<RtxptGI> {
+        mutable std::weak_ptr<RtxptGI> replacement;
+        SP<RuntimeObject> construct_shared_impl() const override {
+            auto gi = std::static_pointer_cast<RtxptGI>(ObjectConstructor<RtxptGI>::construct_shared_impl());
+            replacement = gi;
+            return gi;
+        }
+    } constructor;
+    auto *observer = dynamic_cast<Observer*>(pipeline.renderer().integrator().get());
+    require(observer != nullptr, "ReSTIR integrator must observe GI hotfixes");
+    observer->update_runtime_object(&constructor);
+    const auto gi = constructor.replacement.lock();
+    require(bool(gi), "ReSTIR integrator must retain the replacement GI object");
+    const auto previous = gi->download_radiance();
+    pipeline.upload_data();
+    pipeline.display(1.0 / 60.0);
+    const auto current = gi->download_radiance();
+    double energy = 0.;
+    bool changed = false;
+    for (unsigned y = 4; y < 12; ++y) {
+        for (unsigned x = 4; x < 12; ++x) {
+            const auto i = y * pipeline.resolution().x + x;
+            for (unsigned c = 0; c < 3; ++c) {
+                const float value = current[i][c];
+                require(std::isfinite(value) && value >= 0.f, "restored GI must produce finite nonnegative radiance");
+                energy += value;
+                changed |= value != previous[i][c];
+            }
+        }
+    }
+    require(energy > 0. && changed, "restored GI must write fresh indirect light on the next frame");
+    std::cout << "restored_two_plane_gi_mean=" << energy / (8 * 8 * 3) << '\n';
 }
