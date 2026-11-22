@@ -1,18 +1,13 @@
 #pragma once
 
-// The Web surface, declared once.
-//
-// window.corona.<group>.<name> is the only thing this table projects, and `name` is
-// published verbatim: one spelling on the wire, in the ScriptRuntime contract it used to
-// share, and in the code. A row names the enum that owns its operation, so one table covers
-// every namespace the surface publishes; the V8 readers for the scene rows are looked up by
-// SceneMethod in cef_v8_binding.cpp.
+// The Web surface, declared once: one row per `window.corona.<group>.<name>`, the name published
+// verbatim. A row names the enum that owns the operation; the V8 readers for the scene rows are
+// looked up by SceneMethod in cef_v8_binding.cpp.
 
 #include "cef_operations.h"
 #include "cef_scene_operations.h"
 #include "editor_operation_methods.h"
 
-#include <string>
 #include <string_view>
 #include <variant>
 
@@ -29,77 +24,66 @@ struct EditorOperationSpec {
     std::string_view group;
     std::string_view name;
     EditorMethod method;
-    std::string_view summary;
 };
 
 inline constexpr EditorOperationSpec kEditorOperations[] = {
-    {"scene", "read_scene", SceneMethod::ReadScene, "The scene tree, cameras and actor projection the Web reads."},
-    {"scene", "read_active", SceneMethod::ReadActive, "Archive session, scene route, name, project path, tree revision, selection."},
-    {"scene", "select_model_file", SceneMethod::SelectModelFile, "Native file dialog that answers the chosen model path."},
-    {"scene", "import_resource_file", SceneMethod::ImportResourceFile, "Imports a resource file of the named type into the project."},
-    {"scene", "read_model_nodes", SceneMethod::ReadModelNodes, "One page of a model's node hierarchy."},
-    {"scene", "set_model_node_state", SceneMethod::SetModelNodeState, "Writes model node visibility and per-node overrides."},
-    {"scene", "create_actor", SceneMethod::CreateActor, "Creates an actor from an asset path."},
-    {"scene", "read_actor_properties", SceneMethod::ReadActorProperties, "The actor's own state: name, visibility, mechanics, animation sources."},
-    {"scene", "read_actor_rig", SceneMethod::ReadActorRig, "Skeleton nodes and IK chains for one actor."},
-    {"scene", "set_actor_ik_chains", SceneMethod::SetActorIkChains, "Writes IK chains against the expected revision."},
-    {"scene", "read_transforms", SceneMethod::ReadTransforms, "Transforms for several guids; unknown guids are skipped, not an error."},
-    {"scene", "select_actor", SceneMethod::SelectActor, "Writes the editor selection the scene tree renders."},
-    {"scene", "set_actor_transform", SceneMethod::SetActorTransform, "Writes transform components; omitted components keep their value."},
-    {"scene", "update_actor", SceneMethod::UpdateActor, "Patches the actor's own state (not its body)."},
-    {"scene", "delete_actor", SceneMethod::DeleteActor, "Removes an actor and reports what was removed."},
-    {"scene", "rebind_actor_resource", SceneMethod::RebindActorResource, "Points an actor at a different resource path."},
-    {"scene", "save", SceneMethod::Save, "Writes the scene through the archive service and reports unresolved actors."},
-    {"scene", "read_environment", SceneMethod::GetEnvironment, "The scene environment: sun, grid, physics scalars."},
-    {"scene", "set_environment", SceneMethod::SetEnvironment, "Patches the environment."},
-    {"scene", "focus_actor", SceneMethod::FocusActor, "Moves a camera so it frames one actor."},
-    {"scene", "update_camera", SceneMethod::UpdateCamera, "Patches camera properties and pose."},
-    {"scene", "set_camera_render_settings", SceneMethod::SetCameraRenderSettings, "Writes Vision render settings for one camera."},
-    {"scene", "read_camera_render_settings", SceneMethod::ReadCameraRenderSettings, "Reads Vision render settings for one camera."},
-    {"scene", "create_camera", SceneMethod::CreateCamera, "Creates a camera in a scene."},
-    {"scene", "delete_camera", SceneMethod::DeleteCamera, "Deletes a camera; the last remaining camera is protected."},
-    {"audio", "play", SceneMethod::PlayAudioResource, "Plays the audio attached to an actor; the Web also plays a bare resource."},
-    {"audio", "stop", SceneMethod::StopAudioResource, "Stops the audio attached to an actor; the Web also stops a bare resource."},
-    {"app", "close_process", WindowMethod::CloseProcess, "Closes the whole process; only the main window may ask."},
-    {"viewport", "capture_screenshot", SceneMethod::CaptureScreenshot, "Captures one viewport frame to a file."},
-    {"viewport", "configure", WindowMethod::ConfigureViewport, "Configures a viewport's mode, bounds and calibration."},
-    {"network", "start_session", NetworkMethod::StartSession, "Starts a collaboration session as host or client."},
-    {"network", "stop_session", NetworkMethod::StopSession, "Ends the running collaboration session."},
-    {"network", "get_session_info", NetworkMethod::GetSessionInfo, "The running session's identity, role and port."},
-    {"network", "get_discovered_peers", NetworkMethod::GetDiscoveredPeers, "The peers LAN discovery has reported so far."},
-    {"network", "clear_discovered_peers", NetworkMethod::ClearDiscoveredPeers, "Forgets the peers discovered so far."},
-    {"network", "search_lan", NetworkMethod::SearchLan, "Broadcasts a LAN discovery probe."},
-    {"network", "connect_to_peer", NetworkMethod::ConnectToPeer, "Joins a peer's session by address, port and name."},
-    {"network", "set_project_root", NetworkMethod::SetProjectRoot, "Scopes discovery to one project root."},
-    {"project", "open_project", ProjectLauncherMethod::Open, "Opens a recent project in the editor."},
-    {"project", "open_project_file", ProjectLauncherMethod::SelectFile, "Asks the native launcher for a project file to open."},
-    {"project", "create_world_project", ProjectLauncherMethod::CreateWorld, "Creates a world project; it takes no fields - the archive service names it."},
-    {"project", "create_multiplayer_project", ProjectLauncherMethod::CreateMultiplayer, "Creates a multiplayer project."},
-    {"project", "get_recent_projects", ProjectLauncherMethod::GetRecent, "The recent-project list the launcher renders."},
-    {"project", "get_project_load_status", ProjectLauncherMethod::GetLoadStatus, "Whether the project the launcher asked for has finished loading."},
-    {"project", "open_document", FilesMethod::Open, "Reloads the current scene source (scene.ini) from disk; the only file type it accepts."},
-    {"project", "save_active_project_info", ProjectSettingsMethod::SaveInfo, "Writes the active project's metadata."},
-    {"window", "close", WindowMethod::Close, "Closes a window or panel; the identity decides which."},
-    {"window", "focus", WindowMethod::Focus, "Focuses the window the panel identity belongs to."},
-    {"window", "create_panel", WindowMethod::CreatePanel, "Creates a panel and answers its identity."},
-    {"window", "set_window_presentation", WindowMethod::SetWindowPresentation, "Moves a window to the named presentation state."},
-    {"window", "on_closed", NativeEventKind::Closed, "Subscribes to the event a window publishes after it closes."},
-    {"window", "on_close_requested", NativeEventKind::CloseRequested, "Subscribes to a window's close request before it closes."},
-    {"input", "dispatch", ScriptInputMethod::Dispatch, "Dispatches one input event to a camera's viewport."},
-    {"bridge", "call", BridgeMethod::Call, "The one Web -> Python request entry; Python owns every service behind it."},
+    {"scene", "read_scene", SceneMethod::ReadScene},
+    {"scene", "read_active", SceneMethod::ReadActive},
+    {"scene", "select_model_file", SceneMethod::SelectModelFile},
+    {"scene", "import_resource_file", SceneMethod::ImportResourceFile},
+    {"scene", "read_model_nodes", SceneMethod::ReadModelNodes},
+    {"scene", "set_model_node_state", SceneMethod::SetModelNodeState},
+    {"scene", "create_actor", SceneMethod::CreateActor},
+    {"scene", "read_actor_properties", SceneMethod::ReadActorProperties},
+    {"scene", "read_actor_rig", SceneMethod::ReadActorRig},
+    {"scene", "set_actor_ik_chains", SceneMethod::SetActorIkChains},
+    {"scene", "read_transforms", SceneMethod::ReadTransforms},
+    {"scene", "select_actor", SceneMethod::SelectActor},
+    {"scene", "set_actor_transform", SceneMethod::SetActorTransform},
+    {"scene", "update_actor", SceneMethod::UpdateActor},
+    {"scene", "delete_actor", SceneMethod::DeleteActor},
+    {"scene", "rebind_actor_resource", SceneMethod::RebindActorResource},
+    {"scene", "save", SceneMethod::Save},
+    {"scene", "read_environment", SceneMethod::GetEnvironment},
+    {"scene", "set_environment", SceneMethod::SetEnvironment},
+    {"scene", "focus_actor", SceneMethod::FocusActor},
+    {"scene", "update_camera", SceneMethod::UpdateCamera},
+    {"scene", "set_camera_render_settings", SceneMethod::SetCameraRenderSettings},
+    {"scene", "read_camera_render_settings", SceneMethod::ReadCameraRenderSettings},
+    {"scene", "create_camera", SceneMethod::CreateCamera},
+    {"scene", "delete_camera", SceneMethod::DeleteCamera},
+    {"audio", "play", SceneMethod::PlayAudioResource},
+    {"audio", "stop", SceneMethod::StopAudioResource},
+    {"app", "close_process", WindowMethod::CloseProcess},
+    {"viewport", "capture_screenshot", SceneMethod::CaptureScreenshot},
+    {"viewport", "configure", WindowMethod::ConfigureViewport},
+    {"network", "start_session", NetworkMethod::StartSession},
+    {"network", "stop_session", NetworkMethod::StopSession},
+    {"network", "get_session_info", NetworkMethod::GetSessionInfo},
+    {"network", "get_discovered_peers", NetworkMethod::GetDiscoveredPeers},
+    {"network", "clear_discovered_peers", NetworkMethod::ClearDiscoveredPeers},
+    {"network", "search_lan", NetworkMethod::SearchLan},
+    {"network", "connect_to_peer", NetworkMethod::ConnectToPeer},
+    {"network", "set_project_root", NetworkMethod::SetProjectRoot},
+    {"project", "open_project", ProjectLauncherMethod::Open},
+    {"project", "open_project_file", ProjectLauncherMethod::SelectFile},
+    {"project", "create_world_project", ProjectLauncherMethod::CreateWorld},
+    {"project", "create_multiplayer_project", ProjectLauncherMethod::CreateMultiplayer},
+    {"project", "get_recent_projects", ProjectLauncherMethod::GetRecent},
+    {"project", "get_project_load_status", ProjectLauncherMethod::GetLoadStatus},
+    {"project", "open_document", FilesMethod::Open},
+    {"project", "save_active_project_info", ProjectSettingsMethod::SaveInfo},
+    {"window", "close", WindowMethod::Close},
+    {"window", "focus", WindowMethod::Focus},
+    {"window", "create_panel", WindowMethod::CreatePanel},
+    {"window", "set_window_presentation", WindowMethod::SetWindowPresentation},
+    {"window", "on_closed", NativeEventKind::Closed},
+    {"window", "on_close_requested", NativeEventKind::CloseRequested},
+    {"input", "dispatch", ScriptInputMethod::Dispatch},
+    {"bridge", "call", BridgeMethod::Call},
 };
 
 static_assert(sizeof(kEditorOperations) / sizeof(kEditorOperations[0]) == 54,
               "the Web contract is fifty-four named operations");
 
-/// The row for (group, name), or nullptr when the pair is not in the contract.
-constexpr const EditorOperationSpec* find_editor_operation(std::string_view group,
-                                                           std::string_view name) {
-    for (const auto& spec : kEditorOperations) {
-        if (spec.group == group && spec.name == name) return &spec;
-    }
-    return nullptr;
-}
-
 }  // namespace Corona::Systems::UI
-

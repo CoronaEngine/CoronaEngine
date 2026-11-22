@@ -1,4 +1,4 @@
-"""The Web operation table, parsed once as `{group, name, method, summary}` rows.
+"""The Web operation table, parsed once as `{group, name, method}` rows.
 
 A row's method is qualified by the enum that owns it - `SceneMethod::ReadScene`,
 `WindowMethod::CreatePanel`, `NativeEventKind::Closed` - because the surface spans eight
@@ -10,7 +10,7 @@ import re
 ROOT = Path(__file__).resolve().parents[2]
 TABLE = ROOT / "src/systems/ui/cef/editor_operation_table.h"
 
-ROW = re.compile(r'\{"(\w+)",\s*"(\w+)",\s*(\w+)::(\w+),\s*"((?:[^"\\]|\\.)*)"\}')
+ROW = re.compile(r'\{"(\w+)",\s*"(\w+)",\s*(\w+)::(\w+)\}')
 
 
 def method_kind(enum: str) -> str:
@@ -25,8 +25,8 @@ def rows():
     end = text.index("};", start)
     parsed = [
         {"group": group, "name": name, "enum": enum, "kind": method_kind(enum),
-         "method": method, "summary": summary, "web": True, "script": False}
-        for group, name, enum, method, summary in ROW.findall(text[start:end])
+         "method": method, "web": True, "script": False}
+        for group, name, enum, method in ROW.findall(text[start:end])
     ]
     assert parsed, "the operation table did not parse - did its format change?"
     return parsed
