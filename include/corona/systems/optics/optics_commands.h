@@ -127,10 +127,11 @@ struct OpticsUpdateKey {
 };
 
 /// Apply a drained update while the caller owns the device's write access.
-inline void apply_optics_update(OpticsDevice& device, const OpticsUpdateCommand& command) {
+inline void apply_optics_update(OpticsDevice& device, Ecs::Visibility& visibility,
+                               const OpticsUpdateCommand& command) {
     const auto fields = command.fields;
-    if (has_optics_field(fields, OpticsField::Visible)) device.visible = command.visible;
-    if (has_optics_field(fields, OpticsField::EnableLighting)) device.bEnableLighting = command.enable_lighting;
+    if (has_optics_field(fields, OpticsField::Visible)) visibility.visible = command.visible;
+    if (has_optics_field(fields, OpticsField::EnableLighting)) visibility.receives_lighting = command.enable_lighting;
     if (has_optics_field(fields, OpticsField::Metallic)) device.metallic = command.metallic;
     if (has_optics_field(fields, OpticsField::Roughness)) device.roughness = command.roughness;
     if (has_optics_field(fields, OpticsField::Subsurface)) device.subsurface = command.subsurface;
@@ -197,8 +198,9 @@ class OpticsCommandChannel {
 inline OpticsSnapshotRow make_optics_row(EntityId handle, const OpticsDevice& device) {
     OpticsSnapshotRow row;
     row.handle = handle;
-    row.visible = device.visible;
-    row.enable_lighting = device.bEnableLighting;
+    const auto* visibility = Corona::find_visibility(handle);
+    row.visible = visibility != nullptr ? visibility->visible : true;
+    row.enable_lighting = visibility != nullptr ? visibility->receives_lighting : true;
     row.metallic = device.metallic;
     row.roughness = device.roughness;
     row.subsurface = device.subsurface;

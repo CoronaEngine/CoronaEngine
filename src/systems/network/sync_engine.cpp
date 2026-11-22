@@ -151,14 +151,17 @@ struct OpticsPacked {
     float shininess;
 };
 
-std::string hash_opt(const OpticsDevice& o, uint64_t entity_seq) {
+std::string hash_opt(const OpticsDevice& o, const Ecs::Visibility* visibility,
+                     uint64_t entity_seq) {
     uint64_t h = entity_seq;
     auto mix = [&](const void* p, size_t n) {
         const auto* b = static_cast<const uint8_t*>(p);
         for (size_t i = 0; i < n; ++i) h = h * 31 + b[i];
     };
-    mix(&o.visible, sizeof(o.visible));
-    mix(&o.bEnableLighting, sizeof(o.bEnableLighting));
+    const bool visible = visibility != nullptr ? visibility->visible : true;
+    const bool receives_lighting = visibility != nullptr ? visibility->receives_lighting : true;
+    mix(&visible, sizeof(visible));
+    mix(&receives_lighting, sizeof(receives_lighting));
     mix(&o.metallic, sizeof(o.metallic));
     mix(&o.roughness, sizeof(o.roughness));
     mix(&o.subsurface, sizeof(o.subsurface));
@@ -178,12 +181,13 @@ std::string hash_opt(const OpticsDevice& o, uint64_t entity_seq) {
     return {buf};
 }
 
-void serialize_opt(const OpticsDevice& o, uint64_t entity_seq,
+void serialize_opt(const OpticsDevice& o, const Ecs::Visibility* visibility,
+                   uint64_t entity_seq,
                    const std::string& key,
                    std::vector<uint8_t>& entries) {
     OpticsPacked p;
-    p.visible = o.visible;
-    p.bEnableLighting = o.bEnableLighting;
+    p.visible = visibility != nullptr ? visibility->visible : true;
+    p.bEnableLighting = visibility != nullptr ? visibility->receives_lighting : true;
     p.metallic = o.metallic;
     p.roughness = o.roughness;
     p.subsurface = o.subsurface;
@@ -204,11 +208,12 @@ void serialize_opt(const OpticsDevice& o, uint64_t entity_seq,
     entries.insert(entries.end(), entry.begin(), entry.end());
 }
 
-void deserialize_opt(OpticsDevice& o, const uint8_t* value, uint16_t value_len) {
+void deserialize_opt(OpticsDevice& o, Ecs::Visibility& visibility, const uint8_t* value,
+                     uint16_t value_len) {
     if (value_len != sizeof(OpticsPacked)) return;
     const auto* p = reinterpret_cast<const OpticsPacked*>(value);
-    o.visible = p->visible;
-    o.bEnableLighting = p->bEnableLighting;
+    visibility.visible = p->visible;
+    visibility.receives_lighting = p->bEnableLighting;
     o.metallic = p->metallic;
     o.roughness = p->roughness;
     o.subsurface = p->subsurface;
@@ -534,14 +539,15 @@ bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation
                     applied = true;  // 畸形载荷：与旧实现的静默 no-op 行为一致
                 } else {
                     Corona::OpticsDevice decoded{};
-                    deserialize_opt(decoded, operation.value.data(),
+                    Ecs::Visibility decoded_visibility{};
+                    deserialize_opt(decoded, decoded_visibility, operation.value.data(),
                                     static_cast<uint16_t>(operation.value.size()));
                     Corona::OpticsUpdateCommand command{};
                     command.optics_handle = it->second;
                     // 远程包是整份材质快照，因此 16 个标量位全置。
                     command.fields = kRemoteOpticsFields;
-                    command.visible = decoded.visible;
-                    command.enable_lighting = decoded.bEnableLighting;
+                    command.visible = decoded_visibility.visible;
+                    command.enable_lighting = decoded_visibility.receives_lighting;
                     command.metallic = decoded.metallic;
                     command.roughness = decoded.roughness;
                     command.subsurface = decoded.subsurface;
@@ -558,7 +564,7 @@ bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation
                     command.shininess = decoded.shininess;
                     Corona::OpticsCommandChannel::instance().commands().push(command);
                     impl_->set_snapshot(impl_->make_key(StorageID::ST_OPTICS, *seq, "optics"),
-                                        hash_opt(decoded, *seq));
+                                        hash_opt(decoded, &decoded_visibility, *seq));
                     applied = true;
                 }
             }
@@ -703,7 +709,8 @@ void SyncEngine::poll_and_sync() {
                 auto locally_owned = impl_->ownership_for_entity(StorageID::ST_OPTICS, ent_seq);
                 if (locally_owned && !*locally_owned) continue;
             }
-            auto cur_hash = hash_opt(data, ent_seq);
+            const auto* visibility = Corona::find_visibility(obj_id);
+            auto cur_hash = hash_opt(data, visibility, ent_seq);
             auto snap_key = impl_->make_key(StorageID::ST_OPTICS, ent_seq, "optics");
             if (!impl_->check_snapshot(snap_key, cur_hash)) continue;
             EditorSyncOperation op;
@@ -711,8 +718,9 @@ void SyncEngine::poll_and_sync() {
             op.actor_guid = actor_guid;
             op.field_name = "optics";
             OpticsPacked packed{};
-            packed.visible = data.visible;
-            packed.bEnableLighting = data.bEnableLighting;
+            packed.visible = visibility != nullptr ? visibility->visible : true;
+            packed.bEnableLighting =
+                visibility != nullptr ? visibility->receives_lighting : true;
             packed.metallic = data.metallic; packed.roughness = data.roughness;
             packed.subsurface = data.subsurface; packed.specular = data.specular;
             packed.specularTint = data.specularTint; packed.anisotropic = data.anisotropic;

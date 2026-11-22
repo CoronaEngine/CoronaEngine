@@ -265,10 +265,7 @@ struct OpticsDevice {
     std::shared_ptr<const Materials::Overrides> material_overrides;
     std::shared_ptr<const Materials::Principled> principled;
 
-    bool visible{true};  // 控制模型是否参与渲染
-
-    // 光照影响开关：false 时物体不受灯光照射影响（仍参与渲染但不接收光照计算）
-    bool bEnableLighting{true};
+    // visible / receives_lighting 已迁到 Ecs::Visibility 组件。
 
     // Disney Principled BRDF parameters
     float metallic{0.0f};
@@ -837,6 +834,9 @@ struct ImageDevice {
 /// 便捷：按句柄取 OpticsDevice 组件（无锁）。
 [[nodiscard]] OpticsDevice* find_optics(EntityId handle);
 
+/// 便捷：按句柄取 Visibility 组件（无锁）。
+[[nodiscard]] Ecs::Visibility* find_visibility(EntityId handle);
+
 /// 便捷：按句柄取 SceneDevice 组件（无锁）。
 [[nodiscard]] SceneDevice* find_scene(EntityId handle);
 
@@ -940,6 +940,7 @@ class SharedDataHub {
     void destroy_optics(EntityId handle);
     [[nodiscard]] OpticsDevice* try_optics(EntityId handle);
     [[nodiscard]] const OpticsDevice* try_optics(EntityId handle) const;
+    [[nodiscard]] Ecs::Visibility* try_visibility(EntityId handle);
 
     // profile 已删除 Storage：组件直接挂在实体上，句柄就是实体句柄。
     EntityId create_profile_component();

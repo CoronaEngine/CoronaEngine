@@ -1246,8 +1246,9 @@ bool collect_actor_instances_for_visibility(
             auto optics_acc = Corona::find_optics(profile->optics_handle);
             if (!optics_acc) continue;
             const auto& optics = *optics_acc;
+            const auto* optics_visibility = Corona::find_visibility(profile->optics_handle);
 
-            if (!optics.visible) {
+            if (optics_visibility == nullptr || !optics_visibility->visible) {
                 ++object_id;
                 continue;
             }
@@ -1340,7 +1341,8 @@ bool collect_actor_instances_for_visibility(
                 {
                     batch.materials.push_back(Corona::Systems::OpticsDetail::pack_native_material(
                         ms, optics, texture_descriptor, diag.disable_textures || diag.force_solid_material,
-                        optics.bEnableLighting && !diag.force_solid_material));
+                        optics_visibility != nullptr && optics_visibility->receives_lighting &&
+                            !diag.force_solid_material));
                 }
                 log_optics_material_once(actor_handle,
                                          optics.geometry_handle,
@@ -1678,7 +1680,9 @@ void fallback_large_scenes_to_native_renderer() {
                 const auto optics = Corona::find_optics(profile->optics_handle);
                 const auto geometry = optics ? Corona::find_geometry(optics->geometry_handle)
                                              : decltype(Corona::find_geometry(0)){};
-                if (!optics || !optics->visible || !geometry) continue;
+                const auto* optics_visibility = Corona::find_visibility(profile->optics_handle);
+                if (!optics || optics_visibility == nullptr || !optics_visibility->visible ||
+                    !geometry) continue;
                 if (!geometry->mesh_instances.empty()) {
                     instance_count += geometry->mesh_instances.size();
                 } else if (!geometry->mesh_handles.empty()) {
@@ -2996,7 +3000,11 @@ void apply_pending_optics_updates() {
         if (!device) {
             continue;
         }
-        Corona::apply_optics_update(*device, command);
+        auto* visibility = Corona::find_visibility(command.optics_handle);
+        if (!visibility) {
+            continue;
+        }
+        Corona::apply_optics_update(*device, *visibility, command);
     }
 }
 
@@ -3400,8 +3408,10 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     auto optics_acc = Corona::find_optics(profile->optics_handle);
                     if (!optics_acc) continue;
                     const auto& optics = *optics_acc;
+                    const auto* optics_visibility =
+                        Corona::find_visibility(profile->optics_handle);
 
-                    if (!optics.visible) {
+                    if (optics_visibility == nullptr || !optics_visibility->visible) {
                         ++object_id;
                         continue;
                     }
@@ -3525,9 +3535,12 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                         const ktm::fmat4x4 mesh_model_matrix =
                             multiply_ktm_mat4(model_matrix, ms.instance_transform);
                         auto materialID = static_cast<uint32_t>(batch.materials.size());
+                        const auto* optics_visibility =
+                            Corona::find_visibility(profile->optics_handle);
                         batch.materials.push_back(Corona::Systems::OpticsDetail::pack_native_material(
                             ms, optics, texture_descriptor, diag.disable_textures || diag.force_solid_material,
-                            optics.bEnableLighting && !diag.force_solid_material));
+                            optics_visibility != nullptr && optics_visibility->receives_lighting &&
+                            !diag.force_solid_material));
                         if (optics.principled && !diag.disable_textures && !diag.force_solid_material) {
                             auto appearance=hardware_->appearance_cache.obtain(optics.principled);
                             if (appearance) {
@@ -3697,7 +3710,10 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                         continue;
                     }
                     auto optics_acc = Corona::find_optics(profile->optics_handle);
-                    if (!optics_acc || !optics_acc->visible ||
+                    const auto* optics_visibility =
+                        Corona::find_visibility(profile->optics_handle);
+                    if (!optics_acc || optics_visibility == nullptr ||
+                        !optics_visibility->visible ||
                         !diag_geometry_allowed(optics_acc->geometry_handle)) {
                         continue;
                     }
@@ -3798,7 +3814,9 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                         if(caster.material_ids.contains(slot.mesh_index))continue;
                         caster.material_ids.emplace(slot.mesh_index,static_cast<uint32_t>(rsm_materials.size()));
                         const auto descriptor=slot.texture?slot.texture.store_descriptor():0u;
-                        rsm_materials.push_back(OpticsDetail::pack_native_material(slot,*optics,descriptor,false,optics->bEnableLighting));
+                        const auto* caster_visibility = Corona::find_visibility(profile->optics_handle);
+                        const bool caster_lit = caster_visibility != nullptr && caster_visibility->receives_lighting;
+                        rsm_materials.push_back(OpticsDetail::pack_native_material(slot,*optics,descriptor,false,caster_lit));
                         if(slot.texture)rsm_material_images.push_back(slot.texture);
                         if(slot.material) {
                             sceneBatch.resource_keep_alive->model_materials.push_back(slot.material);
@@ -5114,8 +5132,12 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
                 if (!optics) continue;
 
                 // visible toggle changes topology of the Vision scene.
-                mix(optics->visible ? 0x1u : 0x2u);
-                if (!optics->visible) continue;
+                const auto* optics_visibility =
+                    Corona::find_visibility(profile->optics_handle);
+                const bool optics_visible =
+                    optics_visibility != nullptr && optics_visibility->visible;
+                mix(optics_visible ? 0x1u : 0x2u);
+                if (!optics_visible) continue;
 
                 // Material parameters bridged into the Vision principled BSDF.
                 mix(optics->principled ? optics->principled->revision : 0u);

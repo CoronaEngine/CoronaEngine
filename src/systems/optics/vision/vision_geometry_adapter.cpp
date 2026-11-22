@@ -216,7 +216,9 @@ void stage_actor_geometry(EntityId actor_handle,
             ++result.skipped_no_data;
             continue;
         }
-        if (!optics->visible || optics->geometry_handle == 0) continue;
+        const auto* optics_visibility = hub.try_visibility(profile->optics_handle);
+        if (optics_visibility != nullptr && !optics_visibility->visible) continue;
+        if (optics->geometry_handle == 0) continue;
         ++result.candidate_count;
         auto geometry = Corona::find_geometry(optics->geometry_handle);
         if (!geometry) {

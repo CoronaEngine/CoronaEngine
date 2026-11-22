@@ -2134,9 +2134,9 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
 
         // 从首个有效 profile 收集 optics_visible
         if (!optics_captured && profile->optics_handle) {
-            auto optics = Corona::find_optics(profile->optics_handle);
-            if (optics) {
-                rec.optics_visible = optics->visible;
+            const auto* visibility = Corona::find_visibility(profile->optics_handle);
+            if (visibility != nullptr) {
+                rec.optics_visible = visibility->visible;
                 optics_captured = true;
             }
         }
@@ -2275,10 +2275,9 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
 
                 // 恢复 optics_visible
                 if (profile->optics_handle) {
-                    auto optics = Corona::find_optics(
-                        profile->optics_handle);
-                    if (optics) {
-                        optics->visible = rec->optics_visible;
+                    auto* visibility = Corona::find_visibility(profile->optics_handle);
+                    if (visibility != nullptr) {
+                        visibility->visible = rec->optics_visible;
                     }
                 }
             }

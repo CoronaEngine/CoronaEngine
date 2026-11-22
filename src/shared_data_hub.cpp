@@ -98,7 +98,10 @@ const AcousticsDevice* SharedDataHub::try_acoustics(EntityId handle) const {
     return Ecs::try_get_const<AcousticsDevice>(handle);
 }
 
-EntityId SharedDataHub::create_optics() { return Ecs::emplace<OpticsDevice>(); }
+EntityId SharedDataHub::create_optics() {
+    const auto entity = Ecs::World::instance().create<OpticsDevice, Ecs::Visibility>();
+    return Ecs::to_handle(entity);
+}
 void SharedDataHub::destroy_optics(EntityId handle) { Ecs::destroy(handle); }
 OpticsDevice* SharedDataHub::try_optics(EntityId handle) {
     return Ecs::try_get<OpticsDevice>(handle);
@@ -108,6 +111,12 @@ const OpticsDevice* SharedDataHub::try_optics(EntityId handle) const {
 }
 OpticsDevice* find_optics(EntityId handle) {
     return SharedDataHub::instance().try_optics(handle);
+}
+Ecs::Visibility* SharedDataHub::try_visibility(EntityId handle) {
+    return Ecs::try_get<Ecs::Visibility>(handle);
+}
+Ecs::Visibility* find_visibility(EntityId handle) {
+    return SharedDataHub::instance().try_visibility(handle);
 }
 
 EntityId SharedDataHub::create_profile_component() { return Ecs::emplace<ProfileDevice>(); }

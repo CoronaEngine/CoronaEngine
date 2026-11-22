@@ -72,7 +72,8 @@ void MechanicsSystem::process_mesh_moves() {
                         if(profile->optics_handle) {
                             auto optics=Corona::find_optics(profile->optics_handle);
                             if(!optics) return unavailable("optics",profile->optics_handle);
-                            if(actor_handle!=q.actor && !optics->visible) continue;
+                            const auto* optics_visibility=hub.try_visibility(profile->optics_handle);
+                            if(actor_handle!=q.actor && optics_visibility && !optics_visibility->visible) continue;
                             if(!geometry_handle) geometry_handle=optics->geometry_handle;
                         }
                         if(!geometry_handle && profile->acoustics_handle) {
