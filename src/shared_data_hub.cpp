@@ -65,8 +65,17 @@ ModelTransform* find_model_transform(EntityId handle) {
     return SharedDataHub::instance().try_model_transform(handle);
 }
 
-SharedDataHub::GeometryStorage& SharedDataHub::geometry_storage() { return geometry_storage_; }
-const SharedDataHub::GeometryStorage& SharedDataHub::geometry_storage() const { return geometry_storage_; }
+EntityId SharedDataHub::create_geometry() { return Ecs::emplace<GeometryDevice>(); }
+void SharedDataHub::destroy_geometry(EntityId handle) { Ecs::destroy(handle); }
+GeometryDevice* SharedDataHub::try_geometry(EntityId handle) {
+    return Ecs::try_get<GeometryDevice>(handle);
+}
+const GeometryDevice* SharedDataHub::try_geometry(EntityId handle) const {
+    return Ecs::try_get_const<GeometryDevice>(handle);
+}
+GeometryDevice* find_geometry(EntityId handle) {
+    return SharedDataHub::instance().try_geometry(handle);
+}
 
 EntityId SharedDataHub::create_mechanics() { return Ecs::emplace<MechanicsDevice>(); }
 void SharedDataHub::destroy_mechanics(EntityId handle) { Ecs::destroy(handle); }
@@ -489,7 +498,8 @@ void SharedDataHub::publish_geometry_scene_snapshot_from_storage() {
     GeometrySceneSnapshot snapshot;
     snapshot.tick = geometry_scene_snapshot_.revision() + 1;
     std::unordered_map<EntityId, GeometrySceneCacheEntry> cache;
-    for (auto geometry_it = geometry_storage_.cbegin(); geometry_it != geometry_storage_.cend();
+    auto geometry_components = Ecs::all_components<GeometryDevice>();
+    for (auto geometry_it = geometry_components.cbegin(); geometry_it != geometry_components.cend();
          ++geometry_it) {
         const EntityId handle = geometry_it.id();
         if (handle == 0) {

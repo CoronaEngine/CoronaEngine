@@ -81,7 +81,7 @@ void MechanicsSystem::process_mesh_moves() {
                             geometry_handle=acoustics->geometry_handle;
                         }
                         if(!geometry_handle || !seen_geometry.insert(geometry_handle).second) continue;
-                        auto geometry=hub.geometry_storage().try_acquire_read(geometry_handle);
+                        auto geometry=Corona::find_geometry(geometry_handle);
                         if(!geometry) return unavailable("geometry",geometry_handle);
                         if(geometry->is_skinned && geometry->skinned_aabb_valid){for(unsigned k=0;k<3;++k){local.low[k]=geometry->skinned_aabb_min[k];local.high[k]=geometry->skinned_aabb_max[k];}local.valid=true;}
                         auto resource=Corona::find_model_resource(geometry->model_resource_handle);

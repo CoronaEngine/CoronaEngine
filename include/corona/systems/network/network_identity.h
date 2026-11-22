@@ -158,9 +158,9 @@ private:
         }
 
         if (out.geometry_handle != 0) {
-            out.geometry_seq = hub_.geometry_storage().seq_id(out.geometry_handle);
-            auto geometry = hub_.geometry_storage().try_acquire_read(out.geometry_handle);
-            if (geometry.valid()) {
+            out.geometry_seq = Corona::Ecs::seq_of(out.geometry_handle);
+            const auto* geometry = Corona::find_geometry(out.geometry_handle);
+            if (geometry != nullptr) {
                 out.transform_handle = geometry->transform_handle;
                 out.model_resource_handle = geometry->model_resource_handle;
             }

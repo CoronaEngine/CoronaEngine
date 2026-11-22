@@ -56,7 +56,7 @@ void MechanicsSystem::refresh_foot_ground_cache() {
                   gh = body->geometry_handle; }
                 if (!gh || alive.count(gh)) continue;
                 EntityId resource_handle = 0, transform_handle = 0;
-                { auto geometry = hub.geometry_storage().try_acquire_read(gh);
+                { auto geometry = Corona::find_geometry(gh);
                   if (!geometry || geometry->gpu_build_state != GeometryDevice::GpuBuildState::Ready || geometry->mesh_handles.empty()) continue;
                   resource_handle = geometry->model_resource_handle;
                   transform_handle = geometry->transform_handle; }
@@ -134,7 +134,7 @@ void MechanicsSystem::update_foot_targets(std::span<const FootPose> poses, float
     for (const auto& pose : poses) {
         if (!pose.skeleton || !pose.locals || !pose.chains) continue;
         EntityId transform_handle = 0;
-        { auto geometry = hub.geometry_storage().try_acquire_read(pose.geometry); if (geometry) transform_handle = geometry->transform_handle; }
+        { auto geometry = Corona::find_geometry(pose.geometry); if (geometry) transform_handle = geometry->transform_handle; }
         ktm::fmat4x4 model_to_world{}, world_to_model{};
         bool have_transform = false;
         { auto transform = Corona::find_model_transform(transform_handle);

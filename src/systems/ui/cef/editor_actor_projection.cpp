@@ -135,7 +135,7 @@ std::shared_ptr<Corona::Resource::AnimationPlayer> actor_animation_player(const 
     if (!actor.geometry) return {};
     // The player is a live control object (play/switch/sources), not scene state, so it is
     // deliberately not part of the geometry snapshot: the editor needs the object, not a copy.
-    auto geometry = Corona::SharedDataHub::instance().geometry_storage().try_acquire_read(actor.geometry->get_handle());
+    auto geometry = Corona::find_geometry(actor.geometry->get_handle());
     return geometry ? geometry->animation_player : nullptr;
 }
 

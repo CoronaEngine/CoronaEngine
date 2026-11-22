@@ -304,7 +304,7 @@ void GeometrySystem::update() {
     auto& hub = SharedDataHub::instance();
     auto scene_storage = Corona::all_scenes();
     auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
-    auto& geometry_storage = hub.geometry_storage();
+    auto geometry_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
     std::vector<std::uintptr_t> scene_handles;
     {
         for (auto it = scene_storage.cbegin(); it != scene_storage.cend(); ++it) {
@@ -402,8 +402,8 @@ void GeometrySystem::update() {
                 auto mechanics_read = Corona::find_mechanics(mechanics_handle);
                 if (mechanics_read == nullptr) continue;
 
-                auto geometry_read = geometry_storage.acquire_read(mechanics_read->geometry_handle);
-                if (!geometry_read.valid() || geometry_read->transform_handle == 0) continue;
+                auto geometry_read = Corona::find_geometry(mechanics_read->geometry_handle);
+                if (geometry_read == nullptr || geometry_read->transform_handle == 0) continue;
 
                 // 无网格的 actor（如音频物体，空 model_path）不参与几何加载/距离剔除，
                 // 否则距离剔除每帧反复请求加载空路径并报 "empty model path" 错误。
@@ -1012,7 +1012,7 @@ void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {
         for (auto geom_handle : geom_handles) {
             if (!visited_geom.insert(geom_handle).second) continue;
 
-            auto geom_read = hub.geometry_storage().try_acquire_read(geom_handle);
+            auto geom_read = Corona::find_geometry(geom_handle);
             if (!geom_read) continue;
 
             for (uint32_t mesh_idx = 0;
@@ -1390,7 +1390,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
             // ---- 第 5.1 步：统计该 geometry 有多少个 mesh（子网格）----
             // 一个 GeometryDevice 可能包含多个 MeshDevice（例如一个模型有多个材质）
             uint32_t mesh_count = 0;
-            if (auto geom_read = hub.geometry_storage().try_acquire_read(geom_handle)) {
+            if (auto geom_read = Corona::find_geometry(geom_handle)) {
                 mesh_count = static_cast<uint32_t>(geom_read->mesh_handles.size());
             } else {
                 continue;  // geometry 句柄已失效
@@ -1413,7 +1413,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
             //   textureBuffer（纹理）
             // clear() 触发每个元素的析构 → HardwareBuffer/HardwareImage 析构 → GPU 显存归还
             // 注意：model_resource_handle 保留不删，以便 reload 时能找到模型资源条目
-            if (auto geom_write = hub.geometry_storage().try_acquire_write(geom_handle)) {
+            if (auto geom_write = Corona::find_geometry(geom_handle)) {
                 geom_write->mesh_handles.clear();
                 geom_write->mesh_instances.clear();
             }  // geom_write 析构时自动释放写锁
@@ -1509,7 +1509,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
             EntityId model_res_handle = 0;  // ModelResource 句柄
             bool needs_rebuild = false;            // 是否需要重建 GPU 缓冲
             {
-                auto geom_read = hub.geometry_storage().try_acquire_read(geom_handle);
+                auto geom_read = Corona::find_geometry(geom_handle);
                 if (!geom_read) continue;  // geometry 已失效
                 model_res_handle = geom_read->model_resource_handle;
                 // 关键判断：mesh_handles 为空 → 被 release() 清理过 → 需要重建
@@ -1550,7 +1550,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
                 }
             }  // lod_lock 析构
 
-            if (auto geom_write = hub.geometry_storage().try_acquire_write(geom_handle)) {
+            if (auto geom_write = Corona::find_geometry(geom_handle)) {
                 if (geom_write->model_resource_handle == model_res_handle &&
                     geom_write->mesh_handles.empty()) {
                     geom_write->gpu_build_state = GeometryDevice::GpuBuildState::PendingBuild;
@@ -2076,7 +2076,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
     std::unordered_set<std::uintptr_t> seen_geoms;
     auto collect_rid = [&](EntityId geom_handle) {
         if (!seen_geoms.insert(geom_handle).second) return;  // 已处理
-        auto geom = hub.geometry_storage().try_acquire_read(geom_handle);
+        auto geom = Corona::find_geometry(geom_handle);
         if (geom && geom->model_resource_handle) {
             auto mr = Corona::find_model_resource(geom->model_resource_handle);
             if (mr && mr->model_id != 0) {
@@ -2107,7 +2107,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
                     rec.geometry_handles.push_back(mech->geometry_handle);
                     collect_rid(mech->geometry_handle);
                     if (!transform_captured) {
-                        auto geom = hub.geometry_storage().try_acquire_read(mech->geometry_handle);
+                        auto geom = Corona::find_geometry(mech->geometry_handle);
                         if (geom && geom->transform_handle) {
                             auto xform = Corona::find_model_transform(geom->transform_handle);
                             if (xform) {
@@ -2241,7 +2241,7 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
 
                 // 恢复 transform（通过 geometry → transform_handle）
                 if (profile->geometry_handle) {
-                    auto geom = hub.geometry_storage().try_acquire_read(
+                    auto geom = Corona::find_geometry(
                         profile->geometry_handle);
                     if (geom && geom->transform_handle) {
                         auto xform = Corona::find_model_transform(
@@ -2771,7 +2771,7 @@ namespace {
 void GeometrySystem::process_pending_geometry_imports() {
     auto& hub = SharedDataHub::instance();
     auto& resource_manager = Resource::ResourceManager::get_instance();
-    auto& geom_storage = hub.geometry_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     // ---- 心跳：证明扫描仍在运行，并给出未就绪库存 / 在途任务年龄 ----
     // "运行期加载的模型永远显示上传中" 有两种完全不同的成因：
@@ -2858,8 +2858,8 @@ void GeometrySystem::process_pending_geometry_imports() {
             // 避免与下方 mechanics 槽锁同时持有 → 杜绝跨槽锁序倒置）。
             bool import_ok = false;
             {
-                auto geom_write = geom_storage.try_acquire_write(geom_handle);
-                if (!geom_write.valid()) continue;  // geometry 已销毁
+                auto geom_write = Corona::find_geometry(geom_handle);
+                if (geom_write == nullptr) continue;  // geometry 已销毁
 
                 // 防 slot 复用 ABA：本槽可能在 import 在途期间被 deallocate→复用为新对象
                 // （allocate 时 T{} 把 import_epoch 重置为 0 或新对象有自己的 epoch）。
@@ -2954,8 +2954,8 @@ void GeometrySystem::process_pending_geometry_imports() {
         // 写锁内再校验仍为 PendingImport 且无 epoch，避免与并发状态变更竞争。
         const std::uint64_t epoch = impl_->next_import_epoch++;
         {
-            auto geom_write = geom_storage.try_acquire_write(item.geom_handle);
-            if (!geom_write.valid()) continue;  // 已销毁
+            auto geom_write = Corona::find_geometry(item.geom_handle);
+            if (geom_write == nullptr) continue;  // 已销毁
             if (geom_write->gpu_build_state != GeometryDevice::GpuBuildState::PendingImport ||
                 geom_write->import_epoch != 0) {
                 CFW_LOG_WARNING("[GeometryImport] launch aborted geometry={} state={} import_epoch={}",
@@ -2979,7 +2979,7 @@ void GeometrySystem::process_pending_geometry_imports() {
 void GeometrySystem::process_pending_geometry_builds() {
     auto& hub = SharedDataHub::instance();
     auto& resource_manager = Resource::ResourceManager::get_instance();
-    auto& geom_storage = hub.geometry_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     // 先回收 worker 结果。Geometry 更新线程只做短暂状态写回，不在这里创建
     // HardwareBuffer/HardwareImage，避免把 GPU 构建时间算进主更新帧。
@@ -3054,7 +3054,7 @@ void GeometrySystem::process_pending_geometry_builds() {
             continue;
         }
         std::optional<std::pair<Impl::Payload, Impl::Payload>> load_finished_event;
-        if (auto geom_write = geom_storage.try_acquire_write(handle)) {
+        if (auto geom_write = Corona::find_geometry(handle)) {
             if (geom_write->gpu_build_state == GeometryDevice::GpuBuildState::PendingBuild &&
                 geom_write->mesh_handles.empty() && geom_write->model_resource_handle != 0) {
                 std::uint64_t current_model = 0;
@@ -3131,7 +3131,7 @@ void GeometrySystem::process_pending_geometry_builds() {
     }
 
     for (const auto geom_handle : completed_while_queued) {
-        if (auto geom_write = geom_storage.try_acquire_write(geom_handle)) {
+        if (auto geom_write = Corona::find_geometry(geom_handle)) {
             if (geom_write->gpu_build_state == GeometryDevice::GpuBuildState::PendingBuild &&
                 !geom_write->mesh_handles.empty()) {
                 geom_write->gpu_build_state = GeometryDevice::GpuBuildState::Ready;
@@ -3214,7 +3214,7 @@ void GeometrySystem::upload_lod_from_scene_data() {
 
     auto& resource_manager = Resource::ResourceManager::get_instance();
     auto& hub = SharedDataHub::instance();
-    auto& geom_storage = hub.geometry_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     for (auto it = geom_storage.cbegin(); it != geom_storage.cend(); ++it) {
         const GeometryDevice& geom_dev = *it;
@@ -3411,7 +3411,7 @@ void GeometrySystem::upload_lod_from_scene_data() {
 void GeometrySystem::reconcile_lod_residency() {
     auto& resource_manager = Resource::ResourceManager::get_instance();
     auto& hub = SharedDataHub::instance();
-    auto& geom_storage = hub.geometry_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     struct Lod0DeviceEviction {
         EntityId geometry_handle = 0;
@@ -3748,7 +3748,10 @@ void GeometrySystem::reconcile_lod_residency() {
 
     // 先结束 Geometry storage 的只读迭代，再执行下面可能需要的 Geometry 写锁。
     // ConstIterator 持有 storage 读锁；禁止在其作用域内升级同一 storage 的写锁。
-    const auto geometry_handles = GeometryInternal::snapshot_storage_handles(geom_storage);
+    std::vector<EntityId> geometry_handles;
+    for (auto geometry_it = geom_storage.cbegin(); geometry_it != geom_storage.cend(); ++geometry_it) {
+        geometry_handles.push_back(geometry_it.id());
+    }
 
     // 预分配为 geometry 数 × 8（覆盖多数多 mesh geometry 场景，减少 vector reallocation）。
     lod_budget_entries.reserve(geometry_handles.size() * 8);
@@ -3757,7 +3760,7 @@ void GeometrySystem::reconcile_lod_residency() {
         EntityId transform_handle = 0;
         std::uint32_t mesh_count = 0;
         {
-            auto geom_read = geom_storage.try_acquire_read(geom_handle);
+            auto geom_read = Corona::find_geometry(geom_handle);
             if (!geom_read) continue;
             model_resource_handle = geom_read->model_resource_handle;
             transform_handle = geom_read->transform_handle;
@@ -4262,7 +4265,7 @@ void GeometrySystem::reconcile_lod_residency() {
     // All Geometry storage read iterators/accessors are out of scope here.
     // Only now may this function acquire Geometry storage write locks.
     for (const auto& eviction : pending_lod0_evictions) {
-        auto geom_write = geom_storage.try_acquire_write(eviction.geometry_handle);
+        auto geom_write = Corona::find_geometry(eviction.geometry_handle);
         if (!geom_write ||
             geom_write->model_resource_handle != eviction.expected_model_resource_handle) {
             continue;
@@ -4963,11 +4966,11 @@ build_mesh_slots(const GeometrySystem*        gs,
 
 std::vector<GeometrySystem::MeshSlot>
 GeometrySystem::query_mesh_slots(EntityId geometry_handle) const {
-    auto& geom_storage = SharedDataHub::instance().geometry_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
     // 读锁即可：query_mesh_slots 只复制句柄值，不修改 GeometryDevice 状态。
     // storeSampledDescriptor 由调用方在拿到 MeshSlot 后自行调用（对本地副本操作，
     // 无需持有 geometry 锁）。
-    auto geom = geom_storage.try_acquire_read(geometry_handle);
+    auto geom = Corona::find_geometry(geometry_handle);
     if (!geom || geom->mesh_handles.empty()) return {};
 
     return build_mesh_slots(this, geometry_handle, *geom,
@@ -4981,8 +4984,8 @@ GeometrySystem::query_mesh_slots(EntityId    geometry_handle,
                                  const ktm::fvec3& world_center,
                                  float             bounding_radius,
                                  const ktm::fmat4x4* actor_transform) const {
-    auto& geom_storage = SharedDataHub::instance().geometry_storage();
-    auto geom = geom_storage.try_acquire_read(geometry_handle);
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
+    auto geom = Corona::find_geometry(geometry_handle);
     if (!geom || geom->mesh_handles.empty()) return {};
 
     return build_mesh_slots(this, geometry_handle, *geom,
@@ -5021,8 +5024,8 @@ GeometrySystem::query_shadow_mesh_slots(EntityId geometry_handle,
                                         float world_units_per_texel,
                                         float max_abs_scale,
                                         std::uint64_t frame) const {
-    auto& geom_storage = SharedDataHub::instance().geometry_storage();
-    auto geom = geom_storage.try_acquire_read(geometry_handle);
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
+    auto geom = Corona::find_geometry(geometry_handle);
     if (!geom || geom->mesh_handles.empty()) return {};
 
     for (uint32_t mesh_index = 0;
@@ -5045,8 +5048,8 @@ GeometrySystem::query_shadow_mesh_slots_batch(
     std::vector<std::vector<ShadowMeshSlot>> result(cascades.size());
     if (cascades.empty()) return result;
 
-    auto& geom_storage = SharedDataHub::instance().geometry_storage();
-    auto geom = geom_storage.try_acquire_read(geometry_handle);
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
+    auto geom = Corona::find_geometry(geometry_handle);
     if (!geom || geom->mesh_handles.empty()) return result;
 
     std::vector<GeometryDetail::ShadowLodQueryInput> query_inputs;
@@ -5201,7 +5204,7 @@ GeometrySystem::query_shadow_mesh_slots_batch(
 void GeometrySystem::update_cpu_resource_ledger() {
     auto& hub = SharedDataHub::instance();
     auto& rm  = Resource::ResourceManager::get_instance();
-    auto& geom_storage = hub.geometry_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     // ---- 阶段 1：收集当前驻留的 model_id（Scene rid）----
     std::unordered_set<std::uint64_t> live_model_ids;
@@ -5380,7 +5383,7 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
             uint32_t      mesh_count = 0;
             std::uint64_t model_id   = 0;
             {
-                auto geom = hub.geometry_storage().try_acquire_read(geom_handle);
+                auto geom = Corona::find_geometry(geom_handle);
                 if (!geom) continue;
                 mesh_count = static_cast<uint32_t>(geom->mesh_handles.size());
                 for (const auto& md : geom->mesh_handles) {

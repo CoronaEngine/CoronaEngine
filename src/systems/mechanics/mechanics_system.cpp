@@ -84,7 +84,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     std::unordered_set<std::uintptr_t> contact_observers;
 
     // --- 从 SharedDataHub 取各存储的引用（几何、变换、场景、环境等）---
-    auto& geometry_storage = SharedDataHub::instance().geometry_storage();              // 网格/包围体句柄
+    auto geometry_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
     auto scene_storage = Corona::all_scenes();
 
     ktm::fvec3 gravity = make_fvec3(0.0f, -9.8f, 0.0f);  // m/s²
@@ -135,11 +135,11 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             if (auto actor = Corona::find_actor(actor_handle)) {
                 // 续期资源访问时间（驱动 ResourceManager LRU）
                 {
-                    auto& gs = SharedDataHub::instance().geometry_storage();
+                    auto gs = Corona::Ecs::all_components<Corona::GeometryDevice>();
                     for (auto ph : actor->profile_handles) {
                         auto prof = Corona::find_profile(ph);
                         if (!prof || !prof->geometry_handle) continue;
-                        auto g = gs.try_acquire_read(prof->geometry_handle);
+                        auto g = Corona::find_geometry(prof->geometry_handle);
                         if (!g || !g->model_resource_handle) continue;
                         auto mr = Corona::find_model_resource(g->model_resource_handle);
                         if (mr && mr->model_id) {
@@ -232,7 +232,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         auto mechanics = Corona::find_mechanics(h);
         if (!mechanics) continue;
         needs_solver |= static_cast<bool>(mechanics->on_move_callback);
-        auto geometry = geometry_storage.try_acquire_read(mechanics->geometry_handle);
+        auto geometry = Corona::find_geometry(mechanics->geometry_handle);
         if (!geometry) continue;
         needs_solver |= !geometry->ik_chains.empty();
         const auto transform_handle = geometry->transform_handle;
@@ -317,7 +317,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         if (!m_acc) continue;                            // 无数据则跳过
         const auto& m = *m_acc;                          // 其 min/max、geometry_handle
 
-        auto geom_acc = geometry_storage.try_acquire_read(m.geometry_handle);
+        auto geom_acc = Corona::find_geometry(m.geometry_handle);
         if (!geom_acc) continue;
 
         const auto snapshot = step_transforms.find(geom_acc->transform_handle);
@@ -454,7 +454,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     for (const auto& entry : mechanics_data) {
         if (!entry.model_id || !entry.geom_handle) continue;
         {
-            auto geometry = geometry_storage.try_acquire_read(entry.geom_handle);
+            auto geometry = Corona::find_geometry(entry.geom_handle);
             if (!geometry || geometry->gpu_build_state != GeometryDevice::GpuBuildState::Ready ||
                 geometry->mesh_handles.empty()) continue;
             auto resource = Corona::find_model_resource(geometry->model_resource_handle);
@@ -669,7 +669,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                     bool needs_contact = false;
                     std::uint64_t revision = 0;
                     {
-                        auto gr = geometry_storage.try_acquire_read(gh);
+                        auto gr = Corona::find_geometry(gh);
                         if (gr) {
                             revision = gr->ik_chains_revision;
                             for (const auto& ch : gr->ik_chains) {
@@ -1174,7 +1174,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                     // 获取当前位置用于位移检查
                     ktm::fvec3 cur_pos = make_fvec3(0.f, 0.f, 0.f);
                     bool has_pos = false;
-                    if (auto geom = geometry_storage.try_acquire_read(mech_acc->geometry_handle)) {
+                    if (auto geom = Corona::find_geometry(mech_acc->geometry_handle)) {
                         if (auto tx_r = Corona::find_model_transform(geom->transform_handle)) {
                             cur_pos = tx_r->position;
                             has_pos = true;
@@ -1334,7 +1334,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
 
     auto& resource_manager = Resource::ResourceManager::get_instance();
     auto& hub = SharedDataHub::instance();
-    auto& geom_storage = hub.geometry_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     // dt 由 update() 测量并传入（已钳制 ≤0.1s），此处不再独立计时。
     // last_skin_update_time 保留但不再用于计算 dt，仅供外部诊断查询。
@@ -1373,7 +1373,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         impl_->skinned_collision_cache.erase(key);
         impl_->skinned_collision_model_ids.erase(key);
         impl_->skinned_octree_cache.erase(key);
-        auto geometry = geom_storage.try_acquire_write(key);
+        auto geometry = Corona::find_geometry(key);
         if (!geometry) return;
         const bool had_skin = geometry->is_skinned || geometry->skeleton_cache_model_id != 0;
         geometry->is_skinned = false;
@@ -1433,7 +1433,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         std::shared_ptr<Resource::AnimationPlayer> player;
         std::string model_path;
         {
-            auto geom_read = geom_storage.try_acquire_read(geom_handle);
+            auto geom_read = Corona::find_geometry(geom_handle);
             if (!geom_read) continue;
             model_resource_handle = geom_read->model_resource_handle;
             previous_skin_model = geom_read->skeleton_cache_model_id;
@@ -1500,7 +1500,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         EntityId ik_transform_handle = 0;
         std::uint64_t ik_revision = 0;
         {
-            auto geom_write = geom_storage.try_acquire_write(geom_handle);
+            auto geom_write = Corona::find_geometry(geom_handle);
             if (!geom_write) continue;
             geom_write->is_skinned = true;
             if (animation_discontinuity) {
@@ -1659,7 +1659,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         { auto resource = Corona::find_model_resource(job.resource);
           if (!resource || resource->model_id != job.model) continue; }
         {
-            auto geometry = geom_storage.try_acquire_write(geom_handle);
+            auto geometry = Corona::find_geometry(geom_handle);
             if (!geometry || !still_current(*geometry, job) ||
                 !commit_ik_runtime(geometry->ik_chains, geometry->ik_chains_revision, ik_chains, ik_revision))
                 continue; // Model/targets/IK configuration changed while probing; retry next frame.
@@ -1725,7 +1725,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
             job.blobs[mesh->second] = std::move(result.vertices);
             lod0_results.emplace(mesh->second, std::move(result));
         }
-        { auto geometry = geom_storage.try_acquire_read(job.geometry);
+        { auto geometry = Corona::find_geometry(job.geometry);
           if (!geometry || !still_current(*geometry, job)) continue; }
         { auto resource = Corona::find_model_resource(job.resource);
           if (!resource || resource->model_id != job.model) continue; }
@@ -1801,7 +1801,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         { auto resource = Corona::find_model_resource(job.resource);
           if (!resource || resource->model_id != job.model) continue; }
         {
-            auto geometry = geom_storage.try_acquire_write(job.geometry);
+            auto geometry = Corona::find_geometry(job.geometry);
             if (geometry && still_current(*geometry, job)) {
                 geometry->skinned_cpu_vertices = vision_readback
                     ? std::move(job.blobs) : std::vector<std::vector<std::byte>>{};
@@ -1828,7 +1828,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         const auto key = geom_handles[index];
         EntityId resource_handle{}, transform_handle{};
         {
-            auto geometry = geom_storage.try_acquire_read(key);
+            auto geometry = Corona::find_geometry(key);
             if (!geometry || geometry->gpu_build_state != GeometryDevice::GpuBuildState::Ready ||
                 geometry->mesh_handles.empty()) continue;
             resource_handle = geometry->model_resource_handle;
@@ -1879,7 +1879,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     if (impl_->gpu_collision) impl_->gpu_collision->retain(collision_keys);
     const std::unordered_set<std::uint64_t> live_collision_keys(collision_keys.begin(), collision_keys.end());
     for (const auto key : geom_handles) {
-        auto geometry = geom_storage.try_acquire_write(key);
+        auto geometry = Corona::find_geometry(key);
         if (!geometry) continue;
         geometry->collision_model_id = 0;
         if (!live_collision_keys.contains(key) || geometry->gpu_build_state != GeometryDevice::GpuBuildState::Ready ||
@@ -1961,12 +1961,12 @@ bool MechanicsSystem::register_foot_plant_chain(
         !std::isfinite(damping) || damping < 0 || damping > 1 ||
         !std::isfinite(weight_decay) || weight_decay < 0 || weight_decay > 100) return false;
     auto& hub     = SharedDataHub::instance();
-    auto& geom_st = hub.geometry_storage();
+    auto geom_st = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     // Resolve against the current model, without attempting a read-to-write lock upgrade.
     std::uintptr_t mrh = 0;
     {
-        auto gr = geom_st.try_acquire_read(geom_handle);
+        auto gr = Corona::find_geometry(geom_handle);
         if (!gr) return false;
         mrh = gr->model_resource_handle;
     }
@@ -1995,7 +1995,7 @@ bool MechanicsSystem::register_foot_plant_chain(
     }
     if (!Resource::is_valid_foot_ik_end_node(skel, node_idx)) return false;
 
-    auto gw = geom_st.try_acquire_write(geom_handle);
+    auto gw = Corona::find_geometry(geom_handle);
     if (!gw || gw->model_resource_handle != mrh) return false;
     return apply_foot_plant_chain(*gw, node_idx, bone_name, chain_length, damping, weight_decay);
 }
@@ -2004,8 +2004,8 @@ void MechanicsSystem::unregister_foot_plant_chain(
     EntityId geom_handle,
     std::string_view bone_name) {
 
-    auto& geom_st = SharedDataHub::instance().geometry_storage();
-    auto gw = geom_st.try_acquire_write(geom_handle);
+    auto geom_st = Corona::Ecs::all_components<Corona::GeometryDevice>();
+    auto gw = Corona::find_geometry(geom_handle);
     if (!gw) return;
 
     auto cache_it = gw->bone_name_to_node_idx.find(std::string(bone_name));

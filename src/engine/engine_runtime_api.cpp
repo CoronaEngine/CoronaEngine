@@ -675,8 +675,8 @@ Corona::API::Geometry::Geometry(const std::string& model_path, Resource::ModelIm
 
     transform_handle_ = SharedDataHub::instance().create_model_transform();
 
-    handle_ = SharedDataHub::instance().geometry_storage().allocate();
-    if (auto handle = SharedDataHub::instance().geometry_storage().acquire_write(handle_)) {
+    handle_ = SharedDataHub::instance().create_geometry();
+    if (auto handle = Corona::find_geometry(handle_)) {
         handle->transform_handle = transform_handle_;
         handle->model_resource_handle = model_resource_handle_;
         handle->mesh_handles.clear();  // 留空，待 GeometrySystem 异步构建
@@ -691,7 +691,7 @@ Corona::API::Geometry::Geometry(const std::string& model_path, Resource::ModelIm
         // 清理已分配的资源
         SharedDataHub::instance().destroy_model_transform(transform_handle_);
         SharedDataHub::instance().destroy_model_resource(model_resource_handle_);
-        SharedDataHub::instance().geometry_storage().deallocate(handle_);
+        SharedDataHub::instance().destroy_geometry(handle_);
         handle_ = 0;
         transform_handle_ = 0;
         model_resource_handle_ = 0;
@@ -701,7 +701,7 @@ Corona::API::Geometry::Geometry(const std::string& model_path, Resource::ModelIm
 
 Corona::API::Geometry::~Geometry() {
     if (handle_ != 0) {
-        SharedDataHub::instance().geometry_storage().deallocate(handle_);
+        SharedDataHub::instance().destroy_geometry(handle_);
     }
     if (transform_handle_ != 0) {
         SharedDataHub::instance().destroy_model_transform(transform_handle_);
@@ -724,7 +724,7 @@ Corona::API::Geometry::Geometry(Corona::API::Geometry&& other) noexcept
 Corona::API::Geometry& Corona::API::Geometry::operator=(Corona::API::Geometry&& other) noexcept {
     if (this != &other) {
         if (handle_ != 0) {
-            SharedDataHub::instance().geometry_storage().deallocate(handle_);
+            SharedDataHub::instance().destroy_geometry(handle_);
         }
         if (transform_handle_ != 0) {
             SharedDataHub::instance().destroy_model_transform(transform_handle_);
@@ -834,15 +834,15 @@ Corona::API::Geometry Corona::API::Geometry::from_image(const std::string& image
     // 图片无 Resource::Scene，model_resource_handle 保持 0：Vision adapter 会回退到
     // 从 vertexBuffer 拷回 CPU mesh 的路径（load_cpu_mesh_from_buffers），无需 model resource。
     geo.transform_handle_ = SharedDataHub::instance().create_model_transform();
-    geo.handle_ = SharedDataHub::instance().geometry_storage().allocate();
-    if (auto handle = SharedDataHub::instance().geometry_storage().acquire_write(geo.handle_)) {
+    geo.handle_ = SharedDataHub::instance().create_geometry();
+    if (auto handle = Corona::find_geometry(geo.handle_)) {
         handle->transform_handle = geo.transform_handle_;
         handle->model_resource_handle = 0;
         handle->mesh_handles = std::move(mesh_devices);
     } else {
         CFW_LOG_CRITICAL("[Geometry::from_image] Failed to acquire write access to geometry storage");
         SharedDataHub::instance().destroy_model_transform(geo.transform_handle_);
-        SharedDataHub::instance().geometry_storage().deallocate(geo.handle_);
+        SharedDataHub::instance().destroy_geometry(geo.handle_);
         geo.handle_ = 0;
         geo.transform_handle_ = 0;
     }
@@ -1081,7 +1081,7 @@ std::optional<std::array<float, 6>> Corona::API::Geometry::try_get_aabb() const 
     // resource entry lock across its whole import (seconds for a large model), and
     // the thread that paints the editor and dispatches its input must never wait for
     // it: no AABB for this refresh is acceptable, a frozen editor is not.
-    auto geom = SharedDataHub::instance().geometry_storage().try_acquire_read_nowait(handle_);
+    auto geom = Corona::find_geometry(handle_);
     if (!geom) {
         return std::nullopt;
     }
@@ -1300,7 +1300,7 @@ Corona::API::Mechanics::Mechanics(Geometry& geo)
     min_xyz.y = 0.0f;
     min_xyz.z = 0.0f;
 
-    if (auto geom_handle = SharedDataHub::instance().geometry_storage().try_acquire_read(geo.get_handle())) {
+    if (auto geom_handle = Corona::find_geometry(geo.get_handle())) {
         if (auto res_handle = Corona::find_model_resource(geom_handle->model_resource_handle)) {
             if (res_handle->model_id) {
                 if (auto scene = Resource::ResourceManager::get_instance().acquire_read<Resource::Scene>(res_handle->model_id)) {
@@ -1658,7 +1658,7 @@ Corona::API::Actor::Profile* Corona::API::Actor::add_profile(const Profile& prof
     profile_storage_handles_[profile_handle] = storage_profile_handle;
 
     Resource::ModelImportOptions import_options;
-    if (auto geometry = SharedDataHub::instance().geometry_storage().acquire_read(profile.geometry->get_handle()))
+    if (auto geometry = Corona::find_geometry(profile.geometry->get_handle()))
         import_options = geometry->import_options;
     if (handle_ != 0) {
         if (auto accessor = Corona::find_actor(handle_)) {
@@ -2770,7 +2770,7 @@ Corona::ModelNodes::Counts Corona::API::Geometry::get_model_node_counts() const 
 std::vector<Corona::API::ModelNodeOverride> Corona::API::Geometry::get_model_node_overrides() const {
     // Overrides are the editor's own persisted intent; the scene owner keeps the live
     // copy, so read it from there instead of the DAG-owned geometry slot.
-    if (auto g = SharedDataHub::instance().geometry_storage().try_acquire_read(handle_)) return g->model_node_overrides;
+    if (auto g = Corona::find_geometry(handle_)) return g->model_node_overrides;
     return {};
 }
 bool Corona::API::Geometry::set_model_node_state(uint32_t index, const ModelNodeState& state) {

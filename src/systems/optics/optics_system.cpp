@@ -1203,7 +1203,7 @@ bool collect_actor_instances_for_visibility(
     const auto& diag = optics_diag_config();
 
     auto& hub = Corona::SharedDataHub::instance();
-    auto& geom_storage = hub.geometry_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     bool has_instances = false;
     uint32_t recorded_draws = 0;
@@ -1224,7 +1224,7 @@ bool collect_actor_instances_for_visibility(
             for (auto ph : actor->profile_handles) {
                 auto prof = Corona::find_profile(ph);
                 if (!prof || !prof->geometry_handle) continue;
-                auto g = geom_storage.try_acquire_read(prof->geometry_handle);
+                auto g = Corona::find_geometry(prof->geometry_handle);
                 if (!g || !g->model_resource_handle) continue;
                 auto mr = Corona::find_model_resource(g->model_resource_handle);
                 if (mr && mr->model_id) {
@@ -1258,7 +1258,7 @@ bool collect_actor_instances_for_visibility(
             EntityId transform_handle_a = 0;
             float          nlc_scale_a   = 1.0f;
             ktm::fvec3     nlc_offset_a  = {0.0f, 0.0f, 0.0f};
-            if (auto geom_r = geom_storage.try_acquire_read(optics.geometry_handle)) {
+            if (auto geom_r = Corona::find_geometry(optics.geometry_handle)) {
                 transform_handle_a = geom_r->transform_handle;
                 nlc_scale_a        = geom_r->native_local_correction_scale;
                 nlc_offset_a       = geom_r->native_local_correction_offset;
@@ -1656,7 +1656,7 @@ constexpr std::size_t kVisionInteractiveInstanceLimit = 1024;
 
 void fallback_large_scenes_to_native_renderer() {
     auto& hub = Corona::SharedDataHub::instance();
-    auto& geometry_storage = hub.geometry_storage();
+    auto geometry_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
     auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
 
     for (const auto& scene : Corona::all_scenes()) {
@@ -1676,8 +1676,8 @@ void fallback_large_scenes_to_native_renderer() {
                 const auto profile = Corona::find_profile(profile_handle);
             if (!profile || profile->optics_handle == 0) continue;
                 const auto optics = Corona::find_optics(profile->optics_handle);
-                const auto geometry = optics ? geometry_storage.try_acquire_read(optics->geometry_handle)
-                                             : decltype(geometry_storage.try_acquire_read(0)){};
+                const auto geometry = optics ? Corona::find_geometry(optics->geometry_handle)
+                                             : decltype(Corona::find_geometry(0)){};
                 if (!optics || !optics->visible || !geometry) continue;
                 if (!geometry->mesh_instances.empty()) {
                     instance_count += geometry->mesh_instances.size();
@@ -3304,7 +3304,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         visibility.visibilityData = hardware_->visibilityImage;
         visibility.bind_depth_target(hardware_->depthImage);
 
-        auto& geom_storage = SharedDataHub::instance().geometry_storage();
+        auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
         const auto& diag = optics_diag_config();
 
         RenderInstanceBatch sceneBatch;
@@ -3362,7 +3362,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     for (auto ph : actor->profile_handles) {
                         auto prof = Corona::find_profile(ph);
                         if (!prof || !prof->geometry_handle) continue;
-                        auto g = geom_storage.try_acquire_read(prof->geometry_handle);
+                        auto g = Corona::find_geometry(prof->geometry_handle);
                         if (!g || !g->model_resource_handle) continue;
                         auto mr = Corona::find_model_resource(g->model_resource_handle);
                         if (mr && mr->model_id) {
@@ -3402,7 +3402,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     EntityId transform_handle_b = 0;
                     float          nlc_scale_b  = 1.0f;
                     ktm::fvec3     nlc_offset_b = {0.0f, 0.0f, 0.0f};
-                    if (auto geom_r = geom_storage.try_acquire_read(optics.geometry_handle)) {
+                    if (auto geom_r = Corona::find_geometry(optics.geometry_handle)) {
                         transform_handle_b = geom_r->transform_handle;
                         nlc_scale_b        = geom_r->native_local_correction_scale;
                         nlc_offset_b       = geom_r->native_local_correction_offset;
@@ -3694,7 +3694,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     // Clear glass transmits the solar field approximately;
                     // colored shadows and caustics require a separate model.
                     if(optics_acc->principled && optics_acc->principled->transmission>=.999f)continue;
-                    auto geom = geom_storage.try_acquire_read(optics_acc->geometry_handle);
+                    auto geom = Corona::find_geometry(optics_acc->geometry_handle);
                     if (!geom || geom->transform_handle == 0) continue;
                     auto transform =
                         Corona::find_model_transform(geom->transform_handle);
@@ -4017,8 +4017,8 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         // During async import the actor may not yet have a visible
         // scene-batch instance. Inspect the storage globally so the
         // loading guard is active from the first import frame.
-        for (auto it = shared_hub.geometry_storage().cbegin();
-             it != shared_hub.geometry_storage().cend(); ++it) {
+        auto geometry_components = Corona::Ecs::all_components<Corona::GeometryDevice>();
+        for (auto it = geometry_components.cbegin(); it != geometry_components.cend(); ++it) {
             if (it->gpu_build_state == GeometryDevice::GpuBuildState::PendingImport ||
                 it->gpu_build_state == GeometryDevice::GpuBuildState::PendingBuild) {
                 geometry_loading = true;
@@ -5088,7 +5088,7 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
     };
 
     auto& hub = SharedDataHub::instance();
-    auto& geom_storage = hub.geometry_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     const auto mix_scene = [&](const SceneDevice& scene_dev) {
         if (!scene_dev.enabled) return;
@@ -5119,7 +5119,7 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
                 mix_float(optics->clearcoat);
                 mix_float(optics->clearcoatGloss);
 
-                auto geom = geom_storage.try_acquire_read(optics->geometry_handle);
+                auto geom = Corona::find_geometry(optics->geometry_handle);
                 if (!geom) continue;
                 mix(static_cast<std::size_t>(optics->geometry_handle));
                 mix(static_cast<std::size_t>(geom->model_resource_handle));

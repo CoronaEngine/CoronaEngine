@@ -280,7 +280,7 @@ void AcousticsSystem::update_spatial() {
             return;
         }
 
-        auto& geometry_storage = hub.geometry_storage();
+        auto geometry_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
         for (auto& ap_ptr : active_playbacks_) {
             auto& ap = *ap_ptr;
@@ -300,8 +300,8 @@ void AcousticsSystem::update_spatial() {
             if (geometry_handle == 0) {
                 continue;
             }
-            auto geo = geometry_storage.try_acquire_read(geometry_handle);
-            if (!geo.valid() || geo->transform_handle == 0) {
+            auto geo = Corona::find_geometry(geometry_handle);
+            if (geo == nullptr || geo->transform_handle == 0) {
                 continue;
             }
             auto xf = Corona::find_model_transform(geo->transform_handle);

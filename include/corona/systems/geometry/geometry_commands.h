@@ -120,9 +120,8 @@ inline bool apply_pending_geometry_commands() {
         return false;
     }
 
-    auto& storage = SharedDataHub::instance().geometry_storage();
     for (auto& command : commands) {
-        auto geometry = storage.try_acquire_write(command.geometry_handle);
+        auto* geometry = Corona::find_geometry(command.geometry_handle);
         if (!geometry) {
             continue;  // 几何已销毁：命令随对象作废
         }

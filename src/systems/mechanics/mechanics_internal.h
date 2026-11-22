@@ -628,11 +628,11 @@ inline bool ensure_collision_mesh(
 
 /// 获取 mechanics handle 对应的 model_id
 inline std::uint64_t get_model_id_for_mechanics(EntityId mech_handle) {
-    auto& geometry_storage = Corona::SharedDataHub::instance().geometry_storage();
+    auto geometry_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     auto m_acc = Corona::find_mechanics(mech_handle);
     if (!m_acc) return 0;
-    auto geom_acc = geometry_storage.try_acquire_read(m_acc->geometry_handle);
+    auto geom_acc = Corona::find_geometry(m_acc->geometry_handle);
     if (!geom_acc) return 0;
     auto res_acc = Corona::find_model_resource(geom_acc->model_resource_handle);
     if (!res_acc) return 0;

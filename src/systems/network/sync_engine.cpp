@@ -350,10 +350,9 @@ struct SyncEngine::Impl {
 
         geo_seq_to_id.clear();
         {
-            auto& store = hub.geometry_storage();
-            for (auto it = store.cbegin(); it != store.cend(); ++it) {
-                const auto obj_id = it.id();
-                geo_seq_to_id[store.seq_id(obj_id)] = obj_id;
+            for (const auto entity : Corona::Ecs::view<GeometryDevice>()) {
+                const auto obj_id = Corona::Ecs::to_handle(entity);
+                geo_seq_to_id[Corona::Ecs::seq_of(obj_id)] = obj_id;
             }
         }
 

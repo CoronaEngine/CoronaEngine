@@ -74,6 +74,31 @@ struct MeshDevice {
     // 同一张 GPU 纹理只记账一次，最后一个引用释放时才扣减。
     Corona::Memory::GpuMemToken mesh_mem;
     std::shared_ptr<Corona::Memory::GpuMemToken> tex_mem;
+
+    // 迁移到 ECS 后 MeshDevice 成了组件，entt 的容器在若干路径需要可拷贝类型。
+    // 拷贝**不复制 GPU 记账令牌**（同一批显存不能被记两次账），纹理令牌本就共享。
+    MeshDevice() = default;
+    MeshDevice(const MeshDevice& other) { *this = other; }
+    MeshDevice& operator=(const MeshDevice& other) {
+        if (this == &other) {
+            return *this;
+        }
+        draw_clusters = other.draw_clusters;
+        shadowIndexBuffer = other.shadowIndexBuffer;
+        indexBuffer = other.indexBuffer;
+        vertexBuffer = other.vertexBuffer;
+        indexStorageBuffer = other.indexStorageBuffer;
+        vertexStorageBuffer = other.vertexStorageBuffer;
+        materialIndex = other.materialIndex;
+        textureBuffer = other.textureBuffer;
+        material = other.material;
+        materialColor = other.materialColor;
+        vertex_count = other.vertex_count;
+        index_count = other.index_count;
+        max_index = other.max_index;
+        tex_mem = other.tex_mem;
+        return *this;
+    }
 };
 
 /// 一个共享 MeshDevice 的场景实例。transform 为网格本地空间到 actor 本地空间
@@ -845,6 +870,9 @@ using SceneRange = Ecs::ComponentRange<SceneDevice>;
 /// 便捷：按句柄取 CameraDevice 组件（无锁）。
 [[nodiscard]] CameraDevice* find_camera(EntityId handle);
 
+/// 便捷：按句柄取 GeometryDevice 组件（无锁）。
+[[nodiscard]] GeometryDevice* find_geometry(EntityId handle);
+
 class SharedDataHub {
    public:
     static SharedDataHub& instance();
@@ -861,7 +889,6 @@ class SharedDataHub {
 
    public:
     // 新的 Storage 类型定义，包含默认的容量和内存池参数
-    using GeometryStorage = Kernel::Utils::EntityStorage<GeometryDevice, 128, 2>;
     using ImageStorage = Kernel::Utils::EntityStorage<ImageDevice, 128, 2>;
 
     // model_resource 已删除 Storage：组件直接挂在实体上。
@@ -876,8 +903,11 @@ class SharedDataHub {
     [[nodiscard]] ModelTransform* try_model_transform(EntityId handle);
     [[nodiscard]] const ModelTransform* try_model_transform(EntityId handle) const;
 
-    GeometryStorage& geometry_storage();
-    const GeometryStorage& geometry_storage() const;
+    // geometry 已删除 Storage：组件直接挂在实体上。
+    EntityId create_geometry();
+    void destroy_geometry(EntityId handle);
+    [[nodiscard]] GeometryDevice* try_geometry(EntityId handle);
+    [[nodiscard]] const GeometryDevice* try_geometry(EntityId handle) const;
 
     // mechanics 已删除 Storage：组件直接挂在实体上。
     EntityId create_mechanics();
@@ -1032,7 +1062,6 @@ class SharedDataHub {
     /// 远端 CEF 重构引入：直接写/清 session store 里的指针状态
 
    private:
-    GeometryStorage geometry_storage_;
     mutable std::mutex actor_metadata_mutex_;
     std::unordered_map<EntityId, std::string> actor_guids_;
     Kernel::SnapshotChannel<CameraSnapshot> camera_snapshot_;

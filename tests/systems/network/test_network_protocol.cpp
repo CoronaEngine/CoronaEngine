@@ -986,13 +986,13 @@ void test_network_identity_registry_resolves_actor_components() {
     auto& hub = Corona::SharedDataHub::instance();
 
     auto transform = hub.create_model_transform();
-    auto geometry = hub.geometry_storage().allocate();
+    auto geometry = hub.create_geometry();
     auto optics = hub.create_optics();
     auto profile = hub.create_profile_component();
     auto actor = hub.create_actor_component();
 
     {
-        auto g = hub.geometry_storage().acquire_write(geometry);
+        auto g = Corona::find_geometry(geometry);
         g->transform_handle = transform;
     }
     {
@@ -1025,7 +1025,7 @@ void test_network_identity_registry_resolves_actor_components() {
     hub.destroy_actor_component(actor);
     hub.destroy_profile_component(profile);
     hub.destroy_optics(optics);
-    hub.geometry_storage().deallocate(geometry);
+    hub.destroy_geometry(geometry);
     hub.destroy_model_transform(transform);
 }
 
@@ -1033,12 +1033,12 @@ void test_network_identity_registry_tracks_local_ownership() {
     auto& hub = Corona::SharedDataHub::instance();
 
     auto transform = hub.create_model_transform();
-    auto geometry = hub.geometry_storage().allocate();
+    auto geometry = hub.create_geometry();
     auto profile = hub.create_profile_component();
     auto actor = hub.create_actor_component();
 
     {
-        auto g = hub.geometry_storage().acquire_write(geometry);
+        auto g = Corona::find_geometry(geometry);
         g->transform_handle = transform;
     }
     {
@@ -1061,7 +1061,7 @@ void test_network_identity_registry_tracks_local_ownership() {
 
     hub.destroy_actor_component(actor);
     hub.destroy_profile_component(profile);
-    hub.geometry_storage().deallocate(geometry);
+    hub.destroy_geometry(geometry);
     hub.destroy_model_transform(transform);
 }
 
@@ -1069,12 +1069,12 @@ void test_network_identity_registry_applies_pending_ownership_override() {
     auto& hub = Corona::SharedDataHub::instance();
 
     auto transform = hub.create_model_transform();
-    auto geometry = hub.geometry_storage().allocate();
+    auto geometry = hub.create_geometry();
     auto profile = hub.create_profile_component();
     auto actor = hub.create_actor_component();
 
     {
-        auto g = hub.geometry_storage().acquire_write(geometry);
+        auto g = Corona::find_geometry(geometry);
         g->transform_handle = transform;
     }
     {
@@ -1097,7 +1097,7 @@ void test_network_identity_registry_applies_pending_ownership_override() {
 
     hub.destroy_actor_component(actor);
     hub.destroy_profile_component(profile);
-    hub.geometry_storage().deallocate(geometry);
+    hub.destroy_geometry(geometry);
     hub.destroy_model_transform(transform);
 }
 
@@ -1105,7 +1105,7 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
     auto& hub = Corona::SharedDataHub::instance();
 
     auto transform = hub.create_model_transform();
-    auto geometry = hub.geometry_storage().allocate();
+    auto geometry = hub.create_geometry();
     auto profile = hub.create_profile_component();
     auto actor = hub.create_actor_component();
 
@@ -1114,7 +1114,7 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
         t->position.x = 42.0f;
     }
     {
-        auto g = hub.geometry_storage().acquire_write(geometry);
+        auto g = Corona::find_geometry(geometry);
         g->transform_handle = transform;
     }
     {
@@ -1151,7 +1151,7 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
         sync.shutdown();
         hub.destroy_actor_component(actor);
         hub.destroy_profile_component(profile);
-        hub.geometry_storage().deallocate(geometry);
+        hub.destroy_geometry(geometry);
         hub.destroy_model_transform(transform);
         return;
     }
@@ -1170,7 +1170,7 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
     sync.shutdown();
     hub.destroy_actor_component(actor);
     hub.destroy_profile_component(profile);
-    hub.geometry_storage().deallocate(geometry);
+    hub.destroy_geometry(geometry);
     hub.destroy_model_transform(transform);
 }
 
@@ -1179,7 +1179,7 @@ void test_sync_engine_emits_optics_but_not_local_handles() {
 
     auto transform = hub.create_model_transform();
     auto model_resource = hub.create_model_resource();
-    auto geometry = hub.geometry_storage().allocate();
+    auto geometry = hub.create_geometry();
     auto optics = hub.create_optics();
     auto profile = hub.create_profile_component();
     auto actor = hub.create_actor_component();
@@ -1189,7 +1189,7 @@ void test_sync_engine_emits_optics_but_not_local_handles() {
         mr->model_id = 7;
     }
     {
-        auto g = hub.geometry_storage().acquire_write(geometry);
+        auto g = Corona::find_geometry(geometry);
         g->transform_handle = transform;
         g->model_resource_handle = model_resource;
     }
@@ -1242,7 +1242,7 @@ void test_sync_engine_emits_optics_but_not_local_handles() {
     hub.destroy_actor_component(actor);
     hub.destroy_profile_component(profile);
     hub.destroy_optics(optics);
-    hub.geometry_storage().deallocate(geometry);
+    hub.destroy_geometry(geometry);
     hub.destroy_model_resource(model_resource);
     hub.destroy_model_transform(transform);
 }
@@ -1251,7 +1251,7 @@ void test_sync_engine_does_not_emit_remote_owned_transform() {
     auto& hub = Corona::SharedDataHub::instance();
 
     auto transform = hub.create_model_transform();
-    auto geometry = hub.geometry_storage().allocate();
+    auto geometry = hub.create_geometry();
     auto profile = hub.create_profile_component();
     auto actor = hub.create_actor_component();
 
@@ -1260,7 +1260,7 @@ void test_sync_engine_does_not_emit_remote_owned_transform() {
         t->position.x = 7.0f;
     }
     {
-        auto g = hub.geometry_storage().acquire_write(geometry);
+        auto g = Corona::find_geometry(geometry);
         g->transform_handle = transform;
     }
     {
@@ -1322,7 +1322,7 @@ void test_sync_engine_does_not_emit_remote_owned_transform() {
     sync.shutdown();
     hub.destroy_actor_component(actor);
     hub.destroy_profile_component(profile);
-    hub.geometry_storage().deallocate(geometry);
+    hub.destroy_geometry(geometry);
     hub.destroy_model_transform(transform);
 }
 

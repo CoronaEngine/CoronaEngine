@@ -910,9 +910,9 @@ struct VisionEngineSceneTest {
     }
     static void check_independent_denoiser(OpticsSystem& system, vision::Pipeline& pipeline,
                                           const char* algorithm) {
-        auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
-        const auto first_camera = camera_storage.allocate();
-        const auto second_camera = camera_storage.allocate();
+        auto& hub = Corona::SharedDataHub::instance();
+        const auto first_camera = hub.create_camera();
+        const auto second_camera = hub.create_camera();
         auto prepare = [&](std::uintptr_t camera, CameraVisionDenoiser type, bool enabled = true) {
             expect(system.prepare_vision_camera_view(system.active_vision_runtime(), camera,
                        16, 16, enabled, false, true, type), "denoiser selection must prepare a usable view");
@@ -1028,8 +1028,8 @@ struct VisionEngineSceneTest {
         pipeline.commit_command();
         pipeline.remove_view_context(first_camera);
         pipeline.remove_view_context(second_camera);
-        camera_storage.deallocate(first_camera);
-        camera_storage.deallocate(second_camera);
+        hub.destroy_camera(first_camera);
+        hub.destroy_camera(second_camera);
     }
     static void check_independent_stable_planes(OpticsSystem& system, vision::Pipeline& pipeline) {
         auto prepare = [&](std::uintptr_t handle, bool enabled) {
@@ -1296,14 +1296,14 @@ struct VisionEngineSceneTest {
         expect(id != 0, "Corona must import the mesh fixture");
         const auto model = hub.create_model_resource();
         const auto transform = hub.create_model_transform();
-        const auto geometry = hub.geometry_storage().allocate();
+        const auto geometry = hub.create_geometry();
         const auto optics = hub.create_optics();
         const auto profile = hub.create_profile_component();
         const auto actor = hub.create_actor_component();
         const auto environment = hub.create_environment();
         const auto scene = hub.create_scene();
         { auto* w = hub.try_model_resource(model); w->model_id = id; }
-        { auto w = hub.geometry_storage().acquire_write(geometry); w->model_resource_handle = model; w->transform_handle = transform; }
+        { auto w = Corona::find_geometry(geometry); w->model_resource_handle = model; w->transform_handle = transform; }
         { auto w = Corona::find_optics(optics); w->geometry_handle = geometry; }
         { auto w = hub.try_profile(profile); w->geometry_handle = geometry; w->optics_handle = optics; }
         { auto w = Corona::find_actor(actor); w->profile_handles = {profile}; }
@@ -1393,7 +1393,7 @@ struct VisionEngineSceneTest {
         hub.destroy_actor_component(actor);
         hub.destroy_profile_component(profile);
         hub.destroy_optics(optics);
-        hub.geometry_storage().deallocate(geometry);
+        hub.destroy_geometry(geometry);
         hub.destroy_model_transform(transform);
         hub.destroy_model_resource(model);
         if (!shared_display_only && !imported_emission_only) {
