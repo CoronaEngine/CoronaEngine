@@ -1,8 +1,8 @@
 # Web 接口层的决定记录
 
-契约本身是生成的，见 [interface-contract.md](interface-contract.md)：9 个命名空间、54 个方法，
-以及三条边界和失败码表。这份文档只记**为什么**它长成这样——哪些看似能合并的东西合并了，哪些
-被明确否决并保留。
+契约本身是**手工维护的快照**，见 [interface-contract.md](interface-contract.md)：9 个命名空间、
+54 个方法，以及三条边界和失败码表。权威来源是 `editor_operation_table.h` 与 Python 绑定源码。
+这份文档只记**为什么**它长成这样——哪些看似能合并的东西合并了，哪些被明确否决并保留。
 
 ## 1. 三条边界
 
@@ -14,9 +14,9 @@
 
 所有名字都是具名函数；没有任何"按名字分发"的通用入口（见第 3 节）。Web 面与 Python 的
 两组导出互不重叠，各自的声明处是唯一的：Web 是 `editor_operation_table.h`，Python 是
-`embedded_python/runtime` 里真正调用它们的代码。**手写名单的逐名校验已删除**（见第 6 节
-末尾）——`native_surface.py` 现在只用来渲染契约文档，`python_surface.py` 只剩"不许回来"的
-名字和分组顺序。脚本对象模型（`CoronaEngine.script`）曾作为第三条 Python 边界存在，
+`embedded_python/runtime` 里真正调用它们的代码。**手写名单与逐名校验都已删除**（见第 6 节
+末尾）——契约文档是一份手工快照，`python_surface.py` 只剩"不许回来"的名字和分组顺序。
+脚本对象模型（`CoronaEngine.script`）曾作为第三条 Python 边界存在，
 因仓内无消费者而删除——要不要重新给 Python 场景读写能力是产品决定，不是本契约的一部分。
 
 ## 2. 演进记录
@@ -110,8 +110,8 @@ settlement；C++ 侧的所有者另走 `cancel_context` 取消工作。
 
 1. 改 `src/systems/ui/cef/`：读者、注册、执行三处。
 2. 如果要改方法名，只改 `editor_operation_table.h`（`static_assert` 会盯行数）。
-3. `python tests/tools/generate_interface_contract.py` 重新生成契约——如果方法表变了，顺手把
-   `native_surface.py` 也改掉，否则文档会过时（不再有守卫拦这一步，见下方说明）。
+3. 没有可重新生成的清单：`editor_operation_table.h` 与绑定源码就是权威。
+   `docs/interface-contract.md` 是手工快照，想让它跟上就手动改。
 4. 改 `tests/integration/web_messages_cef_smoke.mjs`（调用与 `typeof` 断言会被守卫检查）。
 5. 前端：改 facade → 推送 CoronaEditor → `python build_tools/dev.py pin editor <sha>` →
    `python build_tools/dev.py editor-sync`。
@@ -120,18 +120,19 @@ settlement；C++ 侧的所有者另走 `cancel_context` 取消工作。
 
 **已删除的两类机械校验**：接口行数 ratchet（测文件大小）与"代码 ↔ 手写名单逐名相等"
 （`test_editor_operation_table.py` 及另两个守卫里的逐名比对）。它们共有的毛病是"改接口必改
-名单"，而失败信息只说两边不一样。现在方法集合的事实来源是操作表本身，文档只是它的投影；
+名单"，而失败信息只说两边不一样。现在方法集合的事实来源是操作表本身，文档只是它的手工快照；
 名字真的写错时，编译期（`static_assert`、`SetValue` 拼写）与冒烟会先报。
 
 ## 7. 现在的守卫
 
-全部列在契约文档的守卫表里，并由 `tests/tools/test_interface_contract_doc.py` 保证表与
-`tests/tools/*.py` 一致：新增一个守卫必须登记，否则失败。
+守卫就是 `tests/tools/` 下的测试，文件名即主题；没有登记表，也没有生成器或文档闸门——一张靠
+人工维护的守卫清单只会过期，而登记本身不证明任何事。
 
-覆盖重点：方法名表、文档一致性、拒绝码词表、集成脚本（调用与 `typeof` 断言）、前端 facade
-（存在性、唯一入口、一一映射）、前端回归文件、pin 工具。行数 ratchet 曾经也在其中，后来删掉了：
-它测的是文件有多大，而接口形状已经由两张名单钉死——一个"涨就要写理由"的守卫，每次特征改动
-都要人工记账，却抓不到它真正关心的东西（多一个方法、少一个方法）。
+覆盖重点：拒绝码词表、集成脚本（调用与 `typeof` 断言）、前端 facade（存在性、唯一入口、
+一一映射）、前端回归文件、Python 面的删除与安装顺序、pin 工具。**没有守卫逐名比对接口面**：
+名字的事实来源是 `editor_operation_table.h` 与绑定源码，文档只是它们的手工快照。行数 ratchet
+曾经也在其中，后来删掉了：它测的是文件有多大——一个"涨就要写理由"的守卫，每次特征改动都要
+人工记账，却抓不到它真正关心的东西（多一个方法、少一个方法）。
 
 ## 7.1 Web→Python 的业务拒绝统一为 Promise 拒绝
 

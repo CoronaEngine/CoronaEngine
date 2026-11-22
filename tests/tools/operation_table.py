@@ -1,8 +1,4 @@
-"""The Web operation table, parsed once.
-
-Every guard used to carry its own copy of this parser. It now reads the one table:
-`{group, name, method, summary}` rows, all of them published to the Web surface (the
-ScriptRuntime projection was removed with the script runtime).
+"""The Web operation table, parsed once as `{group, name, method, summary}` rows.
 
 A row's method is qualified by the enum that owns it - `SceneMethod::ReadScene`,
 `WindowMethod::CreatePanel`, `NativeEventKind::Closed` - because the surface spans eight
@@ -37,12 +33,5 @@ def rows():
 
 
 def web_rows():
+    """Every row, in table order."""
     return rows()
-
-
-def script_rows():
-    return []
-
-
-def script_keys():
-    return []

@@ -1,11 +1,7 @@
 # 接口契约（Web / Python）
 
-这份文档是接口层的**单一入口**。它不重复代码，只给出边界、各自的形状，以及
-**哪条测试在保护它**——契约信息散在守卫和注释里时，新人没有起点。
-
-由 `tests/tools/generate_interface_contract.py` 生成；`test_interface_contract_doc.py`
-会在它与代码不一致时失败。Python 面的清单从绑定源码解析，新增一条 `m.def` 而没在
-生成器里登记归类或用途时，生成器直接失败——这样「能力」不会悄悄膨胀成一团模糊。
+这份文档是接口层的**单一入口**：三条边界、两侧的形状与失败码表。名字的权威来源是
+`src/systems/ui/cef/editor_operation_table.h`（Web 面）与绑定源码（Python 面）；本文是手工维护的快照。
 
 ## 三条边界
 
@@ -14,11 +10,10 @@
 | Web → C++ | 编辑器前端 | `window.corona.*` | 同步值 / Promise |
 | Web → Python | 前端与 C++ 都可能发起 | `corona.bridge.call` → Python 服务 | JSON 信封 |
 
-manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里没有任何按名字分发
-的桥。名字都是**具名函数**。
+没有任何按名字分发的桥；名字都是**具名函数**。
 
-命名空间按职责划分，不再是「一个方法一个命名空间」：项目文档与项目元数据在 `project`，
-视口配置在 `viewport`，脚本输入派发在 `input`，音频按身份分 `play`/`stop`。
+命名空间按职责划分：项目文档与项目元数据在 `project`，视口配置在 `viewport`，脚本输入派发在
+`input`，音频按身份分 `play`/`stop`。
 **键名规则**：过原生的键一律 snake_case（`panel_id`、`route_path`、`archive_session`），
 请求和回复用同一套写法。窗口命令对象**本身就是线上对象**：`appService` 把命令参数
 原样交给绑定，没有 camelCase↔snake_case 的转换层。**方法名也是 snake_case**：表里的
@@ -26,9 +21,8 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 
 ## Web 面
 
-共 9 个命名空间 / 54 个方法。清单由
-`src/systems/ui/cef/editor_operation_table.h` 声明，本文由生成器从 `native_surface.py`
-渲染（那张表不再由守卫逐名比对，见 `test_typed_native_surface.py`）：
+共 9 个命名空间 / 54 个方法。名字的唯一声明处是
+`src/systems/ui/cef/editor_operation_table.h`；下面是它的手工快照：
 
 | 命名空间 | 说明 |
 |---|---|
@@ -59,8 +53,7 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 ### 每个操作的用途与归类
 
 归类只有三种：**capability**（读或写引擎/编辑器状态）、**event**（UI 才需要的订阅）、
-**cross-boundary**（边界本身）。归类不是自动推导的——表在生成器里，新增一行而不归类
-会让生成器失败,而不是默认混进 capability。
+**cross-boundary**（边界本身）。
 
 | 命名空间 | 操作 | 归类 | 用途 |
 |---|---|---|---|
@@ -121,9 +114,8 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 
 ### 面板与窗口：三个合并后的入口
 
-同一件事（打开一个面板、关闭一个窗口、改变窗口呈现）以前按“哪个面板 / 哪个开关”拆成
-多个方法。现在各留一个，差异用参数表达。**面板停靠由 ImGui 负责**：面板打开后就是一个
-ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web 层不再发送停靠位置。
+打开面板、关闭窗口、改变呈现各有一个入口，差异用参数表达。**面板停靠由 ImGui 负责**：
+面板打开后就是一个 ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web 层不发送停靠位置。
 
 | 方法 | 请求 | 说明 |
 |---|---|---|
@@ -139,11 +131,10 @@ ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web �
 
 `panel_id` 是**稳定面板身份**，开/关/聚焦都用它。`window_token` 是**这一次创建**的
 不透明令牌：同一个 `panel_id` 重开后令牌不同，用来把 `onClosed` 的负载和当初那次创建的
-返回值对齐（原始 tab id 不再暴露）。窗口不查询自身状态：身份来自 `createPanel` 的返回值
+返回值对齐（不暴露原始 tab id）。窗口不查询自身状态：身份来自 `createPanel` 的返回值
 和打开时带在 URL 上的参数。
 
-**权限**：窗口操作按调用者身份授权，规则集中在 `cef_window_operations.cpp` 的每个 case，
-这里列全，接入方不必读源码：
+**权限**：窗口操作按调用者身份授权，规则集中在 `cef_window_operations.cpp` 的每个 case：
 
 | 调用者 \ 操作 | 关自己 | `close({panel_id})` | `close({scene_id, camera_id})` | `close({scene_id})` | `focus({panel_id})` | `setWindowPresentation({target:'main'})` |
 |---|---|---|---|---|---|---|
@@ -155,8 +146,7 @@ ImGui 窗口，用户拖动标签页停靠，布局由 imgui.ini 记住，Web �
 `camera_authority` 是否仍 active）授权，因为 SceneTools 自己就在一个原生 Dock 上下文里。
 越权一律 `PERMISSION_DENIED`，不会静默忽略。
 
-**失败形状**：Promise 拒绝时携带下表的码，原样透传给 Web。`rejection_codes.py`
-声明全集，`test_rejection_vocabulary.py` 保证源码只发这些码。
+**失败形状**：Promise 拒绝时携带下表的码，原样透传给 Web；`rejection_codes.py` 声明全集。
 
 | 分组 | 谁给出 | 码 |
 |---|---|---|
@@ -172,15 +162,14 @@ Web 可以按这些码决定重试、禁用控件或提示；其余是**细节�
 
 Python 服务的**业务拒绝**统一是 Promise 拒绝，带 `error.code`：`project_archive` 与
 `project_files` 在 Python 侧抛 `BridgeError(code, message)`，dispatcher 把它写成
-符号码落在 `data.code`（与 C++ 场景层同一字段），C++ 桥不再解析消息，因此 `PROJECT_CONTEXT_CHANGED`、
+符号码落在 `data.code`（与 C++ 场景层同一字段），C++ 桥不解析消息，因此 `PROJECT_CONTEXT_CHANGED`、
 `DOCUMENT_CONFLICT`、`READ_ONLY_PROJECT`、`CONFLICT` 等业务码原样到达前端。
 同步方法**永不拒绝**：返回值，找不到时返回文档化的空值。
 
 
 ## Python 服务清单（bridge 可达）
 
-`corona.bridge.call` 只接受这些服务。白名单在 `runtime/editor_host.py` 的
-`ALLOWED_SERVICES`；函数清单从服务源码解析，所以新增方法或服务后这份文档必须重新生成。
+`corona.bridge.call` 只接受这些服务。白名单在 `runtime/editor_host.py` 的 `ALLOWED_SERVICES`。
 信封是 `{service, function, args}`，业务拒绝是带 `error.code` 的 Promise 拒绝。
 
 | 服务 | 模块 | 函数 |
@@ -196,11 +185,10 @@ Python 服务的**业务拒绝**统一是 Promise 拒绝，带 `error.code`：`p
 ## Python 宿主面（`CoronaEngine.*`）
 
 模块由两个组按序安装：`BindHostSupport` → `BindCef`（`BindCef` 内部再调
-`BindCefServiceQueue`）。它是**被引擎启动的宿主**，不是对外服务者；下面绝大多数条目是
-宿主管道，不是能力。
+`BindCefServiceQueue`）。它是被引擎启动的宿主，下面绝大多数条目是宿主管道，不是能力。
 
 **C++ → Python 只有两处**：`python_api.cpp` 按名字取 `main.run` 与 `main.loop`，启动时
-各调用一次。之后 C++ 一次都不再调用 Python 函数。
+各调用一次，之后 C++ 不再调用 Python 函数。
 
 | 组 | 接口 | 归类 | 用途 | 定义 |
 |---|---|---|---|---|
@@ -226,64 +214,27 @@ Python 服务的**业务拒绝**统一是 Promise 拒绝，带 `error.code`：`p
 | 项目会话 | 随 `scene.read_active` 带出 | `active_project_path` + `active_project_session` | 宿主需要**权威**会话身份（`archive_session` 单看路径无法区分重开），UI 只需要展示 |
 | 归档/文档 | 只有 `project.*` 两个入口，其余走 `bridge.call` | 全部服务在 Python 内 | 实现就在 Python 侧，跨过去只能经过桥 |
 
-因此「两侧长相一样的 API」不可追求：那会逼一侧塞进它不需要的东西（给页面塞
-`poll_service_requests`），或把权限校验降级成可选参数。可以统一的是**能力目录**
-（名字、schema、归类、投影到哪几侧），不是调用形状。
-
-
-
 ## 超时与并发
 
 传输层的超时只有一个语义：Python 运行时没有在期限内回应时，C++ 把回复状态映射成
 `504`，Web 收到 `EDITOR_API_TIMEOUT`（`python_service_bridge.cpp`）。
-**每个操作自己负责超时**——传输层不再叠加第二条 deadline，因为一个慢的解析和一个
-挂死的进程要用不同的方式处理，混在传输层会让两者都不可诊断。
+**每个操作自己负责超时**——传输层不叠加第二条 deadline：一个慢的解析和一个挂死的进程要用
+不同的方式处理，混在传输层会让两者都不可诊断。
 
 Python 侧是单消费者串行：bridge 请求在同一个 worker 上依次执行，所以两个请求不会
 并发改同一个项目；需要并行的工作由操作自己在内部派发。
 
-## 保护这份契约的守卫
-
-| 守卫 | 保护什么 |
-|---|---|
-| [`test_manifest_retirement.py`](../tests/tools/test_manifest_retirement.py) | 已删除的 manifest 不许回来 |
-| [`test_typed_native_surface.py`](../tests/tools/test_typed_native_surface.py) | 拒绝码词表；场景行都有参数读取器；bridge 只一个函数；无 JSON 传输；前端只经 facade |
-| [`test_python_native_surface.py`](../tests/tools/test_python_native_surface.py) | Python 面规则：无子模块、删掉的名字不回来、绑定不得触达编辑器语义、两组按序安装、加载器标记有效 |
-| [`test_python_host_entry_names.py`](../tests/tools/test_python_host_entry_names.py) | 宿主循环的入口名两侧一致；python_api.cpp 的字符串名字查找只允许 run 与 loop 两处 |
-| [`test_wire_key_naming.py`](../tests/tools/test_wire_key_naming.py) | 过原生的键一律 snake_case，Web 侧翻译只在 appService |
-| [`test_interface_contract_doc.py`](../tests/tools/test_interface_contract_doc.py) | 这份文档与代码一致 |
-| [`test_docs_reference_live_files.py`](../tests/tools/test_docs_reference_live_files.py) | 文档不指向已删除的文件 |
-| [`test_editor_settings_owner.py`](../tests/tools/test_editor_settings_owner.py) | 编辑器 ini 只有一个 Python 所有者 |
-| [`test_reply_shapes.py`](../tests/tools/test_reply_shapes.py) | Python 产出的回复透传，引擎产出保留类型 |
-| [`test_integration_surface.py`](../tests/tools/test_integration_surface.py) | 集成冒烟只调用、只断言仍然存在的原生命中 |
-| [`test_rejection_vocabulary.py`](../tests/tools/test_rejection_vocabulary.py) | 拒绝码词表：源码只发已声明的码；稳定码可分支、细节码只进日志 |
-| [`test_window_permission_matrix.py`](../tests/tools/test_window_permission_matrix.py) | 每个窗口方法都带调用者检查，例外必须逐条说明 |
-| [`test_geometry_external_access.py`](../tests/tools/test_geometry_external_access.py) | 外部只读几何场景快照，写一律走命令通道 |
-| [`test_python_runtime_deploy.py`](../tests/tools/test_python_runtime_deploy.py) | Python 运行时部署是增量的：未变化的树只做 stat |
-| [`test_source_pins.py`](../tests/tools/test_source_pins.py) | pin 改写幂等；只有已推送到远程的提交才算可 pin |
-| [`test_frontend_facade.py`](../tests/tools/test_frontend_facade.py) | 原生方法↔facade 一一对应；前端只经 facade 触达原生对象 |
-| [`test_frontend_regressions.py`](../tests/tools/test_frontend_regressions.py) | 逐个跑前端窗口/音频/facade 回归文件（带超时） |
-| [`test_scene_api_consolidation.py`](../tests/tools/test_scene_api_consolidation.py) | 场景查询用显式 owned 投影 |
-| [`test_web_python_bridge.py`](../tests/tools/test_web_python_bridge.py) | Web→Python 信封原样转发：C++ 不解析、不重建，服务白名单在 Python |
-| [`test_python_refusal_codes.py`](../tests/tools/test_python_refusal_codes.py) | Python 侧拒绝码都在契约词表内 |
-| [`test_lanchat_removal.py`](../tests/tools/test_lanchat_removal.py) | 局域网聊天接口已删除，不得回归 |
-| [`test_project_allocator.py`](../tests/tools/test_project_allocator.py) | 项目目录分配器：重名与原子创建 |
-| [`test_paths_have_no_write_side_effects.py`](../tests/tools/test_paths_have_no_write_side_effects.py) | 路径解析不写盘；PathsConfig 只留宿主持有的 repo_root |
-| [`test_project_session.py`](../tests/tools/test_project_session.py) | 项目会话守卫：会话/路径/只读三种拒绝，旧绑定 fail-closed |
-| [`test_archive_refusals.py`](../tests/tools/test_archive_refusals.py) | 归档/文件服务统一抛 BridgeError；成功值是数据，不被嗅探 |
-| [`test_runtime_lifecycle.py`](../tests/tools/test_runtime_lifecycle.py) | 宿主生命周期：幂等、关闭终态、关闭后拒绝可重试 |
-| [`test_vision_thermal_run.py`](../tests/tools/test_vision_thermal_run.py) | Vision 热运行路径 |
-
 ## 已知缺口
 
-脚本侧**有意保留**的能力缺口（文件音频播放、原生射线查询、指针捕获）随脚本运行时一起删除了；重新设计时先加具名入口，不要恢复"探测不存在的函数再静默降级"的写法。
+脚本侧的能力缺口（文件音频播放、原生射线查询、指针捕获）随脚本运行时一起删除；重新设计时
+先加具名入口，不要恢复"探测不存在的函数再静默降级"的写法。
 
-接口侧的覆盖缺口（记录在此，避免被当成已完成）：
+接口侧的覆盖缺口：
 
 - 窗口/音频/面板请求的**参数校验**只有手动 CEF 冒烟覆盖（`web_messages_cef_smoke.mjs`）。
   读者（`read_close_request`、`read_window_presentation`、`read_audio_control`、`read_panel_options`）
-  依赖 `CefV8Value`，单测需要真实 V8 上下文；`tests/tools` 的守卫只钉方法名、拒绝码和集成调用。
-- 窗口不再有 `getCurrent()`：它唯一的产品消费者是测试包装，身份改由 `createPanel` 的返回值和
-  URL 参数提供。需要「问问自己是谁」的新页面应走同样的两条路，而不是恢复这个查询。
-- `SceneReply` 已按读/写分族（`SceneReadReply` / `SceneWriteReply`），每个方法只填、
-  只读自己族里的字段，不再是一个 30 字段、所有方法共用的结构。
+  依赖 `CefV8Value`，单测需要真实 V8 上下文；`tests/tools` 的守卫只检查拒绝码与集成调用，
+  不校验这些参数读取器。
+- 窗口没有 `getCurrent()`：身份来自 `createPanel` 的返回值与 URL 参数，不提供自查询。
+- `SceneReply` 按读/写分族（`SceneReadReply` / `SceneWriteReply`），每个方法只填、
+  只读自己族里的字段。

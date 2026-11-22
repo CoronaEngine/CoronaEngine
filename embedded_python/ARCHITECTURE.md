@@ -11,9 +11,10 @@
 编辑器写操作只能经过 C++ 的 typed V8 具名绑定。底层引擎 API（例如 `camera()`、
 `geometry()`）属于 C++ 内部实现，Vue 不直接导入它们。
 
-Python 侧分两组：顶层的宿主支持（8 个 `m.def` + 载荷类型 `InputEvent`）与 `cef_py_bind.cpp`
-的编辑器传输。`tests/tools/python_surface.py` 把两组一起钉死，新增名字必须同步。
-`CoronaEngine.script` 下的引擎对象模型曾作为第三组存在，随脚本运行时失去全部调用方后被删除。
+Python 侧分两组：顶层的宿主支持（4 个 `m.def` + 载荷类型 `InputEvent`）与 `cef_py_bind.cpp`
+的编辑器传输（6 个，含服务队列的两个）。两组的名字只在绑定源码里声明；`tests/tools/python_surface.py` 只钉住安装顺序
+和已删除的名字。`CoronaEngine.script` 下的引擎对象模型曾作为第三组存在，随脚本运行时失去
+全部调用方后被删除。
 
 ## API 分层
 
@@ -28,7 +29,7 @@ JSON manifest（api-name 表 + caller 掩码 + `EditorApiRegistry`/`NativeApiReg
 已删除；`api/editor_api.py` 与 `script_runtime/` 随脚本运行时一起删除，Python 只剩上面两组。
 
 底层接口只有一个 owner；跨层 adapter 不复制业务状态机。新增 Web 语义加一份 typed V8
-具名绑定，新增宿主支持再加一个 `m.def` 并登记到 `python_surface.py`；禁止新增第二份 schema。
+具名绑定（`editor_operation_table.h` 的一行），新增宿主支持再加一个 `m.def`；禁止新增第二份 schema。
 
 ## Python 目录
 

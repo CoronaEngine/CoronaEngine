@@ -1,13 +1,4 @@
-"""Keep the Web scene query an explicitly owned projection.
-
-The retired scene spellings used to be pinned here too. That list is gone with the other
-name pins: the operation table still declares which scene operations exist, and a retired name
-coming back is a compile error at the call site, not something a list has to remember.
-
-What is left is the shape that matters for reads: `read_scene` projects through an explicit
-enum instead of returning whole actors, so a hot-path read cannot quietly start copying
-everything.
-"""
+"""Keep the Web scene query an explicitly owned projection."""
 from pathlib import Path
 import sys
 

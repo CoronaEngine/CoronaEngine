@@ -1,17 +1,4 @@
-"""Rules about the Python face: what it must not expose, and what it must keep installing.
-
-The exact set of bound names used to be compared with a hand-written list here. That is gone:
-the comparison made every binding addition a two-file edit, and when it failed it only said
-"the sets differ" - it could not tell an added function from a removed one.
-
-What remains are the rules a refactor can violate in silence:
-
-- no submodule comes back and no deleted name is bound again;
-- no binding source names the editor scene layer (Python owns the archive, C++ owns the scene);
-- a type and a function never share a name;
-- the module installs its two groups, in order;
-- the loader recognises the module by a name the module really binds.
-"""
+"""Rules about the Python face: what it must not expose, and what it must keep installing."""
 from pathlib import Path
 import re
 import sys
@@ -157,11 +144,8 @@ def test_every_bound_name_is_a_snake_case_identifier():
 def test_the_loader_recognises_the_module_by_a_name_the_module_binds():
     """The Python loader must not depend on a name a refactor can delete.
 
-    `runtime/native_engine.py` decides whether `import CoronaEngine` yielded the engine by
-    looking for marker attributes. It used to look for `Scene`, which the object-model removal
-    deleted: recognition then returned None for every optional binding, and the editor sat on
-    "archive service initialising" with nothing raising. At least one declared marker must name
-    something the module really binds; legacy markers are not expected.
+    At least one declared marker must name something the module really binds; a deleted marker
+    silently disables every optional binding.
     """
     source = (ROOT / LOADER).read_text(encoding="utf-8")
     markers = set(re.findall(r"hasattr\(mod, '(\w+)'\)", source))

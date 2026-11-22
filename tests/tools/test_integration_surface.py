@@ -1,16 +1,5 @@
-"""Integration smokes must call the native surface that exists.
-
-The scripts under ``tests/integration`` are manual: nothing in CI runs them, so
-when the native surface moves a script can keep calling methods that were
-deleted and nobody notices. This guard reads the same ``EXPECTED_SURFACE`` the
-Web contract is pinned to and fails when a script calls anything else.
-
-``RETIRED_PRE_BRIDGE`` is the temporary hold list for scripts that still drive
-the surface from before the Web -> Python bridge migration. It is empty: every
-script now goes through ``corona.bridge.call`` for the file, document and script
-domains. The mechanism stays, so a script that goes stale again fails here, and
-a script placed on the list must be removed once it is migrated.
-"""
+"""Integration smokes must call the native surface that exists; nothing in CI runs them,
+so a stale call would go unnoticed."""
 
 from pathlib import Path
 import re

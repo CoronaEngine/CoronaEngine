@@ -5,7 +5,7 @@
 Python 负责项目场景存档的解析、校验与显式保存，以及 Web 提交文档的读写；
 C++ 持有场景、Actor、资源、变换和 revision 的权威状态；Vue 负责页面、输入和结果展示。
 跨层业务只能调用 C++ 的 typed V8 具名绑定，Vue 只做薄适配。Python 侧只有顶层宿主支持入口
-（8 个 `m.def` + 载荷类型 `InputEvent`）与 `cef_py_bind.cpp` 的编辑器传输；编辑器语义
+（4 个 `m.def` + 载荷类型 `InputEvent`）与 `cef_py_bind.cpp` 的编辑器传输（6 个）；编辑器语义
 不经 Python 到达 C++。
 
 ## 入口文档
@@ -38,7 +38,7 @@ Vue 源码在 `CoronaEditor` checkout 里，与本目录一起部署到 `<exe>/C
 
 跨层契约按调用方分裂，互相不重叠：Web 使用 C++ 的 typed V8 具名契约
 （`window.corona.*`，加一个 `corona.bridge` 进入 Python 服务）；Python 侧是顶层宿主支持
-（8 个 `m.def` + `InputEvent`）与编辑器传输。两组的名单由
-`tests/tools/python_surface.py` 钉死。JSON manifest、`api/editor_api.py` 与 18 条脚本契约
-随脚本运行时一起删除；脚本对象模型（`CoronaEngine.script`）随后也删除。场景事实始终由
-C++ 持有。
+（4 个 `m.def` + `InputEvent`）与编辑器传输（6 个）。两组的名字只在绑定源码里声明；
+`tests/tools/python_surface.py` 只钉住安装顺序与已删除的名字。JSON manifest、`api/editor_api.py`
+与 18 条脚本契约随脚本运行时一起删除；脚本对象模型（`CoronaEngine.script`）随后也删除。
+场景事实始终由 C++ 持有。

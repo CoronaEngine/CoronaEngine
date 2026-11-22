@@ -1,19 +1,4 @@
-"""Rules that keep the typed Web surface honest, without pinning its size or its names.
-
-The exact method list used to be compared against a hand-written table here. That comparison
-was the thing that made every rename a two-file edit, and its failure only ever said "the sets
-differ" - it could not tell an added method from a removed one. What is left are the rules that
-cost nothing to keep and catch real breakage:
-
-- every scene row has an argument reader (a row without one answers INVALID_ARGUMENT at run
-  time and nothing in the build notices);
-- the Web -> Python bridge stays one function wide;
-- no JSON transport survives;
-- the frontend reaches native objects only through the facade;
-- rejections use the documented vocabulary.
-
-`native_surface.py` still exists: the contract document is generated from it.
-"""
+"""Rules that keep the typed Web surface honest, without pinning its size or its names."""
 from pathlib import Path
 import re
 import sys
