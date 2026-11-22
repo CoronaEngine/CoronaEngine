@@ -90,6 +90,13 @@ void BindHostSupport(nanobind::module_& m) {
             coordinator->set_execution_phase(phase);
         }
     }, nb::arg("phase"), "Update the native Python runtime diagnostic phase");
+
+    // The host loop asks this once per iteration; with no coordinator installed there is no
+    // loop to stop, so it reports "keep going".
+    m.def("should_stop", [] {
+        const auto* coordinator = Corona::Script::Python::active_python_runtime_coordinator();
+        return coordinator && coordinator->stop_requested();
+    }, "True once the host has asked the runtime to stop");
 }
 
 }  // namespace EngineScripts

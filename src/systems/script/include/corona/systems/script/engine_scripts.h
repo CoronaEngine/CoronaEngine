@@ -14,4 +14,9 @@ void BindHostSupport(nanobind::module_& m);
 // project session the host compares incoming requests against. See `cef_py_bind.cpp`.
 void BindCef(nanobind::module_& m);
 
+// The pull side of the host loop: `poll_service_requests` / `complete_service_request`.
+// Called by `BindCef` so the module still installs exactly two groups; see
+// `service_queue_bindings.cpp`.
+void BindCefServiceQueue(nanobind::module_& m);
+
 }  // namespace EngineScripts

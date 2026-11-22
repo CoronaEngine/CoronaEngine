@@ -38,6 +38,7 @@ GUARDS = [
     ("test_manifest_retirement.py", "已删除的 manifest 不许回来"),
     ("test_typed_native_surface.py", "拒绝码词表；场景行都有参数读取器；bridge 只一个函数；无 JSON 传输；前端只经 facade"),
     ("test_python_native_surface.py", "Python 面规则：无子模块、删掉的名字不回来、绑定不得触达编辑器语义、两组按序安装、加载器标记有效"),
+    ("test_python_host_entry_names.py", "宿主循环的入口名两侧一致；python_api.cpp 的字符串名字查找只允许 run 与 loop 两处"),
     ("test_wire_key_naming.py", "过原生的键一律 snake_case，Web 侧翻译只在 appService"),
     ("test_interface_contract_doc.py", "这份文档与代码一致"),
     ("test_docs_reference_live_files.py", "文档不指向已删除的文件"),

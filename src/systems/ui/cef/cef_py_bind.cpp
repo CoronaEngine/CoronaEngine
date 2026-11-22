@@ -3,6 +3,7 @@
 #include "editor_paths.h"
 #include "native_editor_state.h"
 
+#include <corona/systems/script/engine_scripts.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 
@@ -42,6 +43,10 @@ void BindCef(nanobind::module_& m) {
         session["read_only"] = scene->read_only;
         return session;
     }, "Session identity of the project the editor owns, or an empty dict");
+    // The service queue the Python host loop pulls from. It lives in the script module
+    // (`service_queue_bindings.cpp`) because the JSON<->Python conversion helpers do; this
+    // group only installs it, so the module keeps calling two groups.
+    BindCefServiceQueue(m);
 }
 
 }  // namespace EngineScripts
