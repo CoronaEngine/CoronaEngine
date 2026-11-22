@@ -343,7 +343,7 @@ struct ModelNodePageRequest {
     std::size_t offset{0}, limit{100};
 };
 
-enum class SceneMethod { ReadScene, CreateActor, ReadActive, ReadVisionAvailability, ReadTransforms, SelectActor, SelectModelFile, ImportResourceFile, PlayAudioResource, StopAudioResource, PlayActorAudio, StopActorAudio, SetActorTransform, UpdateActor, DeleteActor, RebindActorResource, Save, GetEnvironment, SetEnvironment, FocusActor, CaptureScreenshot, UpdateCamera, ReadCameraRenderSettings, SetCameraRenderSettings, CreateCamera, DeleteCamera, ReadActorProperties, ReadActorRig, SetActorIkChains, ReadModelNodes, SetModelNodeState };
+enum class SceneMethod { ReadScene, CreateActor, ReadActive, ReadTransforms, SelectActor, SelectModelFile, ImportResourceFile, PlayAudioResource, StopAudioResource, PlayActorAudio, StopActorAudio, SetActorTransform, UpdateActor, DeleteActor, RebindActorResource, Save, GetEnvironment, SetEnvironment, FocusActor, CaptureScreenshot, UpdateCamera, ReadCameraRenderSettings, SetCameraRenderSettings, CreateCamera, DeleteCamera, ReadActorProperties, ReadActorRig, SetActorIkChains, ReadModelNodes, SetModelNodeState };
 enum class ActorProjection { None, Index, Tree, Context };
 struct SceneReadProjection {
     ActorProjection actors = ActorProjection::None;
@@ -384,7 +384,6 @@ struct SceneRequest {
 struct SceneReadReply {
     SceneReadProjection scene_read;
     ActiveSceneSnapshot active;
-    bool vision_available = false;
     ActorSelection selection;
     std::vector<ActorTransformSnapshot> transforms;
     CameraListSnapshot camera_list;

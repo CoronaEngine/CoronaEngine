@@ -60,7 +60,6 @@ inline constexpr EditorOperationSpec kEditorOperations[] = {
     {"scene", "delete_camera", SceneMethod::DeleteCamera, "Deletes a camera; the last remaining camera is protected."},
     {"audio", "play", SceneMethod::PlayAudioResource, "Plays the audio attached to an actor; the Web also plays a bare resource."},
     {"audio", "stop", SceneMethod::StopAudioResource, "Stops the audio attached to an actor; the Web also stops a bare resource."},
-    {"app", "is_vision_available", SceneMethod::ReadVisionAvailability, "Answers whether Vision can render on this machine."},
     {"app", "close_process", WindowMethod::CloseProcess, "Closes the whole process; only the main window may ask."},
     {"viewport", "capture_screenshot", SceneMethod::CaptureScreenshot, "Captures one viewport frame to a file."},
     {"viewport", "configure", WindowMethod::ConfigureViewport, "Configures a viewport's mode, bounds and calibration."},
@@ -90,8 +89,8 @@ inline constexpr EditorOperationSpec kEditorOperations[] = {
     {"bridge", "call", BridgeMethod::Call, "The one Web -> Python request entry; Python owns every service behind it."},
 };
 
-static_assert(sizeof(kEditorOperations) / sizeof(kEditorOperations[0]) == 55,
-              "the Web contract is fifty-five named operations");
+static_assert(sizeof(kEditorOperations) / sizeof(kEditorOperations[0]) == 54,
+              "the Web contract is fifty-four named operations");
 
 /// The row for (group, name), or nullptr when the pair is not in the contract.
 constexpr const EditorOperationSpec* find_editor_operation(std::string_view group,

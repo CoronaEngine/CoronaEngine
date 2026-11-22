@@ -1820,7 +1820,6 @@ inline constexpr SceneReaderSpec kSceneReaders[] = {
     {SceneMethod::DeleteCamera, read_camera_delete},
     {SceneMethod::PlayAudioResource, read_audio_play},
     {SceneMethod::StopAudioResource, read_audio_stop},
-    {SceneMethod::ReadVisionAvailability, read_no_arguments},
     {SceneMethod::CaptureScreenshot, read_screenshot},
 };
 
@@ -2265,10 +2264,6 @@ private:
         else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadActive) {
             scene_archive_session_ = reply.read.active.archive_session;
             pending.promise->ResolvePromise(scene_value(reply.read.active));
-        } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ReadVisionAvailability) {
-            auto value = CefV8Value::CreateObject(nullptr, nullptr);
-            value->SetValue("available", CefV8Value::CreateBool(reply.read.vision_available), V8_PROPERTY_ATTRIBUTE_NONE);
-            pending.promise->ResolvePromise(value);
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::SelectModelFile) {
             pending.promise->ResolvePromise(CefV8Value::CreateString(reply.write.selected_file));
         } else if (std::get<SceneMethod>(pending.method) == SceneMethod::ImportResourceFile) {

@@ -2381,10 +2381,6 @@ void* get_default_surface() {
     return g_default_surface.load(std::memory_order_relaxed);
 }
 
-bool is_vision_available() {
-    return true;
-}
-
 void set_render_backend(const std::string& mode, EntityId camera_handle) {
     const auto resolved_handle = resolve_camera_handle(camera_handle);
     if (resolved_handle == 0) {

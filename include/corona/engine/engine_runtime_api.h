@@ -543,9 +543,6 @@ class Scene {
 // ============================================================================
 // Render backend control (Native vs Vision)
 // ============================================================================
-/// 兼容接口：引擎始终包含 Vision，返回 true；不代表 Vulkan 设备已经初始化成功。
-[[nodiscard]] bool is_vision_available();
-
 /// 请求切换光学渲染后端。mode: "native" 或 "vision"。
 /// Vision 设备在需要渲染时延迟初始化。
 void set_render_backend(const std::string& mode, EntityId camera_handle = 0);

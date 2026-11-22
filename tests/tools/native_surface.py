@@ -10,7 +10,7 @@ The spelling is the row's own: snake_case, the same on the wire, in the table, a
 JS facade. There is no derivation left to drift.
 """
 EXPECTED_SURFACE = {
-    "app": {"close_process", "is_vision_available"},
+    "app": {"close_process"},
     # One verb per action; the identity names a resource or an actor of a scene.
     "audio": {"play", "stop"},
     "bridge": {"call"},

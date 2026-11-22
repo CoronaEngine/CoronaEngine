@@ -2692,11 +2692,6 @@ std::vector<IkChainSnapshot> typed_ik_chains(const std::vector<Corona::Resource:
 } // namespace
 
 SceneReply execute_scene_operation(const SceneRequest& request) {
-    if (request.method == SceneMethod::ReadVisionAvailability) {
-        SceneReply reply;
-        reply.read.vision_available = Corona::API::is_vision_available();
-        return reply;
-    }
     if (request.method == SceneMethod::CreateActor) {
         SceneReply reply;
         const auto& patch = request.actor_create;

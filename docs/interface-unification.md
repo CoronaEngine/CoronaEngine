@@ -39,6 +39,8 @@ C++ 同时向两个调用方暴露能力：**编辑器前端**（CEF / typed V8�
 | `input` | 1 | `dispatch` |
 | `bridge` | 1 | `call`（唯一 JSON 字符串入口，其余 54 个都是 typed） |
 
+（上表是本次收口时的快照；`app` 的 Vision 可用性探测已在后续批次删除，当前 Web 面为 54 个方法。）
+
 形状：除 `window.on_closed` / `window.on_close_requested`（订阅）和 `bridge.call`（JSON 信封）
 之外，全部是 `Promise<owned DTO>`；拒绝一律是带 `error.code` 的 Promise reject。
 

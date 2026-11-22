@@ -26,7 +26,7 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 
 ## Web 面
 
-共 9 个命名空间 / 55 个方法。清单由
+共 9 个命名空间 / 54 个方法。清单由
 `src/systems/ui/cef/editor_operation_table.h` 声明，本文由生成器从 `native_surface.py`
 渲染（那张表不再由守卫逐名比对，见 `test_typed_native_surface.py`）：
 
@@ -46,7 +46,7 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 
 | 命名空间 | 方法 |
 |---|---|
-| `app` | `close_process`、`is_vision_available` |
+| `app` | `close_process` |
 | `audio` | `play`、`stop` |
 | `bridge` | `call` |
 | `input` | `dispatch` |
@@ -91,7 +91,6 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 | `scene` | `delete_camera` | capability | Deletes a camera; the last remaining camera is protected. |
 | `audio` | `play` | capability | Plays the audio attached to an actor; the Web also plays a bare resource. |
 | `audio` | `stop` | capability | Stops the audio attached to an actor; the Web also stops a bare resource. |
-| `app` | `is_vision_available` | capability | Answers whether Vision can render on this machine. |
 | `app` | `close_process` | capability | Closes the whole process; only the main window may ask. |
 | `viewport` | `capture_screenshot` | capability | Captures one viewport frame to a file. |
 | `viewport` | `configure` | capability | Configures a viewport's mode, bounds and calibration. |

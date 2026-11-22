@@ -187,7 +187,6 @@ try {
   assert.equal(await main.evaluate("corona.scene.set_actor_ik_chains('scene.ini','actor',[],{archive_session:'missing'}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
   assert.equal(await main.evaluate("corona.scene.read_scene({...({archive_session:'missing'}),scene:'scene.ini',cameras:true}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
   assert.deepEqual(await main.evaluate('corona.scene.read_active()'), { archive_session: '' });
-  assert.equal(typeof (await main.evaluate('corona.app.is_vision_available()')).available, 'boolean');
 
   for (const method of ['read_active', 'select_actor']) {
     assert.equal(await main.evaluate(`corona.scene.${method}(null).catch(error=>error.code)`), 'INVALID_ARGUMENT');
