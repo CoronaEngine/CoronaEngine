@@ -26,13 +26,12 @@ void queue_pt_plane(const PrefixStorage &storage, const Uint &plane, const RayVa
 
 }
 
-void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env) noexcept {
+void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env, const Uint &primary_flag) noexcept {
     using namespace prefix_detail;
     const auto &geometry = Toolkit::geometry();
     const auto &swl = env.sampled_wavelengths();
     auto &lights = Toolkit::renderer().light_sampler();
-    const auto primary_surface = Toolkit::frame_buffer().cur_surfaces_var(env.frame_index()).read(dispatch_id());
-    const Bool first_reflection_covered_by_di = !BxDFFlag::is_specular(primary_surface.flag);
+    const Bool first_reflection_covered_by_di = !BxDFFlag::is_specular(primary_flag);
     RayVar camera = Toolkit::frame_buffer().rays().read(dispatch_id())->to_ray();
     Float near_depth = camera->t_min() * dot(camera->direction(), Toolkit::scene().sensor()->device_forward());
     camera->update_origin(camera->origin() + camera->direction() * camera->t_min());

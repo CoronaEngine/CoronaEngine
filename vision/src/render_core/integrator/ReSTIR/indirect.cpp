@@ -271,13 +271,17 @@ void ReSTIRGI::compile_initial_samples() noexcept {
         OC_INFO("RTXPT GI private stable planes: count=3, max_vertex_depth=5, primary_replacement=true, incident_Lo=unweighted, shared_Falcor_primary=true");
         OC_INFO("RTXPT GI glass policy: complete pure RGB dielectric, roughness^2<0.0064 ideal delta, exact Fresnel, thick sqrt tint per interface, occupied-slot transmission continuation; ordinary PT/Falcor DI unchanged");
         OC_INFO("RTXPT GI stable emission: continuous first reflection owned by DI; first transmission and uncovered delta reflection retained by PT/Build exactly once");
-        Kernel build = [&](Uint frame_index) {
+        // Both private passes consume the same primary flag from the active DI producer.
+        auto read_primary_flag = [](const BufferVar<uint> &words, const Uint2 &layout) {
+            return words.read(dispatch_id() * layout.x + layout.y);
+        };
+        Kernel build = [&](Uint frame_index, BufferVar<uint> flags, Uint2 flag_layout) {
             gi_principled::CompilationScope parameters{false};
             initial(sampler(), frame_index, spectrum());
             scene().sensor()->load_data();
             sampler()->load_data();
             integrator()->load_data();
-            rtxpt_gi::build_pt_prefix(prefix_storage(), *this);
+            rtxpt_gi::build_pt_prefix(prefix_storage(), *this, read_primary_flag(flags, flag_layout));
         };
         build.function()->set_block_dim(8u, 8u, 1u);
         rtxpt_prefix_build_ = device().compile(build, "RTXPT GI stable plane build");
@@ -335,7 +339,7 @@ void ReSTIRGI::compile_initial_samples() noexcept {
         OC_INFO_FORMAT("GI endpoint normal diagnostic: mode={}, material_normal={}, native_grazing_adjust={}",
                        endpoint_normal_mode, endpoint_normal_mode == "shading-facing", endpoint_normal_mode == "shading-facing");
         OC_INFO_FORMAT("GI Fill transport: ordinary camera PT with observers only, counters={}", count_work);
-        Kernel kernel = [&](Uint frame_index, Var<RtxptGICameraParam> camera) {
+        Kernel kernel = [&](Uint frame_index, Var<RtxptGICameraParam> camera, BufferVar<uint> flags, Uint2 flag_layout) {
             gi_principled::CompilationScope parameters{false, !no_parameter_bridge};
             initial(sampler(), frame_index, spectrum());
             scene().sensor()->load_data(); sampler()->load_data(); integrator()->load_data();
@@ -370,8 +374,7 @@ void ReSTIRGI::compile_initial_samples() noexcept {
             }
             PTPathCapture capture;
             capture.reflection_only_direct = true;
-            const auto physical_primary = frame_buffer().cur_surfaces_var(frame_index).read(dispatch_id());
-            capture.first_reflection_covered_by_di = !BxDFFlag::is_specular(physical_primary.flag);
+            capture.first_reflection_covered_by_di = !BxDFFlag::is_specular(read_primary_flag(flags, flag_layout));
             capture.record_radiance = !skip_radiance;
             capture.record_hit_distance = cost_mode != "no-distance-math";
             capture.reuse_signal_distance = reuse_signal_distance;
@@ -1210,7 +1213,7 @@ GIParam ReSTIRGI::construct_param() const noexcept {
 }
 
 CommandBatch ReSTIRGI::dispatch(uint frame_index, bool precise_lobes, bool denoiser_layered,
-                               float di_factor, float gi_factor, bool di_active) const noexcept {
+                               float di_factor, float gi_factor, bool di_active, BufferView<uint> compact_primary_flags) const noexcept {
     CommandBatch ret;
     const Pipeline *rp = pipeline();
     GIParam param = construct_param();
@@ -1225,9 +1228,14 @@ CommandBatch ReSTIRGI::dispatch(uint frame_index, bool precise_lobes, bool denoi
     const char *stage_profile = std::getenv("VISION_STAGE_PROFILE");
     const bool synchronize_native_stages = rtxpt_backend_ && stage_profile && string_view(stage_profile) == "1";
     if (synchronize_native_stages) ret << synchronize();
-    if (rtxpt_backend_) ret << rtxpt_prefix_build_(frame_index).dispatch(rp->resolution());
-    if (synchronize_native_stages) ret << synchronize();
     if (rtxpt_backend_) {
+        static_assert(offsetof(SurfaceData, flag) % sizeof(uint) == 0u && sizeof(SurfaceData) % sizeof(uint) == 0u);
+        const bool compact = compact_primary_flags.size() != 0u;
+        const auto flag_words = compact ? compact_primary_flags : frame_buffer().cur_surfaces_view(frame_index).view_as<uint>();
+        const uint2 flag_layout = compact ? make_uint2(1u, 0u)
+            : make_uint2(uint(sizeof(SurfaceData) / sizeof(uint)), uint(offsetof(SurfaceData, flag) / sizeof(uint)));
+        ret << rtxpt_prefix_build_(frame_index, flag_words, flag_layout).dispatch(rp->resolution());
+        if (synchronize_native_stages) ret << synchronize();
         RtxptGICameraParam camera;
         const float4x4 world_to_camera = inverse(scene().sensor()->host_c2w());
         const float4x4 camera_to_raster = inverse(scene().sensor()->host_raster_to_sensor());
@@ -1235,7 +1243,7 @@ CommandBatch ReSTIRGI::dispatch(uint frame_index, bool precise_lobes, bool denoi
             camera.columns[column] = world_to_camera[column];
             camera.columns[4u + column] = camera_to_raster[column];
         }
-        ret << rtxpt_initial_samples_(frame_index, camera).dispatch(rp->resolution());
+        ret << rtxpt_initial_samples_(frame_index, camera, flag_words, flag_layout).dispatch(rp->resolution());
         if (path_cost::enabled()) ret << path_cost::capture(path_work_counters_.view(), frame_index, rp->resolution(), "gi");
     } else {
         ret << initial_samples_(frame_index).dispatch(rp->resolution());

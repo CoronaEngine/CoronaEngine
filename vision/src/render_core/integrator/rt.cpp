@@ -600,6 +600,8 @@ public:
             spectrum()->impl_type() == "srgb" && frame_buffer().impl_type() == "normal" &&
             scene().sensor()->supports_screen_position_reconstruction() &&
             !pipeline()->geometry().process_mediums();
+        const auto falcor_surface = !gi_enabled ? FalcorGISurface::None :
+            native_gi_planes() && !reference_gi_requested ? FalcorGISurface::PrimaryFlag : FalcorGISurface::Full;
         const bool publish_gi_proposal = gi_enabled &&
             (!native_gi_planes() || reference_gi_requested || rtxpt_gi::primary_light_diagnostic_enabled());
         const bool falcor_requested = falcor_mode && *falcor_mode && direct_->open() &&
@@ -608,7 +610,7 @@ public:
             spectrum()->impl_type() == "srgb" && frame_buffer().impl_type() == "normal" &&
             !pipeline()->geometry().process_mediums();
         const bool prepare_falcor = falcor_requested && (falcor_di_needs_compile_ ||
-            (falcor_di_ && !falcor_di_->matches(rp->resolution(), falcor_mode, gi_enabled, publish_gi_proposal, native_denoising)));
+            (falcor_di_ && !falcor_di_->matches(rp->resolution(), falcor_mode, falcor_surface, publish_gi_proposal, native_denoising)));
         if (prepare_falcor) {
             stream << synchronize() << commit();
             Global::SceneGpuContextScope scene_gpu_context{
@@ -616,7 +618,7 @@ public:
             falcor_di_needs_compile_ = false;
             falcor_di_.reset();
             try {
-                falcor_di_ = std::make_unique<FalcorDIExperiment>(*direct_, falcor_mode, gi_enabled, publish_gi_proposal, native_denoising);
+                falcor_di_ = std::make_unique<FalcorDIExperiment>(*direct_, falcor_mode, falcor_surface, publish_gi_proposal, native_denoising);
             } catch (const std::exception &error) {
                 OC_WARNING_FORMAT("Falcor DI unavailable, using native ReSTIR DI: {}", error.what());
             }
@@ -700,7 +702,8 @@ public:
         } else {
             submit(use_reference_gi ? reference_gi_->dispatch(frame_index_) :
                    indirect_->dispatch(frame_index_, precise_lobes, shared_stable_planes_enabled(),
-                                       direct_->factor(), indirect_->factor(), direct_->open()), &cur_stage_profile_.restir_gi_ms);
+                                       direct_->factor(), indirect_->factor(), direct_->open(),
+                                       use_falcor ? falcor_di_->primary_flags() : BufferView<uint>{}), &cur_stage_profile_.restir_gi_ms);
         }
         cur_stage_profile_.path_tracing_ms = cur_stage_profile_.restir_di_ms + cur_stage_profile_.restir_gi_ms;
         auto debug_readback = [&](const char *stage, bool layers = true) {

@@ -100,8 +100,8 @@ private:
     RegistrableBuffer<uint4> rtxpt_prefix_headers_{pipeline()->bindless_array()};
     RegistrableBuffer<float4> rtxpt_prefix_stable_{pipeline()->bindless_array()};
     RegistrableBuffer<RtxptGIPrefixAux> rtxpt_prefix_aux_{pipeline()->bindless_array()};
-    Shader<void(uint)> rtxpt_prefix_build_;
-    Shader<void(uint, RtxptGICameraParam)> rtxpt_initial_samples_;
+    Shader<void(uint, Buffer<uint>, uint2)> rtxpt_prefix_build_;
+    Shader<void(uint, RtxptGICameraParam, Buffer<uint>, uint2)> rtxpt_initial_samples_;
     ocarina::Buffer<path_cost::PathWorkCounters> path_work_counters_;
     bool native_reblur_enabled_{};
     mutable Buffer<float4> native_reblur_diffuse_, native_reblur_specular_, native_reblur_bypass_;
@@ -253,6 +253,7 @@ public:
     [[nodiscard]] GIParam construct_param() const noexcept;
     [[nodiscard]] CommandBatch dispatch(uint frame_index, bool precise_lobes = false,
                                       bool denoiser_layered = false, float di_factor = 0.f,
-                                      float gi_factor = 0.f, bool di_active = false) const noexcept;
+                                      float gi_factor = 0.f, bool di_active = false,
+                                      BufferView<uint> compact_primary_flags = {}) const noexcept;
 };
 }// namespace vision
