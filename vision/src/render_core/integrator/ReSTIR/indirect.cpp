@@ -47,7 +47,7 @@ void ReSTIRGI::compile(bool refresh_lighting) noexcept {
     rtxpt_materials_->prepare();
     // A whole-pipeline compile can follow light or topology replacement.
     // Rebuild the native emitter mapping after the scene is rebound.
-    if (refresh_lighting || !rtxpt_lights_) {
+    if (refresh_lighting || !rtxpt_lights_ || !rtxpt_) {
         if (!rtxpt_lights_) rtxpt_lights_ = make_shared<rtxpt_gi::NativeLightSampler>(*this);
         try {
             rtxpt_lights_->prepare();
@@ -56,10 +56,12 @@ void ReSTIRGI::compile(bool refresh_lighting) noexcept {
             rtxpt_lights_.reset();
             return;
         }
-    }
-    if (!rtxpt_) {
-        rtxpt_ = make_shared<RtxptGI>(*this);
-        rtxpt_->prepare();
+        if (!rtxpt_) {
+            rtxpt_ = make_shared<RtxptGI>(*this);
+            rtxpt_->prepare();
+        }
+        // These buffers register bindless views after the pipeline's prepare-time upload.
+        pipeline()->upload_bindless_array();
     }
     compile_initial_samples();
     rtxpt_->compile();
