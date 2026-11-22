@@ -332,7 +332,7 @@ void apply_native_actor_optics_state(NativeEditorActor& item) {
     if (item.engine_actor) {
         if (auto actor = hub.actor_storage().acquire_read(item.engine_actor->get_handle())) {
             for (const auto handle : actor->profile_handles) {
-                auto profile = hub.profile_storage().acquire_read(handle);
+                auto profile = Corona::find_profile(handle);
                 if (!profile || !profile->optics_handle) continue;
                 // P5：改走命令通道。geometry 归属校验随命令下发，
                 // 由 DAG 侧在应用时比对（原先是 UI 线程直接持写锁比���）。

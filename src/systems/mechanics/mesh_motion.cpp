@@ -56,7 +56,7 @@ void MechanicsSystem::process_mesh_moves() {
                     if(!actor) return unavailable("actor",actor_handle);
                     std::unordered_set<std::uintptr_t> seen_geometry;
                     for(auto ph:actor->profile_handles) {
-                        auto profile=hub.profile_storage().try_acquire_read(ph);
+                        auto profile=Corona::find_profile(ph);
                         if(!profile) return unavailable("profile",ph);
                         // Runtime Actor profiles keep geometry on their components;
                         // geometry_handle is only populated by some import paths.

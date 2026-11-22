@@ -143,10 +143,10 @@ private:
         out.actor_seq = hub_.actor_storage().seq_id(actor_handle);
 
         out.profile_handle = actor->profile_handles.front();
-        out.profile_seq = hub_.profile_storage().seq_id(out.profile_handle);
+        out.profile_seq = Corona::Ecs::seq_of(out.profile_handle);
 
-        auto profile = hub_.profile_storage().try_acquire_read(out.profile_handle);
-        if (!profile.valid()) return std::nullopt;
+        const auto* profile = hub_.try_profile(out.profile_handle);
+        if (profile == nullptr) return std::nullopt;
 
         out.geometry_handle = profile->geometry_handle;
         out.optics_handle = profile->optics_handle;

@@ -1298,14 +1298,14 @@ struct VisionEngineSceneTest {
         const auto transform = hub.model_transform_storage().allocate();
         const auto geometry = hub.geometry_storage().allocate();
         const auto optics = hub.optics_storage().allocate();
-        const auto profile = hub.profile_storage().allocate();
+        const auto profile = hub.create_profile_component();
         const auto actor = hub.actor_storage().allocate();
         const auto environment = hub.create_environment();
         const auto scene = hub.scene_storage().allocate();
         { auto w = hub.model_resource_storage().acquire_write(model); w->model_id = id; }
         { auto w = hub.geometry_storage().acquire_write(geometry); w->model_resource_handle = model; w->transform_handle = transform; }
         { auto w = hub.optics_storage().acquire_write(optics); w->geometry_handle = geometry; }
-        { auto w = hub.profile_storage().acquire_write(profile); w->geometry_handle = geometry; w->optics_handle = optics; }
+        { auto w = hub.try_profile(profile); w->geometry_handle = geometry; w->optics_handle = optics; }
         { auto w = hub.actor_storage().acquire_write(actor); w->profile_handles = {profile}; }
         { auto* w = hub.try_environment(environment); w->sun_intensity = 0; w->sky_intensity = 1; }
         { auto w = hub.scene_storage().acquire_write(scene); w->actor_handles = {actor}; w->environment = environment; }
@@ -1391,7 +1391,7 @@ struct VisionEngineSceneTest {
         hub.scene_storage().deallocate(scene);
         hub.destroy_environment(environment);
         hub.actor_storage().deallocate(actor);
-        hub.profile_storage().deallocate(profile);
+        hub.destroy_profile_component(profile);
         hub.optics_storage().deallocate(optics);
         hub.geometry_storage().deallocate(geometry);
         hub.model_transform_storage().deallocate(transform);

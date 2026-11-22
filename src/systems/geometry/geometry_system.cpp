@@ -394,9 +394,8 @@ void GeometrySystem::update() {
             if (actor_dev.pinned) pinned_actors.insert(actor_handle);
 
             for (EntityId profile_handle : actor_dev.profile_handles) {
-                auto& profile_storage = hub.profile_storage();
-                auto profile_read = profile_storage.acquire_read(profile_handle);
-                if (!profile_read.valid()) continue;
+                auto profile_read = Corona::find_profile(profile_handle);
+                if (profile_read == nullptr) continue;
 
                 const ProfileDevice& profile_dev = *profile_read;
                 EntityId mechanics_handle = profile_dev.mechanics_handle;
@@ -999,7 +998,7 @@ void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {
     std::unordered_set<std::uintptr_t> visited_geom;
 
     for (auto profile_handle : actor_read->profile_handles) {
-        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
+        auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;
 
         std::vector<std::uintptr_t> geom_handles;
@@ -1347,7 +1346,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
     // ---- 第 3 步：遍历 actor 身上每个 Profile ----
     // Profile 是"配件槽位"——它聚合了 optics/mechanics/geometry/acoustics 的句柄
     for (auto profile_handle : actor_read->profile_handles) {
-        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
+        auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;  // profile 句柄已失效
 
         // ---- 第 4 步：从 Profile 的 4 条路径收集 geometry 句柄 ----
@@ -1462,7 +1461,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
 
     // ---- 第 3 步：遍历 actor 的所有 profile ----
     for (auto profile_handle : actor_read->profile_handles) {
-        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
+        auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;
 
         // ---- 第 4 步：4 条路径收集 geometry 句柄（同 release 逻辑）----
@@ -2094,7 +2093,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
     };
 
     for (auto profile_handle : actor_read->profile_handles) {
-        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
+        auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;
 
         // 从 profile.geometry_handle 收集
@@ -2244,7 +2243,7 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
         auto actor_read = hub.actor_storage().try_acquire_read(event.actor);
         if (actor_read) {
             for (auto ph : actor_read->profile_handles) {
-                auto profile = hub.profile_storage().try_acquire_read(ph);
+                auto profile = Corona::find_profile(ph);
                 if (!profile) continue;
 
                 // 恢复 transform（通过 geometry → transform_handle）
@@ -5364,7 +5363,7 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
     std::unordered_set<const Memory::GpuMemToken*> visited_textures;
 
     for (auto profile_handle : actor_read->profile_handles) {
-        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
+        auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;
 
         std::vector<std::uintptr_t> geom_handles;

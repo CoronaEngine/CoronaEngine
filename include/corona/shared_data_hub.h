@@ -815,6 +815,9 @@ struct ImageDevice {
     Systems::Detail::ImageFrameMetadata metadata;
 };
 
+/// 便捷：按句柄取 Profile 组件（无锁）。迁移期给大量局部别名调用点用。
+[[nodiscard]] ProfileDevice* find_profile(EntityId handle);
+
 class SharedDataHub {
    public:
     static SharedDataHub& instance();
@@ -836,7 +839,6 @@ class SharedDataHub {
     using GeometryStorage = Kernel::Utils::EntityStorage<GeometryDevice, 128, 2>;
     using MechanicsStorage = Kernel::Utils::EntityStorage<MechanicsDevice, 128, 2>;
     using OpticsStorage = Kernel::Utils::EntityStorage<OpticsDevice, 128, 2>;
-    using ProfileStorage = Kernel::Utils::EntityStorage<ProfileDevice, 128, 2>;
     using ActorStorage = Kernel::Utils::EntityStorage<ActorDevice, 128, 2>;
     using CameraStorage = Kernel::Utils::EntityStorage<CameraDevice, 128, 2>;
     using SceneStorage = Kernel::Utils::EntityStorage<SceneDevice, 128, 2>;
@@ -863,8 +865,11 @@ class SharedDataHub {
     OpticsStorage& optics_storage();
     const OpticsStorage& optics_storage() const;
 
-    ProfileStorage& profile_storage();
-    const ProfileStorage& profile_storage() const;
+    // profile 已删除 Storage：组件直接挂在实体上，句柄就是实体句柄。
+    EntityId create_profile_component();
+    void destroy_profile_component(EntityId handle);
+    [[nodiscard]] ProfileDevice* try_profile(EntityId handle);
+    [[nodiscard]] const ProfileDevice* try_profile(EntityId handle) const;
 
     ActorStorage& actor_storage();
     const ActorStorage& actor_storage() const;
@@ -991,7 +996,6 @@ class SharedDataHub {
     ModelTransformStorage model_transform_storage_;
     MechanicsStorage mechanics_storage_;
     OpticsStorage optics_storage_;
-    ProfileStorage profile_storage_;
     ActorStorage actor_storage_;
     mutable std::mutex actor_metadata_mutex_;
     std::unordered_map<EntityId, std::string> actor_guids_;

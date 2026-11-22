@@ -31,7 +31,7 @@ using Corona::Network::StorageID;
 /// Registers one actor device plus one profile device so build_identity() succeeds.
 std::uintptr_t make_actor(Corona::SharedDataHub& hub) {
     const auto actor = hub.actor_storage().allocate();
-    const auto profile = hub.profile_storage().allocate();
+    const auto profile = hub.create_profile_component();
     if (auto device = hub.actor_storage().try_acquire_write(actor)) {
         device->profile_handles.push_back(profile);
     }

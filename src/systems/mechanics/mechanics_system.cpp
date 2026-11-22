@@ -90,7 +90,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     auto& model_resource_storage = SharedDataHub::instance().model_resource_storage();  // 模型资源数据
     const auto& scene_storage = SharedDataHub::instance().scene_storage();              // 场景与 actor 列表（const → cbegin/cend 读锁遍历）
     auto& actor_storage = SharedDataHub::instance().actor_storage();
-    auto& profile_storage = SharedDataHub::instance().profile_storage();          // actor→mechanics 映射
 
     ktm::fvec3 gravity = make_fvec3(0.0f, -9.8f, 0.0f);  // m/s²
 
@@ -141,10 +140,9 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 // 续期资源访问时间（驱动 ResourceManager LRU）
                 {
                     auto& mrs = SharedDataHub::instance().model_resource_storage();
-                    auto& ps = SharedDataHub::instance().profile_storage();
                     auto& gs = SharedDataHub::instance().geometry_storage();
                     for (auto ph : actor->profile_handles) {
-                        auto prof = ps.try_acquire_read(ph);
+                        auto prof = Corona::find_profile(ph);
                         if (!prof || !prof->geometry_handle) continue;
                         auto g = gs.try_acquire_read(prof->geometry_handle);
                         if (!g || !g->model_resource_handle) continue;
@@ -160,7 +158,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                     if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
                         return;
                     }
-                    if (auto profile = profile_storage.try_acquire_read(profile_handle)) {
+                    if (auto profile = Corona::find_profile(profile_handle)) {
                         if (auto h = profile->mechanics_handle) {
                             // 读 MechanicsDevice：检查物理开关 + 质量/阻尼/恢复；读失败则用默认值
                             // 轴锁变化检测变量（需在 if/else 外声明，供后续唤醒逻辑使用）

@@ -988,7 +988,7 @@ void test_network_identity_registry_resolves_actor_components() {
     auto transform = hub.model_transform_storage().allocate();
     auto geometry = hub.geometry_storage().allocate();
     auto optics = hub.optics_storage().allocate();
-    auto profile = hub.profile_storage().allocate();
+    auto profile = hub.create_profile_component();
     auto actor = hub.actor_storage().allocate();
 
     {
@@ -1000,7 +1000,7 @@ void test_network_identity_registry_resolves_actor_components() {
         o->geometry_handle = geometry;
     }
     {
-        auto p = hub.profile_storage().acquire_write(profile);
+        auto* p = hub.try_profile(profile);
         p->optics_handle = optics;
     }
     {
@@ -1023,7 +1023,7 @@ void test_network_identity_registry_resolves_actor_components() {
                 "transform seq resolved");
 
     hub.actor_storage().deallocate(actor);
-    hub.profile_storage().deallocate(profile);
+    hub.destroy_profile_component(profile);
     hub.optics_storage().deallocate(optics);
     hub.geometry_storage().deallocate(geometry);
     hub.model_transform_storage().deallocate(transform);
@@ -1034,7 +1034,7 @@ void test_network_identity_registry_tracks_local_ownership() {
 
     auto transform = hub.model_transform_storage().allocate();
     auto geometry = hub.geometry_storage().allocate();
-    auto profile = hub.profile_storage().allocate();
+    auto profile = hub.create_profile_component();
     auto actor = hub.actor_storage().allocate();
 
     {
@@ -1042,7 +1042,7 @@ void test_network_identity_registry_tracks_local_ownership() {
         g->transform_handle = transform;
     }
     {
-        auto p = hub.profile_storage().acquire_write(profile);
+        auto* p = hub.try_profile(profile);
         p->geometry_handle = geometry;
     }
     {
@@ -1060,7 +1060,7 @@ void test_network_identity_registry_tracks_local_ownership() {
     expect_true(ownership && !*ownership, "registered actor can be remote-owned");
 
     hub.actor_storage().deallocate(actor);
-    hub.profile_storage().deallocate(profile);
+    hub.destroy_profile_component(profile);
     hub.geometry_storage().deallocate(geometry);
     hub.model_transform_storage().deallocate(transform);
 }
@@ -1070,7 +1070,7 @@ void test_network_identity_registry_applies_pending_ownership_override() {
 
     auto transform = hub.model_transform_storage().allocate();
     auto geometry = hub.geometry_storage().allocate();
-    auto profile = hub.profile_storage().allocate();
+    auto profile = hub.create_profile_component();
     auto actor = hub.actor_storage().allocate();
 
     {
@@ -1078,7 +1078,7 @@ void test_network_identity_registry_applies_pending_ownership_override() {
         g->transform_handle = transform;
     }
     {
-        auto p = hub.profile_storage().acquire_write(profile);
+        auto* p = hub.try_profile(profile);
         p->geometry_handle = geometry;
     }
     {
@@ -1096,7 +1096,7 @@ void test_network_identity_registry_applies_pending_ownership_override() {
                 "pending remote ownership overrides registration default");
 
     hub.actor_storage().deallocate(actor);
-    hub.profile_storage().deallocate(profile);
+    hub.destroy_profile_component(profile);
     hub.geometry_storage().deallocate(geometry);
     hub.model_transform_storage().deallocate(transform);
 }
@@ -1106,7 +1106,7 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
 
     auto transform = hub.model_transform_storage().allocate();
     auto geometry = hub.geometry_storage().allocate();
-    auto profile = hub.profile_storage().allocate();
+    auto profile = hub.create_profile_component();
     auto actor = hub.actor_storage().allocate();
 
     {
@@ -1118,7 +1118,7 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
         g->transform_handle = transform;
     }
     {
-        auto p = hub.profile_storage().acquire_write(profile);
+        auto* p = hub.try_profile(profile);
         p->geometry_handle = geometry;
     }
     {
@@ -1150,7 +1150,7 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
     if (outgoing.empty()) {
         sync.shutdown();
         hub.actor_storage().deallocate(actor);
-        hub.profile_storage().deallocate(profile);
+        hub.destroy_profile_component(profile);
         hub.geometry_storage().deallocate(geometry);
         hub.model_transform_storage().deallocate(transform);
         return;
@@ -1169,7 +1169,7 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
 
     sync.shutdown();
     hub.actor_storage().deallocate(actor);
-    hub.profile_storage().deallocate(profile);
+    hub.destroy_profile_component(profile);
     hub.geometry_storage().deallocate(geometry);
     hub.model_transform_storage().deallocate(transform);
 }
@@ -1181,7 +1181,7 @@ void test_sync_engine_emits_optics_but_not_local_handles() {
     auto model_resource = hub.model_resource_storage().allocate();
     auto geometry = hub.geometry_storage().allocate();
     auto optics = hub.optics_storage().allocate();
-    auto profile = hub.profile_storage().allocate();
+    auto profile = hub.create_profile_component();
     auto actor = hub.actor_storage().allocate();
 
     {
@@ -1198,7 +1198,7 @@ void test_sync_engine_emits_optics_but_not_local_handles() {
         o->geometry_handle = geometry;
     }
     {
-        auto p = hub.profile_storage().acquire_write(profile);
+        auto* p = hub.try_profile(profile);
         p->geometry_handle = geometry;
         p->optics_handle = optics;
     }
@@ -1240,7 +1240,7 @@ void test_sync_engine_emits_optics_but_not_local_handles() {
 
     sync.shutdown();
     hub.actor_storage().deallocate(actor);
-    hub.profile_storage().deallocate(profile);
+    hub.destroy_profile_component(profile);
     hub.optics_storage().deallocate(optics);
     hub.geometry_storage().deallocate(geometry);
     hub.model_resource_storage().deallocate(model_resource);
@@ -1252,7 +1252,7 @@ void test_sync_engine_does_not_emit_remote_owned_transform() {
 
     auto transform = hub.model_transform_storage().allocate();
     auto geometry = hub.geometry_storage().allocate();
-    auto profile = hub.profile_storage().allocate();
+    auto profile = hub.create_profile_component();
     auto actor = hub.actor_storage().allocate();
 
     {
@@ -1264,7 +1264,7 @@ void test_sync_engine_does_not_emit_remote_owned_transform() {
         g->transform_handle = transform;
     }
     {
-        auto p = hub.profile_storage().acquire_write(profile);
+        auto* p = hub.try_profile(profile);
         p->geometry_handle = geometry;
     }
     {
@@ -1321,7 +1321,7 @@ void test_sync_engine_does_not_emit_remote_owned_transform() {
 
     sync.shutdown();
     hub.actor_storage().deallocate(actor);
-    hub.profile_storage().deallocate(profile);
+    hub.destroy_profile_component(profile);
     hub.geometry_storage().deallocate(geometry);
     hub.model_transform_storage().deallocate(transform);
 }

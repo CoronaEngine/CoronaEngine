@@ -205,7 +205,7 @@ void stage_actor_geometry(EntityId actor_handle,
     }
 
     for (const auto profile_handle : actor->profile_handles) {
-        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
+        auto profile = Corona::find_profile(profile_handle);
         if (!profile) {
             ++result.skipped_no_data;
             continue;

@@ -48,7 +48,7 @@ void MechanicsSystem::refresh_foot_ground_cache() {
             { auto actor = hub.actor_storage().try_acquire_read(actor_handle); if (actor) profiles = actor->profile_handles; }
             for (auto ph : profiles) {
                 EntityId mechanics_handle = 0;
-                { auto profile = hub.profile_storage().try_acquire_read(ph); if (profile) mechanics_handle = profile->mechanics_handle; }
+                { auto profile = Corona::find_profile(ph); if (profile) mechanics_handle = profile->mechanics_handle; }
                 if (!mechanics_handle) continue;
                 std::uintptr_t gh = 0;
                 { auto body = hub.mechanics_storage().try_acquire_read(mechanics_handle);

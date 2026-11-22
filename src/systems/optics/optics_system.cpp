@@ -1205,7 +1205,6 @@ bool collect_actor_instances_for_visibility(
 
     auto& hub = Corona::SharedDataHub::instance();
     auto& actor_storage = hub.actor_storage();
-    auto& profile_storage = hub.profile_storage();
     auto& optics_storage = hub.optics_storage();
     auto& geom_storage = hub.geometry_storage();
     auto& transform_storage = hub.model_transform_storage();
@@ -1228,7 +1227,7 @@ bool collect_actor_instances_for_visibility(
         {
             auto& model_res_storage = hub.model_resource_storage();
             for (auto ph : actor->profile_handles) {
-                auto prof = profile_storage.try_acquire_read(ph);
+                auto prof = Corona::find_profile(ph);
                 if (!prof || !prof->geometry_handle) continue;
                 auto g = geom_storage.try_acquire_read(prof->geometry_handle);
                 if (!g || !g->model_resource_handle) continue;
@@ -1246,7 +1245,7 @@ bool collect_actor_instances_for_visibility(
         }
 
         for (auto profile_handle : actor->profile_handles) {
-            auto profile = profile_storage.try_acquire_read(profile_handle);
+            auto profile = Corona::find_profile(profile_handle);
             if (!profile || profile->optics_handle == 0) continue;
 
             auto optics_acc = optics_storage.try_acquire_read(profile->optics_handle);
@@ -1663,7 +1662,6 @@ constexpr std::size_t kVisionInteractiveInstanceLimit = 1024;
 void fallback_large_scenes_to_native_renderer() {
     auto& hub = Corona::SharedDataHub::instance();
     auto& actor_storage = hub.actor_storage();
-    auto& profile_storage = hub.profile_storage();
     auto& optics_storage = hub.optics_storage();
     auto& geometry_storage = hub.geometry_storage();
     auto& camera_storage = hub.camera_storage();
@@ -1682,7 +1680,7 @@ void fallback_large_scenes_to_native_renderer() {
             const auto actor = actor_storage.try_acquire_read(actor_handle);
             if (!actor) continue;
             for (const auto profile_handle : actor->profile_handles) {
-                const auto profile = profile_storage.try_acquire_read(profile_handle);
+                const auto profile = Corona::find_profile(profile_handle);
             if (!profile || profile->optics_handle == 0) continue;
                 const auto optics = optics_storage.try_acquire_read(profile->optics_handle);
                 const auto geometry = optics ? geometry_storage.try_acquire_read(optics->geometry_handle)
@@ -3317,7 +3315,6 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         visibility.bind_depth_target(hardware_->depthImage);
 
         auto& actor_storage = SharedDataHub::instance().actor_storage();
-        auto& profile_storage = SharedDataHub::instance().profile_storage();
         auto& optics_storage = SharedDataHub::instance().optics_storage();
         auto& geom_storage = SharedDataHub::instance().geometry_storage();
         auto& transform_storage = SharedDataHub::instance().model_transform_storage();
@@ -3378,7 +3375,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     auto& model_res_storage =
                         SharedDataHub::instance().model_resource_storage();
                     for (auto ph : actor->profile_handles) {
-                        auto prof = profile_storage.try_acquire_read(ph);
+                        auto prof = Corona::find_profile(ph);
                         if (!prof || !prof->geometry_handle) continue;
                         auto g = geom_storage.try_acquire_read(prof->geometry_handle);
                         if (!g || !g->model_resource_handle) continue;
@@ -3402,7 +3399,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 }
 
                 for (auto profile_handle : actor->profile_handles) {
-                    auto profile = profile_storage.try_acquire_read(profile_handle);
+                    auto profile = Corona::find_profile(profile_handle);
                     if (!profile || profile->optics_handle == 0) continue;
 
                     auto optics_acc = optics_storage.try_acquire_read(profile->optics_handle);
@@ -3700,7 +3697,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     continue;
                 }
                 for (auto profile_handle : actor->profile_handles) {
-                    auto profile = profile_storage.try_acquire_read(profile_handle);
+                    auto profile = Corona::find_profile(profile_handle);
                     if (!profile || profile->optics_handle == 0 ||
                         profile->mechanics_handle == 0) {
                         continue;
@@ -3802,7 +3799,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                          ++cascade) {
                         caster.cascade_slots[cascade] = std::move(slots[cascade]);
                     }
-                    auto profile=SharedDataHub::instance().profile_storage().acquire_read(caster.profile_handle);
+                    auto profile=Corona::find_profile(caster.profile_handle);
                     auto optics=SharedDataHub::instance().optics_storage().acquire_read(profile->optics_handle);
                     caster.material_revision=optics->principled?optics->principled->revision:0;
                     for(const auto& cascade_slots:caster.cascade_slots)for(const auto& slot:cascade_slots) {
@@ -5115,7 +5112,6 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
 
     auto& hub = SharedDataHub::instance();
     auto& actor_storage = hub.actor_storage();
-    auto& profile_storage = hub.profile_storage();
     auto& optics_storage = hub.optics_storage();
     auto& geom_storage = hub.geometry_storage();
     auto& transform_storage = hub.model_transform_storage();
@@ -5127,7 +5123,7 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
             if (!actor) continue;
             mix(static_cast<std::size_t>(actor_handle));
             for (auto profile_handle : actor->profile_handles) {
-                auto profile = profile_storage.try_acquire_read(profile_handle);
+                auto profile = Corona::find_profile(profile_handle);
                 if (!profile || profile->optics_handle == 0) continue;
 
                 auto optics = optics_storage.try_acquire_read(profile->optics_handle);

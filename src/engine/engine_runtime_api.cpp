@@ -1600,7 +1600,7 @@ Corona::API::Actor::Actor()
 Corona::API::Actor::~Actor() {
     for (const auto& [_, storage_profile_handle] : profile_storage_handles_) {
         if (storage_profile_handle != 0) {
-            SharedDataHub::instance().profile_storage().deallocate(storage_profile_handle);
+            SharedDataHub::instance().destroy_profile_component(storage_profile_handle);
         }
     }
     profile_storage_handles_.clear();
@@ -1644,16 +1644,16 @@ Corona::API::Actor::Profile* Corona::API::Actor::add_profile(const Profile& prof
     }
 
     // 将 Profile 写入引擎侧 ProfileStorage，ActorDevice 只保存 ProfileStorage 的句柄
-    EntityId storage_profile_handle = SharedDataHub::instance().profile_storage().allocate();
-    if (auto p = SharedDataHub::instance().profile_storage().acquire_write(storage_profile_handle)) {
+    EntityId storage_profile_handle = SharedDataHub::instance().create_profile_component();
+    if (auto* p = SharedDataHub::instance().try_profile(storage_profile_handle)) {
         // Actor 作为组件类的 friend，可以读取组件句柄；但不能直接调用 Geometry 的受保护 get_handle()
         p->optics_handle = profile.optics ? profile.optics->get_handle() : 0;
         p->acoustics_handle = profile.acoustics ? profile.acoustics->get_handle() : 0;
         p->mechanics_handle = profile.mechanics ? profile.mechanics->get_handle() : 0;
         p->geometry_handle = 0;
     } else {
-        CFW_LOG_ERROR("[Actor::add_profile] Failed to acquire write access to profile storage");
-        SharedDataHub::instance().profile_storage().deallocate(storage_profile_handle);
+        CFW_LOG_ERROR("[Actor::add_profile] Failed to create profile component");
+        SharedDataHub::instance().destroy_profile_component(storage_profile_handle);
         storage_profile_handle = 0;
     }
     profile_storage_handles_[profile_handle] = storage_profile_handle;
@@ -1728,7 +1728,7 @@ void Corona::API::Actor::remove_profile(const Profile* profile) {
     }
 
     if (storage_profile_handle != 0) {
-        SharedDataHub::instance().profile_storage().deallocate(storage_profile_handle);
+        SharedDataHub::instance().destroy_profile_component(storage_profile_handle);
     }
 }
 
