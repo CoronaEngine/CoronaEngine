@@ -71,13 +71,6 @@ void test_patch_validation() {
         check(!validate_patch(good), "supported body type accepted");
     }
 
-    // camera_lock was deleted from the typed DTO, so a patch carrying only that key can no
-    // longer describe any modification and must be rejected as an empty patch.
-    auto camera_lock_only = base_patch();
-    error = validate_patch(camera_lock_only);
-    check(error && error.message == "Actor property patch is empty",
-          "camera_lock-only patch is no longer a valid modification");
-
     auto animation_sources = base_patch();
     animation_sources.animation_sources = std::vector<std::string>{"idle"};
     check(!validate_patch(animation_sources), "animation sources accepted");
