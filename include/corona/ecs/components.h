@@ -15,6 +15,8 @@
 
 #include <corona/ecs/world.h>
 
+#include <corona/kernel/entity_id.h>
+
 #include <ktm/ktm.h>
 
 #include <cstdint>
@@ -107,6 +109,11 @@ struct Bounds {
 // ============================================================================
 // 渲染开关
 // ============================================================================
+
+/// actor 下的 profile 实体列表（原 `ActorDevice::profile_handles`）。
+struct Profiles {
+    std::vector<EntityId> handles;
+};
 
 /// actor 的模型路径（原 `ActorDevice::model_path`）。
 struct ModelPath {

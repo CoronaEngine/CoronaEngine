@@ -1210,6 +1210,7 @@ bool collect_actor_instances_for_visibility(
     uint32_t object_id = 1;
     for (auto actor_handle : scene.actor_handles) {
         auto actor = Corona::find_actor(actor_handle);
+        const auto* actor_profiles = Corona::find_profiles(actor_handle);
         if (!actor) {
             ++object_id;
             continue;
@@ -1221,7 +1222,7 @@ bool collect_actor_instances_for_visibility(
 
         // ������Դ����ʱ�䣨���� ResourceManager LRU��
         {
-            for (auto ph : actor->profile_handles) {
+            for (auto ph : actor_profiles->handles) {
                 auto prof = Corona::find_profile(ph);
                 if (!prof || !prof->geometry_handle) continue;
                 auto g = Corona::find_geometry(prof->geometry_handle);
@@ -1239,7 +1240,7 @@ bool collect_actor_instances_for_visibility(
             continue;
         }
 
-        for (auto profile_handle : actor->profile_handles) {
+        for (auto profile_handle : actor_profiles->handles) {
             auto profile = Corona::find_profile(profile_handle);
             if (!profile || profile->optics_handle == 0) continue;
 
@@ -1674,7 +1675,9 @@ void fallback_large_scenes_to_native_renderer() {
         for (const auto actor_handle : scene.actor_handles) {
             const auto actor = Corona::find_actor(actor_handle);
             if (!actor) continue;
-            for (const auto profile_handle : actor->profile_handles) {
+            const auto* actor_profiles = Corona::find_profiles(actor_handle);
+            if (actor_profiles == nullptr) continue;
+            for (const auto profile_handle : actor_profiles->handles) {
                 const auto profile = Corona::find_profile(profile_handle);
             if (!profile || profile->optics_handle == 0) continue;
                 const auto optics = Corona::find_optics(profile->optics_handle);
@@ -3357,6 +3360,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             uint32_t object_id = 1;
             for (auto actor_handle : scene.actor_handles) {
                 auto actor = Corona::find_actor(actor_handle);
+                const auto* actor_profiles = Corona::find_profiles(actor_handle);
                 if (!actor) {
                     ++object_id;
                     continue;
@@ -3377,7 +3381,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
 
                 // ������Դ����ʱ�䣨���� ResourceManager LRU��
                 {
-                    for (auto ph : actor->profile_handles) {
+                    for (auto ph : actor_profiles->handles) {
                         auto prof = Corona::find_profile(ph);
                         if (!prof || !prof->geometry_handle) continue;
                         auto g = Corona::find_geometry(prof->geometry_handle);
@@ -3401,7 +3405,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     continue;
                 }
 
-                for (auto profile_handle : actor->profile_handles) {
+                for (auto profile_handle : actor_profiles->handles) {
                     auto profile = Corona::find_profile(profile_handle);
                     if (!profile || profile->optics_handle == 0) continue;
 
@@ -3698,12 +3702,13 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             shadow_casters.reserve(scene.actor_handles.size());
             for (auto actor_handle : scene.actor_handles) {
                 auto actor = Corona::find_actor(actor_handle);
+                const auto* actor_profiles = Corona::find_profiles(actor_handle);
                 if (!actor || actor->follow_camera ||
                     !diag_actor_allowed(actor_handle) ||
                     !resident_snapshot.contains(actor_handle)) {
                     continue;
                 }
-                for (auto profile_handle : actor->profile_handles) {
+                for (auto profile_handle : actor_profiles->handles) {
                     auto profile = Corona::find_profile(profile_handle);
                     if (!profile || profile->optics_handle == 0 ||
                         profile->mechanics_handle == 0) {
@@ -5125,9 +5130,10 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
         if (!scene_dev.enabled) return;
         for (auto actor_handle : scene_dev.actor_handles) {
             auto actor = Corona::find_actor(actor_handle);
+            const auto* actor_profiles = Corona::find_profiles(actor_handle);
             if (!actor) continue;
             mix(static_cast<std::size_t>(actor_handle));
-            for (auto profile_handle : actor->profile_handles) {
+            for (auto profile_handle : actor_profiles->handles) {
                 auto profile = Corona::find_profile(profile_handle);
                 if (!profile || profile->optics_handle == 0) continue;
 

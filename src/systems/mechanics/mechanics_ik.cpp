@@ -45,7 +45,8 @@ void MechanicsSystem::refresh_foot_ground_cache() {
                 impl_->ik_geometry_actors[gh] = actor_handle;
             }
             std::vector<std::uintptr_t> profiles;
-            { auto actor = Corona::find_actor(actor_handle); if (actor) profiles = actor->profile_handles; }
+            { const auto* actor_profiles = Corona::find_profiles(actor_handle);
+              if (actor_profiles) profiles = actor_profiles->handles; }
             for (auto ph : profiles) {
                 EntityId mechanics_handle = 0;
                 { auto profile = Corona::find_profile(ph); if (profile) mechanics_handle = profile->mechanics_handle; }

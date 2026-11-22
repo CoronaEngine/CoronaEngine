@@ -53,9 +53,10 @@ void MechanicsSystem::process_mesh_moves() {
                 EntityId transform_handle{};
                 for(auto actor_handle:scene.actor_handles) {
                     auto actor=Corona::find_actor(actor_handle);
+                    const auto* actor_profiles = Corona::find_profiles(actor_handle);
                     if(!actor) return unavailable("actor",actor_handle);
                     std::unordered_set<std::uintptr_t> seen_geometry;
-                    for(auto ph:actor->profile_handles) {
+                    for(auto ph:actor_profiles->handles) {
                         auto profile=Corona::find_profile(ph);
                         if(!profile) return unavailable("profile",ph);
                         // Runtime Actor profiles keep geometry on their components;

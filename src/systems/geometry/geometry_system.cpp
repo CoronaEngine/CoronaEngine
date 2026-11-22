@@ -397,13 +397,14 @@ void GeometrySystem::update() {
             if (added_actors.count(actor_handle)) continue;
 
             auto actor_read = Corona::find_actor(actor_handle);
+            const auto* actor_read_profiles = Corona::find_profiles(actor_handle);
             const auto* actor_path = Corona::find_model_path(actor_handle);
             if ( !actor_read ) continue;
             const ActorDevice& actor_dev = *actor_read;
             const auto* streaming = Corona::find_streaming(actor_handle);
             if (streaming != nullptr && streaming->pinned) pinned_actors.insert(actor_handle);
 
-            for (EntityId profile_handle : actor_dev.profile_handles) {
+            for (EntityId profile_handle : actor_read_profiles->handles) {
                 auto profile_read = Corona::find_profile(profile_handle);
                 if (profile_read == nullptr) continue;
 
@@ -706,6 +707,7 @@ void GeometrySystem::update() {
                         if (scene_state.unloading_tasks.count(actor)) continue;
 
                         auto actor_read = Corona::find_actor(actor);
+                        const auto* actor_read_profiles = Corona::find_profiles(actor);
                         const auto* actor_path = Corona::find_model_path(actor);
                         if (actor_read == nullptr) continue;
                         const auto* streaming = Corona::find_streaming(actor);
@@ -1009,12 +1011,13 @@ void GeometrySystem::update() {
 void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {
     auto& hub = SharedDataHub::instance();
     auto actor_read = Corona::find_actor(actor);
+    const auto* actor_read_profiles = Corona::find_profiles(actor);
     const auto* actor_path = Corona::find_model_path(actor);
     if (actor_read == nullptr) return;
 
     std::unordered_set<std::uintptr_t> visited_geom;
 
-    for (auto profile_handle : actor_read->profile_handles) {
+    for (auto profile_handle : actor_read_profiles->handles) {
         auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;
 
@@ -1292,6 +1295,7 @@ void GeometrySystem::on_load_finished(const Events::ActorLoadFinishedEvent& even
     // 加载完成，解除 pin（后续由 Optics/Mechanics 的 touch 续期维持热度）
     {
         auto actor_read = Corona::find_actor(event.actor);
+        const auto* actor_read_profiles = Corona::find_profiles(event.actor);
         const auto* actor_path = Corona::find_model_path(event.actor);
         if (actor_read && !actor_path->value.empty()) {
             auto normalized = actor_path->value.is_relative()
@@ -1354,6 +1358,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
     // ---- 第 1 步：以只读模式获取 actor 数据 ----
     // try_acquire_read 返回一个 RAII 读锁守卫，离开作用域自动释放
     auto actor_read = Corona::find_actor(actor);
+    const auto* actor_read_profiles = Corona::find_profiles(actor);
     const auto* actor_path = Corona::find_model_path(actor);
     if (actor_read == nullptr) return;  // actor 句柄无效（可能已被销毁），直接返回
 
@@ -1364,7 +1369,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
 
     // ---- 第 3 步：遍历 actor 身上每个 Profile ----
     // Profile 是"配件槽位"——它聚合了 optics/mechanics/geometry/acoustics 的句柄
-    for (auto profile_handle : actor_read->profile_handles) {
+    for (auto profile_handle : actor_read_profiles->handles) {
         auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;  // profile 句柄已失效
 
@@ -1471,6 +1476,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
 
     // ---- 第 1 步：读取 actor 数据 ----
     auto actor_read = Corona::find_actor(actor);
+    const auto* actor_read_profiles = Corona::find_profiles(actor);
     const auto* actor_path = Corona::find_model_path(actor);
     if (actor_read == nullptr) return false;  // actor 句柄无效
     bool queued_staged_upload = false;
@@ -1480,7 +1486,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
     std::unordered_set<std::uintptr_t> visited_geometry_handles;
 
     // ---- 第 3 步：遍历 actor 的所有 profile ----
-    for (auto profile_handle : actor_read->profile_handles) {
+    for (auto profile_handle : actor_read_profiles->handles) {
         auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;
 
@@ -1744,6 +1750,7 @@ void GeometrySystem::process_async_tasks() {
                         {task.scene_handle, task.actor, /*loaded=*/false});
                 } else {
                     auto actor_read = Corona::find_actor(task.actor);
+                    const auto* actor_read_profiles = Corona::find_profiles(task.actor);
                     const auto* actor_path = Corona::find_model_path(task.actor);
                     if (actor_read != nullptr) {
                         if (!actor_path->value.empty()) {
@@ -1808,6 +1815,7 @@ void GeometrySystem::on_load_requested(const Events::ActorLoadRequestedEvent& e)
     }
 
     auto actor_read = Corona::find_actor(e.actor);
+    const auto* actor_read_profiles = Corona::find_profiles(e.actor);
     const auto* actor_path = Corona::find_model_path(e.actor);
     if (actor_read == nullptr || actor_path->value.empty()) {
         CFW_LOG_ERROR("[GeometrySystem] Invalid actor or empty model path: {}", e.actor);
@@ -1867,6 +1875,7 @@ void GeometrySystem::on_unload_requested(const Events::ActorUnloadRequestedEvent
     }
 
     auto actor_read = Corona::find_actor(e.actor);
+    const auto* actor_read_profiles = Corona::find_profiles(e.actor);
     const auto* actor_path = Corona::find_model_path(e.actor);
     if (actor_read == nullptr || actor_path->value.empty()) {
         scene_state.actor_load_states[e.actor] = ActorLoadState::Unloaded;
@@ -2083,6 +2092,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
 
     // ---- 第 2 步：读取 actor 完整状态，构建 ActorStreamingRecord ----
     auto actor_read = Corona::find_actor(event.actor);
+    const auto* actor_read_profiles = Corona::find_profiles(event.actor);
     const auto* actor_path = Corona::find_model_path(event.actor);
     if (!actor_read) return;
 
@@ -2097,7 +2107,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
     rec.actor     = event.actor;
     rec.model_path    = actor_path->value;
     rec.follow_camera = actor_read->follow_camera;
-    rec.profile_handles = actor_read->profile_handles;
+    rec.profile_handles = actor_read_profiles->handles;
 
     // 遍历 profiles 收集 geometry_handles / resource_ids / transform / 运行时标志
     bool transform_captured = false;
@@ -2115,7 +2125,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
         }
     };
 
-    for (auto profile_handle : actor_read->profile_handles) {
+    for (auto profile_handle : actor_read_profiles->handles) {
         auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;
 
@@ -2235,6 +2245,7 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
     } else {
         // 缓存未命中：回退到从 ActorDevice 读取 model_path
         auto actor_read = Corona::find_actor(event.actor);
+        const auto* actor_read_profiles = Corona::find_profiles(event.actor);
         const auto* actor_path = Corona::find_model_path(event.actor);
         if (!actor_read) {
             CFW_LOG_ERROR("[GeometrySystem] Restore failed: actor {} not in storage", event.actor);
@@ -2253,6 +2264,7 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
     Resource::ModelImportOptions import_options;
     {
         auto actor = Corona::find_actor(event.actor);
+        const auto* actor_profiles = Corona::find_profiles(event.actor);
         // A contended actor is retried by the visible/offline restore scan. Do
         // not silently substitute default import options and normalize geometry.
         if (!actor) return;
@@ -2265,9 +2277,10 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
     // 渲染/物理看到的是 evict 前的状态而非默认值。
     if (rec) {
         auto actor_read = Corona::find_actor(event.actor);
+        const auto* actor_read_profiles = Corona::find_profiles(event.actor);
         const auto* actor_path = Corona::find_model_path(event.actor);
         if (actor_read) {
-            for (auto ph : actor_read->profile_handles) {
+            for (auto ph : actor_read_profiles->handles) {
                 auto profile = Corona::find_profile(ph);
                 if (!profile) continue;
 
@@ -5386,6 +5399,7 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
     auto& hub = SharedDataHub::instance();
 
     auto actor_read = Corona::find_actor(actor);
+    const auto* actor_read_profiles = Corona::find_profiles(actor);
     const auto* actor_path = Corona::find_model_path(actor);
     if (actor_read == nullptr) return;
 
@@ -5393,7 +5407,7 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
     std::unordered_set<std::uint64_t>  visited_models;
     std::unordered_set<const Memory::GpuMemToken*> visited_textures;
 
-    for (auto profile_handle : actor_read->profile_handles) {
+    for (auto profile_handle : actor_read_profiles->handles) {
         auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;
 

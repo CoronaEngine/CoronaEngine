@@ -331,7 +331,10 @@ void apply_native_actor_optics_state(NativeEditorActor& item) {
     auto& hub = Corona::SharedDataHub::instance();
     if (item.engine_actor) {
         if (auto actor = Corona::find_actor(item.engine_actor->get_handle())) {
-            for (const auto handle : actor->profile_handles) {
+            const auto* actor_profiles =
+                Corona::find_profiles(item.engine_actor->get_handle());
+            if (actor_profiles == nullptr) return;
+            for (const auto handle : actor_profiles->handles) {
                 auto profile = Corona::find_profile(handle);
                 if (!profile || !profile->optics_handle) continue;
                 // P5：改走命令通道。geometry 归属校验随命令下发，

@@ -151,7 +151,8 @@ ProfileDevice* find_profile(EntityId handle) {
 
 EntityId SharedDataHub::create_actor_component() {
     const auto entity =
-        Ecs::World::instance().create<ActorDevice, Ecs::StreamingPolicy, Ecs::ModelPath>();
+        Ecs::World::instance()
+            .create<ActorDevice, Ecs::StreamingPolicy, Ecs::ModelPath, Ecs::Profiles>();
     return Ecs::to_handle(entity);
 }
 void SharedDataHub::destroy_actor_component(EntityId handle) { Ecs::destroy(handle); }
@@ -181,6 +182,12 @@ Ecs::ModelPath* SharedDataHub::try_model_path(EntityId handle) {
 Ecs::ModelPath* find_model_path(EntityId handle) {
     return SharedDataHub::instance().try_model_path(handle);
 }
+Ecs::Profiles* SharedDataHub::try_profiles(EntityId handle) {
+    return Ecs::try_get<Ecs::Profiles>(handle);
+}
+Ecs::Profiles* find_profiles(EntityId handle) {
+    return SharedDataHub::instance().try_profiles(handle);
+}
 
 std::vector<std::uintptr_t> SharedDataHub::resolve_actor_geometry_handles(
     EntityId actor_handle) {
@@ -197,7 +204,9 @@ std::vector<std::uintptr_t> SharedDataHub::resolve_actor_geometry_handles(
     if (!actor) {
         return geometry_handles;
     }
-    for (const auto profile_handle : actor->profile_handles) {
+    const auto* actor_profiles = find_profiles(actor_handle);
+    for (const auto profile_handle : actor_profiles != nullptr ? actor_profiles->handles
+                                                              : std::vector<EntityId>{}) {
         const auto* profile = try_profile(profile_handle);
         if (!profile) {
             continue;

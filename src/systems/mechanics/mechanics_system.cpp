@@ -142,10 +142,14 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             const bool broadphase_loaded = impl_->geometry_sys &&
                 impl_->geometry_sys->get_actor_load_state(actor_handle, scene_handle) == ActorLoadState::Loaded;
             if (auto actor = Corona::find_actor(actor_handle)) {
+                const auto* actor_profiles = Corona::find_profiles(actor_handle);
+                const auto& profiles = actor_profiles != nullptr
+                                           ? actor_profiles->handles
+                                           : std::vector<EntityId>{};
                 // 续期资源访问时间（驱动 ResourceManager LRU）
                 {
                     auto gs = Corona::Ecs::all_components<Corona::GeometryDevice>();
-                    for (auto ph : actor->profile_handles) {
+                    for (auto ph : profiles) {
                         auto prof = Corona::find_profile(ph);
                         if (!prof || !prof->geometry_handle) continue;
                         auto g = Corona::find_geometry(prof->geometry_handle);
@@ -158,7 +162,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                     }
                 }
 
-                for (auto profile_handle : actor->profile_handles) {
+                for (auto profile_handle : profiles) {
                     if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
                         return;
                     }

@@ -199,12 +199,13 @@ void stage_actor_geometry(EntityId actor_handle,
                           VisionBuildResult& result) {
     auto& hub = SharedDataHub::instance();
     auto actor = Corona::find_actor(actor_handle);
+    const auto* actor_profiles = Corona::find_profiles(actor_handle);
     if (!actor) {
         ++result.skipped_no_data;
         return;
     }
 
-    for (const auto profile_handle : actor->profile_handles) {
+    for (const auto profile_handle : actor_profiles->handles) {
         auto profile = Corona::find_profile(profile_handle);
         if (!profile) {
             ++result.skipped_no_data;

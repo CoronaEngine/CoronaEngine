@@ -135,14 +135,17 @@ private:
         const std::string& actor_guid,
         EntityId actor_handle) const {
         auto actor = Corona::find_actor(actor_handle);
-        if (actor == nullptr || actor->profile_handles.empty()) return std::nullopt;
+        const auto* actor_profiles = Corona::find_profiles(actor_handle);
+        if (actor == nullptr || actor_profiles == nullptr || actor_profiles->handles.empty()) {
+            return std::nullopt;
+        }
 
         ActorNetworkIdentity out;
         out.actor_guid = actor_guid;
         out.actor_handle = actor_handle;
         out.actor_seq = Corona::Ecs::seq_of(actor_handle);
 
-        out.profile_handle = actor->profile_handles.front();
+        out.profile_handle = actor_profiles->handles.front();
         out.profile_seq = Corona::Ecs::seq_of(out.profile_handle);
 
         const auto* profile = hub_.try_profile(out.profile_handle);

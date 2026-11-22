@@ -1668,7 +1668,9 @@ Corona::API::Actor::Profile* Corona::API::Actor::add_profile(const Profile& prof
     if (handle_ != 0) {
         if (auto accessor = Corona::find_actor(handle_)) {
             if (storage_profile_handle != 0) {
-                accessor->profile_handles.push_back(storage_profile_handle);
+                if (auto* profiles = SharedDataHub::instance().try_profiles(handle_)) {
+                    profiles->handles.push_back(storage_profile_handle);
+                }
             }
             // 将 Geometry 的 model_path 同步到 ActorDevice，
             // GeometrySystem 的 load/unload 路径依赖此字段
@@ -1731,7 +1733,9 @@ void Corona::API::Actor::remove_profile(const Profile* profile) {
 
     if (auto accessor = Corona::find_actor(handle_)) {
         if (storage_profile_handle != 0) {
-            std::erase(accessor->profile_handles, storage_profile_handle);
+            if (auto* profiles = SharedDataHub::instance().try_profiles(handle_)) {
+                std::erase(profiles->handles, storage_profile_handle);
+            }
         }
     }
 
