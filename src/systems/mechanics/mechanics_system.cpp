@@ -1448,7 +1448,8 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
             model_resource_handle = geom_read->model_resource_handle;
             previous_skin_model = geom_read->skeleton_cache_model_id;
             player = geom_read->animation_player;
-            model_path = geom_read->model_path_utf8;
+            const auto* model_source = Corona::find_model_source(geom_handle);
+            model_path = model_source != nullptr ? model_source->path_utf8 : std::string{};
             geometry_failed = geom_read->gpu_build_state == GeometryDevice::GpuBuildState::Failed;
             geometry_ready = geom_read->gpu_build_state == GeometryDevice::GpuBuildState::Ready &&
                              !geom_read->mesh_handles.empty();

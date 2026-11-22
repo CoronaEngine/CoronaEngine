@@ -65,7 +65,10 @@ ModelTransform* find_transform(EntityId handle) {
     return SharedDataHub::instance().try_transform(handle);
 }
 
-EntityId SharedDataHub::create_geometry() { return Ecs::emplace<GeometryDevice>(); }
+EntityId SharedDataHub::create_geometry() {
+    const auto entity = Ecs::World::instance().create<GeometryDevice, Ecs::ModelSource>();
+    return Ecs::to_handle(entity);
+}
 void SharedDataHub::destroy_geometry(EntityId handle) { Ecs::destroy(handle); }
 GeometryDevice* SharedDataHub::try_geometry(EntityId handle) {
     return Ecs::try_get<GeometryDevice>(handle);
@@ -75,6 +78,12 @@ const GeometryDevice* SharedDataHub::try_geometry(EntityId handle) const {
 }
 GeometryDevice* find_geometry(EntityId handle) {
     return SharedDataHub::instance().try_geometry(handle);
+}
+Ecs::ModelSource* SharedDataHub::try_model_source(EntityId handle) {
+    return Ecs::try_get<Ecs::ModelSource>(handle);
+}
+Ecs::ModelSource* find_model_source(EntityId handle) {
+    return SharedDataHub::instance().try_model_source(handle);
 }
 
 EntityId SharedDataHub::create_mechanics() {

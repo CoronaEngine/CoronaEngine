@@ -152,7 +152,7 @@ struct GeometryDevice {
     GpuBuildState gpu_build_state{GpuBuildState::Ready};
     // 待异步导入的模型路径（UTF-8）。仅 PendingImport 阶段有意义；
     // GeometrySystem import 完成后将解析出的 model_id 写入 model_resource 槽。
-    std::string model_path_utf8;
+    // 磁盘路径已迁到 Ecs::ModelSource 组件。
     // 异步 import 任务的 epoch（防 slot 复用的 ABA）。GeometrySystem 发起 import 时
     // 写入一个进程级单调递增值，并在 import 完成回写前比对：若不符说明本槽已被
     // deallocate→复用为新对象（allocate 时 T{} 会把本字段重置为 0），丢弃本次结果。
@@ -853,6 +853,9 @@ using SceneRange = Ecs::ComponentRange<SceneDevice>;
 /// 便捷：按句柄取 GeometryDevice 组件（无锁）。
 [[nodiscard]] GeometryDevice* find_geometry(EntityId handle);
 
+/// 便捷：按句柄取 ModelSource 组件（无锁）。
+[[nodiscard]] Ecs::ModelSource* find_model_source(EntityId handle);
+
 /// 图像组件的写租约（唯一锁）：UI/DAG/主线程都会碰图像，必须保留同步。
 class ImageAccess {
    public:
@@ -924,6 +927,7 @@ class SharedDataHub {
     void destroy_geometry(EntityId handle);
     [[nodiscard]] GeometryDevice* try_geometry(EntityId handle);
     [[nodiscard]] const GeometryDevice* try_geometry(EntityId handle) const;
+    [[nodiscard]] Ecs::ModelSource* try_model_source(EntityId handle);
 
     // mechanics 已删除 Storage：组件直接挂在实体上。
     EntityId create_mechanics();

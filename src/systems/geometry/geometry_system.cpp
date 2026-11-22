@@ -418,7 +418,9 @@ void GeometrySystem::update() {
 
                 // 无网格的 actor（如音频物体，空 model_path）不参与几何加载/距离剔除，
                 // 否则距离剔除每帧反复请求加载空路径并报 "empty model path" 错误。
-                if (geometry_read->model_path_utf8.empty()) continue;
+                const auto* geometry_source =
+                    Corona::find_model_source(mechanics_read->geometry_handle);
+                if (geometry_source == nullptr || geometry_source->path_utf8.empty()) continue;
                 if (streaming != nullptr && streaming->pinned &&
                     (geometry_read->gpu_build_state != GeometryDevice::GpuBuildState::Ready ||
                      geometry_read->mesh_handles.empty())) {
@@ -2834,7 +2836,8 @@ void GeometrySystem::process_pending_geometry_imports() {
                 not_ready_detail += " meshes=" + std::to_string(geom_dev.mesh_handles.size());
                 not_ready_detail += " model=" + std::to_string(model_id);
                 not_ready_detail += " import_epoch=" + std::to_string(geom_dev.import_epoch);
-                not_ready_detail += " path='" + geom_dev.model_path_utf8 + "'";
+                const auto* source = Corona::find_model_source(it.id());
+                not_ready_detail += " path='" + (source != nullptr ? source->path_utf8 : std::string{}) + "'";
             }
             std::string inflight_detail;
             for (const auto& [task_handle, task] : impl_->pending_import_tasks) {
@@ -2889,8 +2892,9 @@ void GeometrySystem::process_pending_geometry_imports() {
                 }
 
                 if (rid == Resource::IResource::INVALID_UID || rid == 0) {
+                    const auto* source = Corona::find_model_source(geom_handle);
                     CFW_LOG_ERROR("[GeometrySystem] Async import failed for geometry {} (path={})",
-                                  geom_handle, geom_write->model_path_utf8);
+                                  geom_handle, source != nullptr ? source->path_utf8 : std::string{});
                     geom_write->gpu_build_state = GeometryDevice::GpuBuildState::Failed;
                     geom_write->import_epoch = 0;  // 任务结束
                     continue;
@@ -2935,7 +2939,8 @@ void GeometrySystem::process_pending_geometry_imports() {
             // import_tasks age_ms 会持续增长 —— 那说明在途任务本身没跑完。
             continue;  // 已在途
         }
-        if (geom_dev.model_path_utf8.empty()) {
+        const auto* geom_source = Corona::find_model_source(geom_handle);
+        if (geom_source == nullptr || geom_source->path_utf8.empty()) {
             CFW_LOG_WARNING("[GeometrySystem] Skipping PendingImport geometry {:#x} — model_path is empty",
                             geom_handle);
             continue;
@@ -2947,7 +2952,7 @@ void GeometrySystem::process_pending_geometry_imports() {
                 world_pos = tr->position;
             }
         }
-        to_import.push_back({geom_handle, geom_dev.model_path_utf8, world_pos, geom_dev.import_options});
+        to_import.push_back({geom_handle, geom_source->path_utf8, world_pos, geom_dev.import_options});
     }
     if (to_import.empty()) return;
 

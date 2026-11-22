@@ -680,7 +680,9 @@ Corona::API::Geometry::Geometry(const std::string& model_path, Resource::ModelIm
         handle->transform_handle = transform_handle_;
         handle->model_resource_handle = model_resource_handle_;
         handle->mesh_handles.clear();  // 留空，待 GeometrySystem 异步构建
-        handle->model_path_utf8 = model_path;  // 供 GeometrySystem 异步 import
+        if (auto* model_source = SharedDataHub::instance().try_model_source(handle_)) {
+            model_source->path_utf8 = model_path;  // 供 GeometrySystem 异步 import
+        }
         handle->import_options = options;
         // 空路径（如 audio actor）无需导入，直接 Ready；有路径才进 PendingImport。
         handle->gpu_build_state = model_path.empty()

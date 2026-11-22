@@ -107,6 +107,11 @@ struct Bounds {
 // 渲染开关
 // ============================================================================
 
+/// 几何的导入源：磁盘路径。导入选项仍留在 `GeometryDevice`（含 scene_geometry 等语义）。
+struct ModelSource {
+    std::string path_utf8;
+};
+
 /// 流式/驻留策略：pinned 的 actor 不参与距离剔除与 LRU 淘汰。
 ///
 /// 从 `ActorDevice` 抽出的第一个细粒度组件：策略只影响流式系统，
