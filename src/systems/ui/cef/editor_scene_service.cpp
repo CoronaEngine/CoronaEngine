@@ -330,7 +330,7 @@ void apply_native_actor_optics_state(NativeEditorActor& item) {
     auto principled = NativeMaterialConfig::principled(item.persisted_optics.material);
     auto& hub = Corona::SharedDataHub::instance();
     if (item.engine_actor) {
-        if (auto actor = hub.actor_storage().acquire_read(item.engine_actor->get_handle())) {
+        if (auto actor = Corona::find_actor(item.engine_actor->get_handle())) {
             for (const auto handle : actor->profile_handles) {
                 auto profile = Corona::find_profile(handle);
                 if (!profile || !profile->optics_handle) continue;

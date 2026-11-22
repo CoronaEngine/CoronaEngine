@@ -198,7 +198,7 @@ void stage_actor_geometry(EntityId actor_handle,
                           PreparedGroup& group,
                           VisionBuildResult& result) {
     auto& hub = SharedDataHub::instance();
-    auto actor = hub.actor_storage().try_acquire_read(actor_handle);
+    auto actor = Corona::find_actor(actor_handle);
     if (!actor) {
         ++result.skipped_no_data;
         return;

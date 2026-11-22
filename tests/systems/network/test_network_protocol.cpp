@@ -930,28 +930,28 @@ void test_network_system_repeated_start_preserves_active_role() {
 void test_actor_device_follow_camera_defaults_false_and_round_trips() {
     auto& hub = Corona::SharedDataHub::instance();
 
-    auto actor = hub.actor_storage().allocate();
+    auto actor = hub.create_actor_component();
 
     {
-        auto a = hub.actor_storage().acquire_read(actor);
+        auto a = Corona::find_actor(actor);
         expect_true(!a->follow_camera, "actor follow-camera flag defaults to false");
     }
     {
-        auto a = hub.actor_storage().acquire_write(actor);
+        auto a = Corona::find_actor(actor);
         a->follow_camera = true;
     }
     {
-        auto a = hub.actor_storage().acquire_read(actor);
+        auto a = Corona::find_actor(actor);
         expect_true(a->follow_camera, "actor follow-camera flag round trips");
     }
 
-    hub.actor_storage().deallocate(actor);
+    hub.destroy_actor_component(actor);
 }
 
 void test_actor_metadata_guid_round_trips_and_clears() {
     auto& hub = Corona::SharedDataHub::instance();
 
-    auto actor = hub.actor_storage().allocate();
+    auto actor = hub.create_actor_component();
     hub.set_actor_guid(actor, "actor-meta-guid");
     expect_true(hub.actor_guid(actor) == "actor-meta-guid",
                 "actor metadata guid round trips");
@@ -960,25 +960,25 @@ void test_actor_metadata_guid_round_trips_and_clears() {
     expect_true(hub.actor_guid(actor).empty(),
                 "actor metadata guid clears on empty value");
 
-    hub.actor_storage().deallocate(actor);
+    hub.destroy_actor_component(actor);
 }
 
 
 void test_actor_metadata_handle_cleanup_removes_guid() {
     auto& hub = Corona::SharedDataHub::instance();
 
-    auto actor = hub.actor_storage().allocate();
+    auto actor = hub.create_actor_component();
     hub.set_actor_guid(actor, "actor-cleanup");
 
     hub.clear_actor_metadata(actor);
     expect_true(hub.actor_guid(actor).empty(),
                 "actor metadata cleanup removes guid");
 
-    hub.actor_storage().deallocate(actor);
-    auto reused = hub.actor_storage().allocate();
+    hub.destroy_actor_component(actor);
+    auto reused = hub.create_actor_component();
     expect_true(hub.actor_guid(reused).empty(),
                 "fresh or reused actor handle has no stale guid");
-    hub.actor_storage().deallocate(reused);
+    hub.destroy_actor_component(reused);
 }
 
 
@@ -989,7 +989,7 @@ void test_network_identity_registry_resolves_actor_components() {
     auto geometry = hub.geometry_storage().allocate();
     auto optics = hub.optics_storage().allocate();
     auto profile = hub.create_profile_component();
-    auto actor = hub.actor_storage().allocate();
+    auto actor = hub.create_actor_component();
 
     {
         auto g = hub.geometry_storage().acquire_write(geometry);
@@ -1004,7 +1004,7 @@ void test_network_identity_registry_resolves_actor_components() {
         p->optics_handle = optics;
     }
     {
-        auto a = hub.actor_storage().acquire_write(actor);
+        auto a = Corona::find_actor(actor);
         a->profile_handles.push_back(profile);
     }
 
@@ -1022,7 +1022,7 @@ void test_network_identity_registry_resolves_actor_components() {
     expect_true(resolved->transform_seq == hub.model_transform_storage().seq_id(transform),
                 "transform seq resolved");
 
-    hub.actor_storage().deallocate(actor);
+    hub.destroy_actor_component(actor);
     hub.destroy_profile_component(profile);
     hub.optics_storage().deallocate(optics);
     hub.geometry_storage().deallocate(geometry);
@@ -1035,7 +1035,7 @@ void test_network_identity_registry_tracks_local_ownership() {
     auto transform = hub.model_transform_storage().allocate();
     auto geometry = hub.geometry_storage().allocate();
     auto profile = hub.create_profile_component();
-    auto actor = hub.actor_storage().allocate();
+    auto actor = hub.create_actor_component();
 
     {
         auto g = hub.geometry_storage().acquire_write(geometry);
@@ -1046,7 +1046,7 @@ void test_network_identity_registry_tracks_local_ownership() {
         p->geometry_handle = geometry;
     }
     {
-        auto a = hub.actor_storage().acquire_write(actor);
+        auto a = Corona::find_actor(actor);
         a->profile_handles.push_back(profile);
     }
 
@@ -1059,7 +1059,7 @@ void test_network_identity_registry_tracks_local_ownership() {
     expect_true(ownership.has_value(), "registered actor ownership resolves");
     expect_true(ownership && !*ownership, "registered actor can be remote-owned");
 
-    hub.actor_storage().deallocate(actor);
+    hub.destroy_actor_component(actor);
     hub.destroy_profile_component(profile);
     hub.geometry_storage().deallocate(geometry);
     hub.model_transform_storage().deallocate(transform);
@@ -1071,7 +1071,7 @@ void test_network_identity_registry_applies_pending_ownership_override() {
     auto transform = hub.model_transform_storage().allocate();
     auto geometry = hub.geometry_storage().allocate();
     auto profile = hub.create_profile_component();
-    auto actor = hub.actor_storage().allocate();
+    auto actor = hub.create_actor_component();
 
     {
         auto g = hub.geometry_storage().acquire_write(geometry);
@@ -1082,7 +1082,7 @@ void test_network_identity_registry_applies_pending_ownership_override() {
         p->geometry_handle = geometry;
     }
     {
-        auto a = hub.actor_storage().acquire_write(actor);
+        auto a = Corona::find_actor(actor);
         a->profile_handles.push_back(profile);
     }
 
@@ -1095,7 +1095,7 @@ void test_network_identity_registry_applies_pending_ownership_override() {
     expect_true(resolved && !resolved->locally_owned,
                 "pending remote ownership overrides registration default");
 
-    hub.actor_storage().deallocate(actor);
+    hub.destroy_actor_component(actor);
     hub.destroy_profile_component(profile);
     hub.geometry_storage().deallocate(geometry);
     hub.model_transform_storage().deallocate(transform);
@@ -1107,7 +1107,7 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
     auto transform = hub.model_transform_storage().allocate();
     auto geometry = hub.geometry_storage().allocate();
     auto profile = hub.create_profile_component();
-    auto actor = hub.actor_storage().allocate();
+    auto actor = hub.create_actor_component();
 
     {
         auto t = hub.model_transform_storage().acquire_write(transform);
@@ -1122,7 +1122,7 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
         p->geometry_handle = geometry;
     }
     {
-        auto a = hub.actor_storage().acquire_write(actor);
+        auto a = Corona::find_actor(actor);
         a->profile_handles.push_back(profile);
     }
 
@@ -1149,7 +1149,7 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
     expect_true(!outgoing.empty(), "sync packet exists");
     if (outgoing.empty()) {
         sync.shutdown();
-        hub.actor_storage().deallocate(actor);
+        hub.destroy_actor_component(actor);
         hub.destroy_profile_component(profile);
         hub.geometry_storage().deallocate(geometry);
         hub.model_transform_storage().deallocate(transform);
@@ -1168,7 +1168,7 @@ void test_sync_engine_marks_actor_dirty_entries_with_guid() {
     expect_true(found_actor_operation, "editor sync transform carries actor guid");
 
     sync.shutdown();
-    hub.actor_storage().deallocate(actor);
+    hub.destroy_actor_component(actor);
     hub.destroy_profile_component(profile);
     hub.geometry_storage().deallocate(geometry);
     hub.model_transform_storage().deallocate(transform);
@@ -1182,7 +1182,7 @@ void test_sync_engine_emits_optics_but_not_local_handles() {
     auto geometry = hub.geometry_storage().allocate();
     auto optics = hub.optics_storage().allocate();
     auto profile = hub.create_profile_component();
-    auto actor = hub.actor_storage().allocate();
+    auto actor = hub.create_actor_component();
 
     {
         auto* mr = hub.try_model_resource(model_resource);
@@ -1203,7 +1203,7 @@ void test_sync_engine_emits_optics_but_not_local_handles() {
         p->optics_handle = optics;
     }
     {
-        auto a = hub.actor_storage().acquire_write(actor);
+        auto a = Corona::find_actor(actor);
         a->profile_handles.push_back(profile);
     }
 
@@ -1239,7 +1239,7 @@ void test_sync_engine_emits_optics_but_not_local_handles() {
     expect_true(found_optics, "sync emits optics editor operation");
 
     sync.shutdown();
-    hub.actor_storage().deallocate(actor);
+    hub.destroy_actor_component(actor);
     hub.destroy_profile_component(profile);
     hub.optics_storage().deallocate(optics);
     hub.geometry_storage().deallocate(geometry);
@@ -1253,7 +1253,7 @@ void test_sync_engine_does_not_emit_remote_owned_transform() {
     auto transform = hub.model_transform_storage().allocate();
     auto geometry = hub.geometry_storage().allocate();
     auto profile = hub.create_profile_component();
-    auto actor = hub.actor_storage().allocate();
+    auto actor = hub.create_actor_component();
 
     {
         auto t = hub.model_transform_storage().acquire_write(transform);
@@ -1268,7 +1268,7 @@ void test_sync_engine_does_not_emit_remote_owned_transform() {
         p->geometry_handle = geometry;
     }
     {
-        auto a = hub.actor_storage().acquire_write(actor);
+        auto a = Corona::find_actor(actor);
         a->profile_handles.push_back(profile);
     }
 
@@ -1320,7 +1320,7 @@ void test_sync_engine_does_not_emit_remote_owned_transform() {
                 "sync dirty does not emit remote-owned actor transform");
 
     sync.shutdown();
-    hub.actor_storage().deallocate(actor);
+    hub.destroy_actor_component(actor);
     hub.destroy_profile_component(profile);
     hub.geometry_storage().deallocate(geometry);
     hub.model_transform_storage().deallocate(transform);

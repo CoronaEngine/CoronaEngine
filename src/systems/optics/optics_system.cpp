@@ -1204,7 +1204,6 @@ bool collect_actor_instances_for_visibility(
     const auto& diag = optics_diag_config();
 
     auto& hub = Corona::SharedDataHub::instance();
-    auto& actor_storage = hub.actor_storage();
     auto& optics_storage = hub.optics_storage();
     auto& geom_storage = hub.geometry_storage();
     auto& transform_storage = hub.model_transform_storage();
@@ -1213,7 +1212,7 @@ bool collect_actor_instances_for_visibility(
     uint32_t recorded_draws = 0;
     uint32_t object_id = 1;
     for (auto actor_handle : scene.actor_handles) {
-        auto actor = actor_storage.try_acquire_read(actor_handle);
+        auto actor = Corona::find_actor(actor_handle);
         if (!actor) {
             ++object_id;
             continue;
@@ -1660,7 +1659,6 @@ constexpr std::size_t kVisionInteractiveInstanceLimit = 1024;
 
 void fallback_large_scenes_to_native_renderer() {
     auto& hub = Corona::SharedDataHub::instance();
-    auto& actor_storage = hub.actor_storage();
     auto& optics_storage = hub.optics_storage();
     auto& geometry_storage = hub.geometry_storage();
     auto& camera_storage = hub.camera_storage();
@@ -1676,7 +1674,7 @@ void fallback_large_scenes_to_native_renderer() {
 
         std::size_t instance_count = 0;
         for (const auto actor_handle : scene.actor_handles) {
-            const auto actor = actor_storage.try_acquire_read(actor_handle);
+            const auto actor = Corona::find_actor(actor_handle);
             if (!actor) continue;
             for (const auto profile_handle : actor->profile_handles) {
                 const auto profile = Corona::find_profile(profile_handle);
@@ -3313,7 +3311,6 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         visibility.visibilityData = hardware_->visibilityImage;
         visibility.bind_depth_target(hardware_->depthImage);
 
-        auto& actor_storage = SharedDataHub::instance().actor_storage();
         auto& optics_storage = SharedDataHub::instance().optics_storage();
         auto& geom_storage = SharedDataHub::instance().geometry_storage();
         auto& transform_storage = SharedDataHub::instance().model_transform_storage();
@@ -3350,7 +3347,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             uint32_t recorded_draws = 0;
             uint32_t object_id = 1;
             for (auto actor_handle : scene.actor_handles) {
-                auto actor = actor_storage.try_acquire_read(actor_handle);
+                auto actor = Corona::find_actor(actor_handle);
                 if (!actor) {
                     ++object_id;
                     continue;
@@ -3687,7 +3684,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             }
             shadow_casters.reserve(scene.actor_handles.size());
             for (auto actor_handle : scene.actor_handles) {
-                auto actor = actor_storage.try_acquire_read(actor_handle);
+                auto actor = Corona::find_actor(actor_handle);
                 if (!actor || actor->follow_camera ||
                     !diag_actor_allowed(actor_handle) ||
                     !resident_snapshot.contains(actor_handle)) {
@@ -5108,7 +5105,6 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
     };
 
     auto& hub = SharedDataHub::instance();
-    auto& actor_storage = hub.actor_storage();
     auto& optics_storage = hub.optics_storage();
     auto& geom_storage = hub.geometry_storage();
     auto& transform_storage = hub.model_transform_storage();
@@ -5116,7 +5112,7 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
     const auto mix_scene = [&](const SceneDevice& scene_dev) {
         if (!scene_dev.enabled) return;
         for (auto actor_handle : scene_dev.actor_handles) {
-            auto actor = actor_storage.try_acquire_read(actor_handle);
+            auto actor = Corona::find_actor(actor_handle);
             if (!actor) continue;
             mix(static_cast<std::size_t>(actor_handle));
             for (auto profile_handle : actor->profile_handles) {

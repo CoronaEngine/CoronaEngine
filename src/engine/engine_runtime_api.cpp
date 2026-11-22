@@ -1593,7 +1593,7 @@ Corona::API::Geometry* Corona::API::Acoustics::get_geometry() const {
 // ########################
 Corona::API::Actor::Actor()
     : handle_(0), active_profile_handle_(0), next_profile_handle_(1) {
-    handle_ = SharedDataHub::instance().actor_storage().allocate();
+    handle_ = SharedDataHub::instance().create_actor_component();
 }
 
 Corona::API::Actor::~Actor() {
@@ -1606,7 +1606,7 @@ Corona::API::Actor::~Actor() {
 
     if (handle_ != 0) {
         SharedDataHub::instance().clear_actor_metadata(handle_);
-        SharedDataHub::instance().actor_storage().deallocate(handle_);
+        SharedDataHub::instance().destroy_actor_component(handle_);
     }
 }
 
@@ -1661,7 +1661,7 @@ Corona::API::Actor::Profile* Corona::API::Actor::add_profile(const Profile& prof
     if (auto geometry = SharedDataHub::instance().geometry_storage().acquire_read(profile.geometry->get_handle()))
         import_options = geometry->import_options;
     if (handle_ != 0) {
-        if (auto accessor = SharedDataHub::instance().actor_storage().acquire_write(handle_)) {
+        if (auto accessor = Corona::find_actor(handle_)) {
             if (storage_profile_handle != 0) {
                 accessor->profile_handles.push_back(storage_profile_handle);
             }
@@ -1720,7 +1720,7 @@ void Corona::API::Actor::remove_profile(const Profile* profile) {
         }
     }
 
-    if (auto accessor = SharedDataHub::instance().actor_storage().acquire_write(handle_)) {
+    if (auto accessor = Corona::find_actor(handle_)) {
         if (storage_profile_handle != 0) {
             std::erase(accessor->profile_handles, storage_profile_handle);
         }
@@ -1763,7 +1763,7 @@ void Corona::API::Actor::set_follow_camera(bool enabled) {
         return;
     }
 
-    if (auto accessor = SharedDataHub::instance().actor_storage().acquire_write(handle_)) {
+    if (auto accessor = Corona::find_actor(handle_)) {
         accessor->follow_camera = enabled;
     } else {
         CFW_LOG_ERROR("[Actor::set_follow_camera] Failed to acquire write access to actor storage");
@@ -1776,7 +1776,7 @@ bool Corona::API::Actor::get_follow_camera() const {
         return false;
     }
 
-    if (auto accessor = SharedDataHub::instance().actor_storage().try_acquire_read(handle_)) {
+    if (auto accessor = Corona::find_actor(handle_)) {
         return accessor->follow_camera;
     }
 

@@ -134,13 +134,13 @@ private:
     std::optional<ActorNetworkIdentity> build_identity(
         const std::string& actor_guid,
         EntityId actor_handle) const {
-        auto actor = hub_.actor_storage().try_acquire_read(actor_handle);
-        if (!actor.valid() || actor->profile_handles.empty()) return std::nullopt;
+        auto actor = Corona::find_actor(actor_handle);
+        if (actor == nullptr || actor->profile_handles.empty()) return std::nullopt;
 
         ActorNetworkIdentity out;
         out.actor_guid = actor_guid;
         out.actor_handle = actor_handle;
-        out.actor_seq = hub_.actor_storage().seq_id(actor_handle);
+        out.actor_seq = Corona::Ecs::seq_of(actor_handle);
 
         out.profile_handle = actor->profile_handles.front();
         out.profile_seq = Corona::Ecs::seq_of(out.profile_handle);

@@ -821,6 +821,9 @@ struct ImageDevice {
 /// 便捷：按句柄取 ModelResource 组件（无锁）。
 [[nodiscard]] ModelResource* find_model_resource(EntityId handle);
 
+/// 便捷：按句柄取 ActorDevice 组件（无锁）。
+[[nodiscard]] ActorDevice* find_actor(EntityId handle);
+
 class SharedDataHub {
    public:
     static SharedDataHub& instance();
@@ -841,7 +844,6 @@ class SharedDataHub {
     using GeometryStorage = Kernel::Utils::EntityStorage<GeometryDevice, 128, 2>;
     using MechanicsStorage = Kernel::Utils::EntityStorage<MechanicsDevice, 128, 2>;
     using OpticsStorage = Kernel::Utils::EntityStorage<OpticsDevice, 128, 2>;
-    using ActorStorage = Kernel::Utils::EntityStorage<ActorDevice, 128, 2>;
     using CameraStorage = Kernel::Utils::EntityStorage<CameraDevice, 128, 2>;
     using SceneStorage = Kernel::Utils::EntityStorage<SceneDevice, 128, 2>;
     using ImageStorage = Kernel::Utils::EntityStorage<ImageDevice, 128, 2>;
@@ -876,8 +878,11 @@ class SharedDataHub {
     [[nodiscard]] ProfileDevice* try_profile(EntityId handle);
     [[nodiscard]] const ProfileDevice* try_profile(EntityId handle) const;
 
-    ActorStorage& actor_storage();
-    const ActorStorage& actor_storage() const;
+    // actor 已删除 Storage：组件直接挂在实体上。
+    EntityId create_actor_component();
+    void destroy_actor_component(EntityId handle);
+    [[nodiscard]] ActorDevice* try_actor(EntityId handle);
+    [[nodiscard]] const ActorDevice* try_actor(EntityId handle) const;
     [[nodiscard]] std::vector<EntityId> resolve_actor_geometry_handles(
         EntityId actor_handle);
 
@@ -1000,7 +1005,6 @@ class SharedDataHub {
     ModelTransformStorage model_transform_storage_;
     MechanicsStorage mechanics_storage_;
     OpticsStorage optics_storage_;
-    ActorStorage actor_storage_;
     mutable std::mutex actor_metadata_mutex_;
     std::unordered_map<EntityId, std::string> actor_guids_;
     CameraStorage camera_storage_;

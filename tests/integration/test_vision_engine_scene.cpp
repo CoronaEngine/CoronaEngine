@@ -1299,14 +1299,14 @@ struct VisionEngineSceneTest {
         const auto geometry = hub.geometry_storage().allocate();
         const auto optics = hub.optics_storage().allocate();
         const auto profile = hub.create_profile_component();
-        const auto actor = hub.actor_storage().allocate();
+        const auto actor = hub.create_actor_component();
         const auto environment = hub.create_environment();
         const auto scene = hub.scene_storage().allocate();
         { auto* w = hub.try_model_resource(model); w->model_id = id; }
         { auto w = hub.geometry_storage().acquire_write(geometry); w->model_resource_handle = model; w->transform_handle = transform; }
         { auto w = hub.optics_storage().acquire_write(optics); w->geometry_handle = geometry; }
         { auto w = hub.try_profile(profile); w->geometry_handle = geometry; w->optics_handle = optics; }
-        { auto w = hub.actor_storage().acquire_write(actor); w->profile_handles = {profile}; }
+        { auto w = Corona::find_actor(actor); w->profile_handles = {profile}; }
         { auto* w = hub.try_environment(environment); w->sun_intensity = 0; w->sky_intensity = 1; }
         { auto w = hub.scene_storage().acquire_write(scene); w->actor_handles = {actor}; w->environment = environment; }
         if (imported_emission_only) {
@@ -1390,7 +1390,7 @@ struct VisionEngineSceneTest {
         }
         hub.scene_storage().deallocate(scene);
         hub.destroy_environment(environment);
-        hub.actor_storage().deallocate(actor);
+        hub.destroy_actor_component(actor);
         hub.destroy_profile_component(profile);
         hub.optics_storage().deallocate(optics);
         hub.geometry_storage().deallocate(geometry);

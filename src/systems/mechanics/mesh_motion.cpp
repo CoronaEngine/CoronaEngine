@@ -52,7 +52,7 @@ void MechanicsSystem::process_mesh_moves() {
                 ModelTransform original;
                 EntityId transform_handle{};
                 for(auto actor_handle:scene.actor_handles) {
-                    auto actor=hub.actor_storage().try_acquire_read(actor_handle);
+                    auto actor=Corona::find_actor(actor_handle);
                     if(!actor) return unavailable("actor",actor_handle);
                     std::unordered_set<std::uintptr_t> seen_geometry;
                     for(auto ph:actor->profile_handles) {
@@ -167,6 +167,6 @@ void MechanicsSystem::process_mesh_moves() {
             if(request.completion)request.completion(std::move(event));
         }
     }
-    std::erase_if(mesh_movers_,[&](const auto& item) { return !hub.actor_storage().try_acquire_read(item.first); });
+    std::erase_if(mesh_movers_,[&](const auto& item) { return !Corona::find_actor(item.first); });
 }
 }

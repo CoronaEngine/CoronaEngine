@@ -88,7 +88,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     auto& geometry_storage = SharedDataHub::instance().geometry_storage();              // 网格/包围体句柄
     auto& transform_storage = SharedDataHub::instance().model_transform_storage();      // 位姿写回目标
     const auto& scene_storage = SharedDataHub::instance().scene_storage();              // 场景与 actor 列表（const → cbegin/cend 读锁遍历）
-    auto& actor_storage = SharedDataHub::instance().actor_storage();
 
     ktm::fvec3 gravity = make_fvec3(0.0f, -9.8f, 0.0f);  // m/s²
 
@@ -135,7 +134,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             // must not enter collision pairs for an unloaded scene.
             const bool broadphase_loaded = impl_->geometry_sys &&
                 impl_->geometry_sys->get_actor_load_state(actor_handle, scene_handle) == ActorLoadState::Loaded;
-            if (auto actor = actor_storage.try_acquire_read(actor_handle)) {
+            if (auto actor = Corona::find_actor(actor_handle)) {
                 // 续期资源访问时间（驱动 ResourceManager LRU）
                 {
                     auto& gs = SharedDataHub::instance().geometry_storage();

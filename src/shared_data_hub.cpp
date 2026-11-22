@@ -86,8 +86,17 @@ ProfileDevice* find_profile(EntityId handle) {
     return SharedDataHub::instance().try_profile(handle);
 }
 
-SharedDataHub::ActorStorage& SharedDataHub::actor_storage() { return actor_storage_; }
-const SharedDataHub::ActorStorage& SharedDataHub::actor_storage() const { return actor_storage_; }
+EntityId SharedDataHub::create_actor_component() { return Ecs::emplace<ActorDevice>(); }
+void SharedDataHub::destroy_actor_component(EntityId handle) { Ecs::destroy(handle); }
+ActorDevice* SharedDataHub::try_actor(EntityId handle) {
+    return Ecs::try_get<ActorDevice>(handle);
+}
+const ActorDevice* SharedDataHub::try_actor(EntityId handle) const {
+    return Ecs::try_get_const<ActorDevice>(handle);
+}
+ActorDevice* find_actor(EntityId handle) {
+    return SharedDataHub::instance().try_actor(handle);
+}
 
 std::vector<std::uintptr_t> SharedDataHub::resolve_actor_geometry_handles(
     EntityId actor_handle) {
@@ -100,7 +109,7 @@ std::vector<std::uintptr_t> SharedDataHub::resolve_actor_geometry_handles(
         }
     };
 
-    const auto actor = actor_storage_.try_acquire_read(actor_handle);
+    const auto* actor = try_actor(actor_handle);
     if (!actor) {
         return geometry_handles;
     }
