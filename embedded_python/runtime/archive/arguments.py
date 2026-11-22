@@ -4,8 +4,10 @@ The C++ reader rejects unknown keys (``object_keys``); this is the same rule on 
 side. A misspelled key is an error on both boundaries instead of being silently ignored
 here, which is what made the two layers feel different.
 
-No service uses this yet beyond ``file_manager``: the remaining methods migrate one commit
-at a time, and the guard test keeps the two sides' strictness in sync.
+Every archive service that owns a request shape (``documents``, ``script_files``, ``assets``,
+``project``, ``project_files``, ``editor_settings``) checks it here; a misspelled or retired
+key such as ``code`` is refused instead of ignored. The guard test keeps the two sides'
+strictness in sync.
 """
 from __future__ import annotations
 

@@ -1,7 +1,10 @@
-"""Store opaque project documents and the exact script bytes paired with each document."""
+"""Store opaque project documents.
+
+A document owns no script: the generated-code channel is gone, so a save only
+publishes ``document.json`` and the record carries no script pointer.
+"""
 import hashlib
 import json
-import re
 from threading import RLock
 
 from runtime.archive.arguments import require_keys
@@ -21,7 +24,7 @@ class ProjectFiles:
                 raise BridgeError(error.get("code") or "SERVICE_FAILED",
                                   error.get("message") or "Project session refused")
             try:
-                require_keys(request, required=('code', 'document') if save else (),
+                require_keys(request, required=('document',) if save else (),
                              optional=('archive_session', 'project_path', 'identity', 'key'))
                 if 'identity' not in request and 'key' not in request:
                     raise ValueError('Missing document identity or key')
@@ -48,29 +51,26 @@ class ProjectFiles:
                 if index.is_symlink():
                     raise ValueError("Invalid project document path")
                 if save:
-                    code = request["code"].encode("utf-8")
-                    digest = hashlib.sha256(code).hexdigest()
-                    source = folder / f"{digest}.py"
-                    if source.is_symlink():
-                        raise ValueError("Invalid project script path")
-                    record = {"document": request["document"], "revision": digest,
-                              "code_path": source.relative_to(root).as_posix(),
+                    # `revision` is a content digest of the stored document: it changes
+                    # whenever the document changes, using the same JSON serialization
+                    # rule as project_archive. This service has no compare-and-swap.
+                    document_bytes = json.dumps(request["document"], ensure_ascii=False,
+                                                allow_nan=False, indent=2).encode("utf-8")
+                    record = {"document": request["document"],
+                              "revision": hashlib.sha256(document_bytes).hexdigest(),
                               "document_path": index.relative_to(root).as_posix()}
                     encoded = json.dumps(record, ensure_ascii=False, allow_nan=False, indent=2).encode("utf-8")
                     folder.mkdir(parents=True, exist_ok=True)
-                    if not source.exists() or source.read_bytes() != code:
-                        atomic_replace(source, code)
                     # Publish the document last. A failed save leaves the prior revision readable.
                     if not index.exists() or index.read_bytes() != encoded:
                         atomic_replace(index, encoded)
-                    # Only the published revision belongs to this document. Interrupted
-                    # saves may have left an unpublished, content-addressed file here.
-                    for old in folder.glob("*.py"):
-                        if old != source and re.fullmatch(r"[0-9a-f]{64}", old.stem):
-                            try:
-                                old.unlink(missing_ok=True)
-                            except OSError:
-                                pass  # An in-flight reader may still hold it on Windows.
+                    # The document owns no script. Delete whatever an earlier revision
+                    # stored here, including the legacy content-addressed file.
+                    for stale in folder.glob("*.py"):
+                        try:
+                            stale.unlink(missing_ok=True)
+                        except OSError:
+                            pass  # An in-flight reader may still hold it on Windows.
                     return {"status": "saved", **record}
                 if not index.exists():
                     return {"status": "missing"}

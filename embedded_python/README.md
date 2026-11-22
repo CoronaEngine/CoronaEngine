@@ -2,7 +2,7 @@
 
 `embedded_python` 是嵌入引擎进程的编辑器 Python 运行时，不是独立 Web 后端。
 
-Python 负责项目场景存档的解析、校验与显式保存，以及 Web 提交的文档和脚本字节的读写；
+Python 负责项目场景存档的解析、校验与显式保存，以及 Web 提交文档的读写；
 C++ 持有场景、Actor、资源、变换和 revision 的权威状态；Vue 负责页面、输入和结果展示。
 跨层业务只能调用 C++ 的 typed V8 具名绑定，Vue 只做薄适配。Python 侧只有顶层宿主支持入口
 （8 个 `m.def` + 载荷类型 `InputEvent`）与 `cef_py_bind.cpp` 的编辑器传输；编辑器语义
@@ -29,7 +29,8 @@ Vue 源码在 `CoronaEditor` checkout 里，与本目录一起部署到 `<exe>/C
 | `runtime/archive` | 场景/项目的解析、校验与原子写盘 |
 | `plugins` | ProjectArchive 存档门面，以及文件管理器使用的 Actor 模板 |
 
-项目的 `Scripts/files` 保存 Web 提交的工作区文档和按摘要标识的 .py。旧 `api`、`backend`、
+项目的 `Scripts/files` 保存 Web 提交的工作区文档；记录的 revision 是该文档的内容摘要，
+文档不再配对脚本文件。旧 `api`、`backend`、
 `CoronaCore`、`CoronaPlugin`、`utils`、`scripts`、`script_runtime` 目录已删除，新增代码
 不得重新引入这些路径。
 

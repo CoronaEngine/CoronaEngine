@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { readFile, mkdir, writeFile, rm } from 'node:fs/promises';
+import { readFile, mkdir, writeFile, rm, readdir } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -570,37 +570,45 @@ try {
       identity: ['node_graph', 'actor', 'scene.ini', '角色:"A"'] };
     const legacyFolder = path.join(cameraWorld, 'Scripts', 'files', createHash('sha256').update(JSON.stringify(fileScope.identity)).digest('hex'));
     await mkdir(legacyFolder, { recursive: true });
-    const oldCode = '# old revision\n';
-    const oldRevision = createHash('sha256').update(oldCode).digest('hex');
     const legacyDocument = { target: { id: 'existing-target' }, workspace: { nodes: [{ id: 'existing-node' }] } };
-    await writeFile(path.join(legacyFolder, `${oldRevision}.py`), oldCode);
-    await writeFile(path.join(legacyFolder, 'document.json'), JSON.stringify({ document: legacyDocument, revision: oldRevision,
-      code_path: path.relative(cameraWorld, path.join(legacyFolder, `${oldRevision}.py`)).replaceAll('\\', '/'),
-      document_path: path.relative(cameraWorld, path.join(legacyFolder, 'document.json')).replaceAll('\\', '/') }));
+    const oldRevision = createHash('sha256').update(JSON.stringify(legacyDocument, null, 2)).digest('hex');
+    const oldDocumentPath = path.relative(cameraWorld, path.join(legacyFolder, 'document.json')).replaceAll('\\', '/');
+    // An existing content-addressed folder stays readable, and a script an earlier engine
+    // revision stored there must disappear on the next save instead of lingering forever.
+    await writeFile(path.join(legacyFolder, `${oldRevision}.py`), '# old revision\n');
+    await writeFile(path.join(legacyFolder, 'document.json'), JSON.stringify({ document: legacyDocument,
+      revision: oldRevision, document_path: oldDocumentPath }));
     // Project file storage is owned by the Python archive service now, so the request travels
     // through corona.bridge.call and JSON is the transport by design - the old wrapper that
-    // forbade JSON.stringify proved a property the bridge intentionally does not hold. The
-    // service keeps the legacy content-addressed folders and returns the same
-    // {status, document, revision, code_path, document_path} record the native adapter did;
-    // a refusal rejects with Error.code (the bridge raises it on the service side).
+    // forbade JSON.stringify proved a property the bridge intentionally does not hold. A save
+    // publishes {status, document, revision, document_path} and stores no script; a refusal
+    // rejects with Error.code (the bridge raises it on the service side).
     const fileCall = (method, request) => bridgeCall('project_files', method, [request]);
     const oldDocument = await fileCall('load', fileScope);
     assert.equal(oldDocument.status, 'loaded');
     assert.deepEqual(oldDocument.document, legacyDocument, 'existing key encoding must remain readable');
     const fileDocument = { target: { id: 'existing-target' }, workspace: {
       nodes: [{ id: '节点', extra: [null, false, 2 ** 40 + .5, '文本\0tail'] }], empty: {}, list: [] } };
-    const fileCode = '# 新代码\nprint("世界")\n';
-    const savedDocument = await fileCall('save', { ...fileScope, code: fileCode, document: fileDocument });
+    const savedDocument = await fileCall('save', { ...fileScope, document: fileDocument });
     assert.equal(savedDocument.status, 'saved');
     assert.deepEqual(savedDocument.document, fileDocument);
     assert.equal(savedDocument.document_path, oldDocument.document_path);
-    assert.equal(savedDocument.revision, createHash('sha256').update(fileCode).digest('hex'));
-    assert.equal(await readFile(path.join(cameraWorld, savedDocument.code_path), 'utf8'), fileCode);
+    assert.deepEqual(Object.keys(savedDocument).sort(), ['document', 'document_path', 'revision', 'status']);
+    assert.match(savedDocument.revision, /^[0-9a-f]{64}$/);
+    assert.deepEqual((await readdir(legacyFolder)).filter(name => name.endsWith('.py')), [],
+      'a saved document owns no script');
+    const storedDocument = JSON.parse(await readFile(path.join(cameraWorld, savedDocument.document_path), 'utf8'));
+    assert.deepEqual(storedDocument.document, fileDocument);
+    assert.equal(storedDocument.revision, savedDocument.revision);
+    assert.deepEqual(Object.keys(storedDocument).sort(), ['document', 'document_path', 'revision']);
     assert.deepEqual(await fileCall('load', fileScope), { ...savedDocument, status: 'loaded' });
     assert.equal((await fileCall('load', { ...fileScope, identity: ['node_graph', 'project', '', ''] })).status, 'missing');
+    assert.equal(await bridgeRefusal('project_files', 'save',
+      [{ ...fileScope, code: '# retired\n', document: {} }]), 'INVALID_ARGUMENT',
+      'the retired code field is refused as an unknown request key');
     for (const changed of [{ archive_session: 'retired' }, { project_path: path.dirname(cameraWorld) }]) {
       const code = await bridgeRefusal('project_files', 'save',
-        [{ ...fileScope, ...changed, code: 'must not publish', document: {} }]);
+        [{ ...fileScope, ...changed, document: {} }]);
       assert.equal(code, 'PROJECT_CONTEXT_CHANGED', 'a stale session rejects with its code');
     }
     assert.deepEqual((await fileCall('load', fileScope)).document, fileDocument);
@@ -619,7 +627,7 @@ try {
     evidence[0].projectFilesValidationGap =
       'document type/depth validation was dropped when ProjectFiles moved to Python: a string or '
       + 'over-deep document is accepted where the native adapter returned INVALID_ARGUMENT';
-    evidence[0].projectFiles = 'bridge-routed save/load; structured identity preserves legacy folders, opaque workspace values and exact script revision; stale session refused by the owning service';
+    evidence[0].projectFiles = 'bridge-routed save/load; structured identity preserves legacy folders, opaque workspace values and a document revision; no stored script; stale session refused by the owning service';
     assert.equal(listed.data.active_camera_id, 'main-camera');
     for (const value of listed.data.cameras) {
       assert.equal(value.archive_session, sceneRead.archive_session);

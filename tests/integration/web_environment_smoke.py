@@ -93,11 +93,10 @@ def main_selection_retirement(main, open_panel, root, session):
     by the panel that survives it may not act on the retired view.
     """
     # The viewport and controls appear before MainPage's final initialization
-    # snapshot. Wait for it so the selection subscription exists before clicking.
-    wait(lambda: main.call('Runtime.evaluate', {
-        'expression': "Boolean(getEventListeners(window)['cabbage-run-failed']?.length)",
-        'includeCommandLineAPI': True, 'returnByValue': True,
-    })['result'].get('value'), bool, 'MainPage final mounted lifecycle ready')
+    # snapshot. Wait for its explicit mounted marker so the selection
+    # subscription exists before clicking.
+    wait(lambda: main.evaluate('window.__coronaMainPageReady === true'), bool,
+         'MainPage final mounted lifecycle ready')
     actor = None
     try:
         tools = open_panel('SceneTools', '/SceneBar', '[data-guidance=scene-import-model]')
@@ -141,10 +140,8 @@ def main_selection_retirement(main, open_panel, root, session):
               await document.querySelector('#app').__vue_app__.config.globalProperties.$router.push(p.route.slice(1)||'/');
               return true;})()""")
         wait(lambda: main.evaluate("!!document.querySelector('[data-viewport-surface]')"), bool, 'MainPage selection remount')
-        wait(lambda: main.call('Runtime.evaluate', {
-            'expression': "Boolean(getEventListeners(window)['cabbage-run-failed']?.length)",
-            'includeCommandLineAPI': True, 'returnByValue': True,
-        })['result'].get('value'), bool, 'MainPage selection remount initialized')
+        wait(lambda: main.evaluate('window.__coronaMainPageReady === true'), bool,
+             'MainPage selection remount initialized')
         # Leave no selection: the retired-view click above selected Probe, and the next
         # phase needs its own click to be a real selection change.
         main.evaluate("corona.scene.select_actor('scene.ini','scene','')")

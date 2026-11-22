@@ -6,6 +6,7 @@ matched exception messages against a prefix table. Both are gone: each site rais
 bridge only ever see one failure shape. Success values stay data and are never sniffed.
 """
 import hashlib
+import json
 from pathlib import Path
 import sys
 
@@ -94,6 +95,44 @@ def test_a_rename_onto_an_existing_item_is_refused(project):
 
 def test_a_missing_script_document_is_data_not_a_refusal(project):
     assert script_files.ProjectFiles.load({"key": "workspace"}) == {"status": "missing"}
+
+
+def test_a_saved_document_owns_no_script(project):
+    scope = {"key": "workspace", "archive_session": "session", "project_path": str(project)}
+    document = {"target": {"id": "target"}, "workspace": {"nodes": [{"id": "node"}]}}
+
+    saved = script_files.ProjectFiles.save({**scope, "document": document})
+
+    assert saved["status"] == "saved"
+    assert set(saved) == {"status", "document", "revision", "document_path"}
+    index = project / saved["document_path"]
+    folder = index.parent
+    record = json.loads(index.read_text(encoding="utf-8"))
+    assert set(record) == {"document", "revision", "document_path"}
+    assert record["document"] == document
+    assert record["revision"] == saved["revision"]
+    assert len(record["revision"]) == 64
+
+    # An old record may still point at a script, and an interrupted save may have left
+    # one behind; the next save rewrites the record and sweeps the folder clean.
+    (folder / f"{'a' * 64}.py").write_text("# stale revision\n", encoding="utf-8")
+    legacy = {"document": {"workspace": {}}, "revision": "legacy",
+              "code_path": "Scripts/files/legacy.py",
+              "document_path": saved["document_path"]}
+    index.write_text(json.dumps(legacy), encoding="utf-8")
+    assert script_files.ProjectFiles.load(scope) == {"status": "loaded", **legacy}
+
+    resaved = script_files.ProjectFiles.save({**scope, "document": document})
+
+    assert "code_path" not in resaved
+    assert list(folder.glob("*.py")) == []
+
+
+def test_the_retired_script_field_is_not_a_save_key(project):
+    with pytest.raises(BridgeError) as raised:
+        script_files.ProjectFiles.save({"key": "workspace", "code": "# retired\n", "document": {}})
+
+    assert raised.value.code == "INVALID_ARGUMENT"
 
 
 def test_asset_operation_validates_its_request(project):

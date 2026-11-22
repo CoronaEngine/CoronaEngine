@@ -8,7 +8,7 @@
 | `bootstrap.py`、`editor_host.py` | Python host 启动、服务调用入口、更新和关闭 |
 | `registry.py`、`plugin_loader.py` | service 注册、加载、初始化和关闭顺序 |
 | `project_context.py` | native 活动项目会话（`project_path` / `archive_session` / `read_only`）解析 |
-| `archive/` | 场景归档、项目文档和脚本文件 |
+| `archive/` | 场景归档和项目文档（记录 revision 为文档内容摘要，无配对脚本） |
 | `native_engine.py`、`logging.py` | host support |
 
 `runtime.registry` 是唯一 service registry，`ACTIVE_PYTHON_SCRIPT_SERVICES` 是正常启动
