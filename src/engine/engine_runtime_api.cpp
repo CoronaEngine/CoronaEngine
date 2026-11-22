@@ -1777,7 +1777,9 @@ void Corona::API::Actor::set_follow_camera(bool enabled) {
     }
 
     if (auto accessor = Corona::find_actor(handle_)) {
-        accessor->follow_camera = enabled;
+        if (auto* follow = SharedDataHub::instance().try_follow_camera(handle_)) {
+            follow->enabled = enabled;
+        }
     } else {
         CFW_LOG_ERROR("[Actor::set_follow_camera] Failed to acquire write access to actor storage");
     }
@@ -1790,7 +1792,8 @@ bool Corona::API::Actor::get_follow_camera() const {
     }
 
     if (auto accessor = Corona::find_actor(handle_)) {
-        return accessor->follow_camera;
+        const auto* follow = SharedDataHub::instance().try_follow_camera(handle_);
+        return follow != nullptr && follow->enabled;
     }
 
     CFW_LOG_ERROR("[Actor::get_follow_camera] Failed to acquire read access to actor storage");

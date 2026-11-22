@@ -152,7 +152,8 @@ ProfileDevice* find_profile(EntityId handle) {
 EntityId SharedDataHub::create_actor_component() {
     const auto entity =
         Ecs::World::instance()
-            .create<ActorDevice, Ecs::StreamingPolicy, Ecs::ModelPath, Ecs::Profiles>();
+            .create<ActorDevice, Ecs::StreamingPolicy, Ecs::ModelPath, Ecs::Profiles,
+                    Ecs::FollowCamera>();
     return Ecs::to_handle(entity);
 }
 void SharedDataHub::destroy_actor_component(EntityId handle) { Ecs::destroy(handle); }
@@ -187,6 +188,12 @@ Ecs::Profiles* SharedDataHub::try_profiles(EntityId handle) {
 }
 Ecs::Profiles* find_profiles(EntityId handle) {
     return SharedDataHub::instance().try_profiles(handle);
+}
+Ecs::FollowCamera* SharedDataHub::try_follow_camera(EntityId handle) {
+    return Ecs::try_get<Ecs::FollowCamera>(handle);
+}
+Ecs::FollowCamera* find_follow_camera(EntityId handle) {
+    return SharedDataHub::instance().try_follow_camera(handle);
 }
 
 std::vector<std::uintptr_t> SharedDataHub::resolve_actor_geometry_handles(

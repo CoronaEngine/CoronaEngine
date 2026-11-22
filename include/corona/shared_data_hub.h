@@ -298,7 +298,7 @@ struct ActorDevice {
     // profile 列表已迁到 Ecs::Profiles 组件。
     // 磁盘路径已迁到 Ecs::ModelPath 组件。
     Resource::ModelImportOptions model_import_options;
-    bool follow_camera{false};
+    // follow_camera 已迁到 Ecs::FollowCamera 组件。
     // pinned 已迁到 Ecs::StreamingPolicy 组件。
 };
 
@@ -830,6 +830,9 @@ struct ImageDevice {
 /// 便捷：按句柄取 Profiles 组件（无锁）。
 [[nodiscard]] Ecs::Profiles* find_profiles(EntityId handle);
 
+/// 便捷：按句柄取 FollowCamera 组件（无锁）。
+[[nodiscard]] Ecs::FollowCamera* find_follow_camera(EntityId handle);
+
 /// 便捷：按句柄取 ModelTransform 组件（无锁）。
 [[nodiscard]] ModelTransform* find_transform(EntityId handle);
 
@@ -969,6 +972,7 @@ class SharedDataHub {
     [[nodiscard]] Ecs::StreamingPolicy* try_streaming(EntityId handle);
     [[nodiscard]] Ecs::ModelPath* try_model_path(EntityId handle);
     [[nodiscard]] Ecs::Profiles* try_profiles(EntityId handle);
+    [[nodiscard]] Ecs::FollowCamera* try_follow_camera(EntityId handle);
     void set_pinned(EntityId handle, bool pinned);
     [[nodiscard]] std::vector<EntityId> resolve_actor_geometry_handles(
         EntityId actor_handle);

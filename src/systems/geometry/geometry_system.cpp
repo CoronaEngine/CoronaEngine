@@ -2106,7 +2106,8 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
     rec.scene     = event.scene;
     rec.actor     = event.actor;
     rec.model_path    = actor_path->value;
-    rec.follow_camera = actor_read->follow_camera;
+    const auto* follow_camera = Corona::find_follow_camera(event.actor);
+    rec.follow_camera = follow_camera != nullptr && follow_camera->enabled;
     rec.profile_handles = actor_read_profiles->handles;
 
     // 遍历 profiles 收集 geometry_handles / resource_ids / transform / 运行时标志

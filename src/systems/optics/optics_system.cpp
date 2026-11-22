@@ -1235,7 +1235,9 @@ bool collect_actor_instances_for_visibility(
             }
         }
 
-        if (actor->follow_camera != follow_camera_pass) {
+        const auto* actor_follow_camera = Corona::find_follow_camera(actor_handle);
+        if ((actor_follow_camera != nullptr && actor_follow_camera->enabled) !=
+            follow_camera_pass) {
             ++object_id;
             continue;
         }
@@ -3394,7 +3396,9 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     }
                 }
 
-                if (actor->follow_camera != follow_camera_pass) {
+                const auto* actor_follow_camera = Corona::find_follow_camera(actor_handle);
+        if ((actor_follow_camera != nullptr && actor_follow_camera->enabled) !=
+            follow_camera_pass) {
                     ++object_id;
                     continue;
                 }
@@ -3703,7 +3707,9 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             for (auto actor_handle : scene.actor_handles) {
                 auto actor = Corona::find_actor(actor_handle);
                 const auto* actor_profiles = Corona::find_profiles(actor_handle);
-                if (!actor || actor->follow_camera ||
+                const auto* actor_follow_camera = Corona::find_follow_camera(actor_handle);
+                if (!actor ||
+                    (actor_follow_camera != nullptr && actor_follow_camera->enabled) ||
                     !diag_actor_allowed(actor_handle) ||
                     !resident_snapshot.contains(actor_handle)) {
                     continue;

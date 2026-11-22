@@ -110,6 +110,11 @@ struct Bounds {
 // 渲染开关
 // ============================================================================
 
+/// 是否跟随相机（UI 层渲染空间）；原 `ActorDevice::follow_camera`。
+struct FollowCamera {
+    bool enabled{false};
+};
+
 /// actor 下的 profile 实体列表（原 `ActorDevice::profile_handles`）。
 struct Profiles {
     std::vector<EntityId> handles;
