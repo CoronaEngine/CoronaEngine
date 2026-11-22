@@ -1,6 +1,7 @@
 #pragma once
 
 #include <corona/shared_data_hub.h>
+#include <corona/ecs/access.h>
 #include <corona/systems/network/protocol.h>
 
 #include <cstdint>
@@ -178,7 +179,7 @@ private:
             out.mechanics_seq = hub_.mechanics_storage().seq_id(out.mechanics_handle);
         }
         if (out.acoustics_handle != 0) {
-            out.acoustics_seq = hub_.acoustics_storage().seq_id(out.acoustics_handle);
+            out.acoustics_seq = Corona::Ecs::seq_of(out.acoustics_handle);
         }
 
         return out;
@@ -199,8 +200,8 @@ private:
             }
         }
         if (identity.acoustics_handle != 0) {
-            auto acoustics = hub_.acoustics_storage().try_acquire_read(identity.acoustics_handle);
-            if (acoustics.valid() && acoustics->geometry_handle != 0) {
+            const auto* acoustics = hub_.try_acoustics(identity.acoustics_handle);
+            if (acoustics != nullptr && acoustics->geometry_handle != 0) {
                 return acoustics->geometry_handle;
             }
         }

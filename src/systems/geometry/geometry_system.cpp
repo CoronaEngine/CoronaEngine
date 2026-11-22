@@ -1011,7 +1011,7 @@ void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {
             if (auto o = hub.optics_storage().try_acquire_read(profile->optics_handle))
                 if (o->geometry_handle) geom_handles.push_back(o->geometry_handle);
         if (profile->acoustics_handle)
-            if (auto a = hub.acoustics_storage().try_acquire_read(profile->acoustics_handle))
+            if (const auto* a = hub.try_acoustics(profile->acoustics_handle))
                 if (a->geometry_handle) geom_handles.push_back(a->geometry_handle);
 
         for (auto geom_handle : geom_handles) {
@@ -1379,7 +1379,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
         }
         // 路径 D：AcousticsDevice（声学设备）→ geometry
         if (profile->acoustics_handle != 0) {
-            if (auto acoustics = hub.acoustics_storage().try_acquire_read(profile->acoustics_handle)) {
+            if (const auto* acoustics = hub.try_acoustics(profile->acoustics_handle)) {
                 if (acoustics->geometry_handle != 0) {
                     geom_handles.push_back(acoustics->geometry_handle);
                 }
@@ -1494,7 +1494,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
         }
         // 路径 D：声学设备 → geometry
         if (profile->acoustics_handle != 0) {
-            if (auto acoustics = hub.acoustics_storage().try_acquire_read(profile->acoustics_handle)) {
+            if (const auto* acoustics = hub.try_acoustics(profile->acoustics_handle)) {
                 if (acoustics->geometry_handle != 0) {
                     geom_handles.push_back(acoustics->geometry_handle);
                 }
@@ -5378,7 +5378,7 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
                 if (m->geometry_handle) geom_handles.push_back(m->geometry_handle);
         }
         if (profile->acoustics_handle) {
-            if (auto a = hub.acoustics_storage().try_acquire_read(profile->acoustics_handle))
+            if (const auto* a = hub.try_acoustics(profile->acoustics_handle))
                 if (a->geometry_handle) geom_handles.push_back(a->geometry_handle);
         }
 

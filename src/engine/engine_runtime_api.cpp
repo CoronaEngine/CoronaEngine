@@ -1490,19 +1490,19 @@ Corona::API::Acoustics::Acoustics(Geometry& geo)
         return;
     }
 
-    handle_ = SharedDataHub::instance().acoustics_storage().allocate();
-    if (auto accessor = SharedDataHub::instance().acoustics_storage().acquire_write(handle_)) {
+    handle_ = SharedDataHub::instance().create_acoustics();
+    if (auto* accessor = SharedDataHub::instance().try_acoustics(handle_)) {
         accessor->geometry_handle = geo.get_handle();
     } else {
-        CFW_LOG_ERROR("[Acoustics::Acoustics] Failed to acquire write access to acoustics storage");
-        SharedDataHub::instance().acoustics_storage().deallocate(handle_);
+        CFW_LOG_ERROR("[Acoustics::Acoustics] Failed to create acoustics component");
+        SharedDataHub::instance().destroy_acoustics(handle_);
         handle_ = 0;
     }
 }
 
 Corona::API::Acoustics::~Acoustics() {
     if (handle_ != 0) {
-        SharedDataHub::instance().acoustics_storage().deallocate(handle_);
+        SharedDataHub::instance().destroy_acoustics(handle_);
     }
 }
 

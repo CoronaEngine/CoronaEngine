@@ -76,7 +76,7 @@ void MechanicsSystem::process_mesh_moves() {
                             if(!geometry_handle) geometry_handle=optics->geometry_handle;
                         }
                         if(!geometry_handle && profile->acoustics_handle) {
-                            auto acoustics=hub.acoustics_storage().try_acquire_read(profile->acoustics_handle);
+                            const auto* acoustics=hub.try_acoustics(profile->acoustics_handle);
                             if(!acoustics) return unavailable("acoustics",profile->acoustics_handle);
                             geometry_handle=acoustics->geometry_handle;
                         }

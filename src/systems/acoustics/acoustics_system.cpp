@@ -174,9 +174,8 @@ void apply_pending_acoustics_updates() {
         return;
     }
 
-    auto& storage = Corona::SharedDataHub::instance().acoustics_storage();
     for (const auto& command : commands) {
-        auto device = storage.try_acquire_write(command.acoustics_handle);
+        auto* device = Corona::SharedDataHub::instance().try_acoustics(command.acoustics_handle);
         if (!device) {
             continue;
         }
@@ -220,7 +219,6 @@ void AcousticsSystem::update() {
     {
         std::lock_guard lock(playback_mutex_);
 
-        auto& acoustics_storage = SharedDataHub::instance().acoustics_storage();
 
         auto it = active_playbacks_.begin();
         while (it != active_playbacks_.end()) {
@@ -233,8 +231,8 @@ void AcousticsSystem::update() {
             // 空间音频：其声学组件被释放（actor 删除）→ 当作结束清理，避免悬空。
             bool finished = false;
             if (ap.spatial) {
-                auto acc = acoustics_storage.try_acquire_read(ap.acoustics_handle);
-                if (!acc.valid()) {
+                const auto* acc = SharedDataHub::instance().try_acoustics(ap.acoustics_handle);
+                if (acc == nullptr) {
                     finished = true;
                 }
             }
@@ -282,7 +280,6 @@ void AcousticsSystem::update_spatial() {
             return;
         }
 
-        auto& acoustics_storage = hub.acoustics_storage();
         auto& geometry_storage = hub.geometry_storage();
         auto& transform_storage = hub.model_transform_storage();
 
@@ -293,8 +290,8 @@ void AcousticsSystem::update_spatial() {
             }
 
             EntityId geometry_handle = 0;
-            auto acc = acoustics_storage.try_acquire_read(ap.acoustics_handle);
-            if (!acc.valid()) {
+            const auto* acc = hub.try_acoustics(ap.acoustics_handle);
+            if (acc == nullptr) {
                 continue;  // 组件已释放，留给监控循环清理
             }
             geometry_handle = acc->geometry_handle;

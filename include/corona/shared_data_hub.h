@@ -835,7 +835,6 @@ class SharedDataHub {
     using ModelTransformStorage = Kernel::Utils::EntityStorage<ModelTransform, 128, 2>;
     using GeometryStorage = Kernel::Utils::EntityStorage<GeometryDevice, 128, 2>;
     using MechanicsStorage = Kernel::Utils::EntityStorage<MechanicsDevice, 128, 2>;
-    using AcousticsStorage = Kernel::Utils::EntityStorage<AcousticsDevice, 128, 2>;
     using OpticsStorage = Kernel::Utils::EntityStorage<OpticsDevice, 128, 2>;
     using ProfileStorage = Kernel::Utils::EntityStorage<ProfileDevice, 128, 2>;
     using ActorStorage = Kernel::Utils::EntityStorage<ActorDevice, 128, 2>;
@@ -855,8 +854,11 @@ class SharedDataHub {
     MechanicsStorage& mechanics_storage();
     const MechanicsStorage& mechanics_storage() const;
 
-    AcousticsStorage& acoustics_storage();
-    const AcousticsStorage& acoustics_storage() const;
+    // acoustics 已删除 Storage：组件直接挂在实体上，句柄就是实体句柄。
+    EntityId create_acoustics();
+    void destroy_acoustics(EntityId handle);
+    [[nodiscard]] AcousticsDevice* try_acoustics(EntityId handle);
+    [[nodiscard]] const AcousticsDevice* try_acoustics(EntityId handle) const;
 
     OpticsStorage& optics_storage();
     const OpticsStorage& optics_storage() const;
@@ -989,7 +991,6 @@ class SharedDataHub {
     ModelTransformStorage model_transform_storage_;
     MechanicsStorage mechanics_storage_;
     OpticsStorage optics_storage_;
-    AcousticsStorage acoustics_storage_;
     ProfileStorage profile_storage_;
     ActorStorage actor_storage_;
     mutable std::mutex actor_metadata_mutex_;
