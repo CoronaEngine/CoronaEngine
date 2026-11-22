@@ -154,7 +154,6 @@ protected:
     Shader<void(Buffer<TriangleHit>, uint2, uint)> compute_hit_;
     Shader<void(Buffer<float4>, Buffer<float4>, uint)> accumulate_;
     Shader<void(Buffer<float4>, Texture2D, float)> tone_mapping_;
-    Shader<void(Buffer<uint>, Buffer<uint>)> save_surface_exts_history_;
 
 protected:
     string cur_view_{final_result};
@@ -255,36 +254,6 @@ public:                                                                     \
         return ByteBufferView(cur_##buffer_name##_view(frame_index));                                                         \
     }
 
-    /// save two frames of data , use for ReSTIR
-    VS_MAKE_DOUBLE_BUFFER(RegistrableBuffer<SurfaceData>, surfaces)
-    VS_MAKE_BUFFER(RegistrableBuffer<SurfaceExtend>, surface_exts, 1)
-    VS_MAKE_BUFFER(RegistrableBuffer<SurfaceExtendHistory>, surface_ext_history, 1)
-    template<typename T>
-    requires is_integral_expr_v<T>
-    [[nodiscard]] T prev_surface_exts_index(const T &) const noexcept {
-        if constexpr (is_dsl_v<T>) { return surface_ext_history_.index_var(); }
-        else { return surface_ext_history_base(); }
-    }
-    template<typename T>
-    requires is_integral_expr_v<T>
-    [[nodiscard]] T cur_surface_exts_index(const T &) const noexcept {
-        if constexpr (is_dsl_v<T>) { return surface_exts_.index_var(); }
-        else { return surface_exts_base(); }
-    }
-    [[nodiscard]] auto prev_surface_exts_view(uint) const noexcept { return surface_ext_history_.view(); }
-    [[nodiscard]] auto cur_surface_exts_view(uint) const noexcept { return surface_exts_.view(); }
-    [[nodiscard]] auto prev_surface_exts_var(const Uint &frame) const noexcept {
-        return bindless_array().buffer_var<SurfaceExtendHistory>(prev_surface_exts_index(frame));
-    }
-    [[nodiscard]] auto cur_surface_exts_var(const Uint &frame) const noexcept {
-        return bindless_array().buffer_var<SurfaceExtend>(cur_surface_exts_index(frame));
-    }
-    [[nodiscard]] auto prev_surface_exts_byte_view(uint frame) const noexcept {
-        return ByteBufferView(prev_surface_exts_view(frame));
-    }
-    [[nodiscard]] auto cur_surface_exts_byte_view(uint frame) const noexcept {
-        return ByteBufferView(cur_surface_exts_view(frame));
-    }
     VS_MAKE_BUFFER(RegistrableBuffer<StablePlaneData>, stable_planes, 3)
     VS_MAKE_BUFFER(RegistrableBuffer<StablePlaneHistory>, stable_plane_history, 3)
     VS_MAKE_BUFFER(RegistrableBuffer<float4>, stable_direct, 3)
@@ -388,7 +357,7 @@ public:
         previous->require_stable_plane_storage_abi();
         Node::restore(old_obj);
         VS_HOTFIX_MOVE_ATTRS(cur_view_, resolution_, screen_window_, accumulation_, exposure_, datas_,
-                           gbuffer_callbacks_, surfaces_, surface_exts_, surface_ext_history_, hit_bsdfs_,
+                           gbuffer_callbacks_, hit_bsdfs_,
                            stable_planes_, stable_plane_history_, stable_plane_buffers_enabled_, stable_plane_history_retained_, compact_coverage_history_, stable_raw_outputs_retained_, coverage_history_, stable_direct_, stable_indirect_, stable_radiance_, stable_dominant_,
                            motion_vectors_, hit_buffer_, screen_buffers_,
                            denoiser_diffuse_, denoiser_specular_, denoiser_bypass_, denoiser_di_specular_, denoiser_gi_specular_, denoiser_di_bypass_,
@@ -396,7 +365,7 @@ public:
                            accumulation_buffer_, rays_, visibility_buffer_,
                            tone_mapper_,
                            /// shaders
-                           compute_geom_, compute_hit_, save_surface_exts_history_, tone_mapping_, gamma_correct_,
+                           compute_geom_, compute_hit_, tone_mapping_, gamma_correct_,
                            accumulate_)
         restore_owner(*previous);
         for (auto &entry : gbuffer_callbacks_) {
@@ -455,10 +424,6 @@ public:
     void after_render() noexcept;
     [[nodiscard]] static Float2 compute_motion_vec(const TSensor &camera, const Float2 &p_film, const Float3 &cur_pos,
                                                    const Bool &is_hit) noexcept;
-    [[nodiscard]] Float3 compute_motion_vector(const TSensor &camera, const Float2 &p_film, const Uint &frame_index) const noexcept;
-    [[nodiscard]] Float3 compute_motion_vector(const TSensor &camera, const Float3 &cur_pos, const Float3 &pre_pos) const noexcept;
-    [[nodiscard]] static Uint checkerboard_value(const Uint2 &coord) noexcept;
-    [[nodiscard]] static Uint checkerboard_value(const Uint2 &coord, const Uint &frame_index) noexcept;
 
     virtual void compile() noexcept;
     void compile_compute_geom() noexcept;
@@ -466,8 +431,6 @@ public:
     void compile_gamma() noexcept;
     void compile_accumulation() noexcept;
     void compile_tone_mapping() noexcept;
-    void compile_surface_exts_history() noexcept;
-    [[nodiscard]] CommandBatch save_surface_exts_history(uint frame_index) const noexcept;
     void update_device_data() noexcept override;
     [[nodiscard]] CommandBatch gamma_correct(const Texture2D &input,
                                             const Texture2D &output) const noexcept;

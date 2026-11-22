@@ -27,6 +27,9 @@ def offline_history_harness():
     prefix_start = source.index("Vision::sync_vision_camera(*pipeline, camera);")
     prefix_end = source.index("const bool diagnostic =", prefix_start)
     prefix = source[prefix_start:prefix_end]
+    check_start = source.index("const auto incompatible = [&]")
+    check_end = source.index("if (incompatible()) return;", check_start)
+    compatibility = source[check_start:check_end]
     loop_start = source.index("const auto render_frames = capture ? capture->render_frames : 1u;", prefix_end)
     opening = source.index("{", source.index("for (unsigned frame = 1;", loop_start))
     depth = 0
@@ -63,14 +66,21 @@ struct StageProfile {
     double combine_ms=0, postprocess_ms=0, render_final_ms=0;
 };
 struct Integrator {
+    const char *reason=nullptr;
+    const char *render_incompatibility() const { return reason; }
+    bool allows_path_tracing_fallback() const { return false; }
     double cur_denoise_time() { return 0; }
     StageProfile cur_stage_profile() { return {}; }
 } integrator;
 struct Renderer { Integrator* integrator() { return &::integrator; } } renderer;
 namespace ktm { struct fvec3 { float x{}, y{}, z{}; }; }
+enum class CameraVisionRenderMode { ReSTIR };
+struct CameraOutputMode { enum { FinalColor }; };
 struct Camera {
     ktm::fvec3 position{42.f,0.f,0.f}, forward{0.f,0.f,-1.f}, world_up{0.f,1.f,0.f};
     int output_mode=0;
+    int vision_restir_settings=0;
+    bool surface=false;
 };
 struct Sensor {
     unsigned camera_revision=1, projection_revision=17;
@@ -91,6 +101,7 @@ struct Pipeline {
         observed_previous.push_back(gpu_previous);
         observed_current.push_back(current_camera);
         host_previous=current_camera;
+        if (std::getenv("TEST_INCOMPATIBLE_AFTER_DISPLAY")) integrator.reason="unsupported camera";
         if (capture && static_cast<int>(observed_previous.size())==expire_after)
             capture->expires_at=std::chrono::steady_clock::time_point::min();
     }
@@ -126,7 +137,17 @@ void execute(Pipeline* pipeline,unsigned count,bool capturing,bool diagnostic,in
     pipeline->expire_after=expire_after;
     if (capture && expire_after==0) capture->expires_at=std::chrono::steady_clock::time_point::min();
     int cam_handle=1;
-    struct Runtime { std::unordered_map<int,std::unique_ptr<Vision::VisionDiagnosticAdapter>> diagnostics; } runtime;
+    struct Runtime {
+        std::unordered_map<int,std::unique_ptr<Vision::VisionDiagnosticAdapter>> diagnostics;
+        std::unordered_map<int,std::pair<std::string,bool>> incompatible_views;
+        CameraVisionRenderMode mode=CameraVisionRenderMode::ReSTIR;
+    } runtime;
+    struct View { CameraVisionRenderMode vision_mode=CameraVisionRenderMode::ReSTIR; } view;
+    std::optional<int> fallback_settings;
+    auto has_pending_screenshot=[&](int) { return bool(capture); };
+#define CFW_LOG_WARNING(...) ((void)0)
+#define CFW_LOG_ERROR(...) ((void)0)
+    COMPATIBILITY_CHECK
     Timings frame_timings, stage_timings;
     unsigned long long capture_qpc_frequency=1;
     auto capture_profile_qpc=[] { return 0u; };
@@ -155,7 +176,7 @@ int main(int argc,char** argv) {
         std::cout << "S," << pipeline.sync_calls << '\n';
     }
 }
-'''.replace("SYNC_PREFIX", prefix).replace("RENDER_LOOP", loop)
+'''.replace("SYNC_PREFIX", prefix).replace("COMPATIBILITY_CHECK", compatibility).replace("RENDER_LOOP", loop)
     temporary_root = ROOT / ".workspace/tmp/gi-guide-reuse-20261119/offline-camera-history-test"
     temporary_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=temporary_root) as directory:
@@ -187,6 +208,14 @@ def test_each_render_observes_published_previous_camera(offline_history_harness,
     assert actual_failed == failed
     assert after_first_current == 1, "The second and subsequent frames must see the last rendered camera"
     assert uploads == rendered, "Publish once per rendered frame, after checking capture timeout"
+
+
+def test_incompatible_render_fails_pending_capture_before_the_next_frame(offline_history_harness):
+    result = subprocess.run([str(offline_history_harness), "64", "1", "0", "-1"],
+                            capture_output=True, text=True, check=True,
+                            env=dict(os.environ, VISION_GI_GUIDE_REUSE_CAMERA_SEQUENCE="",
+                                     TEST_INCOMPATIBLE_AFTER_DISPLAY="1"))
+    assert list(map(int, result.stdout.split()))[:3] == [1, 1, 1]
 
 
 def test_scheduled_camera_sequence_keeps_previous_pose_and_frame_history(offline_history_harness):

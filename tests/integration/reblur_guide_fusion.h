@@ -33,6 +33,9 @@ inline void check_reblur_guide_fusion() {
             old(std::getenv(key) ? std::getenv(key) : ""), present(std::getenv(key) != nullptr) { set(key, value); }
         ~Environment() { set(name.c_str(), present ? old.c_str() : nullptr); }
     } profiling{"REBLUR_GPU_PROFILE", nullptr},
+      gi_backend{"VISION_RESTIR_GI_BACKEND", nullptr},
+      precise_lobes{"VISION_RESTIR_PRECISE_LOBES", "1"},
+      single_debug_frame{"VISION_EVAL_DEBUG_FRAMES", nullptr},
       snapshot_frame{"REBLUR_SNAPSHOT_FRAME", "2"};
     const auto directory = fs::temp_directory_path() /
         ("corona_guide_fusion_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -87,14 +90,21 @@ inline void check_reblur_guide_fusion() {
           },
           "render":{"sampler":{"type":"independent","param":{"spp":1}},"light_sampler":{"type":"uniform"},
             "integrator":{"type":"rt","param":{"max_depth":4,"min_depth":4,"denoiser":{"type":"ReBLUR"},
-              "direct":{"stable_planes":true,"M_light":8,"M_bsdf":1,"temporal":{"open":false},"spatial":{"open":false}},
-              "indirect":{"temporal":{"open":false},"spatial":{"open":false}}}}},
+              "direct":{"open":false,"max_recursion":1,"M_bsdf":1,"temporal":{"open":false},"spatial":{"open":false}},
+              "indirect":{"open":true,"backend":"rtxpt","temporal":{"open":false},"spatial":{"open":false}}}}},
           "pipeline":{"type":"fixed","param":{"frame_buffer":{"type":"normal","param":{"resolution":[13,9]}}}},
           "output":{"spp":0,"save_exit":false,"denoise":true,"fn":"unused.exr"}
         })");
-        if (scenario == 0u) scene["scene"]["lights"][0]["param"]["scale"] = 0.f;
+        if (scenario == 0u || scenario == 2u) {
+            scene["scene"]["shapes"].push_back(DataWrap::parse(
+                R"({"type":"model","param":{"fn":"bounce.obj","material":"receiver","normalize_to_unit_bounds":false}})"));
+        }
+        if (scenario == 0u) {
+            // Let GI select real illuminated endpoints, then scale the lobe
+            // radiance below FP16 precision at Pack. Distance stays geometric.
+            scene["render"]["integrator"]["param"]["indirect"]["factor"] = 1e-15f;
+        }
         if (scenario == 1u) {
-            scene["scene"]["camera"]["param"]["lens_radius"] = .02f;
             scene["scene"]["materials"] = DataWrap::parse(R"([
               {"name":"glass","type":"principled_bsdf","param":{"roughness":0.03162277660168379,"subsurface_weight":0,"transmission_weight":1,"ior":1.5,"color":[1,1,1]}},
               {"name":"red","type":"principled_bsdf","param":{"color":[0.8,0.1,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}},
@@ -106,7 +116,6 @@ inline void check_reblur_guide_fusion() {
         }
         if (scenario == 2u) {
             scene["scene"]["materials"][0] = DataWrap::parse(R"({"type":"principled_bsdf","name":"receiver","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4,"subsurface_weight":0,"normal":{"node":"tilted","channels":"xyz"}},"node_tab":{"tilted":{"type":"number","param":{"value":[0.6,0,0.8]}}}})");
-            scene["render"]["integrator"]["param"]["direct"]["stable_planes"] = false;
         }
         if (scenario >= 3u) {
             stage("textured_materials_begin");
@@ -136,181 +145,129 @@ inline void check_reblur_guide_fusion() {
                 scene["scene"]["materials"][0]["param"]["spec_tint"] = DataWrap::parse("[0,0,0]");
             }
         }
+        const bool combined = scenario == 1u || scenario >= 3u;
+        scene["render"]["integrator"]["param"]["direct"]["open"] = combined;
         std::ofstream(directory / ("scene-" + std::to_string(scenario) + ".json")) << scene.dump(2);
-        stage("scene_done");
-        std::vector<float4> reference_rgb, reference_diffuse, reference_specular;
-        std::vector<float4> edsl_rgb;
-        for (uint variant = 0u; variant < 5u; ++variant) {
-            const bool fused = variant >= 2u;
-            const bool final_output_only = variant == 4u;
-            const char *variant_name = variant == 4u ? "-edsl-core-batch-final-only" :
-                (variant == 0u ? "-legacy-staged" : (variant == 1u ? "-precise-staged" :
-                (variant == 2u ? "-precise-fused80" : "-precise-fused32")));
-            const auto capture = directory / (std::to_string(scenario) + variant_name);
-            Environment producer{"VISION_RESTIR_PRECISE_LOBES", variant == 0u ? "0" : "1"};
+        std::vector<float4> reference_rgb, reference_lobes;
+        const auto baseline = directory / (std::to_string(scenario) + "-staged");
+        for (uint variant = 0; variant < (combined ? 3u : 4u); ++variant) {
+            const bool fused = variant != 0u, compact = variant >= 2u, batch = variant == 3u;
+            const auto capture = directory / (std::to_string(scenario) +
+                (batch ? "-batch" : (compact ? "-compact" : (fused ? "-fused" : "-staged"))));
             Environment mode{"REBLUR_FUSE_GUIDES", fused ? "1" : "0"};
-            Environment compact{"REBLUR_COMPACT_GUIDE_CACHE", variant >= 3u ? "1" : "0"};
-            // The first four paths retain filtered D/S. Leave the batch selector
-            // unset in the final path to exercise the production default.
-            Environment batching{"REBLUR_BATCH_COMPOSE", final_output_only ? nullptr : "0"};
+            Environment guide_cache{"REBLUR_COMPACT_GUIDE_CACHE", compact ? "1" : "0"};
+            Environment batching{"REBLUR_BATCH_COMPOSE", batch ? "1" : "0"};
             Environment composition{"REBLUR_COMPOSE_IN_UNPACK", nullptr};
             Environment snapshot{"REBLUR_EDSL_SNAPSHOT_DIR", capture.string().c_str()};
+            Environment debug_root{"VISION_EVAL_DEBUG_DIR", combined ? capture.string().c_str() : nullptr};
+            Environment debug_frame{"VISION_EVAL_DEBUG_FRAME", combined ? "2" : nullptr};
+            Environment full_diagnostics{"VISION_GI_GUIDE_REUSE_FULL_READBACK", combined ? "1" : nullptr};
+            Environment physical_snapshot{"VISION_GI_NRD_SNAPSHOT_COPY", combined ? "1" : nullptr};
             Global::instance().set_scene_path(directory);
-            stage("make_pipeline_begin", variant);
             auto pipeline = Corona::Tests::make_vision_test_pipeline(scene, directory);
-            stage("make_pipeline_done", variant);
             auto *integrator = dynamic_cast<IlluminationIntegrator *>(pipeline->renderer().integrator().get());
-            if (!integrator) throw std::runtime_error("guide fusion fixture requires the actual illumination integrator");
-            integrator->set_denoise_enabled(true); pipeline->frame_buffer()->set_enable_accumulation(false);
-            stage("prepare_begin", variant);
+            if (!integrator) throw std::runtime_error("guide fusion fixture needs the illumination integrator");
+            integrator->set_denoise_enabled(true);
+            pipeline->frame_buffer()->set_enable_accumulation(false);
             pipeline->prepare();
-            stage("prepare_done", variant);
-            pipeline->frame_buffer()->prepare_view_texture(); pipeline->upload_data();
-            stage("upload_done", variant);
-            auto &fb = *pipeline->frame_buffer();
-            const uint initial_raw_count = scenario == 2u || variant != 0u ? StablePlaneCount : pipeline->pixel_num() * StablePlaneCount;
-            if (fb.stable_direct().size() != initial_raw_count || fb.stable_indirect().size() != initial_raw_count)
-                throw std::runtime_error("initial raw stable allocation must follow the prepared producer policy");
-            for (uint frame = 0u; frame < 3u; ++frame) {
-                stage("render_begin", variant);
+            pipeline->frame_buffer()->prepare_view_texture();
+            if (const char *reason = integrator->render_incompatibility()) throw std::runtime_error(reason);
+            for (uint frame = 0; frame < 3u; ++frame) {
                 if (frame == 2u) {
                     pipeline->scene().sensor()->set_yaw(.2f);
                     pipeline->scene().sensor()->update_device_data();
                 }
-                pipeline->upload_data(); pipeline->display(1.0 / 60.0);
-                stage("render_done", variant);
+                pipeline->upload_data();
+                pipeline->display(1.0 / 60.0);
             }
-            const uint pixels = pipeline->pixel_num();
-            std::vector<float4> rgb(pixels), diffuse(pixels * StablePlaneCount), specular(diffuse.size());
-            pipeline->stream() << fb.rt_buffer().device_buffer().download(rgb.data());
-            // Batch Pack retires raw D/S into guide/raw fallback caches. Their
-            // filtered-output comparison belongs only to retained paths.
-            if (!final_output_only)
-                pipeline->stream() << fb.denoiser_diffuse().view().download(diffuse.data())
-                    << fb.denoiser_specular().view().download(specular.data());
-            pipeline->stream() << synchronize() << commit();
-            if (variant == 0u) { reference_rgb = rgb; reference_diffuse = diffuse; reference_specular = specular; }
-            else {
-                const auto exact = [](const auto &a, const auto &b) {
-                    return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(a[0])) == 0;
-                };
-                if (final_output_only) {
-                    if (!exact(rgb, edsl_rgb))
-                        throw std::runtime_error("scene " + std::to_string(scenario) + variant_name +
-                            " batched final RT must match retained EDSL composition byte-for-byte");
-                } else if (!exact(rgb, reference_rgb) || !exact(diffuse, reference_diffuse) || !exact(specular, reference_specular)) {
-                    throw std::runtime_error("scene " + std::to_string(scenario) + variant_name +
-                        " changed final FP32 radiance or world-space lobe hit distances beyond the reference contract");
+            const uint count = pipeline->pixel_num();
+            std::vector<float4> rgb(count);
+            pipeline->stream() << pipeline->frame_buffer()->rt_buffer().view().download(rgb.data()) << synchronize() << commit();
+            for (const auto &v : rgb) for (uint c = 0; c < 3u; ++c)
+                if (!std::isfinite(v[c])) throw std::runtime_error("guide fusion produced non-finite radiance");
+            if (!variant) reference_rgb = rgb;
+            else if (std::memcmp(reference_rgb.data(), rgb.data(), count * sizeof(float4)) != 0)
+                throw std::runtime_error("the guide pack variant changed final FP32 radiance");
+            if (!combined && !batch) {
+                auto &fb = *pipeline->frame_buffer();
+                std::vector<float4> lobes(2u * count);
+                pipeline->stream() << fb.denoiser_layer_view(fb.denoiser_diffuse(), 0u).download(lobes.data())
+                    << fb.denoiser_layer_view(fb.denoiser_specular(), 0u).download(lobes.data() + count)
+                    << synchronize() << commit();
+                if (!variant) reference_lobes = lobes;
+                else if (std::memcmp(lobes.data(), reference_lobes.data(), lobes.size() * sizeof(float4)))
+                    throw std::runtime_error("the guide pack variant changed retained lobe radiance or hit distances");
+            }
+            auto compare = [&](const fs::path &relative) {
+                auto packed = read_bytes(capture / relative);
+                if (packed.empty() || (variant && packed != read_bytes(baseline / relative)))
+                    throw std::runtime_error("the guide pack variant changed " + relative.string());
+                return packed;
+            };
+            const uint layers = combined ? 3u : 1u;
+            for (uint layer = 0; layer < layers; ++layer) for (uint slot = 0; slot < 6u; ++slot) {
+                const auto name = "f2_l" + std::to_string(layer) + "_p0_u" + std::to_string(slot) + ".bin";
+                const auto packed = compare(name);
+                if (combined && layer == 0u) compare(fs::path{"physical-di"} / name);
+                if (scenario == 0u && slot < 2u) {
+                    const auto magnitude = [&](size_t offset) {
+                        const uint lo = static_cast<unsigned char>(packed[offset]);
+                        const uint hi = static_cast<unsigned char>(packed[offset + 1u]);
+                        return ((hi << 8u) | lo) & 0x7fffu;
+                    };
+                    bool sampled_black_hit = false;
+                    for (size_t offset = 0; offset + 7u < packed.size(); offset += 8u) {
+                        const auto distance = magnitude(offset + 6u);
+                        sampled_black_hit |= magnitude(offset) == 0u && magnitude(offset + 2u) == 0u &&
+                            magnitude(offset + 4u) == 0u && distance > 0u && distance < 0x7c00u;
+                    }
+                    if (!sampled_black_hit)
+                        throw std::runtime_error("packed black diffuse and specular samples must retain geometric distances");
                 }
-                const auto staged = directory / (std::to_string(scenario) + "-legacy-staged");
-                const uint layers = scenario == 2u ? 1u : StablePlaneCount;
-                for (uint layer = 0u; layer < layers; ++layer) for (uint slot = 0u; slot < 6u; ++slot) {
-                    const auto name = "f2_l" + std::to_string(layer) + "_p0_u" + std::to_string(slot) + ".bin";
-                    const auto packed = read_bytes(capture / name);
-                    if (packed != read_bytes(staged / name))
-                        throw std::runtime_error("scene " + std::to_string(scenario) + variant_name +
-                            " changed a packed ReBLUR input: " + name);
-                    if (scenario == 0u && layer == 0u && slot < 2u) {
-                        bool sampled_black_hit = false;
-                        for (size_t offset = 6u; offset + 1u < packed.size(); offset += 8u) {
-                            const auto bits = static_cast<unsigned char>(packed[offset]) |
-                                (uint(static_cast<unsigned char>(packed[offset + 1u])) << 8u);
-                            sampled_black_hit |= (bits & 0x7fffu) > 0u && (bits & 0x7fffu) < 0x7c00u;
+            }
+            const auto metadata = read_bytes(capture / "metadata.jsonl");
+            std::istringstream lines{std::string(metadata.begin(), metadata.end())};
+            std::array<uint, 3> pack_count{};
+            for (std::string line; std::getline(lines, line);) {
+                const auto record = DataWrap::parse(line);
+                if (record.at("frame") != 2u || record.at("pass") != 0u || record.at("slot") != 0u) continue;
+                const uint layer = record.at("layer").get<uint>();
+                if (layer >= layers) throw std::runtime_error("invalid ReBLUR layer in pack metadata");
+                const auto shader = record.at("shader").get<std::string>();
+                if (fused != shader.starts_with("Pack-FusedGuides") ||
+                    batch != (shader.find("BatchCompose") != std::string::npos))
+                    throw std::runtime_error("the requested ReBLUR pack kernel did not execute");
+                ++pack_count[layer];
+            }
+            for (uint layer = 0; layer < layers; ++layer)
+                if (pack_count[layer] != ((combined && layer == 0u) ? 2u : 1u))
+                    throw std::runtime_error("unexpected physical DI / private GI pack dispatch count");
+            if (combined) {
+                for (const auto *stage_name : {"producer", "filtered"}) {
+                    const auto prefix = std::string{"native_reblur_samples_"} + stage_name;
+                    const auto signals = compare(prefix + ".signals.f32");
+                    const auto guides = compare(prefix + ".guides.bin");
+                    if (signals.size() != 10u * count * sizeof(float4) || guides.size() != 3u * count * sizeof(reblur::Guide))
+                        throw std::runtime_error("full physical DI and three private GI signals or guides are incomplete");
+                    if (std::string_view(stage_name) != "filtered") continue;
+                    std::vector<float4> values(10u * count);
+                    std::memcpy(values.data(), signals.data(), signals.size());
+                    bool lit_gi = false;
+                    for (uint i = 0; i < count; ++i) for (uint c = 0; c < 3u; ++c) {
+                        double sum = 0;
+                        for (uint channel = 0; channel < 10u; ++channel) {
+                            const auto value = values[channel * count + i][c];
+                            sum += value;
+                            if (channel >= 3u && channel <= 8u && value > 0.f) lit_gi = true;
                         }
-                        if (!sampled_black_hit)
-                            throw std::runtime_error("black diffuse and specular samples must retain positive finite packed hit distances");
+                        if (!std::isfinite(sum) || std::abs(sum - rgb[i][c]) > 1e-5 * std::max(1., std::abs(sum)))
+                            throw std::runtime_error("the filtered physical DI and private GI layers must sum to the final pixel");
                     }
+                    if (scenario >= 3u && !lit_gi)
+                        throw std::runtime_error("the lit second surface must produce measurable GI in the textured fixture");
                 }
-                if (fused) {
-                    const auto metadata = read_bytes(capture / "metadata.jsonl");
-                    if (std::string(metadata.begin(), metadata.end()).find("Pack-FusedGuides") == std::string::npos)
-                        throw std::runtime_error("guide fusion regression must execute the fused pack command");
-                    const bool batched = std::string(metadata.begin(), metadata.end()).find("Pack-FusedGuides-BatchCompose") != std::string::npos;
-                    if (batched != final_output_only)
-                        throw std::runtime_error("batch fixture must select only the production-default final-output-only path");
-                    std::array<bool, StablePlaneCount> captured_pack{};
-                    std::istringstream metadata_lines(std::string(metadata.begin(), metadata.end()));
-                    std::string metadata_line;
-                    while (std::getline(metadata_lines, metadata_line)) {
-                        if (metadata_line.empty()) continue;
-                        const auto record = DataWrap::parse(metadata_line);
-                        if (record.at("pass").get<uint>() != 0u) continue;
-                        const uint layer = record.at("layer").get<uint>();
-                        if (layer >= layers) throw std::runtime_error("Pack metadata layer exceeds the scene layer count");
-                        const auto shader = record.at("shader").get<std::string>();
-                        const bool marked_batched = shader.find("Pack-FusedGuides-BatchCompose") != std::string::npos;
-                        if (marked_batched != final_output_only)
-                            throw std::runtime_error("every Pack must match the selected retained or batch path");
-                        const bool marked_precleared = shader.find("Pack-FusedGuides-BatchCompose-Precleared") != std::string::npos;
-                        if (marked_precleared)
-                            throw std::runtime_error("EDSL Pack must not use an external-core preclear path");
-                        captured_pack[layer] = true;
-                    }
-                    for (uint layer = 0u; layer < layers; ++layer)
-                        if (!captured_pack[layer]) throw std::runtime_error("guide oracle requires Pack metadata for every layer");
-                }
-            }
-            if (variant == 3u) edsl_rgb = rgb;
-            if (scenario == 1u && (variant == 3u || variant == 4u)) {
-                const uint direct_base = fb.stable_direct_base(), indirect_base = fb.stable_indirect_base();
-                uint lifecycle_step = 0u;
-                auto check_raw = [&](bool retained) {
-                    const uint step = lifecycle_step++;
-                    const uint expected = retained && integrator->stable_planes_enabled()
-                        ? pipeline->pixel_num() * StablePlaneCount : StablePlaneCount;
-                    if (fb.stable_raw_outputs_retained() != retained || fb.stable_direct().size() != expected ||
-                        fb.stable_indirect().size() != expected || fb.stable_direct_base() != direct_base ||
-                        fb.stable_indirect_base() != indirect_base)
-                        throw std::runtime_error("actual ReSTIR raw allocation lifecycle step=" + std::to_string(step) +
-                            " expected retained/count=" + std::to_string(retained) + "/" + std::to_string(expected) +
-                            " actual=" + std::to_string(fb.stable_raw_outputs_retained()) + "/" +
-                            std::to_string(fb.stable_direct().size()) + "/" + std::to_string(fb.stable_indirect().size()) +
-                            " expected slots=" + std::to_string(direct_base) + "/" + std::to_string(indirect_base) +
-                            " actual slots=" + std::to_string(fb.stable_direct_base()) + "/" + std::to_string(fb.stable_indirect_base()));
-                };
-                auto render = [&] {
-                    pipeline->upload_data(); pipeline->display(1.0 / 60.0);
-                    std::vector<float4> output(pipeline->pixel_num());
-                    pipeline->stream() << fb.rt_buffer().view().download(output.data()) << synchronize() << commit();
-                    for (const auto &value : output) for (uint c = 0u; c < 4u; ++c)
-                        if (!std::isfinite(value[c])) throw std::runtime_error("raw allocation lifecycle produced a non-finite frame");
-                };
-                check_raw(false);
-                pipeline->set_output_denoise(false); render(); check_raw(true);
-                pipeline->set_output_denoise(true); render(); check_raw(false);
-                {
-                    const auto debug_directory = directory / "raw-lifecycle-debug";
-                    const auto debug_frame = std::to_string(integrator->frame_index());
-                    Environment debug_root{"VISION_EVAL_DEBUG_DIR", debug_directory.string().c_str()};
-                    Environment debug_index{"VISION_EVAL_DEBUG_FRAME", debug_frame.c_str()};
-                    render(); check_raw(true);
-                    for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
-                        std::vector<float4> raw_direct(pipeline->pixel_num()), raw_indirect(raw_direct.size());
-                        pipeline->stream() << fb.stable_direct_view(layer).download(raw_direct.data())
-                            << fb.stable_indirect_view(layer).download(raw_indirect.data()) << synchronize() << commit();
-                        const auto prefix = "raw_layer_" + std::to_string(layer);
-                        const auto direct_file = read_bytes(debug_directory / (prefix + "_direct.f32"));
-                        const auto indirect_file = read_bytes(debug_directory / (prefix + "_indirect.f32"));
-                        const size_t bytes = raw_direct.size() * sizeof(float4);
-                        if (direct_file.size() != bytes || indirect_file.size() != bytes ||
-                            std::memcmp(direct_file.data(), raw_direct.data(), bytes) != 0 ||
-                            std::memcmp(indirect_file.data(), raw_indirect.data(), bytes) != 0)
-                            throw std::runtime_error("requested raw layer diagnostics must retain exact complete GPU channels");
-                    }
-                }
-                render(); check_raw(false);
-                pipeline->change_resolution(make_uint2(17u, 9u)); render(); check_raw(false);
-                pipeline->set_output_denoise(false); render(); check_raw(true);
-                pipeline->change_resolution(make_uint2(19u, 11u)); render(); check_raw(true);
-                pipeline->set_output_denoise(true); render(); check_raw(false);
-                integrator->set_stable_planes_enabled(false); render(); check_raw(false);
-                integrator->set_stable_planes_enabled(true); render(); check_raw(false);
-                std::cout << "PASS: actual ReSTIR raw allocation ON/OFF/debug/resize/stable-plane lifecycle, variant="
-                          << variant << (final_output_only ? " batch\n" : " retained\n");
             }
         }
     }
-    std::cout << "PASS: available data paths across " << (selected_scenario == InvalidUI32 ? 5u : 1u)
-              << " scenes preserve exact ReBLUR inputs; batched final RT matches retained core byte-for-byte; evidence="
-              << directory.string() << '\n';
+    std::cout << "PASS: ReBLUR pack and filtered output across selected RTXPT GI scenarios; evidence=" << directory.string() << '\n';
 }

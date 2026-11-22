@@ -1,4 +1,5 @@
 #include "rtxpt_gi.h"
+#include "math/base.h"
 #include "rtxpt_gi_surface.h"
 #include "rtxpt_gi_rng.h"
 #include "rtxpt_gi_boiling.h"
@@ -139,14 +140,6 @@ void finalize(RtxptGIReservoirVar &r, const Float &numerator, const Float &denom
     r.weight = select(denominator == 0.f, 0.f, r.weight * numerator / denominator);
 }
 
-Float3 depth_guide_position(const Float3 &physical, const Float3 &virtual_position,
-                           const Float3 &depth_position, const Bool &use_virtual,
-                           const Bool &approximate) noexcept {
-    // Match SurfaceData::normal_depth and the existing DI guide selection.
-    Float3 position = select(use_virtual, virtual_position, physical);
-    return select(approximate, depth_position, position);
-}
-
 Float luminance_709(const Float3 &rgb) noexcept {
     return dot(rgb, make_float3(.2126f, .7152f, .0722f));
 }
@@ -167,6 +160,14 @@ namespace vision {
 using namespace ocarina;
 
 namespace {
+float3 unpack_gi_normal_host(uint packed) noexcept {
+    if (packed == 0x80008000u) return make_float3(0.f);
+    int x = int(packed & 0xffffu), y = int(packed >> 16u);
+    x -= x >= 32768 ? 65536 : 0;
+    y -= y >= 32768 ? 65536 : 0;
+    return ocarina::octahedral_decode(make_float2(float(x) / 32767.f, float(y) / 32767.f));
+}
+
 Uint native_jenkins(Uint a) {
     a = (a + 0x7ed55d16u) + (a << 12u);
     a = (a ^ 0xc761c23cu) ^ (a >> 19u);
@@ -573,23 +574,12 @@ void RtxptGI::compile_final() noexcept {
                     di_specular = make_float4(frame_buffer().denoiser_gi_specular().read(index).xyz(), direct.w);
                     bypass = frame_buffer().denoiser_di_bypass().read(index).xyz();
                 };
-                Uint layer = 0u;
-                $if(param.denoiser_layered != 0u) { layer = frame_buffer().stable_dominant().read(index); };
-                $if(layer < StablePlaneCount) {
-                    Uint address = layer * (resolution.x * resolution.y) + index;
-                    Float4 old_d = make_float4(0.f), old_s = make_float4(0.f), old_b = make_float4(0.f);
-                    $if(param.denoiser_layered != 0u) {
-                        old_d = frame_buffer().denoiser_diffuse().read(address);
-                        old_s = frame_buffer().denoiser_specular().read(address);
-                        old_b = frame_buffer().denoiser_bypass().read(address);
-                    };
-                    auto merged = denoiser_signals::merge_restir_lobes(direct.xyz(), radiance, di_specular,
-                        make_float4(specular, hit_distance), bypass, param.denoiser_di_factor,
-                        param.denoiser_gi_factor, old_d, old_s, old_b);
-                    frame_buffer().denoiser_diffuse().write(address, merged.diffuse);
-                    frame_buffer().denoiser_specular().write(address, merged.specular);
-                    frame_buffer().denoiser_bypass().write(address, merged.bypass);
-                };
+                auto merged = denoiser_signals::merge_restir_lobes(direct.xyz(), radiance, di_specular,
+                    make_float4(specular, hit_distance), bypass, param.denoiser_di_factor,
+                    param.denoiser_gi_factor, make_float4(0.f), make_float4(0.f), make_float4(0.f));
+                frame_buffer().denoiser_diffuse().write(index, merged.diffuse);
+                frame_buffer().denoiser_specular().write(index, merged.specular);
+                frame_buffer().denoiser_bypass().write(index, merged.bypass);
                 frame_buffer().denoiser_di_specular().write(index, di_specular);
             };
             frame_buffer().denoiser_gi_specular().write(index, make_float4(specular, hit_distance));

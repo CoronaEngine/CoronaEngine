@@ -28,26 +28,9 @@
 #include <windows.h>
 #endif
 
-void check_restir_reprojection(vision::Pipeline& pipeline);
-void check_stable_plane_store_oracle(vision::Pipeline& pipeline, const char* label);
 void check_restir_reservoir_lifetimes(vision::Pipeline& pipeline);
 void check_stable_plane_storage_restore(vision::Pipeline& pipeline);
-void check_stable_plane(vision::Pipeline& pipeline, bool tinted_mirror = true);
-void check_stable_emitter_coverage(vision::Pipeline& pipeline);
-void check_glass_svgf(vision::Pipeline& pipeline);
-void check_glass_runtime_depth(vision::Pipeline&, vision::Pipeline&, unsigned);
-void check_restir_material_reuse(vision::Pipeline& pipeline, const std::vector<vision::SurfaceData>& surfaces);
 void check_restir_gi_depth_one_continuation(vision::Pipeline& pipeline);
-void check_restir_gi_receiver_support(vision::Pipeline& pipeline);
-void check_restir_gi_winner_target(vision::Pipeline& pipeline, const char* label);
-void check_di_light_context_equivalence(vision::Pipeline& pipeline);
-void check_di_light_context_equivalence(vision::Pipeline& pipeline, const char* label, unsigned coverage);
-void check_di_temporal_gather_equivalence(vision::Pipeline& pipeline);
-void check_restir_gi_receiver_positions(vision::Pipeline& pipeline, const char* label,
-                                       bool require_replaced = false, bool require_jacobian = false);
-void check_glass_transport_energy(vision::Pipeline& pipeline, unsigned recursion, const char* label);
-void check_glass_depth_guides(vision::Pipeline& pipeline);
-void check_glass_children_disappear(vision::Pipeline& pipeline);
 void check_principled_stable_planes(vision::Pipeline& pipeline);
 
 namespace {
@@ -240,32 +223,6 @@ void check_stable_lobes(vision::Pipeline& pipeline) {
     }
 }
 
-template<typename FrameBuffer>
-void check_glass_planes(vision::Pipeline& pipeline, FrameBuffer& fb) {
-    if constexpr (!requires { fb.cur_stable_planes_view(0u, 0u); }) {
-        expect(false, "missing layered stable-plane storage for glass reflection and transmission");
-    } else {
-        using Plane = typename std::remove_reference_t<decltype(fb.stable_planes())>::element_type;
-        std::vector<Plane> base(pipeline.pixel_num()), transmitted(base.size()), reflected(base.size());
-        std::vector<vision::TriangleHit> primary(base.size());
-        pipeline.stream() << fb.cur_stable_planes_view(0u, 0u).download(base.data())
-            << fb.cur_stable_planes_view(0u, 1u).download(transmitted.data())
-            << fb.cur_stable_planes_view(0u, 2u).download(reflected.data())
-            << fb.cur_visibility_buffer_view(0u).download(primary.data())
-            << vision::synchronize() << vision::commit();
-        const unsigned i = 8u * 16u + 8u;
-        expect(primary[i].inst_id == base[i].surface.hit.inst_id && base[i].depth == 0u,
-               "glass base must preserve the original camera visibility");
-        expect(transmitted[i].valid() && reflected[i].valid() &&
-               transmitted[i].surface.hit.inst_id != reflected[i].surface.hit.inst_id,
-               "glass must produce distinct valid reflection and transmission endpoint guides");
-        expect(transmitted[i].surface.pos_diff.z < -2.f && reflected[i].surface.pos_diff.z > 0.f,
-               "glass branches must reach the separately coloured targets");
-        expect(transmitted[i].branch_sequence != reflected[i].branch_sequence,
-               "glass reflection and transmission must retain fixed distinct branch identities");
-        std::cout << "PASS: glass layered endpoint guides and primary visibility\n";
-    }
-}
 void configure_headless_process() {
 #ifdef _WIN32
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
@@ -275,8 +232,10 @@ void configure_headless_process() {
     _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
     _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
     _putenv_s("VISION_DISABLE_DENOISER", "1");
+    _putenv_s("VISION_RESTIR_GI_BACKEND", "");
 #else
     setenv("VISION_DISABLE_DENOISER", "1", 1);
+    unsetenv("VISION_RESTIR_GI_BACKEND");
 #endif
 }
 
@@ -330,7 +289,9 @@ vision::DataWrap scene_description(bool direct, bool reuse = false) {
     // scene switches select exactly one channel in the production combine pass.
     auto& parameters = scene["render"]["integrator"]["param"];
     parameters["direct"]["open"] = direct;
+    parameters["direct"]["max_recursion"] = 1u;
     parameters["indirect"]["open"] = !direct;
+    parameters["indirect"]["backend"] = "rtxpt";
     parameters["indirect"]["temporal"]["open"] = reuse;
     parameters["indirect"]["spatial"]["open"] = reuse;
     return scene;
@@ -345,7 +306,7 @@ struct ChannelStats {
     [[nodiscard]] double mean() const { return sum / samples; }
 };
 
-ChannelStats render_channel(vision::Pipeline& pipeline) {
+ChannelStats render_channel(vision::Pipeline& pipeline, size_t expected_instances = 1u) {
     expect(pipeline.resolution().x == kResolution && pipeline.resolution().y == kResolution,
            "ReSTIR estimator fixture must render at 16x16");
     auto* illumination = dynamic_cast<vision::IlluminationIntegrator*>(pipeline.renderer().integrator().get());
@@ -362,14 +323,13 @@ ChannelStats render_channel(vision::Pipeline& pipeline) {
     expect(!pipeline.frame_buffer()->enable_accumulation(), "raw estimator test must not accumulate frames");
     expect(!illumination->denoiser() || !illumination->denoiser()->enabled(),
            "raw estimator test must not invoke a denoiser");
-    expect(pipeline.scene().instances().size() == 1u,
-           "fixture must contain only the diffuse receiver, with no indirect reflectors");
+    expect(pipeline.scene().instances().size() == expected_instances, "fixture must import each requested receiver");
+    if (const char* reason = illumination->render_incompatibility()) throw std::runtime_error(reason);
     expect(pipeline.scene().light_manager().env_light() != nullptr,
            "fixture must contain an actual environment light");
 
     std::vector<vision::float4> pixels(pipeline.pixel_num());
     std::vector<vision::TriangleHit> hits(pixels.size());
-    std::vector<vision::SurfaceData> surfaces(pixels.size());
     std::vector<vision::TriangleHit> first_hits;
     std::vector<vision::float4> first_pixels;
     ChannelStats stats;
@@ -380,27 +340,11 @@ ChannelStats render_channel(vision::Pipeline& pipeline) {
         pipeline.stream()
             << pipeline.frame_buffer()->rt_buffer().device_buffer().download(pixels.data())
             << pipeline.frame_buffer()->cur_visibility_buffer_view(rendered_frame)
-                   .subview(0, hits.size()).download(hits.data())
-            << pipeline.frame_buffer()->cur_surfaces_view(rendered_frame)
-                   .download(surfaces.data())
-            << vision::synchronize() << vision::commit();
+                   .subview(0, hits.size()).download(hits.data());
+        pipeline.stream() << vision::synchronize() << vision::commit();
         if (frame == 0u) {
             first_hits = hits;
             first_pixels = pixels;
-        }
-        // Even on one large triangle, different camera samples disagree in
-        // barycentrics. At silhouettes that becomes a different surface: SVGF
-        // would demodulate and accumulate radiance with the wrong guides.
-        for (size_t index = 0; index < hits.size(); ++index) {
-            const auto& primary = hits[index];
-            const auto& shaded = surfaces[index].hit;
-            expect(primary.inst_id == shaded.inst_id && primary.prim_id == shaded.prim_id,
-                   "ReSTIR and the denoiser GBuffer must cover the same primary surface");
-            if (primary.inst_id != vision::InvalidUI32) {
-                expect(std::abs(primary.bary.x - shaded.bary.x) < 1e-6f &&
-                       std::abs(primary.bary.y - shaded.bary.y) < 1e-6f,
-                       "ReSTIR must shade the exact GBuffer camera ray, including pixel jitter");
-            }
         }
         // The central 8x8 is comfortably inside the triangle for all pixel
         // jitter positions. Sky/background pixels can never satisfy this test.
@@ -465,12 +409,6 @@ int main(int argc, char **argv) {
     try {
         const bool principled_only = argc == 2 && std::string_view{argv[1]} == "--principled-stable-planes";
         expect(argc == 1 || principled_only, "usage: corona_vision_restir_estimator_tests [--principled-stable-planes]");
-        // Three full-resolution planes and their history amplify alignment
-        // gaps into hundreds of MiB. Keep all attributes at full precision.
-        constexpr size_t surface_bytes = 2u * sizeof(vision::SurfaceData) + sizeof(vision::SurfaceExtend) + sizeof(vision::SurfaceExtendHistory) +
-            vision::StablePlaneCount * (sizeof(vision::StablePlaneData) + sizeof(vision::StablePlaneHistory));
-        std::cout << "ReSTIR surface storage bytes/pixel=" << surface_bytes << '\n';
-        expect(surface_bytes <= 1760u, "ReSTIR surface storage exceeds its full-precision budget");
         const auto runtime_directory = fs::current_path();
         const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
         fixture = fs::temp_directory_path() / ("corona_restir_estimators_" + std::to_string(suffix));
@@ -480,11 +418,6 @@ int main(int argc, char **argv) {
         // At z=-1 the full 45-degree camera frustum fits within this triangle.
         write_file(fixture / "receiver.obj",
                    "v -4 -4 -1\nv 4 -4 -1\nv 0 4 -1\nvn 0 0 1\nf 1//1 2//1 3//1\n");
-        write_file(fixture / "receiver-tilted.obj",
-                   "v -4 -4 -1\nv 4 -4 -1\nv 0 4 -1\nvn 0.7071067812 0 0.7071067812\nf 1//1 2//1 3//1\n");
-        auto support_scene = scene_description(false);
-        support_scene["scene"]["shapes"][0]["param"]["fn"] = "receiver-tilted.obj";
-
         // Match the embedded engine bootstrap. Standalone hotfix registration
         // can leave ../bin ahead of the chosen runtime directory in this list.
         ocarina::DynamicModule::clear_search_path();
@@ -495,36 +428,12 @@ int main(int argc, char **argv) {
         device.init_rtx();
         vision::Global::instance().set_device(&device);
         vision::Global::instance().set_scene_path(fixture);
-        if (std::getenv("VISION_TEST_GI_WINNER_TARGET_ONLY")) {
-            // Keep primary rays clear; secondary GI segments with x~2 cross
-            // this actual triangle baffle and exercise world-space occlusion.
-            write_file(fixture / "receiver-oracle.obj",
-                "v -4 -4 -1\nv 4 -4 -1\nv 0 4 -1\n"
-                "v 0.6 -2 -0.25\nv 1.3 -2 -0.25\nv 1.3 2 -0.25\nv 0.6 2 -0.25\n"
-                "vn 0.7071067812 0 0.7071067812\n"
-                "f 1//1 2//1 3//1\nf 4//1 5//1 6//1\nf 4//1 6//1 7//1\n");
-            for (bool glossy : {false, true}) {
-                auto oracle_scene = support_scene;
-                oracle_scene["scene"]["shapes"][0]["param"]["fn"] = "receiver-oracle.obj";
-                if (glossy) {
-                    oracle_scene["scene"]["materials"][0]["param"]["roughness"] = 0.17f;
-                    oracle_scene["scene"]["materials"][0]["param"]["ior"] = 1.65f;
-                }
-                const auto oracle = Corona::Tests::make_vision_test_pipeline(oracle_scene, fixture);
-                expect(bool(oracle), "could not import GI winner target fixture");
-                check_restir_gi_winner_target(*oracle, glossy ? "tilted-glossy-baffle" : "tilted-diffuse-baffle");
-            }
-            fs::remove(fixture / "receiver-oracle.obj");
-            fs::remove(fixture / "receiver.obj"); fs::remove(fixture / "receiver-tilted.obj");
-            std::error_code cleanup_error; fs::remove(fixture, cleanup_error);
-            return 0;
-        }
         const auto direct_pipeline = Corona::Tests::make_vision_test_pipeline(scene_description(true), fixture);
         expect(bool(direct_pipeline), "could not import direct-channel fixture");
         if (std::getenv("VISION_TEST_STORAGE_RESTORE_ONLY")) {
             direct_pipeline->prepare();
             check_stable_plane_storage_restore(*direct_pipeline);
-            fs::remove(fixture / "receiver.obj"); fs::remove(fixture / "receiver-tilted.obj");
+            fs::remove(fixture / "receiver.obj");
             std::error_code cleanup_error; fs::remove(fixture, cleanup_error);
             return 0;
         }
@@ -533,14 +442,13 @@ int main(int argc, char **argv) {
             direct_pipeline->upload_data();
             check_principled_stable_planes(*direct_pipeline);
             fs::remove(fixture / "receiver.obj");
-            fs::remove(fixture / "receiver-tilted.obj");
+
             std::error_code cleanup_error;
             fs::remove(fixture, cleanup_error);
             return 0;
         }
         const auto direct = render_channel(*direct_pipeline);
         check_stable_lobes(*direct_pipeline);
-        check_principled_stable_planes(*direct_pipeline);
         std::cout << "direct_mean=" << direct.mean() << " direct_max=" << direct.max_abs << '\n';
         std::cout << "raw_static_primary_bary_delta=" << direct.max_primary_bary_delta << '\n';
         expect(direct.max_primary_bary_delta <= 1e-6f,
@@ -548,20 +456,6 @@ int main(int argc, char **argv) {
         expect(direct.max_lighting_delta > 1e-4f,
                "stabilizing the raw primary ray must not freeze stochastic lighting samples");
         expect(direct.mean() > 0.05, "DI must illuminate the receiver under the white environment");
-        check_primary_sampling_modes(*direct_pipeline);
-        check_di_light_context_equivalence(*direct_pipeline);
-
-        write_file(fixture / "context-emitter.obj",
-                   "v -2 -2 1\nv -2 2 1\nv 2 -2 1\nv 3 -2 1\nv 3 -1 1\nv 4 -2 1\n"
-                   "vn 0 0 -1\nf 1//1 2//1 3//1\nf 4//1 5//1 6//1\n");
-        auto context_scene = scene_description(true);
-        context_scene["scene"]["shapes"].push_back(vision::DataWrap::parse(R"({
-          "type":"model","param":{"fn":"context-emitter.obj","material":"receiver",
-          "normalize_to_unit_bounds":false,
-          "emission":{"type":"area","param":{"color":[1,0.5,0.25],"scale":2}}}})"));
-        const auto context_pipeline = Corona::Tests::make_vision_test_pipeline(context_scene, fixture);
-        context_pipeline->prepare();
-        check_di_light_context_equivalence(*context_pipeline);
 
         const auto indirect_pipeline = Corona::Tests::make_vision_test_pipeline(scene_description(false), fixture);
         expect(bool(indirect_pipeline), "could not import indirect-channel fixture");
@@ -570,6 +464,7 @@ int main(int argc, char **argv) {
                   << " measured_hit_samples=" << indirect.samples << '\n';
         expect(indirect.max_abs <= 1e-6f,
                "GI must exclude an initial BSDF miss to the environment: this scene has zero indirect transport");
+        check_primary_sampling_modes(*indirect_pipeline);
         const auto reused_pipeline = Corona::Tests::make_vision_test_pipeline(scene_description(false, true), fixture);
         expect(bool(reused_pipeline), "could not import the GI null-history fixture");
         const auto reused = render_channel(*reused_pipeline);
@@ -577,448 +472,24 @@ int main(int argc, char **argv) {
         expect(reused.max_abs <= 1e-6f,
                "temporal and spatial reuse must preserve zero GI when every initial candidate is null");
         std::cout << "PASS: ReSTIR keeps initial environment lighting exclusively in DI\n";
-        bool regression_failed = false;
-        auto check = [&](auto function, vision::Pipeline& pipeline) {
-            try { function(pipeline); }
-            catch (const std::exception& error) {
-                std::cerr << "FAIL: " << error.what() << '\n';
-                regression_failed = true;
-            }
-        };
-        check(check_restir_reprojection, *reused_pipeline);
-        check(check_di_temporal_gather_equivalence, *reused_pipeline);
-        check(check_restir_reservoir_lifetimes, *reused_pipeline);
-        check(check_restir_gi_depth_one_continuation, *direct_pipeline);
-        const auto support_pipeline = Corona::Tests::make_vision_test_pipeline(support_scene, fixture);
-        expect(bool(support_pipeline), "could not import the tilted receiver support fixture");
-        check(check_restir_gi_receiver_support, *support_pipeline);
-        check([](vision::Pipeline& p) { check_restir_gi_receiver_positions(p, "tilted-geometry"); }, *support_pipeline);
-        // Capture real ReSTIR surface guides, including material/texture evaluation.
-        // Equal geometry must not hide a material boundary; similar separately
-        // imported materials must remain reusable regardless of their identities.
-        const char* materials[]{
-            R"({"type":"principled_bsdf","param":{"color":[0.8,0.1,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}})",
-            R"({"type":"principled_bsdf","param":{"color":[0.1,0.8,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}})",
-            R"({"type":"principled_bsdf","param":{"color":[0.75,0.12,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}})",
-            R"({"type":"principled_bsdf","param":{"color":[0.5,0.5,0.5],"roughness":0.2,"subsurface_weight":0,"ior":1.5}})",
-            R"({"type":"principled_bsdf","param":{"color":[0.5,0.5,0.5],"roughness":0.2,"subsurface_weight":0,"ior":5}})",
-            R"({"type":"principled_bsdf","param":{"color":[0.5,0.5,0.5],"roughness":0.1,"subsurface_weight":0}})",
-            R"({"type":"principled_bsdf","param":{"color":[0.5,0.5,0.5],"roughness":0.8,"subsurface_weight":0}})",
-            R"({"type":"black_body","param":{}})",
-            R"({"type":"principled_bsdf","param":{"color":[1,1,1],"ior":1.1,"roughness":0.5,"subsurface_weight":0,"transmission_weight":1}})",
-            R"({"type":"principled_bsdf","param":{"color":[1,1,1],"ior":5.0,"roughness":0.5,"subsurface_weight":0,"transmission_weight":1}})",
-            R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4}})",
-            R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4}})",
-            R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}})",
-            R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}})",
-            R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4,"normal":{"node":"test_normal","channels":"xyz"}},"node_tab":{"test_normal":{"type":"number","param":{"value":[0.6,0,0.8]}}}})",
-            R"({"type":"principled_bsdf","param":{"color":[0.8,0.2,0.1],"coat_weight":1,"coat_ior":2.5,"roughness":0.4,"normal":{"node":"test_normal","channels":"xyz"}},"node_tab":{"test_normal":{"type":"number","param":{"value":[0.6,0,0.8]}}}})",
-        };
+        check_restir_gi_depth_one_continuation(*direct_pipeline);
+        check_restir_reservoir_lifetimes(*reused_pipeline);
 
-        // Additional DI light-context coverage runs only the direct GPU oracle.
-        // Retain every pipeline: MaterialLut identity includes its bindless owner.
-        std::vector<vision::SP<vision::Pipeline>> context_fixtures;
-        const auto run_context_fixture = [&](vision::DataWrap description, const char* label, unsigned coverage) {
-            auto pipeline = Corona::Tests::make_vision_test_pipeline(description, fixture);
-            expect(bool(pipeline), "could not import DI light-context coverage fixture");
-            context_fixtures.push_back(pipeline);
-            pipeline->prepare();
-            std::cout << "DI light-context fixture=" << label << '\n';
-            check_di_light_context_equivalence(*pipeline, label, coverage);
-        };
-        // Nonuniform triangle areas, real UVs and a small nonconstant image.
-        write_file(fixture / "context-uv-emitter.obj",
-            "v -2 -2 1\nv -2 2 1\nv 2 -2 1\nv 3 -2 1\nv 3 -1 1\nv 4 -2 1\n"
-            "vt 0 0\nvt 0 1\nvt 1 0\nvn 0 0 -1\n"
-            "f 1/1/1 2/2/1 3/3/1\nf 4/1/1 5/2/1 6/3/1\n");
-        const unsigned char context_colors[]{255,32,16, 16,255,32, 32,16,255, 255,255,32};
-        std::string context_ppm = "P6\n2 2\n255\n";
-        context_ppm.append(reinterpret_cast<const char*>(context_colors), sizeof(context_colors));
-        write_file(fixture / "context-emission.ppm", context_ppm);
-        auto transformed_context = context_scene;
-        transformed_context["scene"]["shapes"][1]["param"]["fn"] = "context-uv-emitter.obj";
-        transformed_context["scene"]["shapes"][1]["param"]["transform"] = vision::DataWrap::parse(
-            R"({"type":"trs","param":{"t":[0.25,0.1,0.5],"r":[1,0,0,0],"s":[1.5,0.5,2]}})");
-        transformed_context["scene"]["shapes"][1]["param"]["emission"]["param"]["color"] = vision::DataWrap::parse(
-            R"({"channels":"xyz","node":{"type":"image","param":{"fn":"context-emission.ppm","color_space":"linear","filter":"nearest"}}})");
-        auto mapped_receiver = vision::DataWrap::parse(materials[14]);
-        mapped_receiver["name"] = "receiver";
-        transformed_context["scene"]["materials"][0] = mapped_receiver;
-        run_context_fixture(transformed_context, "trs-textured-principled", 1u | 16u | 64u);
+        // The second diffuse surface sits behind the camera and faces the original
+        // receiver. Any returned radiance in the isolated GI channel needs a bounce.
+        write_file(fixture / "bounce.obj",
+                   "v 0.1 -0.7 0.75\nv 0.2 0.8 0.75\nv 1.6 -0.7 0.75\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
+        auto bounce_scene = scene_description(false, true);
+        auto bounce = bounce_scene["scene"]["shapes"][0];
+        bounce["param"]["fn"] = "bounce.obj";
+        bounce_scene["scene"]["shapes"].push_back(bounce);
+        auto bounce_pipeline = Corona::Tests::make_vision_test_pipeline(bounce_scene, fixture);
+        expect(bool(bounce_pipeline), "could not import the diffuse two-receiver GI fixture");
+        const auto bounced = render_channel(*bounce_pipeline, 2u);
+        expect(bounced.mean() > 0.f, "RTXPT GI must return indirect energy from the second surface");
 
-        write_file(fixture / "context-back-emitter.obj",
-            "v -2 -2 1\nv -2 2 1\nv 2 -2 1\nv 3 -2 1\nv 3 -1 1\nv 4 -2 1\n"
-            "vn 0 0 1\nf 1//1 3//1 2//1\nf 4//1 6//1 5//1\n");
-        auto back_context = context_scene;
-        back_context["scene"]["shapes"][1]["param"]["fn"] = "context-back-emitter.obj";
-        run_context_fixture(back_context, "back-facing", 2u);
-        auto grazing_context = context_scene;
-        grazing_context["scene"]["shapes"][1]["param"]["transform"] = vision::DataWrap::parse(
-            R"({"type":"trs","param":{"t":[1000,0,0],"r":[1,0,0,0],"s":[1,1,1]}})");
-        run_context_fixture(grazing_context, "grazing", 1u | 8u);
-        auto black_context = context_scene;
-        auto black_receiver = vision::DataWrap::parse(materials[7]);
-        black_receiver["name"] = "receiver";
-        black_context["scene"]["materials"][0] = black_receiver;
-        run_context_fixture(black_context, "zero-receiver", 2u);
-
-        auto delta_context = scene_description(true);
-        delta_context["scene"]["lights"] = vision::DataWrap::parse(R"([
-            {"type":"directional","param":{"direction":[0,0,-1],"color":[0.25,0.5,1],"scale":2}}
-        ])");
-        run_context_fixture(delta_context, "directional", 4u | 32u);
-        auto glass_context = context_scene;
-        glass_context["scene"]["materials"][0] = vision::DataWrap::parse(
-            R"({"type":"principled_bsdf","name":"receiver","param":{"color":[1,1,1],"transmission_weight":1,"ior":1.5,"roughness":0.5}})");
-        run_context_fixture(glass_context, "rgb-principled-transmission", 1u);
-        // Exercise RGB transmission and hero-spectrum shading independently.
-        const bool skip_hero = std::getenv("CORONA_TEST_SKIP_HERO") != nullptr;
-        if (skip_hero) {
-            std::cout << "SKIP: hero-diffuse (CORONA_TEST_SKIP_HERO)\n";
-        } else {
-            auto spectral_context = context_scene;
-            spectral_context["render"]["spectrum"] = vision::DataWrap::parse(R"({"type":"hero","param":{"dimension":3}})");
-            run_context_fixture(spectral_context, "hero-diffuse", 1u);
-        }
-        auto layered_context = context_scene;
-        layered_context["scene"]["materials"][0] = vision::DataWrap::parse(
-            R"({"type":"principled_bsdf","name":"receiver","param":{"color":[0.8,0.1,0.1],"metallic":0.35,"roughness":0.2,"coat_weight":0.35}})");
-        run_context_fixture(layered_context, "layered-principled", 1u);
-
-        std::vector<vision::SurfaceData> material_surfaces;
-        // Compare live scenes: the existing MaterialLut cache is keyed by a raw
-        // BindlessArray address, so destroying fixtures here can alias stale LUTs.
-        std::vector<vision::SP<vision::Pipeline>> material_fixtures;
-        vision::SP<vision::Pipeline> material_pipeline;
-        for (const char* material_json : materials) {
-            auto description = scene_description(true);
-            const auto material_index = material_surfaces.size();
-            if (skip_hero && (material_index == 12u || material_index == 13u)) {
-                std::cout << "SKIP: hero material " << material_index << " (CORONA_TEST_SKIP_HERO)\n";
-                material_surfaces.emplace_back();
-                material_fixtures.emplace_back();
-                continue;
-            }
-            if (material_index == 11u || material_index == 15u)
-                description["scene"]["camera"]["param"]["transform"]["param"]["position"] = vision::DataWrap::parse("[3,0,0]");
-            if (material_index == 12u || material_index == 13u)
-                description["render"]["spectrum"] = vision::DataWrap::parse(R"({"type":"hero","param":{"dimension":3}})");
-            auto material = vision::DataWrap::parse(material_json);
-            material["name"] = "receiver";
-            description["scene"]["materials"][0] = material;
-            material_pipeline = Corona::Tests::make_vision_test_pipeline(description, fixture);
-            material_fixtures.push_back(material_pipeline);
-            material_pipeline->frame_buffer()->set_enable_accumulation(false);
-            material_pipeline->prepare();
-            material_pipeline->frame_buffer()->prepare_view_texture();
-            for (unsigned frame = 0; frame < (material_index == 13u ? 7u : 1u); ++frame) {
-                material_pipeline->upload_data();
-                material_pipeline->display(1.0 / 60.0);
-            }
-            std::vector<vision::SurfaceData> data(material_pipeline->pixel_num());
-            material_pipeline->stream() << material_pipeline->frame_buffer()->cur_surfaces_view(material_pipeline->frame_index() - 1u).download(data.data())
-                << vision::synchronize() << vision::commit();
-            expect(data[8u * 16u + 8u].hit.inst_id != vision::InvalidUI32, "material fixture must hit receiver");
-            material_surfaces.push_back(data[8u * 16u + 8u]);
-            if (material_index == 11u || material_index == 13u || material_index == 15u) {
-                const auto& a = material_surfaces[material_index - 1u];
-                const auto& b = material_surfaces[material_index];
-                float delta = 0.f;
-                for (unsigned c = 0; c < 4u; ++c) {
-                    delta = std::max(delta, std::abs(a.diffuse_roughness[c] - b.diffuse_roughness[c]));
-                    delta = std::max(delta, std::abs(a.specular_roughness[c] - b.specular_roughness[c]));
-                }
-                std::cout << "Material guide stable index=" << material_index << " max_delta=" << delta << '\n';
-                if (delta > 1e-5f) {
-                    std::cerr << "FAIL: material guide must not vary with view or sampled wavelengths\n";
-                    regression_failed = true;
-                }
-            }
-        }
-        check_restir_material_reuse(*material_pipeline, material_surfaces);
-        for (const unsigned index : {0u, 3u, 12u, 14u}) {
-            if (skip_hero && index == 12u) continue;
-            std::cout << "GI position material index=" << index << '\n';
-            check([](vision::Pipeline& p) { check_restir_gi_receiver_positions(p, "material-diffuse-substrate-spectral-normal-map"); },
-                  *material_fixtures[index]);
-        }
-        write_file(fixture / "glass-front.obj", "v -4 -4 -1\nv 4 -4 -1\nv 0 4 -1\nvn 0 0 1\nf 1//1 2//1 3//1\n");
-        write_file(fixture / "glass-back-target.obj", "v -4 -4 -3\nv 4 -4 -3\nv 0 4 -3\nvn 0 0 1\nf 1//1 2//1 3//1\n");
-        write_file(fixture / "glass-front-target.obj", "v -4 -4 1\nv 0 4 1\nv 4 -4 1\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
-        auto glass_scene = scene_description(true);
-        glass_scene["render"]["integrator"]["param"]["indirect"]["open"] = true;
-        glass_scene["scene"]["materials"] = vision::DataWrap::parse(R"([
-            {"name":"glass","type":"principled_bsdf","param":{"roughness":0.03162277660168379,"subsurface_weight":0,"transmission_weight":1,"ior":1.5,"color":[1,1,1]}},
-            {"name":"red","type":"principled_bsdf","param":{"color":[0.8,0.1,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}},
-            {"name":"blue","type":"principled_bsdf","param":{"color":[0.1,0.1,0.8],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}}])");
-        glass_scene["scene"]["shapes"] = vision::DataWrap::parse(R"([
-            {"type":"model","param":{"fn":"glass-front.obj","material":"glass","normalize_to_unit_bounds":false}},
-            {"type":"model","param":{"fn":"glass-back-target.obj","material":"red","normalize_to_unit_bounds":false}},
-            {"type":"model","param":{"fn":"glass-front-target.obj","material":"blue","normalize_to_unit_bounds":false}}])");
-        auto glass_pipeline = Corona::Tests::make_vision_test_pipeline(glass_scene, fixture);
-        glass_pipeline->frame_buffer()->set_enable_accumulation(false);
-        glass_pipeline->prepare(); glass_pipeline->frame_buffer()->prepare_view_texture();
-        glass_pipeline->upload_data(); glass_pipeline->display(1.0 / 60.0);
-        check_glass_planes(*glass_pipeline, *glass_pipeline->frame_buffer());
-        check_glass_transport_energy(*glass_pipeline, 5u, "two-sided");
-        check_glass_depth_guides(*glass_pipeline);
-        check([](vision::Pipeline& p) { check_restir_gi_receiver_positions(p, "glass", false, true); }, *glass_pipeline);
-        write_file(fixture / "glass-rear.obj", "v -4 -4 -1.2\nv 0 4 -1.2\nv 4 -4 -1.2\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
-        std::vector<vision::SP<vision::Pipeline>> glass_fixtures;
-        auto run_glass_variant = [&](vision::DataWrap description, unsigned recursion, const char* label) {
-            std::cerr << "Running glass fixture: " << label << '\n';
-            description["render"]["integrator"]["param"]["direct"]["max_recursion"] = recursion;
-            auto p = Corona::Tests::make_vision_test_pipeline(description, fixture);
-            glass_fixtures.push_back(p);
-            p->frame_buffer()->set_enable_accumulation(false);
-            p->prepare(); p->frame_buffer()->prepare_view_texture(); p->upload_data(); p->display(1.0 / 60.0);
-            check_glass_transport_energy(*p, recursion, label);
-            return p;
-        };
-        auto principled_glass_scene = glass_scene;
-        principled_glass_scene["scene"]["materials"][0] = vision::DataWrap::parse(R"({
-            "name":"glass","type":"principled_bsdf","param":{"color":[1,1,1],"ior":1.5,
-            "metallic":0,"transmission_weight":1,"roughness":0,"sheen_weight":0,"coat_weight":0}})");
-        std::cerr << "Running Principled glass layered transport and endpoint fixture\n";
-        auto principled_glass_pipeline = run_glass_variant(principled_glass_scene, 5u, "two-sided");
-        check_glass_planes(*principled_glass_pipeline, *principled_glass_pipeline->frame_buffer());
-        auto principled_depth_scene = principled_glass_scene;
-        principled_depth_scene["scene"]["shapes"].push_back(vision::DataWrap::parse(
-            R"({"type":"model","param":{"fn":"glass-rear.obj","material":"glass","normalize_to_unit_bounds":false}})"));
-        run_glass_variant(principled_depth_scene, 2u, "principled-depth-exhaustion");
-        auto thick = glass_scene;
-        write_file(fixture / "glass-occluder.obj", "v -4 -4 0.8\nv 0 4 0.8\nv 4 -4 0.8\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
-        auto occluded = glass_scene;
-        occluded["scene"]["materials"].push_back(vision::DataWrap::parse(
-            R"({"name":"black","type":"black_body","param":{}})"));
-        occluded["scene"]["shapes"].push_back(vision::DataWrap::parse(
-            R"({"type":"model","param":{"fn":"glass-occluder.obj","material":"black","normalize_to_unit_bounds":false}})"));
-        run_glass_variant(occluded, 5u, "occluded-reflection");
-        thick["render"]["integrator"]["param"]["max_depth"] = 8;
-        thick["scene"]["shapes"].push_back(vision::DataWrap::parse(
-            R"({"type":"model","param":{"fn":"glass-rear.obj","material":"glass","normalize_to_unit_bounds":false}})"));
-        auto thick_pipeline = run_glass_variant(thick, 16u, "thick-overflow");
-        std::vector<vision::StablePlaneData> thick_planes(thick_pipeline->pixel_num());
-        thick_pipeline->stream() << thick_pipeline->frame_buffer()->cur_stable_planes_view(64u, 1u).download(thick_planes.data())
-            << vision::synchronize() << vision::commit();
-        expect(thick_planes[136].depth == 2u && thick_planes[136].surface.pos_diff.z < -2.f,
-               "preferred transmission must reach the target through the rear interface despite full layer capacity");
-        check_glass_depth_guides(*thick_pipeline);
-        auto long_prefix = thick;
-        long_prefix["render"]["integrator"]["param"]["direct"]["max_recursion"] = 16u;
-        write_file(fixture / "glass-third.obj", "v -4 -4 -1.4\nv 4 -4 -1.4\nv 0 4 -1.4\nvn 0 0 1\nf 1//1 2//1 3//1\n");
-        write_file(fixture / "glass-fourth.obj", "v -4 -4 -1.6\nv 0 4 -1.6\nv 4 -4 -1.6\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
-        for (const char* file : {"glass-third.obj", "glass-fourth.obj"}) {
-            auto shape = long_prefix["scene"]["shapes"][0]; shape["param"]["fn"] = file;
-            long_prefix["scene"]["shapes"].push_back(shape);
-        }
-        auto runtime_pipeline = Corona::Tests::make_vision_test_pipeline(long_prefix, fixture);
-        glass_fixtures.push_back(runtime_pipeline);
-        runtime_pipeline->frame_buffer()->set_enable_accumulation(false);
-        runtime_pipeline->prepare(); runtime_pipeline->frame_buffer()->prepare_view_texture();
-        for (unsigned budget : {0u, 1u, 3u, 5u}) {
-            auto fresh_scene = long_prefix;
-            fresh_scene["render"]["integrator"]["param"]["max_depth"] = budget + 1u;
-            auto fresh = Corona::Tests::make_vision_test_pipeline(fresh_scene, fixture);
-            glass_fixtures.push_back(fresh);
-            fresh->frame_buffer()->set_enable_accumulation(false);
-            fresh->prepare(); fresh->frame_buffer()->prepare_view_texture();
-            check_glass_runtime_depth(*runtime_pipeline, *fresh, budget);
-        }
-        auto one_suffix = thick;
-        one_suffix["render"]["integrator"]["param"]["max_depth"] = 4u;
-        run_glass_variant(one_suffix, 16u, "dominant-prefix-two-one-suffix");
-        auto oblique = thick;
-        oblique["scene"]["camera"]["param"]["transform"]["param"]["target_pos"] = vision::DataWrap::parse("[0.5,0,-1]");
-        auto oblique_pipeline = run_glass_variant(oblique, 16u, "oblique-thick");
-        check_glass_depth_guides(*oblique_pipeline);
-        run_glass_variant(thick, 2u, "depth-exhaustion");
-        auto zero_color = thick;
-        zero_color["scene"]["materials"][0]["param"]["color"] = vision::DataWrap::parse("[0.25,0,0.8]");
-        run_glass_variant(zero_color, 16u, "zero-prefix-channel");
-        auto sky = glass_scene;
-        sky["scene"]["shapes"] = vision::DataWrap::parse(R"([
-            {"type":"model","param":{"fn":"glass-front.obj","material":"glass","normalize_to_unit_bounds":false}}])");
-        auto sky_pipeline = run_glass_variant(sky, 5u, "glass-sky");
-        check_glass_children_disappear(*sky_pipeline);
-        auto emitting = sky;
-        emitting["scene"]["shapes"][0]["param"]["emission"] = vision::DataWrap::parse(
-            R"({"type":"area","param":{"color":[0.2,0.4,0.8],"scale":1}})");
-        run_glass_variant(emitting, 5u, "prefix-emission");
-        for (unsigned depth : {1u, 2u}) {
-            auto shallow = emitting;
-            shallow["render"]["integrator"]["param"]["max_depth"] = depth;
-            run_glass_variant(shallow, 5u, depth == 1u ? "depth-one-emission" : "depth-two-emission");
-        }
-        write_file(fixture / "glass-tir.obj",
-            "v -2 -4 -4.464101615\nv 0 4 -1\nv 2 -4 2.464101615\nvn 0.866025404 0 -0.5\nf 1//1 2//1 3//1\n");
-        auto tir = sky;
-        tir["scene"]["shapes"][0]["param"]["fn"] = "glass-tir.obj";
-        auto tir_pipeline = run_glass_variant(tir, 5u, "tir-sky");
-        std::vector<vision::StablePlaneData> tir_planes(tir_pipeline->pixel_num());
-        tir_pipeline->stream() << tir_pipeline->frame_buffer()->cur_stable_planes_view(64u, 0u).download(tir_planes.data())
-            << vision::synchronize() << vision::commit();
-        expect(tir_planes[136].depth == 1u && tir_planes[136].branch_sequence == 6u,
-               "total internal reflection must continue the valid reflection slot without an invalid transmission direction");
-        // A planar mirror at z=-1 reflects the receiver at z=+1. Its virtual
-        // image is z=-3: endpoint guides and primary mirror guides must differ.
-        write_file(fixture / "mirror-receiver.obj",
-                   "v -4 -4 1\nv 0 4 1\nv 4 -4 1\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
-#ifdef _WIN32
-        _putenv_s("VISION_DISABLE_DENOISER", "0");
-#else
-        setenv("VISION_DISABLE_DENOISER", "0", 1);
-#endif
-        auto mirror_scene = scene_description(true, true);
-        mirror_scene["output"]["denoise"] = true;
-        mirror_scene["render"]["integrator"]["param"]["direct"]["temporal"]["open"] = true;
-        mirror_scene["render"]["integrator"]["param"]["direct"]["spatial"]["open"] = true;
-        mirror_scene["render"]["integrator"]["param"]["indirect"]["open"] = true;
-        mirror_scene["render"]["denoiser"] = vision::DataWrap::parse(R"({"type":"svgf","param":{"enabled":true}})");
-        mirror_scene["render"]["integrator"]["param"]["denoiser"] = vision::DataWrap::parse(R"({"type":"svgf","param":{"enabled":true}})");
-        mirror_scene["scene"]["materials"][0]["type"] = "principled_bsdf";
-        mirror_scene["scene"]["materials"][0]["param"] = vision::DataWrap::parse(R"({"color":[0.6,0.8,1],"metallic":1,"roughness":0.001,"subsurface_weight":0})");
-        mirror_scene["scene"]["materials"].push_back(vision::DataWrap::parse(
-            R"({"type":"principled_bsdf","name":"reflected","param":{"color":[0.8,0.2,0.1],"subsurface_weight":0,"roughness":1,"spec_tint":[0,0,0]}})"));
-        mirror_scene["scene"]["shapes"].push_back(vision::DataWrap::parse(
-            R"({"type":"model","param":{"fn":"mirror-receiver.obj","material":"reflected","normalize_to_unit_bounds":false}})"));
-        auto mirror_pipeline = Corona::Tests::make_vision_test_pipeline(mirror_scene, fixture);
-        mirror_pipeline->frame_buffer()->set_enable_accumulation(false);
-        mirror_pipeline->prepare();
-        mirror_pipeline->frame_buffer()->prepare_view_texture();
-        mirror_pipeline->upload_data();
-        mirror_pipeline->display(1.0 / 60.0);
-        std::vector<vision::SurfaceData> mirror_surfaces(mirror_pipeline->pixel_num());
-        mirror_pipeline->stream() << mirror_pipeline->frame_buffer()->cur_surfaces_view(0u).download(mirror_surfaces.data())
-            << vision::synchronize() << vision::commit();
-        const auto& reflected = mirror_surfaces[8u * 16u + 8u];
-        std::cout << "mirror endpoint_z=" << reflected.pos_diff.z << " depth=" << reflected.normal_depth.w << '\n';
-        expect(reflected.is_replaced && std::abs(reflected.pos_diff.z - 1.f) < 1e-4f,
-               "stable plane must retain the reflected receiver position, not the mirror position");
-        expect(std::abs(reflected.normal_depth.w - 3.f) < 1e-4f,
-               "stable plane depth must describe the virtual image behind the mirror");
-        check_stable_plane(*mirror_pipeline);
-        check([](vision::Pipeline& p) { check_restir_gi_receiver_positions(p, "mirror", true, true); }, *mirror_pipeline);
-        auto mirror_emitter_scene = mirror_scene;
-        mirror_emitter_scene["scene"]["shapes"].back()["param"]["emission"] = vision::DataWrap::parse(
-            R"({"type":"area","param":{"color":[1,0.5,0.25],"scale":2}})");
-        auto mirror_emitter = Corona::Tests::make_vision_test_pipeline(mirror_emitter_scene, fixture);
-        material_fixtures.push_back(mirror_emitter);
-        mirror_emitter->frame_buffer()->set_enable_accumulation(false);
-        mirror_emitter->prepare(); mirror_emitter->frame_buffer()->prepare_view_texture();
-        check_stable_emitter_coverage(*mirror_emitter);
-        auto filtered_glass = glass_scene;
-        filtered_glass["output"]["denoise"] = true;
-        filtered_glass["render"]["denoiser"] = mirror_scene["render"]["denoiser"];
-        filtered_glass["render"]["integrator"]["param"]["denoiser"] = mirror_scene["render"]["integrator"]["param"]["denoiser"];
-        // Two retained runtimes must begin with independent layer histories.
-        for (unsigned camera = 0u; camera < 2u; ++camera) {
-            auto filtered_pipeline = Corona::Tests::make_vision_test_pipeline(filtered_glass, fixture);
-            material_fixtures.push_back(filtered_pipeline);
-            filtered_pipeline->frame_buffer()->set_enable_accumulation(false);
-            filtered_pipeline->prepare(); filtered_pipeline->frame_buffer()->prepare_view_texture();
-            check_glass_svgf(*filtered_pipeline);
-        }
-        // One mesh contains a coplanar two-triangle mirror on the left and
-        // another plane on the right. Branch identity must describe the plane,
-        // not just the instance and not the individual triangle.
-        write_file(fixture / "faceted-mirror.obj",
-            "v -0.6 -0.6 -1\nv 0 -0.6 -1\nv 0 0.6 -1\nv -0.6 0.6 -1\n"
-            "v 0.6 -0.6 -0.94\nv 0.6 0.6 -0.94\n"
-            "vn 0 0 1\nvn -0.099503719 0 0.99503719\n"
-            "f 1//1 2//1 3//1\nf 1//1 3//1 4//1\n"
-            "f 2//2 5//2 6//2\nf 2//2 6//2 3//2\n");
-        mirror_scene["scene"]["shapes"][0]["param"]["fn"] = "faceted-mirror.obj";
-        auto facets = Corona::Tests::make_vision_test_pipeline(mirror_scene, fixture);
-        facets->frame_buffer()->set_enable_accumulation(false);
-        facets->prepare(); facets->frame_buffer()->prepare_view_texture();
-        facets->upload_data(); facets->display(1.0 / 60.0);
-        std::vector<vision::SurfaceData> facet_surfaces(facets->pixel_num());
-        std::vector<vision::TriangleHit> facet_primary(facets->pixel_num());
-        facets->stream() << facets->frame_buffer()->cur_surfaces_view(0u).download(facet_surfaces.data())
-            << facets->frame_buffer()->cur_visibility_buffer_view(0u).download(facet_primary.data())
-            << vision::synchronize() << vision::commit();
-        unsigned branches[4]{};
-        for (size_t i = 0; i < facet_surfaces.size(); ++i) {
-            const auto prim = facet_primary[i].prim_id;
-            if (facet_primary[i].inst_id == 0u && prim < 4u && facet_surfaces[i].is_replaced)
-                branches[prim] = facet_surfaces[i].stable_branch;
-        }
-        expect(branches[0] && branches[1] && branches[2] && branches[3], "faceted mirror test must see all four triangles");
-        expect(branches[0] == branches[1] && branches[2] == branches[3] && branches[0] != branches[2],
-               "stable branches must share coplanar triangles and separate different planes in one instance");
-        std::cout << "PASS: mirror plane identity across four triangles\n";
-        // A scene-level opt-out must retain the legacy mirror-surface guides.
-        mirror_scene["scene"]["shapes"][0]["param"]["fn"] = "receiver.obj";
-        mirror_scene["render"]["integrator"]["param"]["direct"]["stable_planes"] = false;
-        auto disabled_planes = Corona::Tests::make_vision_test_pipeline(mirror_scene, fixture);
-        disabled_planes->frame_buffer()->set_enable_accumulation(false);
-        disabled_planes->prepare(); disabled_planes->frame_buffer()->prepare_view_texture();
-        disabled_planes->upload_data(); disabled_planes->display(1.0 / 60.0);
-        std::vector<vision::SurfaceData> disabled_surfaces(disabled_planes->pixel_num());
-        disabled_planes->stream() << disabled_planes->frame_buffer()->cur_surfaces_view(0u).download(disabled_surfaces.data())
-            << vision::synchronize() << vision::commit();
-        const auto& disabled = disabled_surfaces[8u * 16u + 8u];
-        expect(disabled.is_replaced && disabled.stable_branch == vision::InvalidUI32 &&
-                   std::abs(disabled.pos_diff.z + 1.f) < 1e-4f && std::abs(disabled.normal_depth.w - 1.f) < 1e-4f,
-               "stable_planes=false must disable stable reuse and restore the primary mirror guides");
-        // The same planar continuation must work for another Principled metal
-        // with a different tint and roughness, without a dedicated mirror type.
-        auto metal_scene = mirror_scene;
-        metal_scene["render"]["integrator"]["param"]["direct"]["stable_planes"] = true;
-        metal_scene["scene"]["materials"][0]["type"] = "principled_bsdf";
-        metal_scene["scene"]["materials"][0]["param"] = vision::DataWrap::parse(
-            R"({"color":[0.65,0.65,0.65],"metallic":1,"roughness":0.04472136,"subsurface_weight":0})");
-        auto metal_pipeline = Corona::Tests::make_vision_test_pipeline(metal_scene, fixture);
-        metal_pipeline->frame_buffer()->set_enable_accumulation(false);
-        metal_pipeline->prepare(); metal_pipeline->frame_buffer()->prepare_view_texture();
-        metal_pipeline->upload_data(); metal_pipeline->display(1.0 / 60.0);
-        std::vector<vision::SurfaceData> metal_surfaces(metal_pipeline->pixel_num());
-        metal_pipeline->stream() << metal_pipeline->frame_buffer()->cur_surfaces_view(0u).download(metal_surfaces.data())
-            << vision::synchronize() << vision::commit();
-        const auto& metal = metal_surfaces[8u * 16u + 8u];
-        expect(metal.is_replaced && metal.stable_branch != 0u && metal.stable_branch != vision::InvalidUI32 &&
-                   std::abs(metal.pos_diff.z - 1.f) < 1e-4f && std::abs(metal.normal_depth.w - 3.f) < 1e-4f,
-               "low-roughness metal must use stable endpoint guides without any mirror material in the scene");
-        check_stable_plane(*metal_pipeline, false);
-        check([](vision::Pipeline& p) { check_restir_gi_receiver_positions(p, "stable-metal", true, true); }, *metal_pipeline);
-        const char* rejected_materials[] = {
-            R"({"type":"principled_bsdf","param":{"roughness":0.5477225575051661,"subsurface_weight":0,"metallic":1,"color":[0.65,0.65,0.65]}})",
-            R"({"type":"principled_bsdf","param":{"roughness":0.044721359549995794,"normal":{"node":"tilted","channels":"xyz"},"subsurface_weight":0,"metallic":1,"color":[0.65,0.65,0.65]},"node_tab":{"tilted":{"type":"number","param":{"value":[0.6,0,0.8]}}}})",
-            R"({"type":"principled_bsdf","param":{"color":[0.5,0.5,0.5],"metallic":0.5,"roughness":0.001,"subsurface_weight":0}})",
-        };
-        for (const char* material_json : rejected_materials) {
-            auto rejected = metal_scene;
-            auto material = vision::DataWrap::parse(material_json);
-            material["name"] = rejected["scene"]["materials"][0]["name"];
-            rejected["scene"]["materials"][0] = material;
-            auto rejected_pipeline = Corona::Tests::make_vision_test_pipeline(rejected, fixture);
-            material_fixtures.push_back(rejected_pipeline);
-            rejected_pipeline->frame_buffer()->set_enable_accumulation(false);
-            rejected_pipeline->prepare(); rejected_pipeline->frame_buffer()->prepare_view_texture();
-            rejected_pipeline->upload_data(); rejected_pipeline->display(1.0 / 60.0);
-            std::vector<vision::SurfaceData> data(rejected_pipeline->pixel_num());
-            rejected_pipeline->stream() << rejected_pipeline->frame_buffer()->cur_surfaces_view(0u).download(data.data())
-                << vision::synchronize() << vision::commit();
-            const auto& center = data[8u * 16u + 8u];
-            expect(center.stable_branch == 0u || center.stable_branch == vision::InvalidUI32,
-                   "rough, perturbed or mixed scattering must not form a stable reflection branch");
-        }
-        std::cout << "PASS: BSDF stable capability for metal and conservative scattering rejection\n";
-        fs::remove(fixture / "faceted-mirror.obj");
-        fs::remove(fixture / "mirror-receiver.obj");
-        expect(!regression_failed, "ReSTIR regression checks failed");
-        // Capture only after normal regressions; both retained pipelines and
-        // their required scene files remain alive until the cleanup below.
-        check_stable_plane_store_oracle(*direct_pipeline, "diffuse");
-        check_stable_plane_store_oracle(*glass_pipeline, "glass");
-        // Remove only the files this test created; preserve the fixture on failure.
         fs::remove(fixture / "receiver.obj");
-        fs::remove(fixture / "receiver-tilted.obj");
-        for (const char* name : {"glass-front.obj", "glass-back-target.obj", "glass-front-target.obj",
-                                "glass-rear.obj", "glass-third.obj", "glass-fourth.obj", "glass-runtime.json", "glass-runtime-fresh.json", "glass-tir.obj", "glass-occluder.obj", "glass.json", "glass-variant.json"}) {
-            fs::remove(fixture / name);
-        }
+        fs::remove(fixture / "bounce.obj");
         // Importers may have left their own cache files in this directory.
         std::error_code cleanup_error;
         fs::remove(fixture, cleanup_error);

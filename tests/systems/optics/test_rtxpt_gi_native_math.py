@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 from unittest import SkipTest
+from _restir_cpu import body
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'vision/src').is_dir())
 HEADER = ROOT / 'vision/src/render_core/integrator/ReSTIR/rtxpt_gi.h'
@@ -232,42 +233,65 @@ void mis_test(){
     }
     std::cout<<"PASS mis: Lambert partition, gain, black/clamps, distinct target/legacy luminance and four colored native MIS fixtures\n";
 }
+struct Receiver {
+    Float3 normal{0,0,1}, diffuse_guide{.2f,.2f,.2f}, specular_guide{};
+    struct { float x{}, y{.4f}; } roughness;
+    float depth{8.f};
+    uint plane_hash{27};
+    bool valid{true};
+};
+bool similar(const Receiver &a,const Receiver &b,Float normal_threshold,Float depth_threshold,
+             Float expected_depth,Bool fallback) __SIMILAR__
 void depth_guide_test(){
-    const Float3 physical{2,-1,3},virtual_position{6,4,8},approximate_position{9,11,12};
-    auto depth=[](Float3 p,Float3 origin,Float3 forward){return dot(p-origin,forward);};
-    auto accepts=[](float predicted,float previous){return std::abs(predicted-previous)<=.1f*std::max(predicted,previous);};
-    auto same=[](Float3 actual,Float3 expected){return actual.x==expected.x&&actual.y==expected.y&&actual.z==expected.z;};
-    const auto selected=depth_guide_position(physical,virtual_position,approximate_position,true,false);
-    require(accepts(depth(selected,{0,0,0},{0,0,1}),8.f),
-            "static mirror must compare virtual guide z8 with history z8, not physical z3");
-    require(!accepts(depth(physical,{0,0,0},{0,0,1}),8.f),"static mirror fixture must reject the old physical-position guide");
-    require(same(selected,virtual_position),"eligible replacement must choose its complete virtual position");
-    const Float3 translated_camera{1,2,1},rotated_camera{1,0,0},rotated_forward{.6f,0,.8f};
-    near(depth(selected,translated_camera,{0,0,1}),7.,1e-6,"previous-camera translation must apply to the virtual guide");
-    near(depth(selected,rotated_camera,rotated_forward),9.4,2e-6,"previous-camera rotation must transform the chosen world position");
-    require(accepts(depth(selected,rotated_camera,rotated_forward),9.4f)&&
-            !accepts(depth(physical,rotated_camera,rotated_forward),9.4f),
-            "rotated mirror fixture must distinguish virtual and physical depth domains");
-    for(bool use_virtual:{false,true}){
-        const auto approximate=depth_guide_position(physical,virtual_position,approximate_position,use_virtual,true);
-        require(same(approximate,approximate_position),"approximate depth position must take priority over physical and virtual positions");
-        near(depth(approximate,translated_camera,{0,0,1}),11.,1e-6,"approximate guide must use previous-camera translation");
-        near(depth(approximate,rotated_camera,rotated_forward),14.4,2e-6,"approximate guide must use previous-camera rotation");
+    Receiver a,b;
+    auto accepts=[&](float projected_depth=8.f,bool fallback=false){
+        return similar(a,b,.8f,.1f,projected_depth,fallback);
+    };
+    require(accepts(),"identical receivers must reuse");
+    a.depth=2.f;
+    require(accepts(8.f)&&!accepts(2.f),"the previous-camera predicted depth must control reprojection");
+    b.normal={0,0,-1};
+    require(!accepts()&&accepts(8.f,true),"geometry fallback must bypass the normal and depth gates");
+    b.plane_hash++;
+    require(!accepts(8.f,true),"the same geometry fallback cannot cross a private plane branch");
+    b=a;b.roughness.y=.99f;
+    require(!accepts(2.f,true),"roughness boundary must reject fallback reuse");
+    b=a;b.diffuse_guide=make_float3(.8f);
+    require(!accepts(2.f,true),"diffuse guide boundary must reject fallback reuse");
+    b=a;b.specular_guide=make_float3(.8f);
+    require(!accepts(2.f,true),"specular guide boundary must reject fallback reuse");
+    b=a;b.valid=false;
+    require(!accepts(2.f,true),"invalid history cannot supply a temporal sample");
+    std::cout<<"PASS RTXPT GI projected depth, receiver normals, materials and private branch gates\n";
+}
+struct History {
+    static constexpr uint InvalidUI32 = ~0u;
+    uint previous_frame_ = InvalidUI32, previous_jitter_ = InvalidUI32;
+    void reset() __RESET_HISTORY__
+    bool dispatch(uint frame, bool reuse, uint jitter) {
+        struct { bool temporal; uint camera_jitter; } param{reuse, jitter};
+        __DISPATCH_HISTORY__
+        return param.temporal;
     }
-    const auto primary=depth_guide_position(physical,virtual_position,approximate_position,false,false);
-    require(same(primary,physical),"non-replaced or invalid-branch receiver must ignore the virtual position");
-    near(depth(primary,translated_camera,{0,0,1}),2.,1e-6,"physical primary depth must remain in its own domain");
-    // The selector returns a guide only; it must not modify transport coordinates.
-    require(same(physical,{2,-1,3})&&same(virtual_position,{6,4,8})&&same(approximate_position,{9,11,12}),
-            "depth guide selection changed its source positions");
-    std::cout<<"PASS depth guide: static/translated/rotated mirrors, approximate priority and physical fallback\n";
+};
+void history_test(){
+    History history;
+    require(!history.dispatch(0,true,0),"the first frame must start with cold history");
+    require(history.dispatch(1,true,0),"the next frame may reuse a matching lattice");
+    require(!history.dispatch(3,true,0),"a frame gap must reject history");
+    require(!history.dispatch(4,true,1),"changing primary jitter must reject history");
+    require(!history.dispatch(5,false,1),"the temporal reuse switch must be respected");
+    require(history.dispatch(6,true,1),"consecutive matching frames must resume temporal reuse");
+    history.reset();
+    require(!history.dispatch(7,true,1),"explicit reset must clear previously accepted history");
+    std::cout<<"PASS RTXPT GI frame continuity, camera sampling lattice, temporal switch and reset\n";
 }
 int main(int argc,char**argv){
     try{
         require(argc==2,"choose analytical fixture");std::string which=argv[1];
         if(which=="codec")codec_test();else if(which=="jacobian")jacobian_test();
         else if(which=="gain")gain_test();else if(which=="mis")mis_test();
-        else if(which=="depth")depth_guide_test();
+        else if(which=="depth")depth_guide_test();else if(which=="history")history_test();
         else require(false,"unknown fixture");return 0;
     }catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}
 }
@@ -284,6 +308,10 @@ def _binary():
     helpers = source[start:end]
     header = HEADER.read_text(encoding='utf-8-sig')
     program = SHIM.replace('__PRODUCTION_HELPERS__', helpers)
+    program = program.replace('__SIMILAR__', body(source, 'Bool RtxptGI::similar(')[1])
+    dispatch = body(source, 'CommandBatch RtxptGI::dispatch(')[1]
+    program = program.replace('__DISPATCH_HISTORY__', dispatch[1:dispatch.index('uint2 padded')])
+    program = program.replace('__RESET_HISTORY__', body(source, 'void RtxptGI::reset_history(')[1])
     program = program.replace('__STORAGE__', _struct(header, 'RtxptGIStorage'))
     program = program.replace('__RESERVOIR__', _struct(header, 'RtxptGIReservoir'))
     compiler = shutil.which('g++') or shutil.which('clang++')
@@ -326,3 +354,15 @@ def test_rtxpt_final_mis_partition_and_clamp_boundaries():
 
 def test_rtxpt_temporal_depth_guide_uses_the_receiver_guide_domain():
     _run('depth')
+
+def test_rtxpt_temporal_lattice_and_reset():
+    _run('history')
+
+
+if __name__ == '__main__':
+    try:
+        for fixture in ('codec', 'jacobian', 'gain', 'mis', 'depth', 'history'):
+            _run(fixture)
+    except SkipTest as reason:
+        print(reason)
+        raise SystemExit(77)

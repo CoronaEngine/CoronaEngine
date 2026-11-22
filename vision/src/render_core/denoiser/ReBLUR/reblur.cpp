@@ -371,7 +371,7 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
     GuideParam gp;
     gp.visibility = input.visibility.descriptor(); gp.motion = input.motion_vec.descriptor();
     gp.planes = input.stable_planes.descriptor(); gp.surfaces = input.stable_surfaces.descriptor();
-    gp.extensions = frame_buffer().cur_surface_exts_view(input.frame_index).descriptor();
+    gp.extensions = input.surface_extensions.descriptor();
     gp.size = input.resolution;
     gp.layered = input.layer_count > 1u; gp.stable = input.use_stable_planes; gp.frame = input.frame_index;
     gp.output = filter_->guides().descriptor();

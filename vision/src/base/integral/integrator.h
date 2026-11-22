@@ -118,6 +118,9 @@ public:
     }
     void update_device_data() noexcept override {}
     virtual void invalidation() const noexcept;
+    // Checked by the viewport before rendering so unsupported ReSTIR settings can use PT.
+    [[nodiscard]] virtual const char *render_incompatibility() const noexcept { return nullptr; }
+    [[nodiscard]] virtual bool allows_path_tracing_fallback() const noexcept { return false; }
     virtual void render() const noexcept {}
 };
 

@@ -1,181 +1,79 @@
-"""Actual DI RIS/Li controls with mutating normal-map and deterministic RNG boundaries."""
-from _restir_cpu import ROOT, balanced, compile_run
-
-def control(source):
-    start = source.index('DIReservoirVar ReSTIRDI::RIS(')
-    end = source.index('Float ReSTIRDI::neighbor_pairwise_MIS', start)
-    function = source[start:end]
-    first = function.index('$if(hit) {')
-    last = balanced(function, first)
-    return function[first:last], function[:first] + '<control>' + function[last:]
+"""Run the production Falcor DI receiver gates and tiled history addressing on the CPU."""
+from _restir_cpu import ROOT, body, compile_run
 
 
-def li_block(source, signature):
-    start = source.index(signature)
-    first = source.index('if (!bsdf) {', start)
-    end = balanced(source, first)
-    assert source[end:end+7] == ' else {'
-    return source[first:balanced(source, end)]
-
-
-CPP = r'''
-
+def test_falcor_receiver_history():
+    base = ROOT / "vision/src/render_core/integrator/falcor_di"
+    common = (base / "common.h").read_text(encoding="utf-8")
+    reuse = (base / "reuse.h").read_text(encoding="utf-8")
+    reservoir = (base / "reservoir.h").read_text(encoding="utf-8")
+    functions = [body(src, token) for src, token in [
+        (common, "inline Bool valid_surface("),
+        (reuse, "inline Bool reuse_similar("),
+        (reuse, "inline Bool same_shadow_receiver("),
+        (reservoir, "inline Uint reservoir_index("),
+    ]]
+    program = r"""
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
-#include <cstdint>
 #include <iostream>
-#include <memory>
 #include <stdexcept>
-#include <string_view>
 #include <vector>
-using uint = unsigned;
+
 using Uint = unsigned;
-using std::addressof;
-#define $if if
-#define $for(i, n) for (uint i = 0; i < uint(n); ++i)
-void require(bool ok, const char *message) { if (!ok) throw std::runtime_error(message); }
-struct Hit { double wi=0, f=0, pdf=-1; bool operator==(const Hit&) const = default; };
-struct State {
-    bool normal=false, dispersive=false, support=true, separate=false, srgb=false;
-    uint max_evaluator_frame=0, builds=0, checks=0, flag=0, light_count=0, bsdf_count=0, outlines=0;
-    std::uint64_t random=12345, draws=0;
-    std::vector<double> values;
-    Hit hit;
-};
-State *state;
-struct Spectrum { std::string_view impl_type() const { return state->srgb ? "srgb" : "spectral"; } };
-struct Interaction { mutable uint shading=0; double wo=1; uint material_id() const { return 0; } };
-struct Sampler {
-    double next_1d() { state->random=state->random*6364136223846793005ULL+1442695040888963407ULL;
-        state->draws++; return double((state->random >> 32) & 65535) / 65536.; }
-};
-struct Eval { double f=0, density=0; double pdf() const { return density; } };
-struct BSDFSample { Eval eval; double wi=0; };
-struct MaterialEvaluator;
-struct Wavelengths {
-    mutable double secondary_pdf=1;
-    void check_dispersive(const Spectrum *, const MaterialEvaluator&) const {
-        state->checks++;
-        if (state->dispersive) secondary_pdf=0;
+using uint = unsigned;
+using Bool = bool;
+using std::abs;
+using std::max;
+using float3 = std::array<float, 3>;
+using uint3 = std::array<uint, 3>;
+using Float = float;
+struct uint2 { uint x, y; };
+using Uint2 = uint2;
+Uint2 operator/(Uint2 v, uint d) { return {v.x / d, v.y / d}; }
+Uint2 operator%(Uint2 v, uint d) { return {v.x % d, v.y % d}; }
+struct Surface { float3 position{}, normal{0, 0, 1}, geometric_normal{0, 0, 1}; float depth{10}; };
+float dot(const float3 &a, const float3 &b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
+template<class T> auto as(const float3 &v) { return std::bit_cast<T>(v); }
+bool all(bool value) { return value; }
+void check(bool x, const char *msg) { if (!x) throw std::runtime_error(msg); }
+__FUNCTIONS__
+int main() {
+    Surface receiver, history;
+    check(reuse_similar(receiver, history), "same receiver must reuse history");
+    for (float angle : {34.f, 36.f}) {
+        const float radians = angle * 3.14159265f / 180.f;
+        history.normal = {std::sin(radians), 0.f, std::cos(radians)};
+        check(reuse_similar(receiver, history) == (angle < 35.f), "receiver normal gate");
     }
-};
-struct MaterialEvaluator {
-    uint frame;
-    MaterialEvaluator(const Interaction& it,const Wavelengths&) : frame(it.shading) {}
-    void update_frame(uint shading) { frame=shading; }
-    uint flag() const { return 17; }
-    Eval evaluate(double wo,double wi) const { return {double(frame+1)*(wo+wi),state->support ? .25 : 0}; }
-    BSDFSample sample(double wo,Sampler& sampler) const {
-        double wi=sampler.next_1d()+sampler.next_1d()+sampler.next_1d();
-        return {evaluate(wo,wi),wi};
+    history = receiver;
+    for (float depth : {-1.f, 8.99f, 9.f, 11.f, 11.01f}) {
+        history.depth = depth;
+        check(reuse_similar(receiver, history) == (depth >= 9.f && depth <= 11.f), "receiver depth gate");
     }
-};
-struct Material {
-    MaterialEvaluator create_evaluator(const Interaction& it,const Wavelengths& swl) const {
-        MaterialEvaluator evaluator(it,swl);
-        build_evaluator(evaluator,it,swl);
-        evaluator.update_frame(it.shading);
-        return evaluator;
+    history = receiver;
+    check(same_shadow_receiver(receiver, history), "identical shadow endpoints");
+    history.position[0] = .1f;
+    check(!same_shadow_receiver(receiver, history), "moving receiver must refresh visibility");
+    history = receiver;
+    history.geometric_normal[0] = .1f;
+    check(!same_shadow_receiver(receiver, history), "changed geometric normal must refresh visibility");
+    for (uint2 extent : {uint2{1,1}, {16,16}, {17,31}, {33,17}}) {
+        const uint slice_size = ((extent.x + 15) / 16) * ((extent.y + 15) / 16) * 256;
+        std::vector<bool> seen(slice_size * 3, false);
+        for (uint slice = 0; slice < 3; ++slice) {
+            for (uint y = 0; y < extent.y; ++y) for (uint x = 0; x < extent.x; ++x) {
+                const uint index = reservoir_index(extent, {x,y}, slice);
+                check(index >= slice * slice_size && index < (slice+1) * slice_size && !seen[index],
+                      "history pixel or slice alias");
+                seen[index] = true;
+            }
+        }
     }
-    void build_evaluator(MaterialEvaluator&,const Interaction& it,const Wavelengths&) const {
-        state->builds++;
-        if(state->normal) it.shading++;
-        state->max_evaluator_frame=std::max(state->max_evaluator_frame,it.shading);
-    }
-};
-struct Materials { template<class F> void dispatch(uint,F f) { Material m; f(&m); } };
-struct Scene { Materials materials() { return {}; } };
-Scene scene() { return {}; }
-struct Integrator { bool separate() { return state->separate; } };
-Integrator *integrator() { static Integrator i; return &i; }
-template<class F> void outline(std::string_view name,F f) {
-    if(name=="ReSTIRDI::RIS build evaluator") state->outlines++;
-    f();
+    std::cout << "PASS Falcor DI receiver rejection, exact visibility reuse and three tiled slices";
 }
-double actual_light_dispatch(MaterialEvaluator *bsdf,const Interaction& it,const Wavelengths& swl,
-                             double wi) {
-    const Spectrum *spectrum=nullptr;
-    double f=0;
-    struct { struct { double L=2; } eval; } ls;
-    Eval eval;
-    __LIGHT_DISPATCH__
-    return f;
-}
-BSDFSample actual_bsdf_dispatch(MaterialEvaluator *bsdf,const Interaction& it,const Wavelengths& swl,
-                                Sampler& sampler,Uint *flag) {
-    const Spectrum *spectrum=nullptr;
-    BSDFSample result;
-    BSDFSample *bs=&result;
-    __BSDF_DISPATCH__
-    return result;
-}
-struct Result { State s; uint frame; double secondary_pdf; };
-template<class F> Result run(F control,uint M_light,uint M_bsdf,bool hit,State input) {
-    State storage=input; state=&storage;
-    Interaction it; Wavelengths swl; Sampler sampler; Spectrum spectrum;
-    auto sample_light = [&](MaterialEvaluator *bsdf) {
-        double wi=sampler.next_1d()+sampler.next_1d()+sampler.next_1d();
-        storage.values.push_back(actual_light_dispatch(bsdf,it,swl,wi));
-        (void)sampler.next_1d(); // unchanged reservoir replacement draw
-        storage.light_count++;
-    };
-    auto sample_bsdf = [&](MaterialEvaluator *bsdf) {
-        auto bs=actual_bsdf_dispatch(bsdf,it,swl,sampler,&storage.flag);
-        storage.hit={bs.wi,bs.eval.f,bs.eval.pdf()};
-        storage.values.push_back(bs.eval.f);
-        (void)sampler.next_1d();
-        storage.bsdf_count++;
-    };
-    control(hit,M_light,M_bsdf,M_light,M_bsdf,it,swl,&spectrum,sample_light,sample_bsdf);
-    return {storage,it.shading,swl.secondary_pdf};
-}
-
-int main(){
- auto actual=[](bool hit,uint M_light,uint M_bsdf,uint M_light_,uint M_bsdf_,
-               const Interaction&it,const Wavelengths&swl,const Spectrum *spectrum,auto sample_light,auto sample_bsdf){
-  __CONTROL__
- };
- uint cases=0;
- for(uint ml:{0u,1u,2u,10u})for(uint mb:{0u,1u,3u})for(bool hit:{false,true})
- for(bool normal:{false,true})for(bool disp:{false,true})for(bool support:{false,true})
- for(bool separate:{false,true})for(bool srgb:{false,true}){
-  State input;input.normal=normal;input.dispersive=disp;input.support=support;input.separate=separate;input.srgb=srgb;
-  auto now=run(actual,ml,mb,hit,input);
-  uint count=hit?ml+mb:0,builds=hit?(separate||srgb?1:ml+mb):0;
-  require(now.s.builds==builds&&now.s.checks==builds,"Evaluator lifetime or dispersion-check count changed");
-  require(now.s.outlines==uint(hit&&separate),"Separated RIS must export the evaluator from its material case");
-  require(now.frame==(normal&&hit&&separate?1u:0u),"Material normal mutation escaped its private Li receiver");
-  require(now.s.max_evaluator_frame==(normal&&builds?1u:0u),"Repeated Li calls accumulate a normal map");
-  require(now.secondary_pdf==(disp&&builds?0:1),"Wavelength dispersion state changed");
-  require(now.s.light_count==(hit?ml:0)&&now.s.bsdf_count==(hit?mb:0),"RIS proposal counts changed");
-  require(now.s.draws==4*count&&now.s.values.size()==count,"RIS RNG budget changed");
-  std::uint64_t rng=12345;
-  auto draw=[&]{rng=rng*6364136223846793005ULL+1442695040888963407ULL;return double((rng>>32)&65535)/65536.;};
-  Hit last;
-  for(uint proposal=0;proposal<count;++proposal){
-   double wi=draw()+draw()+draw();
-   double f=(normal?2.:1.)*(1+wi);
-   bool light=proposal<ml;
-   require(std::abs(now.s.values[proposal]-f*(light?2.:1.))<1e-12,"Proposal order or fresh mapped-frame BSDF changed");
-   if(!light)last={wi,f,support?.25:0};
-   (void)draw();
-  }
-  require(now.s.random==rng,"RIS RNG stream changed");
-  require(now.s.hit==last&&now.s.flag==(hit&&mb?17u:0u),"Last HitBSDF proposal/support/flag changed");
-  ++cases;
- }
- std::cout<<"PASS "<<cases<<" actual RIS/Li cases; receiver frame isolated, RNG/dispersion/proposal support preserved\n";
-}
-'''
-
-
-def test_di_proposals_use_private_receiver_frames():
-    source = (ROOT/'vision/src/render_core/integrator/ReSTIR/direct.cpp').read_text(encoding='utf-8')
-    control_block, _ = control(source)
-    program = CPP.replace('__CONTROL__', control_block)
-    for token, signature in {
-        '__LIGHT_DISPATCH__': 'SampledSpectrum ReSTIRDI::Li(const Interaction &it, MaterialEvaluator *bsdf, const DISampleVar &sample,',
-        '__BSDF_DISPATCH__': 'SampledSpectrum ReSTIRDI::Li(const Interaction &it, MaterialEvaluator *bsdf, DISampleVar *sample,'
-    }.items():
-        program = program.replace(token, li_block(source, signature))
-    compile_run(program, 'di-receiver')
+"""
+    compile_run(program.replace("__FUNCTIONS__", "\n".join(head + block for head, block in functions)),
+                "falcor-di-receiver")

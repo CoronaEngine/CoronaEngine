@@ -31,6 +31,7 @@ inline void draw(const BrowserTab& tab, ImVec2 origin, ImVec2 size) {
     auto timing = hub.camera_frame_timing(camera);
     bool supported = false;
     bool has_camera = false;
+    bool pt_fallback = false;
     if (const auto device = hub.camera_storage().try_acquire_read_nowait(camera)) {
         has_camera = true;
         // Native and diagnostic outputs do not publish render/denoise telemetry.
@@ -39,7 +40,10 @@ inline void draw(const BrowserTab& tab, ImVec2 origin, ImVec2 size) {
             device->output_mode != CameraOutputMode::WorldPosition &&
             device->output_mode != CameraOutputMode::ObjectID &&
             device->output_mode != CameraOutputMode::VisibilityBuffer;
-        if (!supported || (timing && timing->mode != device->vision_render_mode)) timing.reset();
+        pt_fallback = supported && timing && device->output_mode == CameraOutputMode::FinalColor &&
+            device->vision_render_mode == CameraVisionRenderMode::ReSTIR &&
+            timing->mode == CameraVisionRenderMode::PathTracing;
+        if (!supported || (timing && timing->mode != device->vision_render_mode && !pt_fallback)) timing.reset();
     } else {
         timing.reset();
     }
@@ -62,7 +66,7 @@ inline void draw(const BrowserTab& tab, ImVec2 origin, ImVec2 size) {
 
     constexpr const char* labels[] = {"UI FPS", "UI frame", "Camera frame", "Render total", "Denoise"};
     const char* title = !has_camera ? "TIMING / no camera" : !supported ? "TIMING / unavailable" : !timing ? "TIMING / waiting" :
-        stale ? "TIMING / last sample" : "TIMING / live";
+        stale ? "TIMING / last sample" : pt_fallback ? "TIMING / PT fallback" : "TIMING / live";
     constexpr const char* footer = "Render total includes denoise";
     const float padding = 10.0f;
     const float line = ImGui::GetTextLineHeightWithSpacing();
@@ -77,7 +81,7 @@ inline void draw(const BrowserTab& tab, ImVec2 origin, ImVec2 size) {
     draw_list->PushClipRect(origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
     draw_list->AddRectFilled(start, end, IM_COL32(12, 16, 22, 215), 6.0f);
     draw_list->AddText(ImVec2(start.x + padding, start.y + padding),
-        timing && !stale ? IM_COL32(110, 225, 180, 255) : IM_COL32(240, 190, 100, 255), title);
+        timing && !stale && !pt_fallback ? IM_COL32(110, 225, 180, 255) : IM_COL32(240, 190, 100, 255), title);
     for (int i = 0; i < 5; ++i) {
         const float y = start.y + padding + line * (i + 1);
         draw_list->AddText(ImVec2(start.x + padding, y), IM_COL32(205, 213, 223, 255), labels[i]);

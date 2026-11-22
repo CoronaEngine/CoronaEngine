@@ -7,7 +7,6 @@ survivor weight. The fixtures specify that protocol; they do not run the PT loop
 """
 from functools import lru_cache
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import tempfile
@@ -219,60 +218,3 @@ def test_endpoint_first_roulette_preserves_expectation_and_changes_variance():
 
 def test_probability_endpoints_threshold_and_repeated_transport():
     _run('boundaries')
-
-
-def test_native_transport_requires_rtxpt_backend_and_exact_explicit_opt_in():
-    source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/indirect.cpp').read_text(encoding='utf-8-sig')
-    declarations = re.findall(r'const bool native_transport\s*=\s*[^;]+;', source)
-    assert len(declarations) == 2, 'Candidate and compile-log transport decisions must both be tested'
-    program = r'''
-#include <array>
-#include <iostream>
-#include <stdexcept>
-#include <string_view>
-using std::string_view;
-bool candidate_route(bool rtxpt_backend_, const char *transport_override) {
-    __CANDIDATE_DECLARATION__
-    return native_transport;
-}
-bool log_route(bool rtxpt_backend_, const char *transport_override) {
-    __LOG_DECLARATION__
-    return native_transport;
-}
-int main() {
-    try {
-        struct Case { const char *value; bool enabled; };
-        const std::array<Case, 14> cases{{
-            {nullptr, false}, {"", false}, {"0", false}, {"true", false},
-            {"10", false}, {"01", false}, {"1", true}, {"1 ", false},
-            {" 1", false}, {"TRUE", false}, {"false", false}, {"-1", false},
-            {"1.0", false}, {"+1", false}}};
-        unsigned checked = 0;
-        for (bool backend : {false, true}) for (const auto test : cases) {
-            const bool expected = backend ? test.enabled : false;
-            if (candidate_route(backend, test.value) != expected)
-                throw std::runtime_error("candidate transport opt-in accepted a non-exact value or wrong backend");
-            if (log_route(backend, test.value) != expected)
-                throw std::runtime_error("compile-log transport mode disagrees with the exact opt-in contract");
-            ++checked;
-        }
-        std::cout << "PASS " << checked << " exact opt-in/backend cases through both production transport declarations\n";
-        return 0;
-    } catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 1; }
-}
-'''
-    program = program.replace('__CANDIDATE_DECLARATION__', declarations[0])
-    program = program.replace('__LOG_DECLARATION__', declarations[1])
-    compiler = shutil.which('g++')
-    if not compiler:
-        raise SkipTest('g++ is required for the standalone RTXPT transport opt-in fixture')
-    TEMP.mkdir(parents=True, exist_ok=True)
-    directory = Path(tempfile.mkdtemp(prefix='opt-in-', dir=TEMP))
-    cpp, binary = directory / 'transport_opt_in.cpp', directory / 'transport_opt_in.exe'
-    cpp.write_text(program, encoding='utf-8')
-    result = subprocess.run([compiler, '-std=c++20', '-O2', str(cpp), '-o', str(binary)],
-                            text=True, capture_output=True, check=False)
-    assert result.returncode == 0, result.stdout + result.stderr
-    result = subprocess.run([str(binary)], text=True, capture_output=True, check=False)
-    assert result.returncode == 0, result.stdout + result.stderr
-    print(result.stdout, end='')

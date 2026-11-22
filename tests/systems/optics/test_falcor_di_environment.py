@@ -163,6 +163,12 @@ void mixture_test(){
     near(initial_mixture_pdf(.5f,0.f,conditional),5./11.,5e-8,"50-percent environment selection mass was doubled");
     near(initial_mixture_pdf(0.f,.25f,conditional),(.25/conditional)/11.,5e-8,"BSDF density must convert to conditional-light measure once");
     near(initial_mixture_pdf(.5f,-1.f,conditional),5./11.,5e-8,"negative BSDF density must not subtract proposal mass");
+    const float p_light=.25f,p_bsdf=.5f*conditional;
+    near(initial_mixture_pdf(p_light,p_bsdf,conditional,false,7u,2u),(7.*.25+2.*.5)/9.,5e-8,"7 light and2 BSDF candidates must weight both densities");
+    near(initial_mixture_pdf(p_light,p_bsdf,conditional,true,7u,2u),7.*.25/9.,5e-8,"delta light must eliminate continuous BSDF proposal mass");
+    near(initial_mixture_pdf(p_light,p_bsdf,conditional,false,7u,0u),.25,5e-8,"light-only proposals must preserve their density");
+    near(initial_mixture_pdf(p_light,p_bsdf,conditional,false,0u,2u),.5,5e-8,"BSDF-only proposals must preserve their density");
+    near(initial_mixture_pdf(p_light,p_bsdf,conditional,false,0u,0u),0.,0.,"zero candidates must have zero proposal density");
     constexpr double pi=3.14159265358979323846;
     for(float select_env:{.5f,1.f})for(double albedo:{.1,.7,1.})for(double radiance:{.25,2.}){
         double from_light=0,from_bsdf=0;constexpr unsigned n=16384;

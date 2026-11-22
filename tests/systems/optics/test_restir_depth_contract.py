@@ -27,13 +27,13 @@ struct Scene{Geometry&geometry(){static Geometry g;return g;}};
 Scene scene(){return{};}
 namespace Global{struct SceneGpuContextScope{SceneGpuContextScope(int,int){}};}
 struct Node{DataWrap data={{"max_recursion",5u},{"M_light",10u},{"open",true}};
-    DataWrap settings()const{return data;}uint max_recursion()const{return data["max_recursion"].get<uint>();}
-    bool set_settings(const DataWrap& d){data=d;return false;}void compile(){}void set_max_recursion(uint){};};
+    DataWrap settings()const{return data;}bool open()const{return data["open"].get<bool>();}
+    bool set_settings(const DataWrap& d){data=d;return false;}void compile(){}};
 class Harness {
 public:
     Param<uint> max_depth_{16},min_depth_{5};Param<float>rr_threshold_{1};uint apply_count=0;
     bool falcor_di_needs_compile_=false,reference_gi_needs_compile_=false;
-    std::shared_ptr<Node>direct_=std::make_shared<Node>(),indirect_=std::make_shared<Node>(),stable_planes_=std::make_shared<Node>();
+    std::shared_ptr<Node>di_settings_=std::make_shared<Node>(),indirect_=std::make_shared<Node>(),gi_receiver_=std::make_shared<Node>();
     DataWrap scene_restir_settings_;
     explicit Harness(uint depth){max_depth_=depth;__CONSTRUCTOR__ scene_restir_settings_=settings();}
     void update_data(){apply_count++;}void upload_immediately(){}
@@ -109,16 +109,14 @@ public:
 };
 class Harness:public Base{
 public:
- std::shared_ptr<Node>direct_=std::make_shared<Node>(Node{"DI",2}),indirect_=std::make_shared<Node>(Node{"GI",9});
- bool sp=true;uint sp_changes=0,set_settings_calls=0;
- bool stable_planes_enabled()const{return sp;}
- void set_stable_planes_enabled(bool v){sp=v;++sp_changes;}
- void set_settings(){++set_settings_calls;direct_->custom=10;indirect_->custom=50;}
+ std::shared_ptr<Node>di_settings_=std::make_shared<Node>(Node{"DI",2}),indirect_=std::make_shared<Node>(Node{"GI",9});
+ uint set_settings_calls=0;
+ void set_settings(){++set_settings_calls;di_settings_->custom=10;indirect_->custom=50;}
  __RT_UI__
  void render_sub_UI(Widgets*widgets) noexcept override __SUB_UI__
 };
 void require(bool ok,const char*m){if(!ok)throw std::runtime_error(m);}
-void unchanged_parameters(Harness&h){require(h.direct_->custom==2&&h.indirect_->custom==9&&h.denoiser_->custom==37&&h.set_settings_calls==0,"UI depth edit reset unrelated runtime settings");}
+void unchanged_parameters(Harness&h){require(h.di_settings_->custom==2&&h.indirect_->custom==9&&h.denoiser_->custom==37&&h.set_settings_calls==0,"UI depth edit reset unrelated runtime settings");}
 int main(){
  uint cases=0;
  for(uint initial:{1u,16u,20u,128u})for(int edit:{-1,0,1,16,20,128,129}){
@@ -131,14 +129,14 @@ int main(){
   require(h.changed_==(initial!=expected),"RT UI changed flag differs from actual edit");
   require(h.max_depth_.writes==(initial!=expected?1u:0u),"Unedited depth was written back");
   require(h.min_depth_.hv()==5&&h.rr_threshold_.hv()==1,"Depth edit changed min/RR settings");
-  require(h.direct_->calls==1&&h.indirect_->calls==1&&h.denoiser_->calls==1,"Existing child/denoiser UI omitted");
-  require(w.calls==std::vector<std::string>{"ReSTIR integrator","recompile","max depth","min depth","rr threshold","Stable Plane","DI","GI","denoiser"},"UI order changed");
+  require(h.di_settings_->calls==1&&h.indirect_->calls==1&&h.denoiser_->calls==1,"Existing child/denoiser UI omitted");
+  require(w.calls==std::vector<std::string>{"ReSTIR integrator","recompile","max depth","min depth","rr threshold","DI","GI","denoiser"},"UI order changed");
   unchanged_parameters(h);++cases;
  }
  Harness closed;Widgets wc;wc.open=false;wc.depth_edit=20;closed.render_UI(&wc);
- require(!wc.shown_depth&&closed.max_depth_.hv()==15&&closed.direct_->calls==0&&closed.indirect_->calls==0&&closed.denoiser_->calls==1,"Folded UI behavior changed");unchanged_parameters(closed);++cases;
+ require(!wc.shown_depth&&closed.max_depth_.hv()==15&&closed.di_settings_->calls==0&&closed.indirect_->calls==0&&closed.denoiser_->calls==1,"Folded UI behavior changed");unchanged_parameters(closed);++cases;
  Harness h;Widgets w;w.depth_edit=20;w.min_edit=7;w.rr_edit=.25f;w.recompile=true;w.toggle_sp=true;h.render_UI(&w);
- require(h.max_depth_.hv()==19&&h.min_depth_.hv()==7&&h.rr_threshold_.hv()==.25f&&h.compile_count==1&&!h.sp&&h.sp_changes==1&&h.changed_,"Other UI controls changed behavior");unchanged_parameters(h);++cases;
+ require(h.max_depth_.hv()==19&&h.min_depth_.hv()==7&&h.rr_threshold_.hv()==.25f&&h.compile_count==1&&h.changed_,"Other UI controls changed behavior");unchanged_parameters(h);++cases;
  Harness dirty;dirty.changed_=true;Widgets wd;dirty.render_UI(&wd);require(dirty.changed_&&dirty.max_depth_.writes==0,"Preexisting dirty flag lost");++cases;
  std::cout<<"PASS "<<cases<<" actual UI cases; total/suffix mapping, unchanged runtime settings, existing virtual dispatch and controls\n";
 }

@@ -90,55 +90,6 @@ namespace vision {
     return film - motion;
 }
 
-[[nodiscard]] inline Int2 reservoir_pixel(const Float2 &coord) noexcept {
-    // Keep negatives signed until the caller has checked in_screen().
-    return make_int2(floor(coord));
-}
-
-[[nodiscard]] inline Bool is_valid_neighbor(const SurfaceDataVar &cur_surface, const SurfaceDataVar &another_surface,
-                                            const Float &dot_threshold, const Float &depth_threshold,
-                                            const Float &diff_threshold, const Float &another_depth) noexcept {
-    Bool cond0 = dot(cur_surface->normal(), another_surface->normal()) > dot_threshold;
-    Bool cond1 = abs(cur_surface->depth() - another_depth) /
-                     max(abs(cur_surface->depth()), 1e-6f) < depth_threshold;
-    Bool cond2 = abs(cur_surface->diffuse_factor() - another_surface->diffuse_factor()) /
-                     max(abs(cur_surface->diffuse_factor()), 1e-6f) < diff_threshold;
-    // Compare cached material features symmetrically, independent of view angle.
-    // Per-channel reflectance also rejects different hues with equal luminance.
-    Bool diffuse_match = all(abs(cur_surface.diffuse_roughness.xyz() - another_surface.diffuse_roughness.xyz()) <= 0.25f);
-    Bool specular_match = all(abs(cur_surface.specular_roughness.xyz() - another_surface.specular_roughness.xyz()) <= 0.25f);
-    Float2 cur_roughness = make_float2(cur_surface.diffuse_roughness.w, cur_surface.specular_roughness.w);
-    Float2 other_roughness = make_float2(another_surface.diffuse_roughness.w, another_surface.specular_roughness.w);
-    Bool roughness_match = all(abs(cur_roughness - other_roughness) <=
-        0.5f * max(max(cur_roughness, other_roughness), make_float2(1e-6f)));
-    // Only explicitly identified stable branches can reuse replacement hits;
-    // their endpoint material and virtual depth guides describe the same path.
-    return cond0 && cond1 &&
-           cond2 && diffuse_match && specular_match && roughness_match && cur_surface.hit->is_hit() && another_surface.hit->is_hit() &&
-           (!cur_surface.is_replaced || (cur_surface.stable_branch != 0u && cur_surface.stable_branch != InvalidUI32)) &&
-           (!another_surface.is_replaced || (another_surface.stable_branch != 0u && another_surface.stable_branch != InvalidUI32)) &&
-           (!(cur_surface.is_replaced || another_surface.is_replaced) ||
-            cur_surface.hit.inst_id == another_surface.hit.inst_id) &&
-           cur_surface.stable_branch == another_surface.stable_branch;
-}
-
-[[nodiscard]] inline Bool is_valid_neighbor(const SurfaceDataVar &cur_surface, const SurfaceDataVar &another_surface,
-                                            const Float &dot_threshold, const Float &depth_threshold,
-                                            const Float &diff_threshold) noexcept {
-    // Spatial guides already store depth in the same camera space.
-    return is_valid_neighbor(cur_surface, another_surface, dot_threshold, depth_threshold,
-                             diff_threshold, another_surface->depth());
-}
-
-inline void set_reuse_material_guides(SurfaceDataVar &surface, const MaterialEvaluator &guide,
-                                      const Spectrum &spectrum, const SampledWavelengths &swl) noexcept {
-    SampledSpectrum diffuse{swl.dimension()}, specular{swl.dimension()};
-    Float2 roughness;
-    guide.reuse_material(diffuse, specular, roughness);
-    surface.diffuse_roughness = make_float4(spectrum.linear_srgb(diffuse, swl), roughness.x);
-    surface.specular_roughness = make_float4(spectrum.linear_srgb(specular, swl), roughness.y);
-}
-
 class ReSTIR : public Toolkit, public RenderEnv, public GUI, public RuntimeObject {
 protected:
     SpatialResamplingParam spatial_{};
@@ -195,30 +146,5 @@ public:
     [[nodiscard]] IlluminationIntegrator *integrator() noexcept { return integrator_.lock().get(); }
     [[nodiscard]] const IlluminationIntegrator *integrator() const noexcept { return integrator_.lock().get(); }
     virtual void update_resolution(uint2 res) noexcept {}
-    [[nodiscard]] Uint checkerboard_value() const noexcept {
-        return frame_buffer().checkerboard_value(dispatch_idx().xy());
-    }
-    [[nodiscard]] auto prev_surfaces() const noexcept {
-        return pipeline()->bindless_array().buffer_var<SurfaceData>(frame_buffer().prev_surfaces_index(frame_index()));
-    }
-    [[nodiscard]] auto cur_surfaces() const noexcept {
-        return pipeline()->bindless_array().buffer_var<SurfaceData>(frame_buffer().cur_surfaces_index(frame_index()));
-    }
-    [[nodiscard]] auto prev_surface_extends() const noexcept {
-        return pipeline()->bindless_array().buffer_var<SurfaceExtendHistory>(frame_buffer().prev_surface_exts_index(frame_index()));
-    }
-    [[nodiscard]] auto cur_surface_extends() const noexcept {
-        return pipeline()->bindless_array().buffer_var<SurfaceExtend>(frame_buffer().cur_surface_exts_index(frame_index()));
-    }
-    [[nodiscard]] Float3 cur_view_pos(const Bool &is_replace, const Uint &index = dispatch_id()) const noexcept {
-        Float3 view_pos;
-        $if(is_replace) {
-            view_pos = cur_surface_extends().read(index).view_pos.as_vec3();
-        }
-        $else {
-            view_pos = scene().sensor()->device_position();
-        };
-        return view_pos;
-    }
 };
 }// namespace vision

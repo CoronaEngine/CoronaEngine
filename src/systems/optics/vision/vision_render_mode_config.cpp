@@ -105,6 +105,9 @@ void configure_vision_scene_for_mode(::vision::DataWrap& data,
             ensure_vision_json_object(parameters, "spatial");
             ensure_vision_json_object(parameters, "temporal");
         }
+        set_default_vision_json_value(integrator_param["direct"], "max_recursion", 1);
+        set_default_vision_json_value(integrator_param["direct"], "M_light", 10);
+        set_default_vision_json_value(integrator_param["indirect"], "backend", "rtxpt");
     }
     auto& denoiser = ensure_vision_json_object(integrator_param, "denoiser");
     const auto selected_denoiser = denoiser.value("type", std::string{});
@@ -113,6 +116,7 @@ void configure_vision_scene_for_mode(::vision::DataWrap& data,
         denoiser["type"] = "ReBLUR";
     else if (selected_denoiser == "ReLAX" || selected_denoiser == "relax" || selected_denoiser == "RELAX")
         denoiser["type"] = "ReLAX";
+    else if (mode == CameraVisionRenderMode::ReSTIR && selected_denoiser.empty()) denoiser["type"] = "ReBLUR";
     else denoiser["type"] = "svgf";
     auto& denoiser_param = ensure_vision_json_object(denoiser, "param");
     denoiser_param["enabled"] = vision_render_mode_uses_denoise(mode);

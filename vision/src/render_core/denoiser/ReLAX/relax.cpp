@@ -311,7 +311,7 @@ CommandBatch ReLAX::dispatch(RealTimeDenoiseInput &input) noexcept {
     GuideParam gp;
     gp.visibility = input.visibility.descriptor(); gp.motion = input.motion_vec.descriptor();
     gp.planes = input.stable_planes.descriptor(); gp.surfaces = input.stable_surfaces.descriptor();
-    gp.extensions = frame_buffer().cur_surface_exts_view(input.frame_index).descriptor();
+    gp.extensions = input.surface_extensions.descriptor();
     gp.layered = input.layer_count > 1u; gp.stable = input.use_stable_planes; gp.frame = input.frame_index;
     gp.output = filter_->guide_storage().descriptor();
     gp.packed_diffuse = filter_->packed_diffuse().descriptor(); gp.packed_specular = filter_->packed_specular().descriptor();

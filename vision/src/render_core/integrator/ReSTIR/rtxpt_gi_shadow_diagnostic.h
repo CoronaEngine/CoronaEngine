@@ -1,7 +1,7 @@
 #pragma once
 
 #include "rtxpt_gi_denoiser_diagnostic.h"
-#include "direct.h"
+#include "di_radiance.h"
 #include "render_core/integrator/falcor_di/reservoir.h"
 #include "base/mgr/global.h"
 #include "math/util.h"
@@ -26,7 +26,7 @@ namespace vision::rtxpt_gi {
 // Opt-in observation of already finalized Falcor DI samples. Only diagnostic
 // buffers are written; the existing reservoirs, rays and radiance stay read-only.
 inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuffer &fb,
-                                        uint frame, uint2 size, const ReSTIRDI &direct,
+                                        uint frame, uint2 size, const DIRadiance &direct,
                                         const std::filesystem::path &directory) {
     const char *enabled = std::getenv("VISION_GI_SHADOW_DIAGNOSTIC");
     if (!enabled || enabled[0] != '1') return;

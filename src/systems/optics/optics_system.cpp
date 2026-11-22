@@ -2114,6 +2114,7 @@ struct OpticsSystem::VisionPipelineRuntime {
     // Per-view shared buffers carry Vision's resolved display pixels to Vulkan.
     std::unordered_map<std::uintptr_t, std::unique_ptr<Vision::VisionZeroCopyBridge>> bridges;
     std::unordered_map<std::uintptr_t, std::unique_ptr<Vision::VisionDiagnosticAdapter>> diagnostics;
+    std::unordered_map<std::uintptr_t, std::pair<std::string, bool>> incompatible_views;
     std::unordered_set<std::uintptr_t> retained_contexts;
     std::unordered_map<std::uintptr_t, bool> view_denoise_states;
     std::unordered_map<std::uintptr_t, CameraVisionDenoiser> view_denoiser_types;
@@ -2216,6 +2217,7 @@ struct OpticsSystem::VisionPipelineRuntime {
     void clear_camera_runtime_state() noexcept {
         diagnostics.clear();
         bridges.clear();
+        incompatible_views.clear();
         retained_contexts.clear();
         view_denoise_states.clear();
         view_denoiser_types.clear();
@@ -6092,6 +6094,9 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
             }
             pipeline->activate_global_context();
 
+            std::erase_if(runtime.incompatible_views, [&](const auto& entry) {
+                return !active_contexts.contains(entry.first);
+            });
             for (auto it = runtime.bridges.begin(); it != runtime.bridges.end();) {
                 if (active_contexts.contains(it->first)) {
                     ++it;
@@ -6152,7 +6157,8 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
             const RenderView& view,
             LockedRenderView& locked,
             std::unordered_set<std::uintptr_t>& active_contexts,
-            VisionCameraFeedback& feedback) {
+            VisionCameraFeedback& feedback, bool rendering_fallback,
+            std::optional<std::string>& fallback_settings) {
             const bool profile_frame = env_flag_enabled("CORONA_VISION_FRAME_PROFILE");
             const auto profile_now = [&] {
                 return profile_frame ? std::chrono::steady_clock::now()
@@ -6178,7 +6184,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
             active_contexts.insert(cam_handle);
             runtime.retained_contexts.erase(cam_handle);
             vision_phase.set("vision:pick");
-            process_vision_actor_pick(cam_handle, camera, *locked.scene, frame_index);
+            if (!rendering_fallback) process_vision_actor_pick(cam_handle, camera, *locked.scene, frame_index);
             locked.scene = {};
             vision_phase.set("vision:lighting");
             if (!sync_engine_vision_lighting(runtime, environment)) return;
@@ -6193,6 +6199,30 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                                                camera.vision_restir_settings, &feedback, imported_media_count)) {
                     return;
                 }
+
+                const auto incompatible = [&] {
+                    const auto& integrator = pipeline->renderer().integrator();
+                    const char* reason = integrator->render_incompatibility();
+                    if (!reason) return false;
+                    const bool screenshot = has_pending_screenshot(cam_handle);
+                    const bool fallback = runtime.mode == CameraVisionRenderMode::ReSTIR &&
+                        view.vision_mode == runtime.mode && camera.surface &&
+                        camera.output_mode == CameraOutputMode::FinalColor && !screenshot &&
+                        integrator->allows_path_tracing_fallback();
+                    auto& last = runtime.incompatible_views[cam_handle];
+                    if (screenshot || last.first != reason || last.second != fallback) {
+                        if (fallback) {
+                            CFW_LOG_WARNING("OpticsSystem: camera {} using path tracing for this viewport: {}", cam_handle, reason);
+                        } else {
+                            CFW_LOG_ERROR("OpticsSystem: camera {} cannot render the requested output: {}", cam_handle, reason);
+                        }
+                        last = {reason, fallback};
+                    }
+                    if (fallback) fallback_settings = camera.vision_restir_settings;
+                    if (screenshot) fail_pending_screenshots(cam_handle);
+                    return true;
+                };
+                if (incompatible()) return;
 
                 auto& bridge = runtime.bridges[cam_handle];
                 if (!bridge) {
@@ -6370,7 +6400,9 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                         if (!adapter->render(*pipeline, camera.output_mode)) return;
                     } else {
                         pipeline->display(1.0 / 60.0);
+                        if (incompatible()) return;
                     }
+                    runtime.incompatible_views.erase(cam_handle);
                     const auto frame_qpc_end = stage_timings.is_open() ? capture_profile_qpc() : 0u;
                     if (camera_sequence_audit.is_open()) {
                         if (sequence_integrator_before_sync != frame - 1u ||
@@ -6567,21 +6599,27 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
 
     auto render_vision_camera = [&](VisionPipelineRuntime& runtime, const RenderView& view,
                                      std::unordered_set<std::uintptr_t>& active_contexts,
-                                     const VisionPipelineKey& key) {
+                                     const VisionPipelineKey& key,
+                                     const std::string* previous_settings = nullptr) -> std::optional<std::string> {
         const bool profile_frame = env_flag_enabled("CORONA_VISION_FRAME_PROFILE");
         const auto start = profile_frame ? std::chrono::steady_clock::now()
                                          : std::chrono::steady_clock::time_point{};
         auto acquired = start;
         VisionCameraFeedback feedback;
+        std::optional<std::string> fallback_settings;
         {
             auto locked = lock_render_view(view, CameraRenderBackend::Vision);
             if (profile_frame) acquired = std::chrono::steady_clock::now();
             if (!locked || locked->camera.vision_render_mode != view.vision_mode ||
-                camera_uses_vision_media(locked->camera) != runtime.participating_media) return;
+                camera_uses_vision_media(locked->camera) != runtime.participating_media) return std::nullopt;
+            if (previous_settings && (!locked->camera.surface || has_pending_screenshot(view.camera_handle) ||
+                locked->camera.output_mode != CameraOutputMode::FinalColor ||
+                locked->camera.vision_restir_settings != *previous_settings)) return std::nullopt;
             if (key.participating_media &&
                 (locked->scene->authored_media != key.authored_media ||
-                 locked->scene->authored_media_revision != key.authored_media_revision)) return;
-            render_locked_vision_camera(runtime, view, *locked, active_contexts, feedback);
+                 locked->scene->authored_media_revision != key.authored_media_revision)) return std::nullopt;
+            render_locked_vision_camera(runtime, view, *locked, active_contexts, feedback,
+                                        previous_settings != nullptr, fallback_settings);
         }
         const auto feedback_start = profile_frame ? std::chrono::steady_clock::now() : start;
         publish_vision_camera_feedback(view.camera_handle, feedback);
@@ -6592,6 +6630,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - feedback_start).count(),
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
         }
+        return fallback_settings;
     };
 
     const auto mode_selection = select_vision_render_mode(views);
@@ -6601,7 +6640,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
             last_vision_mode_conflict_signature_ = mode_selection.conflict_signature;
             CFW_LOG_WARNING(
                 "OpticsSystem: multiple visible engine-built Vision cameras request different "
-                "render modes ({}); using camera {} mode '{}' for this single runtime",
+                "render modes ({}); camera {} selects the primary runtime '{}'",
                 mode_selection.conflict_summary,
                 mode_selection.selected_camera,
                 std::string(Vision::vision_render_mode_name(mode_selection.mode)));
@@ -6623,12 +6662,16 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
         auto* runtime = &surface_runtime;
         VisionPipelineKey key{view.vision_mode, view.participating_media};
         if (view.participating_media) {
-            {
-                auto scene = SharedDataHub::instance().scene_storage().try_acquire_read(view.scene_handle);
-                if (!scene || !scene->enabled) continue;
-                key.authored_media = scene->authored_media;
-                key.authored_media_revision = scene->authored_media_revision;
-            }
+            auto scene = SharedDataHub::instance().scene_storage().try_acquire_read(view.scene_handle);
+            if (!scene || !scene->enabled) continue;
+            key.authored_media = scene->authored_media;
+            key.authored_media_revision = scene->authored_media_revision;
+        }
+        // ReSTIR capability checks must run on the requested integrator, even
+        // when another camera selected the primary runtime for this frame.
+        const bool different_integrator = (view.vision_mode == CameraVisionRenderMode::ReSTIR) !=
+                                          (surface_runtime.mode == CameraVisionRenderMode::ReSTIR);
+        if (view.participating_media || different_integrator) {
             runtime = &get_or_create_runtime(key);
             if (!runtime->pipeline && !initialize_engine_built_vision_runtime(*runtime, key)) {
                 fail_pending_screenshots(view.camera_handle);
@@ -6637,9 +6680,23 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
             if (!active_contexts.contains(runtime)) sync_vision_dynamic_scene(*runtime);
         }
         runtime->last_used_frame = frame_index;
-        render_vision_camera(*runtime, view, active_contexts[runtime], key);
+        if (const auto previous_settings = render_vision_camera(*runtime, view, active_contexts[runtime], key)) {
+            const auto pt_key = make_vision_pipeline_key(CameraVisionRenderMode::PathTracing);
+            auto& pt = get_or_create_runtime(pt_key);
+            if (!pt.pipeline && !initialize_engine_built_vision_runtime(pt, pt_key)) continue;
+            auto [contexts, first_use] = active_contexts.try_emplace(&pt);
+            if (first_use) sync_vision_dynamic_scene(pt);
+            pt.last_used_frame = frame_index;
+            render_vision_camera(pt, view, contexts->second, pt_key, &*previous_settings);
+        }
     }
 
+    // Invalidate histories when their runtime falls idle after a camera mode
+    // switch or viewport fallback. Its compiled contexts and bridges are reusable.
+    for (const auto& [key, runtime] : vision_runtimes_) {
+        if (!key.participating_media && runtime->last_used_frame + 1 == frame_index)
+            active_contexts.try_emplace(runtime.get());
+    }
     for (auto& [runtime, contexts] : active_contexts) cleanup_runtime_contexts(*runtime, contexts);
     // Old media revisions and disabled views must release their histories.
     for (auto it = vision_runtimes_.begin(); it != vision_runtimes_.end();) {

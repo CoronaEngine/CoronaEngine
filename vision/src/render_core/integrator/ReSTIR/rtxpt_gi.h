@@ -39,9 +39,6 @@ namespace vision::rtxpt_gi {
 [[nodiscard]] Bool combine(RtxptGIReservoirVar &out, const RtxptGIReservoirVar &source,
                            const Float &random, const Float &target) noexcept;
 void finalize(RtxptGIReservoirVar &r, const Float &numerator, const Float &denominator) noexcept;
-[[nodiscard]] Float3 depth_guide_position(const Float3 &physical, const Float3 &virtual_position,
-                                         const Float3 &depth_position, const Bool &use_virtual,
-                                         const Bool &approximate) noexcept;
 [[nodiscard]] Float mis_initial_weight(const Float3 &true_f, const Float3 &rough_f) noexcept;
 }// namespace vision::rtxpt_gi
 

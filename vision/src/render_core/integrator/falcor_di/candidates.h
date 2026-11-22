@@ -12,10 +12,12 @@ inline constexpr uint screen_tile_size = 16u;
 inline constexpr uint ris_point_words = 3u;
 
 [[nodiscard]] inline Float initial_mixture_pdf(const Float &light_probability, const Float &bsdf_probability,
-                                               const Float &conditional_pdf, const Bool &delta = false) {
+                                               const Float &conditional_pdf, const Bool &delta = false,
+                                               float light_count = float(initial_light_count), float bsdf_count = 1.f) {
     // A continuous BSDF proposal has zero mass at a delta light direction.
-    return (float(initial_light_count) * light_probability + select(delta, 0.f, max(0.f, bsdf_probability / conditional_pdf))) /
-        float(initial_candidate_count);
+    if (light_count + bsdf_count == 0.f) return 0.f;
+    return (light_count * light_probability + bsdf_count * select(delta, 0.f, max(0.f, bsdf_probability / conditional_pdf))) /
+        (light_count + bsdf_count);
 }
 
 inline void presample_light(const Context &ctx, const Uint2 &position, TSampler &sampler) {
@@ -64,8 +66,9 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
 [[nodiscard]] inline ReservoirVar sample_initial(const Context &ctx, const Uint2 &pixel, const Surface &surface,
                                                 const MaterialEvaluator &bsdf, const Float3 &wo,
                                                 TSampler &sampler,
-                                                HitBSDFVar *gi_proposal) {
+                                                HitBSDFVar *gi_proposal, uint light_count, uint bsdf_count) {
     ReservoirVar reservoir;
+    if (light_count + bsdf_count == 0u) return reservoir;
     Float2 winner_uv = make_float2(0.f);
     TriangleSample winner_light;
     const bool use_proxy = ctx.precompute_light_points;
@@ -104,7 +107,8 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
                 }
             }
             $if(target > 0.f && finite(target)) {
-                const Float mixture_pdf = initial_mixture_pdf(light_probability, bsdf_probability, light.pdf, light.delta);
+                const Float mixture_pdf = initial_mixture_pdf(light_probability, bsdf_probability, light.pdf, light.delta,
+                                                              float(light_count), float(bsdf_count));
                 $if(mixture_pdf > 0.f && finite(mixture_pdf)) {
                     const Float candidate_weight = target / mixture_pdf;
                     $if(finite(candidate_weight)) {
@@ -127,7 +131,7 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
         light_sampler->set_seed(pixel / screen_tile_size, ctx.frame, Dimension::FalcorDI_tile);
         const Uint tile = cast<uint>(light_sampler->next_1d() * float(tile_count));
         light_sampler->set_seed(pixel, ctx.frame, Dimension::FalcorDI_candidates);
-        $for(i, initial_light_count) {
+        $for(i, light_count) {
             const Uint offset = cast<uint>(light_sampler->next_1d() * float(tile_size));
             const Uint ris_index = tile * tile_size + offset;
             const Uint2 entry = ctx.ris.read(ris_index, false);
@@ -159,42 +163,50 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
         bsdf_replacement = light_sampler->next_1d();
     });
 
-    $if(gi_proposal ? Bool{true} : use_bsdf) {
-        const auto sample = bsdf.sample(wo, sampler);
-        const Float pdf = sample.eval.pdf();
-        if (gi_proposal) {
-            // GI consumes the proposal before the DI light-hit and hemisphere tests.
-            gi_proposal->wi.set(sample.wi);
-            gi_proposal->bsdf.set(sample.eval.f.vec3());
-            gi_proposal->pdf = pdf;
-        }
-        const Bool eligible_for_di = gi_proposal ? use_bsdf : Bool{true};
-        $if(eligible_for_di && pdf > 0.f && finite(pdf) && reflection_supported(bsdf, wo, sample.wi)) {
-            const Float3 origin = Interaction::custom_offset_ray_origin(surface.position, surface.geometric_normal,
-                                                                        sample.wi);
-            const Uint4 hit = trace_light(ctx, origin, sample.wi, ray_epsilon, environment_ray_distance);
-            $if(hit.x != InvalidUI32) {
-                // The folded-square sampler accepts the native triangle hit weights.
-                Float2 uv = make_float2(as<float>(hit.z), as<float>(hit.w));
-                if (importance_environment) {
-                    $if(hit.x == ctx.environment_index) { uv = canonical_environment_uv(uv); };
-                }
-                const auto light = sample_light(ctx, hit.x, surface, uv);
-                Float proposal_pdf = pdf;
-                if (importance_environment) {
-                    $if(hit.x == ctx.environment_index) {
-                        // Only DI's retained environment direction is rounded.
-                        // gi_proposal above keeps the original BSDF sample.
-                        proposal_pdf = bsdf.evaluate(wo, light.direction, MaterialEvalMode::PDF).pdf();
-                    };
-                }
-                offer_candidate(hit.x, uv, ctx.probabilities.read(hit.x, false), light, bsdf_replacement, &proposal_pdf);
+    const auto offer_bsdf = [&](const Float &replacement) {
+        $if(gi_proposal ? Bool{true} : use_bsdf) {
+            const auto sample = bsdf.sample(wo, sampler);
+            const Float pdf = sample.eval.pdf();
+            if (gi_proposal) {
+                // GI consumes the proposal before the DI light-hit and hemisphere tests.
+                gi_proposal->wi.set(sample.wi);
+                gi_proposal->bsdf.set(sample.eval.f.vec3());
+                gi_proposal->pdf = pdf;
+            }
+            const Bool eligible_for_di = gi_proposal ? use_bsdf : Bool{true};
+            $if(eligible_for_di && pdf > 0.f && finite(pdf) && reflection_supported(bsdf, wo, sample.wi)) {
+                const Float3 origin = Interaction::custom_offset_ray_origin(surface.position, surface.geometric_normal,
+                                                                            sample.wi);
+                const Uint4 hit = trace_light(ctx, origin, sample.wi, ray_epsilon, environment_ray_distance);
+                $if(hit.x != InvalidUI32) {
+                    // The folded-square sampler accepts the native triangle hit weights.
+                    Float2 uv = make_float2(as<float>(hit.z), as<float>(hit.w));
+                    if (importance_environment) {
+                        $if(hit.x == ctx.environment_index) { uv = canonical_environment_uv(uv); };
+                    }
+                    const auto light = sample_light(ctx, hit.x, surface, uv);
+                    Float proposal_pdf = pdf;
+                    if (importance_environment) {
+                        $if(hit.x == ctx.environment_index) {
+                            // Only DI's retained environment direction is rounded.
+                            // gi_proposal above keeps the original BSDF sample.
+                            proposal_pdf = bsdf.evaluate(wo, light.direction, MaterialEvalMode::PDF).pdf();
+                        };
+                    }
+                    offer_candidate(hit.x, uv, ctx.probabilities.read(hit.x, false), light, replacement, &proposal_pdf);
+                };
             };
         };
     };
+    if (bsdf_count != 0u) {
+        offer_bsdf(bsdf_replacement);
+        if (bsdf_count > 1u) {
+            $for(i, bsdf_count - 1u) { offer_bsdf(sampler->next_1d()); };
+        }
+    }
 
     reservoir->set_uv(winner_uv);
-    finalize_reservoir(reservoir, 1.f, float(initial_candidate_count));
+    finalize_reservoir(reservoir, 1.f, float(light_count + bsdf_count));
     if (use_proxy) {
         // Keep the RIS weight normalized by the target that selected this sample.
         // Reuse consumes the exact target with that weight and its ordinary MIS.

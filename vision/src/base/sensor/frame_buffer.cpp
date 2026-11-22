@@ -280,29 +280,6 @@ void FrameBuffer::compile() noexcept {
     compile_compute_hit();
     compile_accumulation();
     compile_tone_mapping();
-    compile_surface_exts_history();
-}
-
-void FrameBuffer::compile_surface_exts_history() noexcept {
-    // Copy words rather than performing FP operations, preserving every FP32
-    // bit (including signed zero and NaN payloads) in the receiver position.
-    Kernel kernel = [](BufferVar<uint> current, BufferVar<uint> previous) {
-        Uint index = dispatch_id();
-        constexpr uint stride = sizeof(SurfaceExtend) / sizeof(uint);
-        constexpr uint offset = offsetof(SurfaceExtend, view_pos) / sizeof(uint);
-        for (uint component = 0u; component < 3u; ++component) {
-            previous.write(index * 3u + component, current.read(index * stride + offset + component));
-        }
-    };
-    save_surface_exts_history_ = device().compile(kernel, "FrameBuffer-SaveSurfaceExtHistory");
-}
-
-CommandBatch FrameBuffer::save_surface_exts_history(uint frame_index) const noexcept {
-    CommandBatch ret;
-    if (frame_index == 0u || surface_exts_size() == 0u || surface_ext_history_size() == 0u) { return ret; }
-    ret << save_surface_exts_history_(surface_exts_.view_as<uint>(), surface_ext_history_.view_as<uint>())
-               .dispatch(frame_buffer_size());
-    return ret;
 }
 
 CommandBatch FrameBuffer::compute_hit(uint frame_index, uint2 pixel) const noexcept {
@@ -502,9 +479,6 @@ void FrameBuffer::update_resolution(ocarina::uint2 res) noexcept {
                    res.x, res.y, resolution_.x, resolution_.y,
                    raytracing_resolution().x, raytracing_resolution().y);
     resize(res);
-    reset_surfaces();
-    reset_surface_exts();
-    reset_surface_ext_history();
     if (stable_planes_.has_registered()) {
         manage_stable_plane_buffers(stable_plane_buffers_enabled_, stable_plane_history_retained_, compact_coverage_history_, stable_raw_outputs_retained_);
     }
@@ -558,14 +532,6 @@ const Buffer<float4> &FrameBuffer::cur_screen_buffer() const noexcept {
     return screen_buffers_.at(cur_view_)->device_buffer();
 }
 
-Uint FrameBuffer::checkerboard_value(const Uint2 &coord) noexcept {
-    return (coord.x & 1) ^ (coord.y & 1);
-}
-
-Uint FrameBuffer::checkerboard_value(const Uint2 &coord, const Uint &frame_index) noexcept {
-    return checkerboard_value(coord) ^ (frame_index & 1);
-}
-
 Float2 FrameBuffer::compute_motion_vec(const TSensor &camera, const Float2 &p_film,
                                        const Float3 &cur_pos, const Bool &is_hit) noexcept {
     Float2 ret = make_float2(0.f);
@@ -576,19 +542,4 @@ Float2 FrameBuffer::compute_motion_vec(const TSensor &camera, const Float2 &p_fi
     return ret;
 }
 
-Float3 FrameBuffer::compute_motion_vector(const TSensor &camera, const Float2 &p_film,
-                                          const Uint &frame_index) const noexcept {
-    Uint2 pixel = make_uint2(p_film);
-    Uint pixel_index = dispatch_id(pixel);
-    SurfaceDataVar cur_surf = cur_surfaces_var(frame_index).read(pixel_index);
-    SurfaceDataVar prev_surf = prev_surfaces_var(frame_index).read(pixel_index);
-    return compute_motion_vector(camera, cur_surf->position(), prev_surf->position());
-}
-
-Float3 FrameBuffer::compute_motion_vector(const TSensor &camera, const Float3 &cur_pos,
-                                          const Float3 &pre_pos) const noexcept {
-    Float3 cur_coord = camera->raster_coord(cur_pos);
-    Float3 prev_coord = camera->raster_coord(pre_pos);
-    return prev_coord - cur_coord;
-}
 }// namespace vision

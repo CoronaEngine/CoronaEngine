@@ -21,7 +21,7 @@ namespace vision::rtxpt_gi {
 // Observe the original, already generated Falcor/GI BSDF proposal. No new
 // samples, reservoir writes or image writes; each valid proposal traces two rays.
 inline void download_primary_light_diagnostics(Device &device, Stream &stream, FrameBuffer &fb,
-                                               uint frame, uint2 size, const ReSTIRDI &direct,
+                                               uint frame, uint2 size, const DIRadiance &direct,
                                                const std::filesystem::path &directory) {
     if (!primary_light_diagnostic_enabled()) return;
     auto &diagnostic_geometry = Toolkit::scene().geometry();

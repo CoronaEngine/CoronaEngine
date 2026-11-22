@@ -1,6 +1,7 @@
 #pragma once
 
-#include "ReSTIR/direct.h"
+#include "ReSTIR/di_radiance.h"
+#include "ReSTIR/di_settings.h"
 #include "base/color/spectrum.h"
 #include "falcor_di/common.h"
 #include "falcor_di/candidates.h"
@@ -13,8 +14,6 @@
 #include <string_view>
 
 namespace vision {
-
-enum class FalcorGISurface { None, Full, PrimaryFlag };
 
 // Static RGB, pinhole ReSTIR DI using area lights, directional lights and sky.
 class FalcorDIExperiment final : private Toolkit {
@@ -30,7 +29,7 @@ class FalcorDIExperiment final : private Toolkit {
     WP<const GeometryGpuResource> previous_geometry_;
     uint64_t previous_geometry_revision_{};
     std::string mode_;
-    FalcorGISurface gi_surface_output_{};
+    bool export_primary_flags_{};
     bool publish_gi_proposal_{};
     bool lobe_signals_{};
     Buffer<float4> denoiser_diffuse_, denoiser_specular_, denoiser_bypass_;
@@ -122,7 +121,7 @@ class FalcorDIExperiment final : private Toolkit {
         };
         bind(surfaces0_, "Falcor DI surface position and depth", 1u, 2u);
         bind(surface_normals_, "Falcor DI surface normals", 1u, 2u);
-        if (gi_surface_output_ == FalcorGISurface::PrimaryFlag)
+        if (export_primary_flags_)
             bind(primary_flags_, "Falcor DI physical primary flags", 1u, 1u);
         bind(reservoirs_, "Falcor DI packed reservoir", falcor_di::screen_tile_size, 3u);
         if (lobe_signals_) {
@@ -134,7 +133,7 @@ class FalcorDIExperiment final : private Toolkit {
 
     void prepare_sampling_buffers() {
         ris_ = device().create_buffer<uint2>(falcor_di::tile_count * falcor_di::tile_size, "Falcor DI RIS tiles");
-        if (gi_surface_output_ == FalcorGISurface::None && environment_index_ != InvalidUI32) {
+        if (!export_primary_flags_ && environment_index_ != InvalidUI32) {
             ris_points_ = device().create_buffer<float4>(falcor_di::tile_count * falcor_di::tile_size *
                                                             falcor_di::ris_point_words, "Falcor DI RIS light points");
         }
@@ -163,7 +162,7 @@ class FalcorDIExperiment final : private Toolkit {
         return (bits.x & 65535u) | (bits.y << 16u);
     }
 
-    void compile(ReSTIRDI &direct, uint bias_mode) {
+    void compile(const DISettings &settings, const DIRadiance &radiance, uint bias_mode) {
         const uint pixels = extent_.x * extent_.y;
         auto &camera = scene().sensor();
         auto &geo = geometry();
@@ -172,6 +171,7 @@ class FalcorDIExperiment final : private Toolkit {
         auto &fb = *frame_buffer_;
         auto &materials = scene().materials();
         auto &lights = renderer().light_sampler();
+        const uint light_samples = settings.M_light(), bsdf_samples = settings.M_bsdf();
         Kernel prepare_light_geometry = [&] {
             const Uint index = dispatch_id();
             if (environment_index_ != InvalidUI32) {
@@ -234,32 +234,18 @@ class FalcorDIExperiment final : private Toolkit {
             Uint2 normals = make_uint2(0u);
             camera->load_data();
             const auto swl = spec->sample_wavelength(sampler);
-            SurfaceDataVar gi_surface;
-            if (gi_surface_output_ == FalcorGISurface::Full) gi_surface.hit = hit;
+            Uint primary_flag = BxDFFlag::Unset;
             $if(hit->is_hit()) {
                 auto ray = fb.rays().read(index)->to_ray_state().ray;
                 auto it = geo.compute_surface_interaction(hit, ray);
                 materials.dispatch(it.material_id(), [&](const Material *material) {
-                    if (gi_surface_output_ == FalcorGISurface::Full) {
-                        Interaction guide_it = it;
-                        guide_it.wo = guide_it.ng;
-                        auto guide = material->create_evaluator(guide_it, swl);
-                        set_reuse_material_guides(gi_surface, guide, *spec, swl);
-                    }
                     auto bsdf = material->create_evaluator(it, swl);
                     position_depth = make_float4(it.pos, length(it.pos - camera->device_position()));
                     normals = make_uint2(encode_normal(bsdf.shading_frame().normal()), encode_normal(it.ng));
-                    if (gi_surface_output_ != FalcorGISurface::None) gi_surface.flag = bsdf.flag();
-                    if (gi_surface_output_ == FalcorGISurface::Full) {
-                        gi_surface->set_diffuse_factor(bsdf.diffuse_factor());
-                        gi_surface->set_position(it.pos);
-                        gi_surface->set_normal(it.shading.normal());
-                        gi_surface->set_depth(camera->linear_depth(ray->at(ray->t_max())));
-                    }
+                    if (export_primary_flags_) primary_flag = bsdf.flag();
                 });
             };
-            if (gi_surface_output_ == FalcorGISurface::PrimaryFlag) primary_flags_.write(index, gi_surface.flag);
-            if (gi_surface_output_ == FalcorGISurface::Full) fb.cur_surfaces_var(frame).write(index, gi_surface);
+            if (export_primary_flags_) primary_flags_.write(index, primary_flag);
             surfaces0_.write(offset, as<uint4>(position_depth));
             surface_normals_.write(offset, normals);
         };
@@ -270,7 +256,7 @@ class FalcorDIExperiment final : private Toolkit {
             return falcor_di::Context{extent_, frame, has_history, light_count_, environment_index_, surfaces0_, surface_normals_,
                                      reservoirs_, neighbors_, light_primitives_, light_geometry_,
                                      probabilities_, light_bases_, ris_, light_alias_, ris_points_,
-                                     gi_surface_output_ == FalcorGISurface::None && environment_index_ != InvalidUI32};
+                                     !export_primary_flags_ && environment_index_ != InvalidUI32};
         };
         Kernel presample = [&](Uint frame) {
             sampler->load_data();
@@ -297,19 +283,19 @@ class FalcorDIExperiment final : private Toolkit {
                 materials.dispatch(it.material_id(), [&](const Material *material) {
                     const auto bsdf = material->create_evaluator(it, swl);
                     reservoir = falcor_di::sample_initial(ctx, pixel, surface, bsdf, it.wo, sampler,
-                                                          gi_surface_output_ != FalcorGISurface::None ? addressof(gi_proposal) : nullptr);
+                                                          publish_gi_proposal_ ? addressof(gi_proposal) : nullptr,
+                                                          light_samples, bsdf_samples);
                 });
             };
             falcor_di::store_reservoir(ctx, pixel, slice, reservoir);
             if (publish_gi_proposal_) fb.hit_bsdfs().write(dispatch_id(), gi_proposal);
         };
-        const uint candidate_block_size = gi_surface_output_ == FalcorGISurface::None && environment_index_ != InvalidUI32 ? 8u : 16u;
+        const uint candidate_block_size = !export_primary_flags_ && environment_index_ != InvalidUI32 ? 8u : 16u;
         candidates.function()->set_block_dim(candidate_block_size, candidate_block_size);
         candidates_ = device().compile(candidates, "Falcor DI initial candidates");
 
-        const auto reuse_settings = direct.settings();
-        const bool use_temporal = reuse_settings["temporal"]["open"].get<bool>();
-        const bool use_spatial = reuse_settings["spatial"]["open"].get<bool>();
+        const bool use_temporal = settings.temporal_enabled();
+        const bool use_spatial = settings.spatial_enabled();
         OC_INFO_FORMAT("Falcor DI reuse settings: temporal={}, spatial={}", use_temporal, use_spatial);
         Kernel reuse = [&](Uint frame, Uint3 slices, Uint history) {
             Function::current()->require_ray_query_compute_workgroups();
@@ -403,7 +389,7 @@ class FalcorDIExperiment final : private Toolkit {
                     if (lobe_signals_) *bypass = value;
                 }
             };
-            direct.write_radiance(i, make_float4(value, 1.f));
+            radiance.write_radiance(i, make_float4(value, 1.f));
             if (lobe_signals_) {
                 denoiser_diffuse_.write(i, make_float4(*diffuse, *hit_distance));
                 denoiser_specular_.write(i, make_float4(*specular, *hit_distance));
@@ -415,8 +401,9 @@ class FalcorDIExperiment final : private Toolkit {
     }
 
 public:
-    FalcorDIExperiment(ReSTIRDI &direct, std::string_view mode, FalcorGISurface gi_surface_output, bool publish_gi_proposal, bool lobe_signals)
-        : extent_{pipeline()->resolution()}, frame_buffer_{&frame_buffer()}, mode_{mode}, gi_surface_output_{gi_surface_output},
+    FalcorDIExperiment(const DISettings &settings, const DIRadiance &radiance, std::string_view mode,
+                       bool export_primary_flags, bool publish_gi_proposal, bool lobe_signals)
+        : extent_{pipeline()->resolution()}, frame_buffer_{&frame_buffer()}, mode_{mode}, export_primary_flags_{export_primary_flags},
           publish_gi_proposal_{publish_gi_proposal}, lobe_signals_{lobe_signals} {
         uint bias_mode = 0u;
         if (mode == "basic") bias_mode = 1u;
@@ -426,14 +413,14 @@ public:
         prepare_lights();
         bind_screen_buffers();
         prepare_sampling_buffers();
-        compile(direct, bias_mode);
+        compile(settings, radiance, bias_mode);
         OC_INFO_FORMAT("Falcor DI primary surface output: {}",
-                       gi_surface_output_ == FalcorGISurface::PrimaryFlag ? "4B flag" :
-                       gi_surface_output_ == FalcorGISurface::Full ? "160B full" : "DI only");
+                       export_primary_flags_ ? "4B flag" : "DI only");
         if (lobe_signals_)
             OC_INFO("Falcor DI denoiser outputs active: physical primary, original BSDF lobe split, emission/sky bypass, independent buffers");
-        OC_INFO_FORMAT("Falcor DI native route active: mode={}, {} triangles, {}x{}, environment={}, DI_proposals=10+1, env_pdf=hdr_importance, env_uv=world_equal_area16, actual_scene_radiance, directionals={}, delta_pdf=discrete, selection={}", mode,
+        OC_INFO_FORMAT("Falcor DI native route active: mode={}, {} triangles, {}x{}, environment={}, DI_proposals={}+{}, env_pdf=hdr_importance, env_uv=world_equal_area16, actual_scene_radiance, directionals={}, delta_pdf=discrete, selection={}", mode,
                        area_light_count_, extent_.x, extent_.y, environment_index_ != InvalidUI32,
+                       settings.M_light(), settings.M_bsdf(),
                        directional_light_count_,
                        environment_index_ != InvalidUI32 ? "framework alias, area/env mass .5/.5 (env-only1)" : "original area CDF");
     }
@@ -445,10 +432,11 @@ public:
     // A full-surface GI producer exposes no separate primary flags.
     [[nodiscard]] BufferView<uint> primary_flags() const noexcept { return primary_flags_.view(); }
 
-    [[nodiscard]] bool matches(uint2 extent, std::string_view mode, FalcorGISurface gi_surface_output, bool publish_gi_proposal, bool lobe_signals) const noexcept {
+    [[nodiscard]] bool matches(uint2 extent, std::string_view mode, bool export_primary_flags, bool publish_gi_proposal, bool lobe_signals) const noexcept {
         // A replacement FrameBuffer owns different storage even when the extent is unchanged.
         return frame_buffer_ == &frame_buffer() && extent.x == extent_.x && extent.y == extent_.y &&
-               mode == mode_ && gi_surface_output == gi_surface_output_ && publish_gi_proposal == publish_gi_proposal_ && lobe_signals == lobe_signals_;
+               mode == mode_ && export_primary_flags == export_primary_flags_ &&
+               publish_gi_proposal == publish_gi_proposal_ && lobe_signals == lobe_signals_;
     }
 
     [[nodiscard]] CommandBatch dispatch(uint frame) {

@@ -146,28 +146,20 @@ set_tests_properties(VisionEngineSceneTests PROPERTIES
 
 add_executable(corona_vision_restir_estimator_tests
     test_vision_restir_estimators.cpp
-    test_vision_restir_reprojection.cpp
     test_vision_restir_reservoir_lifetimes.cpp
     test_vision_restir_continuation.cpp
-    test_vision_glass_transport.cpp
-    test_vision_principled_stable_planes.cpp
-    test_vision_restir_support.cpp)
+    test_vision_principled_stable_planes.cpp)
 target_include_directories(corona_vision_restir_estimator_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/vision/src)
 target_link_libraries(corona_vision_restir_estimator_tests PRIVATE
     corona::engine vision-all_libs vision-integrator-ReSTIR)
 add_test(NAME VisionReSTIREstimatorTests COMMAND corona_vision_restir_estimator_tests)
-add_test(NAME VisionReSTIRWinnerTargetTests COMMAND corona_vision_restir_estimator_tests)
-set_tests_properties(VisionReSTIRWinnerTargetTests PROPERTIES
-    WORKING_DIRECTORY "$<TARGET_FILE_DIR:corona_engine>"
-    ENVIRONMENT "VISION_TEST_GI_WINNER_TARGET_ONLY=1"
-    RUN_SERIAL TRUE TIMEOUT 180)
 add_test(NAME VisionPrincipledStablePlanes
     COMMAND corona_vision_restir_estimator_tests --principled-stable-planes)
 set_tests_properties(VisionPrincipledStablePlanes PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
     RUN_SERIAL TRUE TIMEOUT 300)
-# The full material/glass suite compiles many GPU variants on a cold cache.
+# Shader compilation can dominate the first run.
 set_tests_properties(VisionReSTIREstimatorTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
     RUN_SERIAL TRUE

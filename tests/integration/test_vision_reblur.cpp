@@ -30,6 +30,7 @@
 #include "reblur_precise_lobes_probe.h"
 #include "reblur_coverage_history_probe.h"
 #include "pt_denoiser_signal_probe.h"
+#include "raw_lobe_energy_check.h"
 #ifdef VISION_REBLUR_EDSL
 #include "reblur_unpack_compose_probe.h"
 #endif
@@ -985,11 +986,17 @@ void check_scene_signals() {
     const auto receiver_shapes = scene["scene"]["shapes"];
     std::ofstream(fixture / "back.obj") << "v -4 -4 -3\nv 4 -4 -3\nv 0 4 -3\nvn 0 0 1\nf 1//1 2//1 3//1\n";
     std::ofstream(fixture / "front.obj") << "v -4 -4 1\nv 0 4 1\nv 4 -4 1\nvn 0 0 -1\nf 1//1 2//1 3//1\n";
+    std::ofstream(fixture / "bounce.obj") << "v 0.1 -0.7 0.75\nv 0.2 0.8 0.75\nv 1.6 -0.7 0.75\nvn 0 0 -1\nf 1//1 2//1 3//1\n";
     std::ofstream(fixture / "rear.obj") << "v -4 -4 -1.2\nv 0 4 -1.2\nv 4 -4 -1.2\nvn 0 0 -1\nf 1//1 2//1 3//1\n";
     for (uint scenario = 0; scenario < 12u; ++scenario) {
-        const bool pt = scenario == 0u || scenario >= 7u, stable = scenario >= 3u && !pt;
+        const bool pt = scenario == 0u || scenario >= 7u;
+        const bool falcor_di = scenario == 1u || scenario == 4u;
         scene["scene"]["materials"] = receiver_materials;
         scene["scene"]["shapes"] = receiver_shapes;
+        if (scenario == 2u || scenario == 3u) {
+            scene["scene"]["shapes"].push_back(DataWrap::parse(
+                R"({"type":"model","param":{"fn":"bounce.obj","material":"receiver","normalize_to_unit_bounds":false}})"));
+        }
         if (scenario >= 10u) {
             auto &material = scene["scene"]["materials"][0];
             if (scenario == 11u) {
@@ -1011,12 +1018,16 @@ void check_scene_signals() {
         }
         auto &integrator = scene["render"]["integrator"];
         integrator["type"] = pt ? "pt" : "rt";
-        integrator["param"]["direct"]["stable_planes"] = stable;
-        const bool direct_on = scenario != 2u && scenario != 6u;
+        integrator["param"]["direct"]["max_recursion"] = 1u;
+        const float di_factor = scenario == 4u ? .25f : 1.f;
+        const float gi_factor = scenario == 3u || scenario == 6u ? .75f : 1.f;
+        integrator["param"]["direct"]["factor"] = di_factor;
+        integrator["param"]["indirect"]["factor"] = gi_factor;
         integrator["param"]["max_depth"] = scenario == 7u ? 1u : 4u;
         integrator["param"]["mis_mode"] = scenario >= 8u ? 2u : 0u;
-        integrator["param"]["direct"]["open"] = direct_on;
-        integrator["param"]["indirect"]["open"] = scenario != 4u;
+        integrator["param"]["direct"]["open"] = pt || falcor_di;
+        integrator["param"]["indirect"]["open"] = !falcor_di;
+        integrator["param"]["indirect"]["backend"] = "rtxpt";
         Global::instance().set_scene_path(fixture);
         auto pipeline = Corona::Tests::make_vision_test_pipeline(scene, fixture); pipelines.push_back(pipeline);
         auto *illumination = dynamic_cast<IlluminationIntegrator *>(pipeline->renderer().integrator().get());
@@ -1026,11 +1037,12 @@ void check_scene_signals() {
         pipeline->prepare(); pipeline->frame_buffer()->prepare_view_texture();
         if (scenario == 0u) coverage_history_probe::check_allocation(*pipeline);
         pipeline->upload_data();
+        if (const char *reason = illumination->render_incompatibility()) throw std::runtime_error(reason);
         if (pt) check_material(*pipeline);
         if (scenario >= 10u) check_compound_material(*pipeline);
         auto &fb = *pipeline->frame_buffer();
-        const uint count = pipeline->pixel_num(), layers = stable ? 3u : 1u;
-        std::vector<float4> pixels(count), d(count * 3u), s(d.size()), b(d.size()), emission(count);
+        const uint count = pipeline->pixel_num();
+        std::vector<float4> pixels(count), d(count), s(count), b(count);
         if (scenario == 0u) pt_denoiser_signal_probe::check_frame(*pipeline, *illumination, false);
         if (pt) pt_denoiser_signal_probe::compile_raw_producer(*pipeline, *illumination);
         for (uint frame = 0; frame < 4u; ++frame) {
@@ -1038,9 +1050,8 @@ void check_scene_signals() {
             if (pt) pt_denoiser_signal_probe::dispatch_raw_producer(*pipeline, *illumination, frame);
             else pipeline->display(1.0 / 60.0);
             pipeline->stream() << fb.rt_buffer().device_buffer().download(pixels.data())
-                << fb.denoiser_diffuse().view().download(d.data()) << fb.denoiser_specular().view().download(s.data())
-                << fb.denoiser_bypass().view().download(b.data());
-            if (stable) pipeline->stream() << fb.stable_radiance().view().download(emission.data());
+                << fb.denoiser_layer_view(fb.denoiser_diffuse(), 0u).download(d.data()) << fb.denoiser_layer_view(fb.denoiser_specular(), 0u).download(s.data())
+                << fb.denoiser_layer_view(fb.denoiser_bypass(), 0u).download(b.data());
             pipeline->stream() << synchronize() << commit();
             if (scenario == 8u) {
                 float diffuse_sum = 0.f, specular_sum = 0.f;
@@ -1057,17 +1068,14 @@ void check_scene_signals() {
                 expect(continued > 45u, "glass hit distance must continue through the rear interface to the distant target");
             }
             for (uint i = 0; i < count; ++i) for (uint c = 0; c < 3u; ++c) {
-                float sum = stable && direct_on ? emission[i][c] : 0.f;
-                for (uint layer = 0; layer < layers; ++layer) {
-                    const uint j = layer * count + i;
-                    sum += d[j][c] + s[j][c] + b[j][c];
-                }
-                expect(std::isfinite(sum) && std::abs(sum - pixels[i][c]) < 1e-4f * std::max(1.f, std::abs(pixels[i][c])),
-                    "raw per-lobe energy plus bypass must equal the original estimator, including DI/GI switches and stable layers");
+                const float sum = d[i][c] + s[i][c] + b[i][c];
+                check_raw_lobe_energy(sum, pixels[i][c], pt ? 0.f : (falcor_di ? di_factor : gi_factor),
+                                      scenario, frame, i, c);
             }
         }
         if (scenario == 0u && !std::getenv("REBLUR_TEST_PT_SIGNALS_ONLY")) check_total_radiance_coverage(*pipeline);
         pipeline->set_output_denoise(true);
+        if (const char *reason = illumination->render_incompatibility()) throw std::runtime_error(reason);
         // First enable follows the renderer's prepare-before-compile contract.
         // The raw-only fixture deliberately skipped denoiser preparation.
         if (!illumination->denoiser()->has_prepared_resources()) {

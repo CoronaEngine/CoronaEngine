@@ -7,14 +7,9 @@ add_test(NAME VisionSwitchProfileScopeTests
             ${CMAKE_CURRENT_BINARY_DIR}/switch-profile-scope)
 set_tests_properties(VisionSwitchProfileScopeTests PROPERTIES TIMEOUT 30)
 
-add_executable(corona_restir_gi_reconnection_tests test_restir_gi_reconnection.cpp)
-target_include_directories(corona_restir_gi_reconnection_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
-target_link_libraries(corona_restir_gi_reconnection_tests PRIVATE vision-integrator-ReSTIR)
-add_test(NAME ReSTIRGIReconnectionTests COMMAND corona_restir_gi_reconnection_tests)
-set_tests_properties(ReSTIRGIReconnectionTests PROPERTIES
-    LABELS "cpu;vision;restir"
-    TIMEOUT 30
-    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-integrator-ReSTIR>")
+add_test(NAME VisionRTXPTGIReservoirTests
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_rtxpt_gi_native_math.py)
+set_tests_properties(VisionRTXPTGIReservoirTests PROPERTIES LABELS "cpu;vision;restir" SKIP_RETURN_CODE 77 TIMEOUT 60)
 
 
 add_executable(corona_vision_render_mode_config_tests

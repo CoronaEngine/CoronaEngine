@@ -77,6 +77,7 @@ struct RealTimeDenoiseInput {
     bool use_stable_planes{false};
     BufferView<SurfaceData> stable_surfaces;
     BufferView<SurfaceData> prev_stable_surfaces;
+    BufferView<SurfaceExtend> surface_extensions;
 
     // Bounded layer views already include their storage offset.
     uint layer_index{0u};

@@ -5,7 +5,6 @@
 #pragma once
 
 #include "common.h"
-#include "gi_reservoir_storage.h"
 #include "radiance_storage.h"
 #include "base/mgr/switch_profile.h"
 #include "reservoir.h"
@@ -16,10 +15,9 @@
 namespace vision {
 struct GIParam {
     uint camera_jitter{1u};
-    uint precise_lobes{}, denoiser_layered{}, denoiser_di_active{};
+    uint precise_lobes{}, denoiser_di_active{};
     float denoiser_di_factor{}, denoiser_gi_factor{};
     uint max_age{};
-    float diff_factor{};
 
     /// spatial
     uint spatial{1};
@@ -33,7 +31,6 @@ struct GIParam {
     uint history_limit{};
     float t_dot{};
     float t_depth{};
-    float t_radius{};
 
     uint rtxpt_bias_correction{1u}, rtxpt_final_visibility{1u}, rtxpt_final_mis{1u};
     uint rtxpt_permutation{1u}, rtxpt_fallback{1u}, rtxpt_vary_age{1u}, rtxpt_boiling{1u};
@@ -41,56 +38,27 @@ struct GIParam {
 };
 }// namespace vision
 
-OC_PARAM_STRUCT(vision, GIParam, camera_jitter, precise_lobes, denoiser_layered, denoiser_di_active, denoiser_di_factor, denoiser_gi_factor, max_age, diff_factor, spatial, N,
+OC_PARAM_STRUCT(vision, GIParam, camera_jitter, precise_lobes, denoiser_di_active, denoiser_di_factor, denoiser_gi_factor, max_age, spatial, N,
                 s_dot, s_depth, s_radius, temporal, history_limit,
-                t_dot, t_depth, t_radius, rtxpt_bias_correction, rtxpt_final_visibility, rtxpt_final_mis,
+                t_dot, t_depth, rtxpt_bias_correction, rtxpt_final_visibility, rtxpt_final_mis,
                 rtxpt_permutation, rtxpt_fallback, rtxpt_vary_age, rtxpt_boiling, rtxpt_boiling_strength){};
 
 namespace vision {
 
-class RayTracingIntegrator;
 class RtxptGI;
 namespace rtxpt_gi {
 class NativeLightSampler;
 class StandardMaterialInputs;
 }
 
-// Cached secondary radiance is evaluated toward the source receiver. Preserve
-// that geometric side, including when both receivers view a two-sided back face.
-template<typename T>
-[[nodiscard]] inline auto gi_reconnection_supported(const T &target_cosine,
-                                                    const T &source_cosine) noexcept {
-    return target_cosine * source_cosine > 0.f;
-}
-
 class ReSTIRGI : public ReSTIR {
 private:
-    SP<ScreenBuffer> radiance_{make_shared<ScreenBuffer>("ReSTIRGI::radiance_ [gi-radiance-v2-rtxpt]")};
-    RegistrableBuffer<float4> rt_buffer_;
-    RegistrableBuffer<GIReservoirStorage> reservoirs_{pipeline()->bindless_array()};
+    SP<ScreenBuffer> radiance_{make_shared<ScreenBuffer>("ReSTIRGI::radiance_ [gi-radiance-v3-rtxpt]")};
     RegistrableBuffer<GISample> samples_{pipeline()->bindless_array()};
-    uint sample_num_{1u};
-    uint ratio_{2u};
-    bool debias_{true};
-
-    /**
-     * initial sample
-     */
-    Shader<void(uint)> initial_samples_;
-    /**
-     * initial samples and temporal reuse
-     */
-    Shader<void(GIParam, uint)> temporal_pass_;
-    /**
-     * spatial reuse and shading
-     */
-    Shader<void(GIParam, uint)> spatial_shading_;
-
-    // Keep existing fields before these additions for the pre-move ABI check.
     mutable RegistrableBuffer<uint2> raw_radiance_{pipeline()->bindless_array()};
     bool compact_radiance_{};
     bool radiance_prepared_{};
-    bool rtxpt_backend_{};
+    std::string unsupported_backend_;
     SP<RtxptGI> rtxpt_;
     RegistrableBuffer<HitBSDF> rtxpt_proposals_{pipeline()->bindless_array()};
     RegistrableBuffer<float4> rtxpt_bypass_{pipeline()->bindless_array()};
@@ -100,10 +68,11 @@ private:
     RegistrableBuffer<uint4> rtxpt_prefix_headers_{pipeline()->bindless_array()};
     RegistrableBuffer<float4> rtxpt_prefix_stable_{pipeline()->bindless_array()};
     RegistrableBuffer<RtxptGIPrefixAux> rtxpt_prefix_aux_{pipeline()->bindless_array()};
-    Shader<void(uint, Buffer<uint>, uint2)> rtxpt_prefix_build_;
-    Shader<void(uint, RtxptGICameraParam, Buffer<uint>, uint2)> rtxpt_initial_samples_;
+    Shader<void(uint, Buffer<uint>)> rtxpt_prefix_build_;
+    Shader<void(uint, RtxptGICameraParam, Buffer<uint>)> rtxpt_initial_samples_;
     ocarina::Buffer<path_cost::PathWorkCounters> path_work_counters_;
     bool native_reblur_enabled_{};
+    std::string backend_error_;
     mutable Buffer<float4> native_reblur_diffuse_, native_reblur_specular_, native_reblur_bypass_;
     mutable Buffer<float> native_reblur_motion_y_;
 
@@ -117,29 +86,12 @@ private:
     void prepare_rtxpt_candidate_buffers() noexcept;
     void prepare_native_reblur_buffers() noexcept;
 
-    // Internal pass-local receiver cache; no new virtual slots or stored state.
-    [[nodiscard]] GIReservoirVar constant_combine_cached(const GIReservoirVar &canonical_rsv,
-                                                        const Container<uint> &rsv_idx,
-                                                        const Interaction &canonical_it,
-                                                        MaterialEvaluator *cached_bsdf) const noexcept;
-    [[nodiscard]] GIReservoirVar spatial_reuse_cached(GIReservoirVar rsv, const SurfaceDataVar &cur_surf,
-                                                     const Int2 &pixel, const Var<GIParam> &param,
-                                                     const Interaction *cached_it,
-                                                     MaterialEvaluator *cached_bsdf) const noexcept;
-
-protected:
     [[nodiscard]] static TSampler &sampler() noexcept { return renderer().sampler(); }
-    [[nodiscard]] Bool receiver_reuse_allowed(const SurfaceDataVar &surface) const noexcept;
+    void compile_initial_samples() noexcept;
 
 public:
     ReSTIRGI() = default;
     ReSTIRGI(IntegratorPtr integrator, const ParameterSet &desc);
-    // Spatial container capacity and its loop bound are captured at compile time.
-    bool set_settings(const DataWrap &settings) {
-        const bool recompile = spatial_.sample_num != settings["spatial"]["sample_num"].get<uint>();
-        ReSTIR::set_settings(settings);
-        return recompile;
-    }
     void restore(RuntimeObject *old_obj) noexcept override;
     OC_MAKE_MEMBER_GETTER(open, )
     OC_MAKE_MEMBER_GETTER(radiance, &)
@@ -159,16 +111,10 @@ public:
     void download_storage(vector<GISample> &samples, vector<GIReservoir> &reservoirs) const noexcept;
     bool render_UI(Widgets *widgets) noexcept override;
     void render_sub_UI(Widgets *widgets) noexcept override;
-    HOTFIX_VIRTUAL void compile_initial_samples() noexcept;
-    HOTFIX_VIRTUAL void compile_temporal_reuse() noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL ScatterEval eval_bsdf(const Interaction &it, const GISampleVar &sample, MaterialEvalMode mode, MaterialEvaluator *bsdf = nullptr) const noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL Float compute_p_hat(const Interaction &it, const GISampleVar &sample, MaterialEvaluator *bsdf = nullptr) const noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL Float selected_sample_support(const Interaction &target_it,
-                                                               const Interaction &source_it,
-                                                               const GISampleVar &sample) const noexcept;
-    HOTFIX_VIRTUAL void compile_spatial_shading() noexcept;
-    void compile() noexcept;
-    [[nodiscard]] bool uses_rtxpt_backend() const noexcept { return rtxpt_backend_; }
+    void compile(bool refresh_lighting = false) noexcept;
+    [[nodiscard]] const char *backend_incompatibility() const noexcept {
+        return backend_error_.empty() ? nullptr : backend_error_.c_str();
+    }
     // Caller drains the stream and activates this scene's GPU context before a
     // mode switch. An enabled switch recompiles only private Build/Fill/Final.
     bool set_native_reblur_enabled(bool enabled) noexcept;
@@ -200,60 +146,8 @@ public:
     [[nodiscard]] rtxpt_gi::StandardMaterialInputs &rtxpt_materials() const noexcept { return *rtxpt_materials_; }
     [[nodiscard]] const RegistrableBuffer<RtxptGIPrefixAux> &rtxpt_prefix_aux() const noexcept { return rtxpt_prefix_aux_; }
     void update_resolution(ocarina::uint2 res) noexcept override;
-    [[nodiscard]] HOTFIX_VIRTUAL Float Jacobian_det(Float3 cur_pos, Float3 neighbor_pos, Var<SurfacePoint> sample_point) const noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL GISampleVar init_sample(const Interaction &it, const SensorSample &ss,
-                                                         HitBSDFVar &hit_bsdf) noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL GIReservoirVar combine_temporal(const GIReservoirVar &cur_rsv, SurfaceDataVar cur_surf,
-                                                                 GIReservoirVar &other_rsv, SurfaceDataVar *neighbor_surf,
-                                                                 Float3 view_pos, Float3 prev_view_pos) const noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL GIReservoirVar temporal_reuse(GIReservoirVar rsv, const SurfaceDataVar &cur_surf,
-                                                               const Float2 &motion_vec, const SensorSample &ss,
-                                                               const Var<GIParam> &param) const noexcept;
-
-    [[nodiscard]] HOTFIX_VIRTUAL GIReservoirVar constant_combine(const GIReservoirVar &canonical_rsv,
-                                                                 const Container<uint> &rsv_idx) const noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL GIReservoirVar combine_spatial(GIReservoirVar cur_rsv, const Container<uint> &rsv_idx) const noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL GIReservoirVar spatial_reuse(GIReservoirVar rsv, const SurfaceDataVar &cur_surf,
-                                                              const Int2 &pixel, const Var<GIParam> &param) const noexcept;
-    [[nodiscard]] HOTFIX_VIRTUAL Float3 shading(GIReservoirVar rsv, const SurfaceDataVar &cur_surf,
-                                               Float3 *specular = nullptr, Float *hit_distance = nullptr) const noexcept;
-
-    [[nodiscard]] static Bool is_valid_neighbor(const SurfaceDataVar &cur_surface,
-                                                const SurfaceDataVar &another_surface,
-                                                const Var<GIParam> &param) noexcept {
-        return vision::is_valid_neighbor(cur_surface, another_surface,
-                                         param.s_dot, param.s_depth,
-                                         param.diff_factor);
-    }
-    [[nodiscard]] static Bool is_temporal_valid(const SurfaceDataVar &cur_surface,
-                                                const SurfaceDataVar &prev_surface,
-                                                const Var<GIParam> &param,
-                                                GISampleVar *sample) noexcept {
-        Bool cond = sample ? sample->age < param.max_age : true;
-        // Compare both primary-surface depths in the current camera space.
-        Float3 prev_position = ocarina::select(prev_surface.is_replaced && prev_surface.stable_branch != InvalidUI32, prev_surface.virtual_position.as_vec3(), prev_surface->position());
-        prev_position = ocarina::select(prev_surface.approximate != 0u, prev_surface.depth_position.as_vec3(), prev_position);
-        Float prev_depth = scene().sensor()->linear_depth(prev_position);
-        return cond && vision::is_valid_neighbor(cur_surface, prev_surface,
-                                                 param.t_dot, param.t_depth,
-                                                 param.diff_factor, prev_depth);
-    }
-    [[nodiscard]] Uint reservoir_base() const noexcept { return reservoirs_.index_var(); }
-    // Temporal history stays in slice A. Temporal gathers A into scratch B;
-    // spatial copies B back to A before reusing B for this frame's shading.
-    [[nodiscard]] auto prev_reservoirs() const noexcept {
-        return GIReservoirStorageView{pipeline()->bindless_array().buffer_var<GIReservoirStorage>(reservoir_base())};
-    }
-    [[nodiscard]] auto cur_reservoirs() const noexcept {
-        return GIReservoirStorageView{pipeline()->bindless_array().buffer_var<GIReservoirStorage>(reservoir_base())};
-    }
-    [[nodiscard]] auto passthrough_reservoirs() const noexcept {
-        return GIReservoirStorageView{pipeline()->bindless_array().buffer_var<GIReservoirStorage>(1 + reservoir_base())};
-    }
     [[nodiscard]] GIParam construct_param() const noexcept;
-    [[nodiscard]] CommandBatch dispatch(uint frame_index, bool precise_lobes = false,
-                                      bool denoiser_layered = false, float di_factor = 0.f,
-                                      float gi_factor = 0.f, bool di_active = false,
-                                      BufferView<uint> compact_primary_flags = {}) const noexcept;
+    [[nodiscard]] CommandBatch dispatch(uint frame_index, bool precise_lobes, BufferView<uint> primary_flags,
+                                        float di_factor, float gi_factor, bool di_active) const noexcept;
 };
 }// namespace vision
