@@ -26,9 +26,9 @@ C++ 主线程                       Script 线程（唯一 Python 消费者）
 initializeInterpreter
   Py_InitializeFromConfig
   PyEval_SaveThread    ← GIL 交还
-                                  import main → bootstrap 模块级副作用：
-                                    paths → config → logging → 注册 dispatcher
-                                    → plugin_loader → registry（project_files 同步 import）
+  import main → bootstrap 模块级副作用：
+    paths → config → logging → 注册 dispatcher
+    → plugin_loader → registry（project_files 同步 import）
                                   ScriptSystem::update() → main.loop()（只进入一次，阻塞到循环退出）
                                     loop 内：
                                       ├ poll_service_requests()：约 4 ms 轮询队列，空则 sleep
@@ -41,15 +41,16 @@ initializeInterpreter
 一个标志加一次 join：`request_stop()` 只置 `should_stop()`，C++ 在 `stop_for(3s)` 里等待线程
 结束；没有 `LifecycleControl` 跨线程请求握手，也没有 2.5 秒的等待预算。循环抛异常，或在没有
 stop 请求的情况下提前返回，是 policy ③ 的失败：记录 phase 与 error（`host_loop_failed` /
-`host_loop_exited_unexpectedly`），只降级、不请求引擎关机。`ProjectArchive` 等 lazy 服务仍在
-首次调用时由 `LazyPythonScriptService` 起后台线程 import，与宿主循环不共享控制流。
+`host_loop_exited_unexpectedly`），只降级、不请求引擎关机。`ProjectArchive` 等 lazy 服务在注册时
+（bootstrap 的模块级副作用里）就由 `LazyPythonScriptService` 起后台线程 import；首次调用只会复用
+这次已启动（或已完成）的加载，与宿主循环不共享控制流。
 
 | 状态机 | 状态 | 规则 |
 |---|---|---|
 | `CoronaEditor._runtime_state` | created → initializing → initialized → running → stop_requested → stopping → stopped | 初始化幂等；关闭是终态，`start/initialize` 返回 False，`shutdown_runtime` 复用同一快照 |
 | `LazyPythonScriptService` | cold → initializing → ready / degraded → stop_requested → stopped / stop_timeout | 未就绪时调用抛 `SERVICE_UNAVAILABLE`（可重试）；降级信息进 `event=runtime.service.degraded` |
 | 停机 | `request_stop()` 置 `should_stop()` → `main.loop()` 退出 → `finally` 执行 `shutdown_runtime()` | 只置标志；C++ 用 `stop_for(3s)` join。没有跨线程请求握手，也没有 2.5 秒等待预算 |
-| 超时 | 脚本线程 3s 内未退出 → `python.lifecycle.shutdown_timeout` 诊断 → `TerminateProcess` | 诊断含 lifecycle phase/error、coordinator 快照与全部 Python 线程；registry 自己的关闭预算是 2s，不是第二个等待层级 |
+| 超时 | 脚本线程 3s 内未退出 → `python.lifecycle.shutdown_timeout` 诊断 → `TerminateProcess` | 诊断含 lifecycle phase/error 与 coordinator 快照；`python_snapshot`（含 Python 线程列表）只在循环退出后记录，硬超时时是 `unavailable`；registry 自己的关闭预算是 2s，不是第二个等待层级 |
 | 循环失败（policy ③） | `main.loop()` 抛异常，或未收到 stop 请求就返回 | 记录 phase/error（`host_loop_failed` / `host_loop_exited_unexpectedly`）；只降级，不请求引擎关机 |
 
 关闭后到达的调用被拒绝为 `SERVICE_UNAVAILABLE`，不会被误报成"未知服务"；解释器不做
