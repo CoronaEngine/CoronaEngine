@@ -852,7 +852,7 @@ bool read_properties(const CefV8ValueList& arguments, SceneRequest& request) {
     patch.actor = arguments[1]->GetStringValue().ToString();
     if (patch.scene.empty() || patch.actor.empty()) return false;
     const auto object = arguments[2];
-    if (!object_keys(object, {"archive_session", "name", "visible", "follow_camera", "mechanics", "camera_lock", "animation_sources"})) return false;
+    if (!object_keys(object, {"archive_session", "name", "visible", "follow_camera", "mechanics", "animation_sources"})) return false;
     const auto session = object->GetValue("archive_session");
     if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
     request.archive_session = session->GetStringValue().ToString();
@@ -905,21 +905,6 @@ bool read_properties(const CefV8ValueList& arguments, SceneRequest& request) {
         if (mechanics.empty()) return false;
         patch.mechanics = std::move(mechanics);
     }
-    if (object->HasValue("camera_lock")) {
-        const auto values = object->GetValue("camera_lock");
-        if (!object_keys(values, {"enabled", "position_offset", "rotation_offset"})) return false;
-        const auto enabled = values->GetValue("enabled");
-        if (!enabled || !enabled->IsBool()) return false;
-        ActorCameraLockPatch lock; lock.enabled = enabled->GetBoolValue();
-        const auto vector = [&](const char* key, std::optional<std::array<float, 3>>& result) {
-            if (!values->HasValue(key)) return true;
-            std::array<float, 3> copy;
-            if (!read_float3(values->GetValue(key), copy)) return false;
-            result = copy; return true;
-        };
-        if (!vector("position_offset", lock.position_offset) || !vector("rotation_offset", lock.rotation_offset)) return false;
-        patch.camera_lock = lock;
-    }
     if (object->HasValue("animation_sources")) {
         const auto values = object->GetValue("animation_sources");
         if (!values || !values->IsArray()) return false;
@@ -931,7 +916,7 @@ bool read_properties(const CefV8ValueList& arguments, SceneRequest& request) {
         }
         patch.animation_sources = std::move(sources);
     }
-    return patch.name || patch.visible || patch.follow_camera || patch.mechanics || patch.camera_lock || patch.animation_sources;
+    return patch.name || patch.visible || patch.follow_camera || patch.mechanics || patch.animation_sources;
 }
 
 CefRefPtr<CefV8Value> properties_value(const ActorPropertiesSnapshot& snapshot) {
@@ -965,11 +950,6 @@ CefRefPtr<CefV8Value> properties_value(const ActorPropertiesSnapshot& snapshot) 
         set(mechanics, "angular_lock", vector(values.angular_lock));
         set(actor, "mechanics", mechanics);
     }
-    auto lock = CefV8Value::CreateObject(nullptr, nullptr);
-    set(lock, "enabled", CefV8Value::CreateBool(snapshot.camera_lock.enabled));
-    set(lock, "position_offset", vector(snapshot.camera_lock.position_offset));
-    set(lock, "rotation_offset", vector(snapshot.camera_lock.rotation_offset));
-    set(actor, "camera_lock", lock);
     if (snapshot.requested_animation_sources) {
         auto sources = CefV8Value::CreateArray(static_cast<int>(snapshot.requested_animation_sources->size()));
         for (size_t index = 0; index < snapshot.requested_animation_sources->size(); ++index)

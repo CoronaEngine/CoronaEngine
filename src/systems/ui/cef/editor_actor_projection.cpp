@@ -280,12 +280,6 @@ nlohmann::json actor_to_json(const NativeEditorScene& scene, const NativeEditorA
     if (actor.persisted_optics.material.contains("principled"))
         item["material"]["principled"] = actor.persisted_optics.material["principled"];
     if (!actor.persisted_optics.texture.empty()) item["material"]["texture"] = actor.persisted_optics.texture;
-    item["camera_lock"] = {
-        {"enabled", actor.camera_lock_enabled},
-        {"lock_to_camera", actor.camera_lock_enabled},
-        {"position_offset", actor.camera_lock_position_offset},
-        {"rotation_offset", actor.camera_lock_rotation_offset},
-    };
     return item;
 }
 

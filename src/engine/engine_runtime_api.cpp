@@ -17,7 +17,6 @@
 #include <corona/systems/display/display_surface_commands.h>
 #include <corona/systems/acoustics/acoustics_commands.h>
 #include <corona/engine/engine_runtime_api.h>
-#include <corona/systems/script/camera_follow_controller.h>
 #include <corona/systems/geometry/geometry_system.h>
 #include <corona/systems/optics/optics_system.h>
 #include <corona/utils/path_utils.h>

@@ -142,10 +142,8 @@ corona_add_system(ui
 target_compile_definitions(corona_ui_system PUBLIC VK_NO_PROTOTYPES)
 target_link_libraries(corona_ui_system PRIVATE corona::imgui)
 
-# The camera-follow controller is an implementation detail of the Script
-# system, but the native editor handler invokes it as part of the aggregate
-# editor API.  Keep its header private to UI instead of widening Script's
-# public include surface.
+# UI consumes Script's headers directly (script_system.h, script_input.h, ...),
+# so the Script include directory stays private to UI.
 target_include_directories(corona_ui_system PRIVATE
     ${PROJECT_SOURCE_DIR}/src/systems/script/include
 )

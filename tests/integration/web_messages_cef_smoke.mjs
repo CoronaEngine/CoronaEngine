@@ -1258,24 +1258,19 @@ try {
     console.log(`CEF smoke: ${stage}`);
     const properties = { archive_session: camera.archive_session, visible: false, follow_camera: true,
       mechanics: { mass: 7, restitution: 0.25, damping: 0.5, body_type: 'kinematic',
-        linear_lock: [true, false, true], angular_lock: [false, true, false] },
-      camera_lock: { enabled: true, position_offset: [1, 2, 3], rotation_offset: [4, 5, 6] } };
+        linear_lock: [true, false, true], angular_lock: [false, true, false] } };
     const writeProperties = (value, suffix = '') => main.evaluate(`corona.scene.update_actor('scene.ini',${JSON.stringify(actor.actor_guid)},${value})${suffix}`);
     const propertyResult = await writeProperties(JSON.stringify(properties));
     assert.equal(propertyResult.actor.actor_version, afterBadTransform.actor_version + 1);
     assert.equal(propertyResult.actor.visible, false);
     assert.equal(propertyResult.actor.follow_camera, true);
     assert.deepEqual(propertyResult.actor.mechanics, properties.mechanics);
-    assert.deepEqual(propertyResult.actor.camera_lock, properties.camera_lock);
     const stateAfterProperties = await main.evaluate('corona.scene.read_active()');
     for (const invalid of ['null', '[]', '{}', '{visible:false}',
       `{archive_session:${JSON.stringify(camera.archive_session)}}`,
       ...['{mass:NaN}', '{mass:Infinity}', '{mass:1e100}', '{mass:"4"}', '{body_type:"invalid"}',
         '{physics_enabled:true}', '{}', 'null', '{linear_lock:[1,0,1]}', '{angular_lock:[true,false]}', '{mass:1,unknown:2}']
         .map(value => `{archive_session:${JSON.stringify(camera.archive_session)},visible:true,mechanics:${value}}`),
-      ...['{enabled:true,position_offset:[1,Infinity,0]}', '{}', '{enabled:1}', '{enabled:false,position_offset:[1,2]}',
-        '{enabled:false,lock_to_camera:false}']
-        .map(value => `{archive_session:${JSON.stringify(camera.archive_session)},visible:true,camera_lock:${value}}`),
       ...['["same.glb","./same.glb"]', '[""]', '[1]', '{}']
         .map(value => `{archive_session:${JSON.stringify(camera.archive_session)},visible:true,animation_sources:${value}}`),
       `{archive_session:${JSON.stringify(camera.archive_session)},visible:"false"}`,
@@ -1289,14 +1284,13 @@ try {
     assert.equal(afterInvalidProperties.mechanics.mass, 7);
     assert.equal((await main.evaluate('corona.scene.read_active()')).tree_revision, stateAfterProperties.tree_revision);
     const propertyPartial = await writeProperties(JSON.stringify({ archive_session: camera.archive_session,
-      visible: true, follow_camera: false, camera_lock: { enabled: false }, animation_sources: [] }));
+      visible: true, follow_camera: false, animation_sources: [] }));
     assert.equal(propertyPartial.actor.actor_version, propertyResult.actor.actor_version + 1);
     assert.equal(propertyPartial.actor.visible, true);
     assert.equal(propertyPartial.actor.follow_camera, false);
     assert.deepEqual(propertyPartial.actor.mechanics, properties.mechanics);
-    assert.deepEqual(propertyPartial.actor.camera_lock, { ...properties.camera_lock, enabled: false });
     assert.deepEqual(propertyPartial.actor.requested_animation_sources, []);
-    evidence[0].actorProperties = 'one typed V8 patch with JSON disabled: state/physics/camera-lock, partial preservation, animation source acceptance, invalid mixed patches atomic and all old CEF routes denied';
+    evidence[0].actorProperties = 'one typed V8 patch with JSON disabled: state/physics, partial preservation, animation source acceptance, invalid mixed patches atomic and all old CEF routes denied';
 
     evidence[0].sceneReadAndSelection = 'direct V8 with JSON disabled: empty/active state, uint64 identity, uint32 node index, validation/no mutation, old CEF query denied';
     const options = { archive_session: camera.archive_session, scene_id: opened.scene.path,

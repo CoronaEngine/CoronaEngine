@@ -1,7 +1,7 @@
 #pragma once
 
 // The actor property patch pipeline: everything an actor can be told to change - name,
-// transform, visibility, body, optics, camera lock, animation sources - validated and
+// transform, visibility, body, optics, animation sources - validated and
 // written in one place, plus the snapshot that reports the result back.
 //
 // The patch type and the validation rules belong to ActorPropertiesService; this unit owns

@@ -257,15 +257,6 @@ def _parse_actor(
             section.getint(f"{key}.runtime.actor_version", fallback=1), 1
         ),
         "follow_camera": section.getboolean(f"{key}.follow_camera", fallback=False),
-        "camera_lock": {
-            "enabled": section.getboolean(f"{key}.camera_lock.enabled", fallback=False),
-            "position_offset": _float3(
-                section.get(f"{key}.camera_lock.position_offset", "0, 0, 2"), (0.0, 0.0, 2.0)
-            ),
-            "rotation_offset": _float3(
-                section.get(f"{key}.camera_lock.rotation_offset", "0, 0, 0"), (0.0, 0.0, 0.0)
-            ),
-        },
         "transform": {
             "position": _float3(
                 section.get(f"{key}.geometry.position", "0, 0, 0"), (0.0, 0.0, 0.0)

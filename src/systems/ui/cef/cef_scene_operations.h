@@ -65,16 +65,11 @@ struct ActorMechanicsPatch {
     std::optional<std::array<bool, 3>> linear_lock, angular_lock;
     bool empty() const { return !mass && !restitution && !damping && !body_type && !linear_lock && !angular_lock; }
 };
-struct ActorCameraLockPatch {
-    bool enabled = false;
-    std::optional<std::array<float, 3>> position_offset, rotation_offset;
-};
 struct ActorPropertiesPatch {
     std::string scene, actor;
     std::optional<std::string> name;
     std::optional<bool> visible, follow_camera;
     std::optional<ActorMechanicsPatch> mechanics;
-    std::optional<ActorCameraLockPatch> camera_lock;
     std::optional<std::vector<std::string>> animation_sources;
 };
 struct ActorMechanicsSnapshot {
@@ -82,17 +77,12 @@ struct ActorMechanicsSnapshot {
     std::string body_type;
     std::array<bool, 3> linear_lock{}, angular_lock{};
 };
-struct ActorCameraLockSnapshot {
-    bool enabled = false;
-    std::array<float, 3> position_offset{}, rotation_offset{};
-};
 struct ActorPropertiesSnapshot {
     std::string scene, actor, actor_guid;
     int actor_version = 0;
     bool follow_camera = false;
     std::optional<bool> visible;
     std::optional<ActorMechanicsSnapshot> mechanics;
-    ActorCameraLockSnapshot camera_lock;
     std::optional<std::vector<std::string>> requested_animation_sources;
 };
 

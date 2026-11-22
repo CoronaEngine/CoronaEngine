@@ -33,7 +33,6 @@ corona_add_system(script
         python/python_api.cpp
         python/python_path_config.cpp
         python/python_error_handler.cpp
-        camera_follow_controller.cpp
     DEPENDENCIES
         Python::Python
         nanobind-static

@@ -1,7 +1,6 @@
 #include "editor_api_services.h"
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <cmath>
 #include <optional>
@@ -23,16 +22,12 @@ std::string trim_ascii(std::string value) {
     return std::string(begin, end);
 }
 
-bool finite3(const std::optional<std::array<float, 3>>& value) {
-    return !value || std::all_of(value->begin(), value->end(), [](float x) { return std::isfinite(x); });
-}
-
 }  // namespace
 
 ValidationError validate_patch(const ActorPropertiesPatch& patch) {
     if (trim_ascii(patch.actor).empty() ||
         (!patch.name && !patch.visible && !patch.follow_camera && !patch.mechanics &&
-         !patch.camera_lock && !patch.animation_sources)) {
+         !patch.animation_sources)) {
         return {"INVALID_ARGUMENT", "Actor property patch is empty"};
     }
     if (patch.mechanics) {
@@ -43,10 +38,6 @@ ValidationError validate_patch(const ActorPropertiesPatch& patch) {
              *values.body_type != "static" && *values.body_type != "phantom")) {
             return {"INVALID_ARGUMENT", "Invalid Actor mechanics patch"};
         }
-    }
-    if (patch.camera_lock &&
-        (!finite3(patch.camera_lock->position_offset) || !finite3(patch.camera_lock->rotation_offset))) {
-        return {"INVALID_ARGUMENT", "Camera offsets must be finite"};
     }
     return {};
 }

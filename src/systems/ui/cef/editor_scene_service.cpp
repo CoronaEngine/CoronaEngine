@@ -61,7 +61,6 @@
 #include <corona/shared_data_hub.h>
 #include <corona/systems/network/network_commands.h>
 #include <corona/systems/network/network_system.h>
-#include <corona/systems/script/camera_follow_controller.h>
 #include <corona/engine/engine_runtime_api.h>
 #include <corona/utils/path_utils.h>
 
@@ -198,7 +197,6 @@ void restore_native_model_nodes(NativeEditorActor& actor) {
 bool is_valid_project_dir(const std::filesystem::path& project_dir);
 std::filesystem::path canonical_project_dir_for_settings(const std::filesystem::path& project_dir);
 std::string safe_project_dir_name(std::string name, const std::string& fallback);
-void restore_native_camera_lock_target(NativeEditorScene& scene);
 NativeResult project_archive_call(const char* method, nlohmann::json request);
 std::filesystem::path editor_ini_path();
 std::string settings_value(const std::string& section, const std::string& key, const std::string& fallback);
@@ -613,7 +611,6 @@ NativeEditorScene& materialize_scene_snapshot_into_state(
         }
         scene.engine_scene->set_simulation_enabled(data.value("simulation_enabled", true));
 
-        restore_native_camera_lock_target(scene);
         scene.load_diagnostics = diagnostics;
         state.project_path = scene.read_only ? snapshot.at("source_path").get<std::string>()
                                             : path_to_utf8(scene.project_root);
@@ -1409,7 +1406,7 @@ SceneReply apply_native_actor_transform(const SceneRequest& request) {
 
 // Non-Web boundary adapters retain their own public argument shapes. All
 // component writes, version changes and camera side effects live above.
-enum class ActorPropertyAdapter { State, Mechanics, CameraLock };
+enum class ActorPropertyAdapter { State, Mechanics };
 // JSON is confined to the non-Web Python/network adapter. The write itself is
 // the same typed operation as V8, not another transform implementation.
 NativeResult set_native_editor_actor_transform(const ActorTransformPatch& patch, const std::string& archive_session) {
@@ -1645,33 +1642,6 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
             }
         }
 
-        const auto camera_lock = actor_data.value("camera_lock", nlohmann::json::object());
-        if (!camera_lock.is_object()) {
-            return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
-                                         "Remote actor camera lock must be an object");
-        }
-        std::optional<bool> camera_lock_enabled;
-        if (!camera_lock.empty()) {
-            camera_lock_enabled = actor_data_bool(camera_lock, {"enabled", "lock_to_camera"});
-            if (!camera_lock_enabled) {
-                return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
-                                             "Remote actor camera lock requires enabled");
-            }
-            for (const char* key : {"position_offset", "rotation_offset"}) {
-                if (camera_lock.contains(key) && !json_float3_value(camera_lock[key])) {
-                    return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
-                                                 std::string("Remote camera ") + key + " is invalid");
-                }
-            }
-            if (*camera_lock_enabled) {
-                auto* camera = find_native_camera(*scene, {});
-                if (!camera || !camera->engine_camera || !actor->engine_actor) {
-                    return pending_actor_outcome(PendingNetworkActorApplyResult::Retry,
-                                                 "Remote camera lock target is not ready");
-                }
-            }
-        }
-
         auto merged_actor_data = actor_to_json(*scene, *actor);
         merged_actor_data.merge_patch(actor_data);
         merged_actor_data["actor_guid"] = actor_guid;
@@ -1866,31 +1836,6 @@ PendingNetworkActorApplyOutcome apply_pending_network_actor_state(
             }
         }
 
-        if (!camera_lock.empty()) {
-            actor->camera_lock_enabled = *camera_lock_enabled;
-            if (camera_lock.contains("position_offset")) {
-                const auto value = json_float3_value(camera_lock["position_offset"]);
-                if (!value) return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
-                                                         "Remote camera position offset is invalid");
-                actor->camera_lock_position_offset = *value;
-            }
-            if (camera_lock.contains("rotation_offset")) {
-                const auto value = json_float3_value(camera_lock["rotation_offset"]);
-                if (!value) return pending_actor_outcome(PendingNetworkActorApplyResult::Discard,
-                                                         "Remote camera rotation offset is invalid");
-                actor->camera_lock_rotation_offset = *value;
-            }
-            if (*camera_lock_enabled) {
-                auto* camera = find_native_camera(*scene, {});
-                const auto& offset = actor->camera_lock_position_offset;
-                Corona::Systems::CameraFollowController::instance().set_target(
-                    actor->engine_actor->get_handle(), camera->engine_camera->get_handle(),
-                    offset[0], offset[1], offset[2]);
-            } else {
-                Corona::Systems::CameraFollowController::instance().clear_target();
-            }
-        }
-
         ++scene->tree_revision;
         return pending_actor_outcome(PendingNetworkActorApplyResult::Applied, {},
                                      actor_to_json(*scene, *actor));
@@ -2001,24 +1946,6 @@ const std::vector<NativeFileDialogFilter>* resource_dialog_filters(
     if (file_type == "actor") return &actor_filters;
     if (file_type == "ui_image") return &image_filters;
     return nullptr;
-}
-
-void restore_native_camera_lock_target(NativeEditorScene& scene) {
-    auto& controller = Corona::Systems::CameraFollowController::instance();
-    controller.clear_target();
-    auto* camera = find_native_camera(scene, {});
-    if (!camera || !camera->engine_camera) {
-        return;
-    }
-    for (auto& actor : scene.actors) {
-        if (!actor.camera_lock_enabled || !actor.engine_actor) {
-            continue;
-        }
-        const auto& offset = actor.camera_lock_position_offset;
-        controller.set_target(actor.engine_actor->get_handle(), camera->engine_camera->get_handle(),
-                              offset[0], offset[1], offset[2]);
-        return;
-    }
 }
 
 std::optional<std::filesystem::path> select_resource_file_native(

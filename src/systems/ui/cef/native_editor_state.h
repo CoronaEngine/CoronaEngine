@@ -85,9 +85,6 @@ struct NativeEditorActor {
     int source_scene_version{1};
     int actor_version{1};
     bool follow_camera{false};
-    bool camera_lock_enabled{false};
-    std::array<float, 3> camera_lock_position_offset{0.0f, 0.0f, 2.0f};
-    std::array<float, 3> camera_lock_rotation_offset{0.0f, 0.0f, 0.0f};
     std::uint64_t audio_resource_id{0};  // 音频物体绑定的音频资源 id（actor_type=="audio"）
     std::array<float, 3> position{0.0f, 0.0f, 0.0f};
     std::array<float, 3> rotation{0.0f, 0.0f, 0.0f};

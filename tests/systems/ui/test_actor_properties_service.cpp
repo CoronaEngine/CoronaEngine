@@ -2,7 +2,6 @@
 // 这些规则保证"混合无效 patch 绝不部分应用"（计划 §7）。
 #include "editor_api/editor_api_services.h"
 
-#include <array>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -72,18 +71,16 @@ void test_patch_validation() {
         check(!validate_patch(good), "supported body type accepted");
     }
 
-    auto bad_lock = base_patch();
-    ActorCameraLockPatch lock;
-    lock.enabled = true;
-    lock.position_offset = std::array<float, 3>{0.f, kNaN, 0.f};
-    bad_lock.camera_lock = lock;
-    error = validate_patch(bad_lock);
-    check(error && error.message == "Camera offsets must be finite", "non-finite camera offset rejected");
+    // camera_lock was deleted from the typed DTO, so a patch carrying only that key can no
+    // longer describe any modification and must be rejected as an empty patch.
+    auto camera_lock_only = base_patch();
+    error = validate_patch(camera_lock_only);
+    check(error && error.message == "Actor property patch is empty",
+          "camera_lock-only patch is no longer a valid modification");
 
-    auto good_lock = base_patch();
-    good_lock.camera_lock = ActorCameraLockPatch{};
-    good_lock.animation_sources = std::vector<std::string>{"idle"};
-    check(!validate_patch(good_lock), "lock and animation sources accepted together");
+    auto animation_sources = base_patch();
+    animation_sources.animation_sources = std::vector<std::string>{"idle"};
+    check(!validate_patch(animation_sources), "animation sources accepted");
 }
 
 void test_rename_validation() {

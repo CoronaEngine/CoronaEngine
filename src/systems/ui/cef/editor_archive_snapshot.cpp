@@ -120,14 +120,6 @@ void validate_archive_snapshot(const nlohmann::json& snapshot) {
                                  "actor.transform.rotation");
         validate_snapshot_float3(transform.value("scale", nlohmann::json()),
                                  "actor.transform.scale");
-        if (actor.contains("camera_lock")) {
-            const auto& lock = actor.at("camera_lock");
-            if (!lock.is_object() || (lock.contains("enabled") && !lock["enabled"].is_boolean()))
-                throw std::runtime_error("ArchiveSnapshot actor camera_lock is invalid");
-            for (const auto* field : {"position_offset", "rotation_offset"}) {
-                if (lock.contains(field)) validate_snapshot_float3(lock[field], field);
-            }
-        }
         if (actor.contains("mechanics") && actor["mechanics"].is_object()) {
             const auto collision = actor["mechanics"].value("collision_type", std::string{"box"});
             if (collision != "box" && collision != "mesh" && collision != "none") {
@@ -236,17 +228,6 @@ NativeEditorActor native_actor_from_snapshot(const nlohmann::json& actor_data) {
     item.source_scene_version = std::max(actor_data.value("source_scene_version", 1), 1);
     item.actor_version = std::max(actor_data.value("actor_version", 1), 1);
     item.follow_camera = actor_data.value("follow_camera", false);
-    const auto camera_lock = actor_data.value("camera_lock", nlohmann::json::object());
-    if (camera_lock.is_object()) {
-        item.camera_lock_enabled = camera_lock.value("enabled",
-                                                       camera_lock.value("lock_to_camera", false));
-        item.camera_lock_position_offset = snapshot_float3(
-            camera_lock.value("position_offset", nlohmann::json::array()),
-            {0.0f, 0.0f, 2.0f});
-        item.camera_lock_rotation_offset = snapshot_float3(
-            camera_lock.value("rotation_offset", nlohmann::json::array()),
-            {0.0f, 0.0f, 0.0f});
-    }
     item.resolved_asset_path = actor_data.value("asset_path", std::string{});
     const auto transform = actor_data.value("transform", nlohmann::json::object());
     if (transform.contains("matrix")) item.authored_matrix = transform.at("matrix").get<std::array<float, 16>>();

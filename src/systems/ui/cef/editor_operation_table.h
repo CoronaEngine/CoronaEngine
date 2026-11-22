@@ -40,7 +40,7 @@ inline constexpr EditorOperationSpec kEditorOperations[] = {
     {"scene", "read_model_nodes", SceneMethod::ReadModelNodes, "One page of a model's node hierarchy."},
     {"scene", "set_model_node_state", SceneMethod::SetModelNodeState, "Writes model node visibility and per-node overrides."},
     {"scene", "create_actor", SceneMethod::CreateActor, "Creates an actor from an asset path."},
-    {"scene", "read_actor_properties", SceneMethod::ReadActorProperties, "The actor's own state: name, visibility, mechanics, camera lock, animation sources."},
+    {"scene", "read_actor_properties", SceneMethod::ReadActorProperties, "The actor's own state: name, visibility, mechanics, animation sources."},
     {"scene", "read_actor_rig", SceneMethod::ReadActorRig, "Skeleton nodes and IK chains for one actor."},
     {"scene", "set_actor_ik_chains", SceneMethod::SetActorIkChains, "Writes IK chains against the expected revision."},
     {"scene", "read_transforms", SceneMethod::ReadTransforms, "Transforms for several guids; unknown guids are skipped, not an error."},

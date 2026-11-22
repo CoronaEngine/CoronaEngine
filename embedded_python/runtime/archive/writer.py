@@ -49,10 +49,6 @@ def _actor_section(actors, original):
             fields["runtime." + k] = actor[k]
         for k in ("position", "rotation", "scale"):
             fields["geometry." + k] = _vector(actor["geometry"][k])
-        lock = actor["camera_lock"]
-        fields["camera_lock.enabled"] = lock["enabled"]
-        for k in ("position_offset", "rotation_offset"):
-            fields["camera_lock." + k] = _vector(lock[k])
         if actor.get("body_type"):
             fields["mechanics.body_type"] = actor["body_type"]
         fields["ik.chains"] = actor["ik_chains"]

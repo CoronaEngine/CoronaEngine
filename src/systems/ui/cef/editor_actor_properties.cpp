@@ -4,12 +4,9 @@
 #include "editor_actor_projection.h"
 #include "scene_folder.h"
 #include "editor_api_services.h"
-#include "editor_camera_views.h"
 #include "editor_paths.h"
 #include "editor_scene_access.h"
 #include "editor_text_utils.h"
-
-#include <corona/systems/script/camera_follow_controller.h>
 
 #include <algorithm>
 #include <array>
@@ -53,22 +50,6 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
     if (patch.visible && !actor->optics) return fail("COMPONENT_NOT_FOUND", "Actor has no optics component");
     if (patch.mechanics && !actor->mechanics) return fail("COMPONENT_NOT_FOUND", "Actor has no mechanics component");
     if (patch.animation_sources && !actor_animation_player(*actor)) return fail("COMPONENT_NOT_FOUND", "Actor has no geometry");
-    auto* camera = patch.camera_lock && patch.camera_lock->enabled ? find_native_camera(*scene, {}) : nullptr;
-    if (patch.camera_lock && patch.camera_lock->enabled && (!camera || !camera->engine_camera || !actor->engine_actor))
-        return fail("COMPONENT_NOT_FOUND", "Camera-lock requires an active camera and a loaded actor");
-    auto position_offset = actor->camera_lock_position_offset;
-    auto rotation_offset = actor->camera_lock_rotation_offset;
-    if (patch.camera_lock) {
-        position_offset = patch.camera_lock->position_offset.value_or(position_offset);
-        rotation_offset = patch.camera_lock->rotation_offset.value_or(rotation_offset);
-        if (patch.camera_lock->enabled && !patch.camera_lock->position_offset) {
-            const auto camera_position = camera->engine_camera->get_pose().position;
-            const auto position = actor->geometry ? actor->geometry->get_position() : actor->position;
-            for (size_t index = 0; index < 3; ++index) position_offset[index] = camera_position[index] - position[index];
-            if (!std::all_of(position_offset.begin(), position_offset.end(), [](float value) { return std::isfinite(value); }))
-                return fail("INVALID_ARGUMENT", "Derived camera offset exceeds the finite range");
-        }
-    }
     std::optional<std::vector<std::string>> sources;
     if (patch.animation_sources) {
         try {
@@ -90,15 +71,6 @@ SceneReply apply_native_actor_properties(const SceneRequest& request) {
         if (values.linear_lock) actor->mechanics->set_properties({.linear_lock = std::array<bool, 3>{(*values.linear_lock)[0], (*values.linear_lock)[1], (*values.linear_lock)[2]}});
         if (values.angular_lock) actor->mechanics->set_properties({.angular_lock = std::array<bool, 3>{(*values.angular_lock)[0], (*values.angular_lock)[1], (*values.angular_lock)[2]}});
     }
-    if (patch.camera_lock) {
-        actor->camera_lock_enabled = patch.camera_lock->enabled;
-        actor->camera_lock_position_offset = position_offset;
-        actor->camera_lock_rotation_offset = rotation_offset;
-        auto& controller = Corona::Systems::CameraFollowController::instance();
-        if (patch.camera_lock->enabled) controller.set_target(actor->engine_actor->get_handle(),
-            camera->engine_camera->get_handle(), position_offset[0], position_offset[1], position_offset[2]);
-        else controller.clear_target();
-    }
     if (new_name) actor->name = *new_name;
     actor->actor_version = std::max(actor->actor_version + 1, 1);
     ++scene->tree_revision;
@@ -118,7 +90,6 @@ ActorPropertiesSnapshot actor_properties_snapshot(const NativeEditorScene& scene
             mechanics_state.damping, mechanics_state.body_type, mechanics_state.linear_lock,
             mechanics_state.angular_lock};
     }
-    result.camera_lock = {actor.camera_lock_enabled, actor.camera_lock_position_offset, actor.camera_lock_rotation_offset};
     return result;
 }
 
