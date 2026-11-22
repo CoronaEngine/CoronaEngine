@@ -123,7 +123,12 @@ void PythonAPI::shutdown() {
     {
         std::lock_guard lock(lifecycle_mtx_);
         lifecycle_snapshot_.state = lifecycle_.state();
-        lifecycle_snapshot_.phase = "shutdown_complete";
+        // A recorded failure (hard-fail during init, or a dead/wedged host loop) is
+        // the operator's only clue; shutdown must not replace it with
+        // "shutdown_complete".
+        if (lifecycle_snapshot_.error.empty()) {
+            lifecycle_snapshot_.phase = "shutdown_complete";
+        }
         lifecycle_snapshot_.shutting_down = true;
     }
 
@@ -370,16 +375,20 @@ void PythonAPI::enter_runtime() {
     }
 
     bool loop_failed = false;
+    bool exited_unexpectedly = false;
+    std::string failure_detail;
     std::string snapshot_json;
     bool snapshot_valid = false;
 
     if (!backend_initialized_.load(std::memory_order_acquire) || !loopFunc.is_valid()) {
         loop_failed = true;
-        CFW_LOG_CRITICAL("event=python.host_loop.unavailable detail=main.loop was never resolved");
+        failure_detail = "main.loop was never resolved";
+        CFW_LOG_CRITICAL("event=python.host_loop.failed detail=main.loop was never resolved");
     } else if (!runtime_coordinator_.bind_consumer_thread()) {
         // Same rule as the old per-frame entry: only the bound consumer may run the
         // loop, because the pull entries are consumer-thread-only.
         loop_failed = true;
+        failure_detail = "python host loop entered on a non-owner thread";
         CFW_LOG_CRITICAL("event=python.runtime.non_owner_thread");
     } else {
         runtime_coordinator_.set_execution_phase("waiting");
@@ -403,19 +412,40 @@ void PythonAPI::enter_runtime() {
                 CFW_LOG_ERROR("event=python.host_loop.snapshot_failed detail={}", error.what());
                 log_python_error(error);
             }
+            // Failure policy 3 covers "throwing OR returning early": a clean return
+            // with no stop request means the host loop vanished, not that the engine
+            // asked it to stop.
+            if (!runtime_coordinator_.stop_requested()) {
+                loop_failed = true;
+                exited_unexpectedly = true;
+                failure_detail = "main.loop returned without a stop request";
+                CFW_LOG_CRITICAL(
+                    "event=python.host_loop.exited_unexpectedly "
+                    "detail=main.loop returned without a stop request");
+            }
         } catch (const nanobind::python_error& error) {
             // Failure policy 3: degrade, never request engine shutdown.
             loop_failed = true;
+            failure_detail = error.what();
             CFW_LOG_CRITICAL("event=python.host_loop.failed detail={}", error.what());
             log_python_error(error);
         } catch (const std::exception& error) {
             loop_failed = true;
+            failure_detail = error.what();
             CFW_LOG_CRITICAL("event=python.host_loop.failed detail={}", error.what());
         } catch (...) {
             loop_failed = true;
+            failure_detail = "unknown exception";
             CFW_LOG_CRITICAL("event=python.host_loop.failed detail=unknown exception");
         }
+        // Released here, while the interpreter and the GIL still exist. The deleted
+        // LifecycleControl branch used to do this; without it every normal shutdown
+        // would detach these two live references and log the "survived cooperative
+        // shutdown" ERROR from shutdown().
+        pStartFunc.reset();
+        loopFunc.reset();
     }
+    backend_initialized_.store(false, std::memory_order_release);
 
     // Both the normal and the degraded exit settle here: pending tickets do not
     // wake up on their own, and a stuck submit_and_wait() would hang the editor.
@@ -425,13 +455,24 @@ void PythonAPI::enter_runtime() {
     lifecycle_.request_stop();
     lifecycle_.transition(PythonLifecycleState::Stopping);
     lifecycle_.transition(PythonLifecycleState::Stopped);
+    // The loop is gone; never leave the diagnostic phase describing a dead runtime
+    // as "waiting".
+    runtime_coordinator_.set_execution_phase(loop_failed ? "host_loop_failed" : "host_loop_exited");
     {
         std::lock_guard lock(lifecycle_mtx_);
         if (snapshot_valid) {
             last_python_shutdown_snapshot_json_ = std::move(snapshot_json);
         }
+        if (loop_failed && !failure_detail.empty()) {
+            lifecycle_snapshot_.error = std::move(failure_detail);
+        }
         lifecycle_snapshot_.state = lifecycle_.state();
-        lifecycle_snapshot_.phase = loop_failed ? "host_loop_failed" : "host_loop_exited";
+        if (loop_failed) {
+            lifecycle_snapshot_.phase =
+                exited_unexpectedly ? "host_loop_exited_unexpectedly" : "host_loop_failed";
+        } else {
+            lifecycle_snapshot_.phase = "host_loop_exited";
+        }
         lifecycle_snapshot_.shutting_down = true;
     }
     CFW_LOG_NOTICE("event=python.lifecycle.state state=stopped");
