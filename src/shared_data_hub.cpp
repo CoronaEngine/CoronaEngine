@@ -122,7 +122,10 @@ ProfileDevice* find_profile(EntityId handle) {
     return SharedDataHub::instance().try_profile(handle);
 }
 
-EntityId SharedDataHub::create_actor_component() { return Ecs::emplace<ActorDevice>(); }
+EntityId SharedDataHub::create_actor_component() {
+    const auto entity = Ecs::World::instance().create<ActorDevice, Ecs::StreamingPolicy>();
+    return Ecs::to_handle(entity);
+}
 void SharedDataHub::destroy_actor_component(EntityId handle) { Ecs::destroy(handle); }
 ActorDevice* SharedDataHub::try_actor(EntityId handle) {
     return Ecs::try_get<ActorDevice>(handle);
@@ -132,6 +135,17 @@ const ActorDevice* SharedDataHub::try_actor(EntityId handle) const {
 }
 ActorDevice* find_actor(EntityId handle) {
     return SharedDataHub::instance().try_actor(handle);
+}
+Ecs::StreamingPolicy* SharedDataHub::try_streaming(EntityId handle) {
+    return Ecs::try_get<Ecs::StreamingPolicy>(handle);
+}
+void SharedDataHub::set_pinned(EntityId handle, bool pinned) {
+    if (auto* streaming = Ecs::try_get<Ecs::StreamingPolicy>(handle)) {
+        streaming->pinned = pinned;
+    }
+}
+Ecs::StreamingPolicy* find_streaming(EntityId handle) {
+    return SharedDataHub::instance().try_streaming(handle);
 }
 
 std::vector<std::uintptr_t> SharedDataHub::resolve_actor_geometry_handles(

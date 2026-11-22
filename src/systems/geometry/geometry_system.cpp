@@ -387,7 +387,8 @@ void GeometrySystem::update() {
             auto actor_read = Corona::find_actor(actor_handle);
             if ( !actor_read ) continue;
             const ActorDevice& actor_dev = *actor_read;
-            if (actor_dev.pinned) pinned_actors.insert(actor_handle);
+            const auto* streaming = Corona::find_streaming(actor_handle);
+            if (streaming != nullptr && streaming->pinned) pinned_actors.insert(actor_handle);
 
             for (EntityId profile_handle : actor_dev.profile_handles) {
                 auto profile_read = Corona::find_profile(profile_handle);
@@ -406,7 +407,7 @@ void GeometrySystem::update() {
                 // 无网格的 actor（如音频物体，空 model_path）不参与几何加载/距离剔除，
                 // 否则距离剔除每帧反复请求加载空路径并报 "empty model path" 错误。
                 if (geometry_read->model_path_utf8.empty()) continue;
-                if (actor_dev.pinned &&
+                if (streaming != nullptr && streaming->pinned &&
                     (geometry_read->gpu_build_state != GeometryDevice::GpuBuildState::Ready ||
                      geometry_read->mesh_handles.empty())) {
                     pinned_not_ready.insert(actor_handle);
@@ -687,7 +688,9 @@ void GeometrySystem::update() {
                         if (scene_state.unloading_tasks.count(actor)) continue;
 
                         auto actor_read = Corona::find_actor(actor);
-                        if (actor_read != nullptr && actor_read->pinned) continue;
+                        if (actor_read == nullptr) continue;
+                        const auto* streaming = Corona::find_streaming(actor);
+                        if (streaming != nullptr && streaming->pinned) continue;
 
                         auto entry_it = scene_state.actor_to_entry.find(actor);
                         if (entry_it == scene_state.actor_to_entry.end()) continue;
@@ -2056,11 +2059,13 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
     auto actor_read = Corona::find_actor(event.actor);
     if (!actor_read) return;
 
-    // pinned 的 actor 不淘汰
-    if (actor_read->pinned) return;
+    // pinned 的 actor 不淘汰（pinned 在 StreamingPolicy 组件上）
+    const auto* streaming = Corona::find_streaming(event.actor);
+    const bool pinned = streaming != nullptr && streaming->pinned;
+    if (pinned) return;
 
     Corona::Cache::ActorStreamingRecord rec;
-    rec.pinned    = actor_read->pinned;
+    rec.pinned    = pinned;
     rec.scene     = event.scene;
     rec.actor     = event.actor;
     rec.model_path    = actor_read->model_path;
@@ -5446,7 +5451,8 @@ void GeometrySystem::evict_under_memory_pressure() {
                 if (state != ActorLoadState::Loaded) continue;
                 if (st.loading_tasks.count(actor) || st.unloading_tasks.count(actor)) continue;
                 if (auto a = Corona::find_actor(actor)) {
-                    if (a->pinned) continue;
+                    const auto* streaming = Corona::find_streaming(actor);
+                    if (streaming != nullptr && streaming->pinned) continue;
                 } else {
                     continue;
                 }

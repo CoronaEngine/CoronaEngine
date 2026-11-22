@@ -1672,7 +1672,9 @@ Corona::API::Actor::Profile* Corona::API::Actor::add_profile(const Profile& prof
             // Imported renderer scenes keep their authored units and camera.
             // The editor's fixed 50/80-unit streaming radii must not evict their
             // geometry, including while async import still has a zero AABB.
-            if (import_options.scene_geometry) accessor->pinned = true;
+            if (import_options.scene_geometry) {
+                SharedDataHub::instance().set_pinned(handle_, true);
+            }
         } else {
             CFW_LOG_ERROR("[Actor::add_profile] Failed to acquire write access to actor storage");
         }

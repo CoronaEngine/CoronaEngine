@@ -303,7 +303,7 @@ struct ActorDevice {
     std::filesystem::path model_path;
     Resource::ModelImportOptions model_import_options;
     bool follow_camera{false};
-    bool pinned{false};  // 标记后不会被距离剔除卸载，也不会被不可见帧淘汰
+    // pinned 已迁到 Ecs::StreamingPolicy 组件。
 };
 
 enum class CameraOutputMode : uint8_t {
@@ -825,6 +825,9 @@ struct ImageDevice {
 /// 便捷：按句柄取 ActorDevice 组件（无锁）。
 [[nodiscard]] ActorDevice* find_actor(EntityId handle);
 
+/// 便捷：按句柄取 StreamingPolicy 组件（无锁）。
+[[nodiscard]] Ecs::StreamingPolicy* find_streaming(EntityId handle);
+
 /// 便捷：按句柄取 ModelTransform 组件（无锁）。
 [[nodiscard]] ModelTransform* find_transform(EntityId handle);
 
@@ -949,6 +952,8 @@ class SharedDataHub {
     void destroy_actor_component(EntityId handle);
     [[nodiscard]] ActorDevice* try_actor(EntityId handle);
     [[nodiscard]] const ActorDevice* try_actor(EntityId handle) const;
+    [[nodiscard]] Ecs::StreamingPolicy* try_streaming(EntityId handle);
+    void set_pinned(EntityId handle, bool pinned);
     [[nodiscard]] std::vector<EntityId> resolve_actor_geometry_handles(
         EntityId actor_handle);
 

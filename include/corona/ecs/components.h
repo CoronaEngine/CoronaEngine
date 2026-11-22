@@ -107,6 +107,14 @@ struct Bounds {
 // 渲染开关
 // ============================================================================
 
+/// 流式/驻留策略：pinned 的 actor 不参与距离剔除与 LRU 淘汰。
+///
+/// 从 `ActorDevice` 抽出的第一个细粒度组件：策略只影响流式系统，
+/// 渲染/物理路径不再读取 actor 聚合体。
+struct StreamingPolicy {
+    bool pinned{false};
+};
+
 /// 是否参与渲染 / 是否接收光照（与旧 `OpticsDevice` 的两个布尔对应）。
 struct Visibility {
     bool visible{true};
