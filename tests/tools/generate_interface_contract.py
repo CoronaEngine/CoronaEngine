@@ -65,10 +65,90 @@ GUARDS = [
 ]
 
 
+# Every Web operation is one of three things, and the classification is curated on purpose:
+# an operation that is not listed here makes the generator fail, so a new row forces the author
+# to say which side it belongs to instead of drifting into the "everything is a capability" blur.
+#   capability    - reads or writes engine/editor state; a future Python projection would want it
+#   event         - a subscription the UI needs; a host loop has no use for it
+#   cross-boundary- the boundary itself (the Python request entry, the input entry)
+WEB_CLASS = {
+    "bridge.call": "cross-boundary",
+    "input.dispatch": "cross-boundary",
+    "window.on_closed": "event",
+    "window.on_close_requested": "event",
+}
+
+# The Python face, same idea: most of it is plumbing the engine exposes to the host it started,
+# and only two entries read engine state in a way a Web projection could also express.
+HOST_CLASS = {
+    "send_log": "诊断",
+    "python_runtime_phase": "诊断",
+    "drain_input_events": "宿主控制",
+    "should_stop": "宿主控制",
+    "poll_service_requests": "宿主控制",
+    "complete_service_request": "宿主控制",
+    "register_python_script_service_dispatcher": "传输接线",
+    "unregister_python_script_service_dispatcher": "传输接线",
+    "active_project_path": "引擎状态读取",
+    "active_project_session": "引擎状态读取",
+}
+
+HOST_PURPOSE = {
+    "send_log": "把 Python 日志写进引擎日志；一类「可选工具配置缺失」的 ERROR 降级为 WARNING，避免误报",
+    "python_runtime_phase": "更新原生侧运行时诊断相位，供关停诊断与超时报告读取",
+    "drain_input_events": "排空 SDL 与 Web 共用的输入队列。**返回值当前被丢弃**——它是唯一排空者，作用是防增长",
+    "should_stop": "宿主是否已请求停止；无协调器时返回 `false`（没有循环可停）",
+    "poll_service_requests": "拉取排队的服务调用（`{request_id, service, function, args}`）；拉出的每条都必须结算",
+    "complete_service_request": "结算一条 ticket；转换失败也结算（以失败），否则等待方永久挂起",
+    "register_python_script_service_dispatcher": "把 Python 的服务分发器接到 CEF，使 Web 请求有落点",
+    "unregister_python_script_service_dispatcher": "摘掉分发器（关停时）",
+    "active_project_path": "编辑器当前场景的项目根，空串表示没有",
+    "active_project_session": "会话身份的唯一权威副本：`archive_session` 由 Python 铸造、原生持有，单看路径无法区分重开",
+}
+
+HOST_TYPE_PURPOSE = {
+    "InputEvent": "SDL 与 Web 共用输入队列的载荷。15 个只读字段；身份字段（`archive_session`/`scene_id`/`camera_id`）对 SDL 输入为空。**当前无消费者。**",
+}
+
+# Which source file installs which group. Order matters: the module installs them in this order.
+HOST_GROUPS = (
+    ("BindHostSupport", "src/systems/script/python/host_support_bindings.cpp"),
+    ("BindCef", "src/systems/ui/cef/cef_py_bind.cpp"),
+    ("BindCefServiceQueue", "src/systems/script/python/service_queue_bindings.cpp"),
+)
+
+
+def _defs(path: Path):
+    """(name, line) for every `m.def("name", ...)` in one binding file."""
+    text = path.read_text(encoding="utf-8-sig")
+    return [(match.group(1), text[:match.start()].count("\n") + 1)
+            for match in re.finditer(r'm\.def\(\s*"(\w+)"', text)]
+
+
+def python_bindings():
+    """(group, name, file, line) for every named entry the module installs, by group."""
+    rows = []
+    for group, rel in HOST_GROUPS:
+        for name, line in _defs(ROOT / rel):
+            rows.append((group, name, rel, line))
+    return rows
+
+
+def python_types():
+    """(name, file, line) for every type the module exports."""
+    text = (ROOT / HOST_GROUPS[0][1]).read_text(encoding="utf-8-sig")
+    return [(match.group(1), HOST_GROUPS[0][1], text[:match.start()].count("\n") + 1)
+            for match in re.finditer(r'nb::class_<[^>]+>\(\s*m\s*,\s*"(\w+)"', text)]
+
+
+def web_class(group, name):
+    return WEB_CLASS.get(f"{group}.{name}", "capability")
+
+
 def script_operations():
-    """(namespace, name, arguments, arity, summary) for every script row, in table order."""
-    return [(row["group"], row["name"], row["arguments"], row["arity"], row["summary"])
-            for row in operation_table.script_rows()]
+    """(namespace, name, arguments, arity, summary) for every Web row, in table order."""
+    return [(row["group"], row["name"], "", 0, row["summary"])
+            for row in operation_table.web_rows()]
 
 
 def web_surface():
@@ -103,15 +183,30 @@ def build() -> str:
     specs = script_operations()
     surface = web_surface()
     method_total = sum(len(names) for _, names in surface)
+    bindings = python_bindings()
+    types = python_types()
+
+    # A curated classification that silently misses a new row is worse than none: fail here so the
+    # author states which side the new entry belongs to.
+    known_web = {f"{g}.{n}" for g, n, *_ in specs}
+    stale_web = sorted(set(WEB_CLASS) - known_web)
+    unclassified = sorted(set(HOST_CLASS) - {name for _, name, *_ in bindings})
+    missing_class = sorted({name for _, name, *_ in bindings} - set(HOST_CLASS))
+    missing_purpose = sorted({name for _, name, *_ in bindings} - set(HOST_PURPOSE))
+    if stale_web or unclassified or missing_class or missing_purpose:
+        raise SystemExit(
+            "interface face changed: stale_web=%s stale_python=%s unclassified=%s undocumented=%s"
+            % (stale_web, unclassified, missing_class, missing_purpose))
 
     lines = [
-        "# 接口契约（Web）",
+        "# 接口契约（Web / Python）",
         "",
-        "这份文档是接口层的**单一入口**。它不重复代码，只给出三条边界、各自的形状，以及",
+        "这份文档是接口层的**单一入口**。它不重复代码，只给出边界、各自的形状，以及",
         "**哪条测试在保护它**——契约信息散在守卫和注释里时，新人没有起点。",
         "",
         "由 `tests/tools/generate_interface_contract.py` 生成；`test_interface_contract_doc.py`",
-        "会在它与代码不一致时失败。",
+        "会在它与代码不一致时失败。Python 面的清单从绑定源码解析，新增一条 `m.def` 而没在",
+        "生成器里登记归类或用途时，生成器直接失败——这样「能力」不会悄悄膨胀成一团模糊。",
         "",
         "## 三条边界",
         "",
@@ -151,6 +246,20 @@ def build() -> str:
     ]
     for ns, names in surface:
         lines.append(f"| `{ns}` | " + "、".join(f"`{n}`" for n in names) + " |")
+
+    lines += [
+        "",
+        "### 每个操作的用途与归类",
+        "",
+        "归类只有三种：**capability**（读或写引擎/编辑器状态）、**event**（UI 才需要的订阅）、",
+        "**cross-boundary**（边界本身）。归类不是自动推导的——表在生成器里，新增一行而不归类",
+        "会让生成器失败,而不是默认混进 capability。",
+        "",
+        "| 命名空间 | 操作 | 归类 | 用途 |",
+        "|---|---|---|---|",
+    ]
+    for group, name, _arguments, _arity, summary in specs:
+        lines.append(f"| `{group}` | `{name}` | {web_class(group, name)} | {summary} |")
 
     lines += [
         "",
@@ -251,6 +360,46 @@ def build() -> str:
     ]
     for name, module, functions in services:
         lines.append(f"| `{name}` | `{module}` | " + "、".join(f"`{f}`" for f in functions) + " |")
+
+    lines += [
+        "",
+        "",
+        "## Python 宿主面（`CoronaEngine.*`）",
+        "",
+        "模块由两个组按序安装：`BindHostSupport` → `BindCef`（`BindCef` 内部再调",
+        "`BindCefServiceQueue`）。它是**被引擎启动的宿主**，不是对外服务者；下面绝大多数条目是",
+        "宿主管道，不是能力。",
+        "",
+        "**C++ → Python 只有两处**：`python_api.cpp` 按名字取 `main.run` 与 `main.loop`，启动时",
+        "各调用一次。之后 C++ 一次都不再调用 Python 函数。",
+        "",
+        "| 组 | 接口 | 归类 | 用途 | 定义 |",
+        "|---|---|---|---|---|",
+    ]
+    for group, name, rel, line in bindings:
+        lines.append(f"| `{group}` | `{name}` | {HOST_CLASS[name]} | {HOST_PURPOSE[name]} "
+                     f"| [`{rel.split('/')[-1]}`](../{rel}#L{line}) |")
+    for name, rel, line in types:
+        lines.append(f"| — | `{name}`（类型） | 载荷 | {HOST_TYPE_PURPOSE[name]} "
+                     f"| [`{rel.split('/')[-1]}`](../{rel}#L{line}) |")
+
+    lines += [
+        "",
+        "### 两侧对照：不对称之处是设计，不是遗漏",
+        "",
+        "| 概念 | Web | Python | 为什么不能统一 |",
+        "|---|---|---|---|",
+        "| 循环控制 | 无 | `should_stop` | 只有拥有循环的一侧需要它；页面没有帧循环 |",
+        "| 事件订阅 | `window.on_closed` / `on_close_requested` | 无 | 宿主循环不关心窗口生命周期，只关心自己该不该退 |",
+        "| 输入 | `input.dispatch`（写，带 viewport/相机权威校验） | `drain_input_events`（读后丢弃） | 信任前提不同：前者来自不可信前端，后者是引擎自己起的宿主 |",
+        "| 项目会话 | 随 `scene.read_active` 带出 | `active_project_path` + `active_project_session` | 宿主需要**权威**会话身份（`archive_session` 单看路径无法区分重开），UI 只需要展示 |",
+        "| 归档/文档 | 只有 `project.*` 两个入口，其余走 `bridge.call` | 全部服务在 Python 内 | 实现就在 Python 侧，跨过去只能经过桥 |",
+        "",
+        "因此「两侧长相一样的 API」不可追求：那会逼一侧塞进它不需要的东西（给页面塞",
+        "`poll_service_requests`），或把权限校验降级成可选参数。可以统一的是**能力目录**",
+        "（名字、schema、归类、投影到哪几侧），不是调用形状。",
+        "",
+    ]
 
     lines += [
         "",

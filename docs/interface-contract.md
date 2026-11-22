@@ -1,10 +1,11 @@
-# 接口契约（Web）
+# 接口契约（Web / Python）
 
-这份文档是接口层的**单一入口**。它不重复代码，只给出三条边界、各自的形状，以及
+这份文档是接口层的**单一入口**。它不重复代码，只给出边界、各自的形状，以及
 **哪条测试在保护它**——契约信息散在守卫和注释里时，新人没有起点。
 
 由 `tests/tools/generate_interface_contract.py` 生成；`test_interface_contract_doc.py`
-会在它与代码不一致时失败。
+会在它与代码不一致时失败。Python 面的清单从绑定源码解析，新增一条 `m.def` 而没在
+生成器里登记归类或用途时，生成器直接失败——这样「能力」不会悄悄膨胀成一团模糊。
 
 ## 三条边界
 
@@ -54,6 +55,70 @@ manifest（api 名称表 + caller mask + 注册表）已删除，三条边界里
 | `scene` | `create_actor`、`create_camera`、`delete_actor`、`delete_camera`、`focus_actor`、`import_resource_file`、`read_active`、`read_actor_properties`、`read_actor_rig`、`read_camera_render_settings`、`read_environment`、`read_model_nodes`、`read_scene`、`read_transforms`、`rebind_actor_resource`、`save`、`select_actor`、`select_model_file`、`set_actor_ik_chains`、`set_actor_transform`、`set_camera_render_settings`、`set_environment`、`set_model_node_state`、`update_actor`、`update_camera` |
 | `viewport` | `capture_screenshot`、`configure` |
 | `window` | `close`、`create_panel`、`focus`、`on_close_requested`、`on_closed`、`set_window_presentation` |
+
+### 每个操作的用途与归类
+
+归类只有三种：**capability**（读或写引擎/编辑器状态）、**event**（UI 才需要的订阅）、
+**cross-boundary**（边界本身）。归类不是自动推导的——表在生成器里，新增一行而不归类
+会让生成器失败,而不是默认混进 capability。
+
+| 命名空间 | 操作 | 归类 | 用途 |
+|---|---|---|---|
+| `scene` | `read_scene` | capability | The scene tree, cameras and actor projection the Web reads. |
+| `scene` | `read_active` | capability | Archive session, scene route, name, project path, tree revision, selection. |
+| `scene` | `select_model_file` | capability | Native file dialog that answers the chosen model path. |
+| `scene` | `import_resource_file` | capability | Imports a resource file of the named type into the project. |
+| `scene` | `read_model_nodes` | capability | One page of a model's node hierarchy. |
+| `scene` | `set_model_node_state` | capability | Writes model node visibility and per-node overrides. |
+| `scene` | `create_actor` | capability | Creates an actor from an asset path. |
+| `scene` | `read_actor_properties` | capability | The actor's own state: name, visibility, mechanics, animation sources. |
+| `scene` | `read_actor_rig` | capability | Skeleton nodes and IK chains for one actor. |
+| `scene` | `set_actor_ik_chains` | capability | Writes IK chains against the expected revision. |
+| `scene` | `read_transforms` | capability | Transforms for several guids; unknown guids are skipped, not an error. |
+| `scene` | `select_actor` | capability | Writes the editor selection the scene tree renders. |
+| `scene` | `set_actor_transform` | capability | Writes transform components; omitted components keep their value. |
+| `scene` | `update_actor` | capability | Patches the actor's own state (not its body). |
+| `scene` | `delete_actor` | capability | Removes an actor and reports what was removed. |
+| `scene` | `rebind_actor_resource` | capability | Points an actor at a different resource path. |
+| `scene` | `save` | capability | Writes the scene through the archive service and reports unresolved actors. |
+| `scene` | `read_environment` | capability | The scene environment: sun, grid, physics scalars. |
+| `scene` | `set_environment` | capability | Patches the environment. |
+| `scene` | `focus_actor` | capability | Moves a camera so it frames one actor. |
+| `scene` | `update_camera` | capability | Patches camera properties and pose. |
+| `scene` | `set_camera_render_settings` | capability | Writes Vision render settings for one camera. |
+| `scene` | `read_camera_render_settings` | capability | Reads Vision render settings for one camera. |
+| `scene` | `create_camera` | capability | Creates a camera in a scene. |
+| `scene` | `delete_camera` | capability | Deletes a camera; the last remaining camera is protected. |
+| `audio` | `play` | capability | Plays the audio attached to an actor; the Web also plays a bare resource. |
+| `audio` | `stop` | capability | Stops the audio attached to an actor; the Web also stops a bare resource. |
+| `app` | `is_vision_available` | capability | Answers whether Vision can render on this machine. |
+| `app` | `close_process` | capability | Closes the whole process; only the main window may ask. |
+| `viewport` | `capture_screenshot` | capability | Captures one viewport frame to a file. |
+| `viewport` | `configure` | capability | Configures a viewport's mode, bounds and calibration. |
+| `network` | `start_session` | capability | Starts a collaboration session as host or client. |
+| `network` | `stop_session` | capability | Ends the running collaboration session. |
+| `network` | `get_session_info` | capability | The running session's identity, role and port. |
+| `network` | `get_discovered_peers` | capability | The peers LAN discovery has reported so far. |
+| `network` | `clear_discovered_peers` | capability | Forgets the peers discovered so far. |
+| `network` | `search_lan` | capability | Broadcasts a LAN discovery probe. |
+| `network` | `connect_to_peer` | capability | Joins a peer's session by address, port and name. |
+| `network` | `set_project_root` | capability | Scopes discovery to one project root. |
+| `project` | `open_project` | capability | Opens a recent project in the editor. |
+| `project` | `open_project_file` | capability | Asks the native launcher for a project file to open. |
+| `project` | `create_world_project` | capability | Creates a world project; it takes no fields - the archive service names it. |
+| `project` | `create_multiplayer_project` | capability | Creates a multiplayer project. |
+| `project` | `get_recent_projects` | capability | The recent-project list the launcher renders. |
+| `project` | `get_project_load_status` | capability | Whether the project the launcher asked for has finished loading. |
+| `project` | `open_document` | capability | Reloads the current scene source (scene.ini) from disk; the only file type it accepts. |
+| `project` | `save_active_project_info` | capability | Writes the active project's metadata. |
+| `window` | `close` | capability | Closes a window or panel; the identity decides which. |
+| `window` | `focus` | capability | Focuses the window the panel identity belongs to. |
+| `window` | `create_panel` | capability | Creates a panel and answers its identity. |
+| `window` | `set_window_presentation` | capability | Moves a window to the named presentation state. |
+| `window` | `on_closed` | event | Subscribes to the event a window publishes after it closes. |
+| `window` | `on_close_requested` | event | Subscribes to a window's close request before it closes. |
+| `input` | `dispatch` | cross-boundary | Dispatches one input event to a camera's viewport. |
+| `bridge` | `call` | cross-boundary | The one Web -> Python request entry; Python owns every service behind it. |
 
 ### 面板与窗口：三个合并后的入口
 
@@ -127,6 +192,45 @@ Python 服务的**业务拒绝**统一是 Promise 拒绝，带 `error.code`：`p
 与 C++ reader 的 `object_keys` 同语义（未知键拒绝，不静默忽略）。
 | `project_archive` | `plugins.ProjectArchive.main` | `asset_operation`、`commit_document`、`create_project_in`、`editor_settings`、`file_manager`、`parse`、`project_info`、`read_document`、`recent_projects`、`save`、`update_metadata` |
 | `project_files` | `runtime.archive.script_files` | `load`、`save` |
+
+
+## Python 宿主面（`CoronaEngine.*`）
+
+模块由两个组按序安装：`BindHostSupport` → `BindCef`（`BindCef` 内部再调
+`BindCefServiceQueue`）。它是**被引擎启动的宿主**，不是对外服务者；下面绝大多数条目是
+宿主管道，不是能力。
+
+**C++ → Python 只有两处**：`python_api.cpp` 按名字取 `main.run` 与 `main.loop`，启动时
+各调用一次。之后 C++ 一次都不再调用 Python 函数。
+
+| 组 | 接口 | 归类 | 用途 | 定义 |
+|---|---|---|---|---|
+| `BindHostSupport` | `send_log` | 诊断 | 把 Python 日志写进引擎日志；一类「可选工具配置缺失」的 ERROR 降级为 WARNING，避免误报 | [`host_support_bindings.cpp`](../src/systems/script/python/host_support_bindings.cpp#L26) |
+| `BindHostSupport` | `drain_input_events` | 宿主控制 | 排空 SDL 与 Web 共用的输入队列。**返回值当前被丢弃**——它是唯一排空者，作用是防增长 | [`host_support_bindings.cpp`](../src/systems/script/python/host_support_bindings.cpp#L84) |
+| `BindHostSupport` | `python_runtime_phase` | 诊断 | 更新原生侧运行时诊断相位，供关停诊断与超时报告读取 | [`host_support_bindings.cpp`](../src/systems/script/python/host_support_bindings.cpp#L88) |
+| `BindHostSupport` | `should_stop` | 宿主控制 | 宿主是否已请求停止；无协调器时返回 `false`（没有循环可停） | [`host_support_bindings.cpp`](../src/systems/script/python/host_support_bindings.cpp#L96) |
+| `BindCef` | `register_python_script_service_dispatcher` | 传输接线 | 把 Python 的服务分发器接到 CEF，使 Web 请求有落点 | [`cef_py_bind.cpp`](../src/systems/ui/cef/cef_py_bind.cpp#L22) |
+| `BindCef` | `unregister_python_script_service_dispatcher` | 传输接线 | 摘掉分发器（关停时） | [`cef_py_bind.cpp`](../src/systems/ui/cef/cef_py_bind.cpp#L25) |
+| `BindCef` | `active_project_path` | 引擎状态读取 | 编辑器当前场景的项目根，空串表示没有 | [`cef_py_bind.cpp`](../src/systems/ui/cef/cef_py_bind.cpp#L30) |
+| `BindCef` | `active_project_session` | 引擎状态读取 | 会话身份的唯一权威副本：`archive_session` 由 Python 铸造、原生持有，单看路径无法区分重开 | [`cef_py_bind.cpp`](../src/systems/ui/cef/cef_py_bind.cpp#L37) |
+| `BindCefServiceQueue` | `poll_service_requests` | 宿主控制 | 拉取排队的服务调用（`{request_id, service, function, args}`）；拉出的每条都必须结算 | [`service_queue_bindings.cpp`](../src/systems/script/python/service_queue_bindings.cpp#L80) |
+| `BindCefServiceQueue` | `complete_service_request` | 宿主控制 | 结算一条 ticket；转换失败也结算（以失败），否则等待方永久挂起 | [`service_queue_bindings.cpp`](../src/systems/script/python/service_queue_bindings.cpp#L130) |
+| — | `InputEvent`（类型） | 载荷 | SDL 与 Web 共用输入队列的载荷。15 个只读字段；身份字段（`archive_session`/`scene_id`/`camera_id`）对 SDL 输入为空。**当前无消费者。** | [`host_support_bindings.cpp`](../src/systems/script/python/host_support_bindings.cpp#L61) |
+
+### 两侧对照：不对称之处是设计，不是遗漏
+
+| 概念 | Web | Python | 为什么不能统一 |
+|---|---|---|---|
+| 循环控制 | 无 | `should_stop` | 只有拥有循环的一侧需要它；页面没有帧循环 |
+| 事件订阅 | `window.on_closed` / `on_close_requested` | 无 | 宿主循环不关心窗口生命周期，只关心自己该不该退 |
+| 输入 | `input.dispatch`（写，带 viewport/相机权威校验） | `drain_input_events`（读后丢弃） | 信任前提不同：前者来自不可信前端，后者是引擎自己起的宿主 |
+| 项目会话 | 随 `scene.read_active` 带出 | `active_project_path` + `active_project_session` | 宿主需要**权威**会话身份（`archive_session` 单看路径无法区分重开），UI 只需要展示 |
+| 归档/文档 | 只有 `project.*` 两个入口，其余走 `bridge.call` | 全部服务在 Python 内 | 实现就在 Python 侧，跨过去只能经过桥 |
+
+因此「两侧长相一样的 API」不可追求：那会逼一侧塞进它不需要的东西（给页面塞
+`poll_service_requests`），或把权限校验降级成可选参数。可以统一的是**能力目录**
+（名字、schema、归类、投影到哪几侧），不是调用形状。
+
 
 
 ## 超时与并发
