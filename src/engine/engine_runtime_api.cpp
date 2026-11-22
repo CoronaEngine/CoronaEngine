@@ -1672,7 +1672,9 @@ Corona::API::Actor::Profile* Corona::API::Actor::add_profile(const Profile& prof
             }
             // 将 Geometry 的 model_path 同步到 ActorDevice，
             // GeometrySystem 的 load/unload 路径依赖此字段
-            accessor->model_path = profile.geometry->get_model_path();
+            if (auto* model_path = SharedDataHub::instance().try_model_path(handle_)) {
+                model_path->value = profile.geometry->get_model_path();
+            }
             accessor->model_import_options = import_options;
             // Imported renderer scenes keep their authored units and camera.
             // The editor's fixed 50/80-unit streaming radii must not evict their

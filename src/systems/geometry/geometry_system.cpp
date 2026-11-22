@@ -397,6 +397,7 @@ void GeometrySystem::update() {
             if (added_actors.count(actor_handle)) continue;
 
             auto actor_read = Corona::find_actor(actor_handle);
+            const auto* actor_path = Corona::find_model_path(actor_handle);
             if ( !actor_read ) continue;
             const ActorDevice& actor_dev = *actor_read;
             const auto* streaming = Corona::find_streaming(actor_handle);
@@ -705,6 +706,7 @@ void GeometrySystem::update() {
                         if (scene_state.unloading_tasks.count(actor)) continue;
 
                         auto actor_read = Corona::find_actor(actor);
+                        const auto* actor_path = Corona::find_model_path(actor);
                         if (actor_read == nullptr) continue;
                         const auto* streaming = Corona::find_streaming(actor);
                         if (streaming != nullptr && streaming->pinned) continue;
@@ -1007,6 +1009,7 @@ void GeometrySystem::update() {
 void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {
     auto& hub = SharedDataHub::instance();
     auto actor_read = Corona::find_actor(actor);
+    const auto* actor_path = Corona::find_model_path(actor);
     if (actor_read == nullptr) return;
 
     std::unordered_set<std::uintptr_t> visited_geom;
@@ -1289,13 +1292,14 @@ void GeometrySystem::on_load_finished(const Events::ActorLoadFinishedEvent& even
     // 加载完成，解除 pin（后续由 Optics/Mechanics 的 touch 续期维持热度）
     {
         auto actor_read = Corona::find_actor(event.actor);
-        if (actor_read && !actor_read->model_path.empty()) {
-            auto normalized = actor_read->model_path.is_relative()
-                ? std::filesystem::absolute(actor_read->model_path)
-                : actor_read->model_path;
+        const auto* actor_path = Corona::find_model_path(event.actor);
+        if (actor_read && !actor_path->value.empty()) {
+            auto normalized = actor_path->value.is_relative()
+                ? std::filesystem::absolute(actor_path->value)
+                : actor_path->value;
             std::error_code ec;
             normalized = std::filesystem::weakly_canonical(normalized, ec);
-            if (ec) normalized = actor_read->model_path;  // 回退，防止 pin 泄漏
+            if (ec) normalized = actor_path->value;  // 回退，防止 pin 泄漏
             auto rid = Resource::ResourceManager::import_uid(normalized, actor_read->model_import_options);
             Resource::ResourceManager::get_instance().unpin(rid);
         }
@@ -1350,6 +1354,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
     // ---- 第 1 步：以只读模式获取 actor 数据 ----
     // try_acquire_read 返回一个 RAII 读锁守卫，离开作用域自动释放
     auto actor_read = Corona::find_actor(actor);
+    const auto* actor_path = Corona::find_model_path(actor);
     if (actor_read == nullptr) return;  // actor 句柄无效（可能已被销毁），直接返回
 
     // ---- 第 2 步：用 visited 集合去重 ----
@@ -1466,6 +1471,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
 
     // ---- 第 1 步：读取 actor 数据 ----
     auto actor_read = Corona::find_actor(actor);
+    const auto* actor_path = Corona::find_model_path(actor);
     if (actor_read == nullptr) return false;  // actor 句柄无效
     bool queued_staged_upload = false;
 
@@ -1738,14 +1744,15 @@ void GeometrySystem::process_async_tasks() {
                         {task.scene_handle, task.actor, /*loaded=*/false});
                 } else {
                     auto actor_read = Corona::find_actor(task.actor);
+                    const auto* actor_path = Corona::find_model_path(task.actor);
                     if (actor_read != nullptr) {
-                        if (!actor_read->model_path.empty()) {
-                            auto normalized = actor_read->model_path.is_relative()
-                                ? std::filesystem::absolute(actor_read->model_path)
-                                : actor_read->model_path;
+                        if (!actor_path->value.empty()) {
+                            auto normalized = actor_path->value.is_relative()
+                                ? std::filesystem::absolute(actor_path->value)
+                                : actor_path->value;
                             std::error_code ec;
                             normalized = std::filesystem::weakly_canonical(normalized, ec);
-                            if (ec) normalized = actor_read->model_path;
+                            if (ec) normalized = actor_path->value;
                             auto rid = Resource::ResourceManager::import_uid(normalized, actor_read->model_import_options);
                             scene_state.unloading_tasks[task.actor] =
                                 Resource::ResourceManager::get_instance().remove_cache_async(rid);
@@ -1801,7 +1808,8 @@ void GeometrySystem::on_load_requested(const Events::ActorLoadRequestedEvent& e)
     }
 
     auto actor_read = Corona::find_actor(e.actor);
-    if (actor_read == nullptr || actor_read->model_path.empty()) {
+    const auto* actor_path = Corona::find_model_path(e.actor);
+    if (actor_read == nullptr || actor_path->value.empty()) {
         CFW_LOG_ERROR("[GeometrySystem] Invalid actor or empty model path: {}", e.actor);
         scene_state.actor_load_states[e.actor] = ActorLoadState::Unloaded;
         lock.unlock();
@@ -1810,13 +1818,13 @@ void GeometrySystem::on_load_requested(const Events::ActorLoadRequestedEvent& e)
     }
 
     CFW_LOG_NOTICE("[GeometrySystem] Start loading actor {} (path: {})",
-                  e.actor, Utils::path_to_utf8(actor_read->model_path));
+                  e.actor, Utils::path_to_utf8(actor_path->value));
 
     // pin 住资源防止加载过程中被预算淘汰踢掉
     // 加载完成后由 on_load_finished 解除 pin，后续由 touch 续期维持热度
-    auto normalized = actor_read->model_path.is_relative()
-        ? std::filesystem::absolute(actor_read->model_path)
-        : actor_read->model_path;
+    auto normalized = actor_path->value.is_relative()
+        ? std::filesystem::absolute(actor_path->value)
+        : actor_path->value;
     std::error_code ec;
     normalized = std::filesystem::weakly_canonical(normalized, ec);
     if (!ec) {
@@ -1824,7 +1832,7 @@ void GeometrySystem::on_load_requested(const Events::ActorLoadRequestedEvent& e)
         Resource::ResourceManager::get_instance().pin(rid);
     }
 
-    scene_state.loading_tasks[e.actor] = Resource::ResourceManager::get_instance().import_async(actor_read->model_path, actor_read->model_import_options);
+    scene_state.loading_tasks[e.actor] = Resource::ResourceManager::get_instance().import_async(actor_path->value, actor_read->model_import_options);
 }
 
 // 锁顺序同 on_load_requested: impl_->mtx → Storage。
@@ -1859,7 +1867,8 @@ void GeometrySystem::on_unload_requested(const Events::ActorUnloadRequestedEvent
     }
 
     auto actor_read = Corona::find_actor(e.actor);
-    if (actor_read == nullptr || actor_read->model_path.empty()) {
+    const auto* actor_path = Corona::find_model_path(e.actor);
+    if (actor_read == nullptr || actor_path->value.empty()) {
         scene_state.actor_load_states[e.actor] = ActorLoadState::Unloaded;
         lock.unlock();
         impl_->ctx->event_bus()->publish(Events::ActorUnloadFinishedEvent{e.scene, e.actor});
@@ -1868,16 +1877,16 @@ void GeometrySystem::on_unload_requested(const Events::ActorUnloadRequestedEvent
         return;
     }
 
-    auto normalized = actor_read->model_path.is_relative()
-        ? std::filesystem::absolute(actor_read->model_path)
-        : actor_read->model_path;
+    auto normalized = actor_path->value.is_relative()
+        ? std::filesystem::absolute(actor_path->value)
+        : actor_path->value;
     std::error_code ec;
     normalized = std::filesystem::weakly_canonical(normalized, ec);
-    if (ec) normalized = actor_read->model_path;
+    if (ec) normalized = actor_path->value;
     auto rid = Resource::ResourceManager::import_uid(normalized, actor_read->model_import_options);
 
     CFW_LOG_NOTICE("[GeometrySystem] Start unloading actor {} (path: {})",
-                  e.actor, Utils::path_to_utf8(actor_read->model_path));
+                  e.actor, Utils::path_to_utf8(actor_path->value));
     scene_state.unload_retry_counts[e.actor] = 0;
     scene_state.unloading_tasks[e.actor] = Resource::ResourceManager::get_instance().remove_cache_async(rid);
 }
@@ -2074,6 +2083,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
 
     // ---- 第 2 步：读取 actor 完整状态，构建 ActorStreamingRecord ----
     auto actor_read = Corona::find_actor(event.actor);
+    const auto* actor_path = Corona::find_model_path(event.actor);
     if (!actor_read) return;
 
     // pinned 的 actor 不淘汰（pinned 在 StreamingPolicy 组件上）
@@ -2085,7 +2095,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
     rec.pinned    = pinned;
     rec.scene     = event.scene;
     rec.actor     = event.actor;
-    rec.model_path    = actor_read->model_path;
+    rec.model_path    = actor_path->value;
     rec.follow_camera = actor_read->follow_camera;
     rec.profile_handles = actor_read->profile_handles;
 
@@ -2225,11 +2235,12 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
     } else {
         // 缓存未命中：回退到从 ActorDevice 读取 model_path
         auto actor_read = Corona::find_actor(event.actor);
+        const auto* actor_path = Corona::find_model_path(event.actor);
         if (!actor_read) {
             CFW_LOG_ERROR("[GeometrySystem] Restore failed: actor {} not in storage", event.actor);
             return;
         }
-        model_path = actor_read->model_path;
+        model_path = actor_path->value;
         CFW_LOG_NOTICE("[GeometrySystem] Restoring actor {} from disk (cache miss, path={})",
                        event.actor, model_path.string());
     }
@@ -2254,6 +2265,7 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
     // 渲染/物理看到的是 evict 前的状态而非默认值。
     if (rec) {
         auto actor_read = Corona::find_actor(event.actor);
+        const auto* actor_path = Corona::find_model_path(event.actor);
         if (actor_read) {
             for (auto ph : actor_read->profile_handles) {
                 auto profile = Corona::find_profile(ph);
@@ -5374,6 +5386,7 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
     auto& hub = SharedDataHub::instance();
 
     auto actor_read = Corona::find_actor(actor);
+    const auto* actor_path = Corona::find_model_path(actor);
     if (actor_read == nullptr) return;
 
     std::unordered_set<std::uintptr_t> visited_geoms;

@@ -18,6 +18,7 @@
 #include <ktm/ktm.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <vector>
 
 namespace Corona::Ecs {
@@ -106,6 +107,11 @@ struct Bounds {
 // ============================================================================
 // 渲染开关
 // ============================================================================
+
+/// actor 的模型路径（原 `ActorDevice::model_path`）。
+struct ModelPath {
+    std::filesystem::path value;
+};
 
 /// 几何的导入源：磁盘路径。导入选项仍留在 `GeometryDevice`（含 scene_geometry 等语义）。
 struct ModelSource {
