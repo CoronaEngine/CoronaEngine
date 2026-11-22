@@ -13,3 +13,14 @@ def test_the_loop_entries_are_bound():
     text = "\n".join(path.read_text(encoding="utf-8-sig") for path in BINDINGS if path.exists())
     for name in ("should_stop", "poll_service_requests", "complete_service_request"):
         assert re.search(rf'm\.def\(\s*"{name}"', text), f"{name} is not bound"
+
+
+API = ROOT / "src/systems/script/python/python_api.cpp"
+GETATTR = re.compile(r'getattr\((?:\w+|\w+\.\w+),\s*"(\w+)"\)')
+
+
+def test_the_only_name_lookups_are_the_two_entries():
+    names = GETATTR.findall(API.read_text(encoding="utf-8-sig"))
+    assert sorted(names) == ["loop", "run"], (
+        f"python_api.cpp looks up {sorted(names)}; only the two entry names may be resolved by "
+        "string, and every other hook is now called from inside Python")

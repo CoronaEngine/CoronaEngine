@@ -3,7 +3,6 @@
 #include <horizon/core/logging.h>
 #include <corona/kernel/event/i_event_bus.h>
 #include <corona/kernel/event/i_event_stream.h>
-#include <corona/systems/script/camera_follow_controller.h>
 #include <corona/systems/script/python_api.h>
 #include <corona/systems/script/script_system.h>
 #include <nanobind/nanobind.h>
@@ -16,7 +15,7 @@ namespace Corona::Systems {
 
 ScriptSystem::ScriptSystem()
     : python_api_(std::make_unique<Script::Python::PythonAPI>()) {
-    set_target_fps(60);  // 显示系统高刷新率以提升响应速度
+    // 脚本系统不再由 SystemBase 计时：update() 进入 Python 自己的循环并一直阻塞到退出。
 }
 
 ScriptSystem::~ScriptSystem() = default;
@@ -41,7 +40,7 @@ bool ScriptSystem::initialize(Kernel::ISystemContext* ctx) {
 
 void ScriptSystem::stop() {
     if (python_api_) {
-        python_api_->begin_shutdown();
+        python_api_->request_stop();
     }
     constexpr auto kShutdownTimeout = std::chrono::seconds(3);
     if (stop_for(kShutdownTimeout)) {
@@ -62,8 +61,7 @@ void ScriptSystem::stop() {
 
 void ScriptSystem::update() {
 #ifdef CORONA_ENABLE_PYTHON_API
-    CameraFollowController::instance().update(1.0f / 60.0f);
-    python_api_->runPythonScript();
+    python_api_->enter_runtime();
 #endif
 }
 
