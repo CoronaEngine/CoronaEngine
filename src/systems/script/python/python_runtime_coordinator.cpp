@@ -171,6 +171,19 @@ std::optional<PythonRuntimeRequest> PythonRuntimeCoordinator::wait_pop(
     return std::nullopt;
 }
 
+std::vector<PythonRuntimeRequest> PythonRuntimeCoordinator::drain_pending(std::size_t limit) {
+    std::vector<PythonRuntimeRequest> drained;
+    if (!is_consumer_thread()) return drained;
+    std::lock_guard lock(mutex_);
+    const auto count = queue_.size() < limit ? queue_.size() : limit;
+    drained.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        drained.push_back(std::move(queue_.front()));
+        queue_.pop_front();
+    }
+    return drained;
+}
+
 bool PythonRuntimeCoordinator::complete(std::uint64_t request_id,
                                         PythonRuntimeResponse response) {
     std::shared_ptr<Detail::PythonRuntimeTicketState> ticket;
@@ -236,6 +249,14 @@ void PythonRuntimeCoordinator::begin_python_stopping() {
 
 void PythonRuntimeCoordinator::stop() {
     transition_and_cancel(PythonRuntimeState::Stopped);
+}
+
+void PythonRuntimeCoordinator::request_stop() noexcept {
+    stop_requested_.store(true, std::memory_order_release);
+}
+
+bool PythonRuntimeCoordinator::stop_requested() const noexcept {
+    return stop_requested_.load(std::memory_order_acquire);
 }
 
 PythonRuntimeState PythonRuntimeCoordinator::state() const noexcept {

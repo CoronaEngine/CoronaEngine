@@ -257,5 +257,33 @@ int main() {
         if (!require(successful.load() == producer_count * per_producer, "all requests should complete") ||
             !require(!duplicate_completed.load(), "request must only complete once")) return 1;
     }
+    {
+        PythonRuntimeCoordinator coordinator(8);
+        if (!require(coordinator.bind_consumer_thread(), "consumer should bind")) return 1;
+        auto first = coordinator.submit(request());
+        auto second = coordinator.submit(request());
+        if (!require(first.accepted && second.accepted, "both submissions should be accepted")) return 1;
+        auto drained = coordinator.drain_pending(1);
+        if (!require(drained.size() == 1, "drain_pending must respect its limit")) return 1;
+        auto rest = coordinator.drain_pending();
+        if (!require(rest.size() == 1, "second drain must take the remaining request")) return 1;
+        if (!require(coordinator.drain_pending().empty(), "drained queue must be empty")) return 1;
+    }
+    {
+        PythonRuntimeCoordinator coordinator(8);
+        auto ticket = coordinator.submit(request());
+        if (!require(ticket.accepted, "submission without a bound consumer should queue")) return 1;
+        if (!require(coordinator.drain_pending().empty(),
+                     "a non-consumer thread must not drain the queue")) return 1;
+    }
+    {
+        PythonRuntimeCoordinator coordinator(8);
+        if (!require(!coordinator.stop_requested(), "stop must start false")) return 1;
+        coordinator.request_stop();
+        coordinator.request_stop();
+        if (!require(coordinator.stop_requested(), "stop_requested must survive repeats")) return 1;
+        if (!require(coordinator.state() == PythonRuntimeState::Accepting,
+                     "request_stop must not change the state machine")) return 1;
+    }
     return 0;
 }

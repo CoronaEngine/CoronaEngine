@@ -12,6 +12,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 #include <nlohmann/json_fwd.hpp>
 
 namespace Corona::Script::Python {
@@ -116,12 +117,19 @@ class PythonRuntimeCoordinator {
                                           std::chrono::milliseconds timeout);
     PythonRuntimeResponse submit_and_wait(PythonRuntimeRequest request);
     std::optional<PythonRuntimeRequest> wait_pop(std::chrono::milliseconds timeout);
+    /// Non-blocking pull of the front `limit` queued requests. Only the bound consumer
+    /// thread may drain; any other thread gets an empty vector. Tickets stay pending
+    /// until complete() is called for their request ids.
+    std::vector<PythonRuntimeRequest> drain_pending(std::size_t limit = 64);
     bool complete(std::uint64_t request_id, PythonRuntimeResponse response);
 
     void begin_quiescing();
     void begin_draining();
     void begin_python_stopping();
     void stop();
+    /// Ask the owning host loop to stop. Only sets a flag; it never changes state().
+    void request_stop() noexcept;
+    [[nodiscard]] bool stop_requested() const noexcept;
 
     PythonRuntimeState state() const noexcept;
     std::size_t pending_count() const;
@@ -144,6 +152,7 @@ class PythonRuntimeCoordinator {
     std::thread::id consumer_thread_id_;
     std::optional<PythonRuntimeRequest> current_request_;
     std::string execution_phase_ = "created";
+    std::atomic<bool> stop_requested_{false};
 };
 
 PythonRuntimeCoordinator* active_python_runtime_coordinator() noexcept;
