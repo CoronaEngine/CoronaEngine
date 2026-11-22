@@ -63,7 +63,7 @@ void MechanicsSystem::process_mesh_moves() {
                         auto geometry_handle=profile->geometry_handle;
                         Bounds local;
                         if(profile->mechanics_handle) {
-                            auto body=hub.mechanics_storage().try_acquire_read(profile->mechanics_handle);
+                            auto body=Corona::find_mechanics(profile->mechanics_handle);
                             if(!body) return unavailable("mechanics",profile->mechanics_handle);
                             if(actor_handle!=q.actor && body->body_type==BodyType::Phantom) continue;
                             if(!geometry_handle) geometry_handle=body->geometry_handle;

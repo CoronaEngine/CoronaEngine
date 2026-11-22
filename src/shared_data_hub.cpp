@@ -68,8 +68,17 @@ ModelTransform* find_model_transform(EntityId handle) {
 SharedDataHub::GeometryStorage& SharedDataHub::geometry_storage() { return geometry_storage_; }
 const SharedDataHub::GeometryStorage& SharedDataHub::geometry_storage() const { return geometry_storage_; }
 
-SharedDataHub::MechanicsStorage& SharedDataHub::mechanics_storage() { return mechanics_storage_; }
-const SharedDataHub::MechanicsStorage& SharedDataHub::mechanics_storage() const { return mechanics_storage_; }
+EntityId SharedDataHub::create_mechanics() { return Ecs::emplace<MechanicsDevice>(); }
+void SharedDataHub::destroy_mechanics(EntityId handle) { Ecs::destroy(handle); }
+MechanicsDevice* SharedDataHub::try_mechanics(EntityId handle) {
+    return Ecs::try_get<MechanicsDevice>(handle);
+}
+const MechanicsDevice* SharedDataHub::try_mechanics(EntityId handle) const {
+    return Ecs::try_get_const<MechanicsDevice>(handle);
+}
+MechanicsDevice* find_mechanics(EntityId handle) {
+    return SharedDataHub::instance().try_mechanics(handle);
+}
 
 EntityId SharedDataHub::create_acoustics() { return Ecs::emplace<AcousticsDevice>(); }
 void SharedDataHub::destroy_acoustics(EntityId handle) { Ecs::destroy(handle); }
@@ -128,8 +137,7 @@ std::vector<std::uintptr_t> SharedDataHub::resolve_actor_geometry_handles(
             continue;
         }
         append_geometry(profile->geometry_handle);
-        if (const auto mechanics =
-                mechanics_storage_.try_acquire_read(profile->mechanics_handle)) {
+        if (const auto* mechanics = try_mechanics(profile->mechanics_handle)) {
             append_geometry(mechanics->geometry_handle);
         }
         if (const auto optics =

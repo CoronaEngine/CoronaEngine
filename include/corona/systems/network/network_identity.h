@@ -176,7 +176,7 @@ private:
             out.optics_seq = hub_.optics_storage().seq_id(out.optics_handle);
         }
         if (out.mechanics_handle != 0) {
-            out.mechanics_seq = hub_.mechanics_storage().seq_id(out.mechanics_handle);
+            out.mechanics_seq = Corona::Ecs::seq_of(out.mechanics_handle);
         }
         if (out.acoustics_handle != 0) {
             out.acoustics_seq = Corona::Ecs::seq_of(out.acoustics_handle);
@@ -194,8 +194,8 @@ private:
             }
         }
         if (identity.mechanics_handle != 0) {
-            auto mechanics = hub_.mechanics_storage().try_acquire_read(identity.mechanics_handle);
-            if (mechanics.valid() && mechanics->geometry_handle != 0) {
+            auto mechanics = Corona::find_mechanics(identity.mechanics_handle);
+            if (mechanics != nullptr && mechanics->geometry_handle != 0) {
                 return mechanics->geometry_handle;
             }
         }

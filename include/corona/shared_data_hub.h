@@ -827,6 +827,9 @@ struct ImageDevice {
 /// 便捷：按句柄取 ModelTransform 组件（无锁）。
 [[nodiscard]] ModelTransform* find_model_transform(EntityId handle);
 
+/// 便捷：按句柄取 MechanicsDevice 组件（无锁）。
+[[nodiscard]] MechanicsDevice* find_mechanics(EntityId handle);
+
 class SharedDataHub {
    public:
     static SharedDataHub& instance();
@@ -844,7 +847,6 @@ class SharedDataHub {
    public:
     // 新的 Storage 类型定义，包含默认的容量和内存池参数
     using GeometryStorage = Kernel::Utils::EntityStorage<GeometryDevice, 128, 2>;
-    using MechanicsStorage = Kernel::Utils::EntityStorage<MechanicsDevice, 128, 2>;
     using OpticsStorage = Kernel::Utils::EntityStorage<OpticsDevice, 128, 2>;
     using CameraStorage = Kernel::Utils::EntityStorage<CameraDevice, 128, 2>;
     using SceneStorage = Kernel::Utils::EntityStorage<SceneDevice, 128, 2>;
@@ -865,8 +867,11 @@ class SharedDataHub {
     GeometryStorage& geometry_storage();
     const GeometryStorage& geometry_storage() const;
 
-    MechanicsStorage& mechanics_storage();
-    const MechanicsStorage& mechanics_storage() const;
+    // mechanics 已删除 Storage：组件直接挂在实体上。
+    EntityId create_mechanics();
+    void destroy_mechanics(EntityId handle);
+    [[nodiscard]] MechanicsDevice* try_mechanics(EntityId handle);
+    [[nodiscard]] const MechanicsDevice* try_mechanics(EntityId handle) const;
 
     // acoustics 已删除 Storage：组件直接挂在实体上，句柄就是实体句柄。
     EntityId create_acoustics();
@@ -1007,7 +1012,6 @@ class SharedDataHub {
 
    private:
     GeometryStorage geometry_storage_;
-    MechanicsStorage mechanics_storage_;
     OpticsStorage optics_storage_;
     mutable std::mutex actor_metadata_mutex_;
     std::unordered_map<EntityId, std::string> actor_guids_;

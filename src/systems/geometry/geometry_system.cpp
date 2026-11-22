@@ -9,6 +9,7 @@
 #include <corona/resource/types/animation_pose.h>
 #include <corona/resource/types/image.h>
 #include <corona/shared_data_hub.h>
+#include <corona/ecs/access.h>
 #include <corona/systems/geometry/model_node_geometry.h>
 #include <corona/systems/geometry/geometry_commands.h>
 #include <corona/systems/geometry/scene_commands.h>
@@ -53,17 +54,16 @@ void refresh_geometry_resource_bounds(EntityId geometry_handle, std::uint64_t mo
     auto scene = Resource::ResourceManager::get_instance().acquire_read<Resource::Scene>(model_id);
     if (!scene) return;
     const auto bounds = scene->get_scene_aabb();
-    auto& mechanics = SharedDataHub::instance().mechanics_storage();
     std::vector<std::uintptr_t> handles;
-    // Do not acquire a write lock while a storage iterator retains its read lock.
-    for (auto it = mechanics.cbegin(); it != mechanics.cend(); ++it) {
-        if (it->geometry_handle == geometry_handle) {
-            handles.push_back(it.id());
+    for (const auto entity : Corona::Ecs::view<MechanicsDevice>()) {
+        const auto handle = Corona::Ecs::to_handle(entity);
+        if (Corona::Ecs::get<MechanicsDevice>(handle).geometry_handle == geometry_handle) {
+            handles.push_back(handle);
         }
     }
     for (auto handle : handles) {
-        if (auto value = mechanics.try_acquire_write(handle);
-            value && value->geometry_handle == geometry_handle) {
+        if (auto* value = Corona::find_mechanics(handle);
+            value != nullptr && value->geometry_handle == geometry_handle) {
             value->min_xyz = make_fvec3(bounds.min[0], bounds.min[1], bounds.min[2]);
             value->max_xyz = make_fvec3(bounds.max[0], bounds.max[1], bounds.max[2]);
         }
@@ -399,9 +399,8 @@ void GeometrySystem::update() {
                 EntityId mechanics_handle = profile_dev.mechanics_handle;
                 if ( !mechanics_handle ) continue;
 
-                auto& mechanics_storage = hub.mechanics_storage();
-                auto mechanics_read = mechanics_storage.acquire_read(mechanics_handle);
-                if (!mechanics_read.valid()) continue;
+                auto mechanics_read = Corona::find_mechanics(mechanics_handle);
+                if (mechanics_read == nullptr) continue;
 
                 auto geometry_read = geometry_storage.acquire_read(mechanics_read->geometry_handle);
                 if (!geometry_read.valid() || geometry_read->transform_handle == 0) continue;
@@ -1001,7 +1000,7 @@ void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {
         std::vector<std::uintptr_t> geom_handles;
         if (profile->geometry_handle) geom_handles.push_back(profile->geometry_handle);
         if (profile->mechanics_handle)
-            if (auto m = hub.mechanics_storage().try_acquire_read(profile->mechanics_handle))
+            if (auto m = Corona::find_mechanics(profile->mechanics_handle))
                 if (m->geometry_handle) geom_handles.push_back(m->geometry_handle);
         if (profile->optics_handle)
             if (auto o = hub.optics_storage().try_acquire_read(profile->optics_handle))
@@ -1367,7 +1366,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
         }
         // 路径 C：MechanicsDevice（物理/变换设备）→ geometry（最常用的路径）
         if (profile->mechanics_handle != 0) {
-            if (auto mech = hub.mechanics_storage().try_acquire_read(profile->mechanics_handle)) {
+            if (auto mech = Corona::find_mechanics(profile->mechanics_handle)) {
                 if (mech->geometry_handle != 0) {
                     geom_handles.push_back(mech->geometry_handle);
                 }
@@ -1482,7 +1481,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
         }
         // 路径 C：力学/物理设备 → geometry（渲染对象的主要路径）
         if (profile->mechanics_handle != 0) {
-            if (auto mech = hub.mechanics_storage().try_acquire_read(profile->mechanics_handle)) {
+            if (auto mech = Corona::find_mechanics(profile->mechanics_handle)) {
                 if (mech->geometry_handle != 0) {
                     geom_handles.push_back(mech->geometry_handle);
                 }
@@ -2098,7 +2097,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
 
         // 从 profile.mechanics_handle → geometry 收集
         if (profile->mechanics_handle) {
-            auto mech = hub.mechanics_storage().try_acquire_read(profile->mechanics_handle);
+            auto mech = Corona::find_mechanics(profile->mechanics_handle);
             if (mech) {
                 if (!physics_captured) {
                     rec.body_type = mech->body_type;
@@ -2255,7 +2254,7 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
 
                 // 恢复 body_type
                 if (profile->mechanics_handle) {
-                    auto mech = hub.mechanics_storage().try_acquire_write(
+                    auto mech = Corona::find_mechanics(
                         profile->mechanics_handle);
                     if (mech) {
                         mech->body_type = rec->body_type;
@@ -5367,7 +5366,7 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
                 if (o->geometry_handle) geom_handles.push_back(o->geometry_handle);
         }
         if (profile->mechanics_handle) {
-            if (auto m = hub.mechanics_storage().try_acquire_read(profile->mechanics_handle))
+            if (auto m = Corona::find_mechanics(profile->mechanics_handle))
                 if (m->geometry_handle) geom_handles.push_back(m->geometry_handle);
         }
         if (profile->acoustics_handle) {

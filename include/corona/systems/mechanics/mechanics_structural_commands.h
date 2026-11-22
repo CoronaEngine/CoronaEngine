@@ -67,9 +67,8 @@ inline bool apply_pending_mechanics_structural_commands() {
         return false;
     }
 
-    auto& storage = SharedDataHub::instance().mechanics_storage();
     for (auto& command : commands) {
-        auto device = storage.try_acquire_write(command.mechanics_handle);
+        auto* device = Corona::find_mechanics(command.mechanics_handle);
         if (!device) {
             continue;
         }

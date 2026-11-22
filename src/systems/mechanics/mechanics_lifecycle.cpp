@@ -255,9 +255,8 @@ void apply_pending_mechanics_updates() {
         return;
     }
 
-    auto& storage = Corona::SharedDataHub::instance().mechanics_storage();
     for (const auto& command : commands) {
-        if (auto device = storage.try_acquire_write(command.mechanics_handle)) {
+        if (auto* device = Corona::find_mechanics(command.mechanics_handle)) {
             if (Corona::has_mechanics_field(command.fields, Corona::MechanicsField::Mass)) {
                 device->mass = command.mass;
             }

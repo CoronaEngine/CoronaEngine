@@ -218,10 +218,10 @@ void test_mechanics_command_and_snapshot() {
     auto& channel = Corona::MechanicsCommandChannel::instance();
     channel.commands().clear();
 
-    const auto handle = hub.mechanics_storage().allocate();
+    const auto handle = hub.create_mechanics();
     CHECK(handle != 0);
     {
-        auto device = hub.mechanics_storage().acquire_write(handle);
+        auto device = Corona::find_mechanics(handle);
         device->mass = 3.0f;
         device->restitution = 0.5f;
     }
@@ -256,7 +256,7 @@ void test_mechanics_command_and_snapshot() {
 
     // 模拟 Mechanics 应用后再发布：pending 视图与已提交值收敛
     for (const auto& incoming : drained) {
-        if (auto device = hub.mechanics_storage().try_acquire_write(incoming.mechanics_handle)) {
+        if (auto device = Corona::find_mechanics(incoming.mechanics_handle)) {
             if (Corona::has_mechanics_field(incoming.fields, Corona::MechanicsField::Mass)) {
                 device->mass = incoming.mass;
             }
@@ -270,7 +270,7 @@ void test_mechanics_command_and_snapshot() {
     CHECK(Corona::mechanics_row(handle)->mass == 8.5f);
 
     channel.commands().clear();
-    hub.mechanics_storage().deallocate(handle);
+    hub.destroy_mechanics(handle);
 }
 
 void test_optics_command_and_snapshot() {
@@ -399,7 +399,7 @@ void test_mechanics_structural_commands() {
     auto& structural = Corona::MechanicsStructuralChannel::instance();
     structural.commands().clear();
 
-    const auto handle = hub.mechanics_storage().allocate();
+    const auto handle = hub.create_mechanics();
     int hits = 0;
 
     Corona::MechanicsCallbackBinding binding{};
@@ -409,7 +409,7 @@ void test_mechanics_structural_commands() {
     structural.commands().push(std::move(binding));
 
     // 应用之前槽位里没有回调
-    if (auto device = hub.mechanics_storage().try_acquire_read(handle)) {
+    if (auto device = Corona::find_mechanics(handle)) {
         CHECK(!device->on_move_callback);
     } else {
         CHECK(false);
@@ -418,7 +418,7 @@ void test_mechanics_structural_commands() {
     CHECK(Corona::apply_pending_mechanics_structural_commands());
     CHECK(!Corona::apply_pending_mechanics_structural_commands());  // 幂等：没有命令
 
-    if (auto device = hub.mechanics_storage().try_acquire_read(handle)) {
+    if (auto device = Corona::find_mechanics(handle)) {
         CHECK(static_cast<bool>(device->on_move_callback));
         if (device->on_move_callback) {
             device->on_move_callback();
@@ -441,7 +441,7 @@ void test_mechanics_structural_commands() {
     structural.commands().push(std::move(second));
 
     CHECK(Corona::apply_pending_mechanics_structural_commands());
-    if (auto device = hub.mechanics_storage().try_acquire_read(handle)) {
+    if (auto device = Corona::find_mechanics(handle)) {
         if (device->on_move_callback) {
             device->on_move_callback();
         }
@@ -449,7 +449,7 @@ void test_mechanics_structural_commands() {
     CHECK(hits == 101);  // 1 + 100
 
     structural.commands().clear();
-    hub.mechanics_storage().deallocate(handle);
+    hub.destroy_mechanics(handle);
 }
 
 void test_camera_release_queue_is_fifo() {

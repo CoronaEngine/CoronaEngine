@@ -51,7 +51,7 @@ void MechanicsSystem::refresh_foot_ground_cache() {
                 { auto profile = Corona::find_profile(ph); if (profile) mechanics_handle = profile->mechanics_handle; }
                 if (!mechanics_handle) continue;
                 std::uintptr_t gh = 0;
-                { auto body = hub.mechanics_storage().try_acquire_read(mechanics_handle);
+                { auto body = Corona::find_mechanics(mechanics_handle);
                   if (!body || body->body_type == BodyType::Phantom) continue;
                   gh = body->geometry_handle; }
                 if (!gh || alive.count(gh)) continue;

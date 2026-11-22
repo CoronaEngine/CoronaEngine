@@ -84,7 +84,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     std::unordered_set<std::uintptr_t> contact_observers;
 
     // --- 从 SharedDataHub 取各存储的引用（几何、变换、场景、环境等）---
-    auto& mechanics_storage = SharedDataHub::instance().mechanics_storage();            // mechanics 组件数据
     auto& geometry_storage = SharedDataHub::instance().geometry_storage();              // 网格/包围体句柄
     const auto& scene_storage = SharedDataHub::instance().scene_storage();              // 场景与 actor 列表（const → cbegin/cend 读锁遍历）
 
@@ -165,7 +164,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                             uint8_t old_angular = body.angular_lock;
                             uint8_t new_linear = 0;
                             uint8_t new_angular = 0;
-                            if (auto m_acc = mechanics_storage.try_acquire_read(h)) {
+                            if (auto m_acc = Corona::find_mechanics(h)) {
                                 params.mass = m_acc->mass;
                                 params.damping = m_acc->damping;
                                 params.restitution = m_acc->restitution;
@@ -230,7 +229,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             body.reset_sleep_timer = true;
             edited_bodies.insert(h);
         }
-        auto mechanics = mechanics_storage.try_acquire_read(h);
+        auto mechanics = Corona::find_mechanics(h);
         if (!mechanics) continue;
         needs_solver |= static_cast<bool>(mechanics->on_move_callback);
         auto geometry = geometry_storage.try_acquire_read(mechanics->geometry_handle);
@@ -314,7 +313,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
         if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
             return;
         }
-        auto m_acc = mechanics_storage.try_acquire_read(h);  // mechanics 组件读锁
+        auto m_acc = Corona::find_mechanics(h);  // mechanics 组件读锁
         if (!m_acc) continue;                            // 无数据则跳过
         const auto& m = *m_acc;                          // 其 min/max、geometry_handle
 
@@ -881,14 +880,14 @@ void MechanicsSystem::update_physics(float fixed_dt) {
                 std::function<void(std::uintptr_t, bool, const std::array<float, 3>&, const std::array<float, 3>&)> cb_b;
 
                 {
-                    auto mech_a_acc = mechanics_storage.try_acquire_read(ha);
+                    auto mech_a_acc = Corona::find_mechanics(ha);
                     if (mech_a_acc && mech_a_acc->collision_callback) {
                         cb_a = mech_a_acc->collision_callback;
                     }
                 }
 
                 {
-                    auto mech_b_acc = mechanics_storage.try_acquire_read(hb);
+                    auto mech_b_acc = Corona::find_mechanics(hb);
                     if (mech_b_acc && mech_b_acc->collision_callback) {
                         cb_b = mech_b_acc->collision_callback;
                     }
@@ -935,7 +934,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             if (mech_ha != 0) {
                 std::function<void(std::uintptr_t, bool, const std::array<float, 3>&, const std::array<float, 3>&)> cb;
                 {
-                    auto m_acc = mechanics_storage.try_acquire_read(mech_ha);
+                    auto m_acc = Corona::find_mechanics(mech_ha);
                     if (m_acc && m_acc->collision_callback && !impl_->shutdown_requested.load(std::memory_order_acquire)) {
                         cb = m_acc->collision_callback;
                     }
@@ -948,7 +947,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             if (mech_hb != 0) {
                 std::function<void(std::uintptr_t, bool, const std::array<float, 3>&, const std::array<float, 3>&)> cb;
                 {
-                    auto m_acc = mechanics_storage.try_acquire_read(mech_hb);
+                    auto m_acc = Corona::find_mechanics(mech_hb);
                     if (m_acc && m_acc->collision_callback && !impl_->shutdown_requested.load(std::memory_order_acquire)) {
                         cb = m_acc->collision_callback;
                     }
@@ -978,7 +977,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             if (mech_ha != 0) {
                 std::function<void(std::uintptr_t, bool, const std::array<float, 3>&, const std::array<float, 3>&)> cb;
                 {
-                    auto m_acc = mechanics_storage.try_acquire_read(mech_ha);
+                    auto m_acc = Corona::find_mechanics(mech_ha);
                     if (m_acc && m_acc->collision_callback && !impl_->shutdown_requested.load(std::memory_order_acquire)) {
                         cb = m_acc->collision_callback;
                     }
@@ -991,7 +990,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             if (mech_hb != 0) {
                 std::function<void(std::uintptr_t, bool, const std::array<float, 3>&, const std::array<float, 3>&)> cb;
                 {
-                    auto m_acc = mechanics_storage.try_acquire_read(mech_hb);
+                    auto m_acc = Corona::find_mechanics(mech_hb);
                     if (m_acc && m_acc->collision_callback && !impl_->shutdown_requested.load(std::memory_order_acquire)) {
                         cb = m_acc->collision_callback;
                     }
@@ -1167,7 +1166,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
         // ========== 异步执行移动回调 ==========
         {
-            auto mech_acc = mechanics_storage.try_acquire_read(h);
+            auto mech_acc = Corona::find_mechanics(h);
             if (mech_acc && mech_acc->on_move_callback) {
                 std::function<void()> cb_move = mech_acc->on_move_callback;
 

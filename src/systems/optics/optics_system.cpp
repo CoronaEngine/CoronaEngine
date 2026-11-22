@@ -3441,8 +3441,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     float bounding_radius = 1.0f;
                     bool  have_bounds     = false;
                     if (geometry_system_) {
-                        auto& ms = SharedDataHub::instance().mechanics_storage();
-                        if (auto mech = ms.try_acquire_read(profile->mechanics_handle)) {
+                        if (auto mech = Corona::find_mechanics(profile->mechanics_handle)) {
                             float dx = mech->max_xyz.x - mech->min_xyz.x;
                             float dy = mech->max_xyz.y - mech->min_xyz.y;
                             float dz = mech->max_xyz.z - mech->min_xyz.z;
@@ -3705,9 +3704,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     if (!geom || geom->transform_handle == 0) continue;
                     auto transform =
                         Corona::find_model_transform(geom->transform_handle);
-                    auto mech = SharedDataHub::instance()
-                                    .mechanics_storage()
-                                    .try_acquire_read(profile->mechanics_handle);
+                    const auto* mech = Corona::find_mechanics(profile->mechanics_handle);
                     if (!transform || !mech) continue;
 
                     ShadowCasterSnapshot snapshot;
