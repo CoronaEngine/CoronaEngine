@@ -1,5 +1,15 @@
+/*
+* Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
+*
+* NVIDIA CORPORATION and its licensors retain all intellectual property
+* and proprietary rights in and to this software, related documentation
+* and any modifications thereto.  Any use, reproduction, disclosure or
+* distribution of this software and related documentation without an express
+* license agreement from NVIDIA CORPORATION is strictly prohibited.
+*/
+
 #include "rtxpt_gi_pt.h"
-#include "rtxpt_gi_prefix.h"
+#include "rtxpt_gi_rays.h"
 #include "rtxpt_gi.h"
 #include "base/integral/integrator.h"
 #include "base/scattering/gi_ideal_glass.h"
@@ -7,6 +17,83 @@
 namespace vision::rtxpt_gi {
 namespace {
 using namespace ocarina;
+
+[[nodiscard]] inline Float4x4 identity() noexcept {
+    return make_float4x4(make_float4(1.f, 0.f, 0.f, 0.f), make_float4(0.f, 1.f, 0.f, 0.f),
+        make_float4(0.f, 0.f, 1.f, 0.f), make_float4(0.f, 0.f, 0.f, 1.f));
+}
+
+// The native matrices below are indexed as rows. Component expressions keep
+// that convention independent of host/DSL matrix multiplication conventions.
+[[nodiscard]] inline Float4x4 multiply3(const Float4x4 &a, const Float4x4 &b) noexcept {
+    Float4x4 result = identity();
+    for (uint i = 0u; i < 3u; ++i) {
+        Float4 row = make_float4(0.f);
+        for (uint j = 0u; j < 3u; ++j)
+            row[j] = (a[i].x * b[0][j] + a[i].y * b[1][j]) + a[i].z * b[2][j];
+        result[i] = row;
+    }
+    return result;
+}
+
+[[nodiscard]] inline Float4x4 rotate_from_to(const Float3 &from, const Float3 &to) noexcept {
+    Float e = dot(from, to), f = abs(e);
+    Float4x4 result = identity();
+    $if(!(f > float(1.0f - 1e-10f))) {
+        Float3 v = cross(from, to);
+        Float h = 1.f / (1.f + e);
+        Float hvx = h * v.x, hvz = h * v.z;
+        Float hvxy = hvx * v.y, hvxz = hvx * v.z, hvyz = hvz * v.y;
+        result[0] = make_float4(e + hvx * v.x, hvxy - v.z, hvxz + v.y, 0.f);
+        result[1] = make_float4(hvxy + v.z, e + h * v.y * v.y, hvyz - v.x, 0.f);
+        result[2] = make_float4(hvxz - v.y, hvyz + v.x, e + hvz * v.z, 0.f);
+    };
+    return result;
+}
+
+[[nodiscard]] inline Float4x4 transform_frame(const Float4x4 &old,
+                                        const Float3 &tangent_axis, const Float3 &bitangent_axis, const Float3 &normal_axis,
+                                        const Float3 &direction, const Float3 &old_direction,
+                                        const Bool &transmission) noexcept {
+    Float4x4 local = identity();
+    $if(transmission) { local = rotate_from_to(direction, old_direction); }
+    $else {
+        Float4x4 tangent = make_float4x4(make_float4(tangent_axis, 0.f),
+            make_float4(bitangent_axis, 0.f), make_float4(normal_axis, 0.f), make_float4(0.f, 0.f, 0.f, 1.f));
+        Float4x4 mirror = make_float4x4(make_float4(1.f, 0.f, 0.f, 0.f), make_float4(0.f, 1.f, 0.f, 0.f),
+            make_float4(0.f, 0.f, -1.f, 0.f), make_float4(0.f, 0.f, 0.f, 1.f));
+        Float4x4 transposed = identity();
+        for (uint i = 0u; i < 3u; ++i) {
+            Float4 row = make_float4(0.f);
+            for (uint j = 0u; j < 3u; ++j) row[j] = tangent[j][i];
+            transposed[i] = row;
+        }
+        local = multiply3(mirror, tangent);
+        local = multiply3(transposed, local);
+    };
+    return multiply3(old, local);
+}
+
+[[nodiscard]] inline Float3 virtual_position(const Float4x4 &matrix, const Float3 &position,
+                                             const Float3 &pivot) noexcept {
+    Float3 delta = position - pivot;
+    return make_float3(dot(matrix[0].xyz(), delta), dot(matrix[1].xyz(), delta),
+        dot(matrix[2].xyz(), delta)) + pivot;
+}
+
+[[nodiscard]] inline Uint4 pack_hit(const TriangleHitVar &hit) noexcept {
+    return make_uint4(hit.inst_id, hit.prim_id, ocarina::as<uint2>(Float2{hit.bary}));
+}
+
+[[nodiscard]] inline Float4x4 unpack_transform(const RtxptGIPrefixPlaneVar &node) noexcept {
+    Float4 a = ocarina::as<float4>(Uint4{node.hit_words});
+    Float4 b = node.virtual_position;
+    Float4x4 result = identity();
+    result[0] = make_float4(a.xyz(), 0.f);
+    result[1] = make_float4(a.w, b.xy(), 0.f);
+    result[2] = make_float4(b.zw(), node.throughput_flags.w, 0.f);
+    return result;
+}
 
 void queue_pt_plane(const PrefixStorage &storage, const Uint &plane, const RayVar &ray,
                     const Float3 &beta, const Uint &depth, const Float &distance,
@@ -23,11 +110,9 @@ void queue_pt_plane(const PrefixStorage &storage, const Uint &plane, const RayVa
     storage.write(plane, node);
 }
 
-
-}
+}// namespace
 
 void build_pt_prefix(const PrefixStorage &storage, RtxptGI &env, const Uint &primary_flag) noexcept {
-    using namespace prefix_detail;
     const auto &geometry = Toolkit::geometry();
     const auto &swl = env.sampled_wavelengths();
     auto &lights = Toolkit::renderer().light_sampler();

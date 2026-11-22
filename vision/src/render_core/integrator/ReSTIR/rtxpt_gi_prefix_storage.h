@@ -36,8 +36,7 @@ constexpr uint PrefixInvalid = 0xffffffffu, PrefixQueued = 0xfffffffeu;
 constexpr uint PrefixDominantBit = 1u << 8u;
 
 // PT Build retains the queue representation above until a plane terminates.
-// Terminal records reuse dead queue fields for exact FP32 guide data. The
-// legacy build_standard_prefix producer does not emit this PT representation.
+// Terminal records reuse dead queue fields for exact FP32 guide data.
 constexpr uint PtPrefixDepthMask = 0x3cu;
 constexpr uint PtPrefixConsumedBit = 1u << 6u;
 constexpr uint PtPrefixIdealPathBit = 1u << 7u;

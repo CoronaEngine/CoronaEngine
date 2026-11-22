@@ -15,8 +15,7 @@
 namespace vision::rtxpt_gi::lighting_dsl {
 using namespace ocarina;
 
-// Typed AST implementations of the matched native light math. Native shader
-// files are offline references only; these functions never register headers.
+// Typed AST implementations of the RTXPT light sampling and feedback math.
 struct PackedLight {
     Uint4 lo{make_uint4(0u)}, hi{make_uint4(0u)};
 };

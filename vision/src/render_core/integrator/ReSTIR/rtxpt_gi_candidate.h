@@ -8,8 +8,6 @@ class RtxptGI;
 }
 
 namespace vision::rtxpt_gi {
-struct StandardSurfaceView;
-
 struct CandidateTraceResult {
     GISampleVar sample;
     HitBSDFVar proposal;

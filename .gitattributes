@@ -6,12 +6,5 @@ vision/src/render_core/denoiser/ReBLUR/scheduler/src/CpuReblurConfig.h whitespac
 # Preserve immutable benchmark snapshots and their recorded byte checksums.
 docs/benchmarks/restirgi-20261107/** -text -whitespace
 
-# Preserve native GI reference sources, license and generated oracle bytes.
-vision/src/render_core/integrator/ReSTIR/rtxpt_gi_native/original/** -text -whitespace
+# Preserve the original NVIDIA license bytes.
 vision/src/render_core/integrator/ReSTIR/rtxpt_gi_native/LICENSE.txt -text -whitespace
-vision/src/render_core/integrator/ReSTIR/rtxpt_gi_native/literal.h -text -whitespace
-vision/src/render_core/integrator/ReSTIR/rtxpt_gi_native/standard_bsdf.slangh -text -whitespace
-vision/src/render_core/integrator/ReSTIR/rtxpt_gi_native/lighting/literal.h -text -whitespace
-vision/src/render_core/integrator/ReSTIR/rtxpt_gi_interiors_literal.h -text -whitespace
-vision/src/render_core/integrator/ReSTIR/rtxpt_gi_prefix_literal.h -text -whitespace
-vision/src/render_core/integrator/ReSTIR/rtxpt_gi_rng_literal.h -text -whitespace

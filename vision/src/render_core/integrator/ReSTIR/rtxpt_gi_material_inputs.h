@@ -1,7 +1,11 @@
 #pragma once
 
-#include "rtxpt_gi_material.h"
+#include "base/mgr/scene.h"
+#include "rhi/device.h"
+#include <algorithm>
 #include <bit>
+#include <cmath>
+#include <limits>
 
 namespace vision::rtxpt_gi {
 namespace detail {
@@ -50,33 +54,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
-// Native SG conversion, including the original baseColorFromSpecular expression.
-[[nodiscard]] inline Float standard_perceived_brightness(const Float3 &color) noexcept {
-    return sqrt(.299f * color.x * color.x + .587f * color.y * color.y + .114f * color.z * color.z);
-}
-[[nodiscard]] inline Float standard_solve_metalness(const Float &diffuse, const Float &specular,
-                                                  const Float &one_minus_specular) noexcept {
-    Float result = 0.f;
-    $if(!(specular < .04f)) {
-        Float a = .04f;
-        Float b = diffuse * one_minus_specular / (1.f - .04f) + specular - 2.f * .04f;
-        Float c = .04f - specular;
-        Float discriminant = max(b * b - 4.f * a * c, 0.f);
-        result = clamp((-b + sqrt(discriminant)) / (2.f * a), 0.f, 1.f);
-    };
-    return result;
-}
-[[nodiscard]] inline Float4 convert_specular_glossiness(const Float3 &diffuse,
-                                                       const Float3 &specular) noexcept {
-    Float one_minus_specular = 1.f - max(specular.x, max(specular.y, specular.z));
-    Float metallic = standard_solve_metalness(standard_perceived_brightness(diffuse),
-                                            standard_perceived_brightness(specular), one_minus_specular);
-    Float3 from_diffuse = diffuse * (one_minus_specular / (1.f - .04f) / max(1.f - metallic, 1e-6f));
-    Float3 from_specular = specular - .04f * (1.f - metallic) / max(metallic, 1e-6f);
-    Float3 color = saturate(lerp(metallic * metallic, from_diffuse, from_specular));
-    return make_float4(color, metallic);
-}
-
 // Read only actual Number nodes. Uniform image averages are not scalar inputs.
 [[nodiscard]] inline optional<vector<float>> standard_number_values(const ShaderNodeSlot *slot) noexcept {
     if (!slot || !slot->valid() || slot->node()->impl_type() != "number") return {};
@@ -263,46 +240,6 @@ public:
         OC_INFO_FORMAT("RTXPT GI material inputs: materials={}, specular_glossiness={}, legacy_exporter={}, metadata_bytes={}",
                        materials.all_instance_num(), sg_count, legacy_count, values.size() * sizeof(uint4));
         OC_INFO_FORMAT("RTXPT GI alpha metadata: tested={}, visibility_exclusions={}", has_alpha_tested_, has_visibility_exclusions_);
-    }
-
-    [[nodiscard]] StandardSurfaceView load(const Interaction &it, const SampledWavelengths &swl,
-                                            const Float &outside_ior = Float{1.f}) const noexcept {
-        const Uint4 data = metadata_.read(it.material_id() * 3u, false);
-        const Float material_ior = as<float>(data.y);
-        StandardSurfaceView surface = load_standard_surface(it, swl, outside_ior, &material_ior);
-        surface.material.header = make_uint2(metadata_.read(it.material_id() * 3u + 1u, false).w,
-                                             metadata_.read(it.material_id() * 3u + 2u, false).w);
-        $if((data.x & SpecularGlossiness) != 0u) {
-            const Uint4 colors = metadata_.read(it.material_id() * 3u + 1u, false);
-            const Float3 specular_factor = as<float3>(Uint3{colors.xyz()});
-            const Float gloss_factor = as<float>(data.z);
-            scene().materials().dispatch(it.material_id(), [&](const Material *source) {
-                Float3 diffuse = make_float3(1.f);
-                if (const auto *slot = source->input_slot("color"); slot && slot->valid())
-                    diffuse = slot->evaluate(it, swl)->as_vec3();
-                Float3 specular = specular_factor;
-                if (const auto *slot = detail::standard_child(source->input_slot("spec_tint"), "lhs")) {
-                    $if((data.x & SpecularTexture) != 0u) { specular *= slot->evaluate(it, swl)->as_vec3(); };
-                }
-                Float roughness = surface.material.p0.w;
-                $if((data.x & ConstantGloss) != 0u) { roughness = 1.f - gloss_factor; };
-                if (const auto *slot = detail::standard_gloss_texture(*source)) {
-                    $if((data.x & GlossTexture) != 0u) { roughness = 1.f - slot->evaluate(it, swl)->as_scalar() * gloss_factor; };
-                }
-                const Float4 converted = detail::convert_specular_glossiness(diffuse, specular);
-                const Float3 color = converted.xyz();
-                const Float metallic = converted.w;
-                const Float material_ior = surface.interior_ior;
-                const Float f = (material_ior - 1.f) / (material_ior + 1.f);
-                const Float transmission = standard_number(*source, "transmission_weight", it, swl, 0.f) * (1.f - metallic);
-                const Float diffuse_transmission = standard_number(*source, "diffuse_transmission", it, swl, 0.f) * (1.f - metallic);
-                surface.material.p0 = make_float4(lerp(metallic, color, make_float3(0.f)), roughness);
-                surface.material.p1 = make_float4(lerp(metallic, make_float3(f * f), color), metallic);
-                surface.material.p2 = make_float4(color, diffuse_transmission);
-                surface.material.p3.x = transmission;
-            });
-        };
-        return surface;
     }
 
     [[nodiscard]] Float ior(const Uint &material_id, const SampledWavelengths &swl) const noexcept {

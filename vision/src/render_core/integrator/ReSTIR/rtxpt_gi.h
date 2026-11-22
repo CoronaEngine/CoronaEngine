@@ -6,7 +6,6 @@
 #include "radiance_storage.h"
 #include "rtxpt_gi_denoiser.h"
 #include "reservoir.h"
-#include "rtxpt_gi_surface.h"
 #include "rtxpt_gi_pt.h"
 #include "rtxpt_gi_prefix_storage.h"
 
@@ -192,7 +191,7 @@ public:
     }
     [[nodiscard]] rtxpt_gi::NativeReblurStorage native_reblur_storage() const noexcept {
         return native_reblur_enabled_ ? rtxpt_gi::NativeReblurStorage{&native_reblur_diffuse_, &native_reblur_specular_,
-            &native_reblur_bypass_, nullptr, &native_reblur_motion_y_, pipeline()->pixel_num()} : rtxpt_gi::NativeReblurStorage{};
+            &native_reblur_bypass_, &native_reblur_motion_y_, pipeline()->pixel_num()} : rtxpt_gi::NativeReblurStorage{};
     }
     [[nodiscard]] const rtxpt_gi::NativeLightSampler &rtxpt_lights() const noexcept { return *rtxpt_lights_; }
     [[nodiscard]] rtxpt_gi::StandardMaterialInputs &rtxpt_materials() const noexcept { return *rtxpt_materials_; }

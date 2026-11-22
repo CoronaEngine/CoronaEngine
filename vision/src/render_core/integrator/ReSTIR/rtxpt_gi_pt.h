@@ -2,7 +2,7 @@
 
 #include "rtxpt_gi_prefix_storage.h"
 #include "rtxpt_gi_candidate.h"
-#include "rtxpt_gi_surface.h"
+#include "base/scattering/half_storage.h"
 #include "base/scattering/material.h"
 #include "base/scattering/gi_principled_parameters.h"
 #include "base/mgr/scene.h"
@@ -28,6 +28,30 @@ OC_STRUCT(vision, RtxptGIPTSurface, position_depth, frame, encoded_view, materia
 OC_STRUCT(vision, RtxptGIPTReference, fields, identity, metadata, hit_words) {};
 
 namespace vision::rtxpt_gi {
+[[nodiscard]] inline Float2 standard_oct(const Float3 &normal) noexcept {
+    Float3 n = normal / (abs(normal.x) + abs(normal.y) + abs(normal.z));
+    Float2 wrapped = (1.f - abs(n.yx())) * select(n.xy() >= make_float2(0.f), Float2{make_float2(1.f)}, Float2{make_float2(-1.f)});
+    return select(n.z >= 0.f, n.xy(), wrapped) * .5f + .5f;
+}
+[[nodiscard]] inline Float3 standard_unoct(const Float2 &encoded) noexcept {
+    Float2 f = encoded * 2.f - 1.f;
+    Float3 n = make_float3(f, 1.f - abs(f.x) - abs(f.y));
+    Float t = saturate(-n.z);
+    n.x += select(n.x >= 0.f, -t, t);
+    n.y += select(n.y >= 0.f, -t, t);
+    return normalize(n);
+}
+[[nodiscard]] inline Uint standard_r11(const Float3 &rgb) noexcept {
+    Uint2 half = pack_storage_half4(make_float4(rgb, 0.f));
+    Uint r = half.x & 0xffffu, g = half.x >> 16u, b = half.y & 0xffffu;
+    return ((r << 17u) & 0xffe00000u) | ((g << 6u) & 0x001ffc00u) | ((b >> 5u) & 0x000003ffu);
+}
+[[nodiscard]] inline Float3 standard_unr11(const Uint &rgb) noexcept {
+    Uint r = (rgb >> 17u) & 0x7ff0u, g = (rgb >> 6u) & 0x7ff0u, b = (rgb << 5u) & 0x7fe0u;
+    Float2 rg = unpack_storage_half2(r | (g << 16u));
+    return make_float3(rg, unpack_storage_half2(b).x);
+}
+
 struct PTEval { Float3 diffuse{make_float3(0.f)}, specular{make_float3(0.f)}; };
 struct PTSurfaceView {
     Interaction it{false};
