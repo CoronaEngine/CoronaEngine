@@ -11,7 +11,7 @@
 编辑器写操作只能经过 C++ 的 typed V8 具名绑定。底层引擎 API（例如 `camera()`、
 `geometry()`）属于 C++ 内部实现，Vue 不直接导入它们。
 
-Python 侧分两组：顶层的宿主支持（7 个 `m.def` + 载荷类型 `InputEvent`）与 `cef_py_bind.cpp`
+Python 侧分两组：顶层的宿主支持（8 个 `m.def` + 载荷类型 `InputEvent`）与 `cef_py_bind.cpp`
 的编辑器传输。`tests/tools/python_surface.py` 把两组一起钉死，新增名字必须同步。
 `CoronaEngine.script` 下的引擎对象模型曾作为第三组存在，随脚本运行时失去全部调用方后被删除。
 

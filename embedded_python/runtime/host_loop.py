@@ -12,14 +12,27 @@ import time
 logger = logging.getLogger(__name__)
 
 
+def _report(phase, name):
+    """Name the loop's next action for the native side; never fail the loop.
+
+    ``phase`` is diagnostics. The loop is the last line of defence for service
+    settlement and the editor tick, so a reporter that raises must not abort a
+    frame or strand a request: catch only that reporter's exception and carry on.
+    """
+    try:
+        phase(name)
+    except Exception:
+        pass
+
+
 def run_loop(engine, editor, *, dispatch, phase=lambda name: None, poll_interval=0.004,
              update_period=1.0 / 60.0, clock=time.perf_counter, sleep=time.sleep):
     """Pull work, tick the editor, and return the shutdown snapshot.
 
     ``dispatch`` is required: without it a drained request can never complete.
     ``phase`` names what the loop is about to do so the native side can record it;
-    it is diagnostics only and the injected reporter already swallows its own
-    errors, so it is called bare rather than wrapped.
+    it is diagnostics only, and ``_report`` keeps a raising reporter from changing
+    the loop's behaviour.
     The native module is injected as ``engine`` so this module stays importable
     without an interpreter.
     """
@@ -27,12 +40,13 @@ def run_loop(engine, editor, *, dispatch, phase=lambda name: None, poll_interval
     snapshot = None
     try:
         while not engine.should_stop():
-            phase("waiting")
+            _report(phase, "waiting")
             requests = engine.poll_service_requests()
             if requests:
                 for request in requests:
                     request_id = request.get("request_id")
-                    phase(
+                    _report(
+                        phase,
                         f"service_request:{request.get('service')}:{request.get('function')}")
                     try:
                         payload = dispatch(
@@ -60,7 +74,7 @@ def run_loop(engine, editor, *, dispatch, phase=lambda name: None, poll_interval
                 continue
             now = clock()
             if now >= next_update:
-                phase("update_runtime")
+                _report(phase, "update_runtime")
                 editor.update_runtime()
                 next_update += update_period
                 # A frame that overran its period must not leave a backlog of catch-up

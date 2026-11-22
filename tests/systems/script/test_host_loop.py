@@ -167,3 +167,24 @@ def test_a_raising_completion_does_not_strand_the_rest_of_the_batch(caplog):
     ids = [request_id for request_id, _ in engine.completed]
     assert ids == [2, 3], "a completion failure must not strand the rest of the batch"
     assert "event=runtime.service.complete_failed request_id=1" in caplog.text
+
+
+def test_a_raising_phase_reporter_cannot_abort_the_loop():
+    clock = FakeClock()
+    engine = FakeEngine([[request(1, "project_files", "load", [])]], stop_after=2)
+    editor = FakeEditor()
+    prompted = []
+
+    def phase(name):
+        prompted.append(name)
+        raise RuntimeError("diagnostics blew up")
+
+    snapshot = run_loop(engine, editor, clock=clock, sleep=clock.sleep,
+                        dispatch=lambda s, f, a: {"success": True}, phase=phase)
+    assert "waiting" in prompted
+    assert "service_request:project_files:load" in prompted
+    assert "update_runtime" in prompted
+    assert engine.completed == [(1, {"success": True})]
+    assert editor.updates == 1
+    assert editor.shutdown_calls == 1
+    assert snapshot == {"runtime_state": "stopped"}

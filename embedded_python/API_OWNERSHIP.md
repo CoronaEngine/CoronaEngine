@@ -1,6 +1,6 @@
 # API Ownership
 
-跨层契约按调用方分裂：Web 走 typed V8 具名绑定；Python 侧是**两组**——宿主支持（7 个 `m.def`
+跨层契约按调用方分裂：Web 走 typed V8 具名绑定；Python 侧是**两组**——宿主支持（8 个 `m.def`
 加它们的载荷类型 `InputEvent`）与编辑器传输（服务派发器与项目会话）。Web 面与这两组都不重叠。
 JSON manifest 与脚本运行时契约都已删除；随脚本运行时一起留下的引擎对象模型也已删除（见"历史"）。
 
@@ -8,7 +8,7 @@ JSON manifest 与脚本运行时契约都已删除；随脚本运行时一起留
 |---|---|---|---|
 | Web ↔ C++ | `src/systems/ui/cef/cef_v8_binding.cpp` 的 typed V8 具名绑定 | 不参与 | `src/api/editorApi.js` |
 | Web → Python 服务 | `src/systems/ui/editor_api/python_service_bridge.cpp`（只做传输） | `runtime/editor_host.py` 的服务白名单 | `corona.bridge.call` |
-| Python 宿主 ↔ C++ | `src/systems/script/python/host_support_bindings.cpp` 的 `send_log`、`drain_input_events`、`python_runtime_phase`；`src/systems/ui/cef/cef_py_bind.cpp` 的 `active_project_path`、`active_project_session`、`register_python_script_service_dispatcher`、`unregister_python_script_service_dispatcher` | `runtime/native_engine.py` 只取模块，不包 schema | 不参与 |
+| Python 宿主 ↔ C++ | `src/systems/script/python/host_support_bindings.cpp` 的 `send_log`、`drain_input_events`、`python_runtime_phase`、`should_stop`；`src/systems/ui/cef/cef_py_bind.cpp` 的 `active_project_path`、`active_project_session`、`register_python_script_service_dispatcher`、`unregister_python_script_service_dispatcher` | `runtime/native_engine.py` 只取模块，不包 schema | 不参与 |
 | 载荷类型 | 同一文件的 `InputEvent`（顶层，字段与 `input.dispatch` 同名） | 与 `drain_input_events` 同层；`python_surface.HOST_SUPPORT_TYPES` 钉死 | 不参与 |
 
 ## 规则
