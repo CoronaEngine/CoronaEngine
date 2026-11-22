@@ -28,7 +28,7 @@ void MechanicsSystem::refresh_foot_ground_cache() {
     std::unordered_set<std::uintptr_t> alive;
     struct SceneSnapshot { EntityId handle; std::uintptr_t environment; std::vector<std::uintptr_t> actors; };
     std::vector<SceneSnapshot> scenes;
-    const auto& scene_storage = hub.scene_storage();
+    auto scene_storage = Corona::all_scenes();
     for (auto scene_it = scene_storage.cbegin(); scene_it != scene_storage.cend(); ++scene_it) {
         const auto& scene = *scene_it;
         if (scene.enabled) scenes.push_back({scene_it.id(), scene.environment, scene.actor_handles});

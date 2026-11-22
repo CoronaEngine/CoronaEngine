@@ -257,7 +257,7 @@ void AcousticsSystem::update_spatial() {
 
     // --- (a) listener ← 场景活动相机 ---
     {
-        auto& scene_storage = hub.scene_storage();
+    auto scene_storage = Corona::all_scenes();
         auto& camera_storage = hub.camera_storage();
         for (const auto& scene : scene_storage) {
             if (!scene.enabled || scene.active_camera_handle == 0) {

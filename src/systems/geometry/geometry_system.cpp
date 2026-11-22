@@ -302,7 +302,7 @@ void GeometrySystem::update() {
     // 兜底：上一轮写盘可能因失败进入退避，这里按时间戳重新尝试排空队列。
     impl_->pump_lod_disk_writes();
     auto& hub = SharedDataHub::instance();
-    auto& scene_storage = hub.scene_storage();
+    auto scene_storage = Corona::all_scenes();
     auto& camera_storage = hub.camera_storage();
     auto& geometry_storage = hub.geometry_storage();
     std::vector<std::uintptr_t> scene_handles;
@@ -373,8 +373,8 @@ void GeometrySystem::update() {
         std::vector<std::uintptr_t> actor_handles;
         std::vector<std::uintptr_t> camera_handles;
         {
-            auto scene_read = scene_storage.try_acquire_read(scene_handle);
-            if ( !scene_read.valid() )  continue;
+            auto scene_read = Corona::find_scene(scene_handle);
+            if ( scene_read == nullptr )  continue;
             actor_handles = scene_read->actor_handles;
             camera_handles = scene_read->camera_handles;
         }
@@ -821,8 +821,8 @@ void GeometrySystem::update() {
                 scene_state.stats.actor_unloaded  = unloaded;
             }
         }
-        auto scene_write = scene_storage.try_acquire_write(scene_handle);
-        if (scene_write.valid()) {
+        auto scene_write = Corona::find_scene(scene_handle);
+        if (scene_write != nullptr) {
             SceneDevice& scene_dev_write = *scene_write;
             scene_dev_write.min_world = root_aabb.min;
             scene_dev_write.max_world = root_aabb.max;
@@ -2744,8 +2744,8 @@ namespace {
     auto& hub = SharedDataHub::instance();
     auto& camera_storage = hub.camera_storage();
     std::vector<ktm::fvec3> positions;
-    for (auto sit = hub.scene_storage().cbegin(); sit != hub.scene_storage().cend(); ++sit) {
-        for (EntityId cam_handle : sit->camera_handles) {
+    for (const auto& scene : Corona::all_scenes()) {
+        for (EntityId cam_handle : scene.camera_handles) {
             if (auto cam = camera_storage.try_acquire_read_nowait(cam_handle)) {
                 positions.push_back(cam->position);
             }
@@ -3445,8 +3445,8 @@ void GeometrySystem::reconcile_lod_residency() {
     std::vector<Viewer> viewers;
     {
         auto& camera_storage = hub.camera_storage();
-        for (auto sit = hub.scene_storage().cbegin(); sit != hub.scene_storage().cend(); ++sit) {
-            for (EntityId cam_handle : sit->camera_handles) {
+        for (const auto& scene : Corona::all_scenes()) {
+            for (EntityId cam_handle : scene.camera_handles) {
                 if (auto cam = camera_storage.try_acquire_read_nowait(cam_handle)) {
                     const float eps = compute_angular_epsilon(
                         lod_pixel_budget, cam->fov,

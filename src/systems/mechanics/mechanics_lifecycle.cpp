@@ -156,7 +156,7 @@ struct PerformanceReport {
 
 float resolve_fixed_dt() {
     auto& hub = SharedDataHub::instance();
-    const auto& scenes = hub.scene_storage();
+    auto scenes = Corona::all_scenes();
     for (const auto& scene : scenes) {
         if (!scene.enabled || !scene.simulation_enabled || scene.environment == 0) continue;
         if (const auto* environment = hub.try_environment(scene.environment)) {
@@ -167,7 +167,7 @@ float resolve_fixed_dt() {
 }
 
 bool simulation_active() {
-    const auto& scenes = SharedDataHub::instance().scene_storage();
+    auto scenes = Corona::all_scenes();
     for (const auto& scene : scenes)
         if (scene.enabled && scene.simulation_enabled) return true;
     return false;

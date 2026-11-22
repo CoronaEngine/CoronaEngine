@@ -134,7 +134,7 @@ class OpticsSystem : public Kernel::SystemBase {
         CameraVisionRenderMode vision_mode{CameraVisionRenderMode::PathTracing};
     };
     struct LockedRenderView {
-        SharedDataHub::SceneStorage::ReadHandle scene;
+        const SceneDevice* scene{nullptr};
         // Camera settings are small value data. Never hold their storage lock
         // across shader compilation, GPU execution or presentation waits.
         CameraDevice camera;

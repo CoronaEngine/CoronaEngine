@@ -38,7 +38,7 @@ void MechanicsSystem::process_mesh_moves() {
                std::any_of(q.velocity.begin(),q.velocity.end(),[](float x) { return !std::isfinite(x) || std::abs(x)>24; })) return {"invalid"};
             if(std::chrono::steady_clock::now()-request.submitted>std::chrono::seconds(2)) return {"expired"};
             if(!impl_->gpu_collision) return unavailable("pipeline");
-            auto& motion_scenes = hub.scene_storage();
+    auto motion_scenes = Corona::all_scenes();
             for(auto scene_it = motion_scenes.cbegin(); scene_it != motion_scenes.cend(); ++scene_it) {
                 const auto& scene = *scene_it;
                 if(!scene.enabled || std::find(scene.camera_handles.begin(),scene.camera_handles.end(),q.camera)==scene.camera_handles.end() ||
@@ -139,7 +139,7 @@ void MechanicsSystem::process_mesh_moves() {
                     if(future->wait_for(std::chrono::seconds(0))!=std::future_status::ready)return false;
                     auto apply=[&]() -> MeshMoveEvent {
                         const auto result=future->get();auto& hub=SharedDataHub::instance();
-                        auto scene=hub.scene_storage().try_acquire_read(scene_handle);
+                        auto scene=Corona::find_scene(scene_handle);
                         if(!scene || !scene->enabled || std::find(scene->actor_handles.begin(),scene->actor_handles.end(),q.actor)==scene->actor_handles.end())return {"stale_scene"};
                         auto target=Corona::find_model_transform(transform_handle);if(!target)return {"stale_scene"};
                         const auto current=target->compute_matrix(),before=original.compute_matrix();

@@ -94,9 +94,9 @@ inline bool apply_pending_scene_commands() {
         return false;
     }
 
-    auto& storage = SharedDataHub::instance().scene_storage();
+    auto storage = Corona::all_scenes();
     for (const auto& command : commands) {
-        auto scene = storage.try_acquire_write(command.scene_handle);
+        auto* scene = SharedDataHub::instance().try_scene(command.scene_handle);
         if (!scene) {
             continue;  // 场景已销毁：命令随场景一起作废
         }

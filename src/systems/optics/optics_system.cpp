@@ -1574,7 +1574,7 @@ void apply_pending_default_surface_camera_update() {
     auto& hub = Corona::SharedDataHub::instance();
     const auto update = hub.take_default_surface_camera_update();
     if (!update) return;
-    for (const auto& scene : std::as_const(hub.scene_storage())) {
+    for (const auto& scene : Corona::all_scenes()) {
         if (!scene.enabled) continue;
         auto camera = hub.camera_storage().try_acquire_write(select_scene_camera_handle(scene));
         if (!camera || !camera->follows_default_surface ||
@@ -1618,7 +1618,7 @@ template<typename Views>
 
 [[nodiscard]] std::optional<Corona::CameraDevice> active_scene_camera_values() {
     auto& hub = Corona::SharedDataHub::instance();
-    for (const auto& scene : std::as_const(hub.scene_storage())) {
+    for (const auto& scene : Corona::all_scenes()) {
         if (!scene.enabled) continue;
         const auto handle = select_scene_camera_handle(scene);
         if (auto camera = hub.camera_storage().try_acquire_read(handle)) return *camera;
@@ -1641,7 +1641,7 @@ template<typename Views>
 // EngineBuilt currently represents the single enabled Corona scene. Never use
 // EnvironmentDevice's bright defaults when that scene has no environment.
 [[nodiscard]] Corona::EnvironmentDevice engine_vision_environment() {
-    for (const auto& scene : std::as_const(Corona::SharedDataHub::instance().scene_storage())) {
+    for (const auto& scene : Corona::all_scenes()) {
         if (scene.enabled) return vision_environment_for_scene(scene);
     }
     return vision_environment_for_scene(Corona::SceneDevice{});
@@ -1659,7 +1659,7 @@ void fallback_large_scenes_to_native_renderer() {
     auto& geometry_storage = hub.geometry_storage();
     auto& camera_storage = hub.camera_storage();
 
-    for (const auto& scene : std::as_const(hub.scene_storage())) {
+    for (const auto& scene : Corona::all_scenes()) {
         if (!scene.enabled) continue;
         const bool has_vision_camera = std::any_of(scene.camera_handles.begin(), scene.camera_handles.end(),
             [&](auto handle) {
@@ -1711,7 +1711,7 @@ void fallback_large_scenes_to_native_renderer() {
     const std::function<bool(std::uintptr_t)>& pending_capture = {}) {
     VisionModeSelection selection;
 
-    for (const auto& scene : std::as_const(Corona::SharedDataHub::instance().scene_storage())) {
+    for (const auto& scene : Corona::all_scenes()) {
         if (!scene.enabled) continue;
         for (const auto camera_handle : scene.camera_handles) {
             auto camera =
@@ -3055,13 +3055,11 @@ void OpticsSystem::update() {
     fallback_large_scenes_to_native_renderer();
     std::vector<std::uintptr_t> requested_vision_cameras;
     bool native_view_requested = false;
-    auto& scenes = SharedDataHub::instance().scene_storage();
-    for (const auto scene_entity : scenes.view()) {
-        auto scene = scenes.try_acquire_read(Corona::Kernel::Utils::to_entity_id(scene_entity));
-        if (!scene || !scene->enabled) {
+    for (const auto& scene : Corona::all_scenes()) {
+        if (!scene.enabled) {
             continue;
         }
-        for (const auto camera_handle : scene->camera_handles) {
+        for (const auto camera_handle : scene.camera_handles) {
             if (auto camera =
                     SharedDataHub::instance().camera_storage().try_acquire_read(camera_handle);
                 camera) {
@@ -3115,13 +3113,13 @@ void OpticsSystem::update() {
 OpticsSystem::RenderFramePlan OpticsSystem::build_render_frame_plan() {
     RenderFramePlan plan;
     std::unordered_set<std::uintptr_t> scheduled;
-    auto& scenes = SharedDataHub::instance().scene_storage();
-    for (const auto scene_entity : scenes.view()) {
-        auto scene = scenes.try_acquire_read(Corona::Kernel::Utils::to_entity_id(scene_entity));
-        if (!scene || !scene->enabled) continue;
-        // 场景句柄直接来自实体，不再用 &scene 反推（entt 里引用地址不是实体 ID）
-        const auto scene_handle = Corona::Kernel::Utils::to_entity_id(scene_entity);
-        for (const auto handle : scene->camera_handles) {
+    auto scenes = Corona::all_scenes();
+    for (auto scene_it = scenes.begin(); scene_it != scenes.end(); ++scene_it) {
+        const auto& scene = *scene_it;
+        if (!scene.enabled) continue;
+        // 场景句柄直接来自实体句柄（entt 里引用地址不是实体 ID）。
+        const auto scene_handle = scene_it.id();
+        for (const auto handle : scene.camera_handles) {
             auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(handle);
             if (!camera) continue;
             plan.has_vision_cameras |= camera->render_backend == CameraRenderBackend::Vision;
@@ -3139,14 +3137,14 @@ std::optional<OpticsSystem::LockedRenderView> OpticsSystem::lock_render_view(
     const RenderView& view, CameraRenderBackend backend) {
     // Scene structure stays locked, while camera values are copied under a
     // short read lock. UI presentation and input must not wait for a GPU frame.
-    auto scene = SharedDataHub::instance().scene_storage().try_acquire_read(view.scene_handle);
+    auto scene = Corona::find_scene(view.scene_handle);
     if (!scene || !scene->enabled ||
         std::find(scene->camera_handles.begin(), scene->camera_handles.end(), view.camera_handle) ==
             scene->camera_handles.end()) return std::nullopt;
     auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(view.camera_handle);
     if (!camera || camera->render_backend != backend ||
         (!camera->surface && !has_pending_screenshot(view.camera_handle))) return std::nullopt;
-    return LockedRenderView{std::move(scene), *camera};
+    return LockedRenderView{scene, *camera};
 }
 
 void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
@@ -3256,7 +3254,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         }
         bind_native_view_resources(cam_handle, camera->width, camera->height,
                                    frame_index);
-        locked->scene = SharedDataHub::instance().scene_storage().try_acquire_read(view.scene_handle);
+        locked->scene = Corona::find_scene(view.scene_handle);
         if (!locked->scene || !locked->scene->enabled ||
             std::find(locked->scene->camera_handles.begin(), locked->scene->camera_handles.end(), cam_handle) ==
                 locked->scene->camera_handles.end()) continue;
@@ -4939,18 +4937,13 @@ void OpticsSystem::fail_unrenderable_pending_screenshots() {
 
         bool in_enabled_scene = false;
         bool in_any_scene = false;
-        auto& scenes = SharedDataHub::instance().scene_storage();
-        for (const auto scene_entity : scenes.view()) {
-            auto scene = scenes.try_acquire_read(Corona::Kernel::Utils::to_entity_id(scene_entity));
-            if (!scene) {
-                continue;
-            }
-            if (std::find(scene->camera_handles.begin(), scene->camera_handles.end(), camera_handle) ==
-                scene->camera_handles.end()) {
+        for (const auto& scene : Corona::all_scenes()) {
+            if (std::find(scene.camera_handles.begin(), scene.camera_handles.end(), camera_handle) ==
+                scene.camera_handles.end()) {
                 continue;
             }
             in_any_scene = true;
-            if (scene->enabled) {
+            if (scene.enabled) {
                 in_enabled_scene = true;
                 break;
             }
@@ -5184,7 +5177,7 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
     if (locked_scene) {
         mix_scene(*locked_scene);
     } else {
-        for (const auto& scene : std::as_const(hub.scene_storage())) {
+        for (const auto& scene : Corona::all_scenes()) {
             mix_scene(scene);
         }
     }
@@ -5691,7 +5684,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                     vision_phase.set("vision:overlay");
                     // Overlay geometry is read directly under a short scene
                     // lock. Its GPU submission keeps the resource handles alive.
-                    auto scene = SharedDataHub::instance().scene_storage().try_acquire_read(view.scene_handle);
+                    auto scene = Corona::find_scene(view.scene_handle);
                     if (!scene || !scene->enabled) return;
                     presented = compose_surface_ui_overlay(
                         stream, cam_handle, camera, *scene, target, target.final_output,

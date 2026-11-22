@@ -156,7 +156,7 @@ EntityId resolve_camera_handle(EntityId camera_handle) {
     }
 
     std::uintptr_t fallback = 0;
-    for (const auto& scene : std::as_const(Corona::SharedDataHub::instance().scene_storage())) {
+    for (const auto& scene : Corona::all_scenes()) {
         if (scene.active_camera_handle != 0) {
             if (scene.enabled) {
                 return scene.active_camera_handle;
@@ -214,12 +214,12 @@ std::string vision_render_mode_to_string(Corona::CameraVisionRenderMode mode) {
 // ########################
 Corona::API::Scene::Scene()
     : handle_(0) {
-    handle_ = SharedDataHub::instance().scene_storage().allocate();
+    handle_ = SharedDataHub::instance().create_scene();
 }
 
 Corona::API::Scene::~Scene() {
     if (handle_ != 0) {
-        SharedDataHub::instance().scene_storage().deallocate(handle_);
+        SharedDataHub::instance().destroy_scene(handle_);
         handle_ = 0;
     }
 }
@@ -413,7 +413,7 @@ void Corona::API::Scene::set_active_camera(Camera* camera) {
 std::uintptr_t Corona::API::Scene::get_active_camera_handle() const {
     if (handle_ == 0) return 0;
 
-    if (auto accessor = SharedDataHub::instance().scene_storage().try_acquire_read(handle_)) {
+    if (auto accessor = Corona::find_scene(handle_)) {
         if (accessor->active_camera_handle != 0) {
             return accessor->active_camera_handle;
         }
@@ -437,7 +437,7 @@ std::array<float, 6> Corona::API::Scene::get_aabb() const {
     if (handle_ == 0) {
         return {0, 0, 0, 0, 0, 0};
     }
-    if (auto accessor = SharedDataHub::instance().scene_storage().try_acquire_read(handle_)) {
+    if (auto accessor = Corona::find_scene(handle_)) {
         return {accessor->min_world.x, accessor->min_world.y, accessor->min_world.z,
                 accessor->max_world.x, accessor->max_world.y, accessor->max_world.z};
     }

@@ -199,8 +199,17 @@ const EnvironmentDevice* SharedDataHub::try_environment(EntityId handle) const {
     return Ecs::try_get_const<EnvironmentDevice>(handle);
 }
 
-SharedDataHub::SceneStorage& SharedDataHub::scene_storage() { return scene_storage_; }
-const SharedDataHub::SceneStorage& SharedDataHub::scene_storage() const { return scene_storage_; }
+EntityId SharedDataHub::create_scene() { return Ecs::emplace<SceneDevice>(); }
+void SharedDataHub::destroy_scene(EntityId handle) { Ecs::destroy(handle); }
+SceneDevice* SharedDataHub::try_scene(EntityId handle) {
+    return Ecs::try_get<SceneDevice>(handle);
+}
+const SceneDevice* SharedDataHub::try_scene(EntityId handle) const {
+    return Ecs::try_get_const<SceneDevice>(handle);
+}
+SceneDevice* find_scene(EntityId handle) {
+    return SharedDataHub::instance().try_scene(handle);
+}
 
 SharedDataHub::ImageStorage& SharedDataHub::image_storage() { return image_storage_; }
 const SharedDataHub::ImageStorage& SharedDataHub::image_storage() const { return image_storage_; }

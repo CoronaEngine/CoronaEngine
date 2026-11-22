@@ -85,7 +85,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
     // --- 从 SharedDataHub 取各存储的引用（几何、变换、场景、环境等）---
     auto& geometry_storage = SharedDataHub::instance().geometry_storage();              // 网格/包围体句柄
-    const auto& scene_storage = SharedDataHub::instance().scene_storage();              // 场景与 actor 列表（const → cbegin/cend 读锁遍历）
+    auto scene_storage = Corona::all_scenes();
 
     ktm::fvec3 gravity = make_fvec3(0.0f, -9.8f, 0.0f);  // m/s²
 
@@ -1357,7 +1357,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
 
     // Vision still imports CPU geometry; rasterization and mechanics consume GPU buffers.
     bool vision_readback = false;
-    for (const auto& enabled_scene : std::as_const(hub.scene_storage())) {
+    for (const auto& enabled_scene : Corona::all_scenes()) {
         if (!enabled_scene.enabled) continue;
         for (auto camera_handle : enabled_scene.camera_handles) {
             auto camera = hub.camera_storage().try_acquire_read(camera_handle);

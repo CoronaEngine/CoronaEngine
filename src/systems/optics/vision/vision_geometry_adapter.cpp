@@ -371,7 +371,7 @@ void stage_actor_geometry(EntityId actor_handle,
 
 std::vector<PreparedGroup> stage_scene_geometry(VisionBuildResult& result) {
     std::vector<PreparedGroup> groups;
-    auto& scenes = SharedDataHub::instance().scene_storage();
+    auto scenes = Corona::all_scenes();
     for (auto scene_it = scenes.cbegin(); scene_it != scenes.cend(); ++scene_it) {
         const auto& scene = *scene_it;
         if (!scene.enabled) continue;
