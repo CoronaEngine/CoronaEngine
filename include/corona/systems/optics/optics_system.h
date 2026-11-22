@@ -83,6 +83,8 @@ class OpticsSystem : public Kernel::SystemBase {
      */
     void update() override;
 
+    [[nodiscard]] Kernel::ComponentAccess component_access() const override;
+
     /**
      * @brief 关闭光学系统
      *

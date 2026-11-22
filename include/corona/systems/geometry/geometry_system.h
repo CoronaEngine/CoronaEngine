@@ -216,6 +216,8 @@ class GeometrySystem : public Kernel::SystemBase {
      */
     void update() override;
 
+    [[nodiscard]] Kernel::ComponentAccess component_access() const override;
+
     /**
      * @brief 关闭几何系统
      *

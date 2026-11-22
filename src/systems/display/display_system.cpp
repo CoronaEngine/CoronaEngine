@@ -78,6 +78,13 @@ struct PixelExtent {
 }  // namespace
 
 namespace Corona::Systems {
+
+Kernel::ComponentAccess DisplaySystem::component_access() const {
+    Kernel::ComponentAccess access;
+    access.read<ImageDevice>();
+    return access;
+}
+
 DisplaySystem::DisplaySystem() {
     int fps = 120;
     if (const char* setting = std::getenv("CORONA_DISPLAY_MAX_FPS")) {

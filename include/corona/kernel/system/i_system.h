@@ -1,4 +1,6 @@
 #pragma once
+#include <corona/kernel/system/component_access.h>
+
 #include <cstdint>
 #include <string_view>
 
@@ -151,6 +153,14 @@ class ISystem {
      * - 多系统间需要栅栏同步
      */
     virtual void sync() {}
+
+    /**
+     * @brief 组件访问声明（ECS 化后由数据推导 DAG 依赖边）
+     *
+     * 返回空表示不参与推导；FrameGraph::compile() 会把声明转成额外边并与
+     * 手写 `after` 合并。系统只需如实声明读写集合，顺序仍由声明序兜底。
+     */
+    [[nodiscard]] virtual ComponentAccess component_access() const { return {}; }
 
     // ========================================
     // 帧率控制

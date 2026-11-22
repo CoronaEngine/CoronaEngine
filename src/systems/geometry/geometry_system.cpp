@@ -41,6 +41,15 @@
 
 namespace Corona::Systems {
 
+Kernel::ComponentAccess GeometrySystem::component_access() const {
+    Kernel::ComponentAccess access;
+    access.write<GeometryDevice, ModelResource, SceneDevice>()
+          .read<Ecs::Transform, ActorDevice, ProfileDevice, MechanicsDevice,
+                OpticsDevice, AcousticsDevice, CameraDevice>();
+    return access;
+}
+
+
 using namespace GeometryInternal;
 
 namespace {

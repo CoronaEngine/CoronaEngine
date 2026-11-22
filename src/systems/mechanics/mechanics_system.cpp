@@ -43,6 +43,15 @@
 
 namespace Corona::Systems {
 
+Kernel::ComponentAccess MechanicsSystem::component_access() const {
+    Kernel::ComponentAccess access;
+    access.write<Ecs::Transform, MechanicsDevice>()
+          .read<ActorDevice, ProfileDevice, SceneDevice, EnvironmentDevice,
+                CameraDevice, GeometryDevice, ModelResource>();
+    return access;
+}
+
+
 using namespace MechanicsInternal;
 
 void MechanicsSystem::update_physics(float fixed_dt) {

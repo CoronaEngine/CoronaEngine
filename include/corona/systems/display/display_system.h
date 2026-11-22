@@ -55,6 +55,8 @@ class DisplaySystem : public Kernel::SystemBase {
 
     bool initialize(Kernel::ISystemContext* ctx) override;
     void update() override;
+
+    [[nodiscard]] Kernel::ComponentAccess component_access() const override;
     void stop() override;
     void shutdown() override;
 

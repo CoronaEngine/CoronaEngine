@@ -63,6 +63,7 @@ bool SystemsThread::prepare(std::string* error) {
         desc.period_ticks = std::max<std::uint32_t>(1, spec.period_ticks);
         desc.phase = desc.period_ticks > 0 ? spec.phase % desc.period_ticks : 0;
         ISystem* system = spec.system;
+        desc.access = system->component_access();
         desc.body = [system](const FrameTick& tick) {
             system->feed_frame_time(static_cast<float>(tick.delta_seconds), tick.tick);
             system->update();

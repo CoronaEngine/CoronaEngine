@@ -61,6 +61,8 @@ class MechanicsSystem : public Kernel::SystemBase {
      */
     void update() override;
 
+    [[nodiscard]] Kernel::ComponentAccess component_access() const override;
+
     /**
      * @brief 关闭力学系统
      *

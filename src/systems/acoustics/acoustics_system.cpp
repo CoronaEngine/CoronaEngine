@@ -10,6 +10,14 @@
 
 namespace Corona::Systems {
 
+Kernel::ComponentAccess AcousticsSystem::component_access() const {
+    Kernel::ComponentAccess access;
+    access.write<AcousticsDevice>()
+          .read<SceneDevice, CameraDevice, Ecs::Transform, GeometryDevice>();
+    return access;
+}
+
+
 bool AcousticsSystem::initialize(Kernel::ISystemContext* ctx) {
     CFW_LOG_NOTICE("AcousticsSystem: Initializing...");
 

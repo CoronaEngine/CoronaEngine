@@ -1907,6 +1907,16 @@ void bind_pipeline_scene_gpu_resource(
 }  // namespace
 
 namespace Corona::Systems {
+
+Kernel::ComponentAccess OpticsSystem::component_access() const {
+    Kernel::ComponentAccess access;
+    access.write<OpticsDevice, CameraDevice, ImageDevice>()
+          .read<Ecs::Transform, GeometryDevice, OpticsDevice, CameraDevice,
+                SceneDevice, EnvironmentDevice, ActorDevice, ProfileDevice,
+                AcousticsDevice, MechanicsDevice>();
+    return access;
+}
+
 using RenderDetail::RetainSubmission;
 using RenderDetail::bind_storage_image;
 using RenderDetail::bind_sampled_image;
