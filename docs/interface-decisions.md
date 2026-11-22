@@ -1,6 +1,6 @@
 # Web 接口层的决定记录
 
-契约本身是**手工维护的快照**，见 [interface-contract.md](interface-contract.md)：9 个命名空间、
+契约本身是**手工维护的快照**，见 [interface-contract.md](interface-contract.md)：8 个命名空间、
 54 个方法，以及三条边界和失败码表。权威来源是 `editor_operation_table.h` 与 Python 绑定源码。
 这份文档只记**为什么**它长成这样——哪些看似能合并的东西合并了，哪些被明确否决并保留。
 
@@ -8,7 +8,7 @@
 
 | 边界 | 形态 | 规模 |
 |---|---|---|
-| Web → C++ | `window.corona.<ns>.<method>`，typed V8 | 9 命名空间 / 54 方法 |
+| Web → C++ | `window.corona.<ns>.<method>`，typed V8 | 8 命名空间 / 54 方法 |
 | Web → Python | `corona.bridge.call(信封)`，JSON | 2 个服务 + bridge |
 | C++ → Python | `CoronaEngine` 模块的 host-support `m.def` | 7 个具名入口 + `InputEvent` 载荷 |
 
@@ -35,7 +35,7 @@
 | 删 `getCurrent` | 没有产品消费者；身份来自 `createPanel` 返回值和 URL 参数 |
 | 删 `minimized` 等死字段与死函数 | 没有写入路径或没有读取方 |
 
-结果：**65 → 58 个方法**，窗口面从 18 降到 6。（此后又收敛到 55 个方法 / 9 个命名空间，
+结果：**65 → 58 个方法**，窗口面从 18 降到 6。（此后又收敛到 54 个方法 / 8 个命名空间，
 见第 1 节表与第 4 节的边界表；本行保留当时的迁移结果。）
 
 ## 3. 明确否决并保留

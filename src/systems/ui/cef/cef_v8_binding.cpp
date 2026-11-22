@@ -1752,7 +1752,7 @@ bool read_render_settings_only(const CefV8ValueList& arguments, SceneRequest& re
 bool read_render_settings(const CefV8ValueList& arguments, SceneRequest& request) {
     return read_camera_render_settings(arguments, request);
 }
-// audio.play / audio.stop name one identity: a resource, or an actor of a scene. The
+// scene.play_audio / scene.stop_audio name one identity: a resource, or an actor of a scene. The
 // readers were four (play/stop x resource/actor); the identity decides which operation runs.
 bool read_audio_control(const CefV8ValueList& arguments, SceneRequest& request, bool play) {
     if (arguments.size() != 1 || !object_keys(arguments[0], play
@@ -2462,7 +2462,6 @@ std::shared_ptr<CoronaV8Endpoint> attach_corona_v8_binding(CefRefPtr<CefV8Contex
     };
     const NativeNamespace namespaces[] = {
         {"scene", CefV8Value::CreateObject(nullptr, nullptr)},
-        {"audio", CefV8Value::CreateObject(nullptr, nullptr)},
         {"app", CefV8Value::CreateObject(nullptr, nullptr)},
         {"viewport", CefV8Value::CreateObject(nullptr, nullptr)},
         {"network", CefV8Value::CreateObject(nullptr, nullptr)},

@@ -653,26 +653,26 @@ try {
 
     evidence[0].resourceImportValidation = 'JSON disabled: typed import rejects malformed arguments and inactive scope before prompting; unsupported type result retains scope; old Web route denied';
     stage = 'typed audio validation';
-    for (const name of ['play', 'stop'])
-      assert.equal(await main.evaluate(`typeof corona.audio.${name}`), 'function');
+    for (const name of ['play_audio', 'stop_audio'])
+      assert.equal(await main.evaluate(`typeof corona.scene.${name}`), 'function');
     for (const id of [0, 1.5, null, '', '0', '-1', '18446744073709551616', '12suffix']) {
-      assert.equal(await main.evaluate(`corona.audio.play({resource:${JSON.stringify(id)}},{loop:false}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
-      assert.equal(await main.evaluate(`corona.audio.stop({resource:${JSON.stringify(id)}}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+      assert.equal(await main.evaluate(`corona.scene.play_audio({resource:${JSON.stringify(id)}},{loop:false}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+      assert.equal(await main.evaluate(`corona.scene.stop_audio({resource:${JSON.stringify(id)}}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
     // A resource identity plays globally, so an archive scope is rejected instead of ignored.
-    for (const name of ['play', 'stop']) {
-      const extra = name === 'play' ? ',loop:false' : '';
+    for (const name of ['play_audio', 'stop_audio']) {
+      const extra = name === 'play_audio' ? ',loop:false' : '';
       assert.equal(await main.evaluate(
-        `corona.audio.${name}({resource:'1',archive_session:'scope'${extra}}).catch(e=>e.code)`),
+        `corona.scene.${name}({resource:'1',archive_session:'scope'${extra}}).catch(e=>e.code)`),
         'INVALID_ARGUMENT');
     }
-    for (const [name, extra] of [['play', ',loop:false'], ['stop', '']]) {
+    for (const [name, extra] of [['play_audio', ',loop:false'], ['stop_audio', '']]) {
       for (const [scene, session] of [['other.ini', sceneRead.archive_session], ['scene.ini', 'retired']])
-        assert.equal(await main.evaluate(`corona.audio.${name}({scene:${JSON.stringify(scene)},actor:'missing-actor',archive_session:${JSON.stringify(session)}${extra}}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
+        assert.equal(await main.evaluate(`corona.scene.${name}({scene:${JSON.stringify(scene)},actor:'missing-actor',archive_session:${JSON.stringify(session)}${extra}}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
     }
-    for (const method of ['play_audio', 'stop_audio', 'actor_play_audio', 'actor_stop_audio'])
-
-    evidence[0].audioValidation = 'typed audio methods exist; invalid resource IDs and inactive scene/archive rejected; generic native dispatch absent';
+    // The audio namespace is gone; both operations answer under scene now.
+    assert.equal(await main.evaluate('typeof corona.audio'), 'undefined');
+    evidence[0].audioValidation = 'typed audio methods live under scene; invalid resource IDs and inactive scene/archive rejected; the audio namespace is gone';
     assert.equal(await main.evaluate('typeof corona.scene.read_scene'), 'function');
     const readTree = () => main.evaluate(`corona.scene.read_scene({...(${JSON.stringify(cameraReadScope)}),scene:'scene.ini',actors:'tree',cameras:true})`);
     const initialTree = await readTree();

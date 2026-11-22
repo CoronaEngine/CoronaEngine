@@ -13,7 +13,7 @@
 没有任何按名字分发的桥；名字都是**具名函数**。
 
 命名空间按职责划分：项目文档与项目元数据在 `project`，视口配置在 `viewport`，脚本输入派发在
-`input`，音频按身份分 `play`/`stop`。
+`input`，音频按身份分 `scene.play_audio`/`scene.stop_audio`。
 **键名规则**：过原生的键一律 snake_case（`panel_id`、`route_path`、`archive_session`），
 请求和回复用同一套写法。窗口命令对象**本身就是线上对象**：`appService` 把命令参数
 原样交给绑定，没有 camelCase↔snake_case 的转换层。**方法名也是 snake_case**：表里的
@@ -21,13 +21,12 @@
 
 ## Web 面
 
-共 9 个命名空间 / 54 个方法。名字的唯一声明处是
+共 8 个命名空间 / 54 个方法。名字的唯一声明处是
 `src/systems/ui/cef/editor_operation_table.h`；下面是它的手工快照：
 
 | 命名空间 | 说明 |
 |---|---|
 | `app` | 进程级操作（关闭） |
-| `audio` | Audio 资源与 Actor 播放 |
 | `bridge` | 唯一的 Web → Python 入口，一函数宽 |
 | `input` | 脚本输入派发（目标是一个场景相机） |
 | `network` | 协作会话与发现 |
@@ -41,12 +40,11 @@
 | 命名空间 | 方法 |
 |---|---|
 | `app` | `close_process` |
-| `audio` | `play`、`stop` |
 | `bridge` | `call` |
 | `input` | `dispatch` |
 | `network` | `clear_discovered_peers`、`connect_to_peer`、`get_discovered_peers`、`get_session_info`、`search_lan`、`set_project_root`、`start_session`、`stop_session` |
 | `project` | `create_multiplayer_project`、`create_world_project`、`get_project_load_status`、`get_recent_projects`、`open_document`、`open_project`、`open_project_file`、`save_active_project_info` |
-| `scene` | `create_actor`、`create_camera`、`delete_actor`、`delete_camera`、`focus_actor`、`import_resource_file`、`read_active`、`read_actor_properties`、`read_actor_rig`、`read_camera_render_settings`、`read_environment`、`read_model_nodes`、`read_scene`、`read_transforms`、`rebind_actor_resource`、`save`、`select_actor`、`select_model_file`、`set_actor_ik_chains`、`set_actor_transform`、`set_camera_render_settings`、`set_environment`、`set_model_node_state`、`update_actor`、`update_camera` |
+| `scene` | `create_actor`、`create_camera`、`delete_actor`、`delete_camera`、`focus_actor`、`import_resource_file`、`play_audio`、`read_active`、`read_actor_properties`、`read_actor_rig`、`read_camera_render_settings`、`read_environment`、`read_model_nodes`、`read_scene`、`read_transforms`、`rebind_actor_resource`、`save`、`select_actor`、`select_model_file`、`set_actor_ik_chains`、`set_actor_transform`、`set_camera_render_settings`、`set_environment`、`set_model_node_state`、`stop_audio`、`update_actor`、`update_camera` |
 | `viewport` | `capture_screenshot`、`configure` |
 | `window` | `close`、`create_panel`、`focus`、`on_close_requested`、`on_closed`、`set_window_presentation` |
 
@@ -82,8 +80,8 @@
 | `scene` | `read_camera_render_settings` | capability | Reads Vision render settings for one camera. |
 | `scene` | `create_camera` | capability | Creates a camera in a scene. |
 | `scene` | `delete_camera` | capability | Deletes a camera; the last remaining camera is protected. |
-| `audio` | `play` | capability | Plays the audio attached to an actor; the Web also plays a bare resource. |
-| `audio` | `stop` | capability | Stops the audio attached to an actor; the Web also stops a bare resource. |
+| `scene` | `play_audio` | capability | Plays the audio attached to an actor; the Web also plays a bare resource. |
+| `scene` | `stop_audio` | capability | Stops the audio attached to an actor; the Web also stops a bare resource. |
 | `app` | `close_process` | capability | Closes the whole process; only the main window may ask. |
 | `viewport` | `capture_screenshot` | capability | Captures one viewport frame to a file. |
 | `viewport` | `configure` | capability | Configures a viewport's mode, bounds and calibration. |
