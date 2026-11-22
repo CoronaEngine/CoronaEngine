@@ -160,8 +160,8 @@ def test_the_loader_recognises_the_module_by_a_name_the_module_binds():
     `runtime/native_engine.py` decides whether `import CoronaEngine` yielded the engine by
     looking for marker attributes. It used to look for `Scene`, which the object-model removal
     deleted: recognition then returned None for every optional binding, and the editor sat on
-    "archive service initialising" with nothing raising. At least one marker has to name
-    something the module really binds; `Scene` may stay as a legacy marker only.
+    "archive service initialising" with nothing raising. At least one declared marker must name
+    something the module really binds; legacy markers are not expected.
     """
     source = (ROOT / LOADER).read_text(encoding="utf-8")
     markers = set(re.findall(r"hasattr\(mod, '(\w+)'\)", source))

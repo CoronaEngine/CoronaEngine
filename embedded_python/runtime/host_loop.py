@@ -22,7 +22,7 @@ def _report(phase, name):
     try:
         phase(name)
     except Exception:
-        pass
+        logger.debug("event=runtime.phase.report_failed phase=%s", name, exc_info=True)
 
 
 def run_loop(engine, editor, *, dispatch, phase=lambda name: None, poll_interval=0.004,
