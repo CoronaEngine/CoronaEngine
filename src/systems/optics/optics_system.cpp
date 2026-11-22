@@ -732,9 +732,8 @@ void apply_pending_transform_updates() {
         return;
     }
 
-    auto& transform_storage = hub.model_transform_storage();
     for (const auto& update : updates) {
-        if (auto transform = transform_storage.try_acquire_write(update.transform_handle)) {
+        if (auto transform = Corona::find_model_transform(update.transform_handle)) {
             if (Corona::has_transform_field(update.fields, Corona::TransformField::Position)) {
                 transform->position = update.position;
             }
@@ -1206,7 +1205,6 @@ bool collect_actor_instances_for_visibility(
     auto& hub = Corona::SharedDataHub::instance();
     auto& optics_storage = hub.optics_storage();
     auto& geom_storage = hub.geometry_storage();
-    auto& transform_storage = hub.model_transform_storage();
 
     bool has_instances = false;
     uint32_t recorded_draws = 0;
@@ -1268,7 +1266,7 @@ bool collect_actor_instances_for_visibility(
             }
 
             ktm::fmat4x4 model_matrix{ktm::fmat4x4::from_eye()};
-            if (auto transform = transform_storage.try_acquire_read(transform_handle_a)) {
+            if (auto transform = Corona::find_model_transform(transform_handle_a)) {
                 model_matrix = transform->compute_matrix();
                 // ����ȡ�� nlc �������� apply_native_local_correction �߼�
                 if (std::abs(nlc_scale_a - 1.0f) > 1e-6f ||
@@ -3313,7 +3311,6 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
 
         auto& optics_storage = SharedDataHub::instance().optics_storage();
         auto& geom_storage = SharedDataHub::instance().geometry_storage();
-        auto& transform_storage = SharedDataHub::instance().model_transform_storage();
         const auto& diag = optics_diag_config();
 
         RenderInstanceBatch sceneBatch;
@@ -3419,7 +3416,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
 
                     ktm::fmat4x4 model_matrix{ktm::fmat4x4::from_eye()};
                     ktm::fvec3   world_center{0.0f, 0.0f, 0.0f};
-                    if (auto transform = transform_storage.try_acquire_read(transform_handle_b)) {
+                    if (auto transform = Corona::find_model_transform(transform_handle_b)) {
                         model_matrix = transform->compute_matrix();
                         world_center = transform->position;
                         if (std::abs(nlc_scale_b - 1.0f) > 1e-6f ||
@@ -3707,7 +3704,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     auto geom = geom_storage.try_acquire_read(optics_acc->geometry_handle);
                     if (!geom || geom->transform_handle == 0) continue;
                     auto transform =
-                        transform_storage.try_acquire_read(geom->transform_handle);
+                        Corona::find_model_transform(geom->transform_handle);
                     auto mech = SharedDataHub::instance()
                                     .mechanics_storage()
                                     .try_acquire_read(profile->mechanics_handle);
@@ -5107,7 +5104,6 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
     auto& hub = SharedDataHub::instance();
     auto& optics_storage = hub.optics_storage();
     auto& geom_storage = hub.geometry_storage();
-    auto& transform_storage = hub.model_transform_storage();
 
     const auto mix_scene = [&](const SceneDevice& scene_dev) {
         if (!scene_dev.enabled) return;
@@ -5185,7 +5181,7 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
 
                 // Hash the actual affine transform, including authored shear and
                 // reflection. TRS alone misses matrix-only external-scene edits.
-                if (auto transform = transform_storage.try_acquire_read(geom->transform_handle)) {
+                if (auto transform = Corona::find_model_transform(geom->transform_handle)) {
                     const auto matrix = transform->compute_matrix();
                     for (int column = 0; column < 4; ++column)
                         for (int row = 0; row < 4; ++row) mix_float(matrix[column][row]);

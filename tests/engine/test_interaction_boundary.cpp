@@ -178,10 +178,10 @@ void test_camera_move_coalescing() {
 
 void test_transform_command_and_snapshot() {
     auto& hub = SharedDataHub::instance();
-    const auto handle = hub.model_transform_storage().allocate();
+    const auto handle = hub.create_model_transform();
     CHECK(handle != 0);
     {
-        auto transform = hub.model_transform_storage().acquire_write(handle);
+        auto transform = Corona::find_model_transform(handle);
         transform->position = vec3(5.0f, 5.0f, 5.0f);
     }
 
@@ -210,7 +210,7 @@ void test_transform_command_and_snapshot() {
     CHECK(hub.transform_view(handle)->position.x == 5.0f);
     CHECK(hub.drain_transform_updates().empty());
 
-    hub.model_transform_storage().deallocate(handle);
+    hub.destroy_model_transform(handle);
 }
 
 void test_mechanics_command_and_snapshot() {
@@ -337,10 +337,10 @@ void test_acoustics_command_and_snapshot() {
     auto& channel = Corona::AcousticsCommandChannel::instance();
     channel.commands().clear();
 
-    const auto handle = hub.acoustics_storage().allocate();
+    const auto handle = hub.create_acoustics();
     CHECK(handle != 0);
     {
-        auto device = hub.acoustics_storage().acquire_write(handle);
+        auto device = hub.try_acoustics(handle);
         device->volume = 0.4f;
         device->resource_id = 42;
     }
@@ -366,7 +366,7 @@ void test_acoustics_command_and_snapshot() {
     const auto drained = channel.commands().drain();
     CHECK(drained.size() == 1);
     for (const auto& incoming : drained) {
-        if (auto device = hub.acoustics_storage().try_acquire_write(incoming.acoustics_handle)) {
+        if (auto device = hub.try_acoustics(incoming.acoustics_handle)) {
             if (Corona::has_acoustics_field(incoming.fields, Corona::AcousticsField::ResourceId)) {
                 device->resource_id = incoming.resource_id;
             }
@@ -380,7 +380,7 @@ void test_acoustics_command_and_snapshot() {
     CHECK(Corona::acoustics_view(handle)->resource_id == 99);
 
     // 无快照、只有 pending 时也要能读出来
-    const auto fresh = hub.acoustics_storage().allocate();
+    const auto fresh = hub.create_acoustics();
     Corona::AcousticsUpdateCommand bind{};
     bind.acoustics_handle = fresh;
     bind.fields = Corona::AcousticsField::ResourceId;
@@ -388,10 +388,10 @@ void test_acoustics_command_and_snapshot() {
     channel.commands().push(bind);
     CHECK(Corona::acoustics_view(fresh)->resource_id == 7);
     channel.commands().clear();
-    hub.acoustics_storage().deallocate(fresh);
+    hub.destroy_acoustics(fresh);
 
     channel.commands().clear();
-    hub.acoustics_storage().deallocate(handle);
+    hub.destroy_acoustics(handle);
 }
 
 void test_mechanics_structural_commands() {
@@ -575,10 +575,9 @@ void test_camera_api_construction_does_not_self_deadlock() {
 void test_acoustics_owner_snapshot() {
     // With no scene or playback, the real owner tick can consume component
     // commands without opening an audio device. Do not publish on its behalf.
-    auto& storage = SharedDataHub::instance().acoustics_storage();
     auto& channel = Corona::AcousticsCommandChannel::instance();
     channel.commands().clear();
-    const auto handle = storage.allocate();
+    const auto handle = SharedDataHub::instance().create_acoustics();
     Corona::AcousticsUpdateCommand command{};
     command.acoustics_handle = handle;
     command.fields = Corona::AcousticsField::Volume;
@@ -607,7 +606,7 @@ void test_acoustics_owner_snapshot() {
     CHECK(committed && committed->resource_id == 42);
     owner.update();
     CHECK(Corona::acoustics_view(handle).has_value());
-    storage.deallocate(handle);
+    SharedDataHub::instance().destroy_acoustics(handle);
     owner.update();
     CHECK(!Corona::acoustics_view(handle).has_value());
     channel.snapshots().publish(Corona::AcousticsSnapshot{});

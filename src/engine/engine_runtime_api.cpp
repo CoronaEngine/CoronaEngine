@@ -673,7 +673,7 @@ Corona::API::Geometry::Geometry(const std::string& model_path, Resource::ModelIm
         return;
     }
 
-    transform_handle_ = SharedDataHub::instance().model_transform_storage().allocate();
+    transform_handle_ = SharedDataHub::instance().create_model_transform();
 
     handle_ = SharedDataHub::instance().geometry_storage().allocate();
     if (auto handle = SharedDataHub::instance().geometry_storage().acquire_write(handle_)) {
@@ -689,7 +689,7 @@ Corona::API::Geometry::Geometry(const std::string& model_path, Resource::ModelIm
     } else {
         CFW_LOG_CRITICAL("[Geometry::Geometry] Failed to acquire write access to geometry storage");
         // 清理已分配的资源
-        SharedDataHub::instance().model_transform_storage().deallocate(transform_handle_);
+        SharedDataHub::instance().destroy_model_transform(transform_handle_);
         SharedDataHub::instance().destroy_model_resource(model_resource_handle_);
         SharedDataHub::instance().geometry_storage().deallocate(handle_);
         handle_ = 0;
@@ -704,7 +704,7 @@ Corona::API::Geometry::~Geometry() {
         SharedDataHub::instance().geometry_storage().deallocate(handle_);
     }
     if (transform_handle_ != 0) {
-        SharedDataHub::instance().model_transform_storage().deallocate(transform_handle_);
+        SharedDataHub::instance().destroy_model_transform(transform_handle_);
     }
     if (model_resource_handle_ != 0) {
         SharedDataHub::instance().destroy_model_resource(model_resource_handle_);
@@ -727,7 +727,7 @@ Corona::API::Geometry& Corona::API::Geometry::operator=(Corona::API::Geometry&& 
             SharedDataHub::instance().geometry_storage().deallocate(handle_);
         }
         if (transform_handle_ != 0) {
-            SharedDataHub::instance().model_transform_storage().deallocate(transform_handle_);
+            SharedDataHub::instance().destroy_model_transform(transform_handle_);
         }
         if (model_resource_handle_ != 0) {
             SharedDataHub::instance().destroy_model_resource(model_resource_handle_);
@@ -833,7 +833,7 @@ Corona::API::Geometry Corona::API::Geometry::from_image(const std::string& image
 
     // 图片无 Resource::Scene，model_resource_handle 保持 0：Vision adapter 会回退到
     // 从 vertexBuffer 拷回 CPU mesh 的路径（load_cpu_mesh_from_buffers），无需 model resource。
-    geo.transform_handle_ = SharedDataHub::instance().model_transform_storage().allocate();
+    geo.transform_handle_ = SharedDataHub::instance().create_model_transform();
     geo.handle_ = SharedDataHub::instance().geometry_storage().allocate();
     if (auto handle = SharedDataHub::instance().geometry_storage().acquire_write(geo.handle_)) {
         handle->transform_handle = geo.transform_handle_;
@@ -841,7 +841,7 @@ Corona::API::Geometry Corona::API::Geometry::from_image(const std::string& image
         handle->mesh_handles = std::move(mesh_devices);
     } else {
         CFW_LOG_CRITICAL("[Geometry::from_image] Failed to acquire write access to geometry storage");
-        SharedDataHub::instance().model_transform_storage().deallocate(geo.transform_handle_);
+        SharedDataHub::instance().destroy_model_transform(geo.transform_handle_);
         SharedDataHub::instance().geometry_storage().deallocate(geo.handle_);
         geo.handle_ = 0;
         geo.transform_handle_ = 0;

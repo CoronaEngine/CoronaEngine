@@ -281,7 +281,6 @@ void AcousticsSystem::update_spatial() {
         }
 
         auto& geometry_storage = hub.geometry_storage();
-        auto& transform_storage = hub.model_transform_storage();
 
         for (auto& ap_ptr : active_playbacks_) {
             auto& ap = *ap_ptr;
@@ -305,8 +304,8 @@ void AcousticsSystem::update_spatial() {
             if (!geo.valid() || geo->transform_handle == 0) {
                 continue;
             }
-            auto xf = transform_storage.try_acquire_read(geo->transform_handle);
-            if (xf.valid()) {
+            auto xf = Corona::find_model_transform(geo->transform_handle);
+            if (xf != nullptr) {
                 ma_sound_set_position(&ap.sound, xf->position.x, xf->position.y, xf->position.z);
             }
         }

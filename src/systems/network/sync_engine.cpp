@@ -334,10 +334,9 @@ struct SyncEngine::Impl {
     void rebuild_entity_maps() {
         mt_seq_to_id.clear();
         {
-            auto& store = hub.model_transform_storage();
-            for (auto it = store.cbegin(); it != store.cend(); ++it) {
-                const auto obj_id = it.id();
-                mt_seq_to_id[store.seq_id(obj_id)] = obj_id;
+            for (const auto entity : Corona::Ecs::view<ModelTransform>()) {
+                const auto obj_id = Corona::Ecs::to_handle(entity);
+                mt_seq_to_id[Corona::Ecs::seq_of(obj_id)] = obj_id;
             }
         }
 
@@ -647,11 +646,10 @@ void SyncEngine::poll_and_sync() {
 
     // --- ModelTransform ---
     {
-        auto& store = hub.model_transform_storage();
-        for (auto it = store.cbegin(); it != store.cend(); ++it) {
-            const ModelTransform& data = *it;
-            const auto obj_id = it.id();
-            auto ent_seq = store.seq_id(obj_id);
+        for (const auto entity : Corona::Ecs::view<ModelTransform>()) {
+            const auto obj_id = Corona::Ecs::to_handle(entity);
+            const ModelTransform& data = Corona::Ecs::get<ModelTransform>(obj_id);
+            auto ent_seq = Corona::Ecs::seq_of(obj_id);
 
             if (!impl_->guid_for_entity) continue;
             auto actor_guid = impl_->guid_for_entity(

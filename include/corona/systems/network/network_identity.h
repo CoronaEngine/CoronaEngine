@@ -167,7 +167,7 @@ private:
         }
 
         if (out.transform_handle != 0) {
-            out.transform_seq = hub_.model_transform_storage().seq_id(out.transform_handle);
+            out.transform_seq = Corona::Ecs::seq_of(out.transform_handle);
         }
         if (out.model_resource_handle != 0) {
             out.model_resource_seq = Corona::Ecs::seq_of(out.model_resource_handle);

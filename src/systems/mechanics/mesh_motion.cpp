@@ -88,7 +88,7 @@ void MechanicsSystem::process_mesh_moves() {
                         if(!resource || !resource->model_id) return unavailable("resource",geometry->model_resource_handle);
                         // Never replace unavailable/deforming triangles with a proxy.
                         if(!impl_->gpu_collision->contains(geometry_handle,resource->model_id)) return unavailable("triangles",geometry_handle);
-                        auto transform=hub.model_transform_storage().try_acquire_read(geometry->transform_handle);
+                        auto transform=Corona::find_model_transform(geometry->transform_handle);
                         if(!transform) return unavailable("transform",geometry->transform_handle);
                         GpuCollisionPipeline::Matrix matrix{};
                         const auto m=transform->compute_matrix();
@@ -141,7 +141,7 @@ void MechanicsSystem::process_mesh_moves() {
                         const auto result=future->get();auto& hub=SharedDataHub::instance();
                         auto scene=hub.scene_storage().try_acquire_read(scene_handle);
                         if(!scene || !scene->enabled || std::find(scene->actor_handles.begin(),scene->actor_handles.end(),q.actor)==scene->actor_handles.end())return {"stale_scene"};
-                        auto target=hub.model_transform_storage().try_acquire_write(transform_handle);if(!target)return {"stale_scene"};
+                        auto target=Corona::find_model_transform(transform_handle);if(!target)return {"stale_scene"};
                         const auto current=target->compute_matrix(),before=original.compute_matrix();
                         for(int c=0;c<4;++c)for(int r=0;r<4;++r)if(current[c][r]!=before[c][r])return {"superseded"};
                         target->position.x+=result.displacement[0];target->position.y+=result.displacement[1];target->position.z+=result.displacement[2];

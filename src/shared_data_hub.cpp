@@ -53,8 +53,17 @@ ModelResource* find_model_resource(EntityId handle) {
     return SharedDataHub::instance().try_model_resource(handle);
 }
 
-SharedDataHub::ModelTransformStorage& SharedDataHub::model_transform_storage() { return model_transform_storage_; }
-const SharedDataHub::ModelTransformStorage& SharedDataHub::model_transform_storage() const { return model_transform_storage_; }
+EntityId SharedDataHub::create_model_transform() { return Ecs::emplace<ModelTransform>(); }
+void SharedDataHub::destroy_model_transform(EntityId handle) { Ecs::destroy(handle); }
+ModelTransform* SharedDataHub::try_model_transform(EntityId handle) {
+    return Ecs::try_get<ModelTransform>(handle);
+}
+const ModelTransform* SharedDataHub::try_model_transform(EntityId handle) const {
+    return Ecs::try_get_const<ModelTransform>(handle);
+}
+ModelTransform* find_model_transform(EntityId handle) {
+    return SharedDataHub::instance().try_model_transform(handle);
+}
 
 SharedDataHub::GeometryStorage& SharedDataHub::geometry_storage() { return geometry_storage_; }
 const SharedDataHub::GeometryStorage& SharedDataHub::geometry_storage() const { return geometry_storage_; }
@@ -425,10 +434,9 @@ void SharedDataHub::clear_transform_updates(EntityId transform_handle) {
 void SharedDataHub::publish_transform_snapshot_from_storage() {
     TransformSnapshot snapshot;
     snapshot.tick = transform_snapshot_.revision() + 1;
-    const auto& storage = model_transform_storage_;
-    for (auto transform_it = storage.cbegin(); transform_it != storage.cend(); ++transform_it) {
-        const auto handle = transform_it.id();
-        const auto& transform = *transform_it;
+    for (const auto entity : Ecs::view<ModelTransform>()) {
+        const auto handle = Ecs::to_handle(entity);
+        const auto& transform = Ecs::get<ModelTransform>(handle);
         if (handle == 0) {
             continue;
         }

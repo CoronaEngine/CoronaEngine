@@ -824,6 +824,9 @@ struct ImageDevice {
 /// 便捷：按句柄取 ActorDevice 组件（无锁）。
 [[nodiscard]] ActorDevice* find_actor(EntityId handle);
 
+/// 便捷：按句柄取 ModelTransform 组件（无锁）。
+[[nodiscard]] ModelTransform* find_model_transform(EntityId handle);
+
 class SharedDataHub {
    public:
     static SharedDataHub& instance();
@@ -840,7 +843,6 @@ class SharedDataHub {
 
    public:
     // 新的 Storage 类型定义，包含默认的容量和内存池参数
-    using ModelTransformStorage = Kernel::Utils::EntityStorage<ModelTransform, 128, 2>;
     using GeometryStorage = Kernel::Utils::EntityStorage<GeometryDevice, 128, 2>;
     using MechanicsStorage = Kernel::Utils::EntityStorage<MechanicsDevice, 128, 2>;
     using OpticsStorage = Kernel::Utils::EntityStorage<OpticsDevice, 128, 2>;
@@ -854,8 +856,11 @@ class SharedDataHub {
     [[nodiscard]] ModelResource* try_model_resource(EntityId handle);
     [[nodiscard]] const ModelResource* try_model_resource(EntityId handle) const;
 
-    ModelTransformStorage& model_transform_storage();
-    const ModelTransformStorage& model_transform_storage() const;
+    // model_transform 已删除 Storage：组件直接挂在实体上。
+    EntityId create_model_transform();
+    void destroy_model_transform(EntityId handle);
+    [[nodiscard]] ModelTransform* try_model_transform(EntityId handle);
+    [[nodiscard]] const ModelTransform* try_model_transform(EntityId handle) const;
 
     GeometryStorage& geometry_storage();
     const GeometryStorage& geometry_storage() const;
@@ -1002,7 +1007,6 @@ class SharedDataHub {
 
    private:
     GeometryStorage geometry_storage_;
-    ModelTransformStorage model_transform_storage_;
     MechanicsStorage mechanics_storage_;
     OpticsStorage optics_storage_;
     mutable std::mutex actor_metadata_mutex_;
