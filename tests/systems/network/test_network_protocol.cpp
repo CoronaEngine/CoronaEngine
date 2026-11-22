@@ -1178,14 +1178,14 @@ void test_sync_engine_emits_optics_but_not_local_handles() {
     auto& hub = Corona::SharedDataHub::instance();
 
     auto transform = hub.model_transform_storage().allocate();
-    auto model_resource = hub.model_resource_storage().allocate();
+    auto model_resource = hub.create_model_resource();
     auto geometry = hub.geometry_storage().allocate();
     auto optics = hub.optics_storage().allocate();
     auto profile = hub.create_profile_component();
     auto actor = hub.actor_storage().allocate();
 
     {
-        auto mr = hub.model_resource_storage().acquire_write(model_resource);
+        auto* mr = hub.try_model_resource(model_resource);
         mr->model_id = 7;
     }
     {
@@ -1243,7 +1243,7 @@ void test_sync_engine_emits_optics_but_not_local_handles() {
     hub.destroy_profile_component(profile);
     hub.optics_storage().deallocate(optics);
     hub.geometry_storage().deallocate(geometry);
-    hub.model_resource_storage().deallocate(model_resource);
+    hub.destroy_model_resource(model_resource);
     hub.model_transform_storage().deallocate(transform);
 }
 

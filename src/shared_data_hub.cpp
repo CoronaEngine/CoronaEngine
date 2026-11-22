@@ -41,8 +41,17 @@ SharedDataHub& SharedDataHub::instance() {
 }
 
 // Storage accessors definitions
-SharedDataHub::ModelResourceStorage& SharedDataHub::model_resource_storage() { return model_resource_storage_; }
-const SharedDataHub::ModelResourceStorage& SharedDataHub::model_resource_storage() const { return model_resource_storage_; }
+EntityId SharedDataHub::create_model_resource() { return Ecs::emplace<ModelResource>(); }
+void SharedDataHub::destroy_model_resource(EntityId handle) { Ecs::destroy(handle); }
+ModelResource* SharedDataHub::try_model_resource(EntityId handle) {
+    return Ecs::try_get<ModelResource>(handle);
+}
+const ModelResource* SharedDataHub::try_model_resource(EntityId handle) const {
+    return Ecs::try_get_const<ModelResource>(handle);
+}
+ModelResource* find_model_resource(EntityId handle) {
+    return SharedDataHub::instance().try_model_resource(handle);
+}
 
 SharedDataHub::ModelTransformStorage& SharedDataHub::model_transform_storage() { return model_transform_storage_; }
 const SharedDataHub::ModelTransformStorage& SharedDataHub::model_transform_storage() const { return model_transform_storage_; }

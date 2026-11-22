@@ -818,6 +818,9 @@ struct ImageDevice {
 /// 便捷：按句柄取 Profile 组件（无锁）。迁移期给大量局部别名调用点用。
 [[nodiscard]] ProfileDevice* find_profile(EntityId handle);
 
+/// 便捷：按句柄取 ModelResource 组件（无锁）。
+[[nodiscard]] ModelResource* find_model_resource(EntityId handle);
+
 class SharedDataHub {
    public:
     static SharedDataHub& instance();
@@ -834,7 +837,6 @@ class SharedDataHub {
 
    public:
     // 新的 Storage 类型定义，包含默认的容量和内存池参数
-    using ModelResourceStorage = Kernel::Utils::EntityStorage<ModelResource, 128, 2>;
     using ModelTransformStorage = Kernel::Utils::EntityStorage<ModelTransform, 128, 2>;
     using GeometryStorage = Kernel::Utils::EntityStorage<GeometryDevice, 128, 2>;
     using MechanicsStorage = Kernel::Utils::EntityStorage<MechanicsDevice, 128, 2>;
@@ -844,8 +846,11 @@ class SharedDataHub {
     using SceneStorage = Kernel::Utils::EntityStorage<SceneDevice, 128, 2>;
     using ImageStorage = Kernel::Utils::EntityStorage<ImageDevice, 128, 2>;
 
-    ModelResourceStorage& model_resource_storage();
-    const ModelResourceStorage& model_resource_storage() const;
+    // model_resource 已删除 Storage：组件直接挂在实体上。
+    EntityId create_model_resource();
+    void destroy_model_resource(EntityId handle);
+    [[nodiscard]] ModelResource* try_model_resource(EntityId handle);
+    [[nodiscard]] const ModelResource* try_model_resource(EntityId handle) const;
 
     ModelTransformStorage& model_transform_storage();
     const ModelTransformStorage& model_transform_storage() const;
@@ -991,7 +996,6 @@ class SharedDataHub {
     /// 远端 CEF 重构引入：直接写/清 session store 里的指针状态
 
    private:
-    ModelResourceStorage model_resource_storage_;
     GeometryStorage geometry_storage_;
     ModelTransformStorage model_transform_storage_;
     MechanicsStorage mechanics_storage_;

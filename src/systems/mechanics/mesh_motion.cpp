@@ -84,7 +84,7 @@ void MechanicsSystem::process_mesh_moves() {
                         auto geometry=hub.geometry_storage().try_acquire_read(geometry_handle);
                         if(!geometry) return unavailable("geometry",geometry_handle);
                         if(geometry->is_skinned && geometry->skinned_aabb_valid){for(unsigned k=0;k<3;++k){local.low[k]=geometry->skinned_aabb_min[k];local.high[k]=geometry->skinned_aabb_max[k];}local.valid=true;}
-                        auto resource=hub.model_resource_storage().try_acquire_read(geometry->model_resource_handle);
+                        auto resource=Corona::find_model_resource(geometry->model_resource_handle);
                         if(!resource || !resource->model_id) return unavailable("resource",geometry->model_resource_handle);
                         // Never replace unavailable/deforming triangles with a proxy.
                         if(!impl_->gpu_collision->contains(geometry_handle,resource->model_id)) return unavailable("triangles",geometry_handle);

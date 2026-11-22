@@ -630,13 +630,12 @@ inline bool ensure_collision_mesh(
 inline std::uint64_t get_model_id_for_mechanics(EntityId mech_handle) {
     auto& mechanics_storage = Corona::SharedDataHub::instance().mechanics_storage();
     auto& geometry_storage = Corona::SharedDataHub::instance().geometry_storage();
-    auto& model_resource_storage = Corona::SharedDataHub::instance().model_resource_storage();
 
     auto m_acc = mechanics_storage.try_acquire_read(mech_handle);
     if (!m_acc) return 0;
     auto geom_acc = geometry_storage.try_acquire_read(m_acc->geometry_handle);
     if (!geom_acc) return 0;
-    auto res_acc = model_resource_storage.try_acquire_read(geom_acc->model_resource_handle);
+    auto res_acc = Corona::find_model_resource(geom_acc->model_resource_handle);
     if (!res_acc) return 0;
     return res_acc->model_id;
 }

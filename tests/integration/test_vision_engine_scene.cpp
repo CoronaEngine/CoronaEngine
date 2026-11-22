@@ -1294,7 +1294,7 @@ struct VisionEngineSceneTest {
         Resource::ModelImportOptions options; options.scene_geometry = true;
         auto id = Resource::ResourceManager::get_instance().import_sync(base / "receiver.obj", options);
         expect(id != 0, "Corona must import the mesh fixture");
-        const auto model = hub.model_resource_storage().allocate();
+        const auto model = hub.create_model_resource();
         const auto transform = hub.model_transform_storage().allocate();
         const auto geometry = hub.geometry_storage().allocate();
         const auto optics = hub.optics_storage().allocate();
@@ -1302,7 +1302,7 @@ struct VisionEngineSceneTest {
         const auto actor = hub.actor_storage().allocate();
         const auto environment = hub.create_environment();
         const auto scene = hub.scene_storage().allocate();
-        { auto w = hub.model_resource_storage().acquire_write(model); w->model_id = id; }
+        { auto* w = hub.try_model_resource(model); w->model_id = id; }
         { auto w = hub.geometry_storage().acquire_write(geometry); w->model_resource_handle = model; w->transform_handle = transform; }
         { auto w = hub.optics_storage().acquire_write(optics); w->geometry_handle = geometry; }
         { auto w = hub.try_profile(profile); w->geometry_handle = geometry; w->optics_handle = optics; }
@@ -1395,7 +1395,7 @@ struct VisionEngineSceneTest {
         hub.optics_storage().deallocate(optics);
         hub.geometry_storage().deallocate(geometry);
         hub.model_transform_storage().deallocate(transform);
-        hub.model_resource_storage().deallocate(model);
+        hub.destroy_model_resource(model);
         if (!shared_display_only && !imported_emission_only) {
             // Exercise the embedded base fallback after removing the fixture's
             // geometry/environment, so its deterministic output is black.

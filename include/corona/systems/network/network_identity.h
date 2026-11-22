@@ -170,7 +170,7 @@ private:
             out.transform_seq = hub_.model_transform_storage().seq_id(out.transform_handle);
         }
         if (out.model_resource_handle != 0) {
-            out.model_resource_seq = hub_.model_resource_storage().seq_id(out.model_resource_handle);
+            out.model_resource_seq = Corona::Ecs::seq_of(out.model_resource_handle);
         }
         if (out.optics_handle != 0) {
             out.optics_seq = hub_.optics_storage().seq_id(out.optics_handle);

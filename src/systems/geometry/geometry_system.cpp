@@ -1525,7 +1525,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
             // reload 时 import_async 可能分配新的资源 UID，必须更新
             // 无论是否需要 rebuild 都要更新，确保后续 LOD 上传能正确查找到 Scene 数据
             if (model_res_handle != 0) {
-                if (auto model_res = hub.model_resource_storage().try_acquire_write(model_res_handle)) {
+                if (auto model_res = Corona::find_model_resource(model_res_handle)) {
                     model_res->model_id = rid;  // 写入新的资源 UID
                 }
             }
@@ -2085,7 +2085,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
         if (!seen_geoms.insert(geom_handle).second) return;  // 已处理
         auto geom = hub.geometry_storage().try_acquire_read(geom_handle);
         if (geom && geom->model_resource_handle) {
-            auto mr = hub.model_resource_storage().try_acquire_read(geom->model_resource_handle);
+            auto mr = Corona::find_model_resource(geom->model_resource_handle);
             if (mr && mr->model_id != 0) {
                 rec.resource_ids.push_back(mr->model_id);
             }
@@ -2812,7 +2812,7 @@ void GeometrySystem::process_pending_geometry_imports() {
                 if (not_ready_count > 4) continue;
                 std::uint64_t model_id = 0;
                 if (geom_dev.model_resource_handle != 0) {
-                    if (auto model = hub.model_resource_storage().try_acquire_read(
+                    if (auto model = Corona::find_model_resource(
                             geom_dev.model_resource_handle)) {
                         model_id = model->model_id;
                     }
@@ -2887,7 +2887,7 @@ void GeometrySystem::process_pending_geometry_imports() {
                 }
 
                 if (geom_write->model_resource_handle) {
-                    if (auto mr = hub.model_resource_storage().try_acquire_write(geom_write->model_resource_handle)) {
+                    if (auto mr = Corona::find_model_resource(geom_write->model_resource_handle)) {
                         mr->model_id = rid;
                     }
                 }
@@ -3065,7 +3065,7 @@ void GeometrySystem::process_pending_geometry_builds() {
             if (geom_write->gpu_build_state == GeometryDevice::GpuBuildState::PendingBuild &&
                 geom_write->mesh_handles.empty() && geom_write->model_resource_handle != 0) {
                 std::uint64_t current_model = 0;
-                if (auto model = hub.model_resource_storage().try_acquire_read(geom_write->model_resource_handle)) {
+                if (auto model = Corona::find_model_resource(geom_write->model_resource_handle)) {
                     current_model = model->model_id;
                 }
                 if (current_model == task.model_id) {
@@ -3121,7 +3121,7 @@ void GeometrySystem::process_pending_geometry_builds() {
             continue;
         }
         std::uint64_t model_id = 0;
-        if (auto model_res = hub.model_resource_storage().try_acquire_read(geom_dev.model_resource_handle)) {
+        if (auto model_res = Corona::find_model_resource(geom_dev.model_resource_handle)) {
             model_id = model_res->model_id;
         }
         if (model_id == 0) continue;  // import 尚未完成，下帧再试
@@ -3230,7 +3230,7 @@ void GeometrySystem::upload_lod_from_scene_data() {
 
         // 通过 ModelResource 解析真正的 ResourceManager UID
         std::uint64_t model_id = 0;
-        if (auto model_res = hub.model_resource_storage().try_acquire_read(geom_dev.model_resource_handle)) {
+        if (auto model_res = Corona::find_model_resource(geom_dev.model_resource_handle)) {
             model_id = model_res->model_id;
         }
         if (model_id == 0) continue;
@@ -3773,7 +3773,7 @@ void GeometrySystem::reconcile_lod_residency() {
         if (!model_resource_handle) continue;
 
         std::uint64_t model_id = 0;
-        if (auto model_res = hub.model_resource_storage().try_acquire_read(model_resource_handle)) {
+        if (auto model_res = Corona::find_model_resource(model_resource_handle)) {
             model_id = model_res->model_id;
         }
         if (model_id == 0) continue;
@@ -5215,7 +5215,7 @@ void GeometrySystem::update_cpu_resource_ledger() {
     for (auto it = geom_storage.cbegin(); it != geom_storage.cend(); ++it) {
         if (!it->model_resource_handle) continue;
         std::uint64_t model_id = 0;
-        if (auto mr = hub.model_resource_storage().try_acquire_read(it->model_resource_handle))
+        if (auto mr = Corona::find_model_resource(it->model_resource_handle))
             model_id = mr->model_id;
         if (model_id != 0) live_model_ids.insert(model_id);
     }
@@ -5400,7 +5400,7 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
                     }
                 }
                 if (geom->model_resource_handle) {
-                    if (auto mr = hub.model_resource_storage().try_acquire_read(geom->model_resource_handle))
+                    if (auto mr = Corona::find_model_resource(geom->model_resource_handle))
                         model_id = mr->model_id;
                 }
             }

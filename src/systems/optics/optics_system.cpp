@@ -1225,13 +1225,12 @@ bool collect_actor_instances_for_visibility(
 
         // ������Դ����ʱ�䣨���� ResourceManager LRU��
         {
-            auto& model_res_storage = hub.model_resource_storage();
             for (auto ph : actor->profile_handles) {
                 auto prof = Corona::find_profile(ph);
                 if (!prof || !prof->geometry_handle) continue;
                 auto g = geom_storage.try_acquire_read(prof->geometry_handle);
                 if (!g || !g->model_resource_handle) continue;
-                auto mr = model_res_storage.try_acquire_read(g->model_resource_handle);
+                auto mr = Corona::find_model_resource(g->model_resource_handle);
                 if (mr && mr->model_id) {
                     Corona::Resource::ResourceManager::get_instance().touch(mr->model_id);
                 }
@@ -1690,7 +1689,7 @@ void fallback_large_scenes_to_native_renderer() {
                     instance_count += geometry->mesh_instances.size();
                 } else if (!geometry->mesh_handles.empty()) {
                     instance_count += geometry->mesh_handles.size();
-                } else if (auto model = hub.model_resource_storage().try_acquire_read(geometry->model_resource_handle)) {
+                } else if (auto model = Corona::find_model_resource(geometry->model_resource_handle)) {
                     if (auto resource = Corona::Resource::ResourceManager::get_instance()
                             .acquire_read<Corona::Resource::Scene>(model->model_id)) {
                         instance_count += resource->data.mesh_instances.empty()
@@ -3372,14 +3371,12 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
 
                 // ������Դ����ʱ�䣨���� ResourceManager LRU��
                 {
-                    auto& model_res_storage =
-                        SharedDataHub::instance().model_resource_storage();
                     for (auto ph : actor->profile_handles) {
                         auto prof = Corona::find_profile(ph);
                         if (!prof || !prof->geometry_handle) continue;
                         auto g = geom_storage.try_acquire_read(prof->geometry_handle);
                         if (!g || !g->model_resource_handle) continue;
-                        auto mr = model_res_storage.try_acquire_read(g->model_resource_handle);
+                        auto mr = Corona::find_model_resource(g->model_resource_handle);
                         if (mr && mr->model_id) {
                             Corona::Resource::ResourceManager::get_instance().touch(mr->model_id);
                         }
@@ -5149,7 +5146,7 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
                 if (!geom) continue;
                 mix(static_cast<std::size_t>(optics->geometry_handle));
                 mix(static_cast<std::size_t>(geom->model_resource_handle));
-                if (auto model = hub.model_resource_storage().try_acquire_read(geom->model_resource_handle)) {
+                if (auto model = Corona::find_model_resource(geom->model_resource_handle)) {
                     mix(static_cast<std::size_t>(model->model_id));
                 }
                 mix(static_cast<std::size_t>(geom->gpu_build_state));

@@ -663,12 +663,12 @@ Corona::API::Geometry::Geometry(const std::string& model_path, Resource::ModelIm
     // 契约变化：构造后 model_id / AABB **尚未就绪**（get_aabb() 暂返回 0，
     // Mechanics AABB 暂为 0）。GeometrySystem 在 import 完成后回填 MechanicsDevice
     // 的 AABB，八叉树每帧重读自然自愈；前端读 AABB 的逻辑需容忍"最终一致"。
-    model_resource_handle_ = SharedDataHub::instance().model_resource_storage().allocate();
-    if (auto handle = SharedDataHub::instance().model_resource_storage().acquire_write(model_resource_handle_)) {
+    model_resource_handle_ = SharedDataHub::instance().create_model_resource();
+    if (auto* handle = SharedDataHub::instance().try_model_resource(model_resource_handle_)) {
         handle->model_id = 0;  // 待 import 完成后由 GeometrySystem 填入
     } else {
-        CFW_LOG_ERROR("[Geometry::Geometry] Failed to acquire write access to model resource storage");
-        SharedDataHub::instance().model_resource_storage().deallocate(model_resource_handle_);
+        CFW_LOG_ERROR("[Geometry::Geometry] Failed to create model resource component");
+        SharedDataHub::instance().destroy_model_resource(model_resource_handle_);
         model_resource_handle_ = 0;
         return;
     }
@@ -690,7 +690,7 @@ Corona::API::Geometry::Geometry(const std::string& model_path, Resource::ModelIm
         CFW_LOG_CRITICAL("[Geometry::Geometry] Failed to acquire write access to geometry storage");
         // 清理已分配的资源
         SharedDataHub::instance().model_transform_storage().deallocate(transform_handle_);
-        SharedDataHub::instance().model_resource_storage().deallocate(model_resource_handle_);
+        SharedDataHub::instance().destroy_model_resource(model_resource_handle_);
         SharedDataHub::instance().geometry_storage().deallocate(handle_);
         handle_ = 0;
         transform_handle_ = 0;
@@ -707,7 +707,7 @@ Corona::API::Geometry::~Geometry() {
         SharedDataHub::instance().model_transform_storage().deallocate(transform_handle_);
     }
     if (model_resource_handle_ != 0) {
-        SharedDataHub::instance().model_resource_storage().deallocate(model_resource_handle_);
+        SharedDataHub::instance().destroy_model_resource(model_resource_handle_);
     }
 }
 
@@ -730,7 +730,7 @@ Corona::API::Geometry& Corona::API::Geometry::operator=(Corona::API::Geometry&& 
             SharedDataHub::instance().model_transform_storage().deallocate(transform_handle_);
         }
         if (model_resource_handle_ != 0) {
-            SharedDataHub::instance().model_resource_storage().deallocate(model_resource_handle_);
+            SharedDataHub::instance().destroy_model_resource(model_resource_handle_);
         }
         handle_ = other.handle_;
         transform_handle_ = other.transform_handle_;
@@ -1022,7 +1022,7 @@ std::uint64_t Corona::API::Geometry::get_model_id() const {
     }
     if (auto row = SharedDataHub::instance().geometry_scene_row(handle_)) {
         if (row->model_resource_handle != 0) {
-            if (auto res = SharedDataHub::instance().model_resource_storage().try_acquire_read(row->model_resource_handle)) {
+            if (auto res = Corona::find_model_resource(row->model_resource_handle)) {
                 return res->model_id;
             }
         }
@@ -1050,7 +1050,7 @@ Corona::API::GeometryRenderStatus Corona::API::Geometry::get_render_status() con
                        status.mesh_count > 0 &&
                        status.invalid_mesh_count == 0;
         if (status.ready) {
-            if (auto resource = SharedDataHub::instance().model_resource_storage().try_acquire_read(row->model_resource_handle)) {
+            if (auto resource = Corona::find_model_resource(row->model_resource_handle)) {
                 status.collision_ready = resource->model_id != 0 &&
                     row->collision_model_id == resource->model_id &&
                     (!row->is_skinned || row->skinned_aabb_valid);
@@ -1063,7 +1063,7 @@ Corona::API::GeometryRenderStatus Corona::API::Geometry::get_render_status() con
 std::array<float, 6> Corona::API::Geometry::get_aabb() const {
     if (auto row = SharedDataHub::instance().geometry_scene_row(handle_)) {
         if (row->model_node_bounds) return *row->model_node_bounds;
-        if (auto res = SharedDataHub::instance().model_resource_storage().try_acquire_read(row->model_resource_handle)) {
+        if (auto res = Corona::find_model_resource(row->model_resource_handle)) {
             if (res->model_id) {
                 if (auto scene = Resource::ResourceManager::get_instance().acquire_read<Resource::Scene>(res->model_id)) {
                     auto aabb_min = scene->get_scene_aabb().min;
@@ -1088,8 +1088,7 @@ std::optional<std::array<float, 6>> Corona::API::Geometry::try_get_aabb() const 
     if (geom->model_node_bounds) {
         return *geom->model_node_bounds;
     }
-    auto res = SharedDataHub::instance().model_resource_storage().try_acquire_read_nowait(
-        geom->model_resource_handle);
+    const auto* res = Corona::find_model_resource(geom->model_resource_handle);
     if (!res || res->model_id == 0) {
         return std::nullopt;
     }
@@ -1302,7 +1301,7 @@ Corona::API::Mechanics::Mechanics(Geometry& geo)
     min_xyz.z = 0.0f;
 
     if (auto geom_handle = SharedDataHub::instance().geometry_storage().try_acquire_read(geo.get_handle())) {
-        if (auto res_handle = SharedDataHub::instance().model_resource_storage().try_acquire_read(geom_handle->model_resource_handle)) {
+        if (auto res_handle = Corona::find_model_resource(geom_handle->model_resource_handle)) {
             if (res_handle->model_id) {
                 if (auto scene = Resource::ResourceManager::get_instance().acquire_read<Resource::Scene>(res_handle->model_id)) {
                     auto max = scene->get_scene_aabb().max;

@@ -61,7 +61,7 @@ void MechanicsSystem::refresh_foot_ground_cache() {
                   resource_handle = geometry->model_resource_handle;
                   transform_handle = geometry->transform_handle; }
                 std::uint64_t model_id = 0;
-                { auto resource = hub.model_resource_storage().try_acquire_read(resource_handle); if (resource) model_id = resource->model_id; }
+                { auto resource = Corona::find_model_resource(resource_handle); if (resource) model_id = resource->model_id; }
                 if (!model_id) continue;
                 ModelTransform transform;
                 { auto tx = hub.model_transform_storage().try_acquire_read(transform_handle); if (!tx || !invertible_transform(*tx)) continue; transform = *tx; }

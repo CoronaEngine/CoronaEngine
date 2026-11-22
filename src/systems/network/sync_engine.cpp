@@ -343,10 +343,9 @@ struct SyncEngine::Impl {
 
         mr_seq_to_id.clear();
         {
-            auto& store = hub.model_resource_storage();
-            for (auto it = store.cbegin(); it != store.cend(); ++it) {
-                const auto obj_id = it.id();
-                mr_seq_to_id[store.seq_id(obj_id)] = obj_id;
+            for (const auto entity : Corona::Ecs::view<ModelResource>()) {
+                const auto obj_id = Corona::Ecs::to_handle(entity);
+                mr_seq_to_id[Corona::Ecs::seq_of(obj_id)] = obj_id;
             }
         }
 

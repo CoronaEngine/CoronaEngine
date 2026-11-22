@@ -87,7 +87,6 @@ void MechanicsSystem::update_physics(float fixed_dt) {
     auto& mechanics_storage = SharedDataHub::instance().mechanics_storage();            // mechanics 组件数据
     auto& geometry_storage = SharedDataHub::instance().geometry_storage();              // 网格/包围体句柄
     auto& transform_storage = SharedDataHub::instance().model_transform_storage();      // 位姿写回目标
-    auto& model_resource_storage = SharedDataHub::instance().model_resource_storage();  // 模型资源数据
     const auto& scene_storage = SharedDataHub::instance().scene_storage();              // 场景与 actor 列表（const → cbegin/cend 读锁遍历）
     auto& actor_storage = SharedDataHub::instance().actor_storage();
 
@@ -139,14 +138,13 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             if (auto actor = actor_storage.try_acquire_read(actor_handle)) {
                 // 续期资源访问时间（驱动 ResourceManager LRU）
                 {
-                    auto& mrs = SharedDataHub::instance().model_resource_storage();
                     auto& gs = SharedDataHub::instance().geometry_storage();
                     for (auto ph : actor->profile_handles) {
                         auto prof = Corona::find_profile(ph);
                         if (!prof || !prof->geometry_handle) continue;
                         auto g = gs.try_acquire_read(prof->geometry_handle);
                         if (!g || !g->model_resource_handle) continue;
-                        auto mr = mrs.try_acquire_read(g->model_resource_handle);
+                        auto mr = Corona::find_model_resource(g->model_resource_handle);
                         if (mr && mr->model_id) {
                             Corona::Resource::ResourceManager::get_instance().touch(mr->model_id);
                         }
@@ -338,7 +336,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 
         // 获取 model_id 用于碰撞网格查找
         std::uint64_t entry_model_id = 0;
-        if (auto res_acc = model_resource_storage.try_acquire_read(geom_acc->model_resource_handle)) {
+        if (auto res_acc = Corona::find_model_resource(geom_acc->model_resource_handle)) {
             entry_model_id = res_acc->model_id;
         }
 
@@ -462,7 +460,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
             auto geometry = geometry_storage.try_acquire_read(entry.geom_handle);
             if (!geometry || geometry->gpu_build_state != GeometryDevice::GpuBuildState::Ready ||
                 geometry->mesh_handles.empty()) continue;
-            auto resource = model_resource_storage.try_acquire_read(geometry->model_resource_handle);
+            auto resource = Corona::find_model_resource(geometry->model_resource_handle);
             if (!resource || resource->model_id != entry.model_id) continue;
         }
         const auto bind = impl_->collision_mesh_cache.find(entry.model_id);
@@ -1456,7 +1454,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
 
         // ---- 第 2 步：解析 model_id ----
         std::uint64_t model_id = 0;
-        if (auto model_res = hub.model_resource_storage().try_acquire_read(model_resource_handle)) {
+        if (auto model_res = Corona::find_model_resource(model_resource_handle)) {
             model_id = model_res->model_id;
         }
         if (model_id == 0 || (previous_skin_model != 0 && previous_skin_model != model_id))
@@ -1661,7 +1659,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
             }
             advance_ik_activation(chain, target, dt);
         }
-        { auto resource = hub.model_resource_storage().try_acquire_read(job.resource);
+        { auto resource = Corona::find_model_resource(job.resource);
           if (!resource || resource->model_id != job.model) continue; }
         {
             auto geometry = geom_storage.try_acquire_write(geom_handle);
@@ -1732,7 +1730,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         }
         { auto geometry = geom_storage.try_acquire_read(job.geometry);
           if (!geometry || !still_current(*geometry, job)) continue; }
-        { auto resource = hub.model_resource_storage().try_acquire_read(job.resource);
+        { auto resource = Corona::find_model_resource(job.resource);
           if (!resource || resource->model_id != job.model) continue; }
         const auto geom_handle = job.geometry;
         const auto model_id = job.model;
@@ -1803,7 +1801,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     // Publish only after both batches succeed. Revalidate identity because scene
     // collection and execution can overlap editor/model changes.
     for (auto& job : frame_jobs) {
-        { auto resource = hub.model_resource_storage().try_acquire_read(job.resource);
+        { auto resource = Corona::find_model_resource(job.resource);
           if (!resource || resource->model_id != job.model) continue; }
         {
             auto geometry = geom_storage.try_acquire_write(job.geometry);
@@ -1840,7 +1838,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
             transform_handle = geometry->transform_handle;
         }
         std::uint64_t model_id{};
-        if (auto resource = hub.model_resource_storage().try_acquire_read(resource_handle))
+        if (auto resource = Corona::find_model_resource(resource_handle))
             model_id = resource->model_id;
         if (!model_id) continue;
         live_models.insert(model_id);
@@ -1889,7 +1887,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         geometry->collision_model_id = 0;
         if (!live_collision_keys.contains(key) || geometry->gpu_build_state != GeometryDevice::GpuBuildState::Ready ||
             geometry->mesh_handles.empty() || (geometry->is_skinned && !geometry->skinned_aabb_valid)) continue;
-        auto resource = hub.model_resource_storage().try_acquire_read(geometry->model_resource_handle);
+        auto resource = Corona::find_model_resource(geometry->model_resource_handle);
         if (resource && impl_->gpu_collision && impl_->gpu_collision->contains(key, resource->model_id))
             geometry->collision_model_id = resource->model_id;
     }
@@ -1979,7 +1977,7 @@ bool MechanicsSystem::register_foot_plant_chain(
 
     std::uint64_t model_id = 0;
     {
-        auto mr = hub.model_resource_storage().try_acquire_read(mrh);
+        auto mr = Corona::find_model_resource(mrh);
         if (!mr) return false;
         model_id = mr->model_id;
     }

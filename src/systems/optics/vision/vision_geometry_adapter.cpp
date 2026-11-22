@@ -230,7 +230,7 @@ void stage_actor_geometry(EntityId actor_handle,
 
         Resource::ReadHandle<Resource::Scene> source;
         if (geometry->model_resource_handle != 0) {
-            auto resource = hub.model_resource_storage().try_acquire_read(geometry->model_resource_handle);
+            auto resource = Corona::find_model_resource(geometry->model_resource_handle);
             if (resource && resource->model_id != 0) {
                 source = Resource::ResourceManager::get_instance().acquire_read<Resource::Scene>(resource->model_id);
             }
