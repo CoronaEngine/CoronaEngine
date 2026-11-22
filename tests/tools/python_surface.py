@@ -14,6 +14,8 @@ Nothing here is compared against the source as a *set*; the rules read the bindi
 
 # The named host-support entries `CoronaEngine` publishes at the top level. `embedded_python`
 # calls all of them; this list documents the group, it is not compared with the bindings.
+# ``poll_service_requests`` and ``complete_service_request`` belong to the ``BindCef`` group,
+# not here: the CEF transport owns the service queue the host loop drains.
 HOST_SUPPORT_FUNCTIONS = frozenset({
     "active_project_path",
     "active_project_session",
@@ -21,6 +23,7 @@ HOST_SUPPORT_FUNCTIONS = frozenset({
     "python_runtime_phase",
     "register_python_script_service_dispatcher",
     "send_log",
+    "should_stop",
     "unregister_python_script_service_dispatcher",
 })
 

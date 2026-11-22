@@ -7,9 +7,9 @@ from typing import Optional
 # The loader used to recognise the module by `Scene`, which the object-model removal deleted:
 # recognition then returned None for *every* optional binding (send_log, the service
 # dispatcher registration, the project session), leaving the editor on "archive service
-# initialising" while nothing raised. `send_log` is host support, so it survives engine
-# generations that come and go above it; `Scene` stays only for older binaries.
-LOADER_MARKERS = ('send_log', 'Scene')
+# initialising" while nothing raised. That `Scene` marker is gone for good; `send_log` is
+# host support, so it survives engine generations that come and go above it.
+LOADER_MARKERS = ('send_log',)
 
 
 def load_corona_engine() -> Optional[object]:

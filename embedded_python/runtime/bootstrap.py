@@ -69,4 +69,5 @@ def loop():
         raise RuntimeError("CoronaEngine module is unavailable")
     return host_loop.run_loop(
         CoronaEngine, editor,
-        dispatch=editor.dispatch_script_values_from_cpp)
+        dispatch=editor.dispatch_script_values_from_cpp,
+        phase=editor._set_native_runtime_phase)
