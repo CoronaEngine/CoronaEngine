@@ -37,11 +37,11 @@
 | --- | --- | --- |
 | **E0** | `ComponentAccess` + FrameGraph 由访问推导依赖边（含环检测、去重、诊断接口） | ✅ 已完成 |
 | **E1** | `Ecs::ActorWorld`：actor/profile/scene 实体与关系；tick 边界随场景命令同步（双写期） | ✅ 已完成 |
-| **E2** | `Transform` / `Bounds` 成为权威：每 tick 由 device 镜像到组件，快照改为从组件构建 | ⏳ 下一步 |
-| **E3** | Geometry 系统按组件重写（import 状态机、LOD、流式驻留） | ⏳ |
-| **E4** | Mechanics / Optics / Acoustics 切组件，删 `ProfileDevice` 指针链 | ⏳ |
-| **E5** | 五个系统声明 `ComponentAccess`，DAG 由数据推导（手写边退为兜底）；评估同 tick 并行 | ⏳ |
-| **E6** | 删除 12 个 device 与 `EntityStorage` 兼容层，句柄直接是 `entt::entity` | ⏳ |
+| **E2** | 快照改为从组件构建（transform / camera / geometry-scene / optics / mechanics / acoustics / environment） | ✅ 已完成 |
+| **E3** | 12 个存储逐个删除：分配走 `Ecs::emplace`，读取走 `find_*`，遍历走 `ComponentRange` | ✅ 已完成 |
+| **E4** | `EntityStorage<T>` 兼容层与两个 `storage_snapshot.h` 辅助删除 | ✅ 已完成 |
+| **E5** | 句柄即实体（`integral + 1`），`seq_of` 复刻旧的网络序号，协议不变 | ✅ 已完成 |
+| **E6** | 图像仍保留一把 `shared_mutex` 租约（UI/DAG/主线程共用），其余路径无锁 | ✅ 已完成 |
 
 每阶段独立提交，验收口径：编译 + 相关单测 + 编辑器冒烟（加载/编辑/协作/切场景）。
 
@@ -84,3 +84,20 @@ actors.destroy_actor(actor);     // 级联销毁 profile
 3. **句柄语义**：`EntityId` 仍是 `uintptr_t` 槽位地址，直到 E6 才换成 `entt::entity`；
    过渡期两套 id 并存，漏转会表现为"查不到实体"而不是崩溃，需要测试兜底。
 4. **性能**：组件拆分可能牺牲局部性；E2/E3 后必须用 `group` 与实测数据说话。
+
+---
+
+## 6. 完成状态（截至本次收尾）
+
+- `SharedDataHub` 不再持有任何 `*_storage()`：12 个存储全部删除。
+- 没有 `acquire_read/acquire_write/try_acquire_*`；`EntityStorage<T>` 类本身已删除。
+- 句柄就是实体（`EntityId = entt::to_integral(entity) + 1`），`Ecs::seq_of` 与旧的
+  `seq_id` 完全一致，因此网络同步 key 不变。
+- 遍历用 `Corona::Ecs::ComponentRange<T>` / `all_components<T>()`（保留旧迭代器的
+  `*it` / `it->field` / `it.id()` 形状）；按句柄取组件用 `Corona::find_*`。
+- 唯一保留的同步点是图像：`ImageAccess` / `ImageReadAccess` 是带锁的租约，
+  因为 UI、DAG、主线程都会碰同一份帧图像。
+
+**下一步（数据形状）**：组件目前仍是一个子系统一个 `*Device` 聚合体。真正的细粒度
+ECS（`Transform`、`Bounds`、`MeshSet`、`RigidBody` … 分开挂）是下一阶段，
+`include/corona/ecs/components.h` 已定义了首批细粒度组件与实体模型。
