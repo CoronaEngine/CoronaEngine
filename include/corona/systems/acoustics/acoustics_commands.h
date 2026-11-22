@@ -95,7 +95,7 @@ inline AcousticsSnapshotRow make_acoustics_row(EntityId handle, const AcousticsD
 }
 
 /// 拥有者线程：从槽位重建整份快照
-inline void publish_acoustics_snapshot_from_storage() {
+inline void publish_acoustics_snapshot() {
     AcousticsSnapshot snapshot;
     snapshot.tick = AcousticsCommandChannel::instance().snapshots().revision() + 1;
     for (const auto entity : Corona::Ecs::view<AcousticsDevice>()) {

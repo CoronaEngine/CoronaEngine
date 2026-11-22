@@ -229,8 +229,24 @@ SceneDevice* find_scene(EntityId handle) {
     return SharedDataHub::instance().try_scene(handle);
 }
 
-SharedDataHub::ImageStorage& SharedDataHub::image_storage() { return image_storage_; }
-const SharedDataHub::ImageStorage& SharedDataHub::image_storage() const { return image_storage_; }
+EntityId SharedDataHub::create_image() { return Ecs::emplace<ImageDevice>(); }
+void SharedDataHub::destroy_image(EntityId handle) { Ecs::destroy(handle); }
+ImageAccess SharedDataHub::image_write(EntityId handle) {
+    std::unique_lock<std::shared_mutex> lock(image_mutex_);
+    return ImageAccess(std::move(lock), handle, Ecs::try_get<ImageDevice>(handle));
+}
+ImageReadAccess SharedDataHub::image_read(EntityId handle) {
+    std::shared_lock<std::shared_mutex> lock(image_mutex_);
+    return ImageReadAccess(std::move(lock), handle, Ecs::try_get<ImageDevice>(handle));
+}
+std::vector<EntityId> SharedDataHub::image_handles() {
+    std::shared_lock<std::shared_mutex> lock(image_mutex_);
+    std::vector<EntityId> handles;
+    for (const auto entity : Ecs::view<ImageDevice>()) {
+        handles.push_back(Ecs::to_handle(entity));
+    }
+    return handles;
+}
 
 void SharedDataHub::publish_camera_frame_timing(EntityId camera_handle, double render_ms, double denoise_ms,
                                                 CameraVisionRenderMode mode,
@@ -293,7 +309,7 @@ void SharedDataHub::publish_camera_snapshot(CameraSnapshot snapshot) {
     camera_snapshot_.publish(std::move(snapshot));
 }
 
-void SharedDataHub::publish_camera_snapshot_from_storage() {
+void SharedDataHub::publish_camera_snapshot() {
     CameraSnapshot snapshot;
     snapshot.tick = camera_snapshot_.revision() + 1;
     auto cameras = Ecs::all_components<Corona::CameraDevice>();
@@ -311,7 +327,7 @@ std::shared_ptr<const CameraSnapshot> SharedDataHub::camera_snapshot() const {
     return camera_snapshot_.read();
 }
 
-void SharedDataHub::seed_camera_snapshot_from_storage(EntityId camera_handle) {
+void SharedDataHub::seed_camera_snapshot(EntityId camera_handle) {
     if (camera_handle == 0) {
         return;
     }
@@ -474,7 +490,7 @@ void SharedDataHub::clear_transform_updates(EntityId transform_handle) {
     transform_updates_.erase(transform_handle);
 }
 
-void SharedDataHub::publish_transform_snapshot_from_storage() {
+void SharedDataHub::publish_transform_snapshot() {
     TransformSnapshot snapshot;
     snapshot.tick = transform_snapshot_.revision() + 1;
     for (const auto entity : Ecs::view<ModelTransform>()) {
@@ -494,7 +510,7 @@ void SharedDataHub::publish_transform_snapshot_from_storage() {
     transform_snapshot_.publish(std::move(snapshot));
 }
 
-void SharedDataHub::publish_geometry_scene_snapshot_from_storage() {
+void SharedDataHub::publish_geometry_scene_snapshot() {
     GeometrySceneSnapshot snapshot;
     snapshot.tick = geometry_scene_snapshot_.revision() + 1;
     std::unordered_map<EntityId, GeometrySceneCacheEntry> cache;

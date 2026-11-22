@@ -131,7 +131,7 @@ inline MechanicsSnapshotRow make_mechanics_row(EntityId handle, const MechanicsD
 }
 
 /// 拥有者线程：从槽位重建整份快照（Mechanics 的写入已经完成之后调用）
-inline void publish_mechanics_snapshot_from_storage() {
+inline void publish_mechanics_snapshot() {
     MechanicsSnapshot snapshot;
     snapshot.tick = MechanicsCommandChannel::instance().snapshots().revision() + 1;
     for (const auto entity : Corona::Ecs::view<MechanicsDevice>()) {

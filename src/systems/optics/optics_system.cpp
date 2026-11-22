@@ -2710,11 +2710,11 @@ OpticsSystem::SurfaceRenderTarget& OpticsSystem::acquire_surface_target(void* su
 
     // Allocate one ImageStorage slot when this surface first needs an output.
     if (target.image_handle == 0) {
-        target.image_handle = SharedDataHub::instance().image_storage().allocate();
+        target.image_handle = Corona::SharedDataHub::instance().create_image();
         target.published_image = Detail::PublishedImage(target.image_handle);
         // Clear any image and GPU receipts retained from a previous allocation.
         if (auto accessor =
-                SharedDataHub::instance().image_storage().acquire_write(target.image_handle)) {
+                Corona::SharedDataHub::instance().image_write(target.image_handle)) {
             *accessor = ImageDevice{};
         }
     }
@@ -2724,7 +2724,7 @@ OpticsSystem::SurfaceRenderTarget& OpticsSystem::acquire_surface_target(void* su
         target.width != width || target.height != height) {
         if (target.image_handle != 0) {
             if (auto image_device =
-                    SharedDataHub::instance().image_storage().acquire_write(target.image_handle)) {
+                    Corona::SharedDataHub::instance().image_write(target.image_handle)) {
                 if (image_device->consumed_receipt.serial != 0) {
                     hardware_->executor.wait_idle(image_device->consumed_receipt);
                 }
@@ -2794,9 +2794,9 @@ void OpticsSystem::release_surface_target(SurfaceRenderTarget& target) {
     // Invalidate cached Display layers and snapshots before waiting. An entered
     // frame keeps its image access until its final consumed receipt is written.
     target.published_image.retire().wait();
-    auto& storage = SharedDataHub::instance().image_storage();
+    auto& storage = Corona::SharedDataHub::instance();
     {
-        auto image = storage.acquire_write(target.image_handle);
+        auto image = storage.image_write(target.image_handle);
         if (image->submit_receipt.serial != 0) {
             hardware_->executor.wait_idle(image->submit_receipt);
         }
@@ -2805,7 +2805,7 @@ void OpticsSystem::release_surface_target(SurfaceRenderTarget& target) {
         }
         *image = ImageDevice{};
     }
-    storage.deallocate(target.image_handle);
+    storage.destroy_image(target.image_handle);
     target.image_handle = 0;
     target.published_image = {};
 }
@@ -2998,10 +2998,10 @@ void OpticsSystem::apply_camera_and_transform_updates() {
     apply_pending_camera_moves();
     apply_pending_transform_updates();
     apply_pending_camera_releases();
-    SharedDataHub::instance().publish_camera_snapshot_from_storage();
+    SharedDataHub::instance().publish_camera_snapshot();
     // 变换快照：外部读者（get_position/get_matrix/面板）只读这一份投影，
     // 不再对 slot 加锁。必须在 transform 命令应用之后重建，才是"本 tick 的最终值"。
-    SharedDataHub::instance().publish_transform_snapshot_from_storage();
+    SharedDataHub::instance().publish_transform_snapshot();
     acknowledge_camera_state_updates(state_updates);
 }
 
@@ -3013,7 +3013,7 @@ void OpticsSystem::update() {
     apply_pending_optics_updates();
     // Visibility/material getters must retain consumed values even when the
     // render cap below skips GPU work for this tick.
-    Corona::publish_optics_snapshot_from_storage();
+    Corona::publish_optics_snapshot();
 
     // Event-driven wakes may bypass SystemBase's periodic wait. An explicitly
     // requested render cap must still bound GPU submissions during such bursts.
@@ -3245,7 +3245,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             // 把整条链一起拖住，所以锁范围必须和等待分离。
             Horizon::SubmitReceipt consumed{};
             if (auto consumed_device =
-                    SharedDataHub::instance().image_storage().acquire_write(target.image_handle)) {
+                    Corona::SharedDataHub::instance().image_write(target.image_handle)) {
                 consumed = consumed_device->consumed_receipt;
             }
             if (consumed.serial != 0) {
@@ -4626,7 +4626,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         const ImagePixelExtent presented_extent{target.width, target.height};
         const auto viewport = optics_event_viewport(*camera, presented_extent);
         if (auto image_device =
-                SharedDataHub::instance().image_storage().acquire_write(target.image_handle)) {
+                Corona::SharedDataHub::instance().image_write(target.image_handle)) {
             if (latest_submit_receipt.serial == 0) {
                 CFW_LOG_WARNING(
                     "OpticsSystem: publishing native frame with empty submit receipt "
@@ -5651,7 +5651,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                     ? acquire_surface_target(surface, w, h, frame_index)
                     : acquire_offscreen_screenshot_target(cam_handle, w, h, frame_index);
                 if (auto consumed_device =
-                        SharedDataHub::instance().image_storage().try_acquire_read(
+                        Corona::SharedDataHub::instance().image_write(
                             target.image_handle)) {
                     if (consumed_device->consumed_receipt.serial != 0) {
                         hardware_->executor.wait(consumed_device->consumed_receipt);
@@ -5705,7 +5705,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                 const ImagePixelExtent presented_extent{target.width, target.height};
                 const auto viewport = optics_event_viewport(camera, presented_extent);
                 if (auto image_device =
-                        SharedDataHub::instance().image_storage().acquire_write(
+                        Corona::SharedDataHub::instance().image_write(
                             target.image_handle)) {
                     if (vision_submit_receipt.serial == 0) {
                         CFW_LOG_WARNING(

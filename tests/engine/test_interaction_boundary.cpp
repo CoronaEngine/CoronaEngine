@@ -61,7 +61,7 @@ void test_camera_seed_and_committed_read() {
 
     CHECK(!hub.camera_row(handle).has_value());
 
-    hub.seed_camera_snapshot_from_storage(handle);
+    hub.seed_camera_snapshot(handle);
     const auto row = hub.camera_row(handle);
     CHECK(row.has_value());
     CHECK(row->position.x == 1.0f && row->position.y == 2.0f && row->position.z == 3.0f);
@@ -84,7 +84,7 @@ void test_camera_pending_overlay() {
         camera->width = 800;
         camera->height = 600;
     }
-    hub.seed_camera_snapshot_from_storage(handle);
+    hub.seed_camera_snapshot(handle);
 
     Corona::CameraMoveCommand move{};
     move.camera_handle = handle;
@@ -125,7 +125,7 @@ void test_camera_pending_overlay() {
             }
         }
     }
-    hub.publish_camera_snapshot_from_storage();
+    hub.publish_camera_snapshot();
 
     CHECK(hub.camera_view(handle).position.x == 10.0f);
     CHECK(hub.camera_row(handle)->position.x == 10.0f);
@@ -188,7 +188,7 @@ void test_transform_command_and_snapshot() {
     CHECK(!hub.transform_row(handle).has_value());
     CHECK(!hub.transform_view(handle).has_value());
 
-    hub.publish_transform_snapshot_from_storage();
+    hub.publish_transform_snapshot();
     CHECK(hub.transform_row(handle).has_value());
     CHECK(hub.transform_row(handle)->position.x == 5.0f);
 
@@ -228,7 +228,7 @@ void test_mechanics_command_and_snapshot() {
 
     CHECK(!Corona::mechanics_row(handle).has_value());
 
-    Corona::publish_mechanics_snapshot_from_storage();
+    Corona::publish_mechanics_snapshot();
     CHECK(Corona::mechanics_row(handle).has_value());
     CHECK(Corona::mechanics_row(handle)->mass == 3.0f);
     CHECK(Corona::mechanics_row(handle)->restitution == 0.5f);
@@ -265,7 +265,7 @@ void test_mechanics_command_and_snapshot() {
             }
         }
     }
-    Corona::publish_mechanics_snapshot_from_storage();
+    Corona::publish_mechanics_snapshot();
     CHECK(Corona::mechanics_view(handle)->mass == 8.5f);
     CHECK(Corona::mechanics_row(handle)->mass == 8.5f);
 
@@ -287,7 +287,7 @@ void test_optics_command_and_snapshot() {
     }
 
     CHECK(!Corona::optics_row(handle).has_value());
-    Corona::publish_optics_snapshot_from_storage();
+    Corona::publish_optics_snapshot();
     CHECK(Corona::optics_row(handle).has_value());
     CHECK(Corona::optics_row(handle)->metallic == 0.25f);
     CHECK(Corona::optics_row(handle)->roughness == 0.75f);
@@ -323,7 +323,7 @@ void test_optics_command_and_snapshot() {
             }
         }
     }
-    Corona::publish_optics_snapshot_from_storage();
+    Corona::publish_optics_snapshot();
     CHECK(Corona::optics_view(handle)->metallic == 0.95f);
     CHECK(Corona::optics_row(handle)->metallic == 0.95f);
     CHECK(Corona::optics_row(handle)->visible == false);
@@ -345,7 +345,7 @@ void test_acoustics_command_and_snapshot() {
         device->resource_id = 42;
     }
 
-    Corona::publish_acoustics_snapshot_from_storage();
+    Corona::publish_acoustics_snapshot();
     CHECK(Corona::acoustics_row(handle).has_value());
     CHECK(Corona::acoustics_row(handle)->volume == 0.4f);
     CHECK(Corona::acoustics_row(handle)->resource_id == 42);
@@ -375,7 +375,7 @@ void test_acoustics_command_and_snapshot() {
             }
         }
     }
-    Corona::publish_acoustics_snapshot_from_storage();
+    Corona::publish_acoustics_snapshot();
     CHECK(Corona::acoustics_row(handle)->resource_id == 99);
     CHECK(Corona::acoustics_view(handle)->resource_id == 99);
 

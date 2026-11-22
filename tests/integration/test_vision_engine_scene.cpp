@@ -39,7 +39,7 @@ struct VisionEngineSceneTest {
     static std::uintptr_t create_test_camera() {
         auto& hub = SharedDataHub::instance();
         const auto handle = hub.create_camera();
-        hub.seed_camera_snapshot_from_storage(handle);
+        hub.seed_camera_snapshot(handle);
         return handle;
     }
     static void destroy_test_camera(std::uintptr_t handle) {
@@ -109,7 +109,7 @@ struct VisionEngineSceneTest {
                "new cameras must have no retained denoise request");
         // Exercise queued false -> true transitions independently of defaults.
         { auto camera = Corona::find_camera(handle); camera->vision_denoise = false; }
-        hub.publish_camera_snapshot_from_storage();
+        hub.publish_camera_snapshot();
         Corona::API::set_vision_render_mode("ReSTIR", handle);
         auto updates = hub.drain_camera_state_updates();
         expect(updates.size() == 1 && updates[0].camera_handle == handle &&
@@ -120,7 +120,7 @@ struct VisionEngineSceneTest {
             auto camera = Corona::find_camera(handle);
             camera->vision_render_mode = updates[0].vision_render_mode;
         }
-        hub.publish_camera_snapshot_from_storage();
+        hub.publish_camera_snapshot();
         expect(Corona::API::get_vision_render_mode(handle) == "restir",
                "camera snapshots must serialize ReSTIR for persistence and UI");
 
@@ -140,7 +140,7 @@ struct VisionEngineSceneTest {
             auto camera = Corona::find_camera(handle);
             camera->vision_denoise = updates[0].vision_denoise;
         }
-        hub.publish_camera_snapshot_from_storage();
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_denoise(handle, updates[0].sequence);
         expect(!hub.requested_camera_vision_denoise(handle).has_value() &&
                    Corona::API::get_requested_vision_denoise(handle),
@@ -183,7 +183,7 @@ struct VisionEngineSceneTest {
             auto camera = Corona::find_camera(handle);
             camera->vision_denoise = updates[0].vision_denoise;
         }
-        hub.publish_camera_snapshot_from_storage();
+        hub.publish_camera_snapshot();
         expect(!Corona::API::get_vision_denoise(handle),
                "committed explicit false must remain false");
 
@@ -215,7 +215,7 @@ struct VisionEngineSceneTest {
             auto camera = Corona::find_camera(handle);
             camera->vision_denoise = in_flight.vision_denoise;
         }
-        hub.publish_camera_snapshot_from_storage();
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_denoise(handle, in_flight.sequence);
         expect(hub.camera_row(handle)->vision_denoise && !Corona::API::get_vision_denoise(handle) &&
                    hub.requested_camera_vision_denoise(handle).has_value() &&
@@ -231,7 +231,7 @@ struct VisionEngineSceneTest {
             auto camera = Corona::find_camera(handle);
             camera->vision_denoise = updates[0].vision_denoise;
         }
-        hub.publish_camera_snapshot_from_storage();
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_denoise(handle, updates[0].sequence);
         expect(!hub.requested_camera_vision_denoise(handle).has_value() &&
                    !Corona::API::get_requested_vision_denoise(handle),
@@ -240,7 +240,7 @@ struct VisionEngineSceneTest {
             auto camera = Corona::find_camera(handle);
             camera->vision_denoise = true;
         }
-        hub.publish_camera_snapshot_from_storage();
+        hub.publish_camera_snapshot();
         expect(Corona::API::get_requested_vision_denoise(handle),
                "acknowledged preference must not permanently shadow later committed camera changes");
 
@@ -300,7 +300,7 @@ struct VisionEngineSceneTest {
                 camera->vision_accumulation = updates[0].vision_accumulation;
                 camera->vision_denoise = updates[0].vision_denoise;
             }
-            hub.publish_camera_snapshot_from_storage();
+            hub.publish_camera_snapshot();
             hub.acknowledge_camera_vision_accumulation(handle, updates[0].sequence);
             hub.acknowledge_camera_vision_denoise(handle, updates[0].sequence);
             expect(Corona::API::get_vision_render_mode(handle) == mode &&
@@ -389,7 +389,7 @@ struct VisionEngineSceneTest {
             auto camera = Corona::find_camera(handle);
             camera->vision_stable_planes = in_flight.vision_stable_planes;
         }
-        hub.publish_camera_snapshot_from_storage();
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_stable_planes(handle, in_flight.sequence);
         expect(!hub.camera_row(handle)->vision_stable_planes && Corona::API::get_vision_stable_planes(handle) &&
                    Corona::API::get_requested_vision_stable_planes(handle) &&
@@ -413,7 +413,7 @@ struct VisionEngineSceneTest {
                 camera->vision_stable_planes = updates[0].vision_stable_planes;
                 camera->vision_render_mode = updates[0].vision_render_mode;
             }
-            hub.publish_camera_snapshot_from_storage();
+            hub.publish_camera_snapshot();
             hub.acknowledge_camera_vision_stable_planes(handle, updates[0].sequence);
             expect(!hub.requested_camera_vision_stable_planes(handle).has_value() &&
                        !Corona::API::get_requested_vision_stable_planes(handle) &&
@@ -444,7 +444,7 @@ struct VisionEngineSceneTest {
                    !hub.requested_camera_vision_denoiser(handle).has_value(),
                "new cameras must retain REBLUR without a pending override");
         { auto camera = Corona::find_camera(handle); camera->vision_denoiser = CameraVisionDenoiser::Scene; }
-        hub.publish_camera_snapshot_from_storage();
+        hub.publish_camera_snapshot();
         Corona::API::set_vision_denoiser("ReBLUR", handle);
         Corona::API::set_vision_denoise(true, handle);
         expect(hub.camera_row(handle)->vision_denoiser == CameraVisionDenoiser::Scene &&
@@ -465,7 +465,7 @@ struct VisionEngineSceneTest {
             camera->vision_denoiser = in_flight.vision_denoiser;
             camera->vision_denoise = in_flight.vision_denoise;
         }
-        hub.publish_camera_snapshot_from_storage();
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_denoiser(handle, in_flight.sequence);
         hub.acknowledge_camera_vision_denoise(handle, in_flight.sequence);
         expect(hub.camera_row(handle)->vision_denoiser == CameraVisionDenoiser::ReBLUR &&
@@ -479,7 +479,7 @@ struct VisionEngineSceneTest {
             auto camera = Corona::find_camera(handle);
             camera->vision_denoiser = updates[0].vision_denoiser;
         }
-        hub.publish_camera_snapshot_from_storage();
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_denoiser(handle, updates[0].sequence);
         expect(!hub.requested_camera_vision_denoiser(handle).has_value() &&
                    Corona::API::get_requested_vision_denoiser(handle) == "svgf" &&
@@ -516,7 +516,7 @@ struct VisionEngineSceneTest {
             auto state = Corona::find_camera(camera);
             state->vision_reblur_settings = updates[0].vision_reblur_settings;
         }
-        hub.publish_camera_snapshot_from_storage();
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_reblur_settings(camera, updates[0].sequence);
         expect(!hub.requested_camera_vision_reblur_settings(camera).has_value() &&
                    Corona::API::get_requested_vision_reblur_settings(camera) == R"({"max_history":20})",
@@ -552,7 +552,7 @@ struct VisionEngineSceneTest {
             auto state = Corona::find_camera(camera);
             state->vision_relax_settings = updates[0].vision_relax_settings;
         }
-        hub.publish_camera_snapshot_from_storage();
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_relax_settings(camera, updates[0].sequence);
         expect(!hub.requested_camera_vision_relax_settings(camera).has_value() &&
                    Corona::API::get_requested_vision_relax_settings(camera) == R"({"diffuse_history":20})",

@@ -197,7 +197,7 @@ void AcousticsSystem::update() {
     // 先落地外部提交的声学参数，再处理播放/停止请求。
     apply_pending_acoustics_updates();
     // Playback/API readers use committed snapshots once pending values drain.
-    Corona::publish_acoustics_snapshot_from_storage();
+    Corona::publish_acoustics_snapshot();
 
     // --- 消费命令队列 ---
     {

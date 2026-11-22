@@ -1850,7 +1850,7 @@ Corona::API::Camera::Camera()
     // 播种首帧快照必须在相机槽位的写锁**释放之后**：seed 内部会再读同一个槽位，
     // 而 shared_timed_mutex 不可重入 —— 在锁内调用会自死锁（表现为创建相机时整个程序卡住）。
     if (handle_ != 0) {
-        SharedDataHub::instance().seed_camera_snapshot_from_storage(handle_);
+        SharedDataHub::instance().seed_camera_snapshot(handle_);
     }
 }
 
@@ -1890,7 +1890,7 @@ Corona::API::Camera::Camera(const std::array<float, 3>& position, const std::arr
     // 播种首帧快照必须在相机槽位的写锁**释放之后**：seed 内部会再读同一个槽位，
     // 而 shared_timed_mutex 不可重入 —— 在锁内调用会自死锁（表现为创建相机时整个程序卡住）。
     if (handle_ != 0) {
-        SharedDataHub::instance().seed_camera_snapshot_from_storage(handle_);
+        SharedDataHub::instance().seed_camera_snapshot(handle_);
     }
 }
 

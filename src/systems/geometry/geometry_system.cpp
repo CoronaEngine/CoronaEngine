@@ -2,7 +2,6 @@
 #include <corona/events/engine_events.h>
 #include <corona/diagnostics/thread_phase.h>
 #include <horizon/core/logging.h>
-#include <corona/kernel/entity_storage.h>
 #include <corona/resource/resource.h>
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
@@ -36,7 +35,6 @@
 #include <utility>
 
 #include "geometry_internal.h"
-#include "storage_snapshot.h"
 #include "../common/diagnostic_env.h"
 
 #include <corona/systems/geometry/geometry_mesh_builder.h>
@@ -983,7 +981,7 @@ void GeometrySystem::update() {
 
     // ---- 场景状态快照：本 tick 的命令和重建都已落地，发布给 DAG 外的读者 ----
     update_phase.set("publish_scene_snapshot");
-    hub.publish_geometry_scene_snapshot_from_storage();
+    hub.publish_geometry_scene_snapshot();
 }
 
 void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {

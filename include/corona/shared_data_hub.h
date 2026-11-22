@@ -1,5 +1,4 @@
 #pragma once
-#include <corona/kernel/entity_storage.h>
 #include <corona/ecs/access.h>
 #include <nlohmann/json.hpp>
 #include <corona/camera_command_authority.h>
@@ -22,6 +21,7 @@
 #include <chrono>
 #include <cstdint>
 #include <mutex>
+#include <shared_mutex>
 #include <unordered_map>
 #include <memory>
 #include <optional>
@@ -873,6 +873,43 @@ using SceneRange = Ecs::ComponentRange<SceneDevice>;
 /// 便捷：按句柄取 GeometryDevice 组件（无锁）。
 [[nodiscard]] GeometryDevice* find_geometry(EntityId handle);
 
+/// 图像组件的写租约（唯一锁）：UI/DAG/主线程都会碰图像，必须保留同步。
+class ImageAccess {
+   public:
+    ImageAccess() = default;
+    ImageAccess(std::unique_lock<std::shared_mutex> lock, EntityId handle, ImageDevice* device)
+        : lock_(std::move(lock)), handle_(handle), device_(device) {}
+
+    [[nodiscard]] explicit operator bool() const noexcept { return device_ != nullptr; }
+    [[nodiscard]] EntityId id() const noexcept { return handle_; }
+    [[nodiscard]] ImageDevice* operator->() const noexcept { return device_; }
+    [[nodiscard]] ImageDevice& operator*() const noexcept { return *device_; }
+
+   private:
+    std::unique_lock<std::shared_mutex> lock_;
+    EntityId handle_{0};
+    ImageDevice* device_{nullptr};
+};
+
+/// 图像组件的读租约（共享锁）。
+class ImageReadAccess {
+   public:
+    ImageReadAccess() = default;
+    ImageReadAccess(std::shared_lock<std::shared_mutex> lock, EntityId handle,
+                    const ImageDevice* device)
+        : lock_(std::move(lock)), handle_(handle), device_(device) {}
+
+    [[nodiscard]] explicit operator bool() const noexcept { return device_ != nullptr; }
+    [[nodiscard]] EntityId id() const noexcept { return handle_; }
+    [[nodiscard]] const ImageDevice* operator->() const noexcept { return device_; }
+    [[nodiscard]] const ImageDevice& operator*() const noexcept { return *device_; }
+
+   private:
+    std::shared_lock<std::shared_mutex> lock_;
+    EntityId handle_{0};
+    const ImageDevice* device_{nullptr};
+};
+
 class SharedDataHub {
    public:
     static SharedDataHub& instance();
@@ -889,7 +926,6 @@ class SharedDataHub {
 
    public:
     // 新的 Storage 类型定义，包含默认的容量和内存池参数
-    using ImageStorage = Kernel::Utils::EntityStorage<ImageDevice, 128, 2>;
 
     // model_resource 已删除 Storage：组件直接挂在实体上。
     EntityId create_model_resource();
@@ -967,13 +1003,17 @@ class SharedDataHub {
     [[nodiscard]] SceneDevice* try_scene(EntityId handle);
     [[nodiscard]] const SceneDevice* try_scene(EntityId handle) const;
 
-    ImageStorage& image_storage();
-    const ImageStorage& image_storage() const;
+    // image 已删除 Storage：组件直接挂在实体上，跨线程访问用锁租约串行化。
+    EntityId create_image();
+    void destroy_image(EntityId handle);
+    [[nodiscard]] ImageAccess image_write(EntityId handle);
+    [[nodiscard]] ImageReadAccess image_read(EntityId handle);
+    [[nodiscard]] std::vector<EntityId> image_handles();
 
     // ---- 变换（P2）：外部写走命令，外部读走快照 ----
     void enqueue_transform_update(TransformUpdateCommand command);
     std::vector<TransformUpdateCommand> drain_transform_updates();
-    void publish_transform_snapshot_from_storage();
+    void publish_transform_snapshot();
     [[nodiscard]] std::shared_ptr<const TransformSnapshot> transform_snapshot() const;
     [[nodiscard]] std::optional<TransformSnapshotRow> transform_row(
         EntityId transform_handle) const;
@@ -984,7 +1024,7 @@ class SharedDataHub {
 
     // ---- 几何场景状态快照：外部读者不再对 GeometryStorage 加读锁 ----
     /// 从几何槽位重建整份快照（Geometry，DAG 线程；每 tick 末尾调用）
-    void publish_geometry_scene_snapshot_from_storage();
+    void publish_geometry_scene_snapshot();
     /// 当前快照（任意线程，可为 nullptr）
     [[nodiscard]] std::shared_ptr<const GeometrySceneSnapshot> geometry_scene_snapshot() const;
     /// 某个几何句柄的当前快照行
@@ -994,11 +1034,11 @@ class SharedDataHub {
     /// 用一整份新快照替换当前快照（Optics，DAG 线程）
     void publish_camera_snapshot(CameraSnapshot snapshot);
     /// 从相机槽位重建整份快照（Optics，DAG 线程；tick 内应用完命令之后调用）
-    void publish_camera_snapshot_from_storage();
+    void publish_camera_snapshot();
     /// 当前快照（任意线程，可为 nullptr）
     [[nodiscard]] std::shared_ptr<const CameraSnapshot> camera_snapshot() const;
     /// 创建相机时从槽位播种一行（主线程，仅创建路径），避免首帧读到空快照
-    void seed_camera_snapshot_from_storage(EntityId camera_handle);
+    void seed_camera_snapshot(EntityId camera_handle);
     /// 销毁相机时移除该行（避免把已释放的槽位暴露给读者）
     void remove_camera_snapshot_row(EntityId camera_handle);
     /// 读一行的已提交值（快照）
@@ -1084,7 +1124,7 @@ class SharedDataHub {
     std::unordered_map<EntityId, GeometrySceneCacheEntry> geometry_scene_cache_;
     mutable std::mutex camera_timing_mutex_;
     std::unordered_map<EntityId, CameraFrameTiming> camera_timings_;
-    ImageStorage image_storage_;
+    mutable std::shared_mutex image_mutex_;
     // 相机姿态：LatestWins（拖拽在 120Hz 下只需最后一次），P5 起统一走 CommandBuffer
     Kernel::CommandBuffer<CameraMoveCommand, CameraMoveKey,
                           Kernel::CoalescePolicy::LatestWins>

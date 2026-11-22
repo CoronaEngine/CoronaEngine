@@ -162,6 +162,7 @@ target_include_directories(corona_ui_multisurface_smoke
 )
 target_link_libraries(corona_ui_multisurface_smoke
     PRIVATE corona_ui_system corona_display_system corona_script_system corona::resource::manager
+            EnTT::EnTT nlohmann_json::nlohmann_json
 )
 if(COMMAND helicon_install_runtime_deps)
     helicon_install_runtime_deps(corona_ui_multisurface_smoke)

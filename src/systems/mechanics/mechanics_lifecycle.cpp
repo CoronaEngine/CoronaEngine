@@ -290,7 +290,7 @@ void MechanicsSystem::update() {
     // Getters read the committed snapshot once pending commands are drained.
     // Publish even on idle ticks so newly loaded and removed components are
     // reflected without requiring another property edit.
-    Corona::publish_mechanics_snapshot_from_storage();
+    Corona::publish_mechanics_snapshot();
     // 结构命令（回调注册）在 DAG 模式下已由边界阶段应用；这里兜底降级路径，
     // helper 幂等，没有命令时直接返回。
     Corona::apply_pending_mechanics_structural_commands();

@@ -635,7 +635,7 @@ void DisplaySystem::update() {
         // and image access. It also owns the handles with the lease so an
         // acquisition exception destroys partial results before lease release.
         using ImageAccess = std::optional<Detail::SurfaceFrameCoordinator::FrameAccess<
-            SharedDataHub::ImageStorage::WriteHandle>>;
+            Corona::ImageAccess>>;
         struct FrameImages {
             ImageAccess optics;
             ImageAccess ui;
@@ -649,9 +649,9 @@ void DisplaySystem::update() {
         auto frame_access = surface_frame_coordinator_.begin_frame(
             gate_it->second,
             [&]() -> FrameImages {
-                auto& storage = SharedDataHub::instance().image_storage();
-                return {state.optics.published_image.acquire_write(storage, state.optics),
-                        state.ui.published_image.acquire_write(storage, state.ui)};
+                auto& hub = SharedDataHub::instance();
+                return {state.optics.published_image.acquire_write(hub, state.optics),
+                        state.ui.published_image.acquire_write(hub, state.ui)};
             });
         const auto input_end = profile_frame ? std::chrono::steady_clock::now() : input_start;
         if (!frame_access) {

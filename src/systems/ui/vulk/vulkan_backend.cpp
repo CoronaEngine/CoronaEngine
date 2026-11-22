@@ -115,7 +115,7 @@ void VulkanBackend::shutdown() {
     for (auto& [surface, render] : surfaces_) {
         if (render && render->image_handle != 0) {
             render->published_image.retire().wait();
-            if (auto image = SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
+            if (auto image = Corona::SharedDataHub::instance().image_write(render->image_handle)) {
                 if (image->consumed_receipt.serial != 0) {
                     render->resources.executor.wait_idle(image->consumed_receipt);
                 }
@@ -127,7 +127,7 @@ void VulkanBackend::shutdown() {
             if (render->resources.last_receipt.serial != 0) {
                 render->resources.executor.wait_idle(render->resources.last_receipt);
             }
-            SharedDataHub::instance().image_storage().deallocate(render->image_handle);
+            Corona::SharedDataHub::instance().destroy_image(render->image_handle);
             render->image_handle = 0;
         }
     }
@@ -151,14 +151,14 @@ bool VulkanBackend::register_surface(void* surface, SDL_Window* window) {
     }
 
     auto render = std::make_unique<PerSurfaceRender>();
-    render->image_handle = SharedDataHub::instance().image_storage().allocate();
+    render->image_handle = Corona::SharedDataHub::instance().create_image();
     render->published_image = Detail::PublishedImage(render->image_handle);
     if (auto image_device =
-            SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
+            Corona::SharedDataHub::instance().image_write(render->image_handle)) {
         *image_device = ImageDevice{};
     } else {
         CFW_LOG_ERROR("VulkanBackend: failed to acquire image storage handle for surface {}", surface);
-        SharedDataHub::instance().image_storage().deallocate(render->image_handle);
+        Corona::SharedDataHub::instance().destroy_image(render->image_handle);
         return false;
     }
 
@@ -188,7 +188,7 @@ void VulkanBackend::unregister_surface(void* surface) {
     auto& render = *it->second;
     render.published_image.retire().wait();
     if (render.image_handle != 0) {
-        if (auto image = SharedDataHub::instance().image_storage().acquire_write(render.image_handle)) {
+        if (auto image = Corona::SharedDataHub::instance().image_write(render.image_handle)) {
             if (image->consumed_receipt.serial != 0) {
                 render.resources.executor.wait_idle(image->consumed_receipt);
             }
@@ -203,7 +203,7 @@ void VulkanBackend::unregister_surface(void* surface) {
     }
 
     if (render.image_handle != 0) {
-        SharedDataHub::instance().image_storage().deallocate(render.image_handle);
+        Corona::SharedDataHub::instance().destroy_image(render.image_handle);
         render.image_handle = 0;
     }
     surfaces_.erase(it);
@@ -221,7 +221,7 @@ void VulkanBackend::new_frame(void* surface) {
 
     // GPU sync: wait for Display to finish consuming our image before we render new content.
     if (auto image_device =
-            SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
+            Corona::SharedDataHub::instance().image_write(render->image_handle)) {
         // The first frame has no Display submission to wait for yet.
         if (image_device->consumed_receipt.serial != 0) {
             render->resources.executor.wait(image_device->consumed_receipt);
@@ -307,7 +307,7 @@ void VulkanBackend::present_surface(void* surface) {
     }
 
     if (auto image_device =
-            SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
+            Corona::SharedDataHub::instance().image_write(render->image_handle)) {
         const auto submit_receipt = render->resources.last_receipt;
         if (submit_receipt.serial == 0) {
             CFW_LOG_WARNING(
@@ -385,7 +385,7 @@ void VulkanBackend::rebuild(void* surface, uint32_t pixel_w, uint32_t pixel_h) {
                      render->resources.last_receipt.serial);
         if (render->image_handle != 0) {
             if (auto image_device =
-                    SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
+                    Corona::SharedDataHub::instance().image_write(render->image_handle)) {
                 if (image_device->consumed_receipt.serial != 0) {
                     render->resources.executor.wait_idle(image_device->consumed_receipt);
                 }

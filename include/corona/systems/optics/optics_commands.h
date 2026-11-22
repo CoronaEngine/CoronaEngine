@@ -217,7 +217,7 @@ inline OpticsSnapshotRow make_optics_row(EntityId handle, const OpticsDevice& de
 }
 
 /// 拥有者线程：从槽位重建整份快照（Optics 的写入完成之后调用）
-inline void publish_optics_snapshot_from_storage() {
+inline void publish_optics_snapshot() {
     OpticsSnapshot snapshot;
     snapshot.tick = OpticsCommandChannel::instance().snapshots().revision() + 1;
     for (const auto entity : Corona::Ecs::view<OpticsDevice>()) {

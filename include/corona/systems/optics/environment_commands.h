@@ -154,7 +154,7 @@ inline EnvironmentSnapshotRow make_environment_row(EntityId handle,
 }
 
 /// 从槽位重建整份快照（只应在 tick 边界、应用完命令之后调用）
-inline void publish_environment_snapshot_from_storage() {
+inline void publish_environment_snapshot() {
     EnvironmentSnapshot snapshot;
     snapshot.tick = EnvironmentCommandChannel::instance().snapshots().revision() + 1;
     for (const auto entity : Corona::Ecs::view<EnvironmentDevice>()) {
@@ -223,7 +223,7 @@ inline bool apply_pending_environment_updates() {
     // 幂等：没有命令、且快照已存在时不重复重建（DAG 模式下 Optics 的兜底调用
     // 因此几乎没有开销）。
     if (applied || !channel.snapshots().published()) {
-        publish_environment_snapshot_from_storage();
+        publish_environment_snapshot();
     }
     return applied;
 }
