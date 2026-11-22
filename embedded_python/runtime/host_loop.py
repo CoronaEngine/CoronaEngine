@@ -6,7 +6,10 @@ drain queued service calls, tick the editor on a fixed period, and sleep only
 while there is nothing to do.
 """
 
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 
 def run_loop(engine, editor, *, dispatch, poll_interval=0.004,
@@ -24,7 +27,7 @@ def run_loop(engine, editor, *, dispatch, poll_interval=0.004,
             requests = engine.poll_service_requests()
             if requests:
                 for request in requests:
-                    request_id = request["request_id"]
+                    request_id = request.get("request_id")
                     try:
                         payload = dispatch(
                             request.get("service"), request.get("function"),
@@ -38,7 +41,14 @@ def run_loop(engine, editor, *, dispatch, poll_interval=0.004,
                             "code": "SERVICE_FAILED",
                             "error": str(error),
                         }
-                    engine.complete_service_request(request_id, payload)
+                    try:
+                        engine.complete_service_request(request_id, payload)
+                    except Exception:
+                        # Completion can fail on its own (unconvertible payload, queue
+                        # failure). That request's caller is already lost, but the other
+                        # drained ids must still be settled, so log and keep going.
+                        logger.exception(
+                            "event=runtime.service.complete_failed request_id=%s", request_id)
                 # Work arrived: give this frame to the editor instead of sleeping.
                 next_update = clock()
                 continue
