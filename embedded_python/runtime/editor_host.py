@@ -254,6 +254,22 @@ class CoronaEditor:
                 output.close()
 
     @classmethod
+    def _disarm_runtime_watchdog(cls):
+        """Cancel the hang timer, keeping the crash handler and its file open.
+
+        The host loop sleeps between frames, so the timer may cover only the work
+        region. Closing the file here would reopen and log it again on every frame;
+        ``_cancel_runtime_watchdog`` remains the shutdown path.
+        """
+        import faulthandler
+
+        try:
+            if faulthandler.is_enabled():
+                faulthandler.cancel_dump_traceback_later()
+        except Exception:
+            logger.debug("event=runtime.watchdog.disarm_failed", exc_info=True)
+
+    @classmethod
     def _arm_runtime_watchdog(cls):
         import faulthandler
 
@@ -288,35 +304,35 @@ class CoronaEditor:
         if cls._shutdown_requested or not cls._runtime_started:
             return False
         cls.checkpoint()
-        # Consume SDL and scoped V8 input from the one native owned queue.
-        cls._set_native_runtime_phase("input_dispatch")
-        input_start = _time.perf_counter()
+        # The host loop sleeps between frames; covering that idle time would dump a
+        # thread traceback on every frame whose idle period reaches the watchdog.
+        cls._arm_runtime_watchdog()
         try:
-            import CoronaEngine
-            # The queue belongs to the native side; drain it so it cannot grow while no
-            # script host consumes the events.
-            CoronaEngine.drain_input_events()
-        except RuntimeError:
-            return False
-        except Exception:
-            logger.exception("event=runtime.input.dispatch_failed")
-        cls._warn_runtime_phase(
-            "input_dispatch", (_time.perf_counter() - input_start) * 1000.0, 50.0)
+            # Consume SDL and scoped V8 input from the one native owned queue.
+            cls._set_native_runtime_phase("input_dispatch")
+            input_start = _time.perf_counter()
+            try:
+                import CoronaEngine
+                # The queue belongs to the native side; drain it so it cannot grow while no
+                # script host consumes the events.
+                CoronaEngine.drain_input_events()
+            except RuntimeError:
+                return False
+            except Exception:
+                logger.exception("event=runtime.input.dispatch_failed")
+            cls._warn_runtime_phase(
+                "input_dispatch", (_time.perf_counter() - input_start) * 1000.0, 50.0)
 
-        elapsed_ms = (_time.perf_counter() - runtime_start) * 1000.0
-        cls._warn_runtime_phase("update", elapsed_ms, 50.0)
-        return True
+            elapsed_ms = (_time.perf_counter() - runtime_start) * 1000.0
+            cls._warn_runtime_phase("update", elapsed_ms, 50.0)
+            return True
+        finally:
+            cls._disarm_runtime_watchdog()
 
     @classmethod
     def update_runtime(cls):
         cls._set_native_runtime_phase("update_entry")
-        cls._arm_runtime_watchdog()
         try:
             return cls._update_runtime_impl()
         finally:
             cls._set_native_runtime_phase("idle")
-            # Keep the watchdog armed between frames. If another Python thread
-            # takes the GIL and blocks in native code, the next C++ update cannot
-            # enter Python to arm a new timer; this outstanding timer still dumps
-            # every Python thread without requiring the GIL.
-            cls._arm_runtime_watchdog()

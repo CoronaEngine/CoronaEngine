@@ -17,7 +17,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.append(str(REPO_ROOT))
 
 from config.app_config import get_app_config
+from runtime import host_loop
 from runtime.editor_host import CoronaEditor
+from runtime.native_engine import get_corona_engine
 
 
 app_config = get_app_config()
@@ -40,6 +42,7 @@ except Exception:
 
 
 editor = CoronaEditor
+CoronaEngine = get_corona_engine()
 editor.register_script_dispatcher()
 atexit.register(editor.unregister_script_dispatcher)
 
@@ -52,6 +55,18 @@ except Exception:
 
 
 def run():
-    """Signal that the embedded Python runtime is ready for editor updates."""
+    """Initialize and start the editor runtime; returns immediately."""
 
+    editor.initialize_runtime()
+    editor.start_runtime()
     logging.getLogger(__name__).info("event=runtime.started")
+
+
+def loop():
+    """Own the loop until CoronaEngine.should_stop(); returns the shutdown snapshot."""
+
+    if CoronaEngine is None:
+        raise RuntimeError("CoronaEngine module is unavailable")
+    return host_loop.run_loop(
+        CoronaEngine, editor,
+        dispatch=editor.dispatch_script_values_from_cpp)

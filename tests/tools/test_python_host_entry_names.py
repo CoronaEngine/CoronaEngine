@@ -24,3 +24,11 @@ def test_the_only_name_lookups_are_the_two_entries():
     assert sorted(names) == ["loop", "run"], (
         f"python_api.cpp looks up {sorted(names)}; only the two entry names may be resolved by "
         "string, and every other hook is now called from inside Python")
+
+
+def test_bootstrap_exports_both_entries():
+    source = (ROOT / "embedded_python/runtime/bootstrap.py").read_text(encoding="utf-8-sig")
+    for name in ("def run(", "def loop("):
+        assert name in source, f"bootstrap.py no longer defines {name}"
+    module = (ROOT / "embedded_python/main.py").read_text(encoding="utf-8-sig")
+    assert "loop" in module, "main.py does not re-export loop"

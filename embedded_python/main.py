@@ -1,5 +1,5 @@
 """Host-facing entrypoint for the embedded Python runtime."""
 
-from runtime.bootstrap import editor, run
+from runtime.bootstrap import editor, loop, run
 
-__all__ = ["editor", "run"]
+__all__ = ["editor", "loop", "run"]
