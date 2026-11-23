@@ -294,17 +294,31 @@ SceneDevice* find_scene(EntityId handle) {
 }
 
 EntityId SharedDataHub::create_image() { return Ecs::emplace<ImageDevice>(); }
-void SharedDataHub::destroy_image(EntityId handle) { Ecs::destroy(handle); }
+void SharedDataHub::destroy_image(EntityId handle) {
+    Ecs::destroy(handle);
+    std::lock_guard<std::mutex> guard(image_locks_mutex_);
+    image_locks_.erase(handle);
+}
+std::shared_ptr<std::shared_mutex> SharedDataHub::image_lock_for(EntityId handle) const {
+    std::lock_guard<std::mutex> guard(image_locks_mutex_);
+    auto& entry = image_locks_[handle];
+    if (!entry) {
+        entry = std::make_shared<std::shared_mutex>();
+    }
+    return entry;
+}
 ImageAccess SharedDataHub::image_write(EntityId handle) {
-    std::unique_lock<std::shared_mutex> lock(image_mutex_);
-    return ImageAccess(std::move(lock), handle, Ecs::try_get<ImageDevice>(handle));
+    auto owner = image_lock_for(handle);
+    std::unique_lock<std::shared_mutex> lock(*owner);
+    return ImageAccess(std::move(lock), std::move(owner), handle, Ecs::try_get<ImageDevice>(handle));
 }
 ImageReadAccess SharedDataHub::image_read(EntityId handle) {
-    std::shared_lock<std::shared_mutex> lock(image_mutex_);
-    return ImageReadAccess(std::move(lock), handle, Ecs::try_get<ImageDevice>(handle));
+    auto owner = image_lock_for(handle);
+    std::shared_lock<std::shared_mutex> lock(*owner);
+    return ImageReadAccess(std::move(lock), std::move(owner), handle,
+                           Ecs::try_get<ImageDevice>(handle));
 }
 std::vector<EntityId> SharedDataHub::image_handles() {
-    std::shared_lock<std::shared_mutex> lock(image_mutex_);
     std::vector<EntityId> handles;
     for (const auto entity : Ecs::view<ImageDevice>()) {
         handles.push_back(Ecs::to_handle(entity));

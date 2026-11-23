@@ -869,8 +869,9 @@ using SceneRange = Ecs::ComponentRange<SceneDevice>;
 class ImageAccess {
    public:
     ImageAccess() = default;
-    ImageAccess(std::unique_lock<std::shared_mutex> lock, EntityId handle, ImageDevice* device)
-        : lock_(std::move(lock)), handle_(handle), device_(device) {}
+    ImageAccess(std::unique_lock<std::shared_mutex> lock,
+                std::shared_ptr<std::shared_mutex> owner, EntityId handle, ImageDevice* device)
+        : lock_(std::move(lock)), owner_(std::move(owner)), handle_(handle), device_(device) {}
 
     [[nodiscard]] explicit operator bool() const noexcept { return device_ != nullptr; }
     [[nodiscard]] EntityId id() const noexcept { return handle_; }
@@ -879,6 +880,8 @@ class ImageAccess {
 
    private:
     std::unique_lock<std::shared_mutex> lock_;
+    // 每张图一把锁：租约持锁期间锁对象本身必须存活（destroy_image 会从表里摘除）。
+    std::shared_ptr<std::shared_mutex> owner_;
     EntityId handle_{0};
     ImageDevice* device_{nullptr};
 };
@@ -887,9 +890,10 @@ class ImageAccess {
 class ImageReadAccess {
    public:
     ImageReadAccess() = default;
-    ImageReadAccess(std::shared_lock<std::shared_mutex> lock, EntityId handle,
+    ImageReadAccess(std::shared_lock<std::shared_mutex> lock,
+                    std::shared_ptr<std::shared_mutex> owner, EntityId handle,
                     const ImageDevice* device)
-        : lock_(std::move(lock)), handle_(handle), device_(device) {}
+        : lock_(std::move(lock)), owner_(std::move(owner)), handle_(handle), device_(device) {}
 
     [[nodiscard]] explicit operator bool() const noexcept { return device_ != nullptr; }
     [[nodiscard]] EntityId id() const noexcept { return handle_; }
@@ -898,6 +902,7 @@ class ImageReadAccess {
 
    private:
     std::shared_lock<std::shared_mutex> lock_;
+    std::shared_ptr<std::shared_mutex> owner_;
     EntityId handle_{0};
     const ImageDevice* device_{nullptr};
 };
@@ -1124,7 +1129,11 @@ class SharedDataHub {
     std::unordered_map<EntityId, GeometrySceneCacheEntry> geometry_scene_cache_;
     mutable std::mutex camera_timing_mutex_;
     std::unordered_map<EntityId, CameraFrameTiming> camera_timings_;
-    mutable std::shared_mutex image_mutex_;
+    // 图像按句柄分锁：同一张图互斥，不同图可并行。用全局单锁会让
+    // 同时持有 optics / ui 两张图写租约的 Display 线程自死锁。
+    [[nodiscard]] std::shared_ptr<std::shared_mutex> image_lock_for(EntityId handle) const;
+    mutable std::mutex image_locks_mutex_;
+    mutable std::unordered_map<EntityId, std::shared_ptr<std::shared_mutex>> image_locks_;
     // 相机姿态：LatestWins（拖拽在 120Hz 下只需最后一次），P5 起统一走 CommandBuffer
     Kernel::CommandBuffer<CameraMoveCommand, CameraMoveKey,
                           Kernel::CoalescePolicy::LatestWins>
