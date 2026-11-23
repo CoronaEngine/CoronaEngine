@@ -245,6 +245,17 @@ class ISystemManager {
      * 必须在 configure_dag() 之后、start_all() 之前调用；DAG 不存在时为空操作。
      */
     virtual void set_tick_boundary_hook(std::function<void()> hook) = 0;
+
+    /**
+     * @brief 设置 DAG 线程的启停钩子（P1）
+     *
+     * on_start 在 DAG 线程建立之后、on_stop 在请求停止之前各调用一次。
+     * 内核不知道引擎的类型，因此 ECS 结构命令通道的"结算未消费请求"由装配方
+     * （engine.cpp）通过这两个钩子注入。必须在 start_all() 之前调用；
+     * DAG 不存在时为空操作。
+     */
+    virtual void set_dag_lifecycle_hooks(std::function<void()> on_start,
+                                         std::function<void()> on_stop) = 0;
 };
 
 /**

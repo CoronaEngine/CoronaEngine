@@ -123,6 +123,22 @@ public:
     using TickBoundaryHook = std::function<void()>;
     void set_tick_boundary_hook(TickBoundaryHook hook);
 
+    /**
+     * @brief 线程启停钩子：start() 建好线程之后 / stop() 请求停止之前各调用一次
+     *
+     * 用来在**内核之外**收敛线程生命周期上的资源：例如 ECS 结构命令通道必须在
+     * DAG 停止之前把仍在等待的请求以失败结算，否则调用方只能等到超时。
+     * 内核不引用引擎的任何类型，钩子由装配方（engine.cpp）注入。
+     *
+     * 约定：
+     * - 必须在 start() 之前设置（生命周期线程只读该成员）
+     * - start/stop 钩子抛异常不会改变启停结果：记 ERROR 后继续
+     * - stop 钩子只在真正 join 的那一次（线程还 joinable 时）调用
+     */
+    using LifecycleHook = std::function<void()>;
+    void set_start_hook(LifecycleHook hook);
+    void set_stop_hook(LifecycleHook hook);
+
     /// 最近一次边界阶段耗时（毫秒）
     [[nodiscard]] double last_boundary_ms() const {
         return last_boundary_ms_.load(std::memory_order_relaxed);
@@ -197,6 +213,8 @@ private:
     std::atomic<std::uint32_t> tick_rate_;
     bool prepared_{false};
     TickBoundaryHook boundary_hook_;                  ///< 装配期设置，tick 线程只读
+    LifecycleHook start_hook_;                        ///< 装配期设置，启停线程只读
+    LifecycleHook stop_hook_;                         ///< 装配期设置，启停线程只读
     std::atomic<double> last_boundary_ms_{0.0};
 
     std::jthread thread_;

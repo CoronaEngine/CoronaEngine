@@ -9,6 +9,7 @@
 #include <corona/resource/types/image.h>
 #include <corona/shared_data_hub.h>
 #include <corona/ecs/access.h>
+#include <corona/ecs/structural_commands.h>
 #include <corona/systems/geometry/model_node_geometry.h>
 #include <corona/systems/geometry/geometry_commands.h>
 #include <corona/systems/geometry/scene_commands.h>
@@ -305,7 +306,9 @@ void GeometrySystem::update() {
     // such a stall visible as "Geometry stuck in phase X" instead of silence.
     Corona::Diagnostics::PhaseScope update_phase{"Geometry", "update"};
     // DAG 降级路径（CORONA_SYSTEMS_DAG=0）没有 tick 边界钩子：在这里兜底应用
-    // 场景成员命令。DAG 模式下边界阶段已 drain 过，这里是幂等空操作。
+    // 结构命令与场景成员命令。DAG 模式下边界阶段已 drain 过，这里是空操作
+    // （只有本 tick 期间新到的请求会被应用 —— 与场景命令的兜底语义一致）。
+    Corona::Ecs::apply_pending_structural_commands();
     Corona::apply_pending_scene_commands();
     // 外部线程（CEF/脚本）对 GeometryDevice 的写入也在这里落地。
     Corona::apply_pending_geometry_commands();

@@ -1,6 +1,7 @@
 #include "corona/engine.h"
 
 #include <corona/concurrency/thread_pool.h>
+#include <corona/ecs/structural_commands.h>
 #include <corona/events/engine_events.h>
 #include <corona/systems/geometry/scene_commands.h>
 #include <corona/systems/optics/environment_commands.h>
@@ -86,7 +87,10 @@ static void configure_systems_dag(Kernel::ISystemManager* sys_mgr) {
     // Environment 跨 Optics（光照）与 Mechanics（重力/固定步长）两个消费者，
     // 且 Mechanics 在 DAG 里排在 Optics 之前 —— 只有在边界应用才能同 tick 生效。
     sys_mgr->set_tick_boundary_hook([]() {
-        // 场景成员先应用：它决定"本 tick 存在哪些 actor / camera"，
+        // 结构命令最先应用：它们决定"本 tick 存在哪些实体"（ECS 单写者边界，P1）。
+        // 必须在场景成员命令之前 —— 同 tick 的成员命令要能看到刚创建出来的实体。
+        Corona::Ecs::apply_pending_structural_commands();
+        // 场景成员其次：它决定"本 tick 存在哪些 actor / camera"，
         // 结构命令与全局环境参数都建立在成员集合之上。
         Corona::apply_pending_scene_commands();
         // 结构命令先应用：它们决定"本 tick 存在什么、能调到什么"。
@@ -94,6 +98,11 @@ static void configure_systems_dag(Kernel::ISystemManager* sys_mgr) {
         // 全局环境参数：Optics 与 Mechanics 必须在同一 tick 看到同一个值。
         Corona::apply_pending_environment_updates();
     });
+
+    // DAG 线程的启停钩子（P1）：结构命令通道必须知道"拥有者线程何时上线/下线"。
+    // 停止时把仍在等待的请求以失败结算，而不是让调用方空等到超时。
+    sys_mgr->set_dag_lifecycle_hooks(&Corona::Ecs::on_dag_thread_started,
+                                     &Corona::Ecs::on_dag_thread_stopping);
 
     CFW_LOG_NOTICE("Systems DAG enabled: {}Hz tick, order = Mechanics -> {{Geometry, Acoustics}} -> Optics -> Display",
                    tick_rate);
@@ -287,6 +296,12 @@ void Engine::shutdown() {
                 dynamic_cast<Corona::Systems::UiSystem*>(ui_system ? ui_system.get() : nullptr)) {
             ui->stop();
         }
+
+        // 结构命令通道：DAG 模式由 SystemsThread 的 stop 钩子结算；降级路径
+        // （CORONA_SYSTEMS_DAG=0）没有钩子，这里兜底一次（幂等：停机后再调用
+        // 只是把 stopped 再置一次，队列已空）。放在 stop_all() 之前 —— 入口一关，
+        // 之后到达的创建请求立刻失败，不会悬空。
+        Corona::Ecs::on_dag_thread_stopping();
 
         sys_mgr->stop_all();
 

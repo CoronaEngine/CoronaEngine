@@ -310,6 +310,15 @@ class SystemManager : public ISystemManager {
         }
     }
 
+    void set_dag_lifecycle_hooks(std::function<void()> on_start,
+                                 std::function<void()> on_stop) override {
+        if (!dag_) {
+            return;
+        }
+        dag_->set_start_hook(std::move(on_start));
+        dag_->set_stop_hook(std::move(on_stop));
+    }
+
    private:
     std::vector<std::shared_ptr<ISystem>> snapshot_systems(bool ensure_sorted = false) {
         std::lock_guard<std::mutex> lock(mutex_);

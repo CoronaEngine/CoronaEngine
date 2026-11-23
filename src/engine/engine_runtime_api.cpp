@@ -8,6 +8,7 @@
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
 #include <corona/shared_data_hub.h>
+#include <corona/ecs/structural_commands.h>
 #include <corona/systems/mechanics/mechanics_commands.h>
 #include <corona/systems/mechanics/mechanics_structural_commands.h>
 #include <corona/systems/optics/optics_commands.h>
@@ -675,26 +676,26 @@ Corona::API::Geometry::Geometry(const std::string& model_path, Resource::ModelIm
 
     transform_handle_ = SharedDataHub::instance().create_transform();
 
-    handle_ = SharedDataHub::instance().create_geometry();
-    if (auto handle = Corona::find_geometry(handle_)) {
-        handle->transform_handle = transform_handle_;
-        handle->model_resource_handle = model_resource_handle_;
-        handle->mesh_handles.clear();  // 留空，待 GeometrySystem 异步构建
-        if (auto* model_source = SharedDataHub::instance().try_model_source(handle_)) {
-            model_source->path_utf8 = model_path;  // 供 GeometrySystem 异步 import
-        }
-        handle->import_options = options;
-        // 空路径（如 audio actor）无需导入，直接 Ready；有路径才进 PendingImport。
-        handle->gpu_build_state = model_path.empty()
-            ? GeometryDevice::GpuBuildState::Ready
-            : GeometryDevice::GpuBuildState::PendingImport;
-    } else {
-        CFW_LOG_CRITICAL("[Geometry::Geometry] Failed to acquire write access to geometry storage");
+    // 结构创建走 tick 边界命令通道（ECS 单写者，P1）：把实体与初始组件值装成
+    // 一条命令，由 DAG 线程在 tick 边界创建并把 EntityId 交回。句柄到手时实体
+    // 已存在 —— 这里不再"先创建再补字段"，因此也不会在 UI 线程写组件。
+    Corona::Ecs::CreateGeometryPayload payload{};
+    payload.geometry.transform_handle = transform_handle_;
+    payload.geometry.model_resource_handle = model_resource_handle_;
+    payload.geometry.mesh_handles.clear();  // 留空，待 GeometrySystem 异步构建
+    payload.geometry.import_options = options;
+    // 空路径（如 audio actor）无需导入，直接 Ready；有路径才进 PendingImport。
+    payload.geometry.gpu_build_state = model_path.empty()
+        ? GeometryDevice::GpuBuildState::Ready
+        : GeometryDevice::GpuBuildState::PendingImport;
+    payload.model_source.path_utf8 = model_path;  // 供 GeometrySystem 异步 import
+    handle_ = Corona::Ecs::request_create_geometry(std::move(payload));
+    if (handle_ == 0) {
+        CFW_LOG_CRITICAL("[Geometry::Geometry] Failed to create the geometry entity "
+                         "(the structural command did not settle; see the diagnostic above)");
         // 清理已分配的资源
         SharedDataHub::instance().destroy_transform(transform_handle_);
         SharedDataHub::instance().destroy_model_resource(model_resource_handle_);
-        SharedDataHub::instance().destroy_geometry(handle_);
-        handle_ = 0;
         transform_handle_ = 0;
         model_resource_handle_ = 0;
         return;
@@ -836,16 +837,17 @@ Corona::API::Geometry Corona::API::Geometry::from_image(const std::string& image
     // 图片无 Resource::Scene，model_resource_handle 保持 0：Vision adapter 会回退到
     // 从 vertexBuffer 拷回 CPU mesh 的路径（load_cpu_mesh_from_buffers），无需 model resource。
     geo.transform_handle_ = SharedDataHub::instance().create_transform();
-    geo.handle_ = SharedDataHub::instance().create_geometry();
-    if (auto handle = Corona::find_geometry(geo.handle_)) {
-        handle->transform_handle = geo.transform_handle_;
-        handle->model_resource_handle = 0;
-        handle->mesh_handles = std::move(mesh_devices);
-    } else {
-        CFW_LOG_CRITICAL("[Geometry::from_image] Failed to acquire write access to geometry storage");
+    // 同上：结构创建走命令通道，初始组件值（含已上传的 mesh）随 payload 一起
+    // 交给 DAG 线程，UI 线程不再直接写 registry / 组件。
+    Corona::Ecs::CreateGeometryPayload payload{};
+    payload.geometry.transform_handle = geo.transform_handle_;
+    payload.geometry.model_resource_handle = 0;
+    payload.geometry.mesh_handles = std::move(mesh_devices);
+    geo.handle_ = Corona::Ecs::request_create_geometry(std::move(payload));
+    if (geo.handle_ == 0) {
+        CFW_LOG_CRITICAL("[Geometry::from_image] Failed to create the geometry entity "
+                         "(the structural command did not settle; see the diagnostic above)");
         SharedDataHub::instance().destroy_transform(geo.transform_handle_);
-        SharedDataHub::instance().destroy_geometry(geo.handle_);
-        geo.handle_ = 0;
         geo.transform_handle_ = 0;
     }
     return geo;

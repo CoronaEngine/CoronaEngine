@@ -130,6 +130,17 @@ bool SystemsThread::start() {
         next_tick_ = 0;
     }
     thread_ = std::jthread{[this](std::stop_token token) { thread_loop(token); }};
+
+    // 启动钩子：在调用方线程上执行（此时 DAG 线程已经存在，下一 tick 会走到边界阶段）。
+    if (start_hook_) {
+        try {
+            start_hook_();
+        } catch (const std::exception& e) {
+            CFW_LOG_ERROR("[SystemsThread] start hook failed: {}", e.what());
+        } catch (...) {
+            CFW_LOG_ERROR("[SystemsThread] start hook failed: unknown exception");
+        }
+    }
     return true;
 }
 
@@ -153,6 +164,17 @@ void SystemsThread::resume() {
 
 void SystemsThread::stop() {
     if (thread_.joinable()) {
+        // 停止钩子：在请求停止之前执行，这样"正在停止"期间到达的请求会立刻被拒绝，
+        // 队列里未消费的请求也会在这里被结算，而不是等调用方超时。
+        if (stop_hook_) {
+            try {
+                stop_hook_();
+            } catch (const std::exception& e) {
+                CFW_LOG_ERROR("[SystemsThread] stop hook failed: {}", e.what());
+            } catch (...) {
+                CFW_LOG_ERROR("[SystemsThread] stop hook failed: unknown exception");
+            }
+        }
         thread_.request_stop();
         {
             std::lock_guard lock{state_mutex_};
@@ -185,6 +207,14 @@ FrameTickReport SystemsThread::run_once(double delta_seconds) {
 
 void SystemsThread::set_tick_boundary_hook(TickBoundaryHook hook) {
     boundary_hook_ = std::move(hook);
+}
+
+void SystemsThread::set_start_hook(LifecycleHook hook) {
+    start_hook_ = std::move(hook);
+}
+
+void SystemsThread::set_stop_hook(LifecycleHook hook) {
+    stop_hook_ = std::move(hook);
 }
 
 FrameTickReport SystemsThread::tick_locked(double delta_seconds) {
