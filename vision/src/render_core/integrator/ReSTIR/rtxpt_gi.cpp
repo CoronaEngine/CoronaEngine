@@ -1357,17 +1357,25 @@ void RtxptGI::compile_initial_samples() noexcept {
         if (work_counters) path_work_counters_.write(dispatch_id(), *work_counters);
         if (storage.denoiser.enabled()) {
             if (buffer_signal_commit) {
-                for (uint p = 0u; p < 3u; ++p) {
+                auto finalize_plane = [&](uint p) {
+                    Float4 diffuse = storage.denoiser.read_diffuse(dispatch_id(), Uint{p});
+                    Float4 specular = storage.denoiser.read_specular(dispatch_id(), Uint{p});
                     $if(signal_plane == p) {
-                        gi_signal_commit_buffer_visit(storage.denoiser, dispatch_id(), Uint{p},
+                        gi_signal_commit_visit(diffuse, specular,
                             signal_base_diffuse, signal_base_specular, signal_secondary,
                             skip_distance ? Float{0.f} : capture.signal_hit_distance, signal_scatter_diffuse);
                     };
-                    Float4 diffuse = storage.denoiser.read_diffuse(dispatch_id(), Uint{p});
-                    Float4 specular = storage.denoiser.read_specular(dispatch_id(), Uint{p});
                     storage.denoiser.write(dispatch_id(), Uint{p},
                         make_float4(ocarina::zero_if_nan_inf(Float3{diffuse.xyz()}), diffuse.w),
                         make_float4(ocarina::zero_if_nan_inf(Float3{specular.xyz()}), specular.w));
+                };
+                // A path starts on plane zero even if it never matches a prefix.
+                // Unmatched secondary slots still contain this frame's initial zeros.
+                finalize_plane(0u);
+                for (uint p = 1u; p < 3u; ++p) {
+                    $if(header[p] != rtxpt_gi::PrefixInvalid && header[p] != rtxpt_gi::PrefixQueued) {
+                        finalize_plane(p);
+                    };
                 }
             } else {
                 for (uint p = 0u; p < 3u; ++p) {

@@ -212,8 +212,8 @@ struct Capture{
 };
 struct Context{Capture*path_capture=nullptr;};
 unsigned nee_samples=0;
-SampledSpectrum direct_light_mis(Interaction,const MaterialEvaluator&,LightSample,bool,int,int,BSDFSample&ss){
-    ++nee_samples;ss.wi=make_float3(1,0,0);return{7.f};
+SampledSpectrum direct_light_mis(Interaction,const MaterialEvaluator&,LightSample,bool,int& sampler,int,BSDFSample&ss){
+    ++nee_samples;++sampler;ss.wi=make_float3(1,0,0);return{7.f};
 }
 '''
     checks = r'''
@@ -222,21 +222,28 @@ void near(float v,float want,const char*m){require(std::isfinite(v)&&abs(v-want)
 int main(){try{
     Capture capture;Context hc{&capture};Interaction it;TriangleHitVar hit;MaterialEvaluator evaluator;
     SampledWavelengths wavelengths;BSDFSample bsdf_sample{wavelengths};LightSample light_sample;
-    unsigned bounces=2;int sampler=0,swl=0;bool occluded=false;
+    unsigned bounces=0,samples_observed=0;int sampler=0,swl=0;bool occluded=false;
     SampledSpectrum throughput{1.f};Float3 signal_direct_fraction=make_float3(0);
-    capture.on_sample=[&](const auto&,const auto&,const auto&,const auto&,const auto&bounce,const auto&){
+    capture.on_sample=[&](const auto&,const auto&,const auto&,const auto&sample,const auto&bounce,const auto&){
+        require(nee_samples==samples_observed+1,"BSDF observer did not follow exactly one NEE sample");
+        near(sample.wi.x,1,"sampled BSDF direction changed");++samples_observed;
         // This is the newly selected receiver, discovered after BSDF sampling.
         if(bounce==2)capture.signal_bounce=bounce;
     };
     auto run=[&](){__FRAGMENT__return SampledSpectrum{0.f};};
-    auto L=run();near(L.x,7,"NEE radiance changed");require(nee_samples==1,"NEE sampled twice");
+    auto primary=run();near(primary.x,7,"primary NEE radiance changed");
+    require(nee_samples==1&&sampler==1&&samples_observed==1,"primary sampling changed");
+    require(evaluator.fraction_calls==0,"primary NEE evaluated the unused RGB fraction");
+    bounces=2;
+    auto L=run();near(L.x,7,"secondary NEE radiance changed");
+    require(nee_samples==2&&sampler==2&&samples_observed==2,"secondary sampling changed");
     near(evaluator.evaluated_wi.x,0,"fraction used sampled BSDF direction");
     near(evaluator.evaluated_wi.y,.6f,"fraction did not use exact shadow direction");
     near(evaluator.evaluated_wi.z,.8f,"fraction did not use exact shadow direction");
     require(evaluator.fraction_calls==1,"base was not evaluated once");
     bounces=3;run();require(evaluator.fraction_calls==1,"later NEE evaluated unnecessary D/S");
     capture.on_signal=false;bounces=2;run();require(evaluator.fraction_calls==1,"non-signal path evaluated D/S");
-    require(nee_samples==3,"observer changed NEE sample count");
+    require(nee_samples==4&&sampler==4&&samples_observed==4,"observer changed sampling");
     std::cout<<"PASS actual shared NEE fragment, exact shadow direction, base-only D/S, unchanged sampling and ordinary opt-out\n";
     return 0;
 }catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}}

@@ -673,9 +673,8 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                     auto direct = direct_light_mis(it, evaluator, light_sample, occluded, sampler, swl, bsdf_sample);
                     hc.path_capture->on_sample(it, hit, evaluator, bsdf_sample, bounces, throughput);
                     if (hc.path_capture->on_signal && hc.path_capture->evaluate_signal_direct_fraction) {
-                        $if(bounces == hc.path_capture->signal_bounce) {
-                            // Fill has one ordinary PT NEE sample. Split that
-                            // exact evaluated direction only at a plane base.
+                        // GI records direct-light signals only at secondary plane bases.
+                        $if(bounces > 0u && bounces == hc.path_capture->signal_bounce) {
                             signal_direct_fraction = evaluator.specular_fraction_rgb(it.wo,
                                 normalize(light_sample.p_light - it.pos));
                         };
