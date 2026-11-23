@@ -128,7 +128,14 @@ void VulkanBackend::shutdown() {
             if (render->resources.last_receipt.serial != 0) {
                 render->resources.executor.wait_idle(render->resources.last_receipt);
             }
-            Corona::Ecs::request_destroy_image(render->image_handle);
+            // 命令没被接受（DAG 已停机 / 队列拒绝）时不能装作销毁成功：句柄一旦清零，
+            // 这个图像实体和它的 GPU 资源就再也找不回来了 —— 至少把句柄写进日志。
+            if (!Corona::Ecs::request_destroy_image(render->image_handle)) {
+                CFW_LOG_WARNING(
+                    "VulkanBackend: image {} could not be queued for destruction during "
+                    "shutdown; the entity is orphaned with the world",
+                    render->image_handle);
+            }
             render->image_handle = 0;
         }
     }
@@ -210,7 +217,13 @@ void VulkanBackend::unregister_surface(void* surface) {
     }
 
     if (render.image_handle != 0) {
-        Corona::Ecs::request_destroy_image(render.image_handle);
+        // 同上：命令没被接受时把句柄写进日志，别让它悄悄消失。
+        if (!Corona::Ecs::request_destroy_image(render.image_handle)) {
+            CFW_LOG_WARNING(
+                "VulkanBackend: image {} could not be queued for destruction while "
+                "unregistering surface {}; the entity is orphaned with the world",
+                render.image_handle, surface);
+        }
         render.image_handle = 0;
     }
     surfaces_.erase(it);

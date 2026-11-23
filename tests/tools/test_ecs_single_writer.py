@@ -271,17 +271,33 @@ def test_a_stuck_dag_does_not_multiply_the_wait_per_entity():
     # requests must fail immediately (the latch), and destroys must never wait - otherwise
     # a failed load's rollback costs N entities x budget on the CEF/main thread.
     channel = read(ROOT / "include" / "corona" / "ecs" / "structural_commands.h")
-    assert "unresponsive_" in channel and "mark_unresponsive" in channel
+    assert "unresponsive_beat_" in channel, (
+        "the latch must be stamped with the heartbeat, not a plain bool: a completed "
+        "boundary has to invalidate it without a clear that can race")
     assert "kUnresponsiveReason" in channel and "DAG_UNRESPONSIVE" in channel
     assert "if (channel.unresponsive())" in channel, (
         "submit_structural_command must reject fast once the DAG is unresponsive")
     assert "submit_structural_command_without_waiting" in channel
-    destroy = channel.split("request_destroy_entity(EntityId handle")[1].split(
-        "request_destroy_image")[0]
-    assert "submit_structural_command_without_waiting(" in destroy
-    assert "submit_structural_command(" not in destroy, (
-        "destroys must not wait for settlement: the rollback path would multiply the "
-        "no-progress budget by the entity count")
+    destroy = channel.split("submit_structural_command_without_waiting")[1].split(
+        "request_destroy_entity(EntityId handle")[0]
+    assert "enqueue_deferred_destroy(" in destroy
+
+
+def test_the_deferred_destroy_queue_is_not_the_capacity_capped_fifo():
+    # Task 1c review item 1: a fire-and-forget teardown of a large scene (~8 destroys per
+    # actor) must not hit CommandBuffer's 4096 cap - rejected destroys would orphan live
+    # entities (and their GPU resources) on a perfectly healthy DAG.
+    channel = read(ROOT / "include" / "corona" / "ecs" / "structural_commands.h")
+    assert "std::deque<DeferredDestroy>" in channel
+    assert "destroy_queue_.push_back(" in channel
+    assert "enqueue_deferred_destroy" in channel
+    assert "pending_destroy_count" in channel
+    destroy = channel.split("submit_structural_command_without_waiting")[1].split(
+        "request_destroy_entity(EntityId handle")[0]
+    assert "commands().push(" not in destroy, (
+        "deferred destroys must not go through the capacity-capped shared Fifo")
+    assert "destroy_queue_.size() >=" not in channel, (
+        "the deferred destroy queue must not reject because of a fixed capacity")
 
 
 def test_a_profile_without_engine_storage_fails_the_actor_materialisation():

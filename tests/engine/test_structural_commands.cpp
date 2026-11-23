@@ -21,10 +21,12 @@
  * 12. **DAG_UNRESPONSIVE 闩锁**：一次无进展超时之后请求立即失败（不再等预算），
  *     一次边界完成自动解锁；
  * 13. **销毁不等待**：闩锁/卡死期间 200 条销毁仍是入队即返回（不按实体数 × 预算放大），
- *     边界恢复后统一落地，不留孤儿；
- * 14. **profile 创建没结算不算成功**：`Actor::add_profile` 返回 nullptr 并回滚登记
+ *     边界恢复后统一落地，不留孤儿；**大规模 teardown 也一条不丢**（5000 条 > 共享
+ *     Fifo 的 4096 上限，全部落地）；
+ * 14. **闩锁以心跳序号为戳**：边界一完成就失效，不存在"清了又被旧闩锁挡住"的卡死窗口；
+ * 15. **profile 创建没结算不算成功**：`Actor::add_profile` 返回 nullptr 并回滚登记
  *     （否则装载会产出"没有引擎侧 profile"的半连接 actor）；
- * 15. 批量创建成本：N=200 个 actor 通过公开 API 创建/销毁的实测墙钟时间。
+ * 16. 批量创建成本：N=200 个 actor 通过公开 API 创建/销毁的实测墙钟时间。
  */
 
 #include <corona/ecs/structural_commands.h>
@@ -194,6 +196,7 @@ void test_an_empty_tick_boundary_still_publishes_the_heartbeat() {
     // 先清空队列（上一条用例可能留下命令）。
     Corona::Ecs::apply_pending_structural_commands();
     CHECK(channel.commands().size() == 0);
+    CHECK(channel.pending_destroy_count() == 0);  // 延迟销毁队列也是空的
 
     const auto before = channel.heartbeat();
     const bool applied = Corona::Ecs::apply_pending_structural_commands();
@@ -497,13 +500,87 @@ void test_teardown_destroys_do_not_wait_on_an_unresponsive_dag() {
     CHECK(destroy_ms < 500);
     CHECK(channel.stats().deferred_destroys == stats_before.deferred_destroys + kCount);
     CHECK(channel.stats().timeouts == stats_before.timeouts);  // 销毁不消耗预算
-    CHECK(channel.commands().size() >= static_cast<std::size_t>(kCount));
+    CHECK(channel.pending_destroy_count() == static_cast<std::size_t>(kCount));
 
     // 边界恢复 → 闩锁清除，排队的销毁真的落地（没有孤儿）。
     Corona::Ecs::apply_pending_structural_commands();
     CHECK(!channel.unresponsive());
-    CHECK(channel.commands().size() == 0);
+    CHECK(channel.pending_destroy_count() == 0);
+    CHECK(channel.stats().applied_destroys == stats_before.applied_destroys + kCount);
     CHECK(entity_count() == entities_before - static_cast<std::size_t>(kCount));
+}
+
+/// 延迟销毁队列**不是**共享 Fifo：它没有那个 4096 的固定容量，所以一次大规模
+/// teardown（远超上限）也不会丢掉任何一条销毁命令（review item 1）。
+///
+/// 用 5000 条（> 4096 的共享 Fifo 上限）证明"每一条都落地"，而不是"大部分落地"：
+/// 旧实现里第 4097 条开始返回 false，那些实体在**活着的 DAG** 上也会变成孤儿。
+void test_a_large_teardown_never_drops_a_destroy() {
+    auto& channel = StructuralCommandChannel::instance();
+    channel.clear_no_progress_budget_override();
+    channel.set_no_progress_budget(500ms);
+    channel.set_tick_period(8333us);
+    channel.on_dag_started();
+    channel.affinity().reset();
+
+    constexpr int kCount = 5000;  // > CommandBuffer::kDefaultCapacity (4096)
+    std::vector<Corona::EntityId> handles;
+    handles.reserve(kCount);
+    for (int i = 0; i < kCount; ++i) {
+        handles.push_back(
+            Corona::Ecs::create_transform_entity(Corona::Ecs::CreateTransformPayload{}));
+    }
+    const auto entities_before = entity_count();
+    CHECK(entities_before >= static_cast<std::size_t>(kCount));
+    // 共享 Fifo 本身的容量就是 4096：这条用例的规模必须超过它才有意义。
+    CHECK(channel.commands().capacity() < static_cast<std::size_t>(kCount));
+
+    const auto stats_before = channel.stats();
+    const auto destroy_started = Clock::now();
+    int queued = 0;
+    for (const auto handle : handles) {
+        if (Corona::Ecs::request_destroy_entity(handle, "destroy_transform")) {
+            ++queued;
+        }
+    }
+    const long long destroy_ms = elapsed_ms(destroy_started);
+
+    CHECK(queued == kCount);                                   // 一条都没被容量拒绝
+    CHECK(channel.pending_destroy_count() == static_cast<std::size_t>(kCount));
+    CHECK(destroy_ms < 2000);
+    CHECK(channel.stats().deferred_destroys == stats_before.deferred_destroys + kCount);
+
+    // 一个边界把它们全部落地。
+    Corona::Ecs::apply_pending_structural_commands();
+    CHECK(channel.pending_destroy_count() == 0);
+    CHECK(channel.stats().applied_destroys == stats_before.applied_destroys + kCount);
+    CHECK(entity_count() == entities_before - static_cast<std::size_t>(kCount));  // 全部落地
+
+    std::printf("  [teardown] %d deferred destroys queued in %lldms (shared Fifo capacity %zu), "
+                "all applied by one boundary\n",
+                kCount, destroy_ms, channel.commands().capacity());
+}
+
+/// 闩锁以**心跳序号**为戳：边界一完成，闩锁立刻失效（不需要谁去清它，也不存在
+/// "清了又被旧闩锁挡住"的窗口）。这是 review item 2 的"不会卡死"保证。
+void test_a_completed_boundary_invalidates_the_latch_immediately() {
+    auto& channel = StructuralCommandChannel::instance();
+    channel.on_dag_started();
+    channel.affinity().reset();
+    CHECK(!channel.unresponsive());
+
+    channel.mark_unresponsive();
+    CHECK(channel.unresponsive());
+    // 边界完成 → 心跳前进 → 闩锁自动失效（没有显式清除调用）。
+    channel.publish_tick_boundary();
+    CHECK(!channel.unresponsive());
+
+    // 再闩一次，经过一次"真实的"边界应用（不是直接 publish）同样立刻失效。
+    channel.mark_unresponsive();
+    CHECK(channel.unresponsive());
+    Corona::Ecs::apply_pending_structural_commands();
+    CHECK(!channel.unresponsive());
+    channel.affinity().reset();
 }
 
 /// Profile 的结构创建没结算时，`Actor::add_profile` 必须返回 nullptr 并回滚内存登记：
@@ -721,6 +798,8 @@ int main() {
     test_completed_boundaries_reset_the_no_progress_budget();
     test_an_unresponsive_dag_rejects_immediately_until_a_boundary_completes();
     test_teardown_destroys_do_not_wait_on_an_unresponsive_dag();
+    test_a_large_teardown_never_drops_a_destroy();
+    test_a_completed_boundary_invalidates_the_latch_immediately();
     test_a_profile_whose_create_did_not_settle_is_not_registered();
     test_the_owner_thread_applies_inline();
     test_the_owner_thread_cannot_create_once_shutdown_begins();
