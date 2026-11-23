@@ -64,7 +64,7 @@ async function connect(target) {
   socket.onclose = event => {
     for (const entry of pending.values()) {
       clearTimeout(entry.timer);
-      entry.reject(new Error(`CDP socket closed during ${stage}: ${event.code} ${event.reason}`));
+      entry.reject(new Error(`CDP socket closed during ${entry.stage}: ${event.code} ${event.reason}`));
     }
     pending.clear();
   };
@@ -77,16 +77,24 @@ async function connect(target) {
     if (message.error) entry.reject(new Error(message.error.message));
     else entry.resolve(message.result);
   };
-  const call = (method, params) => new Promise((resolve, reject) => {
+  // `stage` advances while requests are in flight, so record the stage (and the
+  // expression for evaluate) on the pending entry at call time: the timer must
+  // name the call that hung, not whatever stage the script has reached by then.
+  const call = (method, params, context = {}) => new Promise((resolve, reject) => {
     const id = ++sequence;
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error(`CDP timeout during ${stage}: ${method}`)); }, 20_000);
-    pending.set(id, { resolve, reject, timer });
+    const entry = { resolve, reject, stage, expression: context.expression };
+    entry.timer = setTimeout(() => {
+      pending.delete(id);
+      const subject = entry.expression === undefined ? method : `${method} ${entry.expression}`;
+      reject(new Error(`CDP timeout during ${entry.stage}: ${subject}`));
+    }, 20_000);
+    pending.set(id, entry);
     socket.send(JSON.stringify({ id, method, params }));
   });
   const api = {
     call,
     async evaluate(expression, awaitPromise = true) {
-      const reply = await call('Runtime.evaluate', { expression, awaitPromise, returnByValue: true });
+      const reply = await call('Runtime.evaluate', { expression, awaitPromise, returnByValue: true }, { expression });
       if (reply.exceptionDetails) throw new Error(reply.exceptionDetails.exception?.description || reply.exceptionDetails.text);
       return reply.result.value;
     },
@@ -656,7 +664,7 @@ try {
     for (const name of ['play_audio', 'stop_audio'])
       assert.equal(await main.evaluate(`typeof corona.scene.${name}`), 'function');
     for (const id of [0, 1.5, null, '', '0', '-1', '18446744073709551616', '12suffix']) {
-      assert.equal(await main.evaluate(`corona.scene.play_audio({resource:${JSON.stringify(id)}},{loop:false}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
+      assert.equal(await main.evaluate(`corona.scene.play_audio({resource:${JSON.stringify(id)},loop:false}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
       assert.equal(await main.evaluate(`corona.scene.stop_audio({resource:${JSON.stringify(id)}}).catch(e=>e.code)`), 'INVALID_ARGUMENT');
     }
     // A resource identity plays globally, so an archive scope is rejected instead of ignored.
@@ -782,19 +790,26 @@ try {
     // returns a tree entry for get_file_tree, {status,path,name,file_type} for create_file, bare
     // True for create_folder/rename_item/delete_item, and rejects with Error.code for a refusal
     // - so callers compare scalars on success and read error.code instead of matching text.
-    const filesCall = (method, request) => {
+    // runtime/archive/project_files.py owns one flat request: op plus the operation's
+    // named arguments. It refuses an unknown key, so the adapter has to spell each field
+    // out rather than nest them in a positional `args` array the service never reads.
+    const fileManagerRequest = (method, request) => {
       const scope = { ...filesScope, ...request };
-      const manager = (op, args) => bridgeCall('project_archive', 'file_manager',
-        [{ archive_session: scope.archive_session, project_path: scope.project_path, op, args }]);
+      const base = { archive_session: scope.archive_session, project_path: scope.project_path };
       switch (method) {
-        case 'getFileTree': return manager('get_file_tree', [scope.path ?? '']);
-        case 'createFolder': return manager('create_folder', [scope.path, scope.name]);
-        case 'createActorTemplate': return manager('create_file', [scope.path, scope.name, 'actor']);
-        case 'renameItem': return manager('rename_item', [scope.path, scope.name]);
-        case 'deleteItem': return manager('delete_item', [scope.path]);
-        case 'openFile': return main.evaluate(`corona.project.open_document(${JSON.stringify(scope)})`);
+        case 'getFileTree': return { ...base, op: 'get_file_tree', path: scope.path ?? '' };
+        case 'createFolder': return { ...base, op: 'create_folder', path: scope.path, name: scope.name };
+        case 'createActorTemplate': return { ...base, op: 'create_file', path: scope.path, name: scope.name, file_type: 'actor' };
+        case 'renameItem': return { ...base, op: 'rename_item', path: scope.path, name: scope.name };
+        case 'deleteItem': return { ...base, op: 'delete_item', path: scope.path };
         default: throw new Error(`unsupported project file method ${method}`);
       }
+    };
+    const filesCall = (method, request) => {
+      if (method === 'openFile') {
+        return main.evaluate(`corona.project.open_document(${JSON.stringify({ ...filesScope, ...request })})`);
+      }
+      return bridgeCall('project_archive', 'file_manager', [fileManagerRequest(method, request)]);
     };
     const rootTree = await filesCall('getFileTree', { path: '' });
     assert.equal(rootTree.archive_session, filesScope.archive_session);
@@ -814,18 +829,10 @@ try {
     assert.equal(await main.evaluate(`corona.project.open_document(${JSON.stringify({ ...filesScope, path: '文件测试/改名.actor', file_type: 'actor' })}).catch(e=>e.code)`), 'INVALID_ARGUMENT',
       'an Actor document is a focus intent, not a native document open');
     const sceneBytes = await readFile(path.join(cameraWorld, 'scene.ini'));
-    const managerEnvelope = (method, request) => {
-      const scope = { ...filesScope, ...request };
-      const [op, args] = {
-        getFileTree: ['get_file_tree', [scope.path ?? '']],
-        createFolder: ['create_folder', [scope.path, scope.name]],
-        createActorTemplate: ['create_file', [scope.path, scope.name, 'actor']],
-        renameItem: ['rename_item', [scope.path, scope.name]],
-        deleteItem: ['delete_item', [scope.path]],
-      }[method];
-      return JSON.stringify({ service: 'project_archive', function: 'file_manager',
-        args: [{ archive_session: scope.archive_session, project_path: scope.project_path, op, args }] });
-    };
+    const managerEnvelope = (method, request) => JSON.stringify({
+      service: 'project_archive', function: 'file_manager',
+      args: [fileManagerRequest(method, request)],
+    });
     const managerRefusal = (method, request) => main.evaluate(
       `corona.bridge.call(${JSON.stringify(managerEnvelope(method, request))})`
       + `.then(() => 'resolved', error => error.code || 'SERVICE_FAILED')`);
@@ -843,9 +850,9 @@ try {
       assert.equal(await managerRefusal(method, request), code, `${method}: refusal code`);
     }
     assert.deepEqual(await readFile(path.join(cameraWorld, 'scene.ini')), sceneBytes);
-    // A stale archive or project path is refused by the owning service. Unknown extra keys are no
-    // longer refused: project_files.py reads only 'op' and 'args', so the strict-argument guarantee
-    // the native adapter provided is not reproduced here - recorded, not asserted.
+    // A stale archive or project path is refused by the owning service before it reads any
+    // operation argument. The service also declares every accepted key and refuses an unknown
+    // one, so the adapter above spells each field out instead of nesting them.
     for (const [method, extra] of [
       ['getFileTree', {}], ['createFolder', { name: 'no' }], ['createActorTemplate', { name: 'no' }],
       ['renameItem', { name: 'no' }], ['deleteItem', {}],
@@ -863,9 +870,6 @@ try {
 
     evidence[0].files = 'bridge-routed tree and CRUD; Actor template collision, rename/open/delete, '
       + 'root/scene/path fences, stale archive/path refused by the owning service';
-    evidence[0].filesArgumentStrictnessGap =
-      'unknown request keys are accepted by project_files.py where the native adapter returned '
-      + 'INVALID_ARGUMENT; strict-argument validation was not reproduced by the migration';
     stage = 'one typed native environment read and patch with JSON disabled';
     console.log(`CEF smoke: ${stage}`);
     const environmentScope = { archive_session: camera.archive_session };
