@@ -47,11 +47,7 @@ IMPORTANT:
 
 // SVML availability
 #ifndef ML_SVML_AVAILABLE
-#    if defined(__arm__) || defined(__aarch64__) || defined(_M_ARM64) || defined(_M_ARM)
-#        define ML_SVML_AVAILABLE 0
-#    else
-#        define ML_SVML_AVAILABLE (_MSC_VER >= 1920 && __clang__ == 0)
-#    endif
+#    define ML_SVML_AVAILABLE (_MSC_VER >= 1920 && __clang__ == 0)
 #endif
 
 // More precision (a little bit slower)
@@ -133,8 +129,6 @@ IMPORTANT:
 
 #if (defined(__i386__) || defined(__x86_64__) || defined(__SCE__))
 #    include <x86intrin.h>
-#elif (defined(__arm__) || defined(__aarch64__) || defined(_M_ARM64) || defined(_M_ARM))
-#    include "sse2neon.h"
 #else
 #    include <mmintrin.h>
 #    if (ML_SVML_AVAILABLE || ML_INTRINSIC_LEVEL >= ML_INTRINSIC_AVX1)

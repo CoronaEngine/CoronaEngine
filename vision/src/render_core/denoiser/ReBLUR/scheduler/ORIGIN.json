@@ -63,8 +63,8 @@
       "path": "math/ml.h",
       "upstream": "MathLib/ml.h",
       "upstream_sha256": "a8222ad2620f8f8afd7caa235e1fac5ca7d8389e7092d82994acf5b7de4ff48c",
-      "sha256": "a8222ad2620f8f8afd7caa235e1fac5ca7d8389e7092d82994acf5b7de4ff48c",
-      "adapted": false
+      "sha256": "b33c7a7afbb6e8885c41fadcd0dc2f38120abbabcc9e7cb5ca02cf0d122b2097",
+      "adapted": true
     },
     {
       "path": "math/ml.hlsli",
@@ -105,8 +105,8 @@
       "path": "math/Guts/f16.h",
       "upstream": "MathLib/Guts/f16.h",
       "upstream_sha256": "2371db97c1bbe7a7efafd974ee66e477b023993367cedb8b1fdbb84ffcf2477c",
-      "sha256": "2371db97c1bbe7a7efafd974ee66e477b023993367cedb8b1fdbb84ffcf2477c",
-      "adapted": false
+      "sha256": "257f975f913350fcc55aafb10a67f2ee7bd6b4a4daef5e8b5b6df4e3f809051c",
+      "adapted": true
     },
     {
       "path": "math/Guts/f32.h",

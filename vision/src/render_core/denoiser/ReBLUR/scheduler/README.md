@@ -36,6 +36,6 @@ constant calculations otherwise retain their upstream expressions and order.
 
 NRD's license is in `LICENSE-NRD.txt`; the MathLib license is in
 `math/LICENSE.txt`. File-level notice comments are omitted from the local ReBLUR implementation
-sources. Original MathLib source headers remain intact. Complete license texts
-and upstream provenance are retained; this cleanup does not change the upstream
-license obligations.
+sources. The bundled MathLib headers omit the upstream ARM compatibility branches.
+Complete license texts and upstream provenance are retained; this cleanup does
+not change the upstream license obligations.
