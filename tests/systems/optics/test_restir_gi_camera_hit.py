@@ -8,7 +8,7 @@ def test_gi_reuses_only_the_physical_camera_segment():
     init_end = source.index('auto mis_bsdf =', init_start)
     query_start = source.index('auto trace_segment =', init_end)
     query_end = source.index('if (hc.path_capture && hc.path_capture->on_signal', query_start)
-    fill = (ROOT / 'vision/src/render_core/integrator/ReSTIR/rtxpt_gi.cpp').read_text(encoding='utf-8-sig')
+    fill = (ROOT / 'vision/src/render_core/integrator/restir/gi/restir_gi.cpp').read_text(encoding='utf-8-sig')
     fill = fill[fill.index('PTPathCapture capture;'):]
     assert 'capture.reuse_camera_hit = true;' in fill[:fill.index('integrator()->Li(')]
     assert 'frame_buffer().rays().read(dispatch_id())->to_ray_state()' in fill[:fill.index('integrator()->Li(')]

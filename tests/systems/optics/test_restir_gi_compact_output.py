@@ -24,7 +24,7 @@ def _definition(source, signature, trailing_semicolon=False):
 
 
 def test_compact_temporal_output_native_words():
-    source = (ROOT/'vision/src/render_core/integrator/restir_gi/device.h').read_text(encoding='utf-8-sig')
+    source = (ROOT/'vision/src/render_core/integrator/restir/gi/reference/device.h').read_text(encoding='utf-8-sig')
     codec = '\n'.join([
         _definition(source, 'struct TemporalOutput {', True),
         *[_definition(source, signature) for signature in (

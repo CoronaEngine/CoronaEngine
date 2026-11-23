@@ -17,7 +17,7 @@ def test_reference_reservoir_math():
     source = output / 'math.cpp'
     binary = output / 'math.exe'
     source.write_text(r'''
-#include "restir_gi/core.h"
+#include "restir/gi/reference/core.h"
 #include <cmath>
 #include <iostream>
 #include <stdexcept>

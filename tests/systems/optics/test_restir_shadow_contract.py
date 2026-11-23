@@ -97,7 +97,7 @@ int main(int argc,char**argv){try{std::string mode=argv[1];if(mode=="late")late_
 def executable():
     interaction=(ROOT/'vision/src/base/scattering/interaction.h').read_text(encoding='utf-8-sig')
     horizon=(ROOT/'Horizon/src/dsl/types/rtx.h').read_text(encoding='utf-8-sig')
-    common=(ROOT/'vision/src/render_core/integrator/restir_di/common.h').read_text(encoding='utf-8-sig')
+    common=(ROOT/'vision/src/render_core/integrator/restir/di/common.h').read_text(encoding='utf-8-sig')
     offset=extract_function(horizon,'inline float3 offset_ray_origin(')
     evaluate=extract_function(common,'[[nodiscard]] inline TriangleSample evaluate_light_point(')
     if HEADER.exists():

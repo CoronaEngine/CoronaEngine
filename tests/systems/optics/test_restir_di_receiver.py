@@ -3,7 +3,7 @@ from _restir_cpu import ROOT, body, compile_run
 
 
 def test_restir_di_receiver_history():
-    base = ROOT / "vision/src/render_core/integrator/restir_di"
+    base = ROOT / "vision/src/render_core/integrator/restir/di"
     common = (base / "common.h").read_text(encoding="utf-8")
     reuse = (base / "reuse.h").read_text(encoding="utf-8")
     reservoir = (base / "reservoir.h").read_text(encoding="utf-8")

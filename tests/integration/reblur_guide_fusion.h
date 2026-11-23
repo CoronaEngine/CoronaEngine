@@ -90,7 +90,7 @@ inline void check_reblur_guide_fusion() {
           "render":{"sampler":{"type":"independent","param":{"spp":1}},"light_sampler":{"type":"uniform"},
             "integrator":{"type":"rt","param":{"max_depth":4,"min_depth":4,"denoiser":{"type":"ReBLUR"},
               "direct":{"open":false,"max_recursion":1,"M_bsdf":1,"temporal":{"open":false},"spatial":{"open":false}},
-              "indirect":{"open":true,"backend":"rtxpt","temporal":{"open":false},"spatial":{"open":false}}}}},
+              "indirect":{"open":true,"backend":"restir_gi","temporal":{"open":false},"spatial":{"open":false}}}}},
           "pipeline":{"type":"fixed","param":{"frame_buffer":{"type":"normal","param":{"resolution":[13,9]}}}},
           "output":{"spp":0,"save_exit":false,"denoise":true,"fn":"unused.exr"}
         })");
@@ -268,5 +268,5 @@ inline void check_reblur_guide_fusion() {
             }
         }
     }
-    std::cout << "PASS: ReBLUR pack and filtered output across selected RTXPT GI scenarios; evidence=" << directory.string() << '\n';
+    std::cout << "PASS: ReBLUR pack and filtered output across selected ReSTIR GI scenarios; evidence=" << directory.string() << '\n';
 }

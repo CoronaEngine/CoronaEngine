@@ -1,9 +1,9 @@
-// Check generic guide-storage and the actual ReSTIR DI / RTXPT GI output codecs,
+// Check generic guide-storage and the actual ReSTIR DI / ReSTIR GI output codecs,
 // including GPU allocation sizes, readback, resize and restore.
 #define VISION_PLUGIN_NAME "ReSTIR"
 #define VISION_CATEGORY "integrator"
-#include "render_core/integrator/ReSTIR/rtxpt_gi.h"
-#include "render_core/integrator/ReSTIR/di_radiance.h"
+#include "render_core/integrator/restir/gi/restir_gi.h"
+#include "render_core/integrator/restir/di/di_radiance.h"
 #include "hotfix/hotfix.h"
 
 #include <algorithm>
@@ -234,7 +234,7 @@ void check_radiance_storage(vision::Pipeline& pipeline, const char *kind) {
     const auto original_resolution = pipeline.resolution();
     const uint first_slot = pipeline.bindless_array().buffer_num();
     auto di = std::make_unique<Restir>();
-    if constexpr (std::is_same_v<Restir, RtxptGI>) {
+    if constexpr (std::is_same_v<Restir, ReSTIRGI>) {
         auto unprepared = std::make_unique<Restir>();
         if (std::getenv("CORONA_TEST_GI_RADIANCE_OLD_ABI"))
             unprepared->radiance()->set_name("ReSTIRGI::radiance_ legacy");
@@ -297,7 +297,7 @@ void check_radiance_storage(vision::Pipeline& pipeline, const char *kind) {
         }
     };
     exercise(true); exercise(false); exercise(true);
-    if constexpr (std::is_same_v<Restir, RtxptGI>) {
+    if constexpr (std::is_same_v<Restir, ReSTIRGI>) {
         auto restored = std::make_unique<Restir>();
         restored->restore(di.get());
         di = std::move(restored);
@@ -331,7 +331,7 @@ void check_restir_reservoir_lifetimes(vision::Pipeline& pipeline) {
     vision::Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
     half_motion_storage_checks::run(pipeline);
     check_radiance_storage<vision::DIRadiance>(pipeline, "DI");
-    check_radiance_storage<vision::RtxptGI>(pipeline, "GI");
+    check_radiance_storage<vision::ReSTIRGI>(pipeline, "GI");
 }
 
 void check_populated_gi_restore(vision::Pipeline& pipeline) {
@@ -340,10 +340,10 @@ void check_populated_gi_restore(vision::Pipeline& pipeline) {
     Global::SceneGpuContextScope scope{pipeline.geometry().bindless_array(), pipeline.device()};
     pipeline.stream() << synchronize() << commit();
 
-    struct Constructor final : ObjectConstructor<RtxptGI> {
-        mutable std::weak_ptr<RtxptGI> replacement;
+    struct Constructor final : ObjectConstructor<ReSTIRGI> {
+        mutable std::weak_ptr<ReSTIRGI> replacement;
         SP<RuntimeObject> construct_shared_impl() const override {
-            auto gi = std::static_pointer_cast<RtxptGI>(ObjectConstructor<RtxptGI>::construct_shared_impl());
+            auto gi = std::static_pointer_cast<ReSTIRGI>(ObjectConstructor<ReSTIRGI>::construct_shared_impl());
             replacement = gi;
             return gi;
         }

@@ -3,7 +3,7 @@
 #include "base/integral/integrator.h"
 #include "base/mgr/evaluation_debug.h"
 #include "utils.h"
-#include "render_core/integrator/ReSTIR/rtxpt_gi_denoiser_prepare.h"
+#include "render_core/integrator/restir/gi/restir_gi_denoiser_prepare.h"
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -178,7 +178,7 @@ void ReBLUR::compile() noexcept {
 #endif
         };
         $if(p.prepared == 2u) {
-            auto guide = rtxpt_gi::load_pt_reblur_guide(p.prepared_prefix, p.prepared_headers, p.prepared_motion_y,
+            auto guide = restir_gi::load_pt_reblur_guide(p.prepared_prefix, p.prepared_headers, p.prepared_motion_y,
                 Uint2{dispatch_idx().xy()}, Uint2{p.size}, Uint{p.prepared_plane}, [&](const Uint &instance) {
                     return pipeline()->geometry().data()->instances().read(instance).mat_id;
                 });
@@ -377,7 +377,7 @@ CommandBatch ReBLUR::dispatch(RealTimeDenoiseInput &input) noexcept {
     gp.diffuse = input.lobe_signals.diffuse_radiance_hitdist.descriptor();
     gp.specular = input.lobe_signals.specular_radiance_hitdist.descriptor();
     gp.prepared = input.prepared_reblur_prefix.size() != 0u ? 2u : uint(input.prepared_reblur_guides.size() != 0u);
-    gp.prepared_prefix = input.prepared_reblur_prefix.view_as<RtxptGIPrefixPlane>().descriptor();
+    gp.prepared_prefix = input.prepared_reblur_prefix.view_as<ReSTIRGIPrefixPlane>().descriptor();
     gp.prepared_headers = input.prepared_reblur_headers.descriptor();
     gp.prepared_motion_y = input.prepared_reblur_motion_y.descriptor();
     gp.prepared_plane = input.layer_index;

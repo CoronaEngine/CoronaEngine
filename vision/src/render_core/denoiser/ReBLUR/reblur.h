@@ -9,7 +9,7 @@
 #include "base/denoiser.h"
 #include "params.h"
 #include "filter.h"
-#include "render_core/integrator/ReSTIR/rtxpt_gi_prefix_storage.h"
+#include "render_core/integrator/restir/gi/restir_gi_prefix_storage.h"
 #ifdef VISION_REBLUR_EDSL
 #include "edsl_nrd.h"
 #include "edsl_nrd_params.h"
@@ -26,7 +26,7 @@ struct GuideParam {
     BufferDesc<> output;
     BufferDesc<float4> diffuse, specular;
     BufferDesc<Guide> prepared_guides;
-    BufferDesc<RtxptGIPrefixPlane> prepared_prefix;
+    BufferDesc<ReSTIRGIPrefixPlane> prepared_prefix;
     BufferDesc<uint4> prepared_headers;
     BufferDesc<float> prepared_motion_y;
     uint prepared_plane{};

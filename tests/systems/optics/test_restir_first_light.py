@@ -11,7 +11,7 @@ import subprocess
 import pytest
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p/'vision/src').is_dir())
-RESTIR_DI = ROOT/'vision/src/render_core/integrator/restir_di'
+RESTIR_DI = ROOT/'vision/src/render_core/integrator/restir/di'
 POLICY = ROOT/'vision/src/base/scattering/gi_ideal_glass.h'
 TEMP = ROOT/'.workspace/tmp/rtxpt-first-light-fix-20261115/production-tests'
 

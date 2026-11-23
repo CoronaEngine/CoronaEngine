@@ -108,8 +108,8 @@ void restir_selects_rt_and_preserves_scene_parameters() {
     expect(desc.renderer_desc.integrator_desc.denoiser_desc.sub_type == "ReBLUR" &&
                !desc.output_desc.denoise, "ReSTIR must select ReBLUR and leave denoising under camera control");
     expect(data["render"]["integrator"]["param"]["direct"]["max_recursion"] == 1 &&
-               data["render"]["integrator"]["param"]["indirect"]["backend"] == "rtxpt",
-           "ReSTIR defaults must select the ReSTIR DI primary receiver and RTXPT GI");
+               data["render"]["integrator"]["param"]["indirect"]["backend"] == "restir_gi",
+           "ReSTIR defaults must select the ReSTIR DI primary receiver and ReSTIR GI");
     expect(desc.renderer_desc.integrator_desc["direct"]["M_light"].as_uint() == 12,
            "ReSTIR must preserve source sampling settings");
     for (const auto channel : {"direct", "indirect"}) {
@@ -126,10 +126,10 @@ void restir_selects_rt_and_preserves_scene_parameters() {
            "ReSTIR must have a distinct runtime key");
     auto& parameters = data["render"]["integrator"]["param"];
     parameters["direct"]["max_recursion"] = 5;
-    parameters["indirect"]["backend"] = "legacy";
+    parameters["indirect"]["backend"] = "unknown";
     parameters["denoiser"]["type"] = "svgf";
     Corona::Systems::Vision::configure_vision_scene_for_mode(data, CameraVisionRenderMode::ReSTIR);
-    expect(parameters["direct"]["max_recursion"] == 5 && parameters["indirect"]["backend"] == "legacy" &&
+    expect(parameters["direct"]["max_recursion"] == 5 && parameters["indirect"]["backend"] == "unknown" &&
                parameters["denoiser"]["type"] == "svgf", "ReSTIR must preserve explicitly selected scene settings");
 }
 

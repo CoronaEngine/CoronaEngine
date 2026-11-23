@@ -1,7 +1,7 @@
 #pragma once
 
-#include "render_core/integrator/ReSTIR/denoiser_signals.h"
-#include "render_core/integrator/ReSTIR/radiance_storage.h"
+#include "render_core/integrator/restir/denoiser_signals.h"
+#include "render_core/integrator/restir/radiance_storage.h"
 #include <array>
 #include <bit>
 #include <iostream>

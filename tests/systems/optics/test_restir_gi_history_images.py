@@ -10,9 +10,9 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_history_native_image_layout():
-    source = (ROOT/'vision/src/render_core/integrator/restir_gi/history.h').read_text(encoding='utf-8')
+    source = (ROOT/'vision/src/render_core/integrator/restir/gi/reference/history.h').read_text(encoding='utf-8')
     history = _definition(source, 'class HistoryImages {', True)
-    device = (ROOT/'vision/src/render_core/integrator/restir_gi/device.h').read_text(encoding='utf-8')
+    device = (ROOT/'vision/src/render_core/integrator/restir/gi/reference/device.h').read_text(encoding='utf-8')
     codec = '\n'.join(_definition(device, name) for name in (
         'inline Uint pack_image_half2(', 'inline Float2 unpack_image_half2('))
     half_source = (ROOT/'Horizon/src/math/half.h').read_text(encoding='utf-8')
