@@ -40,6 +40,43 @@ static Systems::UiSystem* g_ui_system_ = nullptr;
 // ============================================================================
 
 /**
+ * @brief 把结构命令的默认等待上限对齐到真实帧周期。
+ *
+ * 结构命令是**同步应答**：调用方要等一次 tick 边界（spec §5.1）。预算写死 17ms
+ * （两帧 @120Hz）在 `CORONA_SYSTEMS_DAG_TICK=30`（33.3ms/帧）下会让近一半创建
+ * 请求假超时，所以帧周期必须取装配参数；`CORONA_ECS_STRUCTURAL_TIMEOUT_MS`
+ * 仍是显式覆盖，优先于这里。
+ */
+static void configure_structural_command_frame_period(std::uint32_t tick_rate) {
+    const std::uint32_t rate = tick_rate == 0 ? 120u : tick_rate;
+    auto& channel = Corona::Ecs::StructuralCommandChannel::instance();
+    channel.set_tick_period(std::chrono::microseconds{1'000'000 / rate});
+    if (channel.timeout_is_override()) {
+        CFW_LOG_NOTICE("[Ecs/StructuralCommand] create timeout = {}ms (explicit override; DAG tick {}Hz)",
+                       channel.timeout().count(), rate);
+    } else {
+        CFW_LOG_NOTICE("[Ecs/StructuralCommand] create timeout = {}ms (two frames at {}Hz)",
+                       channel.timeout().count(), rate);
+    }
+}
+
+/**
+ * @brief DAG 降级路径（`CORONA_SYSTEMS_DAG=0` 或装配失败）下对齐结构命令的帧周期。
+ *
+ * 降级模式没有 tick 边界钩子，结构命令由 `GeometrySystem::update()` 的兜底 drain
+ * 应用，因此帧周期取 Geometry 的目标帧率（它自己 `set_target_fps(60)`）。
+ */
+static void configure_structural_command_frame_period(Kernel::ISystemManager* sys_mgr) {
+    int fps = 0;
+    if (sys_mgr != nullptr) {
+        auto geometry = sys_mgr->get_system("Geometry");
+        fps = geometry ? geometry->get_target_fps() : 0;
+    }
+    configure_structural_command_frame_period(
+        fps > 0 ? static_cast<std::uint32_t>(fps) : 60u);
+}
+
+/**
  * @brief 装配默认的五系统 DAG
  *
  * 拓扑来自实际数据流（不是 priority）：
@@ -55,6 +92,7 @@ static Systems::UiSystem* g_ui_system_ = nullptr;
 static void configure_systems_dag(Kernel::ISystemManager* sys_mgr) {
     const char* dag_env = std::getenv("CORONA_SYSTEMS_DAG");
     if (dag_env != nullptr && std::string_view{dag_env} == "0") {
+        configure_structural_command_frame_period(sys_mgr);
         CFW_LOG_NOTICE("Systems DAG disabled by CORONA_SYSTEMS_DAG=0 (legacy per-system threads)");
         return;
     }
@@ -79,9 +117,13 @@ static void configure_systems_dag(Kernel::ISystemManager* sys_mgr) {
 
     std::string error;
     if (!sys_mgr->configure_dag(config, &error)) {
+        // 装配失败会退回"一系统一线程"：结构命令的帧周期同样取 Geometry 的更新周期。
+        configure_structural_command_frame_period(sys_mgr);
         CFW_LOG_ERROR("Failed to configure systems DAG ({}); falling back to per-system threads", error);
         return;
     }
+
+    configure_structural_command_frame_period(tick_rate);
 
     // tick 边界阶段（P4）：结构变更与全局环境参数必须在所有节点开始遍历之前落地。
     // Environment 跨 Optics（光照）与 Mechanics（重力/固定步长）两个消费者，
@@ -98,6 +140,10 @@ static void configure_systems_dag(Kernel::ISystemManager* sys_mgr) {
         // 全局环境参数：Optics 与 Mechanics 必须在同一 tick 看到同一个值。
         Corona::apply_pending_environment_updates();
     });
+
+    // 标记 tick 边界已安装：GeometrySystem::update() 的降级兜底从此不再 drain，
+    // 保证"实体集合在一个 tick 内不变"。
+    Corona::Ecs::StructuralCommandChannel::instance().notify_tick_boundary_installed();
 
     // DAG 线程的启停钩子（P1）：结构命令通道必须知道"拥有者线程何时上线/下线"。
     // 停止时把仍在等待的请求以失败结算，而不是让调用方空等到超时。

@@ -10,3 +10,10 @@ add_test(NAME InteractionBoundaryTests
 add_executable(corona_optics_command_tests test_optics_commands.cpp)
 target_link_libraries(corona_optics_command_tests PRIVATE CoronaEngine)
 add_test(NAME OpticsCommandTests COMMAND corona_optics_command_tests)
+
+# 结构命令通道的结算/重入/超时/停机契约（spec §5.1）。用假拥有者线程注入故障，
+# 因此不需要 GPU 或真 DAG；TIMEOUT 是"任何等待都必须有界"的最后一道保险。
+add_executable(corona_structural_command_tests test_structural_commands.cpp)
+target_link_libraries(corona_structural_command_tests PRIVATE CoronaEngine)
+add_test(NAME StructuralCommandTests COMMAND corona_structural_command_tests)
+set_tests_properties(StructuralCommandTests PROPERTIES TIMEOUT 120)

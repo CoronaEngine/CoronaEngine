@@ -21,8 +21,9 @@
 ///    `submit_and_wait` 没有截止时间，一次漏结算就永久挂住一个线程 —— 这里不允许重演。
 /// 2. **重入**：调用方本身就是 DAG 线程（系统内部创建）时**直接应用**，
 ///    入队后等自己会自死锁。
-/// 3. **超时**：默认两帧（120Hz ≈ 17ms），`CORONA_ECS_STRUCTURAL_TIMEOUT_MS` 可配置；
-///    超时按失败返回并写诊断，不静默吞。
+/// 3. **超时**：默认**两帧**，帧周期由装配方用 `set_tick_period()` 告知（DAG 模式取
+///    配置的 tick，降级模式取 Geometry 的更新周期），下限 17ms；
+///    `CORONA_ECS_STRUCTURAL_TIMEOUT_MS` 可覆盖。超时按失败返回并写诊断，不静默吞。
 /// 4. **停机**：DAG 停止时把队列里未消费的请求全部以失败结算
 ///    （与 Python 桥 `transition_and_cancel` 同一原则）。
 
@@ -51,21 +52,35 @@
 
 namespace Corona::Ecs {
 
-/// 默认等待上限：两帧 @120Hz ≈ 17ms。
-inline constexpr std::int64_t kDefaultStructuralTimeoutMs = 17;
+/// 自动超时的下限：两帧 @120Hz ≈ 17ms（旧默认值，保留为 floor）。
+inline constexpr std::int64_t kMinStructuralTimeoutMs = 17;
 
-/// 超时上限：再长也不该把一个 UI / 脚本线程挂过一帧。
+/// 显式/自动超时的上限：再长也不该把一个 UI / 脚本线程挂住。
 inline constexpr std::int64_t kMaxStructuralTimeoutMs = 5000;
 
-/// 从环境读取默认超时（`CORONA_ECS_STRUCTURAL_TIMEOUT_MS`，毫秒）。
-[[nodiscard]] inline std::int64_t default_structural_timeout_ms() noexcept {
+/// 装配方告知真实帧周期之前使用的保守假设（120Hz）。
+inline constexpr std::int64_t kDefaultFramePeriodUs = 8333;
+
+/// 环境覆盖（`CORONA_ECS_STRUCTURAL_TIMEOUT_MS`，毫秒）；0 表示未覆盖。
+/// 覆盖值优先于"两帧"的自动推导，语义与旧版一致。
+[[nodiscard]] inline std::int64_t structural_timeout_override_ms() noexcept {
     if (const char* env = std::getenv("CORONA_ECS_STRUCTURAL_TIMEOUT_MS")) {
         const long parsed = std::strtol(env, nullptr, 10);
         if (parsed > 0 && parsed <= kMaxStructuralTimeoutMs) {
             return parsed;
         }
     }
-    return kDefaultStructuralTimeoutMs;
+    return 0;
+}
+
+/// 自动超时 = **两帧**（帧周期向上取整到毫秒），下限 `kMinStructuralTimeoutMs`。
+///
+/// 帧周期由装配方用 `set_tick_period()` 告知：DAG 模式取配置的 tick
+/// （`CORONA_SYSTEMS_DAG_TICK`，30..480Hz），降级模式取 Geometry 的更新周期。
+/// 写死 17ms 会在 30Hz（33.3ms/帧）下让近一半创建请求假超时。
+[[nodiscard]] inline std::int64_t two_frame_timeout_ms(std::int64_t frame_period_us) noexcept {
+    const std::int64_t two_frames_ms = (frame_period_us * 2 + 999) / 1000;
+    return std::clamp(two_frames_ms, kMinStructuralTimeoutMs, kMaxStructuralTimeoutMs);
 }
 
 /// 一条结构请求的**结算槽**：等待方（任意线程）与拥有者（DAG 线程）共享。
@@ -144,12 +159,6 @@ class StructuralRequest {
         return abandoned_;
     }
 
-    /// 是否以成功结算（仅用于诊断；调用方应使用 `wait()` 的返回值）。
-    [[nodiscard]] bool succeeded() const {
-        std::lock_guard lock(mutex_);
-        return result_.handle != 0;
-    }
-
    private:
     std::uint64_t id_{0};
     mutable std::mutex mutex_;
@@ -198,11 +207,11 @@ class StructuralCommandChannel {
         std::uint64_t requested{0};       ///< 入队的外部请求数
         std::uint64_t inline_applied{0};  ///< 重入规则下直接应用的请求数
         std::uint64_t applied{0};         ///< 由 DAG 应用并成功结算的请求数
-        std::uint64_t failed{0};          ///< 以失败结算的请求数（超时/停机/异常）
+        std::uint64_t failed{0};          ///< 等待方拿到失败的请求数（每条只记一次）
         std::uint64_t rejected{0};        ///< 未入队就拒绝的请求数（停机/队列满）
-        std::uint64_t timeouts{0};        ///< 等待超时的请求数
+        std::uint64_t timeouts{0};        ///< 等待超时的请求数（failed 的子集）
         std::uint64_t abandoned{0};       ///< 等待方放弃后拥有者跳过的命令数
-        std::uint64_t settled_on_stop{0}; ///< 停机时批量结算的请求数
+        std::uint64_t settled_on_stop{0}; ///< 停机时批量结算的请求数（不计入 failed）
     };
 
     static StructuralCommandChannel& instance() {
@@ -222,22 +231,43 @@ class StructuralCommandChannel {
         return request_ids_.fetch_add(1, std::memory_order_relaxed) + 1;
     }
 
+    /// 当前等待上限：显式覆盖优先，否则 = 两帧（真实帧周期，下限 17ms）。
     [[nodiscard]] std::chrono::milliseconds timeout() const noexcept {
-        return std::chrono::milliseconds{timeout_ms_.load(std::memory_order_relaxed)};
+        const auto override_ms = timeout_override_ms_.load(std::memory_order_relaxed);
+        if (override_ms > 0) {
+            return std::chrono::milliseconds{override_ms};
+        }
+        return std::chrono::milliseconds{
+            two_frame_timeout_ms(frame_period_us_.load(std::memory_order_relaxed))};
     }
 
+    /// 装配方告知真实帧周期（DAG tick / 降级模式下 Geometry 的更新周期），
+    /// 自动超时据此推导；显式 `set_timeout()` 与 env 覆盖不受影响。
+    void set_tick_period(std::chrono::microseconds period) noexcept {
+        const auto count = std::clamp<std::int64_t>(period.count(), 1, 1'000'000);
+        frame_period_us_.store(count, std::memory_order_relaxed);
+    }
+
+    /// 显式覆盖（测试与需要固定预算的集成方）；env 覆盖在构造时已生效。
     void set_timeout(std::chrono::milliseconds value) noexcept {
         const auto count = std::clamp<std::int64_t>(value.count(), 1, kMaxStructuralTimeoutMs);
-        timeout_ms_.store(count, std::memory_order_relaxed);
+        timeout_override_ms_.store(count, std::memory_order_relaxed);
+    }
+
+    /// 清除显式覆盖，回到"两帧"自动推导（测试与运行时重配用）。
+    void clear_timeout_override() noexcept {
+        timeout_override_ms_.store(0, std::memory_order_relaxed);
+    }
+
+    /// 是否由 env / `set_timeout()` 显式指定（诊断用）。
+    [[nodiscard]] bool timeout_is_override() const noexcept {
+        return timeout_override_ms_.load(std::memory_order_relaxed) > 0;
     }
 
     // ------------------------------------------------------------ 生命周期
 
     /// DAG 线程即将开始 tick：重新接受请求。
-    void on_dag_started() noexcept {
-        stopped_.store(false, std::memory_order_release);
-        armed_.store(true, std::memory_order_release);
-    }
+    void on_dag_started() noexcept { stopped_.store(false, std::memory_order_release); }
 
     /// DAG 线程即将停止：先关入口，再把未消费的请求全部以失败结算。
     /// 与 Python 桥 `transition_and_cancel` 同一原则：停机不能让任何请求悬空。
@@ -251,9 +281,15 @@ class StructuralCommandChannel {
 
     [[nodiscard]] bool stopped() const noexcept { return stopped_.load(std::memory_order_acquire); }
 
-    [[nodiscard]] bool armed() const noexcept { return armed_.load(std::memory_order_acquire); }
+    /// 装配方是否安装了 DAG tick 边界钩子。安装后 `GeometrySystem::update()` 的
+    /// 降级兜底不再 drain —— 保证"实体集合在一个 tick 内不变"。
+    [[nodiscard]] bool tick_boundary_installed() const noexcept {
+        return boundary_installed_.load(std::memory_order_acquire);
+    }
 
-    void arm() noexcept { armed_.store(true, std::memory_order_release); }
+    void notify_tick_boundary_installed() noexcept {
+        boundary_installed_.store(true, std::memory_order_release);
+    }
 
     // ------------------------------------------------------------ 应用
 
@@ -279,23 +315,17 @@ class StructuralCommandChannel {
                         break;
                     }
                 }
-                if (applied) {
-                    if (request->succeeded()) {
-                        record_applied();
-                    } else {
-                        record_failed();
-                    }
-                } else if (request->abandoned()) {
+                if (!applied && request->abandoned()) {
                     // 等待方已超时放弃：命令被跳过，不创建无人签收的实体。
+                    // 成功与失败都由等待方在 wait() 返回时各记一次，这里不重复计数。
                     record_abandoned();
                 }
             } catch (const std::exception& error) {
+                // settle_failure 唤醒等待方，由它记一次 failed。
                 request->settle_failure(std::string{"structural command failed: "} + error.what());
-                record_failed();
                 CFW_LOG_ERROR("[Ecs/StructuralCommand] apply failed: {}", error.what());
             } catch (...) {
                 request->settle_failure("structural command failed: unknown exception");
-                record_failed();
                 CFW_LOG_ERROR("[Ecs/StructuralCommand] apply failed: unknown exception");
             }
         }
@@ -315,9 +345,9 @@ class StructuralCommandChannel {
             }
         }
         if (settled != 0) {
+            // 只记"停机时结算了多少条"；失败本身由各等待方各记一次。
             std::lock_guard lock(stats_mutex_);
             stats_.settled_on_stop += settled;
-            stats_.failed += settled;
         }
         return settled;
     }
@@ -353,10 +383,11 @@ class StructuralCommandChannel {
 
     Buffer commands_;
     Kernel::ThreadAffinity affinity_;
-    std::atomic<bool> armed_{false};
-    std::atomic<bool> stopped_{false};
+    std::atomic<bool> stopped_{false};              ///< 停机后拒绝新请求
+    std::atomic<bool> boundary_installed_{false};   ///< DAG tick 边界钩子已安装
     std::atomic<std::uint64_t> request_ids_{0};
-    std::atomic<std::int64_t> timeout_ms_{default_structural_timeout_ms()};
+    std::atomic<std::int64_t> frame_period_us_{kDefaultFramePeriodUs};
+    std::atomic<std::int64_t> timeout_override_ms_{structural_timeout_override_ms()};
     mutable std::mutex stats_mutex_;
     Stats stats_{};
 };
@@ -369,13 +400,21 @@ class StructuralCommandChannel {
     return to_handle(entity);
 }
 
-/// 应用入站结构命令（tick 边界，先于 scene 命令；DAG 降级路径由
-/// `GeometrySystem::update()` 兜底）。绑定/刷新 registry 的拥有者线程。
+/// 应用入站结构命令（tick 边界，先于 scene 命令）。绑定/刷新 registry 的拥有者线程。
 inline bool apply_pending_structural_commands() {
     auto& channel = StructuralCommandChannel::instance();
     channel.affinity().bind_to_current_thread();
-    channel.arm();
     return channel.apply_pending();
+}
+
+/// DAG 降级路径（`CORONA_SYSTEMS_DAG=0`）的兜底 drain：只在装配方**没有**安装
+/// tick 边界钩子时生效。DAG 模式下返回 false 且不消费队列，因此实体集合在
+/// 一个 tick 内不会因为 GeometrySystem::update() 而改变。
+inline bool apply_pending_structural_commands_legacy_fallback() {
+    if (StructuralCommandChannel::instance().tick_boundary_installed()) {
+        return false;
+    }
+    return apply_pending_structural_commands();
 }
 
 /// DAG 线程启动（由 `SystemsThread` 的 start 钩子调用，接线在 engine.cpp）。
@@ -397,18 +436,20 @@ inline void on_dag_thread_stopping() {
 [[nodiscard]] inline EntityId request_create_geometry(CreateGeometryPayload payload) {
     auto& channel = StructuralCommandChannel::instance();
 
-    // 重入：系统在 DAG 线程内部创建实体。入队后等自己 = 自死锁。
-    if (channel.affinity().is_owner_thread()) {
-        channel.record_inline_applied();
-        return create_geometry_entity(std::move(payload));
-    }
-
+    // 停机后即使调用方是 DAG 线程也不允许再写 registry：引擎正在关停，
+    // 新建实体会落在一个马上要被拆掉的世界上。所以停机判定在重入判定之前。
     if (channel.stopped()) {
         channel.record_rejected();
         CFW_LOG_ERROR(
             "[Ecs/StructuralCommand] create_geometry rejected: the systems DAG is not accepting "
-            "structural commands (stopped or never started)");
+            "structural commands (stopped)");
         return 0;
+    }
+
+    // 重入：系统在 DAG 线程内部创建实体。入队后等自己 = 自死锁。
+    if (channel.affinity().is_owner_thread()) {
+        channel.record_inline_applied();
+        return create_geometry_entity(std::move(payload));
     }
 
     auto request = std::make_shared<StructuralRequest>(channel.next_request_id());
@@ -429,16 +470,21 @@ inline void on_dag_thread_stopping() {
     const auto timeout = channel.timeout();
     const StructuralRequest::Result result = request->wait(timeout);
     if (!result.ok()) {
+        // 失败只在这里记一次（超时是它的子集），停机/异常路径不再重复计数。
         const bool abandoned = request->abandoned();
         if (abandoned) {
             channel.record_timeout();
+            CFW_LOG_ERROR(
+                "[Ecs/StructuralCommand] create_geometry timed out after {}ms: {}; owner thread {}; "
+                "the late command is skipped, no entity is created",
+                timeout.count(), result.error,
+                channel.affinity().bound()
+                    ? "is bound but did not drain the request"
+                    : "has never drained this channel (DAG not running?)");
         } else {
             channel.record_failed();
+            CFW_LOG_ERROR("[Ecs/StructuralCommand] create_geometry failed: {}", result.error);
         }
-        CFW_LOG_ERROR(
-            "[Ecs/StructuralCommand] create_geometry did not settle within {}ms ({}): {}",
-            timeout.count(), abandoned ? "caller abandoned the request" : "settled with failure",
-            result.error);
         return 0;
     }
     channel.record_applied();

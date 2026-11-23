@@ -1,5 +1,6 @@
 #include <corona/shared_data_hub.h>
 #include <corona/ecs/access.h>
+#include <corona/ecs/structural_commands.h>
 #include <corona/utils/scene_path_key.h>
 
 #include <algorithm>
@@ -66,8 +67,11 @@ ModelTransform* find_transform(EntityId handle) {
 }
 
 EntityId SharedDataHub::create_geometry() {
-    const auto entity = Ecs::World::instance().create<GeometryDevice, Ecs::ModelSource>();
-    return Ecs::to_handle(entity);
+    // **拥有者线程专用**，且只是默认初始值的便捷入口：权威实现在
+    // `Ecs::create_geometry_entity()`（`include/corona/ecs/structural_commands.h`），
+    // 由 tick 边界的应用器调用。本函数保留给单线程测试夹具（没有 DAG 线程）。
+    // 生产调用点一律走 `Ecs::request_create_geometry()`（结构命令 + 同步应答）。
+    return Ecs::create_geometry_entity(Ecs::CreateGeometryPayload{});
 }
 void SharedDataHub::destroy_geometry(EntityId handle) { Ecs::destroy(handle); }
 GeometryDevice* SharedDataHub::try_geometry(EntityId handle) {

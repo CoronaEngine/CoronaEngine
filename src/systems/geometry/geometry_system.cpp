@@ -306,9 +306,9 @@ void GeometrySystem::update() {
     // such a stall visible as "Geometry stuck in phase X" instead of silence.
     Corona::Diagnostics::PhaseScope update_phase{"Geometry", "update"};
     // DAG 降级路径（CORONA_SYSTEMS_DAG=0）没有 tick 边界钩子：在这里兜底应用
-    // 结构命令与场景成员命令。DAG 模式下边界阶段已 drain 过，这里是空操作
-    // （只有本 tick 期间新到的请求会被应用 —— 与场景命令的兜底语义一致）。
-    Corona::Ecs::apply_pending_structural_commands();
+    // 结构命令与场景成员命令。DAG 模式下结构命令的 drain 被门控关闭（边界阶段
+    // 已经消费过），保证"实体集合在一个 tick 内不变"；场景命令的兜底语义不变。
+    Corona::Ecs::apply_pending_structural_commands_legacy_fallback();
     Corona::apply_pending_scene_commands();
     // 外部线程（CEF/脚本）对 GeometryDevice 的写入也在这里落地。
     Corona::apply_pending_geometry_commands();
