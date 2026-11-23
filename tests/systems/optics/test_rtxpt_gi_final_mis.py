@@ -69,7 +69,7 @@ bool native_occluded(auto&&...){return false;}
 }
 namespace rtxpt_gi=vision::rtxpt_gi;
 namespace gi_principled{
-constexpr uint BaseNearBit=1u<<8u,CoatNearBit=1u<<9u,IdealGlassBit=1u<<11u;
+__MATERIAL_FLAGS__
 }
 struct SampledWavelengths{};
 struct PTSurfaceView{
@@ -165,12 +165,13 @@ void rough_test(){
     PTSurfaceView surface;
     for(uint i=0;i<6;++i)surface.parameters[i]={float(i+1),float(i+2),float(i+3),float(i+4)};
     surface.parameters[0].w=.03f;
-    const uint flags=gi_principled::BaseNearBit|gi_principled::CoatNearBit|gi_principled::IdealGlassBit|63u;
+    const uint flags=gi_principled::BaseNearBit|gi_principled::CoatNearBit
+        |gi_principled::IdealGlassBit|gi_principled::IdealMetalBit|63u;
     surface.parameters[5].w=as<float>(flags);
     const auto exact=surface.f({},{});
     const auto rough=surface.f_roughness_clamp(.2f,{},{});
     near(rough.x,.2,"roughened proxy clamps base perceptual roughness before evaluation");
-    near(rough.y,gi_principled::CoatNearBit|63u,"roughened base cannot retain ideal-glass or near-specular classification");
+    near(rough.y,gi_principled::CoatNearBit|63u,"roughened base must clear ideal-metal, ideal-glass and near-specular flags");
     near(rough.z,exact.z,"roughened proxy must retain every other complete-closure parameter");
     const auto after=surface.f({},{});
     near(after.x,.03,"proxy evaluation must not change actual transport roughness");
@@ -190,11 +191,14 @@ int main(int argc,char**argv){try{
 def _binary():
     source = (BASE / 'rtxpt_gi.cpp').read_text(encoding='utf-8-sig')
     pt = (BASE / 'rtxpt_gi_pt.h').read_text(encoding='utf-8-sig')
+    material = (ROOT / 'vision/src/base/scattering/gi_principled_parameters.h').read_text(encoding='utf-8-sig')
+    flags = '\n'.join(line for line in material.splitlines() if line.startswith('inline constexpr uint '))
     start = source.index('Float3 direction = normalize(', source.index('void RtxptGI::compile_final()'))
     end = source.index('Float3 prefix =', start)
     helpers = '\n'.join(_function(source, name) for name in ('Float luminance_legacy(', 'Float mis_initial_weight('))
     rough = _function(pt, '[[nodiscard]] Float3 f_roughness_clamp(')
     program = ('constexpr bool half_mis = false;\n' + SHIM.replace('__MIS_HELPERS__', helpers)
+               .replace('__MATERIAL_FLAGS__', flags)
                .replace('__ROUGH_EVALUATOR__', rough)
                .replace('__FINAL_COMBINATION__', source[start:end]))
     compiler = shutil.which('g++') or shutil.which('clang++')
