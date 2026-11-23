@@ -75,7 +75,7 @@ void finalize(RtxptGIReservoirVar &r, const Float &numerator, const Float &denom
 
 namespace vision {
 class RtxptGI final : public ReSTIR {
-    SP<ScreenBuffer> radiance_{make_shared<ScreenBuffer>("RtxptGI::radiance_ [gi-radiance-v3-rtxpt]")};
+    SP<ScreenBuffer> radiance_{make_shared<ScreenBuffer>("RtxptGI::radiance_ [gi-rtxpt-runtime-v4]")};
     RegistrableBuffer<GISample> samples_{pipeline()->bindless_array()};
     mutable RegistrableBuffer<uint2> raw_radiance_{pipeline()->bindless_array()};
     bool compact_radiance_{};

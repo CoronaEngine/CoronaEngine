@@ -873,9 +873,9 @@ void RtxptGI::compile(bool refresh_lighting) noexcept {
     if (!rtxpt_materials_) rtxpt_materials_ = make_shared<rtxpt_gi::StandardMaterialInputs>();
     rtxpt_materials_->prepare();
     // A whole-pipeline compile can follow light or topology replacement.
-    // Rebuild the native emitter mapping after the scene is rebound.
+    // Revalidate lights and rebuild the diagnostic buffers after the scene is rebound.
     if (refresh_lighting || !rtxpt_lights_) {
-        if (!rtxpt_lights_) rtxpt_lights_ = make_shared<rtxpt_gi::NativeLightSampler>(*this);
+        if (!rtxpt_lights_) rtxpt_lights_ = make_shared<rtxpt_gi::NativeLightSampler>();
         try {
             rtxpt_lights_->prepare();
         } catch (const std::runtime_error &error) {
@@ -1470,8 +1470,8 @@ void RtxptGI::update_resolution(ocarina::uint2 res) noexcept {
 void RtxptGI::restore(RuntimeObject *old_obj) noexcept {
     const auto *previous = hotfix::hotfix_detail::restore_source(*this, old_obj);
     if (!previous) return;
-    OC_ERROR_IF(!previous->radiance_->name().ends_with(" [gi-radiance-v3-rtxpt]"),
-                "GI radiance storage ABI changed; restart the engine before loading the new shaders.");
+    OC_ERROR_IF(!previous->radiance_->name().ends_with(" [gi-rtxpt-runtime-v4]"),
+                "RTXPT GI runtime resource layout changed; restart the engine before loading the new shaders.");
     ReSTIR::restore(old_obj);
     VS_HOTFIX_MOVE_ATTRS(radiance_, samples_, raw_radiance_, compact_radiance_, radiance_prepared_,
                        unsupported_backend_, backend_error_, path_work_counters_, rtxpt_proposals_, rtxpt_bypass_, rtxpt_lights_, rtxpt_materials_,
@@ -1479,12 +1479,11 @@ void RtxptGI::restore(RuntimeObject *old_obj) noexcept {
                        native_reblur_enabled_, native_reblur_diffuse_, native_reblur_specular_, native_reblur_bypass_, native_reblur_motion_y_,
                        reservoirs_, neighbors_, surfaces_, references_, extent_, temporal_shader_, spatial_shader_, final_shader_,
                        pt_validation_, pt_validation_output_, pt_validation_pending_, previous_frame_, previous_jitter_)
-    if (rtxpt_lights_) rtxpt_lights_->rebind_owner(*this);
 }
 
 void RtxptGI::set_compact_radiance(bool compact) noexcept {
     if (radiance_prepared_ && compact == compact_radiance_) return;
-    const string suffix = " [gi-radiance-v3-rtxpt]";
+    const string suffix = " [gi-rtxpt-runtime-v4]";
     if (!radiance_->name().ends_with(suffix)) radiance_->set_name(radiance_->name() + suffix);
     ByteBufferView empty{handle_ty{0u}, 0u};
     if (radiance_prepared_) {
