@@ -1,12 +1,12 @@
 #pragma once
 
-#include "ReSTIR/di_radiance.h"
-#include "ReSTIR/di_settings.h"
+#include "di_radiance.h"
+#include "di_settings.h"
 #include "base/color/spectrum.h"
-#include "restir_di/common.h"
-#include "restir_di/candidates.h"
-#include "restir_di/reuse.h"
-#include "restir_di/denoiser_signals.h"
+#include "common.h"
+#include "candidates.h"
+#include "reuse.h"
+#include "denoiser_signals.h"
 #include "render_core/warper/alias.h"
 #include <cmath>
 #include <stdexcept>

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "base/mgr/pipeline.h"
-#include "radiance_storage.h"
+#include "../radiance_storage.h"
 
 namespace vision {
 

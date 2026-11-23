@@ -1,5 +1,5 @@
 #include "render_core/denoiser/ReLAX/utils.h"
-#include "render_core/integrator/ReSTIR/denoiser_signals.h"
+#include "render_core/integrator/restir/denoiser_signals.h"
 #include "rhi/context.h"
 #include <array>
 #include <bit>

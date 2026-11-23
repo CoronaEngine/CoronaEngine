@@ -12,7 +12,7 @@ import subprocess
 import pytest
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p/'vision/src').is_dir())
-COMMON = ROOT/'vision/src/render_core/integrator/restir_di/common.h'
+COMMON = ROOT/'vision/src/render_core/integrator/restir/di/common.h'
 TEMP = ROOT/'.workspace/tmp/gi-di-fix-20261115/production-helper-tests'
 
 

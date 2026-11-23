@@ -3,7 +3,7 @@
 #include "base/integral/integrator.h"
 #include "base/mgr/evaluation_debug.h"
 #include "utils.h"
-#include "render_core/integrator/ReSTIR/restir_gi_denoiser_prepare.h"
+#include "render_core/integrator/restir/gi/restir_gi_denoiser_prepare.h"
 #include <cstdlib>
 #include <cstring>
 #include <fstream>

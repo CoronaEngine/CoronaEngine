@@ -12,7 +12,7 @@
 #include "base/mgr/pipeline.h"
 #include "core/concurrency/thread_pool.h"
 #include "hotfix/hotfix.h"
-#include "reservoir.h"
+#include "gi/reservoir.h"
 #include "base/using.h"
 
 namespace vision {

@@ -9,7 +9,7 @@
 #include "dsl/dsl.h"
 #include "base/sampler.h"
 #include "base/illumination/light.h"
-#include "common.h"
+#include "../common.h"
 #include "base/using.h"
 
 namespace vision {

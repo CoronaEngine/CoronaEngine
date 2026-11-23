@@ -214,7 +214,7 @@ int main(){try{
 
 
 def test_actual_gi_emission_callback_counts_represented_energy_once_and_preserves_suffix():
-    source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/restir_gi.cpp').read_text(encoding='utf-8-sig')
+    source = (ROOT / 'vision/src/render_core/integrator/restir/gi/restir_gi.cpp').read_text(encoding='utf-8-sig')
     declaration, implementation = body(source, 'capture.on_emission =')
     callback = declaration + implementation + ';'
     helpers = []
@@ -222,7 +222,7 @@ def test_actual_gi_emission_callback_counts_represented_energy_once_and_preserve
     for signature in ('Bool gi_prefix_stable_emission_allowed(', 'Bool gi_prefix_emission_represented('):
         declaration, implementation = body(source, signature)
         helpers.append(declaration + implementation)
-    terminal_source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/restir_gi_prefix_storage.h').read_text(encoding='utf-8-sig')
+    terminal_source = (ROOT / 'vision/src/render_core/integrator/restir/gi/restir_gi_prefix_storage.h').read_text(encoding='utf-8-sig')
     terminal_helpers = [line for line in terminal_source.splitlines()
                         if line.startswith('constexpr uint PtPrefix')]
     for signature in ('Uint pt_prefix_depth(', 'Bool pt_prefix_ideal_path(', 'void pt_prefix_store_controls('):

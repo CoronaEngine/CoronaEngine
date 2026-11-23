@@ -12,7 +12,7 @@ import subprocess
 import pytest
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'vision/src').is_dir())
-BASE = ROOT / 'vision/src/render_core/integrator/ReSTIR'
+BASE = ROOT / 'vision/src/render_core/integrator/restir/gi'
 TEMP = ROOT / '.workspace/tmp/restir-gi-signal-mis-20261115/mis'
 
 

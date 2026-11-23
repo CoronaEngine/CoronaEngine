@@ -64,7 +64,7 @@ int main(){try{
 
 
 def test_actual_per_plane_signal_events_keep_prefix_and_remove_fresh_once():
-    source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/restir_gi.cpp').read_text(encoding='utf-8-sig')
+    source = (ROOT / 'vision/src/render_core/integrator/restir/gi/restir_gi.cpp').read_text(encoding='utf-8-sig')
     helpers = []
     for signature in ('void gi_signal_switch_plane(', 'void gi_signal_commit(', 'void gi_signal_commit_visit('):
         assert signature in source, f'GI per-plane production helper missing: {signature}'
@@ -76,7 +76,7 @@ def test_actual_per_plane_signal_events_keep_prefix_and_remove_fresh_once():
     policy = (ROOT / 'vision/src/base/scattering/gi_ideal_glass.h').read_text(encoding='utf-8-sig')
     declaration, implementation = body(policy, 'Bool gi_camera_emission_owned_by_di(')
     helpers.append(declaration + implementation)
-    native = (ROOT / 'vision/src/render_core/integrator/ReSTIR/restir_gi_denoiser.h').read_text(encoding='utf-8-sig')
+    native = (ROOT / 'vision/src/render_core/integrator/restir/gi/restir_gi_denoiser.h').read_text(encoding='utf-8-sig')
     native_helpers = []
     for signature in ('Float native_reblur_combine_hit(', 'Float4 native_reblur_commit('):
         declaration, implementation = body(native, signature)

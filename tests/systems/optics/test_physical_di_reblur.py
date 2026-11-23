@@ -7,7 +7,7 @@ import pytest
 from test_shadow_ray_endpoint import extract_function
 
 ROOT = Path(__file__).resolve().parents[3]
-HEADER = ROOT / 'vision/src/render_core/integrator/ReSTIR/physical_di_reblur.h'
+HEADER = ROOT / 'vision/src/render_core/integrator/restir/di/reblur_settings.h'
 
 
 def test_physical_di_reblur_preserves_parent_and_other_settings():
@@ -22,7 +22,7 @@ def test_physical_di_reblur_preserves_parent_and_other_settings():
     cpp = directory / 'physical_di_reblur.cpp'
     exe = directory / 'physical_di_reblur.exe'
     cpp.write_text(r'''
-#include "ReSTIR/physical_di_reblur.h"
+#include "restir/di/reblur_settings.h"
 #include <iostream>
 #include <stdexcept>
 void require(bool v, const char *message) { if (!v) throw std::runtime_error(message); }
@@ -73,7 +73,7 @@ def test_actual_rt_sync_prepare_target_and_readonly_context_feedback():
     getter = extract_function(source, '[[nodiscard]] DataWrap reblur_context_settings() const override')
     getter = getter.replace(' const override', ' const', 1)
     program = r'''
-#include "ReSTIR/physical_di_reblur.h"
+#include "restir/di/reblur_settings.h"
 #include <iostream>
 #include <memory>
 #include <stdexcept>

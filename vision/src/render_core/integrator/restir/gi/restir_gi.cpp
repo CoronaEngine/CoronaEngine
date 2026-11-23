@@ -1,5 +1,5 @@
 #include "restir_gi.h"
-#include "denoiser_signals.h"
+#include "../denoiser_signals.h"
 #include "restir_gi_boiling.h"
 #include "restir_gi_candidate.h"
 #include "restir_gi_lights.h"

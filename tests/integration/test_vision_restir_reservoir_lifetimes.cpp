@@ -2,8 +2,8 @@
 // including GPU allocation sizes, readback, resize and restore.
 #define VISION_PLUGIN_NAME "ReSTIR"
 #define VISION_CATEGORY "integrator"
-#include "render_core/integrator/ReSTIR/restir_gi.h"
-#include "render_core/integrator/ReSTIR/di_radiance.h"
+#include "render_core/integrator/restir/gi/restir_gi.h"
+#include "render_core/integrator/restir/di/di_radiance.h"
 #include "hotfix/hotfix.h"
 
 #include <algorithm>

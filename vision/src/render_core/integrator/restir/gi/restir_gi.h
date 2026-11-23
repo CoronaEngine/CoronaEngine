@@ -2,8 +2,8 @@
 
 #include "base/integral/path_work_diagnostic.h"
 #include "base/mgr/switch_profile.h"
-#include "common.h"
-#include "radiance_storage.h"
+#include "../common.h"
+#include "../radiance_storage.h"
 #include "restir_gi_denoiser.h"
 #include "reservoir.h"
 #include "restir_gi_pt.h"

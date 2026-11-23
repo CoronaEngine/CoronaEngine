@@ -13,7 +13,7 @@ import tempfile
 from unittest import SkipTest
 
 ROOT = Path(__file__).resolve().parents[3]
-SOURCE = ROOT / "vision/src/render_core/integrator/ReSTIR/restir_gi_denoiser_prepare.h"
+SOURCE = ROOT / "vision/src/render_core/integrator/restir/gi/restir_gi_denoiser_prepare.h"
 MATH = SOURCE.with_name("restir_gi_denoiser.h")
 TEMP = ROOT / ".workspace/tmp/gi-guide-reuse-20261119/conditioning-tests"
 

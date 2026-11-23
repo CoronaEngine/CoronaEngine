@@ -9,7 +9,7 @@
 #include "base/denoiser.h"
 #include "params.h"
 #include "filter.h"
-#include "render_core/integrator/ReSTIR/restir_gi_prefix_storage.h"
+#include "render_core/integrator/restir/gi/restir_gi_prefix_storage.h"
 #ifdef VISION_REBLUR_EDSL
 #include "edsl_nrd.h"
 #include "edsl_nrd_params.h"

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "restir_gi_denoiser_diagnostic.h"
-#include "di_radiance.h"
-#include "render_core/integrator/restir_di/reservoir.h"
+#include "../di/di_radiance.h"
+#include "render_core/integrator/restir/di/reservoir.h"
 #include "base/mgr/global.h"
 #include "math/util.h"
 #include <cstdlib>

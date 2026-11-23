@@ -13,7 +13,7 @@ from unittest import SkipTest
 from _restir_cpu import body
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'vision/src').is_dir())
-HEADER = ROOT / 'vision/src/render_core/integrator/ReSTIR/restir_gi.h'
+HEADER = ROOT / 'vision/src/render_core/integrator/restir/gi/restir_gi.h'
 SOURCE = HEADER.with_suffix('.cpp')
 TEMP = ROOT / '.workspace/tmp/rtxpt-corona-dsl-20261108/native-math-tests'
 

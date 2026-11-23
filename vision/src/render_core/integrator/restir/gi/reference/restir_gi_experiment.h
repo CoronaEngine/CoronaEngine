@@ -1,9 +1,9 @@
 #pragma once
 #include "base/integral/restir_shadow.h"
 
-#include "ReSTIR/restir_gi.h"
-#include "restir_gi/history.h"
-#include "restir_gi/literal.h"
+#include "../restir_gi.h"
+#include "history.h"
+#include "literal.h"
 #include <array>
 #include <cstdlib>
 #include <fstream>
