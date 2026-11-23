@@ -522,6 +522,18 @@ inline void destroy_entity_owner(DestroyEntityPayload payload) {
 // 通道
 // ============================================================================
 
+/// 注册在 tick 边界上的**额外拥有者任务**（无参函数指针）。
+///
+/// 结构命令只负责"本 tick 存在哪些实体"。同一个单写者边界还要承载不属于结构变更、
+/// 但同样只能由拥有者线程执行的收口工作 —— 目前是网络同步的入站写入与出站序列化
+/// （`Corona::Network::apply_pending_sync_boundary`）。
+///
+/// 注册发生在装配期（系统线程启动之前），任务按注册顺序执行。用函数指针而不是
+/// `std::function`：任务的生命期必须覆盖进程，注册方不该在运行时持有/释放闭包。
+/// 两个边界应用器都经由 `apply_pending()`，所以 DAG 模式（engine.cpp 的边界钩子）
+/// 与 `CORONA_SYSTEMS_DAG=0` 降级模式（GeometrySystem 的兜底 drain）自动都执行它。
+using TickBoundaryTask = void (*)();
+
 /// 通道本身：队列 + 拥有者线程标识 + 生命周期状态 + 诊断计数。
 class StructuralCommandChannel {
    public:
@@ -702,6 +714,48 @@ class StructuralCommandChannel {
         boundary_installed_.store(true, std::memory_order_release);
     }
 
+    // ------------------------------------------------------------ 额外边界任务
+
+    /// 注册一条额外的拥有者任务。重复注册同一函数指针返回 false（幂等）。
+    bool add_boundary_task(TickBoundaryTask task) {
+        if (task == nullptr) {
+            return false;
+        }
+        std::lock_guard lock(boundary_tasks_mutex_);
+        if (std::find(boundary_tasks_.begin(), boundary_tasks_.end(), task) !=
+            boundary_tasks_.end()) {
+            return false;
+        }
+        boundary_tasks_.push_back(task);
+        return true;
+    }
+
+    /// 拥有者线程：按注册顺序执行额外边界任务。单个任务抛异常不阻断其它任务。
+    void run_boundary_tasks() {
+        std::vector<TickBoundaryTask> tasks;
+        {
+            std::lock_guard lock(boundary_tasks_mutex_);
+            tasks = boundary_tasks_;
+        }
+        for (const auto task : tasks) {
+            try {
+                task();
+            } catch (const std::exception& error) {
+                CFW_LOG_ERROR("[Ecs/StructuralCommand] tick boundary task failed: {}",
+                              error.what());
+            } catch (...) {
+                CFW_LOG_ERROR("[Ecs/StructuralCommand] tick boundary task failed: "
+                              "unknown exception");
+            }
+        }
+    }
+
+    /// 已注册的额外边界任务数（诊断/测试用）。
+    [[nodiscard]] std::size_t boundary_task_count() const {
+        std::lock_guard lock(boundary_tasks_mutex_);
+        return boundary_tasks_.size();
+    }
+
     // ------------------------------------------------------------ 应用
 
     /// 应用入站结构命令（tick 边界阶段 / DAG 降级兜底）。返回是否真的应用了命令。
@@ -756,6 +810,10 @@ class StructuralCommandChannel {
                               static_cast<unsigned long long>(destroy.handle));
             }
         }
+
+        // 额外拥有者任务（网络同步的入站写入 / 出站序列化）：在实体集合已经定型
+        // （创建 + 延迟销毁都应用完）之后执行，读到的就是本 tick 的真实状态。
+        run_boundary_tasks();
         return applied_any || !destroys.empty();
     }
 
@@ -1036,6 +1094,10 @@ class StructuralCommandChannel {
     mutable std::mutex destroy_mutex_;
     std::deque<DeferredDestroy> destroy_queue_;
 
+    /// 额外边界任务（网络同步收口）。注册在装配期，执行在拥有者线程。
+    mutable std::mutex boundary_tasks_mutex_;
+    std::vector<TickBoundaryTask> boundary_tasks_;
+
     mutable std::mutex stats_mutex_;
     Stats stats_{};
 };
@@ -1045,6 +1107,12 @@ inline bool apply_pending_structural_commands() {
     auto& channel = StructuralCommandChannel::instance();
     channel.affinity().bind_to_current_thread();
     return channel.apply_pending();
+}
+
+/// 注册一条额外的 tick 边界任务（装配期调用；拥有者线程执行）。
+/// 重复注册同一函数指针返回 false。
+[[nodiscard]] inline bool add_tick_boundary_task(TickBoundaryTask task) {
+    return StructuralCommandChannel::instance().add_boundary_task(task);
 }
 
 /// DAG 降级路径（`CORONA_SYSTEMS_DAG=0`）的兜底 drain：只在装配方**没有**安装

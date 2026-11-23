@@ -1,21 +1,30 @@
 #include <corona/systems/network/sync_engine.h>
-#include <corona/ecs/access.h>
+#include <corona/systems/network/sync_boundary.h>
+#include <corona/systems/network/sync_codec.h>
 
-#include <corona/shared_data_hub.h>
-#include <corona/systems/optics/environment_commands.h>
-#include <corona/systems/optics/optics_commands.h>
 #include <horizon/core/logging.h>
 
 #include <chrono>
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace Corona::Network {
 
 // ============================================================================
 // Per-type serialize / deserialize / hash helpers
+//
+// Task 2：这些函数搬到了 `sync_codec.h`（线上布局 + 哈希 + 编解码，纯值）。
+// `sync_engine.cpp` 不再包含 ECS 头、不再 `Ecs::view` / `Ecs::get` / 写组件：
+// 出站序列化由拥有者线程在 tick 边界上完成（`sync_boundary.h`），入站写入变成
+// 同一条边界上的命令。这里保留网络线程该做的事：dirty 记账、LWW 版本、收发字节。
 // ============================================================================
 
 namespace {
@@ -26,247 +35,6 @@ uint64_t editor_now_ms() {
         steady_clock::now().time_since_epoch()).count());
 }
 
-// ---- ModelTransform helpers ----
-std::string hash_mt(const ModelTransform& t, uint64_t entity_seq) {
-    uint64_t h = entity_seq;
-    auto mix = [&](const void* p, size_t n) {
-        const auto* b = static_cast<const uint8_t*>(p);
-        for (size_t i = 0; i < n; ++i) h = h * 31 + b[i];
-    };
-    mix(&t.position, sizeof(t.position));
-    mix(&t.euler_rotation, sizeof(t.euler_rotation));
-    mix(&t.scale, sizeof(t.scale));
-
-    char buf[24];
-    std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(h));
-    return {buf};
-}
-
-void serialize_mt(const ModelTransform& t, uint64_t entity_seq,
-                  const std::string& key,
-                  std::vector<uint8_t>& entries) {
-    float xform[9];
-    xform[0] = t.position.x; xform[1] = t.position.y; xform[2] = t.position.z;
-    xform[3] = t.euler_rotation.x; xform[4] = t.euler_rotation.y; xform[5] = t.euler_rotation.z;
-    xform[6] = t.scale.x; xform[7] = t.scale.y; xform[8] = t.scale.z;
-
-    auto entry = build_dirty_entries(StorageID::ST_MODEL_TRANSFORM, entity_seq,
-                                     key.c_str(), static_cast<uint16_t>(key.size()),
-                                     xform, sizeof(xform));
-    entries.insert(entries.end(), entry.begin(), entry.end());
-}
-
-void deserialize_mt(ModelTransform& t, const uint8_t* value, uint16_t value_len) {
-    if (value_len != 36) return;
-    const auto* f = reinterpret_cast<const float*>(value);
-    t.position.x = f[0]; t.position.y = f[1]; t.position.z = f[2];
-    t.euler_rotation.x = f[3]; t.euler_rotation.y = f[4]; t.euler_rotation.z = f[5];
-    t.scale.x = f[6]; t.scale.y = f[7]; t.scale.z = f[8];
-}
-
-// ---- ModelResource helpers ----
-std::string hash_mr(const ModelResource& r, uint64_t entity_seq) {
-    uint64_t h = entity_seq;
-    h = h * 31 + r.model_id;
-    char buf[24];
-    std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(h));
-    return {buf};
-}
-
-void serialize_mr(const ModelResource& r, uint64_t entity_seq,
-                  const std::string& key,
-                  std::vector<uint8_t>& entries) {
-    auto entry = build_dirty_entries(StorageID::ST_MODEL_RESOURCE, entity_seq,
-                                     key.c_str(), static_cast<uint16_t>(key.size()),
-                                     &r.model_id, sizeof(r.model_id));
-    entries.insert(entries.end(), entry.begin(), entry.end());
-}
-
-void deserialize_mr(ModelResource& r, const uint8_t* value, uint16_t value_len) {
-    if (value_len != 8) return;
-    r.model_id = *reinterpret_cast<const uint64_t*>(value);
-}
-
-// ---- GeometryDevice helpers ----
-// Serialize only pointer references (transform_handle, model_resource_handle).
-// GPU data (mesh_handles with HardwareBuffer/Image) is created locally via
-// the same deterministic code path on every peer and must NOT be synced.
-std::string hash_geo(const GeometryDevice& g, uint64_t entity_seq) {
-    uint64_t h = entity_seq;
-    h = h * 31 + g.transform_handle;
-    h = h * 31 + g.model_resource_handle;
-    char buf[24];
-    std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(h));
-    return {buf};
-}
-
-void serialize_geo(const GeometryDevice& g, uint64_t entity_seq,
-                   const std::string& key,
-                   std::vector<uint8_t>& entries) {
-    uint64_t data[2];
-    data[0] = static_cast<uint64_t>(g.transform_handle);
-    data[1] = static_cast<uint64_t>(g.model_resource_handle);
-    auto entry = build_dirty_entries(StorageID::ST_GEOMETRY, entity_seq,
-                                     key.c_str(), static_cast<uint16_t>(key.size()),
-                                     data, sizeof(data));
-    entries.insert(entries.end(), entry.begin(), entry.end());
-}
-
-void deserialize_geo(GeometryDevice& g, const uint8_t* value, uint16_t value_len) {
-    if (value_len != 16) return;
-    const auto* d = reinterpret_cast<const uint64_t*>(value);
-    // Only update if handles are zero (unlinked). Once linked they are stable.
-    if (g.transform_handle == 0) g.transform_handle = static_cast<std::uintptr_t>(d[0]);
-    if (g.model_resource_handle == 0) g.model_resource_handle = static_cast<std::uintptr_t>(d[1]);
-}
-
-// ---- OpticsDevice helpers ----
-/// 远程 optics 包承载整份材质快照，因此这条命令覆盖全部标量位。
-constexpr auto kRemoteOpticsFields =
-    Corona::OpticsField::Visible | Corona::OpticsField::EnableLighting |
-    Corona::OpticsField::Metallic | Corona::OpticsField::Roughness |
-    Corona::OpticsField::Subsurface | Corona::OpticsField::Specular |
-    Corona::OpticsField::SpecularTint | Corona::OpticsField::Anisotropic |
-    Corona::OpticsField::Sheen | Corona::OpticsField::SheenTint |
-    Corona::OpticsField::Clearcoat | Corona::OpticsField::ClearcoatGloss |
-    Corona::OpticsField::Ambient | Corona::OpticsField::Diffuse |
-    Corona::OpticsField::SpecularColor | Corona::OpticsField::Shininess;
-
-struct OpticsPacked {
-    bool visible;
-    bool bEnableLighting;
-    float metallic;
-    float roughness;
-    float subsurface;
-    float specular;
-    float specularTint;
-    float anisotropic;
-    float sheen;
-    float sheenTint;
-    float clearcoat;
-    float clearcoatGloss;
-    float ambient[3];
-    float diffuse[3];
-    float specular_color[3];
-    float shininess;
-};
-
-std::string hash_opt(const OpticsDevice& o, const Ecs::Visibility* visibility,
-                     uint64_t entity_seq) {
-    uint64_t h = entity_seq;
-    auto mix = [&](const void* p, size_t n) {
-        const auto* b = static_cast<const uint8_t*>(p);
-        for (size_t i = 0; i < n; ++i) h = h * 31 + b[i];
-    };
-    const bool visible = visibility != nullptr ? visibility->visible : true;
-    const bool receives_lighting = visibility != nullptr ? visibility->receives_lighting : true;
-    mix(&visible, sizeof(visible));
-    mix(&receives_lighting, sizeof(receives_lighting));
-    mix(&o.metallic, sizeof(o.metallic));
-    mix(&o.roughness, sizeof(o.roughness));
-    mix(&o.subsurface, sizeof(o.subsurface));
-    mix(&o.specular, sizeof(o.specular));
-    mix(&o.specularTint, sizeof(o.specularTint));
-    mix(&o.anisotropic, sizeof(o.anisotropic));
-    mix(&o.sheen, sizeof(o.sheen));
-    mix(&o.sheenTint, sizeof(o.sheenTint));
-    mix(&o.clearcoat, sizeof(o.clearcoat));
-    mix(&o.clearcoatGloss, sizeof(o.clearcoatGloss));
-    mix(&o.ambient, sizeof(o.ambient));
-    mix(&o.diffuse, sizeof(o.diffuse));
-    mix(&o.specular_color, sizeof(o.specular_color));
-    mix(&o.shininess, sizeof(o.shininess));
-    char buf[24];
-    std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(h));
-    return {buf};
-}
-
-void serialize_opt(const OpticsDevice& o, const Ecs::Visibility* visibility,
-                   uint64_t entity_seq,
-                   const std::string& key,
-                   std::vector<uint8_t>& entries) {
-    OpticsPacked p;
-    p.visible = visibility != nullptr ? visibility->visible : true;
-    p.bEnableLighting = visibility != nullptr ? visibility->receives_lighting : true;
-    p.metallic = o.metallic;
-    p.roughness = o.roughness;
-    p.subsurface = o.subsurface;
-    p.specular = o.specular;
-    p.specularTint = o.specularTint;
-    p.anisotropic = o.anisotropic;
-    p.sheen = o.sheen;
-    p.sheenTint = o.sheenTint;
-    p.clearcoat = o.clearcoat;
-    p.clearcoatGloss = o.clearcoatGloss;
-    p.ambient[0] = o.ambient.x;  p.ambient[1] = o.ambient.y;  p.ambient[2] = o.ambient.z;
-    p.diffuse[0] = o.diffuse.x;  p.diffuse[1] = o.diffuse.y;  p.diffuse[2] = o.diffuse.z;
-    p.specular_color[0] = o.specular_color.x; p.specular_color[1] = o.specular_color.y; p.specular_color[2] = o.specular_color.z;
-    p.shininess = o.shininess;
-    auto entry = build_dirty_entries(StorageID::ST_OPTICS, entity_seq,
-                                     key.c_str(), static_cast<uint16_t>(key.size()),
-                                     &p, sizeof(p));
-    entries.insert(entries.end(), entry.begin(), entry.end());
-}
-
-void deserialize_opt(OpticsDevice& o, Ecs::Visibility& visibility, const uint8_t* value,
-                     uint16_t value_len) {
-    if (value_len != sizeof(OpticsPacked)) return;
-    const auto* p = reinterpret_cast<const OpticsPacked*>(value);
-    visibility.visible = p->visible;
-    visibility.receives_lighting = p->bEnableLighting;
-    o.metallic = p->metallic;
-    o.roughness = p->roughness;
-    o.subsurface = p->subsurface;
-    o.specular = p->specular;
-    o.specularTint = p->specularTint;
-    o.anisotropic = p->anisotropic;
-    o.sheen = p->sheen;
-    o.sheenTint = p->sheenTint;
-    o.clearcoat = p->clearcoat;
-    o.clearcoatGloss = p->clearcoatGloss;
-    o.ambient = ktm::fvec3{p->ambient[0], p->ambient[1], p->ambient[2]};
-    o.diffuse = ktm::fvec3{p->diffuse[0], p->diffuse[1], p->diffuse[2]};
-    o.specular_color = ktm::fvec3{p->specular_color[0], p->specular_color[1], p->specular_color[2]};
-    o.shininess = p->shininess;
-}
-
-// ---- EnvironmentDevice helpers ----
-std::string hash_env(const EnvironmentDevice& e, uint64_t entity_seq) {
-    uint64_t h = entity_seq;
-    auto mix = [&](const void* p, size_t n) {
-        const auto* b = static_cast<const uint8_t*>(p);
-        for (size_t i = 0; i < n; ++i) h = h * 31 + b[i];
-    };
-    mix(&e.sun_position, sizeof(e.sun_position));
-    mix(&e.sun_intensity, sizeof(e.sun_intensity));
-    mix(&e.exposure, sizeof(e.exposure));
-    char buf[24];
-    std::snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(h));
-    return {buf};
-}
-
-void serialize_env(const EnvironmentDevice& e, uint64_t entity_seq,
-                   const std::string& key,
-                   std::vector<uint8_t>& entries) {
-    float data[5];
-    data[0] = e.sun_position.x; data[1] = e.sun_position.y; data[2] = e.sun_position.z;
-    data[3] = e.sun_intensity;
-    data[4] = e.exposure;
-
-    auto entry = build_dirty_entries(StorageID::ST_ENVIRONMENT, entity_seq,
-                                     key.c_str(), static_cast<uint16_t>(key.size()),
-                                     data, sizeof(data));
-    entries.insert(entries.end(), entry.begin(), entry.end());
-}
-
-void deserialize_env(EnvironmentDevice& e, const uint8_t* value, uint16_t value_len) {
-    if (value_len != 20) return;
-    const auto* f = reinterpret_cast<const float*>(value);
-    e.sun_position.x = f[0]; e.sun_position.y = f[1]; e.sun_position.z = f[2];
-    e.sun_intensity = f[3];
-    e.exposure = f[4];
-}
-
 }  // anonymous namespace
 
 // ============================================================================
@@ -274,7 +42,6 @@ void deserialize_env(EnvironmentDevice& e, const uint8_t* value, uint16_t value_
 // ============================================================================
 
 struct SyncEngine::Impl {
-    SharedDataHub& hub;
     std::string local_peer_id;
     LwwState lww_state;
     std::deque<EditorSyncOperation> pending_editor_operations;
@@ -296,14 +63,13 @@ struct SyncEngine::Impl {
     std::unordered_map<std::string, std::string> last_synced;
     mutable std::mutex snapshot_mutex;
 
-    // Entity mapping: seq_id → ObjectId for each storage, rebuilt each tick.
-    using ObjMap = std::unordered_map<uint64_t, std::uintptr_t>;
-
-    ObjMap mt_seq_to_id;   // ModelTransform
-    ObjMap mr_seq_to_id;   // ModelResource
-    ObjMap geo_seq_to_id;  // GeometryDevice
-    ObjMap opt_seq_to_id;  // OpticsDevice
-    ObjMap env_seq_to_id;  // EnvironmentDevice
+    /// 刚提交给拥有者线程的远端 environment 值（线上字节）。
+    ///
+    /// environment 操作是全局 `__scene__` 状态、线上不带实体序号，所以网络线程在
+    /// 提交时无法预写 `last_synced` 的 key（key 含本端环境实体的 seq）。下一帧构建
+    /// 完成后（同一边界先应用写入、再构建帧），若帧里出现同一份字节，就在那里补记
+    /// 对应 key 并跳过发送 —— 否则会把自己刚收到的远端值再广播回去一次。
+    std::optional<std::vector<uint8_t>> applied_environment_value;
 
     // Callbacks
     OnSyncOutgoing on_outgoing;
@@ -334,49 +100,7 @@ struct SyncEngine::Impl {
         }
     }
 
-    Impl(SharedDataHub& h) : hub(h), lww_state("uninitialized") {}
-
-    void rebuild_entity_maps() {
-        mt_seq_to_id.clear();
-        {
-            for (const auto entity : Corona::Ecs::view<ModelTransform>()) {
-                const auto obj_id = Corona::Ecs::to_handle(entity);
-                mt_seq_to_id[Corona::Ecs::seq_of(obj_id)] = obj_id;
-            }
-        }
-
-        mr_seq_to_id.clear();
-        {
-            for (const auto entity : Corona::Ecs::view<ModelResource>()) {
-                const auto obj_id = Corona::Ecs::to_handle(entity);
-                mr_seq_to_id[Corona::Ecs::seq_of(obj_id)] = obj_id;
-            }
-        }
-
-        geo_seq_to_id.clear();
-        {
-            for (const auto entity : Corona::Ecs::view<GeometryDevice>()) {
-                const auto obj_id = Corona::Ecs::to_handle(entity);
-                geo_seq_to_id[Corona::Ecs::seq_of(obj_id)] = obj_id;
-            }
-        }
-
-        opt_seq_to_id.clear();
-        {
-            for (const auto entity : Corona::Ecs::view<OpticsDevice>()) {
-                const auto obj_id = Corona::Ecs::to_handle(entity);
-                opt_seq_to_id[Corona::Ecs::seq_of(obj_id)] = obj_id;
-            }
-        }
-
-        env_seq_to_id.clear();
-        {
-            for (const auto entity : Corona::Ecs::view<EnvironmentDevice>()) {
-                const auto obj_id = Corona::Ecs::to_handle(entity);
-                env_seq_to_id[Corona::Ecs::seq_of(obj_id)] = obj_id;
-            }
-        }
-    }
+    Impl() : lww_state("uninitialized") {}
 
     std::string make_key(StorageID sid, uint64_t entity_seq, const std::string& field) {
         char buf[96];
@@ -430,7 +154,7 @@ struct SyncEngine::Impl {
 
 // ============================================================================
 
-SyncEngine::SyncEngine() : impl_(std::make_unique<Impl>(SharedDataHub::instance())) {}
+SyncEngine::SyncEngine() : impl_(std::make_unique<Impl>()) {}
 
 SyncEngine::~SyncEngine() = default;
 
@@ -496,107 +220,78 @@ bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation
         operation.field_name == "actor.state" ||
         operation.field_name == "actor.transform") return true;
 
-    impl_->rebuild_entity_maps();
-    auto& hub = impl_->hub;
-    bool applied = false;
-    // 远程 xform：解码成值命令，由 Optics 在 tick 内应用。
-    // 网络线程不再持 slot 写锁——此前这里是跨线程直写 ModelTransform。
-    auto apply_to_transform = [&]() {
-        if (!impl_->entity_for_guid) return;
-        auto seq = impl_->entity_for_guid(StorageID::ST_MODEL_TRANSFORM, operation.actor_guid);
-        if (!seq) return;
-        auto it = impl_->mt_seq_to_id.find(*seq);
-        if (it == impl_->mt_seq_to_id.end()) return;
-        if (operation.value.size() != 36) {
+    // Task 2：远端状态的落地不再由网络线程写组件。这里只把线上字节解码成值，
+    // 交给 tick 边界上的拥有者线程应用（`sync_boundary.h`）。`entity_seq` 直接来自
+    // 身份注册表（seq → handle 恒等于 seq + 1，见 `handle_for_seq`），所以网络线程
+    // 不需要遍历 registry 建 seq → handle 映射表。
+    //
+    // 返回值语义保持迁移前不变：true = 这条操作已交出/已应用（不再重试）；
+    // false = 暂时没有实体/被 DAG 拒绝，保留在 `pending_editor_operations` 里重试。
+
+    if (operation.field_name == "xform") {
+        if (!impl_->entity_for_guid) return false;
+        const auto seq = impl_->entity_for_guid(StorageID::ST_MODEL_TRANSFORM,
+                                                operation.actor_guid);
+        if (!seq) return false;
+        TransformState decoded{};
+        if (!decode_transform(operation.value.data(),
+                              static_cast<uint16_t>(operation.value.size()), decoded)) {
             // 畸形载荷：旧实现是 deserialize 静默 no-op 但仍标 applied，保持一致。
-            applied = true;
-            return;
+            return true;
         }
-        Corona::ModelTransform decoded{};
-        deserialize_mt(decoded, operation.value.data(),
-                       static_cast<uint16_t>(operation.value.size()));
-        Corona::TransformUpdateCommand command{};
-        command.transform_handle = it->second;
-        command.fields = Corona::TransformField::All;
-        command.position = decoded.position;
-        command.euler_rotation = decoded.euler_rotation;
-        command.scale = decoded.scale;
-        hub.enqueue_transform_update(command);
+        RemoteStateWrite write{};
+        write.storage = StorageID::ST_MODEL_TRANSFORM;
+        write.entity_seq = *seq;
+        write.transform = decoded;
+        if (!submit_remote_state(write)) return false;
         // 脏值哈希按"目标值"记账：下一轮 poll 只有真的与目标不一致时才回传，
         // 因此不会把自己刚收到的远程值再广播一次。
-        impl_->set_snapshot(impl_->make_key(StorageID::ST_MODEL_TRANSFORM,
-                                             *seq, "xform"),
-                            hash_mt(decoded, *seq));
-        applied = true;
-    };
-    if (operation.field_name == "xform") apply_to_transform();
-    if (operation.field_name == "optics" && impl_->entity_for_guid) {
-        auto seq = impl_->entity_for_guid(StorageID::ST_OPTICS, operation.actor_guid);
-        if (seq) {
-            auto it = impl_->opt_seq_to_id.find(*seq);
-            if (it != impl_->opt_seq_to_id.end()) {
-                if (operation.value.size() != sizeof(OpticsPacked)) {
-                    applied = true;  // 畸形载荷：与旧实现的静默 no-op 行为一致
-                } else {
-                    Corona::OpticsDevice decoded{};
-                    Ecs::Visibility decoded_visibility{};
-                    deserialize_opt(decoded, decoded_visibility, operation.value.data(),
-                                    static_cast<uint16_t>(operation.value.size()));
-                    Corona::OpticsUpdateCommand command{};
-                    command.optics_handle = it->second;
-                    // 远程包是整份材质快照，因此 16 个标量位全置。
-                    command.fields = kRemoteOpticsFields;
-                    command.visible = decoded_visibility.visible;
-                    command.enable_lighting = decoded_visibility.receives_lighting;
-                    command.metallic = decoded.metallic;
-                    command.roughness = decoded.roughness;
-                    command.subsurface = decoded.subsurface;
-                    command.specular = decoded.specular;
-                    command.specular_tint = decoded.specularTint;
-                    command.anisotropic = decoded.anisotropic;
-                    command.sheen = decoded.sheen;
-                    command.sheen_tint = decoded.sheenTint;
-                    command.clearcoat = decoded.clearcoat;
-                    command.clearcoat_gloss = decoded.clearcoatGloss;
-                    command.ambient = decoded.ambient;
-                    command.diffuse = decoded.diffuse;
-                    command.specular_color = decoded.specular_color;
-                    command.shininess = decoded.shininess;
-                    Corona::OpticsCommandChannel::instance().commands().push(command);
-                    impl_->set_snapshot(impl_->make_key(StorageID::ST_OPTICS, *seq, "optics"),
-                                        hash_opt(decoded, &decoded_visibility, *seq));
-                    applied = true;
-                }
-            }
-        }
+        impl_->set_snapshot(impl_->make_key(StorageID::ST_MODEL_TRANSFORM, *seq, "xform"),
+                            hash_transform(decoded, *seq));
+        return true;
     }
+
+    if (operation.field_name == "optics") {
+        if (!impl_->entity_for_guid) return false;
+        const auto seq = impl_->entity_for_guid(StorageID::ST_OPTICS, operation.actor_guid);
+        if (!seq) return false;
+        OpticsPacked decoded{};
+        if (!decode_optics(operation.value.data(),
+                           static_cast<uint16_t>(operation.value.size()), decoded)) {
+            // 畸形载荷（长度不是 sizeof(OpticsPacked)）：与旧实现的静默 no-op 一致。
+            return true;
+        }
+        RemoteStateWrite write{};
+        write.storage = StorageID::ST_OPTICS;
+        write.entity_seq = *seq;
+        write.optics = decoded;
+        if (!submit_remote_state(write)) return false;
+        impl_->set_snapshot(impl_->make_key(StorageID::ST_OPTICS, *seq, "optics"),
+                            hash_optics(decoded, *seq));
+        return true;
+    }
+
     if (operation.actor_guid == "__scene__" && operation.field_name == "environment") {
-        if (!impl_->env_seq_to_id.empty()) {
-            auto seq_it = impl_->env_seq_to_id.begin();
-            auto seq = seq_it->first;
-            if (operation.value.size() != 20) {
-                applied = true;  // 畸形载荷：与旧实现的静默 no-op 行为一致
-            } else {
-                Corona::EnvironmentDevice decoded{};
-                deserialize_env(decoded, operation.value.data(),
-                                static_cast<uint16_t>(operation.value.size()));
-                Corona::EnvironmentUpdateCommand command{};
-                command.environment_handle = seq_it->second;
-                command.fields = Corona::EnvironmentField::SunDirection |
-                                 Corona::EnvironmentField::SunIntensity |
-                                 Corona::EnvironmentField::Exposure;
-                // 设备的 sun_position 语义上是"方向"，命令侧叫 sun_direction。
-                command.sun_direction = decoded.sun_position;
-                command.sun_intensity = decoded.sun_intensity;
-                command.exposure = decoded.exposure;
-                Corona::EnvironmentCommandChannel::instance().commands().push(command);
-                impl_->set_snapshot(impl_->make_key(StorageID::ST_ENVIRONMENT, seq, "env"),
-                                    hash_env(decoded, seq));
-                applied = true;
-            }
+        EnvironmentState decoded{};
+        if (!decode_environment(operation.value.data(),
+                                static_cast<uint16_t>(operation.value.size()), decoded)) {
+            // 畸形载荷（长度不是 20）：与旧实现的静默 no-op 一致。
+            return true;
         }
+        RemoteStateWrite write{};
+        write.storage = StorageID::ST_ENVIRONMENT;
+        write.environment = decoded;
+        // `__scene__` 是全局状态，线上不带实体序号：拥有者线程取第一个
+        // EnvironmentDevice（迁移前同样取"任意一个"）。目标不存在时这条会在边界上
+        // 被丢弃并计入 `remote_writes_dropped`，而不是让网络线程去猜一个 seq。
+        if (!submit_remote_state(write)) return false;
+        // environment 的 `last_synced` key 含本端环境实体的 seq，网络线程不知道它；
+        // 记下线上字节，下一帧里出现同一份值时在 `poll_and_sync()` 补记 key 并跳过。
+        impl_->applied_environment_value = encode_environment(decoded);
+        return true;
     }
-    return applied;
+
+    return false;
 }
 
 void SyncEngine::retry_pending_operations() {
@@ -644,50 +339,34 @@ void SyncEngine::poll_and_sync() {
     maintain_snapshot_sessions(editor_now_ms());
     retry_pending_operations();
 
-    impl_->rebuild_entity_maps();
-
-    auto& hub = impl_->hub;
+    // Task 2：组件读取与线上编码在**拥有者线程**的 tick 边界上完成
+    //（`request_sync_frame()` 复用结构命令的存活性等待）。网络线程只做 dirty
+    // 记账、LWW 版本与发包，不再 `Ecs::view` / `Ecs::get`。
+    SyncFrameRequestOptions options;
+    options.guid_for_entity = impl_->guid_for_entity;
+    options.ownership_for_entity = impl_->ownership_for_entity;
+    auto frame = request_sync_frame(std::move(options));
+    if (!frame) {
+        // DAG 停机 / 已判定不推进：本 tick 不序列化。已入队的远端写入仍在通道里，
+        // 下一次边界恢复时照常应用。
+        return;
+    }
 
     // --- ModelTransform ---
-    {
-        for (const auto entity : Corona::Ecs::view<ModelTransform>()) {
-            const auto obj_id = Corona::Ecs::to_handle(entity);
-            const ModelTransform& data = Corona::Ecs::get<ModelTransform>(obj_id);
-            auto ent_seq = Corona::Ecs::seq_of(obj_id);
-
-            if (!impl_->guid_for_entity) continue;
-            auto actor_guid = impl_->guid_for_entity(
-                StorageID::ST_MODEL_TRANSFORM, ent_seq);
-            if (actor_guid.empty()) continue;
-
-            if (impl_->ownership_for_entity) {
-                auto locally_owned = impl_->ownership_for_entity(
-                    StorageID::ST_MODEL_TRANSFORM, ent_seq);
-                if (locally_owned && !*locally_owned) {
-                    continue;
-                }
-            }
-
-            std::string cur_hash = hash_mt(data, ent_seq);
-            std::string snap_key = impl_->make_key(StorageID::ST_MODEL_TRANSFORM, ent_seq, "xform");
-
-            if (impl_->check_snapshot(snap_key, cur_hash)) {
-                EditorSyncOperation op;
-                op.kind = EditorSyncOperationKind::Upsert;
-                op.actor_guid = actor_guid;
-                op.field_name = "xform";
-                op.value.resize(36);
-                float values[9] = {data.position.x, data.position.y, data.position.z,
-                                   data.euler_rotation.x, data.euler_rotation.y, data.euler_rotation.z,
-                                   data.scale.x, data.scale.y, data.scale.z};
-                std::memcpy(op.value.data(), values, sizeof(values));
-                op.version = impl_->lww_state.next_local_version();
-                (void)impl_->lww_state.apply_upsert(op.actor_guid, op.field_name,
-                                                     op.value, op.version);
-                auto packet = build_editor_sync_operation(op);
-                if (!packet.empty() && impl_->on_outgoing) impl_->on_outgoing(packet);
-            }
-        }
+    for (auto& row : frame->transforms) {
+        const auto snap_key = impl_->make_key(StorageID::ST_MODEL_TRANSFORM,
+                                              row.entity_seq, "xform");
+        if (!impl_->check_snapshot(snap_key, row.hash)) continue;
+        EditorSyncOperation op;
+        op.kind = EditorSyncOperationKind::Upsert;
+        op.actor_guid = row.actor_guid;
+        op.field_name = "xform";
+        op.value = std::move(row.value);
+        op.version = impl_->lww_state.next_local_version();
+        (void)impl_->lww_state.apply_upsert(op.actor_guid, op.field_name,
+                                             op.value, op.version);
+        auto packet = build_editor_sync_operation(op);
+        if (!packet.empty() && impl_->on_outgoing) impl_->on_outgoing(packet);
     }
 
     // Geometry and model resource handles remain local; optics editor state is
@@ -697,76 +376,49 @@ void SyncEngine::poll_and_sync() {
     // links with seq/handle values from another process and make meshes vanish.
 
     // --- OpticsDevice (logical material/editor state; geometry handle excluded) ---
-    {
-        for (const auto entity : Corona::Ecs::view<OpticsDevice>()) {
-            const auto obj_id = Corona::Ecs::to_handle(entity);
-            const OpticsDevice& data = Corona::Ecs::get<OpticsDevice>(obj_id);
-            auto ent_seq = Corona::Ecs::seq_of(obj_id);
-            if (!impl_->guid_for_entity) continue;
-            auto actor_guid = impl_->guid_for_entity(StorageID::ST_OPTICS, ent_seq);
-            if (actor_guid.empty()) continue;
-            if (impl_->ownership_for_entity) {
-                auto locally_owned = impl_->ownership_for_entity(StorageID::ST_OPTICS, ent_seq);
-                if (locally_owned && !*locally_owned) continue;
-            }
-            const auto* visibility = Corona::find_visibility(obj_id);
-            auto cur_hash = hash_opt(data, visibility, ent_seq);
-            auto snap_key = impl_->make_key(StorageID::ST_OPTICS, ent_seq, "optics");
-            if (!impl_->check_snapshot(snap_key, cur_hash)) continue;
-            EditorSyncOperation op;
-            op.kind = EditorSyncOperationKind::Upsert;
-            op.actor_guid = actor_guid;
-            op.field_name = "optics";
-            OpticsPacked packed{};
-            packed.visible = visibility != nullptr ? visibility->visible : true;
-            packed.bEnableLighting =
-                visibility != nullptr ? visibility->receives_lighting : true;
-            packed.metallic = data.metallic; packed.roughness = data.roughness;
-            packed.subsurface = data.subsurface; packed.specular = data.specular;
-            packed.specularTint = data.specularTint; packed.anisotropic = data.anisotropic;
-            packed.sheen = data.sheen; packed.sheenTint = data.sheenTint;
-            packed.clearcoat = data.clearcoat; packed.clearcoatGloss = data.clearcoatGloss;
-            packed.ambient[0] = data.ambient.x; packed.ambient[1] = data.ambient.y; packed.ambient[2] = data.ambient.z;
-            packed.diffuse[0] = data.diffuse.x; packed.diffuse[1] = data.diffuse.y; packed.diffuse[2] = data.diffuse.z;
-            packed.specular_color[0] = data.specular_color.x; packed.specular_color[1] = data.specular_color.y; packed.specular_color[2] = data.specular_color.z;
-            packed.shininess = data.shininess;
-            op.value.resize(sizeof(packed));
-            std::memcpy(op.value.data(), &packed, sizeof(packed));
-            op.version = impl_->lww_state.next_local_version();
-            (void)impl_->lww_state.apply_upsert(op.actor_guid, op.field_name, op.value, op.version);
-            auto packet = build_editor_sync_operation(op);
-            if (!packet.empty() && impl_->on_outgoing) impl_->on_outgoing(packet);
-        }
+    for (auto& row : frame->optics) {
+        const auto snap_key = impl_->make_key(StorageID::ST_OPTICS,
+                                              row.entity_seq, "optics");
+        if (!impl_->check_snapshot(snap_key, row.hash)) continue;
+        EditorSyncOperation op;
+        op.kind = EditorSyncOperationKind::Upsert;
+        op.actor_guid = row.actor_guid;
+        op.field_name = "optics";
+        op.value = std::move(row.value);
+        op.version = impl_->lww_state.next_local_version();
+        (void)impl_->lww_state.apply_upsert(op.actor_guid, op.field_name,
+                                             op.value, op.version);
+        auto packet = build_editor_sync_operation(op);
+        if (!packet.empty() && impl_->on_outgoing) impl_->on_outgoing(packet);
     }
 
     // --- EnvironmentDevice ---
-    {
-        for (const auto entity : Corona::Ecs::view<EnvironmentDevice>()) {
-            const auto obj_id = Corona::Ecs::to_handle(entity);
-            const EnvironmentDevice& data = Corona::Ecs::get<EnvironmentDevice>(obj_id);
-            auto ent_seq = Corona::Ecs::seq_of(obj_id);
-
-            std::string cur_hash = hash_env(data, ent_seq);
-            std::string snap_key = impl_->make_key(StorageID::ST_ENVIRONMENT, ent_seq, "env");
-
-            if (impl_->check_snapshot(snap_key, cur_hash)) {
-                EditorSyncOperation op;
-                op.kind = EditorSyncOperationKind::Upsert;
-                op.actor_guid = "__scene__";
-                op.field_name = "environment";
-                op.value.resize(20);
-                float values[5] = {data.sun_position.x, data.sun_position.y,
-                                   data.sun_position.z, data.sun_intensity,
-                                   data.exposure};
-                std::memcpy(op.value.data(), values, sizeof(values));
-                op.version = impl_->lww_state.next_local_version();
-                (void)impl_->lww_state.apply_upsert(op.actor_guid, op.field_name,
-                                                     op.value, op.version);
-                auto packet = build_editor_sync_operation(op);
-                if (!packet.empty() && impl_->on_outgoing) impl_->on_outgoing(packet);
+    for (auto& row : frame->environments) {
+        const auto snap_key = impl_->make_key(StorageID::ST_ENVIRONMENT,
+                                              row.entity_seq, "env");
+        // 刚提交的远端 environment 值：key 里的 seq 网络线程无法预知，在这里补记。
+        if (impl_->applied_environment_value) {
+            if (*impl_->applied_environment_value == row.value) {
+                impl_->set_snapshot(snap_key, row.hash);
+                impl_->applied_environment_value.reset();
+                continue;
             }
         }
+        if (!impl_->check_snapshot(snap_key, row.hash)) continue;
+        EditorSyncOperation op;
+        op.kind = EditorSyncOperationKind::Upsert;
+        op.actor_guid = "__scene__";
+        op.field_name = "environment";
+        op.value = std::move(row.value);
+        op.version = impl_->lww_state.next_local_version();
+        (void)impl_->lww_state.apply_upsert(op.actor_guid, op.field_name,
+                                             op.value, op.version);
+        auto packet = build_editor_sync_operation(op);
+        if (!packet.empty() && impl_->on_outgoing) impl_->on_outgoing(packet);
     }
+    // 只用来抑制紧邻的一帧：没匹配上（值已被本地改动 / 目标环境实体不存在）
+    // 就丢掉，避免无限期压着一条过期的期望。
+    impl_->applied_environment_value.reset();
 }
 
 void SyncEngine::sync_full_to(const std::string& target_peer_id) {

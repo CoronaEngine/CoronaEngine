@@ -1,5 +1,6 @@
 #include <corona/events/network_system_events.h>
 #include <horizon/core/logging.h>
+#include <corona/ecs/structural_commands.h>
 #include <corona/kernel/event/i_event_bus.h>
 #include <corona/kernel/event/i_event_stream.h>
 #include <corona/systems/network/file_transfer.h>
@@ -10,6 +11,7 @@
 #include <corona/systems/network/actor_editor_payload.h>
 #include <corona/systems/network/scoped_bool_override.h>
 #include <corona/systems/network/scene_snapshot_policy.h>
+#include <corona/systems/network/sync_boundary.h>
 #include <corona/shared_data_hub.h>
 
 #include <chrono>
@@ -332,6 +334,18 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
         [this](const Network::PeerManager::PeerInfo& info) {
             on_peer_disconnected(info);
         });
+
+    // Task 2：网络同步的入站写入与出站序列化只能发生在 registry 的拥有者线程
+    //（`Ecs::World` 没有同步；`Material` / `OpticsDevice` 是 DAG 私有状态，不发布）。
+    // 把收口函数挂到结构命令通道的 tick 边界上：DAG 模式走 engine.cpp 的边界钩子，
+    // `CORONA_SYSTEMS_DAG=0` 走 GeometrySystem 的兜底 drain —— 同一条边界、同一个
+    // 拥有者线程。网络线程此后只负责收发字节与 dirty/LWW 记账。
+    if (Corona::Ecs::add_tick_boundary_task(
+            &Corona::Network::apply_pending_sync_boundary)) {
+        CFW_LOG_NOTICE(
+            "NetworkSystem: sync serialization is served on the ECS tick boundary "
+            "(network thread no longer touches the registry)");
+    }
 
     return true;
 }
