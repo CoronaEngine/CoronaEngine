@@ -1,13 +1,16 @@
 """Offline checks for batch selection, evidence retention and capture validation."""
 
-import importlib.util
 import json
 from pathlib import Path
 import struct
 import socket
+import sys
 import tempfile
 import subprocess
 import unittest
+from unittest.mock import patch
+
+from tools import render_mitsuba_scenes
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "render_mitsuba_scenes.py"
@@ -16,9 +19,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "render_mitsuba_scenes.py"
 class RenderMitsubaScenesTests(unittest.TestCase):
     def setUp(self):
         self.assertTrue(SCRIPT.is_file(), "The reusable batch screenshot tool is missing")
-        spec = importlib.util.spec_from_file_location("render_mitsuba_scenes", SCRIPT)
-        self.tool = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.tool)
+        self.tool = render_mitsuba_scenes
         root = SCRIPT.parents[1] / ".workspace/tmp/batch-screenshot-tests"
         root.mkdir(parents=True, exist_ok=True)
         self.temporary = tempfile.TemporaryDirectory(dir=root)
@@ -48,6 +49,23 @@ class RenderMitsubaScenesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing-scene"):
             self.tool.select_scenes(self.directory, ["missing-scene"])
 
+    def test_scratch_cannot_be_used_as_a_scene_directory(self):
+        self.manifest()
+        manifest = self.directory / "manifest.json"
+        content = json.loads(manifest.read_text(encoding="utf-8"))
+        content["scenes"][0]["id"] = "Scratch."
+        manifest.write_text(json.dumps(content), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "scene output"):
+            self.tool.select_scenes(self.directory)
+
+    def test_top_level_import_with_only_tools_on_search_path(self):
+        subprocess.run(
+            [sys.executable, "-I", "-B", "-c",
+             "import sys; sys.path.insert(0, sys.argv[1]); from render_mitsuba_scenes import Session",
+             str(SCRIPT.parent)],
+            check=True, capture_output=True,
+        )
+
     def test_occupied_debug_port_is_rejected_before_connecting_to_another_engine(self):
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
@@ -74,6 +92,43 @@ class RenderMitsubaScenesTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             self.tool.prepare_output(output)
         self.assertEqual(evidence.read_text(encoding="utf-8"), "original evidence")
+
+    def test_successful_batch_prunes_only_scratch_after_writing_summary(self):
+        for status in ("complete", "failed"):
+            with self.subTest(status=status):
+                output = self.directory / status
+                executable = self.directory / "corona_engine.exe"
+                executable.touch()
+                scenes = [{"id": "kitchen"}]
+
+                def capture(scene, modes, args, scene_output):
+                    final = scene_output / modes[0]
+                    final.mkdir(parents=True)
+                    for name in ("image.png", "frames.csv", "result.json"):
+                        (final / name).touch()
+                    baseline = args.output / "baseline"
+                    baseline.mkdir()
+                    (baseline / "reference.bin").write_bytes(b"baseline")
+                    scratch = args.output / "scratch" / scene["id"]
+                    (scratch / "cef-cache").mkdir(parents=True)
+                    (scratch / "engine.log").write_text("launch trace", encoding="utf-8")
+                    return {"scene_id": scene["id"], "status": status}
+
+                with (
+                    patch.object(self.tool, "select_scenes", return_value=scenes),
+                    patch.object(self.tool, "ensure_port_available"),
+                    patch.object(self.tool, "confirm_thermal_protection", return_value={}),
+                    patch.object(self.tool, "run_scene", side_effect=capture),
+                ):
+                    result = self.tool.main(["--executable", str(executable), "--output", str(output)])
+
+                self.assertEqual(result, int(status == "failed"))
+                report = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+                self.assertEqual(report["records"][0]["status"], status)
+                for name in ("image.png", "frames.csv", "result.json"):
+                    self.assertTrue((output / "kitchen/pt2048" / name).is_file())
+                self.assertEqual((output / "baseline/reference.bin").read_bytes(), b"baseline")
+                self.assertEqual((output / "scratch").exists(), status == "failed")
 
     def test_api_error_payload_cannot_be_recorded_as_a_successful_capture(self):
         with self.assertRaisesRegex(RuntimeError, "Screenshot save failed"):

@@ -18,6 +18,30 @@ timings in `frames.csv`, and a result JSON. Import failures and unsupported
 features remain recorded in each scene result. The four unsupported hair
 scenes retain their original geometry and are marked unsupported.
 
+The batch saves reviewable output and metrics in the run directory. It
+automatically removes `scratch/` after all scenes finish with a result or an
+expected unsupported status and the final `summary.json` is written.
+Failed or interrupted batches retain the engine logs, API trace, and browser
+cache in `scratch/<scene-id>/` for diagnosis.
+
+For other experiments under `.workspace/experiments/`, put disposable frame
+dumps, logs, and runtime copies in that run's `scratch/`. Store reports,
+their linked assets, final images, and metrics outside it. Store baselines
+still used by an experiment in `baseline/` or in
+`.workspace/archive/experiment-baselines/` if shared across runs. Copy any
+needed input out of CoronaTests' rotating regression directory before using
+it as a baseline. Once capture processes exit and final outputs are written,
+call `finalize(output, report)` from `tools.finalize_experiment` in the last
+step of the experiment script. Existing experiments with mixed output layouts
+can pass `disposable=[...]` with exact temporary file and directory paths
+under their run directory. Review report links and later consumers before
+adding any path to that list. The default `scratch/` cleanup can be retried
+from the repository root.
+
+```powershell
+python tools/finalize_experiment.py .workspace/experiments/<run-id> summary.json
+```
+
 The tool calls `SceneTools.save_screenshot(scene, path, camera, options)`:
 
 ```python

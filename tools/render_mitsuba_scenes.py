@@ -20,8 +20,14 @@ import socket
 import statistics
 import struct
 import subprocess
+import sys
 import time
 import xml.etree.ElementTree as ET
+
+if __package__:
+    from .finalize_experiment import finalize
+else:
+    from finalize_experiment import finalize
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -47,6 +53,9 @@ def select_scenes(resources, requested=None):
     for scene in scenes:
         if requested and scene["id"] not in requested:
             continue
+        name = scene["id"]
+        if not name or Path(name).name != name or name.rstrip(" .").casefold() in {"", "scratch"}:
+            raise ValueError(f"Invalid scene output name: {name}")
         xml_files = scene["xml_files"]
         source = resources / scene["directory"] / ("scene_v3.xml" if "scene_v3.xml" in xml_files else xml_files[0])
         if not source.is_file():
@@ -187,7 +196,7 @@ class Session:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.process.poll() is not None:
-                raise RuntimeError("Engine exited; see engine.log")
+                raise RuntimeError("Engine exited before the requested state was ready")
             value = self.api(name, args)
             if ready(value):
                 return value
@@ -204,7 +213,9 @@ def run_scene(scene, modes, args, output):
         save_json(output / "scene-result.json", record)
         return record
     ensure_port_available(args.port)
-    environment = engine_environment(os.environ, output / "cef-cache", args.port)
+    scratch = args.output / "scratch" / scene["id"]
+    scratch.mkdir(parents=True)
+    environment = engine_environment(os.environ, scratch / "cef-cache", args.port)
     ctest = args.executable.parents[2] / "tests/integration/CTestTestfile.cmake"
     paths = re.findall(r'PATH=path_list_prepend:([^;"\n]+)', ctest.read_text(encoding="utf-8")) if ctest.is_file() else []
     environment["PATH"] = os.pathsep.join(dict.fromkeys([str(args.executable.parent), *paths, environment.get("PATH", "")]))
@@ -212,16 +223,16 @@ def run_scene(scene, modes, args, output):
     ini_before = ini.read_bytes() if ini.exists() else None
     frontend = process = session = None
     try:
-        with (output / "engine.log").open("w", encoding="utf-8") as log:
+        with (scratch / "engine.log").open("w", encoding="utf-8") as log:
             process = subprocess.Popen([str(args.executable)], cwd=args.executable.parent, env=environment,
                 stdout=log, stderr=subprocess.STDOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
             if process.poll() is not None:
-                raise RuntimeError("Engine exited during startup; see engine.log")
+                raise RuntimeError(f"Engine exited during startup; see {scratch / 'engine.log'}")
             try:
                 frontend = Frontend(args.port)
-                session = Session(frontend, process, output / "api.jsonl")
+                session = Session(frontend, process, scratch / "api.jsonl")
                 if session.evaluate("Boolean(window.cefQuery)"):
                     break
                 frontend.socket.close()
@@ -277,7 +288,7 @@ def run_scene(scene, modes, args, output):
                               "render_ms": result["render_including_denoise_mean_ms"]}), flush=True)
         record["status"] = "complete"
     except Exception as error:
-        record.update(status="failed", error=str(error))
+        record.update(status="failed", error=str(error), diagnostics=str(scratch))
     finally:
         if session:
             try:
@@ -329,12 +340,20 @@ def main(argv=None):
             "started_utc": datetime.now(timezone.utc).isoformat(), "frames_override": args.frames,
             "modes": args.mode or list(MODES), "scenes": [scene["id"] for scene in scenes]})
         records = []
+        report = args.output / "summary.json"
         for scene in scenes:
             record = run_scene(scene, args.mode or list(MODES), args, args.output / scene["id"])
             records.append(record)
-            save_json(args.output / "summary.json", {"records": records, "resolution": [WIDTH, HEIGHT]})
+            save_json(report, {"records": records, "resolution": [WIDTH, HEIGHT], "complete": False})
             print(json.dumps({"scene": scene["id"], "status": record["status"], "error": record.get("error")}), flush=True)
-        return int(any(record["status"] == "failed" for record in records))
+        failed = any(record["status"] == "failed" for record in records)
+        if records and not failed:
+            save_json(report, {"records": records, "resolution": [WIDTH, HEIGHT], "complete": True})
+            try:
+                finalize(args.output, report)
+            except (OSError, ValueError) as error:
+                print(f"Experiment cleanup failed: {error}", file=sys.stderr, flush=True)
+        return int(failed)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print("Batch failed: " + str(error), flush=True)
         return 1
