@@ -7,4 +7,4 @@ vision/src/render_core/denoiser/ReBLUR/scheduler/src/CpuReblurConfig.h whitespac
 docs/benchmarks/restirgi-20261107/** -text -whitespace
 
 # Preserve the original NVIDIA license bytes.
-vision/src/render_core/integrator/ReSTIR/rtxpt_gi_native/LICENSE.txt -text -whitespace
+vision/src/render_core/integrator/ReSTIR/LICENSE-RTXPT.txt -text -whitespace

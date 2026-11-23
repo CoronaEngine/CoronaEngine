@@ -13,7 +13,7 @@
  * and any modifications thereto. Any use, reproduction, disclosure or
  * distribution of this software and related documentation without an express
  * license agreement from NVIDIA CORPORATION is strictly prohibited.
- * See rtxpt_gi_native/LICENSE.txt for the original source license.
+ * See LICENSE-RTXPT.txt for the original source license.
  */
 
 namespace vision::rtxpt_gi {
