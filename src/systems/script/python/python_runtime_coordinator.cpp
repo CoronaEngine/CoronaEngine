@@ -62,6 +62,13 @@ PythonRuntimeResponse PythonRuntimeTicket::wait(std::chrono::milliseconds timeou
     return state_->response;
 }
 
+PythonRuntimeResponse PythonRuntimeTicket::wait() const {
+    if (!accepted || !state_) return response;
+    std::unique_lock lock(state_->mutex);
+    state_->cv.wait(lock, [&] { return state_->done; });
+    return state_->response;
+}
+
 PythonRuntimeCoordinator::PythonRuntimeCoordinator(std::size_t capacity)
     : capacity_(capacity) {}
 
@@ -124,6 +131,17 @@ PythonRuntimeResponse PythonRuntimeCoordinator::submit_and_wait(
     return response;
 }
 
+PythonRuntimeResponse PythonRuntimeCoordinator::submit_and_wait(PythonRuntimeRequest request) {
+    if (is_consumer_thread()) {
+        return PythonRuntimeResponse::failure(
+            "synchronous python runtime request from the consumer thread would deadlock");
+    }
+    // deadline stays at max(): the consumer never times the request out.
+    auto ticket = submit(std::move(request));
+    if (!ticket.accepted) return ticket.response;
+    return ticket.wait();
+}
+
 std::optional<PythonRuntimeRequest> PythonRuntimeCoordinator::wait_pop(
     std::chrono::milliseconds timeout) {
     if (!bind_consumer_thread()) return std::nullopt;
@@ -151,6 +169,19 @@ std::optional<PythonRuntimeRequest> PythonRuntimeCoordinator::wait_pop(
         return request;
     }
     return std::nullopt;
+}
+
+std::vector<PythonRuntimeRequest> PythonRuntimeCoordinator::drain_pending(std::size_t limit) {
+    std::vector<PythonRuntimeRequest> drained;
+    if (!is_consumer_thread()) return drained;
+    std::lock_guard lock(mutex_);
+    const auto count = queue_.size() < limit ? queue_.size() : limit;
+    drained.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        drained.push_back(std::move(queue_.front()));
+        queue_.pop_front();
+    }
+    return drained;
 }
 
 bool PythonRuntimeCoordinator::complete(std::uint64_t request_id,
@@ -218,6 +249,14 @@ void PythonRuntimeCoordinator::begin_python_stopping() {
 
 void PythonRuntimeCoordinator::stop() {
     transition_and_cancel(PythonRuntimeState::Stopped);
+}
+
+void PythonRuntimeCoordinator::request_stop() noexcept {
+    stop_requested_.store(true, std::memory_order_release);
+}
+
+bool PythonRuntimeCoordinator::stop_requested() const noexcept {
+    return stop_requested_.load(std::memory_order_acquire);
 }
 
 PythonRuntimeState PythonRuntimeCoordinator::state() const noexcept {

@@ -1,5 +1,7 @@
 # Principled Stable Planes
 
+<!-- HISTORICAL-DOC: this page describes the tree as it was when it was written. The editor API handler has since been split; the scene service now lives in src/systems/ui/cef/editor_scene_service.cpp and the Python bridge in src/systems/ui/editor_api/python_service_bridge.{h,cpp}. -->
+
 `vision/src/render_core/material/principled_bsdf.cpp` 的 `PrincipledLobeSet`
 保留原有分层 BSDF，只为纯玻璃和纯金属提供 Stable Plane 接口。
 

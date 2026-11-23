@@ -1,4 +1,5 @@
 #include "mechanics_internal.h"
+#include <corona/kernel/entity_id.h>
 #include "gpu_performance.h"
 #include "ik_runtime.h"
 
@@ -25,15 +26,16 @@ void MechanicsSystem::refresh_foot_ground_cache() {
     impl_->ik_geometry_actors.clear();
     impl_->ik_scene_floors.clear();
     std::unordered_set<std::uintptr_t> alive;
-    struct SceneSnapshot { std::uintptr_t handle; std::uintptr_t environment; std::vector<std::uintptr_t> actors; };
+    struct SceneSnapshot { EntityId handle; std::uintptr_t environment; std::vector<std::uintptr_t> actors; };
     std::vector<SceneSnapshot> scenes;
-    const auto& scene_storage = hub.scene_storage();
-    for (const auto& scene : scene_storage) {
-        if (scene.enabled) scenes.push_back({reinterpret_cast<std::uintptr_t>(&scene), scene.environment, scene.actor_handles});
+    auto scene_storage = Corona::all_scenes();
+    for (auto scene_it = scene_storage.cbegin(); scene_it != scene_storage.cend(); ++scene_it) {
+        const auto& scene = *scene_it;
+        if (scene.enabled) scenes.push_back({scene_it.id(), scene.environment, scene.actor_handles});
     }
     for (const auto& scene : scenes) {
         float floor = 0.0f;
-        if (auto environment = hub.environment_storage().try_acquire_read(scene.environment)) floor = environment->floor_y;
+        if (const auto* environment = hub.try_environment(scene.environment)) floor = environment->floor_y;
         if (std::isfinite(floor)) impl_->ik_scene_floors[scene.handle] = floor;
         for (auto actor_handle : scene.actors) {
             if (impl_->shutdown_requested.load(std::memory_order_acquire)) return;
@@ -43,26 +45,27 @@ void MechanicsSystem::refresh_foot_ground_cache() {
                 impl_->ik_geometry_actors[gh] = actor_handle;
             }
             std::vector<std::uintptr_t> profiles;
-            { auto actor = hub.actor_storage().try_acquire_read(actor_handle); if (actor) profiles = actor->profile_handles; }
+            { const auto* actor_profiles = Corona::find_profiles(actor_handle);
+              if (actor_profiles) profiles = actor_profiles->handles; }
             for (auto ph : profiles) {
-                std::uintptr_t mechanics_handle = 0;
-                { auto profile = hub.profile_storage().try_acquire_read(ph); if (profile) mechanics_handle = profile->mechanics_handle; }
+                EntityId mechanics_handle = 0;
+                { auto profile = Corona::find_profile(ph); if (profile) mechanics_handle = profile->mechanics_handle; }
                 if (!mechanics_handle) continue;
                 std::uintptr_t gh = 0;
-                { auto body = hub.mechanics_storage().try_acquire_read(mechanics_handle);
+                { auto body = Corona::find_mechanics(mechanics_handle);
                   if (!body || body->body_type == BodyType::Phantom) continue;
                   gh = body->geometry_handle; }
                 if (!gh || alive.count(gh)) continue;
-                std::uintptr_t resource_handle = 0, transform_handle = 0;
-                { auto geometry = hub.geometry_storage().try_acquire_read(gh);
+                EntityId resource_handle = 0, transform_handle = 0;
+                { auto geometry = Corona::find_geometry(gh);
                   if (!geometry || geometry->gpu_build_state != GeometryDevice::GpuBuildState::Ready || geometry->mesh_handles.empty()) continue;
                   resource_handle = geometry->model_resource_handle;
                   transform_handle = geometry->transform_handle; }
                 std::uint64_t model_id = 0;
-                { auto resource = hub.model_resource_storage().try_acquire_read(resource_handle); if (resource) model_id = resource->model_id; }
+                { auto resource = Corona::find_model_resource(resource_handle); if (resource) model_id = resource->model_id; }
                 if (!model_id) continue;
                 ModelTransform transform;
-                { auto tx = hub.model_transform_storage().try_acquire_read(transform_handle); if (!tx || !invertible_transform(*tx)) continue; transform = *tx; }
+                { auto tx = Corona::find_transform(transform_handle); if (!tx || !invertible_transform(*tx)) continue; transform = *tx; }
                 auto& ground = impl_->foot_ground_cache[gh];
                 if (ground.model_id != model_id || ground.mesh.triangles.empty()) {
                     ground = {};
@@ -105,7 +108,7 @@ void MechanicsSystem::refresh_foot_ground_cache() {
     if (!snapshot_keys.empty()) impl_->gpu_collision->snapshot_ground(snapshot_keys);
 }
 
-void MechanicsSystem::update_foot_targets(std::uintptr_t geom_handle,
+void MechanicsSystem::update_foot_targets(EntityId geom_handle,
     const Resource::SkeletonData& skeleton,
     const std::vector<std::array<float, 16>>& locals,
     std::vector<Resource::IkChain>& chains, float dt) {
@@ -131,11 +134,11 @@ void MechanicsSystem::update_foot_targets(std::span<const FootPose> poses, float
 
     for (const auto& pose : poses) {
         if (!pose.skeleton || !pose.locals || !pose.chains) continue;
-        std::uintptr_t transform_handle = 0;
-        { auto geometry = hub.geometry_storage().try_acquire_read(pose.geometry); if (geometry) transform_handle = geometry->transform_handle; }
+        EntityId transform_handle = 0;
+        { auto geometry = Corona::find_geometry(pose.geometry); if (geometry) transform_handle = geometry->transform_handle; }
         ktm::fmat4x4 model_to_world{}, world_to_model{};
         bool have_transform = false;
-        { auto transform = hub.model_transform_storage().try_acquire_read(transform_handle);
+        { auto transform = Corona::find_transform(transform_handle);
           if (transform && invertible_transform(*transform)) {
               model_to_world = transform->compute_matrix();
               world_to_model = ktm::inverse(model_to_world);

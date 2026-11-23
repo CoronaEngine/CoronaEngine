@@ -1,5 +1,8 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
+#include "camera_window_lifetime.h"
+
 #include "horizon.h"
 #include <SDL3/SDL.h>
 #include <include/internal/cef_types.h>
@@ -35,29 +38,19 @@ inline bool is_valid_texture_id(const UiTextureId texture_id) {
     return texture_id != k_invalid_texture_id;
 }
 
-// Plain 2D point (replaces ImVec2 for drag bookkeeping).
-struct PointF {
-    float x = 0.0f;
-    float y = 0.0f;
-};
-
-struct DragRegion {
-    float x, y, width, height;
-};
-
 // ============================================================================
 // 浏览器标签页数据结构
 // ============================================================================
 
 struct BrowserTab {
     int tab_id = -1;
+    // Opaque per-creation token exposed to Web as window_token. It distinguishes two
+    // incarnations of the same panel id (reopen) without leaking the internal tab id.
+    int window_token = 0;
     std::string name;
     std::string url;
     std::string panel_id; // Stable ImGui identity, independent of the current browser id.
     std::string panel_title;
-    bool native_docked = false;
-    bool native_force_viewport = false;
-    bool native_focus_requested = false;
     bool cef_visible = true;
     // Published on the UI thread, read under mutex by CEF callbacks. CEF renders
     // at logical resolution; screen coordinates are physical desktop pixels.
@@ -66,7 +59,8 @@ struct BrowserTab {
     float content_screen_scale = 1.0f;
     CefRect ime_caret{0, 0, 1, 18};
     // Last Web-local camera rectangle; composed with the ImGui content origin each frame.
-    std::uintptr_t web_camera_handle = 0;
+    EntityId web_camera_handle = 0;
+    std::shared_ptr<Corona::CameraCommandAuthority> web_camera_authority;
     int web_camera_x = 0, web_camera_y = 0;
     int web_camera_width = 0, web_camera_height = 0;
     int web_camera_render_width = 0, web_camera_render_height = 0;
@@ -78,23 +72,21 @@ struct BrowserTab {
     int width = 800;
     int height = 600;
 
-    // Docking 相关属性
-    std::string docking_pos;        // 位置: "left", "right", "top", "bottom", "center"
-    int dock_width = 0;             // 指定宽度，0 表示自动
-    int dock_height = 0;            // 指定高度，0 表示自动
-    bool dock_fixed = false;        // 是否固定位置
-    bool dock_initialized = false;  // 是否已初始化 docking
-    // Phase 10: in-main-window floating panel (popped-out). Positioned by initial_x/y and
-    // draggable by its title bar within the main window. Distinct from host_surface detach
-    // (own OS window), which is disabled pending the multi-surface fix.
-    bool floating = false;
-    // Higher values are composed and hit-tested above ordinary floating panels.
-    int z_priority = 0;
+    // ImGui owns placement: a panel is one ImGui window, the dockspace remembers where it
+    // sits, and the user docks it. Native keeps only what ImGui cannot know:
+    //   main_workspace ⇒ the whole-window editor surface (never a dockable panel)
+    //   camera_view    ⇒ a camera surface in its own OS window (never merged into a dock)
+    //   initial_x/y    ⇒ first-use position for a window that opens floating
+    bool main_workspace = false;
+    bool camera_view = false;
+    // Set by FocusTab, consumed by the next ImGui frame.
+    bool native_focus_requested = false;
+    int initial_x = 120;
+    int initial_y = 120;
+    // First-use size/layout already applied once.
+    bool laid_out = false;
 
     bool open = true;
-    bool minimized = false;  // 新增：是否最小化
-    bool needs_resize = false;
-    bool needs_reposition = false;
     bool buffer_dirty = false;
     // Dimensions of the buffer currently sitting in `pixel_buffer`, as delivered by CEF's
     // OnPaint. They are NOT always width/height: a paint issued before a resize can still arrive
@@ -104,36 +96,15 @@ struct BrowserTab {
     int paint_width = 0;
     int paint_height = 0;
     bool has_focus = false;
-    bool camera_view = false;
     bool cef_creation_failed = false;
     bool transparent_overlay = false;
-    std::atomic_bool hide_system_cursor{false};
-    std::atomic_bool use_custom_system_cursor{false};
-    // Native image bounds are independent of the frontend's cached cursor preference.
-    std::atomic_bool cursor_inside_camera_image{true};
     bool preserve_camera_open_on_close = false;
     SDL_WindowID platform_window_id = 0;
     void* platform_handle_raw = nullptr;
-    int initial_x = 120;
-    int initial_y = 120;
 
-    // Phase 7 (detach / re-dock): the surface this tab is rendered into.
-    //   nullptr  ⇒ docked in the main window (composed into the main layout)
-    //   non-null ⇒ detached, rendered full-bleed into its own secondary OS window (this is
-    //             that window's native surface handle / DisplaySystem key).
-    // host_surface is owned/driven by the UI thread only (frame runner + DockCommand tasks).
-    void* host_surface = nullptr;
-    // Detach lifecycle state. Only the UI thread mutates it; guards against double-detach and
-    // detach-during-teardown (ABA). Docked is the initial/redocked state.
-    enum class DetachState { Docked, Detaching, Detached, Redocking };
-    DetachState detach_state = DetachState::Docked;
-    // Desired secondary-window geometry (logical px), filled by detachPanel and consumed by
-    // the frame runner's reconcile step when it creates the OS window.
-    int detach_x = 120;
-    int detach_y = 120;
-    int detach_w = 640;
-    int detach_h = 480;
-    bool detach_maximized = false;
+    // The surface ImGui renders this tab into:
+    //   nullptr  ⇒ docked in the main window (composed into the main viewport)
+    //   non-null ⇒ its own OS window (a camera surface, or a panel the user undocked)
 
     char url_buffer[1024] = "";
     // Last uncomposited PET_VIEW. Retained after upload so popup-only updates
@@ -141,41 +112,34 @@ struct BrowserTab {
     std::vector<uint8_t> pixel_buffer;
     PopupOverlay popup;
     std::mutex mutex;
-
-    std::vector<DragRegion> drag_regions;
-    bool drag_pending = false;
-    PointF drag_pending_start_pos;
-    bool dragging_window = false;
-    std::mutex drag_mutex;  // 确保线程安全
 };
 
 // ============================================================================
 // 浏览器标签管理器
 // ============================================================================
 
+// What a tab is for. ImGui decides placement; this only tells the compositor which kind of
+// surface it is.
+enum class TabKind { Panel, CameraView, MainWorkspace };
+
 class BrowserManager {
    public:
     static BrowserManager& instance();
 
+    /// Creates one CEF document. Panels open as ImGui windows the user docks; camera views
+    /// and the main workspace are the two surfaces native has to place itself.
     int create_tab(const std::string& url, const std::string& path = "",
-                   const std::string& docking_pos = "",
-                   int dock_width = 0, int dock_height = 0,
-                   bool dock_fixed = false);
-    int create_tab(const std::string& url, const std::string& path,
-                   const std::string& docking_pos, int dock_width, int dock_height,
-                   bool dock_fixed, bool camera_view, int initial_x, int initial_y);
+                   TabKind kind = TabKind::Panel, int width = 0, int height = 0,
+                   int initial_x = 120, int initial_y = 120);
     BrowserTab* get_tab(int tab_id);
+    /// Stable panel identity (the id createPanel was given), not the transient tab id.
+    BrowserTab* find_tab_by_panel_id(const std::string& panel_id);
     void remove_tab(int tab_id);
     void update_texture(int tab_id);
     void resize_tab(int tab_id, int width, int height);
     [[nodiscard]] const Horizon::HardwareImage* get_texture_image(UiTextureId texture_id) const;
     [[nodiscard]] Horizon::SubmitReceipt get_texture_upload_receipt(UiTextureId texture_id) const;
     void wait_for_texture_upload(UiTextureId texture_id);
-
-    // 隐藏标签页（最小化）
-    bool hide_tab(int tab_id, bool if_close = false);
-    // 显示标签页（恢复）
-    bool show_tab(int tab_id);
 
     // void set_vulkan_backend(VulkanBackend* backend);
     // VulkanBackend* get_vulkan_backend() const;
@@ -189,7 +153,7 @@ class BrowserManager {
      * BrowserTab* / OffscreenCefClient*。
      *
      * @note 返回的 BrowserTab* 只在对应标签页未被 remove_tab 期间有效；访问其内容仍
-     *       需该 tab 自己的锁（paint 用 tab->mutex，drag 用 tab->drag_mutex）。
+     *       需该 tab 自己的锁（paint 用 tab->mutex）。
      */
     struct TabSnapshotEntry {
         int tab_id = 0;
@@ -204,7 +168,6 @@ class BrowserManager {
     // 设置主窗口指针
     void set_main_window(SDL_Window* window) { main_window_ = window; }
     [[nodiscard]] SDL_Window* main_window() const { return main_window_; }
-    void set_tab_drag_regions(int tab_id, const std::vector<DragRegion>& regions);
 
    private:
     BrowserManager() = default;
@@ -227,7 +190,7 @@ class BrowserManager {
 
     std::unordered_map<int, std::unique_ptr<BrowserTab>> tabs_;
     /// 保护 tabs_ 与 tab_counter_（见 tabs_snapshot 的说明）。
-    /// 锁序：tabs_mutex_ → tab->mutex / tab->drag_mutex；绝不反向。
+    /// 锁序：tabs_mutex_ → tab->mutex；绝不反向。
     mutable std::mutex tabs_mutex_;
     std::mutex pending_tasks_mutex_;
     std::vector<std::function<void()>> pending_tasks_;
@@ -236,6 +199,7 @@ class BrowserManager {
     std::vector<DeferredTextureDestroy> deferred_texture_destroys_;
     uint64_t frame_index_ = 0;
     int tab_counter_ = 0;
+    int next_window_token_ = 1;
 
 };
 

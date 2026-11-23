@@ -2,19 +2,27 @@ set(CORONA_ENGINE_KERNEL_SOURCE_FILES
     core/kernel_context.cpp
     event/event_bus.cpp
     event/event_stream.cpp
+    system/frame_graph.cpp
     system/system_base.cpp
     system/system_manager.cpp
+    system/systems_thread.cpp
 )
 
 set(CORONA_ENGINE_KERNEL_HEADER_FILES
+    ${PROJECT_SOURCE_DIR}/include/corona/kernel/command/command_buffer.h
+    ${PROJECT_SOURCE_DIR}/include/corona/kernel/command/snapshot_channel.h
+    ${PROJECT_SOURCE_DIR}/include/corona/kernel/command/thread_affinity.h
     ${PROJECT_SOURCE_DIR}/include/corona/kernel/core/kernel_context.h
     ${PROJECT_SOURCE_DIR}/include/corona/kernel/event/event_concepts.h
     ${PROJECT_SOURCE_DIR}/include/corona/kernel/event/i_event_bus.h
     ${PROJECT_SOURCE_DIR}/include/corona/kernel/event/i_event_stream.h
+    ${PROJECT_SOURCE_DIR}/include/corona/kernel/system/component_access.h
+    ${PROJECT_SOURCE_DIR}/include/corona/kernel/system/frame_graph.h
     ${PROJECT_SOURCE_DIR}/include/corona/kernel/system/i_system.h
     ${PROJECT_SOURCE_DIR}/include/corona/kernel/system/i_system_context.h
     ${PROJECT_SOURCE_DIR}/include/corona/kernel/system/i_system_manager.h
     ${PROJECT_SOURCE_DIR}/include/corona/kernel/system/system_base.h
+    ${PROJECT_SOURCE_DIR}/include/corona/kernel/system/systems_thread.h
 )
 
 add_library(CoronaEngineKernel STATIC

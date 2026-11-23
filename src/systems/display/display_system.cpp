@@ -1,6 +1,7 @@
 #include "../common/render_resource_bindings.h"
 #include "aspect_fit.h"
 #include "presentation_surface.h"
+#include <corona/systems/display/display_frame_commands.h>
 #include <corona/events/display_system_events.h>
 #include <corona/events/engine_events.h>
 #include <horizon/core/logging.h>
@@ -8,6 +9,7 @@
 #include <corona/kernel/event/i_event_stream.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/display/display_system.h>
+#include <corona/systems/display/display_surface_commands.h>
 
 #include <algorithm>
 #include <array>
@@ -44,6 +46,13 @@ struct PixelExtent {
 }  // namespace
 
 namespace Corona::Systems {
+
+Kernel::ComponentAccess DisplaySystem::component_access() const {
+    Kernel::ComponentAccess access;
+    access.read<ImageDevice>();
+    return access;
+}
+
 DisplaySystem::DisplaySystem() {
     int fps = 120;
     if (const char* setting = std::getenv("CORONA_DISPLAY_MAX_FPS")) {
@@ -228,7 +237,7 @@ void DisplaySystem::handle_ui_frame(const Events::UIFrameReadyEvent& event) {
 }
 
 bool DisplaySystem::initialize(Kernel::ISystemContext* ctx) {
-    if (callback_gate_) {
+    if (forward_completion_fence_) {
         stop();
         shutdown();
     }
@@ -238,79 +247,10 @@ bool DisplaySystem::initialize(Kernel::ISystemContext* ctx) {
     forward_completion_fence_ =
         std::make_shared<Detail::ForwardCompletionFence>();
     const auto forward_completion_fence = forward_completion_fence_;
-    callback_gate_ = std::make_shared<CallbackGate>(*this);
-    const auto callback_gate = callback_gate_;
-    auto* event_bus = ctx->event_bus();
-    if (event_bus == nullptr) {
-        CFW_LOG_WARNING("DisplaySystem: No event bus available");
-        return true;
-    }
-
-    surface_changed_sub_id_ = event_bus->subscribe<Events::DisplaySurfaceChangedEvent>(
-        [callback_gate, forward_completion_fence](
-            const Events::DisplaySurfaceChangedEvent& event) {
-            auto access = callback_gate->try_acquire();
-            if (!access || !forward_completion_fence->run([&]() {
-                    access.owner().handle_surface_changed(event);
-                })) {
-                callback_gate->defer_registration(event.registration_ticket);
-            }
-        });
-    surface_removed_sub_id_ = event_bus->subscribe<Events::DisplaySurfaceRemovedEvent>(
-        [callback_gate, forward_completion_fence](
-            const Events::DisplaySurfaceRemovedEvent& event) {
-            auto access = callback_gate->try_acquire();
-            if (!access || !forward_completion_fence->run([&]() {
-                    access.owner().handle_surface_removed(event);
-                })) {
-                callback_gate->defer_removal(event.removal_ticket, event.done);
-            }
-        });
-    optics_frame_sub_id_ = event_bus->subscribe<Events::OpticsFrameReadyEvent>(
-        [callback_gate, forward_completion_fence](
-            const Events::OpticsFrameReadyEvent& event) {
-            auto access = callback_gate->try_acquire();
-            if (access) {
-                (void)forward_completion_fence->run([&]() {
-                    access.owner().handle_optics_frame(event);
-                });
-            }
-        });
-    ui_frame_sub_id_ = event_bus->subscribe<Events::UIFrameReadyEvent>(
-        [callback_gate, forward_completion_fence](
-            const Events::UIFrameReadyEvent& event) {
-            auto access = callback_gate->try_acquire();
-            if (!access || !forward_completion_fence->run([&]() {
-                    access.owner().handle_ui_frame(event);
-                })) {
-                callback_gate->defer_first_present(event.first_present_ticket);
-            }
-        });
-
     const auto initialization_failed =
         [this,
-         event_bus,
-         callback_gate,
          forward_completion_fence](std::string message) {
             forward_completion_fence->close();
-            callback_gate->close();
-            if (surface_changed_sub_id_) {
-                event_bus->unsubscribe(*surface_changed_sub_id_);
-                surface_changed_sub_id_.reset();
-            }
-            if (surface_removed_sub_id_) {
-                event_bus->unsubscribe(*surface_removed_sub_id_);
-                surface_removed_sub_id_.reset();
-            }
-            if (optics_frame_sub_id_) {
-                event_bus->unsubscribe(*optics_frame_sub_id_);
-                optics_frame_sub_id_.reset();
-            }
-            if (ui_frame_sub_id_) {
-                event_bus->unsubscribe(*ui_frame_sub_id_);
-                ui_frame_sub_id_.reset();
-            }
-            callback_gate->wait_for_quiescence();
 
             std::unordered_set<std::uint64_t> surface_ids;
             std::vector<std::shared_ptr<Detail::SurfaceLifecycleAcks>>
@@ -406,9 +346,6 @@ bool DisplaySystem::initialize(Kernel::ISystemContext* ctx) {
                     pending_acknowledgements->removal_succeeded();
                 }
             }
-            callback_gate->complete_deferred_after_resources_destroyed(
-                UI::DisplaySurfaceResult::Status::Failed,
-                message);
             CFW_LOG_ERROR("DisplaySystem: {}", message);
             return false;
         };
@@ -459,7 +396,42 @@ void DisplaySystem::on_thread_stopped() {
     CFW_LOG_INFO("DisplaySystem: update loop exited");
 }
 
+void DisplaySystem::apply_pending_surface_commands() {
+    auto commands = DisplaySurfaceCommandChannel::instance().commands().drain();
+    for (auto& command : commands) {
+        if (command.kind == DisplaySurfaceCommand::Kind::Changed) {
+            Events::DisplaySurfaceChangedEvent event{};
+            event.surface = command.surface;
+            event.registration_ticket = std::move(command.registration_ticket);
+            handle_surface_changed(event);
+        } else {
+            Events::DisplaySurfaceRemovedEvent event{};
+            event.surface = command.surface;
+            event.done = std::move(command.done);
+            event.removal_ticket = std::move(command.removal_ticket);
+            handle_surface_removed(event);
+        }
+    }
+}
+
+void DisplaySystem::apply_pending_frame_commands() {
+    auto optics_commands = OpticsFrameCommandChannel::instance().commands().drain();
+    for (auto& command : optics_commands) {
+        handle_optics_frame(command.event);
+    }
+    auto ui_commands = UIFrameCommandChannel::instance().commands().drain();
+    for (auto& command : ui_commands) {
+        handle_ui_frame(command.event);
+    }
+}
+
 void DisplaySystem::update() {
+    // 入站 surface 命令必须在任何早退之前处理：发布方在等回执，
+    // 漏掉就会让主线程等到超时（5s）。
+    apply_pending_surface_commands();
+    // 帧命令只在本线程消费（Optics 在 DAG 线程、UI 帧在主线程发布），
+    // 原先由跨线程同步回调送进来。
+    apply_pending_frame_commands();
     if (!frame_submission_enabled_.load(std::memory_order_acquire)) {
         return;
     }
@@ -638,7 +610,7 @@ void DisplaySystem::update() {
         // and image access. It also owns the handles with the lease so an
         // acquisition exception destroys partial results before lease release.
         using ImageAccess = std::optional<Detail::SurfaceFrameCoordinator::FrameAccess<
-            SharedDataHub::ImageStorage::WriteHandle>>;
+            Corona::ImageAccess>>;
         struct FrameImages {
             ImageAccess optics;
             ImageAccess ui;
@@ -652,9 +624,9 @@ void DisplaySystem::update() {
         auto frame_access = surface_frame_coordinator_.begin_frame(
             gate_it->second,
             [&]() -> FrameImages {
-                auto& storage = SharedDataHub::instance().image_storage();
-                return {state.optics.published_image.acquire_write(storage, state.optics),
-                        state.ui.published_image.acquire_write(storage, state.ui)};
+                auto& hub = SharedDataHub::instance();
+                return {state.optics.published_image.acquire_write(hub, state.optics),
+                        state.ui.published_image.acquire_write(hub, state.ui)};
             });
         const auto input_end = profile_frame ? std::chrono::steady_clock::now() : input_start;
         if (!frame_access) {
@@ -1098,15 +1070,31 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
     composite_pipeline.pushConsts.bgHeight = std::max(bg_extent.height, 1u);
     composite_pipeline.pushConsts.fgWidth = std::max(fg_extent.width, 1u);
     composite_pipeline.pushConsts.fgHeight = std::max(fg_extent.height, 1u);
-    const auto viewport = DisplayDetail::fit_image(
-        {state.optics.viewport_x, state.optics.viewport_y,
-         state.optics.viewport_width != 0 ? state.optics.viewport_width : output_width,
-         state.optics.viewport_height != 0 ? state.optics.viewport_height : output_height},
-        std::max(bg_extent.width, 1u), std::max(bg_extent.height, 1u));
-    composite_pipeline.pushConsts.bgViewportX = viewport.x;
-    composite_pipeline.pushConsts.bgViewportY = viewport.y;
-    composite_pipeline.pushConsts.bgViewportWidth = viewport.width;
-    composite_pipeline.pushConsts.bgViewportHeight = viewport.height;
+    // A camera without a viewport rect publishes its own render extent as the
+    // viewport, which is how a scene presents before the Web reports its bounds.
+    // Treat that "no rect" state as "fill the surface": placing the archive-sized
+    // render 1:1 at the origin would leave the rest of the window black. A real
+    // rect equal to the render extent on a larger surface gets the same fill,
+    // which matches how a configured viewport already scales its render.
+    uint32_t bg_viewport_x = state.optics.viewport_x;
+    uint32_t bg_viewport_y = state.optics.viewport_y;
+    uint32_t bg_viewport_width = state.optics.viewport_width;
+    uint32_t bg_viewport_height = state.optics.viewport_height;
+    if (bg_viewport_width == 0 || bg_viewport_height == 0) {
+        bg_viewport_x = 0;
+        bg_viewport_y = 0;
+        bg_viewport_width = output_width;
+        bg_viewport_height = output_height;
+    } else if (bg_viewport_x == 0 && bg_viewport_y == 0 &&
+               bg_viewport_width == bg_extent.width && bg_viewport_height == bg_extent.height &&
+               (bg_viewport_width != output_width || bg_viewport_height != output_height)) {
+        bg_viewport_width = output_width;
+        bg_viewport_height = output_height;
+    }
+    composite_pipeline.pushConsts.bgViewportX = bg_viewport_x;
+    composite_pipeline.pushConsts.bgViewportY = bg_viewport_y;
+    composite_pipeline.pushConsts.bgViewportWidth = bg_viewport_width;
+    composite_pipeline.pushConsts.bgViewportHeight = bg_viewport_height;
     composite_pipeline.pushConsts.fgOpaque =
         (state.ui.image_handle != 0 && state.optics.image_handle == 0) ? 1u : 0u;
     composite_pipeline.pushConsts.encodeOutputSrgb = encode_output_srgb;
@@ -1161,10 +1149,18 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
         {state.optics.image_handle, receipt_serial(optics_receipt)},
         optics_system_ ? optics_system_->get_target_fps() : 0,
         std::chrono::steady_clock::now());
+    // 节拍由调度器负责，这里默认不再自己睡：
+    // 原实现在每次 present 前 sleep_until(cadence)，由于 period 取自 Optics 的
+    // 60Hz，clamp 之后每个出图帧固定睡 ~8ms。在"五个系统同一条线程按 DAG 执行"
+    // 之后，这 8ms 会把整条 DAG 卡在 Display 节点里（120Hz tick 的预算只有
+    // 8.33ms），于是 Mechanics/Geometry 实际只能按 ~30Hz 被驱动。
+    // 需要复现旧行为（例如做 A/B 或对照实验）时设 CORONA_DISPLAY_CADENCE_SLEEP=1。
     // No producer image locks are held here. Composition is already on the
     // GPU, and the surface lease protects the same output until present ends.
     // The bounded sleep also bounds shutdown latency; no busy spin is used.
-    std::this_thread::sleep_until(present_deadline);
+    if (std::getenv("CORONA_DISPLAY_CADENCE_SLEEP") != nullptr) {
+        std::this_thread::sleep_until(present_deadline);
+    }
     const auto present_start = profile_now();
     resources.last_receipt = resources.executor.stream()
         << Horizon::present(displayer, resources.output)
@@ -1186,50 +1182,19 @@ Detail::PresentOutcome DisplaySystem::compose_and_present(
 
 void DisplaySystem::shutdown() {
     CFW_LOG_INFO("DisplaySystem: destroying display resources");
+    // 关停时通道里可能还有 surface 命令：拆除命令必须兑现 promise，
+    // 否则发布方会一直阻塞。处理完再走原有 teardown。
+    apply_pending_surface_commands();
     frame_submission_enabled_.store(false, std::memory_order_release);
     const auto forward_completion_fence = forward_completion_fence_;
     if (forward_completion_fence) {
         forward_completion_fence->close();
     }
-    const auto callback_gate = callback_gate_;
-    if (callback_gate) {
-        callback_gate->close();
-    }
-
-    const bool has_subscriptions = surface_changed_sub_id_ ||
-                                   surface_removed_sub_id_ ||
-                                   optics_frame_sub_id_ || ui_frame_sub_id_;
-    if (has_subscriptions) {
-        if (auto* system_context = context(); system_context != nullptr) {
-            auto* event_bus = system_context->event_bus();
-            if (event_bus != nullptr) {
-                if (surface_changed_sub_id_) {
-                    event_bus->unsubscribe(*surface_changed_sub_id_);
-                }
-                if (surface_removed_sub_id_) {
-                    event_bus->unsubscribe(*surface_removed_sub_id_);
-                }
-                if (optics_frame_sub_id_) {
-                    event_bus->unsubscribe(*optics_frame_sub_id_);
-                }
-                if (ui_frame_sub_id_) {
-                    event_bus->unsubscribe(*ui_frame_sub_id_);
-                }
-            }
-        }
-    }
-    surface_changed_sub_id_.reset();
-    surface_removed_sub_id_.reset();
-    optics_frame_sub_id_.reset();
-    ui_frame_sub_id_.reset();
 
     // Unsubscribe does not stop a handler already copied by EventBus. The
     // owner-independent gate rejects callbacks that have not started and this
     // wait lets callbacks already holding owner access finish. Never wait while
     // holding frame_mutex_: active callbacks may need that mutex to exit.
-    if (callback_gate) {
-        callback_gate->wait_for_quiescence();
-    }
 
     std::unordered_set<std::uint64_t> surface_ids;
     std::vector<std::shared_ptr<Detail::SurfaceLifecycleAcks>> acknowledgements;
@@ -1323,11 +1288,6 @@ void DisplaySystem::shutdown() {
     for (const auto& pending_acknowledgements : acknowledgements) {
         pending_acknowledgements->cancel_forward(shutdown_message);
         pending_acknowledgements->removal_succeeded();
-    }
-    if (callback_gate) {
-        callback_gate->complete_deferred_after_resources_destroyed(
-            UI::DisplaySurfaceResult::Status::Cancelled,
-            shutdown_message);
     }
     device_lost_.store(false, std::memory_order_release);
 

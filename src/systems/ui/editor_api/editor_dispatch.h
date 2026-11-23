@@ -1,16 +1,16 @@
-﻿#pragma once
+#pragma once
 
 /// 编辑器状态派发：单一 owner 线程（CEF UI 线程）
 ///
 /// 背景：编辑器场景状态（`native_editor_state()` 及其 `NativeEditorScene`）被三类线程
 /// 触碰 —— CEF UI 线程（JS 请求）、引擎主线程（协作同步）、Python/Script 运行时线程
-/// （`_invoke_cpp_editor_api`）。它们此前的唯一"同步"是运气：状态里没有一把锁，handler
+/// （`script_scene_*` 具名绑定）。它们此前的唯一"同步"是运气：状态里没有一把锁，handler
 /// 也按单线程写（缓存、表、`unique_ptr` 成员）。并发进来就是堆损坏。
 ///
 /// 方案 A：让**所有** handler 只在 owner 线程执行。
 ///   - owner 线程上的调用（JS）：就地执行（该线程本来串行）；
 ///   - 其它线程：把执行打包 post 到 owner 线程并**有界**等待（超时返回错误/撤销，不无限
-///     等待，避免把 Python 线程或引擎主线程也拖死）。Python（`_invoke_cpp_editor_api`）和
+///     等待，避免把 Python 线程或引擎主线程也拖死）。Python（`script_scene_*`）和
 ///     引擎主线程的协作同步（`tick_collaborative_editor_runtime`）都走这条路；
 ///   - CEF 还没起来 / headless（从没见过 owner 线程）：没有 owner 可投递，就地执行，
 ///     但**加 `editor_state_mutex`**，让多个外来线程之间仍然串行。
@@ -35,7 +35,7 @@
 /// 创建两次。
 ///
 /// 本头不依赖 CEF，便于单元测试；CEF 的实现（`CefCurrentlyOn`／`CefPostTask`）由
-/// `cef_editor_api.cpp` 在首次使用时安装。
+/// `python_service_bridge.cpp` 在首次使用时安装。
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -227,7 +227,8 @@ template <typename Fn>
 [[nodiscard]] auto call_on_editor_owner_thread(Fn fn,
                                                std::chrono::milliseconds timeout,
                                                EditorOwnerRun* executed_as = nullptr,
-                                               bool* ran_inline_on_caller = nullptr)
+                                               bool* ran_inline_on_caller = nullptr,
+                                               bool allow_python_handoff = true)
     -> std::optional<std::invoke_result_t<Fn&>> {
     using R = std::invoke_result_t<Fn&>;
     if (ran_inline_on_caller) *ran_inline_on_caller = false;
@@ -280,7 +281,7 @@ template <typename Fn>
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready &&
            std::chrono::steady_clock::now() < deadline) {
-        if (editor_thread_waiting_for_python()) {
+        if (allow_python_handoff && editor_thread_waiting_for_python()) {
             std::unique_lock<std::recursive_mutex> state_lock(editor_state_mutex(), std::try_to_lock);
             if (state_lock.owns_lock() && editor_thread_waiting_for_python() && execute()) {
                 if (ran_inline_on_caller) *ran_inline_on_caller = true;
@@ -314,7 +315,8 @@ template <typename Fn>
 [[nodiscard]] auto call_editor_dispatch(Fn fn,
                                         EditorDispatchRoute route,
                                         std::chrono::milliseconds timeout,
-                                        EditorDispatchReport* report = nullptr)
+                                        EditorDispatchReport* report = nullptr,
+                                        bool allow_python_handoff = true)
     -> std::optional<std::invoke_result_t<Fn&>> {
     EditorDispatchReport local;
     EditorDispatchReport& out = report ? *report : local;
@@ -324,11 +326,18 @@ template <typename Fn>
             return std::optional{fn()};
 
         case EditorDispatchRoute::InlineBusy: {
+            // Native service handlers can synchronously wait for Python again.
+            // Running them under this mutex would block Python's scene callback.
+            if (!allow_python_handoff) {
+                return call_on_editor_owner_thread(std::move(fn), timeout, &out.run,
+                                                   &out.ran_inline_on_caller, false);
+            }
             std::unique_lock<std::recursive_mutex> state_lock(editor_state_mutex());
             if (!editor_thread_waiting_for_python()) {
                 // owner 已经恢复（或即将恢复）：改走 owner 线程，避免与它并发。
                 state_lock.unlock();
-                return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller);
+                return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller,
+                                                   allow_python_handoff);
             }
             out.ran_inline_on_caller = true;
             return std::optional{fn()};
@@ -339,7 +348,8 @@ template <typename Fn>
             if (editor_owner_thread_seen()) {
                 // owner 线程刚刚出现（CEF 起来了）：交回给它，别在这里和它并发。
                 state_lock.unlock();
-                return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller);
+                return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller,
+                                                   allow_python_handoff);
             }
             out.ran_inline_on_caller = true;
             return std::optional{fn()};
@@ -347,7 +357,8 @@ template <typename Fn>
 
         case EditorDispatchRoute::Marshal:
         default:
-            return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller);
+            return call_on_editor_owner_thread(std::move(fn), timeout, &out.run, &out.ran_inline_on_caller,
+                                               allow_python_handoff);
     }
 }
 

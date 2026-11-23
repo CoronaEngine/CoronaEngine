@@ -1,7 +1,6 @@
 #pragma once
 #include <SDL3/SDL.h>
 #include <memory>
-#include <unordered_map>
 #include "cef/browser_ui.h"
 namespace Corona::Systems { class VulkanBackend; }
 namespace Corona::Systems::UI {
@@ -22,6 +21,5 @@ class UiFrameRunner {
     int captured_tab_ = -1;
     int hovered_tab_ = -1;
     unsigned int dockspace_ = 0;
-    std::unordered_map<std::string, unsigned int> default_docks_;
 };
 }

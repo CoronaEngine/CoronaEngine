@@ -53,8 +53,38 @@ EDITOR = SourceWorkspace(
     name="CoronaEditor",
     directory=Path("CoronaEditor"),
     url="https://github.com/CoronaEngine/CoronaEditor.git",
-    ref="codex/volumetric-caustic-media",
-    commit="2b735da431bdeae209f757080c8550e5058c0a97",
+    ref="codex/remove-story-world",
+    commit="c2f090e70f200d7051441aac55bcc668e988e56a",
 )
 
 WORKSPACES = (HORIZON, EDITOR)
+
+
+def find_workspace(key: str) -> SourceWorkspace:
+    for workspace in WORKSPACES:
+        if workspace.key == key:
+            return workspace
+    raise ValueError(f"Unknown workspace: {key}; choose one of {', '.join(w.key for w in WORKSPACES)}")
+
+
+def rewrite_pin(key: str, commit: str, path: Path | None = None) -> bool:
+    """Point one workspace's pin at ``commit``.
+
+    ``path`` defaults to this file and exists so the guard can round-trip a copy.
+    Returns whether the file changed; the pin lives in the source itself, so the
+    caller must re-import the module (or start a new process) to see the new value.
+    """
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError(f"Pin must be a full lowercase commit: {commit}")
+    find_workspace(key)
+    path = (path or Path(__file__)).resolve()
+    text = path.read_text(encoding="utf-8")
+    pattern = re.compile(
+        r'(key="' + re.escape(key) + r'",[\s\S]*?commit=")([0-9a-f]{40})(")')
+    updated, count = pattern.subn(lambda match: match.group(1) + commit + match.group(3), text, count=1)
+    if count != 1:
+        raise ValueError(f"Could not find the pin for {key} in {path.name}")
+    if updated == text:
+        return False
+    path.write_text(updated, encoding="utf-8")
+    return True

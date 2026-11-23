@@ -1,4 +1,6 @@
 #include <corona/shared_data_hub.h>
+#include <corona/ecs/access.h>
+#include <corona/ecs/structural_commands.h>
 #include <corona/utils/scene_path_key.h>
 
 #include <algorithm>
@@ -6,7 +8,21 @@
 
 namespace Corona {
 
-ktm::fmat4x4 ModelTransform::compute_matrix() const {
+ktm::fmat4x4 TransformSnapshotRow::compute_matrix() const {
+    ktm::fquat qx = ktm::fquat::from_angle_x(euler_rotation.x);
+    ktm::fquat qy = ktm::fquat::from_angle_y(euler_rotation.y);
+    ktm::fquat qz = ktm::fquat::from_angle_z(euler_rotation.z);
+    ktm::fquat rot_quat = qz * qy * qx;
+
+    ktm::faffine3d affine;
+    affine.translate(position).rotate(rot_quat).scale(scale);
+
+    ktm::fmat4x4 result;
+    affine >> result;
+    return result * affine_basis;
+}
+
+ktm::fmat4x4 Ecs::Transform::compute_matrix() const {
     ktm::fquat qx = ktm::fquat::from_angle_x(euler_rotation.x);
     ktm::fquat qy = ktm::fquat::from_angle_y(euler_rotation.y);
     ktm::fquat qz = ktm::fquat::from_angle_z(euler_rotation.z);
@@ -26,34 +42,171 @@ SharedDataHub& SharedDataHub::instance() {
 }
 
 // Storage accessors definitions
-SharedDataHub::ModelResourceStorage& SharedDataHub::model_resource_storage() { return model_resource_storage_; }
-const SharedDataHub::ModelResourceStorage& SharedDataHub::model_resource_storage() const { return model_resource_storage_; }
+//
+// **拥有者线程专用原语**，且只是默认初始值的便捷入口：权威实现在
+// `Ecs::create_*_entity()`（`include/corona/ecs/structural_commands.h`），由 tick
+// 边界的应用器调用。这些包装保留给单线程测试夹具与引擎装配期（还没有 DAG 线程）。
+// 生产调用点一律走 `Ecs::request_create_*()` / `Ecs::request_destroy_entity()`。
+EntityId SharedDataHub::create_model_resource() {
+    return Ecs::create_model_resource_entity(Ecs::CreateModelResourcePayload{});
+}
+void SharedDataHub::destroy_model_resource(EntityId handle) { Ecs::destroy(handle); }
+ModelResource* SharedDataHub::try_model_resource(EntityId handle) {
+    return Ecs::try_get<ModelResource>(handle);
+}
+const ModelResource* SharedDataHub::try_model_resource(EntityId handle) const {
+    return Ecs::try_get_const<ModelResource>(handle);
+}
+ModelResource* find_model_resource(EntityId handle) {
+    return SharedDataHub::instance().try_model_resource(handle);
+}
 
-SharedDataHub::ModelTransformStorage& SharedDataHub::model_transform_storage() { return model_transform_storage_; }
-const SharedDataHub::ModelTransformStorage& SharedDataHub::model_transform_storage() const { return model_transform_storage_; }
+EntityId SharedDataHub::create_transform() {
+    return Ecs::create_transform_entity(Ecs::CreateTransformPayload{});
+}
+void SharedDataHub::destroy_transform(EntityId handle) { Ecs::destroy(handle); }
+ModelTransform* SharedDataHub::try_transform(EntityId handle) {
+    return Ecs::try_get<ModelTransform>(handle);
+}
+const ModelTransform* SharedDataHub::try_transform(EntityId handle) const {
+    return Ecs::try_get_const<ModelTransform>(handle);
+}
+ModelTransform* find_transform(EntityId handle) {
+    return SharedDataHub::instance().try_transform(handle);
+}
 
-SharedDataHub::GeometryStorage& SharedDataHub::geometry_storage() { return geometry_storage_; }
-const SharedDataHub::GeometryStorage& SharedDataHub::geometry_storage() const { return geometry_storage_; }
+EntityId SharedDataHub::create_geometry() {
+    return Ecs::create_geometry_entity(Ecs::CreateGeometryPayload{});
+}
+void SharedDataHub::destroy_geometry(EntityId handle) { Ecs::destroy(handle); }
+GeometryDevice* SharedDataHub::try_geometry(EntityId handle) {
+    return Ecs::try_get<GeometryDevice>(handle);
+}
+const GeometryDevice* SharedDataHub::try_geometry(EntityId handle) const {
+    return Ecs::try_get_const<GeometryDevice>(handle);
+}
+GeometryDevice* find_geometry(EntityId handle) {
+    return SharedDataHub::instance().try_geometry(handle);
+}
+Ecs::ModelSource* SharedDataHub::try_model_source(EntityId handle) {
+    return Ecs::try_get<Ecs::ModelSource>(handle);
+}
+Ecs::ModelSource* find_model_source(EntityId handle) {
+    return SharedDataHub::instance().try_model_source(handle);
+}
 
-SharedDataHub::MechanicsStorage& SharedDataHub::mechanics_storage() { return mechanics_storage_; }
-const SharedDataHub::MechanicsStorage& SharedDataHub::mechanics_storage() const { return mechanics_storage_; }
+EntityId SharedDataHub::create_mechanics() {
+    return Ecs::create_mechanics_entity(Ecs::CreateMechanicsPayload{});
+}
+void SharedDataHub::destroy_mechanics(EntityId handle) { Ecs::destroy(handle); }
+MechanicsDevice* SharedDataHub::try_mechanics(EntityId handle) {
+    return Ecs::try_get<MechanicsDevice>(handle);
+}
+const MechanicsDevice* SharedDataHub::try_mechanics(EntityId handle) const {
+    return Ecs::try_get_const<MechanicsDevice>(handle);
+}
+MechanicsDevice* find_mechanics(EntityId handle) {
+    return SharedDataHub::instance().try_mechanics(handle);
+}
+Ecs::Bounds* SharedDataHub::try_bounds(EntityId handle) {
+    return Ecs::try_get<Ecs::Bounds>(handle);
+}
+Ecs::Bounds* find_bounds(EntityId handle) {
+    return SharedDataHub::instance().try_bounds(handle);
+}
 
-SharedDataHub::AcousticsStorage& SharedDataHub::acoustics_storage() { return acoustics_storage_; }
-const SharedDataHub::AcousticsStorage& SharedDataHub::acoustics_storage() const { return acoustics_storage_; }
+EntityId SharedDataHub::create_acoustics() {
+    return Ecs::create_acoustics_entity(Ecs::CreateAcousticsPayload{});
+}
+void SharedDataHub::destroy_acoustics(EntityId handle) { Ecs::destroy(handle); }
+AcousticsDevice* SharedDataHub::try_acoustics(EntityId handle) {
+    return Ecs::try_get<AcousticsDevice>(handle);
+}
+const AcousticsDevice* SharedDataHub::try_acoustics(EntityId handle) const {
+    return Ecs::try_get_const<AcousticsDevice>(handle);
+}
 
-SharedDataHub::OpticsStorage& SharedDataHub::optics_storage() { return optics_storage_; }
-const SharedDataHub::OpticsStorage& SharedDataHub::optics_storage() const { return optics_storage_; }
+EntityId SharedDataHub::create_optics() {
+    return Ecs::create_optics_entity(Ecs::CreateOpticsPayload{});
+}
+void SharedDataHub::destroy_optics(EntityId handle) { Ecs::destroy(handle); }
+OpticsDevice* SharedDataHub::try_optics(EntityId handle) {
+    return Ecs::try_get<OpticsDevice>(handle);
+}
+const OpticsDevice* SharedDataHub::try_optics(EntityId handle) const {
+    return Ecs::try_get_const<OpticsDevice>(handle);
+}
+OpticsDevice* find_optics(EntityId handle) {
+    return SharedDataHub::instance().try_optics(handle);
+}
+Ecs::Visibility* SharedDataHub::try_visibility(EntityId handle) {
+    return Ecs::try_get<Ecs::Visibility>(handle);
+}
+Ecs::Visibility* find_visibility(EntityId handle) {
+    return SharedDataHub::instance().try_visibility(handle);
+}
 
-SharedDataHub::ProfileStorage& SharedDataHub::profile_storage() { return profile_storage_; }
-const SharedDataHub::ProfileStorage& SharedDataHub::profile_storage() const { return profile_storage_; }
+EntityId SharedDataHub::create_profile_component() {
+    return Ecs::create_profile_entity(Ecs::CreateProfilePayload{});
+}
+void SharedDataHub::destroy_profile_component(EntityId handle) { Ecs::destroy(handle); }
+ProfileDevice* SharedDataHub::try_profile(EntityId handle) {
+    return Ecs::try_get<ProfileDevice>(handle);
+}
+const ProfileDevice* SharedDataHub::try_profile(EntityId handle) const {
+    return Ecs::try_get_const<ProfileDevice>(handle);
+}
+ProfileDevice* find_profile(EntityId handle) {
+    return SharedDataHub::instance().try_profile(handle);
+}
 
-SharedDataHub::ActorStorage& SharedDataHub::actor_storage() { return actor_storage_; }
-const SharedDataHub::ActorStorage& SharedDataHub::actor_storage() const { return actor_storage_; }
+EntityId SharedDataHub::create_actor_component() {
+    return Ecs::create_actor_entity(Ecs::CreateActorPayload{});
+}
+void SharedDataHub::destroy_actor_component(EntityId handle) { Ecs::destroy(handle); }
+ActorDevice* SharedDataHub::try_actor(EntityId handle) {
+    return Ecs::try_get<ActorDevice>(handle);
+}
+const ActorDevice* SharedDataHub::try_actor(EntityId handle) const {
+    return Ecs::try_get_const<ActorDevice>(handle);
+}
+ActorDevice* find_actor(EntityId handle) {
+    return SharedDataHub::instance().try_actor(handle);
+}
+Ecs::StreamingPolicy* SharedDataHub::try_streaming(EntityId handle) {
+    return Ecs::try_get<Ecs::StreamingPolicy>(handle);
+}
+void SharedDataHub::set_pinned(EntityId handle, bool pinned) {
+    if (auto* streaming = Ecs::try_get<Ecs::StreamingPolicy>(handle)) {
+        streaming->pinned = pinned;
+    }
+}
+Ecs::StreamingPolicy* find_streaming(EntityId handle) {
+    return SharedDataHub::instance().try_streaming(handle);
+}
+Ecs::ModelPath* SharedDataHub::try_model_path(EntityId handle) {
+    return Ecs::try_get<Ecs::ModelPath>(handle);
+}
+Ecs::ModelPath* find_model_path(EntityId handle) {
+    return SharedDataHub::instance().try_model_path(handle);
+}
+Ecs::Profiles* SharedDataHub::try_profiles(EntityId handle) {
+    return Ecs::try_get<Ecs::Profiles>(handle);
+}
+Ecs::Profiles* find_profiles(EntityId handle) {
+    return SharedDataHub::instance().try_profiles(handle);
+}
+Ecs::FollowCamera* SharedDataHub::try_follow_camera(EntityId handle) {
+    return Ecs::try_get<Ecs::FollowCamera>(handle);
+}
+Ecs::FollowCamera* find_follow_camera(EntityId handle) {
+    return SharedDataHub::instance().try_follow_camera(handle);
+}
 
 std::vector<std::uintptr_t> SharedDataHub::resolve_actor_geometry_handles(
-    std::uintptr_t actor_handle) {
+    EntityId actor_handle) {
     std::vector<std::uintptr_t> geometry_handles;
-    const auto append_geometry = [&geometry_handles](std::uintptr_t geometry_handle) {
+    const auto append_geometry = [&geometry_handles](EntityId geometry_handle) {
         if (geometry_handle != 0 &&
             std::find(geometry_handles.begin(), geometry_handles.end(),
                       geometry_handle) == geometry_handles.end()) {
@@ -61,49 +214,32 @@ std::vector<std::uintptr_t> SharedDataHub::resolve_actor_geometry_handles(
         }
     };
 
-    const auto actor = actor_storage_.try_acquire_read(actor_handle);
+    const auto* actor = try_actor(actor_handle);
     if (!actor) {
         return geometry_handles;
     }
-    for (const auto profile_handle : actor->profile_handles) {
-        const auto profile = profile_storage_.try_acquire_read(profile_handle);
+    const auto* actor_profiles = find_profiles(actor_handle);
+    for (const auto profile_handle : actor_profiles != nullptr ? actor_profiles->handles
+                                                              : std::vector<EntityId>{}) {
+        const auto* profile = try_profile(profile_handle);
         if (!profile) {
             continue;
         }
         append_geometry(profile->geometry_handle);
-        if (const auto mechanics =
-                mechanics_storage_.try_acquire_read(profile->mechanics_handle)) {
+        if (const auto* mechanics = try_mechanics(profile->mechanics_handle)) {
             append_geometry(mechanics->geometry_handle);
         }
-        if (const auto optics =
-                optics_storage_.try_acquire_read(profile->optics_handle)) {
+        if (const auto* optics = try_optics(profile->optics_handle)) {
             append_geometry(optics->geometry_handle);
         }
-        if (const auto acoustics =
-                acoustics_storage_.try_acquire_read(profile->acoustics_handle)) {
+        if (const auto* acoustics = try_acoustics(profile->acoustics_handle)) {
             append_geometry(acoustics->geometry_handle);
         }
     }
     return geometry_handles;
 }
 
-std::optional<std::uintptr_t>
-SharedDataHub::resolve_actor_primary_transform_handle(
-    std::uintptr_t actor_handle) {
-    for (const auto geometry_handle :
-         resolve_actor_geometry_handles(actor_handle)) {
-        const auto geometry = geometry_storage_.try_acquire_read(geometry_handle);
-        if (geometry && geometry->transform_handle != 0) {
-            if (model_transform_storage_.try_acquire_read(
-                    geometry->transform_handle)) {
-                return geometry->transform_handle;
-            }
-        }
-    }
-    return std::nullopt;
-}
-
-void SharedDataHub::set_actor_guid(std::uintptr_t actor_handle, std::string actor_guid) {
+void SharedDataHub::set_actor_guid(EntityId actor_handle, std::string actor_guid) {
     if (actor_handle == 0) {
         return;
     }
@@ -115,7 +251,7 @@ void SharedDataHub::set_actor_guid(std::uintptr_t actor_handle, std::string acto
     }
 }
 
-std::string SharedDataHub::actor_guid(std::uintptr_t actor_handle) const {
+std::string SharedDataHub::actor_guid(EntityId actor_handle) const {
     std::lock_guard<std::mutex> lock(actor_metadata_mutex_);
     const auto it = actor_guids_.find(actor_handle);
     return it != actor_guids_.end() ? it->second : std::string{};
@@ -126,66 +262,88 @@ std::string SharedDataHub::actor_guid(std::uintptr_t actor_handle) const {
 
 
 
-void SharedDataHub::clear_actor_metadata(std::uintptr_t actor_handle) {
+void SharedDataHub::clear_actor_metadata(EntityId actor_handle) {
     std::lock_guard<std::mutex> lock(actor_metadata_mutex_);
     actor_guids_.erase(actor_handle);
 }
 
-SharedDataHub::CameraStorage& SharedDataHub::camera_storage() { return camera_storage_; }
-const SharedDataHub::CameraStorage& SharedDataHub::camera_storage() const { return camera_storage_; }
+EntityId SharedDataHub::create_camera() {
+    return Ecs::create_camera_entity(Ecs::CreateCameraPayload{});
+}
+void SharedDataHub::destroy_camera(EntityId handle) { Ecs::destroy(handle); }
+CameraDevice* SharedDataHub::try_camera(EntityId handle) {
+    return Ecs::try_get<CameraDevice>(handle);
+}
+const CameraDevice* SharedDataHub::try_camera(EntityId handle) const {
+    return Ecs::try_get_const<CameraDevice>(handle);
+}
+CameraDevice* find_camera(EntityId handle) {
+    return SharedDataHub::instance().try_camera(handle);
+}
 
-SharedDataHub::ActorPickStorage& SharedDataHub::actor_pick_storage() { return actor_pick_storage_; }
-const SharedDataHub::ActorPickStorage& SharedDataHub::actor_pick_storage() const { return actor_pick_storage_; }
+EntityId SharedDataHub::create_environment() {
+    return Ecs::create_environment_entity(Ecs::CreateEnvironmentPayload{});
+}
+void SharedDataHub::destroy_environment(EntityId handle) { Ecs::destroy(handle); }
+EnvironmentDevice* SharedDataHub::try_environment(EntityId handle) {
+    return Ecs::try_get<EnvironmentDevice>(handle);
+}
+const EnvironmentDevice* SharedDataHub::try_environment(EntityId handle) const {
+    return Ecs::try_get_const<EnvironmentDevice>(handle);
+}
 
-void SharedDataHub::enqueue_actor_pick_request(ActorPickRequestCommand command) {
-    if (command.camera_handle == 0 || command.request_id.empty()) {
-        return;
+EntityId SharedDataHub::create_scene() {
+    return Ecs::create_scene_entity(Ecs::CreateScenePayload{});
+}
+void SharedDataHub::destroy_scene(EntityId handle) { Ecs::destroy(handle); }
+SceneDevice* SharedDataHub::try_scene(EntityId handle) {
+    return Ecs::try_get<SceneDevice>(handle);
+}
+const SceneDevice* SharedDataHub::try_scene(EntityId handle) const {
+    return Ecs::try_get_const<SceneDevice>(handle);
+}
+SceneDevice* find_scene(EntityId handle) {
+    return SharedDataHub::instance().try_scene(handle);
+}
+
+EntityId SharedDataHub::create_image() {
+    return Ecs::create_image_entity(Ecs::CreateImagePayload{});
+}
+void SharedDataHub::destroy_image(EntityId handle) {
+    Ecs::destroy_image_entity(handle);
+}
+void SharedDataHub::forget_image_lock(EntityId handle) {
+    std::lock_guard<std::mutex> guard(image_locks_mutex_);
+    image_locks_.erase(handle);
+}
+std::shared_ptr<std::shared_mutex> SharedDataHub::image_lock_for(EntityId handle) const {
+    std::lock_guard<std::mutex> guard(image_locks_mutex_);
+    auto& entry = image_locks_[handle];
+    if (!entry) {
+        entry = std::make_shared<std::shared_mutex>();
     }
-    std::lock_guard<std::mutex> lock(actor_pick_queue_mutex_);
-    pending_actor_pick_requests_.push_back(std::move(command));
+    return entry;
 }
-
-std::optional<ActorPickRequestCommand> SharedDataHub::take_actor_pick_request(
-    std::uintptr_t camera_handle) {
-    std::lock_guard<std::mutex> lock(actor_pick_queue_mutex_);
-    const auto it = std::find_if(pending_actor_pick_requests_.begin(),
-                                 pending_actor_pick_requests_.end(),
-                                 [camera_handle](const auto& request) {
-                                     return request.camera_handle == camera_handle;
-                                 });
-    if (it == pending_actor_pick_requests_.end()) {
-        return std::nullopt;
+ImageAccess SharedDataHub::image_write(EntityId handle) {
+    auto owner = image_lock_for(handle);
+    std::unique_lock<std::shared_mutex> lock(*owner);
+    return ImageAccess(std::move(lock), std::move(owner), handle, Ecs::try_get<ImageDevice>(handle));
+}
+ImageReadAccess SharedDataHub::image_read(EntityId handle) {
+    auto owner = image_lock_for(handle);
+    std::shared_lock<std::shared_mutex> lock(*owner);
+    return ImageReadAccess(std::move(lock), std::move(owner), handle,
+                           Ecs::try_get<ImageDevice>(handle));
+}
+std::vector<EntityId> SharedDataHub::image_handles() {
+    std::vector<EntityId> handles;
+    for (const auto entity : Ecs::view<ImageDevice>()) {
+        handles.push_back(Ecs::to_handle(entity));
     }
-    auto request = std::move(*it);
-    pending_actor_pick_requests_.erase(it);
-    return request;
+    return handles;
 }
 
-void SharedDataHub::enqueue_actor_pick_completion(ActorPickCompletion completion) {
-    if (completion.camera_handle == 0 || completion.request_id.empty()) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(actor_pick_queue_mutex_);
-    actor_pick_completions_.push_back(std::move(completion));
-}
-
-std::vector<ActorPickCompletion> SharedDataHub::drain_actor_pick_completions() {
-    std::lock_guard<std::mutex> lock(actor_pick_queue_mutex_);
-    std::vector<ActorPickCompletion> completions;
-    completions.swap(actor_pick_completions_);
-    return completions;
-}
-
-SharedDataHub::EnvironmentStorage& SharedDataHub::environment_storage() { return environment_storage_; }
-const SharedDataHub::EnvironmentStorage& SharedDataHub::environment_storage() const { return environment_storage_; }
-
-SharedDataHub::SceneStorage& SharedDataHub::scene_storage() { return scene_storage_; }
-const SharedDataHub::SceneStorage& SharedDataHub::scene_storage() const { return scene_storage_; }
-
-SharedDataHub::ImageStorage& SharedDataHub::image_storage() { return image_storage_; }
-const SharedDataHub::ImageStorage& SharedDataHub::image_storage() const { return image_storage_; }
-
-void SharedDataHub::publish_camera_frame_timing(std::uintptr_t camera_handle, double render_ms, double denoise_ms,
+void SharedDataHub::publish_camera_frame_timing(EntityId camera_handle, double render_ms, double denoise_ms,
                                                 CameraVisionRenderMode mode,
                                                 std::chrono::steady_clock::time_point completed_at) {
     std::lock_guard<std::mutex> lock(camera_timing_mutex_);
@@ -199,75 +357,415 @@ void SharedDataHub::publish_camera_frame_timing(std::uintptr_t camera_handle, do
 }
 
 std::optional<CameraFrameTiming> SharedDataHub::camera_frame_timing(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_timing_mutex_);
     const auto it = camera_timings_.find(camera_handle);
     return it == camera_timings_.end() ? std::nullopt : std::optional{it->second};
+}
+
+namespace {
+
+// CameraDevice -> 外部可读投影。只搬运"读者需要的字段"，内部状态（字符串设置、
+// camera_handle 等）留在 DAG 内部。
+CameraSnapshotRow make_camera_row(EntityId handle, const CameraDevice& camera) {
+    CameraSnapshotRow row;
+    row.handle = handle;
+    row.position = camera.position;
+    row.forward = camera.forward;
+    row.world_up = camera.world_up;
+    row.fov = camera.fov;
+    row.aspect = camera.aspect;
+    row.near_plane = camera.near_plane;
+    row.far_plane = camera.far_plane;
+    row.projection_x_sign = camera.projection_x_sign;
+    row.width = camera.width;
+    row.height = camera.height;
+    row.surface = camera.surface;
+    row.follows_default_surface = camera.follows_default_surface;
+    row.view_open = camera.view_open;
+    row.view_x = camera.view_x;
+    row.view_y = camera.view_y;
+    row.view_width = camera.view_width;
+    row.view_height = camera.view_height;
+    row.move_speed = camera.move_speed;
+    row.output_mode = camera.output_mode;
+    row.render_backend = camera.render_backend;
+    row.vision_render_mode = camera.vision_render_mode;
+    row.vision_denoise = camera.vision_denoise;
+    row.vision_denoiser = camera.vision_denoiser;
+    row.vision_accumulation = camera.vision_accumulation;
+    row.vision_stable_planes = camera.vision_stable_planes;
+    return row;
+}
+
+}  // namespace
+
+void SharedDataHub::publish_camera_snapshot(CameraSnapshot snapshot) {
+    camera_snapshot_.publish(std::move(snapshot));
+}
+
+void SharedDataHub::publish_camera_snapshot() {
+    CameraSnapshot snapshot;
+    snapshot.tick = camera_snapshot_.revision() + 1;
+    auto cameras = Ecs::all_components<Corona::CameraDevice>();
+    for (auto camera_it = cameras.begin(); camera_it != cameras.end(); ++camera_it) {
+        const auto handle = camera_it.id();
+        if (handle == 0) {
+            continue;
+        }
+        snapshot.rows.push_back(make_camera_row(handle, *camera_it));
+    }
+    camera_snapshot_.publish(std::move(snapshot));
+}
+
+std::shared_ptr<const CameraSnapshot> SharedDataHub::camera_snapshot() const {
+    return camera_snapshot_.read();
+}
+
+void SharedDataHub::seed_camera_snapshot(EntityId camera_handle) {
+    if (camera_handle == 0) {
+        return;
+    }
+
+    // 建相机时槽位刚分配，除创建者外无人持有引用；这里读一次把首行播种下去，
+    // 避免"创建后到首个 Optics tick 之间"的 get_* 读到默认值。
+    std::optional<CameraSnapshotRow> seeded;
+    if (const auto* camera = try_camera(camera_handle)) {
+        seeded = make_camera_row(camera_handle, *camera);
+    }
+    if (!seeded.has_value()) {
+        return;
+    }
+
+    CameraSnapshot next;
+    if (auto current = camera_snapshot_.read()) {
+        next = *current;
+    }
+    auto it = std::find_if(next.rows.begin(), next.rows.end(),
+                           [camera_handle](const CameraSnapshotRow& candidate) {
+                               return candidate.handle == camera_handle;
+                           });
+    if (it == next.rows.end()) {
+        next.rows.push_back(*seeded);
+    } else {
+        *it = *seeded;
+    }
+    camera_snapshot_.publish(std::move(next));
+}
+
+void SharedDataHub::remove_camera_snapshot_row(EntityId camera_handle) {
+    if (camera_handle == 0) {
+        return;
+    }
+
+    auto current = camera_snapshot_.read();
+    if (!current) {
+        return;
+    }
+    CameraSnapshot next = *current;
+    const auto before = next.rows.size();
+    next.rows.erase(std::remove_if(next.rows.begin(), next.rows.end(),
+                                   [camera_handle](const CameraSnapshotRow& row) {
+                                       return row.handle == camera_handle;
+                                   }),
+                    next.rows.end());
+    if (next.rows.size() != before) {
+        camera_snapshot_.publish(std::move(next));
+    }
+}
+
+std::optional<CameraSnapshotRow> SharedDataHub::camera_row(EntityId camera_handle) const {
+    if (camera_handle == 0) {
+        return std::nullopt;
+    }
+    auto snapshot = camera_snapshot_.read();
+    if (!snapshot) {
+        return std::nullopt;
+    }
+    for (const auto& row : snapshot->rows) {
+        if (row.handle == camera_handle) {
+            return row;
+        }
+    }
+    return std::nullopt;
+}
+
+CameraSnapshotRow SharedDataHub::camera_view(EntityId camera_handle) const {
+    CameraSnapshotRow view;
+    view.handle = camera_handle;
+    if (auto committed = camera_row(camera_handle)) {
+        view = *committed;
+    }
+
+    // 叠加待处理的姿态命令（读己之写）：peek 内部自带锁，不再需要单独的互斥量
+    if (const auto pending = camera_moves_.peek(camera_handle)) {
+        view.position = pending->position;
+        view.forward = pending->forward;
+        view.world_up = pending->world_up;
+        view.fov = pending->fov;
+    }
+
+    // 叠加待处理的状态命令（按 fields 位掩码部分更新）
+    {
+        std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
+        if (auto it = pending_camera_state_updates_.find(camera_handle);
+            it != pending_camera_state_updates_.end()) {
+            const auto& update = it->second;
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::Projection)) {
+                view.projection_x_sign = update.projection_x_sign;
+                view.near_plane = update.near_plane;
+                view.far_plane = update.far_plane;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::Surface)) {
+                view.surface = update.surface;
+                view.follows_default_surface = false;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::Size)) {
+                view.width = update.width;
+                view.height = update.height;
+                view.aspect = static_cast<float>(update.width) /
+                              static_cast<float>(std::max(update.height, 1u));
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::OutputMode)) {
+                view.output_mode = update.output_mode;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::RenderBackend)) {
+                view.render_backend = update.render_backend;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::VisionRenderMode)) {
+                view.vision_render_mode = update.vision_render_mode;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::VisionDenoise)) {
+                view.vision_denoise = update.vision_denoise;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::VisionDenoiser)) {
+                view.vision_denoiser = update.vision_denoiser;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::VisionAccumulation)) {
+                view.vision_accumulation = update.vision_accumulation;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::VisionStablePlanes)) {
+                view.vision_stable_planes = update.vision_stable_planes;
+            }
+            if (has_camera_state_field(update.fields,
+                                       CameraStateUpdateField::FollowsDefaultSurface)) {
+                view.follows_default_surface = update.follows_default_surface;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::ViewState)) {
+                view.view_open = update.view_open;
+            }
+            if (has_camera_state_field(update.fields, CameraStateUpdateField::ViewState) ||
+                has_camera_state_field(update.fields, CameraStateUpdateField::ViewSettings)) {
+                view.view_x = update.view_x;
+                view.view_y = update.view_y;
+                view.view_width = update.view_width;
+                view.view_height = update.view_height;
+                view.move_speed = update.move_speed;
+            }
+        }
+    }
+
+    return view;
+}
+
+void SharedDataHub::enqueue_transform_update(TransformUpdateCommand command) {
+    if (command.transform_handle == 0 || command.fields == TransformField::None) {
+        return;
+    }
+    // LatestWins：同一个 transform 只保留最后一条，出队时按 CommandBuffer 内部
+    // 单调序列排序，因此应用顺序与生产者线程的调度顺序无关。
+    transform_updates_.push(command);
+}
+
+std::vector<TransformUpdateCommand> SharedDataHub::drain_transform_updates() {
+    return transform_updates_.drain();
+}
+
+void SharedDataHub::clear_transform_updates(EntityId transform_handle) {
+    transform_updates_.erase(transform_handle);
+}
+
+void SharedDataHub::publish_transform_snapshot() {
+    TransformSnapshot snapshot;
+    snapshot.tick = transform_snapshot_.revision() + 1;
+    for (const auto entity : Ecs::view<ModelTransform>()) {
+        const auto handle = Ecs::to_handle(entity);
+        const auto& transform = Ecs::get<ModelTransform>(handle);
+        if (handle == 0) {
+            continue;
+        }
+        TransformSnapshotRow row;
+        row.handle = handle;
+        row.position = transform.position;
+        row.euler_rotation = transform.euler_rotation;
+        row.scale = transform.scale;
+        row.affine_basis = transform.affine_basis;
+        snapshot.rows.push_back(row);
+    }
+    transform_snapshot_.publish(std::move(snapshot));
+}
+
+void SharedDataHub::publish_geometry_scene_snapshot() {
+    GeometrySceneSnapshot snapshot;
+    snapshot.tick = geometry_scene_snapshot_.revision() + 1;
+    std::unordered_map<EntityId, GeometrySceneCacheEntry> cache;
+    auto geometry_components = Ecs::all_components<GeometryDevice>();
+    for (auto geometry_it = geometry_components.cbegin(); geometry_it != geometry_components.cend();
+         ++geometry_it) {
+        const EntityId handle = geometry_it.id();
+        if (handle == 0) {
+            continue;
+        }
+        const auto& device = *geometry_it;
+        auto row = geometry_scene_meta_row(device);
+        row.handle = handle;
+        const auto previous = geometry_scene_cache_.find(handle);
+        if (previous != geometry_scene_cache_.end()) {
+            const auto& cached = previous->second;
+            if (cached.nodes && cached.model_node_revision == row.model_node_revision &&
+                cached.gpu_build_state == row.gpu_build_state &&
+                cached.mesh_count == row.mesh_count &&
+                cached.renderable_mesh_count == row.renderable_mesh_count) {
+                row.nodes = cached.nodes;
+            }
+        }
+        if (!row.nodes) {
+            row.nodes = geometry_scene_nodes(device);
+        }
+        if (previous != geometry_scene_cache_.end()) {
+            const auto& cached = previous->second;
+            if (cached.ik_chains && cached.ik_chains_revision == row.ik_chains_revision) {
+                row.ik_chains = cached.ik_chains;
+            }
+        }
+        if (!row.ik_chains) {
+            row.ik_chains = geometry_scene_ik_chains(device);
+        }
+        cache[handle] = GeometrySceneCacheEntry{row.model_node_revision, row.gpu_build_state,
+                                                row.mesh_count, row.renderable_mesh_count,
+                                                row.ik_chains_revision, row.nodes,
+                                                row.ik_chains};
+        snapshot.rows.push_back(std::move(row));
+    }
+    geometry_scene_cache_ = std::move(cache);
+    geometry_scene_snapshot_.publish(std::move(snapshot));
+}
+
+std::shared_ptr<const GeometrySceneSnapshot> SharedDataHub::geometry_scene_snapshot() const {
+    return geometry_scene_snapshot_.read();
+}
+
+std::optional<GeometrySceneRow> SharedDataHub::geometry_scene_row(EntityId geometry_handle) const {
+    if (geometry_handle == 0) {
+        return std::nullopt;
+    }
+    auto snapshot = geometry_scene_snapshot_.read();
+    if (!snapshot) {
+        return std::nullopt;
+    }
+    for (const auto& row : snapshot->rows) {
+        if (row.handle == geometry_handle) {
+            return row;
+        }
+    }
+    return std::nullopt;
+}
+
+std::shared_ptr<const TransformSnapshot> SharedDataHub::transform_snapshot() const {
+    return transform_snapshot_.read();
+}
+
+std::optional<TransformSnapshotRow> SharedDataHub::transform_row(
+    EntityId transform_handle) const {
+    if (transform_handle == 0) {
+        return std::nullopt;
+    }
+    auto snapshot = transform_snapshot_.read();
+    if (!snapshot) {
+        return std::nullopt;
+    }
+    for (const auto& row : snapshot->rows) {
+        if (row.handle == transform_handle) {
+            return row;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<TransformSnapshotRow> SharedDataHub::transform_view(
+    EntityId transform_handle) const {
+    if (transform_handle == 0) {
+        return std::nullopt;
+    }
+
+    std::optional<TransformSnapshotRow> view = transform_row(transform_handle);
+    if (auto pending = transform_updates_.peek(transform_handle)) {
+        if (!view.has_value()) {
+            view.emplace();
+            view->handle = transform_handle;
+        }
+        if (has_transform_field(pending->fields, TransformField::Position)) {
+            view->position = pending->position;
+        }
+        if (has_transform_field(pending->fields, TransformField::Rotation)) {
+            view->euler_rotation = pending->euler_rotation;
+        }
+        if (has_transform_field(pending->fields, TransformField::Scale)) {
+            view->scale = pending->scale;
+        }
+        if (has_transform_field(pending->fields, TransformField::Matrix)) {
+            // 与 set_matrix() 的应用语义一致：矩阵已含平移，TRS 被归一化。
+            for (int c = 0; c < 4; ++c) {
+                for (int r = 0; r < 4; ++r) {
+                    view->affine_basis[c][r] = pending->matrix[c * 4 + r];
+                }
+            }
+            view->affine_basis[3] = ktm::fvec4{0.0f, 0.0f, 0.0f, 1.0f};
+            view->position = pending->position;
+            view->euler_rotation = ktm::fvec3{0.0f, 0.0f, 0.0f};
+            view->scale = ktm::fvec3{1.0f, 1.0f, 1.0f};
+        }
+    }
+    return view;
 }
 
 void SharedDataHub::enqueue_camera_move(CameraMoveCommand command) {
     if (command.camera_handle == 0) {
         return;
     }
-
-    std::lock_guard<std::mutex> lock(camera_move_mutex_);
-    command.sequence = ++camera_move_sequence_;
-    pending_camera_moves_[command.camera_handle] = command;
+    // LatestWins：同一台相机只保留最后一条；出队顺序由 CommandBuffer 内部
+    // 单调序列决定，与生产者线程的调度顺序无关。
+    camera_moves_.push(std::move(command));
 }
 
 std::vector<CameraMoveCommand> SharedDataHub::drain_camera_moves() {
-    std::vector<CameraMoveCommand> moves;
-    {
-        std::lock_guard<std::mutex> lock(camera_move_mutex_);
-        moves.reserve(pending_camera_moves_.size());
-        for (auto& [_, command] : pending_camera_moves_) {
-            moves.push_back(command);
-        }
-        pending_camera_moves_.clear();
-    }
-
-    std::sort(moves.begin(), moves.end(), [](const auto& lhs, const auto& rhs) {
-        return lhs.sequence < rhs.sequence;
-    });
-    return moves;
+    return camera_moves_.drain();
 }
 
 void SharedDataHub::enqueue_camera_viewport_update(CameraViewportUpdateCommand command) {
     if (command.camera_handle == 0) {
         return;
     }
-
-    std::lock_guard<std::mutex> lock(camera_viewport_update_mutex_);
-    command.sequence = ++camera_viewport_update_sequence_;
-    pending_camera_viewport_updates_[command.camera_handle] = command;
+    // LatestWins：同一台相机只保留最后一次视口状态；出队顺序由 buffer 内部序列决定。
+    camera_viewport_updates_.push(std::move(command));
 }
 
 std::vector<CameraViewportUpdateCommand> SharedDataHub::drain_camera_viewport_updates() {
-    std::vector<CameraViewportUpdateCommand> updates;
-    {
-        std::lock_guard<std::mutex> lock(camera_viewport_update_mutex_);
-        updates.reserve(pending_camera_viewport_updates_.size());
-        for (auto& [_, command] : pending_camera_viewport_updates_) {
-            updates.push_back(command);
-        }
-        pending_camera_viewport_updates_.clear();
-    }
-
-    std::sort(updates.begin(), updates.end(), [](const auto& lhs, const auto& rhs) {
-        return lhs.sequence < rhs.sequence;
-    });
-    return updates;
+    return camera_viewport_updates_.drain();
 }
 
 void SharedDataHub::enqueue_default_surface_camera_update(DefaultSurfaceCameraUpdateCommand command) {
     if (!command.surface || command.width == 0 || command.height == 0) return;
-    std::lock_guard lock(camera_viewport_update_mutex_);
-    pending_default_surface_camera_update_ = command;
+    // 容量 1 + LatestWins = 单槽：新命令覆盖旧命令。
+    default_surface_camera_update_.push(command);
 }
 
 std::optional<DefaultSurfaceCameraUpdateCommand> SharedDataHub::take_default_surface_camera_update() {
-    std::lock_guard lock(camera_viewport_update_mutex_);
-    return std::exchange(pending_default_surface_camera_update_, std::nullopt);
+    auto updates = default_surface_camera_update_.drain();
+    if (updates.empty()) {
+        return std::nullopt;
+    }
+    return updates.front();
 }
 
 void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command) {
@@ -348,13 +846,13 @@ void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command
     }
     if (has_camera_state_field(command.fields, CameraStateUpdateField::ViewState)) {
         pending.view_open = command.view_open;
+    }
+    if (has_camera_state_field(command.fields, CameraStateUpdateField::ViewState) ||
+        has_camera_state_field(command.fields, CameraStateUpdateField::ViewSettings)) {
         pending.view_x = command.view_x;
         pending.view_y = command.view_y;
         pending.view_width = command.view_width;
         pending.view_height = command.view_height;
-        pending.move_speed = command.move_speed;
-    }
-    if (has_camera_state_field(command.fields, CameraStateUpdateField::MoveSpeed)) {
         pending.move_speed = command.move_speed;
     }
 }
@@ -377,7 +875,7 @@ std::vector<CameraStateUpdateCommand> SharedDataHub::drain_camera_state_updates(
 }
 
 std::optional<bool> SharedDataHub::requested_camera_vision_denoise(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_denoise_.find(camera_handle);
     if (it != requested_camera_vision_denoise_.end()) {
@@ -387,7 +885,7 @@ std::optional<bool> SharedDataHub::requested_camera_vision_denoise(
 }
 
 std::optional<CameraVisionDenoiser> SharedDataHub::requested_camera_vision_denoiser(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_denoiser_.find(camera_handle);
     if (it != requested_camera_vision_denoiser_.end()) return it->second.type;
@@ -395,7 +893,7 @@ std::optional<CameraVisionDenoiser> SharedDataHub::requested_camera_vision_denoi
 }
 
 void SharedDataHub::acknowledge_camera_vision_denoiser(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_denoiser_.find(camera_handle);
     if (it != requested_camera_vision_denoiser_.end() && it->second.sequence <= applied_sequence) {
@@ -403,40 +901,40 @@ void SharedDataHub::acknowledge_camera_vision_denoiser(
     }
 }
 
-std::optional<std::string> SharedDataHub::requested_camera_vision_reblur_settings(
-    std::uintptr_t camera_handle) const {
+std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_reblur_settings(
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_reblur_settings_.find(camera_handle);
-    if (it != requested_camera_vision_reblur_settings_.end()) return it->second.json;
+    if (it != requested_camera_vision_reblur_settings_.end()) return it->second.value;
     return std::nullopt;
 }
 
-std::optional<std::string> SharedDataHub::requested_camera_vision_pt_settings(
-    std::uintptr_t camera_handle) const {
+std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_pt_settings(
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_pt_settings_.find(camera_handle);
-    if (it != requested_camera_vision_pt_settings_.end()) return it->second.json;
+    if (it != requested_camera_vision_pt_settings_.end()) return it->second.value;
     return std::nullopt;
 }
 
-std::optional<std::string> SharedDataHub::requested_camera_vision_restir_settings(
-    std::uintptr_t camera_handle) const {
+std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_restir_settings(
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_restir_settings_.find(camera_handle);
-    if (it != requested_camera_vision_restir_settings_.end()) return it->second.json;
+    if (it != requested_camera_vision_restir_settings_.end()) return it->second.value;
     return std::nullopt;
 }
 
-std::optional<std::string> SharedDataHub::requested_camera_vision_relax_settings(
-    std::uintptr_t camera_handle) const {
+std::optional<nlohmann::json> SharedDataHub::requested_camera_vision_relax_settings(
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_relax_settings_.find(camera_handle);
-    if (it != requested_camera_vision_relax_settings_.end()) return it->second.json;
+    if (it != requested_camera_vision_relax_settings_.end()) return it->second.value;
     return std::nullopt;
 }
 
 void SharedDataHub::acknowledge_camera_vision_reblur_settings(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_reblur_settings_.find(camera_handle);
     if (it != requested_camera_vision_reblur_settings_.end() && it->second.sequence <= applied_sequence) {
@@ -445,7 +943,7 @@ void SharedDataHub::acknowledge_camera_vision_reblur_settings(
 }
 
 void SharedDataHub::acknowledge_camera_vision_pt_settings(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_pt_settings_.find(camera_handle);
     if (it != requested_camera_vision_pt_settings_.end() && it->second.sequence <= applied_sequence) {
@@ -454,7 +952,7 @@ void SharedDataHub::acknowledge_camera_vision_pt_settings(
 }
 
 void SharedDataHub::acknowledge_camera_vision_restir_settings(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_restir_settings_.find(camera_handle);
     if (it != requested_camera_vision_restir_settings_.end() && it->second.sequence <= applied_sequence) {
@@ -463,7 +961,7 @@ void SharedDataHub::acknowledge_camera_vision_restir_settings(
 }
 
 void SharedDataHub::acknowledge_camera_vision_relax_settings(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_relax_settings_.find(camera_handle);
     if (it != requested_camera_vision_relax_settings_.end() && it->second.sequence <= applied_sequence) {
@@ -472,7 +970,7 @@ void SharedDataHub::acknowledge_camera_vision_relax_settings(
 }
 
 void SharedDataHub::acknowledge_camera_vision_denoise(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_denoise_.find(camera_handle);
     if (it != requested_camera_vision_denoise_.end() &&
@@ -482,7 +980,7 @@ void SharedDataHub::acknowledge_camera_vision_denoise(
 }
 
 std::optional<bool> SharedDataHub::requested_camera_vision_accumulation(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_accumulation_.find(camera_handle);
     if (it != requested_camera_vision_accumulation_.end()) {
@@ -492,7 +990,7 @@ std::optional<bool> SharedDataHub::requested_camera_vision_accumulation(
 }
 
 void SharedDataHub::acknowledge_camera_vision_accumulation(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_accumulation_.find(camera_handle);
     if (it != requested_camera_vision_accumulation_.end() &&
@@ -502,7 +1000,7 @@ void SharedDataHub::acknowledge_camera_vision_accumulation(
 }
 
 std::optional<bool> SharedDataHub::requested_camera_vision_stable_planes(
-    std::uintptr_t camera_handle) const {
+    EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_stable_planes_.find(camera_handle);
     if (it != requested_camera_vision_stable_planes_.end()) {
@@ -512,7 +1010,7 @@ std::optional<bool> SharedDataHub::requested_camera_vision_stable_planes(
 }
 
 void SharedDataHub::acknowledge_camera_vision_stable_planes(
-    std::uintptr_t camera_handle, std::uint64_t applied_sequence) {
+    EntityId camera_handle, std::uint64_t applied_sequence) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     const auto it = requested_camera_vision_stable_planes_.find(camera_handle);
     if (it != requested_camera_vision_stable_planes_.end() &&
@@ -521,7 +1019,7 @@ void SharedDataHub::acknowledge_camera_vision_stable_planes(
     }
 }
 
-void SharedDataHub::clear_camera_state_updates(std::uintptr_t camera_handle) {
+void SharedDataHub::clear_camera_state_updates(EntityId camera_handle) {
     std::lock_guard<std::mutex> lock(camera_state_update_mutex_);
     pending_camera_state_updates_.erase(camera_handle);
     requested_camera_vision_denoise_.erase(camera_handle);
@@ -540,24 +1038,21 @@ void SharedDataHub::enqueue_camera_release(CameraReleaseCommand command) {
     }
 
     clear_camera_state_updates(command.camera_handle);
-    std::lock_guard<std::mutex> lock(camera_release_mutex_);
-    pending_camera_releases_.push_back(command);
+    camera_viewport_updates_.erase(command.camera_handle);
+    // Fifo：同一相机多次释放不会被合并，顺序保持不变。
+    camera_releases_.push(command);
 }
 
 std::vector<CameraReleaseCommand> SharedDataHub::drain_camera_releases() {
-    std::vector<CameraReleaseCommand> releases;
-    {
-        std::lock_guard<std::mutex> lock(camera_release_mutex_);
-        releases.swap(pending_camera_releases_);
-    }
-    {
+    auto releases = camera_releases_.drain();
+    if (!releases.empty()) {
         std::lock_guard<std::mutex> lock(camera_timing_mutex_);
         for (const auto& release : releases) camera_timings_.erase(release.camera_handle);
     }
     return releases;
 }
 
-void SharedDataHub::set_viewport_ui_mode(std::uintptr_t camera_handle, ViewportUiMode mode) {
+void SharedDataHub::set_viewport_ui_mode(EntityId camera_handle, ViewportUiMode mode) {
     if (camera_handle == 0) {
         return;
     }
@@ -568,7 +1063,7 @@ void SharedDataHub::set_viewport_ui_mode(std::uintptr_t camera_handle, ViewportU
     state.mode = mode;
 }
 
-void SharedDataHub::set_viewport_ui_calibration(std::uintptr_t camera_handle,
+void SharedDataHub::set_viewport_ui_calibration(EntityId camera_handle,
                                                 const ViewportUiCalibration& calibration) {
     if (camera_handle == 0) {
         return;
@@ -580,7 +1075,7 @@ void SharedDataHub::set_viewport_ui_calibration(std::uintptr_t camera_handle,
     state.calibration = calibration;
 }
 
-ViewportUiState SharedDataHub::viewport_ui_state(std::uintptr_t camera_handle) const {
+ViewportUiState SharedDataHub::viewport_ui_state(EntityId camera_handle) const {
     std::lock_guard<std::mutex> lock(viewport_ui_mutex_);
     const auto it = viewport_ui_states_.find(camera_handle);
     if (it != viewport_ui_states_.end()) {
@@ -591,78 +1086,4 @@ ViewportUiState SharedDataHub::viewport_ui_state(std::uintptr_t camera_handle) c
     return state;
 }
 
-void SharedDataHub::enqueue_viewport_ui_pointer(ViewportUiPointerCommand command) {
-    if (command.camera_handle == 0) {
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(viewport_ui_mutex_);
-    command.sequence = ++viewport_ui_pointer_sequence_;
-    pending_viewport_ui_pointer_commands_.push_back(std::move(command));
-}
-
-std::vector<ViewportUiPointerCommand> SharedDataHub::drain_viewport_ui_pointer_commands() {
-    std::vector<ViewportUiPointerCommand> commands;
-    {
-        std::lock_guard<std::mutex> lock(viewport_ui_mutex_);
-        commands.swap(pending_viewport_ui_pointer_commands_);
-    }
-    return commands;
-}
-
-void SharedDataHub::set_viewport_gizmo_target(ViewportGizmoTarget target) {
-    if (target.camera_handle == 0) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(viewport_gizmo_mutex_);
-    auto& state = viewport_gizmo_states_[target.camera_handle];
-    const bool changed = state.target.actor_handle != target.actor_handle ||
-                         state.target.scene_id != target.scene_id ||
-                         state.target.actor_name != target.actor_name;
-    state.target = std::move(target);
-    state.sequence = ++viewport_gizmo_sequence_;
-    if (changed) {
-        state.hover_axis = ViewportGizmoAxis::None;
-        state.active_axis = ViewportGizmoAxis::None;
-        state.dragging = false;
-    }
-}
-
-void SharedDataHub::clear_viewport_gizmo_target(std::uintptr_t camera_handle) {
-    if (camera_handle == 0) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(viewport_gizmo_mutex_);
-    viewport_gizmo_states_.erase(camera_handle);
-    ++viewport_gizmo_sequence_;
-}
-
-ViewportGizmoState SharedDataHub::viewport_gizmo_state(
-    std::uintptr_t camera_handle) const {
-    std::lock_guard<std::mutex> lock(viewport_gizmo_mutex_);
-    const auto it = viewport_gizmo_states_.find(camera_handle);
-    if (it != viewport_gizmo_states_.end()) {
-        return it->second;
-    }
-    ViewportGizmoState state;
-    state.target.camera_handle = camera_handle;
-    return state;
-}
-
-void SharedDataHub::update_viewport_gizmo_interaction(
-    std::uintptr_t camera_handle,
-    ViewportGizmoAxis axis,
-    bool dragging,
-    ViewportGizmoAxis hover_axis) {
-    if (camera_handle == 0) {
-        return;
-    }
-    std::lock_guard<std::mutex> lock(viewport_gizmo_mutex_);
-    auto& state = viewport_gizmo_states_[camera_handle];
-    state.target.camera_handle = camera_handle;
-    state.active_axis = dragging ? axis : ViewportGizmoAxis::None;
-    state.hover_axis = dragging ? axis : hover_axis;
-    state.dragging = dragging;
-    state.sequence = ++viewport_gizmo_sequence_;
-}
 }  // namespace Corona

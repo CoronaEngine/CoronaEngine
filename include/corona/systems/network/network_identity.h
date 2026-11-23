@@ -1,6 +1,7 @@
 #pragma once
 
 #include <corona/shared_data_hub.h>
+#include <corona/ecs/access.h>
 #include <corona/systems/network/protocol.h>
 
 #include <cstdint>
@@ -14,14 +15,14 @@ namespace Corona::Network {
 struct ActorNetworkIdentity {
     std::string actor_guid;
     bool locally_owned = true;
-    std::uintptr_t actor_handle = 0;
-    std::uintptr_t profile_handle = 0;
-    std::uintptr_t geometry_handle = 0;
-    std::uintptr_t transform_handle = 0;
-    std::uintptr_t model_resource_handle = 0;
-    std::uintptr_t optics_handle = 0;
-    std::uintptr_t mechanics_handle = 0;
-    std::uintptr_t acoustics_handle = 0;
+    EntityId actor_handle = 0;
+    EntityId profile_handle = 0;
+    EntityId geometry_handle = 0;
+    EntityId transform_handle = 0;
+    EntityId model_resource_handle = 0;
+    EntityId optics_handle = 0;
+    EntityId mechanics_handle = 0;
+    EntityId acoustics_handle = 0;
     std::int64_t actor_seq = -1;
     std::int64_t profile_seq = -1;
     std::int64_t geometry_seq = -1;
@@ -51,7 +52,7 @@ public:
     explicit NetworkIdentityRegistry(SharedDataHub& hub) : hub_(hub) {}
 
     bool register_actor(const std::string& actor_guid,
-                        std::uintptr_t actor_handle,
+                        EntityId actor_handle,
                         bool locally_owned = true) {
         if (actor_guid.empty() || actor_handle == 0) return false;
         // 句柄快照在锁外采集：build_identity 会取若干槽位锁。
@@ -132,20 +133,23 @@ public:
 private:
     std::optional<ActorNetworkIdentity> build_identity(
         const std::string& actor_guid,
-        std::uintptr_t actor_handle) const {
-        auto actor = hub_.actor_storage().try_acquire_read(actor_handle);
-        if (!actor.valid() || actor->profile_handles.empty()) return std::nullopt;
+        EntityId actor_handle) const {
+        auto actor = Corona::find_actor(actor_handle);
+        const auto* actor_profiles = Corona::find_profiles(actor_handle);
+        if (actor == nullptr || actor_profiles == nullptr || actor_profiles->handles.empty()) {
+            return std::nullopt;
+        }
 
         ActorNetworkIdentity out;
         out.actor_guid = actor_guid;
         out.actor_handle = actor_handle;
-        out.actor_seq = hub_.actor_storage().seq_id(actor_handle);
+        out.actor_seq = Corona::Ecs::seq_of(actor_handle);
 
-        out.profile_handle = actor->profile_handles.front();
-        out.profile_seq = hub_.profile_storage().seq_id(out.profile_handle);
+        out.profile_handle = actor_profiles->handles.front();
+        out.profile_seq = Corona::Ecs::seq_of(out.profile_handle);
 
-        auto profile = hub_.profile_storage().try_acquire_read(out.profile_handle);
-        if (!profile.valid()) return std::nullopt;
+        const auto* profile = hub_.try_profile(out.profile_handle);
+        if (profile == nullptr) return std::nullopt;
 
         out.geometry_handle = profile->geometry_handle;
         out.optics_handle = profile->optics_handle;
@@ -157,50 +161,50 @@ private:
         }
 
         if (out.geometry_handle != 0) {
-            out.geometry_seq = hub_.geometry_storage().seq_id(out.geometry_handle);
-            auto geometry = hub_.geometry_storage().try_acquire_read(out.geometry_handle);
-            if (geometry.valid()) {
+            out.geometry_seq = Corona::Ecs::seq_of(out.geometry_handle);
+            const auto* geometry = Corona::find_geometry(out.geometry_handle);
+            if (geometry != nullptr) {
                 out.transform_handle = geometry->transform_handle;
                 out.model_resource_handle = geometry->model_resource_handle;
             }
         }
 
         if (out.transform_handle != 0) {
-            out.transform_seq = hub_.model_transform_storage().seq_id(out.transform_handle);
+            out.transform_seq = Corona::Ecs::seq_of(out.transform_handle);
         }
         if (out.model_resource_handle != 0) {
-            out.model_resource_seq = hub_.model_resource_storage().seq_id(out.model_resource_handle);
+            out.model_resource_seq = Corona::Ecs::seq_of(out.model_resource_handle);
         }
         if (out.optics_handle != 0) {
-            out.optics_seq = hub_.optics_storage().seq_id(out.optics_handle);
+            out.optics_seq = Corona::Ecs::seq_of(out.optics_handle);
         }
         if (out.mechanics_handle != 0) {
-            out.mechanics_seq = hub_.mechanics_storage().seq_id(out.mechanics_handle);
+            out.mechanics_seq = Corona::Ecs::seq_of(out.mechanics_handle);
         }
         if (out.acoustics_handle != 0) {
-            out.acoustics_seq = hub_.acoustics_storage().seq_id(out.acoustics_handle);
+            out.acoustics_seq = Corona::Ecs::seq_of(out.acoustics_handle);
         }
 
         return out;
     }
 
-    std::uintptr_t geometry_from_component_handles(
+    EntityId geometry_from_component_handles(
         const ActorNetworkIdentity& identity) const {
         if (identity.optics_handle != 0) {
-            auto optics = hub_.optics_storage().try_acquire_read(identity.optics_handle);
-            if (optics.valid() && optics->geometry_handle != 0) {
+            auto optics = Corona::find_optics(identity.optics_handle);
+            if (optics != nullptr && optics->geometry_handle != 0) {
                 return optics->geometry_handle;
             }
         }
         if (identity.mechanics_handle != 0) {
-            auto mechanics = hub_.mechanics_storage().try_acquire_read(identity.mechanics_handle);
-            if (mechanics.valid() && mechanics->geometry_handle != 0) {
+            auto mechanics = Corona::find_mechanics(identity.mechanics_handle);
+            if (mechanics != nullptr && mechanics->geometry_handle != 0) {
                 return mechanics->geometry_handle;
             }
         }
         if (identity.acoustics_handle != 0) {
-            auto acoustics = hub_.acoustics_storage().try_acquire_read(identity.acoustics_handle);
-            if (acoustics.valid() && acoustics->geometry_handle != 0) {
+            const auto* acoustics = hub_.try_acoustics(identity.acoustics_handle);
+            if (acoustics != nullptr && acoustics->geometry_handle != 0) {
                 return acoustics->geometry_handle;
             }
         }

@@ -46,8 +46,8 @@ ResourceManager& ResourceManager::get_instance() {
 ResourceManager::ResourceManager() = default;
 
 ResourceManager::~ResourceManager() {
-    // 取消所有正在进行的异步任务并等待它们完成
-    async_tasks_.cancel();
+    // 拒绝新任务，并等待已在飞的任务结束；否则任务可能在成员析构后访问 this。
+    shutting_down_.store(true, std::memory_order_release);
     async_tasks_.wait();
     parser_registry_.clear();
     resource_cache_.clear();
@@ -69,14 +69,17 @@ std::future<TResourceID> ResourceManager::import_async(const std::filesystem::pa
     auto promise = std::make_shared<std::promise<TResourceID>>();
     auto future = promise->get_future();
 
-    // 阶段标记：import_arena_.execute() 会阻塞调用线程直到 arena 腾出槽位，
-    // 任务本身则可能在解析或等条目锁。二者都会让"加载中"永远不结束，
-    // 但没有任何日志能区分，故这里把阶段暴露给线程阶段看门狗。
-    Corona::Diagnostics::PhaseScope import_phase{"Resource", "import_async:arena_wait"};
+    // 阶段标记：任务在"排队等共享 worker"与"真正解析"两段之间，日志上无法区分，
+    // 故把阶段暴露给线程阶段看门狗。
+    Corona::Diagnostics::PhaseScope import_phase{"Resource", "import_async:queued"};
 
-    // 将加载任务提交到任务组
-    import_arena_.execute([this, path, options, promise]() {
-        async_tasks_.run([this, path, options, promise]() {
+    const bool queued = async_tasks_.submit(
+        Corona::Concurrency::TaskClass::Background,
+        [this, path, options, promise]() {
+            if (shutting_down_.load(std::memory_order_acquire)) {
+                promise->set_value(IResource::INVALID_UID);
+                return;
+            }
             Corona::Diagnostics::PhaseScope task_phase{"Resource", "import_async:load_internal"};
             try {
                 promise->set_value(load_internal(path, options));
@@ -84,7 +87,10 @@ std::future<TResourceID> ResourceManager::import_async(const std::filesystem::pa
                 promise->set_value(IResource::INVALID_UID);
             }
         });
-    });
+    if (!queued) {
+        // 池已停止：直接回填失败值，避免调用方拿到 broken_promise。
+        promise->set_value(IResource::INVALID_UID);
+    }
 
     return future;
 }
@@ -105,9 +111,18 @@ std::future<bool> ResourceManager::export_async(TResourceID rid, const std::file
     auto promise = std::make_shared<std::promise<bool>>();
     auto future = promise->get_future();
 
-    async_tasks_.run([this, rid, path, promise]() {
-        promise->set_value(export_sync(rid, path));
-    });
+    const bool queued = async_tasks_.submit(
+        Corona::Concurrency::TaskClass::Background,
+        [this, rid, path, promise]() {
+            if (shutting_down_.load(std::memory_order_acquire)) {
+                promise->set_value(false);
+                return;
+            }
+            promise->set_value(export_sync(rid, path));
+        });
+    if (!queued) {
+        promise->set_value(false);
+    }
     return future;
 }
 
@@ -118,9 +133,18 @@ bool ResourceManager::remove_cache(TResourceID rid) {
 std::future<bool> ResourceManager::remove_cache_async(TResourceID rid) {
     auto promise = std::make_shared<std::promise<bool>>();
     auto future = promise->get_future();
-    async_tasks_.run([this, rid, promise]() {
-        promise->set_value(try_evict(rid).success);
-    });
+    const bool queued = async_tasks_.submit(
+        Corona::Concurrency::TaskClass::Background,
+        [this, rid, promise]() {
+            if (shutting_down_.load(std::memory_order_acquire)) {
+                promise->set_value(false);
+                return;
+            }
+            promise->set_value(try_evict(rid).success);
+        });
+    if (!queued) {
+        promise->set_value(false);
+    }
     return future;
 }
 

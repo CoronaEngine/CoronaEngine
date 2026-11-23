@@ -18,6 +18,7 @@ target_include_directories(CoronaPythonRuntimeCoordinator PUBLIC
     ${PROJECT_SOURCE_DIR}/include
 )
 target_compile_features(CoronaPythonRuntimeCoordinator PUBLIC cxx_std_20)
+target_link_libraries(CoronaPythonRuntimeCoordinator PUBLIC nlohmann_json::nlohmann_json)
 
 # Create system library
 corona_add_system(script
@@ -27,12 +28,11 @@ corona_add_system(script
         script_system.cpp
         ${PROJECT_SOURCE_DIR}/src/engine/engine_runtime_api.cpp
         python/corona_engine_module.cpp
-        python/engine_bindings.cpp
-        python/editor_host_bindings.cpp
+        python/host_support_bindings.cpp
+        python/service_queue_bindings.cpp
         python/python_api.cpp
         python/python_path_config.cpp
         python/python_error_handler.cpp
-        camera_follow_controller.cpp
     DEPENDENCIES
         Python::Python
         nanobind-static

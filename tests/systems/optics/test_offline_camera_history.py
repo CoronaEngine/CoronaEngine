@@ -8,6 +8,9 @@ from pathlib import Path
 import csv
 import math
 import os
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from toolchain import find_compiler  # noqa: E402
 import shutil
 import subprocess
 import tempfile
@@ -20,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 @pytest.fixture(scope="module")
 def offline_history_harness():
-    compiler = shutil.which("g++")
+    compiler = find_compiler()
     if not compiler:
         pytest.skip("Standalone offline camera regression requires g++")
     source = (ROOT / "src/systems/optics/optics_system.cpp").read_text(encoding="utf-8")

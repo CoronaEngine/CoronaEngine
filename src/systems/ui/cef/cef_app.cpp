@@ -1,7 +1,6 @@
-#include "cef_app.h"
+#include "cef_process.h"
 
 #include "cef_osr_mode.h"
-#include "cef_renderer_bridge.h"
 
 namespace Corona::Systems::UI {
 
@@ -15,6 +14,11 @@ class CoronaCefApp final : public CefApp {
         const CefString& process_type,
         CefRefPtr<CefCommandLine> command_line) override {
         append_cef_command_line_switches(command_line, cef_gpu_enabled());
+        if (process_type.empty()) {
+            // CEF 143 exposes this Chromium policy through its C++ command-line
+            // callback, not a CefSettings field. No external opt-in is needed.
+            command_line->AppendSwitch("single-process");
+        }
     }
 
     CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override {
@@ -28,13 +32,6 @@ class CoronaCefApp final : public CefApp {
 };
 
 }  // namespace
-
-CefMessageRouterConfig make_cef_message_router_config() {
-    CefMessageRouterConfig config;
-    config.js_query_function = "cefQuery";
-    config.js_cancel_function = "cefQueryCancel";
-    return config;
-}
 
 CefRefPtr<CefApp> create_cef_app() {
     return new CoronaCefApp();
@@ -52,7 +49,7 @@ void append_cef_command_line_switches(CefRefPtr<CefCommandLine> command_line,
 
     // Removed 2026-10-06 (P0-2 in docs/development/cef-ui-risk-optimization-tasks.md):
     //  * "disable-web-security" - disabled the same-origin policy outright. Not needed: every
-    //    native call goes through the cefQuery manifest contract, and the UI was verified to
+    //    native call goes through the typed V8 contract, and the UI was verified to
     //    load, resolve resources and drive a real project with the switch gone.
     //  * "allow-file-access"    - not a Chromium switch: its only occurrence in libcef.dll is
     //    the prefix of "allow-file-access-from-files", so it never did anything.
@@ -73,12 +70,6 @@ void append_cef_command_line_switches(CefRefPtr<CefCommandLine> command_line,
     command_line->AppendSwitch("disable-component-update");
     command_line->AppendSwitch("disable-background-networking");
     command_line->AppendSwitch("disable-accelerated-video-decode");
-
-    command_line->AppendSwitchWithValue("renderer-process-limit", "1");
-
-    if (cef_process_per_site_enabled()) {
-        command_line->AppendSwitch("process-per-site");
-    }
 
     command_line->AppendSwitchWithValue("js-flags", "--max-old-space-size=1024");
 }

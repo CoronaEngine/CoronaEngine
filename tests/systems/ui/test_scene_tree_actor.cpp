@@ -27,6 +27,7 @@ int main() {
     row.visible = true;
     row.model_node_count = 3778;
     row.model_node_root_count = 1;
+    row.actor_version = 7;
 
     const auto item = scene_tree_actor_to_json(row);
 
@@ -44,6 +45,7 @@ int main() {
     require(item.at("gpu_build_state") == "PendingBuild", "gpu_build_state");
     require(item.at("model_node_count") == 3778, "model_node_count");
     require(item.at("model_node_root_count") == 1, "model_node_root_count");
+    require(item.at("actor_version") == 7, "actor_version");
     require(item.at("load_error").is_null(), "load_error");
 
     // A tree row must not carry the engine-side payload that made the previous

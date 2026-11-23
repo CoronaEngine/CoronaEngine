@@ -1,5 +1,8 @@
 """Exercise the pixel placement used by the display compositor, without a GPU."""
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from toolchain import find_compiler  # noqa: E402
 import shutil
 import subprocess
 import tempfile
@@ -10,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_fixed_image_is_maximally_fitted_without_stretching():
-    compiler = shutil.which("g++")
+    compiler = find_compiler()
     if not compiler:
         pytest.skip("Standalone display placement check requires g++")
     code = r'''

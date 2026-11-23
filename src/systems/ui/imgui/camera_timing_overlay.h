@@ -13,7 +13,9 @@
 namespace Corona::Systems::UI::CameraTimingOverlay {
 
 inline void draw(const BrowserTab& tab, ImVec2 origin, ImVec2 size) {
-    if (tab.docking_pos != "main" || size.x <= 0 || size.y <= 0) return;
+    // The HUD belongs to the editor's main viewport tab only; panels/camera windows
+    // have their own surfaces (the docking_pos string was retired with ImGui docking).
+    if (!tab.main_workspace || size.x <= 0 || size.y <= 0) return;
     auto camera = tab.web_camera_handle;
     // SPA navigation retains the tab's old camera handle. Only the main scene
     // route owns a viewport; launcher pages must never show that old telemetry.
@@ -32,7 +34,7 @@ inline void draw(const BrowserTab& tab, ImVec2 origin, ImVec2 size) {
     bool supported = false;
     bool has_camera = false;
     bool pt_fallback = false;
-    if (const auto device = hub.camera_storage().try_acquire_read_nowait(camera)) {
+    if (const auto* device = Corona::find_camera(camera)) {
         has_camera = true;
         // Native and diagnostic outputs do not publish render/denoise telemetry.
         supported = device->render_backend == CameraRenderBackend::Vision &&

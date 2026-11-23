@@ -83,13 +83,14 @@ class CoronaEngineConan(ConanFile):
         self.requires("sdl/3.4.0", transitive_headers=True, transitive_libs=True)
         self.requires("corona-imgui/1.92.5")
         self.requires("enet/1.3.18", transitive_headers=True, transitive_libs=True)
-        self.requires("onetbb/2022.3.0", transitive_headers=True, transitive_libs=True)
         self.requires("miniaudio/0.11.21", transitive_headers=True)
         self.requires("nlohmann_json/3.12.0", transitive_headers=True)
         self.requires("tinyexr/1.0.7", transitive_headers=True, transitive_libs=True)
         self.requires("meshoptimizer/0.25", transitive_headers=True, transitive_libs=True)
         self.requires("astc-encoder/5.3.0", transitive_headers=True, transitive_libs=True)
         self.requires("ffmpeg/8.1.1", transitive_headers=True, transitive_libs=True)
+        # ECS 容器（Storage -> entt 迁移用）。header-only，只需要头文件。
+        self.requires("entt/3.16.0", transitive_headers=True)
 
         if bool(self.options.with_cef):
             self.requires("cef-binary/143.0.14.gdd46a37.chromium143.0.7499.193",

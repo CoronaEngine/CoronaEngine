@@ -1,0 +1,91 @@
+#pragma once
+
+#include <corona/kernel/entity_id.h>
+#include "browser_manager.h"
+#include "camera_window_lifetime.h"
+#include "editor_operation_methods.h"
+#include <optional>
+
+namespace Corona::Systems::UI {
+
+/// A window presentation is a state, not a toggle: the caller names the state it
+/// wants and the native host runs whichever transition reaches it.
+enum class WindowPresentation { None, Windowed, Maximized, Borderless, Toggle };
+
+struct ViewportBounds {
+    int x = 0, y = 0, width = 0, height = 0, render_width = 0, render_height = 0;
+};
+struct ViewportLenticularCalibration {
+    double pe = 19.1813, angle = 0.2305, offset = 14.1171, parallax_scale = 19.1849;
+};
+struct ViewportConfiguration {
+    std::optional<std::string> mode;
+    std::optional<ViewportLenticularCalibration> calibration;
+    std::optional<ViewportBounds> bounds;
+};
+struct ViewportConfigurationSnapshot {
+    std::string archive_session, scene, camera_id, mode;
+    ViewportLenticularCalibration calibration;
+    std::optional<ViewportBounds> bounds;
+};
+
+// A panel open request. ImGui owns placement, so this carries only identity and size: the
+// panel becomes an ImGui window and the user's layout decides where it sits.
+struct PanelOptions {
+    std::string panel_id;
+    std::string title;
+    std::string route;
+    int width = 0, height = 0, x = 120, y = 120;
+};
+
+// Thread-boundary DTOs. No V8 handles or legacy JSON requests belong here.
+struct WindowSnapshot {
+    int window_token = -1;
+    std::string panel_id;
+};
+
+struct WindowRequest {
+    WindowMethod method;
+    int browser_id;
+    std::optional<PanelOptions> panel;
+    std::string base_url;
+    std::string panel_id; // Stable panel identity for Close; never a tab id.
+    std::string scene_id;
+    std::string camera_id;
+    std::string archive_session;
+    EntityId camera_handle = 0; // Resolved by the native scene owner, never supplied by Web.
+    std::shared_ptr<CameraWindowAuthority> camera_authority;
+    std::shared_ptr<CameraWindowState> camera_state;
+    /// Presentation request: the caller names the states it wants, not the toggles to run.
+    WindowPresentation presentation = WindowPresentation::None;
+    bool main_window_target = false;
+    /// close({sceneId}) — the plural form. The scene may be empty: it then closes no view
+    /// but still answers in the next main-thread turn, which is the session's fence.
+    bool close_scene_views = false;
+    std::uint64_t context_id = 0; // Native endpoint identity; never supplied by Web.
+    int width = 0, height = 0;
+    std::optional<ViewportConfiguration> viewport;
+};
+
+struct WindowReply {
+    WindowSnapshot snapshot;
+    bool accepted = false;
+    bool existing = false;
+    int close_self_tab_id = -1;
+    int closed_count = 0;
+    std::string error_code;
+    std::string error_message;
+    std::optional<ViewportConfigurationSnapshot> viewport;
+};
+
+// Invoked only by the BrowserManager main-thread task queue.
+WindowReply execute_window_operation(const WindowRequest& request);
+bool request_application_exit();
+WindowReply apply_viewport_configuration(const WindowRequest& request, BrowserTab& source);
+void refresh_viewport_state(BrowserTab& source);
+
+// Invoked asynchronously on the native editor scene owner (CEF UI) thread.
+// Resolves exact IDs and fills only immutable DTO values plus a native lease.
+WindowReply prepare_camera_window_request(WindowRequest& request);
+
+}  // namespace Corona::Systems::UI

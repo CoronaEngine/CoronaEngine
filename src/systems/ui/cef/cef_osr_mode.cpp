@@ -93,10 +93,6 @@ int resolve_windowless_frame_rate() {
     return rate > 0 ? rate : kDefaultFrameRate;
 }
 
-bool cef_process_per_site_enabled() {
-    return !is_disabled_value(std::getenv("CORONA_CEF_PROCESS_PER_SITE"));
-}
-
 int resolve_remote_debugging_port(int build_default_port) {
     const char* value = std::getenv("CORONA_CEF_REMOTE_DEBUG_PORT");
     if (value == nullptr || value[0] == '\0') {

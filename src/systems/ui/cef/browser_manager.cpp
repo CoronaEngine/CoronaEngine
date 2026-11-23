@@ -9,7 +9,8 @@
 
 #include "cef_client.h"
 #include "cef_paths.h"
-#include "cef_bridge_helpers.h"
+#include "cef_process.h"
+#include "cef_window_operations.h"
 #include "cef_osr_mode.h"
 #include "horizon/core/logging.h"
 #include "corona/systems/ui/camera_viewport_manager.h"
@@ -21,57 +22,9 @@ BrowserManager& BrowserManager::instance() {
     return instance;
 }
 
-bool BrowserManager::hide_tab(int tab_id, bool if_close) {
-    auto it = tabs_.find(tab_id);
-    if (it == tabs_.end()) {
-        CFW_LOG_WARNING("Attempted to hide non-existent tab: ID={}", tab_id);
-        return false;
-    }
-
-    BrowserTab* tab = it->second.get();
-    tab->minimized = true;
-    if (if_close) {
-        tab->open = true;
-    }
-
-    CFW_LOG_INFO("Browser tab hidden: ID={}", tab_id);
-    return true;
-}
-
-bool BrowserManager::show_tab(int tab_id) {
-    auto it = tabs_.find(tab_id);
-    if (it == tabs_.end()) {
-        CFW_LOG_WARNING("Attempted to show non-existent tab: ID={}", tab_id);
-        return false;
-    }
-
-    BrowserTab* tab = it->second.get();
-
-    tab->minimized = false;
-
-    // 触发重绘
-    if (tab->client && tab->client->GetBrowser()) {
-        tab->client->GetBrowser()->GetHost()->WasResized();
-    }
-
-    CFW_LOG_INFO("Browser tab shown: ID={}", tab_id);
-    return true;
-}
-
 // 修改主 create_tab 方法
-int BrowserManager::create_tab(const std::string& url, const std::string& path,
-                               const std::string& docking_pos,
-                               int dock_width, int dock_height,
-                               bool dock_fixed) {
-    return create_tab(url, path, docking_pos, dock_width, dock_height,
-                      dock_fixed, false, 120, 120);
-}
-
-int BrowserManager::create_tab(const std::string& url, const std::string& path,
-                               const std::string& docking_pos,
-                               int dock_width, int dock_height,
-                               bool dock_fixed, bool camera_view,
-                               int initial_x, int initial_y) {
+int BrowserManager::create_tab(const std::string& url, const std::string& path, TabKind kind,
+                               int width, int height, int initial_x, int initial_y) {
     auto tab = std::make_unique<BrowserTab>();
 
     int id = 0;
@@ -81,23 +34,17 @@ int BrowserManager::create_tab(const std::string& url, const std::string& path,
     }
     const auto thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
 
-    // 设置 docking 属性
     tab->tab_id = id;
-    tab->docking_pos = docking_pos;
-    tab->dock_width = dock_width;
-    tab->dock_height = dock_height;
-    tab->dock_fixed = dock_fixed;
-    tab->dock_initialized = false;
-    tab->minimized = false;
+    tab->window_token = next_window_token_++;
+    tab->main_workspace = kind == TabKind::MainWorkspace;
+    tab->camera_view = kind == TabKind::CameraView;
     tab->open = true;  // 新标签页默认显示
-    tab->camera_view = camera_view;
     tab->initial_x = initial_x;
     tab->initial_y = initial_y;
 
-    // 如果有指定的dock大小，使用它，否则使用默认大小
-    if (dock_width > 0 && dock_height > 0) {
-        tab->width = dock_width;
-        tab->height = dock_height;
+    if (width > 0 && height > 0) {
+        tab->width = width;
+        tab->height = height;
     } else {
         tab->width = 1600;
         tab->height = 900;
@@ -105,7 +52,7 @@ int BrowserManager::create_tab(const std::string& url, const std::string& path,
 
     tab->name = "Browser " + path;
 
-    CFW_LOG_INFO("create_tab: id={}, camera_view={}, thread={}, path={}", id, camera_view,
+    CFW_LOG_INFO("create_tab: id={}, camera_view={}, thread={}, path={}", id, tab->camera_view,
                  thread_id, path);
 
     // URL Processing
@@ -161,13 +108,9 @@ int BrowserManager::create_tab(const std::string& url, const std::string& path,
     browser_settings.javascript = STATE_ENABLED;
     browser_settings.local_storage = STATE_ENABLED;
     browser_settings.webgl = STATE_ENABLED;
-    const bool transparent_overlay =
-        camera_view ||
-        docking_pos == "main" ||
-        docking_pos == "right_top" ||
-        docking_pos == "right_bottom" ||
-        docking_pos == "left_bottom" ||
-        docking_pos == "center";
+    // The camera surface carries the 3D scene, and the editor chrome floats over it: both need
+    // a transparent page background. Everything else paints its own panel background.
+    const bool transparent_overlay = tab->camera_view || tab->main_workspace;
     tab->transparent_overlay = transparent_overlay;
     browser_settings.background_color =
         CefColorSetARGB(transparent_overlay ? 0 : 255, 16, 19, 16);
@@ -188,7 +131,7 @@ int BrowserManager::create_tab(const std::string& url, const std::string& path,
     if (!browser_created) {
         registered_tab->cef_creation_failed = true;
         registered_tab->client->MarkBrowserCreationFailed();
-        CFW_LOG_ERROR("Failed to create browser tab: ID={}, camera_view={}", id, camera_view);
+        CFW_LOG_ERROR("Failed to create browser tab: ID={}, camera_view={}", id, tab->camera_view);
     }
     return id;
 }
@@ -197,6 +140,15 @@ BrowserTab* BrowserManager::get_tab(int tab_id) {
     std::lock_guard lock(tabs_mutex_);
     auto it = tabs_.find(tab_id);
     return it != tabs_.end() ? it->second.get() : nullptr;
+}
+
+BrowserTab* BrowserManager::find_tab_by_panel_id(const std::string& panel_id) {
+    if (panel_id.empty()) return nullptr;
+    std::lock_guard lock(tabs_mutex_);
+    for (const auto& [tab_id, tab] : tabs_) {
+        if (tab && tab->open && tab->panel_id == panel_id) return tab.get();
+    }
+    return nullptr;
 }
 
 std::vector<BrowserManager::TabSnapshotEntry> BrowserManager::tabs_snapshot() const {
@@ -224,8 +176,8 @@ void BrowserManager::remove_tab(int tab_id) {
     BrowserTab* tab = removed.get();
     if (!tab) return;
 
-    CFW_LOG_INFO("[CEF/Tab] remove_tab id={} camera_view={} floating={} open={}", tab_id,
-                 tab->camera_view, tab->floating, tab->open);
+    CFW_LOG_INFO("[CEF/Tab] remove_tab id={} camera_view={} open={}", tab_id,
+                 tab->camera_view, tab->open);
     if (tab->camera_view) {
         CameraViewportManager::instance().unregister_view(
             tab_id, tab->preserve_camera_open_on_close);
@@ -238,34 +190,23 @@ void BrowserManager::remove_tab(int tab_id) {
     }
 
     destroy_tab_texture(tab);
+    notify_corona_window_closed(tab->window_token, tab->panel_id);
     // `removed` releases the tab here, once every reference above is dropped.
-}
-
-void BrowserManager::set_tab_drag_regions(int tab_id, const std::vector<DragRegion>& regions) {
-    BrowserTab* tab = nullptr;
-    {
-        std::lock_guard lock(tabs_mutex_);
-        auto it = tabs_.find(tab_id);
-        if (it == tabs_.end()) return;
-        tab = it->second.get();
-    }
-    std::lock_guard<std::mutex> lock(tab->drag_mutex);
-    tab->drag_regions = regions;
 }
 
 void BrowserManager::update() {
     ++frame_index_;
     retire_deferred_tab_textures();
 
-    std::function<void()> task;
+    // Drain this turn's snapshot so multiple Web documents cannot produce
+    // work faster than a one-task-per-frame consumer. Tasks posted while this
+    // batch runs belong to the next turn (including lifecycle acknowledgments).
+    std::vector<std::function<void()>> tasks;
     {
         std::lock_guard lock(pending_tasks_mutex_);
-        if (!pending_tasks_.empty()) {
-            task = std::move(pending_tasks_.front());
-            pending_tasks_.erase(pending_tasks_.begin());
-        }
+        tasks.swap(pending_tasks_);
     }
-    if (task) {
+    for (auto& task : tasks) {
         try {
             task();
         } catch (const std::exception& exception) {
@@ -275,9 +216,13 @@ void BrowserManager::update() {
         }
     }
 
+    // Retire cached viewport bindings with their scene.
+    for (const auto& entry : tabs_snapshot()) {
+        if (entry.tab) refresh_viewport_state(*entry.tab);
+    }
+
     // GPU actor-pick completions are produced by OpticsSystem on another thread;
-    // broadcast them only from this CEF/UI-thread tick.
-    drain_actor_pick_completion_events();
+    // resolve owned native requests only from this main-thread tick.
 
     // Texture uploads are driven by UiFrameRunner after this frame's SDL/CEF input has
     // already been routed. Keeping uploads out of this queue drain prevents a GPU receipt

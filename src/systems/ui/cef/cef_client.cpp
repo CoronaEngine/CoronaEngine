@@ -1,3 +1,4 @@
+#include "bridge_worker.h"
 #include "cef_client.h"
 #include "cef_paths.h"
 #include <corona/utils/runtime_paths.h>
@@ -19,18 +20,26 @@
 #include <vector>
 
 #include <horizon/core/logging.h>
+#include <include/base/cef_callback.h>
+#include <wrapper/cef_closure_task.h>
 
 #include "browser_manager.h"
-#include "cef_app.h"
-#include "cef_bridge_helpers.h"
-#include "cef_editor_api.h"
+#include "cef_process.h"
+#include "python_service_bridge.h"
 #include "cef_osr_mode.h"
 #include "cef_shared_texture_probe.h"
-#include "request_response_broker.h"
 
 namespace Corona::Systems::UI {
 
 namespace {
+
+// CefShutdown is only valid after successful initialization. Our workaround for
+// the bundled CEF's single-process shutdown uses the initializing thread's loop.
+std::atomic<bool> g_cef_initialized{false};
+
+bool owns_cef_message_loop() {
+    return g_cef_initialized.load() && CefCurrentlyOn(TID_UI);
+}
 
 bool is_main_editor_route(const std::string& url) {
     const auto hash_pos = url.find('#');
@@ -53,7 +62,7 @@ bool should_preserve_alpha(BrowserTab* tab, CefRefPtr<CefBrowser> browser) {
     if (tab->camera_view) {
         return true;
     }
-    if (tab->docking_pos != "main") {
+    if (!tab->main_workspace) {
         return tab->transparent_overlay;
     }
 
@@ -309,9 +318,7 @@ void OffscreenRenderHandler::OnImeCompositionRangeChanged(CefRefPtr<CefBrowser>,
 
 OffscreenCefClient::OffscreenCefClient()
     : browser_(nullptr),
-      render_handler_(new OffscreenRenderHandler()),
-      browser_side_router_(nullptr),
-      js_handler_(nullptr) {
+      render_handler_(new OffscreenRenderHandler()) {
 }
 
 CefRefPtr<CefRenderHandler> OffscreenCefClient::GetRenderHandler() {
@@ -340,16 +347,12 @@ void OffscreenCefClient::OnAfterCreated(CefRefPtr<CefBrowser> browser) {
         close_requested = close_requested_;
     }
 
-    if (!browser_side_router_) {
-        browser_side_router_ =
-            CefMessageRouterBrowserSide::Create(make_cef_message_router_config());
-
-        js_handler_ = new BrowserSideJSHandler();
-        browser_side_router_->AddHandler(js_handler_, true);
-    }
-
     if (close_requested) {
-        browser->GetHost()->CloseBrowser(true);
+        // Creation has not unwound yet. Closing synchronously here can destroy
+        // the browser while CEF is still finishing its creation callback.
+        CefPostTask(TID_UI, base::BindOnce([](CefRefPtr<CefBrowser> pending_browser) {
+            pending_browser->GetHost()->CloseBrowser(true);
+        }, browser));
         return;
     }
 
@@ -388,12 +391,6 @@ void OffscreenCefClient::OnLoadError(CefRefPtr<CefBrowser> browser,
 void OffscreenCefClient::OnBeforeClose(CefRefPtr<CefBrowser> browser) {
     CEF_REQUIRE_UI_THREAD();
     if (browser) {
-        cef_request_response_broker().cancel_browser(browser->GetIdentifier());
-        EditorApiCallbackRegistry::instance().clear_cef_callbacks_for_browser(
-            browser->GetIdentifier());
-    }
-    if (browser_side_router_) {
-        browser_side_router_->OnBeforeClose(browser);
     }
     {
         std::lock_guard lock(browser_mutex_);
@@ -421,6 +418,24 @@ void OffscreenCefClient::RequestClose() {
 }
 
 bool OffscreenCefClient::WaitForClose(std::chrono::milliseconds timeout) {
+    if (owns_cef_message_loop()) {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        for (;;) {
+            {
+                std::lock_guard lock(browser_mutex_);
+                if (browser_closed_) {
+                    return true;
+                }
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return false;
+            }
+            // OnBeforeClose runs on this thread. Never hold browser_mutex_ while
+            // pumping: the callback needs that mutex to mark the browser closed.
+            do_cef_message_loop_work();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
     std::unique_lock lock(browser_mutex_);
     return browser_closed_cv_.wait_for(lock, timeout, [this] {
         return browser_closed_;
@@ -450,9 +465,6 @@ bool OffscreenCefClient::OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
                                         bool user_gesture,
                                         bool is_redirect) {
     CEF_REQUIRE_UI_THREAD();
-    if (browser_side_router_) {
-        browser_side_router_->OnBeforeBrowse(browser, frame);
-    }
     return false;
 }
 
@@ -514,8 +526,7 @@ bool OffscreenCefClient::OnConsoleMessage(CefRefPtr<CefBrowser> browser,
     }
 
     const auto msg = message.ToString();
-    if (level == LOGSEVERITY_ERROR || msg.find("ActorTransformFast") != std::string::npos ||
-        msg.find("coronaBridge") != std::string::npos) {
+    if (level == LOGSEVERITY_ERROR) {
         VUE_LOG_INFO("[{}] {}", levelStr, msg.c_str());
     }
     return true;
@@ -528,26 +539,6 @@ void OffscreenCefClient::OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser
     CEF_REQUIRE_UI_THREAD();
     CFW_LOG_ERROR("CEF: Renderer terminated tab={} status={} code={} error={}",
                   tab_id_, static_cast<int>(status), error_code, error_string.ToString());
-    if (browser_side_router_) {
-        browser_side_router_->OnRenderProcessTerminated(browser);
-    }
-}
-
-bool OffscreenCefClient::OnProcessMessageReceived(CefRefPtr<CefBrowser> browser,
-                                                  CefRefPtr<CefFrame> frame,
-                                                  CefProcessId source_process,
-                                                  CefRefPtr<CefProcessMessage> message) {
-    CEF_REQUIRE_UI_THREAD();
-    if (handle_realtime_process_message(browser, frame, message)) {
-        return true;
-    }
-    if (message->GetName() == "RendererMessage") {
-        std::string msg = message->GetArgumentList()->GetString(0);
-        CFW_LOG_INFO("CEF: Received message from Renderer: {}", msg);
-        return true;
-    }
-
-    return forward_process_message_to_router(browser_side_router_, browser, frame, source_process, message);
 }
 
 // ============================================================================
@@ -731,10 +722,6 @@ const char* cef_log_severity_name(cef_log_severity_t severity) {
     }
 }
 
-// CefInitialize 失败后调用 CefShutdown() 是未定义行为（会挂死或崩溃），
-// 因此 shutdown_cef() 必须只在初始化成功后真正执行。
-std::atomic<bool> g_cef_initialized{false};
-
 }  // namespace
 
 bool initialize_cef() {
@@ -749,7 +736,13 @@ bool initialize_cef() {
     CefRefPtr<CefApp> app = create_cef_app();
 
     CefSettings settings;
-    settings.multi_threaded_message_loop = true;
+    // Bundled CEF 143's CefUIThread explicitly processes AtExit callbacks even
+    // after Chromium disables them for the in-process renderer. This destroys
+    // CefRenderManager's Mojo endpoint on the wrong sequence during shutdown.
+    // The main-thread loop avoids that explicit AtExit path; it is a workaround,
+    // not a requirement of single-process mode. Keep it until the bundled CEF
+    // honors DisableAllAtExitManagers() in ProcessCallbacksNow().
+    settings.multi_threaded_message_loop = false;
     settings.windowless_rendering_enabled = true;
     settings.no_sandbox = true;
     apply_remote_debugging_port(settings);
@@ -805,8 +798,7 @@ bool initialize_cef() {
     set_cef_path(settings.browser_subprocess_path, exe_path);
     set_cef_path(settings.resources_dir_path, exe_dir);
     set_cef_path(settings.locales_dir_path, exe_dir / "locales");
-    CFW_LOG_INFO("CEF: Using main executable for subprocesses: {}",
-                 Utils::path_to_utf8(exe_path));
+    CFW_LOG_INFO("CEF: Resource directory: {}", Utils::path_to_utf8(exe_dir));
     CFW_LOG_INFO("CEF: Cache directory: {}", Utils::path_to_utf8(cache_path));
 
     CefString(&settings.user_agent).FromASCII("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
@@ -823,7 +815,15 @@ bool initialize_cef() {
 
     g_cef_initialized.store(true);
 
+    CFW_LOG_INFO("CEF: single-process mode configured in C++ (main-thread message loop)");
+
     return true;
+}
+
+void do_cef_message_loop_work() {
+    if (owns_cef_message_loop()) {
+        CefDoMessageLoopWork();
+    }
 }
 
 void shutdown_cef() {
@@ -833,6 +833,9 @@ void shutdown_cef() {
         return;
     }
     CFW_LOG_INFO("CEF: Starting shutdown...");
+    // Bridge calls post their completion to a CEF task runner; stop the worker first so
+    // nothing posts into a torn-down CEF.
+    BridgeWorker::instance().stop();
     CefShutdown();
     CFW_LOG_INFO("CEF: Shutdown complete");
 }

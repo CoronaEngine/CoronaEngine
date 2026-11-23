@@ -15,7 +15,6 @@ target_include_directories(corona_resource_tests
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-corona_copy_tbb_runtime_artifacts(corona_resource_tests)
 corona_copy_runtime_files(gf corona_resource_tests)
 corona_copy_runtime_files(assimp::assimp corona_resource_tests)
 
@@ -39,7 +38,6 @@ target_include_directories(corona_animation_pose_tests
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-corona_copy_tbb_runtime_artifacts(corona_animation_pose_tests)
 
 add_test(NAME AnimationPoseTests COMMAND corona_animation_pose_tests)
 
@@ -62,7 +60,6 @@ target_include_directories(corona_mesh_index_tests
         ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 
-corona_copy_tbb_runtime_artifacts(corona_mesh_index_tests)
 
 add_test(NAME MeshIndexValidationTests COMMAND corona_mesh_index_tests)
 

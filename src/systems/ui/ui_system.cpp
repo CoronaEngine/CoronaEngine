@@ -21,7 +21,7 @@
 
 #include "cef/browser_manager.h"
 #include "cef/cef_client.h"
-#include "cef/cef_editor_native_api_registry.h"
+#include "cef/native_api_types.h"
 #include "collaborative_editor_runtime.h"
 
 namespace Corona::Systems {
@@ -45,7 +45,7 @@ void create_initial_frontend_tab() {
     }
 
     const int tab_id = UI::BrowserManager::instance().create_tab(
-        Utils::path_to_utf8(frontend_index), "/StartScreen", "main", 1920, 1080, true);
+        Utils::path_to_utf8(frontend_index), "/StartScreen", UI::TabKind::MainWorkspace, 1920, 1080);
     CFW_LOG_INFO("UiSystem: Initial Vue/CEF tab created: ID={}", tab_id);
 }
 
@@ -100,6 +100,7 @@ void UiSystem::start() {
 }
 
 void UiSystem::stop() {
+    if (state_ == Kernel::SystemState::stopped) return;
     CFW_LOG_INFO("UiSystem: Stop called (main thread mode)");
     running_ = false;
 
@@ -124,8 +125,8 @@ void UiSystem::stop() {
             // after SystemManager has joined the Display worker.
         }
     }
-    if (void* main_surface = UI::SdlWindowManager::instance().main_surface();
-        main_surface != nullptr) {
+    if (UI::SdlWindowManager::instance().main_surface() != nullptr) {
+        void* main_surface = UI::SdlWindowManager::instance().main_surface();
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
             deadline - std::chrono::steady_clock::now());
         if (remaining.count() > 0 &&
@@ -150,9 +151,9 @@ void UiSystem::stop() {
     browser_manager.close_all_tabs();
 
     while (!camera_handles.empty() && std::chrono::steady_clock::now() < deadline) {
-        std::erase_if(camera_handles, [](const std::uintptr_t camera_handle) {
+        std::erase_if(camera_handles, [](const EntityId camera_handle) {
             auto camera =
-                SharedDataHub::instance().camera_storage().try_acquire_read(camera_handle);
+                Corona::find_camera(camera_handle);
             return !camera || camera->surface == nullptr;
         });
         if (!camera_handles.empty()) {
@@ -175,9 +176,11 @@ void UiSystem::update() {
 
     const auto frame_start = std::chrono::steady_clock::now();
 
-    // The CEF UI thread runs every editor API request and paints the editor. If one
-    // of those requests never returns, that thread stops reporting anything at all,
-    // while this main loop keeps running - so the watchdog is driven from here.
+    // CEF uses the engine main thread's message loop in our single-process policy.
+    UI::do_cef_message_loop_work();
+
+    // CEF editor API callbacks share this thread. The watchdog can report a stall
+    // only after the blocking callback returns.
     UI::report_stuck_native_api_request();
 
     // System threads have the same failure mode one level down: a blocking storage

@@ -30,7 +30,7 @@ std::vector<std::uintptr_t> GeometrySystem::query_aabb(
     std::vector<std::uintptr_t> filtered;
     filtered.reserve(out.size());
     const auto& state_map = it->second.actor_load_states;
-    for (std::uintptr_t actor_handle : out) {
+    for (EntityId actor_handle : out) {
         auto state_it = state_map.find(actor_handle);
         if (state_it != state_map.end() && state_it->second == ActorLoadState::Loaded) {
             filtered.push_back(actor_handle);
@@ -55,7 +55,7 @@ std::vector<std::uintptr_t> GeometrySystem::query_sphere(
     std::vector<std::uintptr_t> filtered;
     filtered.reserve(out.size());
     const auto& state_map = it->second.actor_load_states;
-    for (std::uintptr_t actor_handle : out) {
+    for (EntityId actor_handle : out) {
         auto state_it = state_map.find(actor_handle);
         if (state_it != state_map.end() && state_it->second == ActorLoadState::Loaded) {
             filtered.push_back(actor_handle);
@@ -81,7 +81,7 @@ std::vector<std::uintptr_t> GeometrySystem::query_frustum(
     std::vector<std::uintptr_t> filtered;
     filtered.reserve(out.size());
     const auto& state_map = it->second.actor_load_states;
-    for (std::uintptr_t actor_handle : out) {
+    for (EntityId actor_handle : out) {
         auto state_it = state_map.find(actor_handle);
         if (state_it != state_map.end() && state_it->second == ActorLoadState::Loaded) {
             filtered.push_back(actor_handle);
@@ -121,9 +121,9 @@ std::vector<std::pair<std::uintptr_t, std::uintptr_t>> GeometrySystem::query_pai
 
 std::vector<std::uintptr_t> GeometrySystem::query_visible_for_camera(
     std::uintptr_t scene, std::uintptr_t camera) const {
-    auto& cam_storage = SharedDataHub::instance().camera_storage();
-    auto cam_handle = cam_storage.try_acquire_read_nowait(camera);
-    if (!cam_handle.valid()) {
+    auto cam_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
+    auto cam_handle = Corona::find_camera(camera);
+    if (cam_handle == nullptr) {
         return {};
     }
     const auto frustum = Math::Frustum::from_camera(*cam_handle);

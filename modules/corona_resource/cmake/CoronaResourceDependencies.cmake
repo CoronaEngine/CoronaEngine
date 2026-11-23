@@ -15,8 +15,7 @@ foreach(_target
         nlohmann_json::nlohmann_json
         tinyexr_headers
         meshoptimizer
-        astcenc-native-static
-        TBB::tbb)
+        astcenc-native-static)
     if(NOT TARGET ${_target})
         message(FATAL_ERROR "[CoronaResource] Expected dependency target '${_target}'")
     endif()

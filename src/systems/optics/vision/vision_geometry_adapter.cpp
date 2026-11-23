@@ -161,7 +161,7 @@ struct PreparedInstance {
 };
 
 struct PreparedGeometry {
-    std::uintptr_t geometry_handle{};
+    EntityId geometry_handle{};
     OpticsDevice optics;
     std::unordered_map<std::size_t, PreparedMesh> meshes;
     std::vector<PreparedInstance> instances;
@@ -195,31 +195,34 @@ using PreparedGroup = std::vector<PreparedGeometry>;
     return true;
 }
 
-void stage_actor_geometry(std::uintptr_t actor_handle,
+void stage_actor_geometry(EntityId actor_handle,
                           PreparedGroup& group,
                           VisionBuildResult& result) {
     auto& hub = SharedDataHub::instance();
-    auto actor = hub.actor_storage().try_acquire_read(actor_handle);
+    auto actor = Corona::find_actor(actor_handle);
+    const auto* actor_profiles = Corona::find_profiles(actor_handle);
     if (!actor) {
         ++result.skipped_no_data;
         return;
     }
 
-    for (const auto profile_handle : actor->profile_handles) {
-        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
+    for (const auto profile_handle : actor_profiles->handles) {
+        auto profile = Corona::find_profile(profile_handle);
         if (!profile) {
             ++result.skipped_no_data;
             continue;
         }
         if (profile->optics_handle == 0) continue;
-        auto optics = hub.optics_storage().try_acquire_read(profile->optics_handle);
+        auto optics = Corona::find_optics(profile->optics_handle);
         if (!optics) {
             ++result.skipped_no_data;
             continue;
         }
-        if (!optics->visible || optics->geometry_handle == 0) continue;
+        const auto* optics_visibility = hub.try_visibility(profile->optics_handle);
+        if (optics_visibility != nullptr && !optics_visibility->visible) continue;
+        if (optics->geometry_handle == 0) continue;
         ++result.candidate_count;
-        auto geometry = hub.geometry_storage().try_acquire_read(optics->geometry_handle);
+        auto geometry = Corona::find_geometry(optics->geometry_handle);
         if (!geometry) {
             ++result.skipped_no_data;
             continue;
@@ -231,7 +234,7 @@ void stage_actor_geometry(std::uintptr_t actor_handle,
 
         Resource::ReadHandle<Resource::Scene> source;
         if (geometry->model_resource_handle != 0) {
-            auto resource = hub.model_resource_storage().try_acquire_read(geometry->model_resource_handle);
+            auto resource = Corona::find_model_resource(geometry->model_resource_handle);
             if (resource && resource->model_id != 0) {
                 source = Resource::ResourceManager::get_instance().acquire_read<Resource::Scene>(resource->model_id);
             }
@@ -246,7 +249,7 @@ void stage_actor_geometry(std::uintptr_t actor_handle,
         prepared.optics = *optics;
         auto object_to_world = ::vision::make_float4x4(1.f);
         if (geometry->transform_handle != 0) {
-            auto transform = hub.model_transform_storage().try_acquire_read(geometry->transform_handle);
+            auto transform = Corona::find_transform(geometry->transform_handle);
             if (!transform) {
                 ++result.skipped_no_data;
                 continue;
@@ -372,7 +375,7 @@ void stage_actor_geometry(std::uintptr_t actor_handle,
 
 std::vector<PreparedGroup> stage_scene_geometry(VisionBuildResult& result) {
     std::vector<PreparedGroup> groups;
-    auto& scenes = SharedDataHub::instance().scene_storage();
+    auto scenes = Corona::all_scenes();
     for (auto scene_it = scenes.cbegin(); scene_it != scenes.cend(); ++scene_it) {
         const auto& scene = *scene_it;
         if (!scene.enabled) continue;

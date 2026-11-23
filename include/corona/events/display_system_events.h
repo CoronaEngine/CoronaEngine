@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <cstdint>
 #include <future>
 #include <memory>
@@ -62,7 +63,7 @@ struct DisplaySurfaceRemovedEvent {
  */
 struct OpticsFrameReadyEvent {
     void* surface = nullptr;
-    std::uintptr_t image_handle = 0;
+    EntityId image_handle = 0;
     uint64_t frame_index = 0;
     uint32_t width = 0;
     uint32_t height = 0;
@@ -85,7 +86,7 @@ struct OpticsFrameConsumedEvent {
  */
 struct UIFrameReadyEvent {
     void* surface = nullptr;
-    std::uintptr_t image_handle = 0;
+    EntityId image_handle = 0;
     uint64_t frame_index = 0;
     uint32_t width = 0;
     uint32_t height = 0;

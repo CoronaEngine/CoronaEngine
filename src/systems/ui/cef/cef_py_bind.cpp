@@ -1,7 +1,9 @@
-﻿#pragma once
+#include "python_service_bridge.h"
 
-#include "cef_editor_api.h"
+#include "editor_paths.h"
+#include "native_editor_state.h"
 
+#include <corona/systems/script/engine_scripts.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 
@@ -9,93 +11,42 @@
 
 namespace EngineScripts {
 
-namespace {
+namespace UI = Corona::Systems::UI;
 
-/// 调用编辑器 API 时必须**放开 GIL**。
+/// The editor-facing half of the embedded module.
 ///
-/// `_invoke_cpp_editor_api` 现在会把 handler 派发到 CEF UI（编辑器状态 owner）线程并等它
-/// 执行（见 `editor_api/editor_dispatch.h`）。而 CEF UI 线程自己也会同步等 Python
-/// （`invoke_python_script_service` → `submit_and_wait`，例如 `Scripts.mouse_event`）。
-/// 如果这里握着 GIL 等 CEF 线程，Python 消费线程就拿不到 GIL 去答复 CEF 线程，形成
-/// "CEF 等 Python、Python 等 CEF"的环路。实测（LANChat 后台轮询每 ~2.5 s 一次）：
-/// 每次轮询撞上鼠标事件的 Python 往返就握手成 5 s 超时，期间每帧鼠标事件都在 2 s 超时里
-/// 冻住 UI。放开 GIL 之后这段等待不再拖住整个 Python 运行时。
-///
-/// handler 全是 C++，Python 相关工作本来就走 coordinator 队列（不在这里直接触 Python
-/// C-API），所以释放 GIL 不会让任何 handler 摸到没有 GIL 的 Python 对象。
-std::string invoke_editor_endpoint_off_gil(const std::string& api_name,
-                                          const nlohmann::json& args,
-                                          Corona::Systems::UI::EditorApiCaller caller) {
-    Corona::Systems::UI::register_builtin_native_api_handlers();
-    Corona::Systems::UI::NativeContext context;
-    Corona::Systems::UI::NativeResult result;
-    {
-        nanobind::gil_scoped_release release;
-        result = Corona::Systems::UI::EditorApiRegistry::instance().invoke(
-            {api_name, args, caller}, context);
-    }
-    nlohmann::json response = {
-        {"success", result.success},
-        {"route", result.route},
-    };
-    if (result.success) {
-        response["data"] = result.data;
-    } else {
-        response["error"] = result.error;
-        response["error_code"] = result.error_code;
-    }
-    return response.dump();
-}
-
-}  // namespace
-
+/// The ScriptRuntime contract (18 scene/audio/viewport bindings) was removed with the script
+/// runtime and will be redesigned; what is left is the transport the Python host needs: the
+/// service dispatcher registration, and the one piece of editor state the host itself reads.
 void BindCef(nanobind::module_& m) {
-    namespace nb = nanobind;
-    m.def("register_python_script_service_dispatcher", [](nb::object dispatcher) {
-        Corona::Systems::UI::register_python_script_service_dispatcher(dispatcher.ptr());
-    }, nb::arg("dispatcher"));
-
-    m.def("unregister_python_script_service_dispatcher", []() {
-        Corona::Systems::UI::unregister_python_script_service_dispatcher();
+    m.def("register_python_script_service_dispatcher", [] {
+        UI::register_python_script_service_dispatcher();
     });
-
-    m.def("register_python_script_callback", [](const std::string& event_name, nb::object callback) {
-        return Corona::Systems::UI::register_python_script_callback_callable(event_name, callback.ptr());
-    }, nb::arg("event_name"), nb::arg("callback"));
-
-    m.def("emit_editor_api_event", [](const std::string& event_name, const std::string& payload_json) {
-        auto payload = nlohmann::json::parse(payload_json.empty() ? "{}" : payload_json, nullptr, false);
-        if (payload.is_discarded()) {
-            return static_cast<std::size_t>(0);
-        }
-        return Corona::Systems::UI::emit_editor_api_event(event_name, payload);
-    }, nb::arg("event_name"), nb::arg("payload_json"));
-
-    m.def("_invoke_cpp_editor_api", [](const std::string& api_name, const std::string& args_json) {
-        auto args = nlohmann::json::parse(args_json.empty() ? "[]" : args_json, nullptr, false);
-        if (args.is_discarded()) {
-            nlohmann::json response = {
-                {"success", false},
-                {"error", "Invalid Editor API args JSON"},
-            };
-            return response.dump();
-        }
-        return invoke_editor_endpoint_off_gil(api_name, args,
-                                              Corona::Systems::UI::EditorApiCaller::PythonScript);
-    }, nb::arg("api_name"), nb::arg("args_json"));
-
-    m.def("_invoke_cpp_script_api", [](const std::string& api_name, const std::string& args_json) {
-        auto args = nlohmann::json::parse(args_json.empty() ? "[]" : args_json, nullptr, false);
-        if (args.is_discarded()) {
-            nlohmann::json response = {
-                {"success", false},
-                {"error", "Invalid Script Runtime API args JSON"},
-            };
-            return response.dump();
-        }
-        return invoke_editor_endpoint_off_gil(api_name, args,
-                                              Corona::Systems::UI::EditorApiCaller::ScriptRuntime);
-    }, nb::arg("api_name"), nb::arg("args_json"));
+    m.def("unregister_python_script_service_dispatcher", [] {
+        UI::unregister_python_script_service_dispatcher();
+    });
+    // Host support, not a script API: `runtime.project_context` reads the project this
+    // editor owns to resolve the active project path.
+    m.def("active_project_path", [] {
+        const auto* scene = UI::native_editor_state().scene.get();
+        return scene ? UI::path_to_utf8(scene->project_root) : std::string{};
+    }, "Project root of the scene the editor owns, or an empty string");
+    // Host support: the session identity a Python service compares a request against.
+    // `archive_session` is minted by the Python parser and owned here afterwards, so this
+    // is the only authoritative copy; the path alone cannot tell a reopened project apart.
+    m.def("active_project_session", [] {
+        nanobind::dict session;
+        const auto* scene = UI::native_editor_state().scene.get();
+        if (!scene) return session;
+        session["project_path"] = UI::path_to_utf8(scene->project_root);
+        session["archive_session"] = scene->archive_session;
+        session["read_only"] = scene->read_only;
+        return session;
+    }, "Session identity of the project the editor owns, or an empty dict");
+    // The service queue the Python host loop pulls from. It lives in the script module
+    // (`service_queue_bindings.cpp`) because the JSON<->Python conversion helpers do; this
+    // group only installs it, so the module keeps calling two groups.
+    BindCefServiceQueue(m);
 }
 
 }  // namespace EngineScripts

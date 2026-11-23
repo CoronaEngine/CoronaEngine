@@ -5,20 +5,27 @@
 #include <stdexcept>
 
 namespace Corona::Systems::UI::AnimationConfig {
-inline std::vector<std::string> parse_sources(const nlohmann::json& value) {
-    if (!value.is_array()) throw std::invalid_argument("animation_sources must be an array of file paths");
+inline std::vector<std::string> parse_sources(const std::vector<std::string>& value) {
     std::vector<std::string> result;
     std::set<std::string> unique;
     for (const auto& entry : value) {
-        if (!entry.is_string() || entry.get_ref<const std::string&>().empty() ||
-            entry.get_ref<const std::string&>().find('\0') != std::string::npos)
+        if (entry.empty() || entry.find('\0') != std::string::npos)
             throw std::invalid_argument("animation_sources entries must be non-empty paths");
-        auto path = std::filesystem::u8path(entry.get<std::string>()).lexically_normal().generic_u8string();
+        auto path = std::filesystem::u8path(entry).lexically_normal().generic_u8string();
         std::string source(reinterpret_cast<const char*>(path.data()), path.size());
         if (!unique.insert(source).second) throw std::invalid_argument("Duplicate animation source: " + source);
         result.push_back(std::move(source));
     }
     return result;
+}
+inline std::vector<std::string> parse_sources(const nlohmann::json& value) {
+    if (!value.is_array()) throw std::invalid_argument("animation_sources must be an array of file paths");
+    std::vector<std::string> result;
+    for (const auto& entry : value) {
+        if (!entry.is_string()) throw std::invalid_argument("animation_sources entries must be non-empty paths");
+        result.push_back(entry.get<std::string>());
+    }
+    return parse_sources(result);
 }
 inline nlohmann::json serialize(const Resource::AnimationSnapshot& snapshot) {
     auto clips = nlohmann::json::array();

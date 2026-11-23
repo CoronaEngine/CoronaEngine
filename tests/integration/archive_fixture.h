@@ -11,7 +11,7 @@ namespace ArchiveFixture {
 using namespace Corona::Systems::UI::SceneFolders;
 using Json = nlohmann::json;
 namespace fs = std::filesystem;
-inline Json call(const char* method, Json data, const char* module = "ProjectArchive") {
+inline Json call(const char* method, Json data, const char* module = "project_archive") {
     static std::mutex mutex;
     std::lock_guard lock(mutex);
     std::cout << "ARCHIVE_RPC " << Json({{"module", module}, {"function", method},
@@ -32,7 +32,10 @@ inline std::optional<Layout> detect_scene_folder(const fs::path& path) {
     return Layout{root, root / "scene.ini", info.at("name")};
 }
 inline std::optional<Layout> create_scene_folder(const fs::path& path, const std::string& name) {
-    if (!call("create_project", {{"path", path}, {"name", name}}).at("success")) return {};
+    // Creation at an exact path is a fixture capability: the production service exposes only the
+    // directory allocator (`create_project_in`), which chooses the directory itself, so this goes
+    // through the test-only channel and the archive module's `create_project` behind it.
+    if (!call("create_project", {{"path", path}, {"name", name}}, "ArchiveFixture").at("success")) return {};
     return detect_scene_folder(path);
 }
 struct Validation {
@@ -41,14 +44,17 @@ struct Validation {
     bool ok() const { return diagnostics.empty(); }
 };
 inline Validation validate_portable_scene(const fs::path& path, bool hashes = true) {
-    const auto data = call("validate_project", {{"path", path}, {"verifyHashes", hashes}}).at("data");
+    // Same fixture channel as creation: `validate_project` is an archive-module function the
+    // production service no longer re-exports.
+    const auto data = call("validate_project", {{"path", path}, {"verify_hashes", hashes}},
+                           "ArchiveFixture").at("data");
     Validation result{{}, data.at("assetCount"), data.at("totalBytes")};
     for (const auto& d : data.at("diagnostics"))
         result.diagnostics.push_back({d.at("code"), d.at("message"), {}, {}, d.value("field", "")});
     return result;
 }
 inline CleanupResult cleanup_portable_scene_assets(const fs::path& root, bool dry_run) {
-    auto validation = call("validate_project", {{"path", root}}).at("data");
+    auto validation = call("validate_project", {{"path", root}}, "ArchiveFixture").at("data");
     if (!validation.at("ok")) return CleanupResult{0, 0, 0, {{"invalid_archive", "Unsafe cleanup"}}};
     return cleanup_unreferenced_assets(root, validation.at("references").get<std::set<std::string>>(), dry_run);
 }

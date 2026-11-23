@@ -10,7 +10,6 @@ set(UI_SYSTEM_SOURCES
     imgui/imgui_ui.cpp
     ui_surface_lifecycle.cpp
     camera_viewport_manager.cpp
-    panel_layout.cpp
     panel_resize_policy.cpp
     collaborative_editor_runtime.cpp
     collaborative_editor_runtime.h
@@ -20,19 +19,41 @@ set(UI_SYSTEM_SOURCES
     vulk/browser_manager_vulkan.cpp
 
     cef/browser_manager.cpp
+    cef/bridge_worker.h
+    cef/bridge_worker.cpp
     cef/actor_selection_routing.h
     cef/browser_ui.cpp
     cef/cef_app.cpp
     cef/cef_client.cpp
-    editor_api/cef_editor_api.cpp
-    cef/cef_editor_native_api_registry.cpp
-    cef/cef_editor_native_api_handlers.cpp
+    editor_api/python_service_bridge.cpp
+    editor_api/scene_model_node_service.cpp
+    editor_api/scene_environment_service.cpp
+    editor_api/actor_properties_service.cpp
+    editor_api/camera_properties_service.cpp
+    editor_api/camera_render_settings_service.cpp
+    editor_api/scene_projection_service.cpp
+    editor_api/resource_import_service.cpp
+    editor_api/project_script_service.cpp
+    cef/native_api_types.cpp
+    cef/editor_paths.cpp
+    cef/editor_actor_projection.cpp
+    cef/editor_scene_projection.cpp
+    cef/editor_camera_views.cpp
+    cef/editor_scene_access.cpp
+    cef/editor_actor_properties.cpp
+    cef/editor_request_values.cpp
+    cef/editor_platform_dialogs.cpp
+    cef/editor_archive_snapshot.cpp
+    cef/editor_scene_media.cpp
+    cef/editor_network_state.cpp
+    cef/editor_service_operations.cpp
+    cef/editor_scene_service.cpp
     cef/scene_folder.cpp
     cef/scene_archive_rpc.cpp
-    cef/cef_query_bridge.cpp
-    cef/cef_realtime_bridge.cpp
-    cef/request_response_broker.cpp
+    cef/cef_script_input.cpp
     cef/cef_renderer_bridge.cpp
+    cef/cef_v8_binding.cpp
+    cef/cef_window_operations.cpp
     cef/cef_runtime.cpp
     cef/cef_py_bind.cpp
     cef/cef_osr_mode.cpp
@@ -42,23 +63,34 @@ set(UI_SYSTEM_SOURCES
 
     sdl/sdl_utils.cpp
     sdl/sdl_window_manager.cpp
-    sdl/sdl_input_router.cpp
 
     # Internal headers (listed for IDE visibility, matching other systems).
     cef/browser_manager.h
     cef/browser_ui.h
-    cef/cef_app.h
-    cef/cef_bridge_helpers.h
-    cef/request_response_broker.h
+    cef/cef_process.h
+    cef/editor_scene_service.h
+    cef/cef_script_input.h
     cef/cef_client.h
-    cef/cef_editor_native_api_registry.h
+    cef/native_api_types.h
+    cef/editor_paths.h
+    cef/editor_actor_projection.h
+    cef/editor_scene_projection.h
+    cef/editor_camera_views.h
+    cef/editor_scene_access.h
+    cef/editor_actor_properties.h
+    cef/editor_request_values.h
+    cef/editor_platform_dialogs.h
+    cef/editor_archive_snapshot.h
+    cef/editor_network_state.h
+    cef/editor_text_utils.h
+    cef/native_editor_state.h
     cef/cef_editor_native_api_test_support.h
     cef/cef_osr_mode.h
     cef/cef_shared_texture_probe.h
     cef/popup_overlay.h
-    editor_api/cef_editor_api.h
+    editor_api/python_service_bridge.h
+    editor_api/editor_api_services.h
     cef/scene_folder.h
-    cef/cef_renderer_bridge.h
     sdl/sdl_utils.h
 
     ${PROJECT_SOURCE_DIR}/include/corona/systems/ui/vulkan_backend.h
@@ -111,10 +143,8 @@ corona_add_system(ui
 target_compile_definitions(corona_ui_system PUBLIC VK_NO_PROTOTYPES)
 target_link_libraries(corona_ui_system PRIVATE corona::imgui)
 
-# The camera-follow controller is an implementation detail of the Script
-# system, but the native editor handler invokes it as part of the aggregate
-# editor API.  Keep its header private to UI instead of widening Script's
-# public include surface.
+# UI consumes Script's headers directly (script_system.h, script_input.h, ...),
+# so the Script include directory stays private to UI.
 target_include_directories(corona_ui_system PRIVATE
     ${PROJECT_SOURCE_DIR}/src/systems/script/include
 )

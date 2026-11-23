@@ -119,14 +119,14 @@ bool verify_quad_pixels(Corona::Systems::DisplaySystem& display, const std::stri
         if (scene_handle != 0) {
             try {
                 scene_publication.retire().wait();
-                auto& storage = Corona::SharedDataHub::instance().image_storage();
-                if (auto image = storage.acquire_write(scene_handle)) {
+                auto& storage = Corona::SharedDataHub::instance();
+                if (auto image = storage.image_write(scene_handle)) {
                     Horizon::HardwareExecutor drain;
                     if (image->submit_receipt.serial != 0) drain.wait_idle(image->submit_receipt);
                     if (image->consumed_receipt.serial != 0) drain.wait_idle(image->consumed_receipt);
                     *image = Corona::ImageDevice{};
                 }
-                storage.deallocate(scene_handle);
+                storage.destroy_image(scene_handle);
                 scene_handle = 0;
             } catch (...) {
                 std::cerr << "UI pixel regression: failed to retire scene image\n";
@@ -155,10 +155,10 @@ bool verify_quad_pixels(Corona::Systems::DisplaySystem& display, const std::stri
     const auto scene_receipt = upload_executor.stream()
                                << scene.copy_from(scene_staging)
                                << Horizon::commit();
-    auto& image_storage = Corona::SharedDataHub::instance().image_storage();
-    scene_handle = image_storage.allocate();
+    auto& image_storage = Corona::SharedDataHub::instance();
+    scene_handle = image_storage.create_image();
     scene_publication = Detail::PublishedImage(scene_handle);
-    if (auto image_device = image_storage.acquire_write(scene_handle)) {
+    if (auto image_device = image_storage.image_write(scene_handle)) {
         *image_device = Corona::ImageDevice{};
         image_device->image = scene;
         image_device->submit_receipt = scene_receipt;
@@ -308,7 +308,7 @@ bool verify_quad_pixels(Corona::Systems::DisplaySystem& display, const std::stri
             if (!ui_only && !scene_only && frame > 0) {
                 // Publish real producer submissions for this constant diagnostic.
                 // Reusing one receipt would correctly hit Display's frame cache.
-                if (auto image_device = image_storage.acquire_write(scene_handle)) {
+                if (auto image_device = image_storage.image_write(scene_handle)) {
                     if (image_device->consumed_receipt.serial != 0) {
                         upload_executor.wait(image_device->consumed_receipt);
                     }

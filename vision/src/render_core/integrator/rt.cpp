@@ -139,7 +139,7 @@ private:
             denoiser_->impl_type() == "ReBLUR";
     }
 
-    void prepare_native_di_denoiser(const string &settings) const noexcept {
+    void prepare_native_di_denoiser(const DataWrap &settings) const noexcept {
         // Runtime compilation needs the scene's material LUT bindings.
         Global::SceneGpuContextScope scene_gpu_context{
             scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
@@ -186,10 +186,10 @@ public:
 
     [[nodiscard]] DataWrap reblur_context_settings() const override {
         if (!native_reblur_requested()) return DataWrap::object();
-        const auto parent = DataWrap::parse(denoiser_->reblur_settings_json());
+        const auto parent = denoiser_->reblur_settings();
         const auto target = physical_di_reblur_settings(parent);
         const auto physical = native_di_denoiser_
-            ? DataWrap::parse(native_di_denoiser_->reblur_settings_json()) : DataWrap::object();
+            ? native_di_denoiser_->reblur_settings() : DataWrap::object();
         return {{"policy", "physical-di-detail-preserving-v1"},
                 {"physical_di", {{"count", 1u}, {"ready", physical == target}, {"settings", physical}}},
                 {"gi", {{"count", 3u}, {"settings", parent}}}};
@@ -749,9 +749,9 @@ public:
         const bool denoiser = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled() && denoiser_->requires_lobe_signals();
         if (native_denoising && use_di) {
             const auto physical_di_settings = physical_di_reblur_settings(
-                DataWrap::parse(denoiser_->reblur_settings_json())).dump();
+                denoiser_->reblur_settings());
             if (!native_di_denoiser_ || any(native_denoiser_size_ != pipeline()->resolution()) ||
-                native_di_denoiser_->reblur_settings_json() != physical_di_settings)
+                native_di_denoiser_->reblur_settings() != physical_di_settings)
                 stream << synchronize() << commit();
             prepare_native_di_denoiser(physical_di_settings);
             begin_denoise_timing(stream);

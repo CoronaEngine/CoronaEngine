@@ -143,18 +143,6 @@ add_test(NAME VisionWorldBoundsGpuTests
 set_tests_properties(VisionGeometryGpuResourceTests VisionWorldBoundsGpuTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
 
-add_executable(corona_optics_actor_pick_readback_worker_tests
-    test_actor_pick_readback_worker.cpp
-    ${PROJECT_SOURCE_DIR}/src/systems/optics/actor_pick_readback_worker.cpp
-)
-target_include_directories(corona_optics_actor_pick_readback_worker_tests
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/include
-        ${PROJECT_SOURCE_DIR}/src/systems/optics
-)
-add_test(NAME OpticsActorPickReadbackWorkerTests
-         COMMAND corona_optics_actor_pick_readback_worker_tests)
-
 add_executable(corona_optics_native_frame_throttle_tests
     test_native_frame_throttle.cpp
 )
@@ -172,6 +160,7 @@ add_executable(corona_optics_storage_snapshot_tests
 target_include_directories(corona_optics_storage_snapshot_tests
     PRIVATE
         ${PROJECT_SOURCE_DIR}/src/systems/optics
+        ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(corona_optics_storage_snapshot_tests PRIVATE Horizon)
 add_test(NAME OpticsStorageSnapshotTests
@@ -211,14 +200,3 @@ target_link_libraries(corona_shadow_culling_tests PRIVATE Horizon corona::resour
 add_test(NAME ShadowCullingTests
          COMMAND corona_shadow_culling_tests)
 
-add_executable(corona_viewport_gizmo_math_tests
-    test_viewport_gizmo_math.cpp
-)
-target_include_directories(corona_viewport_gizmo_math_tests
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/include
-        ${PROJECT_SOURCE_DIR}/src/systems/optics
-)
-target_link_libraries(corona_viewport_gizmo_math_tests PRIVATE Horizon)
-add_test(NAME ViewportGizmoMathTests
-         COMMAND corona_viewport_gizmo_math_tests)

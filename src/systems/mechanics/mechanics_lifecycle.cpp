@@ -1,6 +1,8 @@
 #include <horizon/core/logging.h>
 #include <corona/diagnostics/thread_phase.h>
 #include <corona/systems/geometry/geometry_system.h>
+#include <corona/systems/mechanics/mechanics_commands.h>
+#include <corona/systems/mechanics/mechanics_structural_commands.h>
 #include <corona/systems/mechanics/mechanics_system.h>
 
 #include <algorithm>
@@ -154,11 +156,10 @@ struct PerformanceReport {
 
 float resolve_fixed_dt() {
     auto& hub = SharedDataHub::instance();
-    const auto& scenes = hub.scene_storage();
-    auto& environments = hub.environment_storage();
+    auto scenes = Corona::all_scenes();
     for (const auto& scene : scenes) {
         if (!scene.enabled || !scene.simulation_enabled || scene.environment == 0) continue;
-        if (auto environment = environments.try_acquire_read(scene.environment)) {
+        if (const auto* environment = hub.try_environment(scene.environment)) {
             return std::clamp(environment->fixed_dt, kMinFixedDt, kMaxFixedDt);
         }
     }
@@ -166,7 +167,7 @@ float resolve_fixed_dt() {
 }
 
 bool simulation_active() {
-    const auto& scenes = SharedDataHub::instance().scene_storage();
+    auto scenes = Corona::all_scenes();
     for (const auto& scene : scenes)
         if (scene.enabled && scene.simulation_enabled) return true;
     return false;
@@ -188,7 +189,8 @@ MechanicsSystem::MechanicsSystem() : impl_(std::make_unique<Impl>()) {
 MechanicsSystem::~MechanicsSystem() = default;
 
 void MechanicsSystem::Impl::start_gpu_preparation() {
-    if (!gpu_preparation_workers.empty()) return;
+    if (gpu_preparation_started) return;
+    gpu_preparation_started = true;
     struct Jobs {
         std::vector<std::packaged_task<void()>> tasks;
         std::atomic<std::size_t> next{};
@@ -201,15 +203,17 @@ void MechanicsSystem::Impl::start_gpu_preparation() {
     jobs->tasks.push_back(gpu_broadphase.prepare("broad phase", warmup_pipeline));
     jobs->tasks.push_back(gpu_skinning.prepare("skinning", warmup_pipeline));
     // Bound compiler concurrency instead of starting a compiler for every
-    // kernel. Workers capture only their job queue, never Impl or SystemContext.
+    // kernel. 两条取任务的池任务等价于原先的两条预热线程；workers capture
+    // only their job queue, never Impl or SystemContext.
     for (unsigned i = 0; i < 2; ++i) {
-        gpu_preparation_workers.emplace_back([jobs](std::stop_token stop) {
-            while (!stop.stop_requested()) {
-                const auto index = jobs->next.fetch_add(1, std::memory_order_relaxed);
-                if (index >= jobs->tasks.size()) break;
-                if (jobs->tasks[index].valid()) jobs->tasks[index]();
-            }
-        });
+        gpu_preparation_tasks.submit(
+            Corona::Concurrency::TaskClass::Compute, [jobs]() {
+                for (;;) {
+                    const auto index = jobs->next.fetch_add(1, std::memory_order_relaxed);
+                    if (index >= jobs->tasks.size()) break;
+                    if (jobs->tasks[index].valid()) jobs->tasks[index]();
+                }
+            });
     }
 }
 
@@ -239,10 +243,57 @@ bool MechanicsSystem::initialize(Kernel::ISystemContext* ctx) {
     return true;
 }
 
+namespace {
+
+/// 应用入站力学参数命令（P3）。
+/// 单写者入口：只在 DAG tick 的开头执行一次，顺序由 CommandBuffer 的单调序列决定，
+/// 同一个 mechanics_handle 的连续命令已在入队侧合并成最后一条。
+void apply_pending_mechanics_updates() {
+    auto& channel = Corona::MechanicsCommandChannel::instance();
+    auto commands = channel.commands().drain();
+    if (commands.empty()) {
+        return;
+    }
+
+    for (const auto& command : commands) {
+        if (auto* device = Corona::find_mechanics(command.mechanics_handle)) {
+            if (Corona::has_mechanics_field(command.fields, Corona::MechanicsField::Mass)) {
+                device->mass = command.mass;
+            }
+            if (Corona::has_mechanics_field(command.fields, Corona::MechanicsField::Restitution)) {
+                device->restitution = command.restitution;
+            }
+            if (Corona::has_mechanics_field(command.fields, Corona::MechanicsField::Damping)) {
+                device->damping = command.damping;
+            }
+            if (Corona::has_mechanics_field(command.fields, Corona::MechanicsField::BodyType)) {
+                device->body_type = command.body_type;
+            }
+            if (Corona::has_mechanics_field(command.fields, Corona::MechanicsField::LinearLock)) {
+                device->linear_lock_mask = command.linear_lock_mask;
+            }
+            if (Corona::has_mechanics_field(command.fields, Corona::MechanicsField::AngularLock)) {
+                device->angular_lock_mask = command.angular_lock_mask;
+            }
+        }
+    }
+}
+
+}  // namespace
+
 void MechanicsSystem::update() {
     if (impl_->shutdown_requested.load(std::memory_order_acquire)) {
         return;
     }
+    // tick 边界：先把外部提交的力学参数落到槽位，再跑本帧的蒙皮与物理。
+    apply_pending_mechanics_updates();
+    // Getters read the committed snapshot once pending commands are drained.
+    // Publish even on idle ticks so newly loaded and removed components are
+    // reflected without requiring another property edit.
+    Corona::publish_mechanics_snapshot();
+    // 结构命令（回调注册）在 DAG 模式下已由边界阶段应用；这里兜底降级路径，
+    // helper 幂等，没有命令时直接返回。
+    Corona::apply_pending_mechanics_structural_commands();
     // Stage marker: this loop holds Scene read handles for the whole skinning pass
     // (frame_scenes) and blocks on scene/geometry slot locks, so a stall here also
     // stalls every writer that wants the same Scene entry.

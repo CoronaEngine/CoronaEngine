@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <corona/systems/optics/vision_pipeline_key.h>
 
 #include <algorithm>
@@ -45,7 +46,7 @@ struct VisionLogicalInstanceKeyHash {
 
 struct VisionLogicalInstanceRecord {
     VisionLogicalInstanceKey key;
-    std::uintptr_t actor_handle{0};
+    EntityId actor_handle{0};
     std::size_t transform_signature{0};
     std::array<float, 16> object_to_world{};
 };

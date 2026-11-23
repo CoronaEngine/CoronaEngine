@@ -1,4 +1,6 @@
 #pragma once
+#include <corona/kernel/system/component_access.h>
+
 #include <cstdint>
 #include <string_view>
 
@@ -122,6 +124,25 @@ class ISystem {
     virtual void update() = 0;
 
     /**
+     * @brief 帧时间注入（可选）
+     *
+     * 由外部调度者（帧图 / SystemsThread）在每次调用 update() 之前告知本帧的
+     * 时间步长与帧号。默认空实现，系统可继续自测 dt。
+     *
+     * 为什么需要它：目前多个系统在 update() 内部用 steady_clock 自己算 dt
+     * （例如 MechanicsSystem 的定步长累加器），一旦 update() 的调用者从
+     * "每个系统一条线程" 变成 "一条线程按 DAG 顺序依次调用"，自测 dt 会
+     * 与真实调度间隔错配，因此调度者需要显式把帧时间喂进来。
+     *
+     * @param dt 本帧时间步长（秒）
+     * @param frame_number 帧号（单调递增，从 0 开始）
+     */
+    virtual void feed_frame_time(float dt, std::uint64_t frame_number) {
+        (void)dt;
+        (void)frame_number;
+    }
+
+    /**
      * @brief 帧同步点（可选）
      *
      * 对于需要与主线程或其他系统同步的系统，可以实现此方法。
@@ -132,6 +153,14 @@ class ISystem {
      * - 多系统间需要栅栏同步
      */
     virtual void sync() {}
+
+    /**
+     * @brief 组件访问声明（ECS 化后由数据推导 DAG 依赖边）
+     *
+     * 返回空表示不参与推导；FrameGraph::compile() 会把声明转成额外边并与
+     * 手写 `after` 合并。系统只需如实声明读写集合，顺序仍由声明序兜底。
+     */
+    [[nodiscard]] virtual ComponentAccess component_access() const { return {}; }
 
     // ========================================
     // 帧率控制
@@ -167,6 +196,18 @@ class ISystem {
      * 只能在 idle 或 stopped 状态下调用。
      */
     virtual void start() = 0;
+
+    /**
+     * @brief 由外部调度者驱动（帧图 / SystemsThread）时的启动
+     *
+     * 语义与 start() 相同（进入 running 状态、准备好接收 update()），但**不建线程**：
+     * update() 由调度者在它自己的线程上按拓扑序调用。
+     *
+     * 默认实现什么都不做，因此只有自己的线程模型依赖 SystemBase 的系统需要覆写。
+     * 为什么不在 start() 里加参数：start() 是既有公开契约，改签名会波及全部调用点；
+     * 默认空实现则让"DAG 里的系统"与"自带线程的系统"共用同一套生命周期调用。
+     */
+    virtual void start_inline() {}
 
     /**
      * @brief 暂停系统

@@ -1,10 +1,11 @@
 #pragma once
-#include <oneapi/tbb/concurrent_hash_map.h>
-#include <oneapi/tbb/concurrent_vector.h>
 
 #include <filesystem>
 #include <memory>
+#include <shared_mutex>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "resource.h"
 
@@ -80,9 +81,12 @@ class ParserRegistry {
      */
     bool register_parser_impl(std::shared_ptr<IParser> parser);
 
-    tbb::concurrent_vector<std::shared_ptr<IParser>> parsers_{};
-    tbb::concurrent_hash_map<std::string, std::shared_ptr<IParser>> parser_registry_;
-    tbb::concurrent_hash_map<std::string, std::shared_ptr<IParser>> export_parser_registry_;
+    // 读多写少：注册发生在启动期，查找发生在导入线程。锁只保护三张表的
+    // 结构，不覆盖 is_supported() 之类的文件探测（那里先拷贝候选再放锁）。
+    mutable std::shared_mutex mutex_;
+    std::vector<std::shared_ptr<IParser>> parsers_;
+    std::unordered_map<std::string, std::shared_ptr<IParser>> parser_registry_;
+    std::unordered_map<std::string, std::shared_ptr<IParser>> export_parser_registry_;
 };
 
 }  // namespace Corona::Resource

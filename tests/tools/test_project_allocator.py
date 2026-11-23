@@ -1,0 +1,104 @@
+"""Project directories are allocated by the archive service, not by C++.
+
+The editor used to pick creative_world_1, _2, ... by looping over the filesystem before asking
+Python to create the project - while Python creates its own directories anyway. This pins the
+behaviour that replaced it: sequential names, occupied slots skipped, and the display name
+following the directory index so the two cannot disagree.
+"""
+import configparser
+import json
+from pathlib import Path
+import sys
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "embedded_python"))
+
+from runtime.archive.project import create_project_in  # noqa: E402
+
+
+def _request(base: Path, stem: str = "creative_world") -> dict:
+    return {"base_dir": str(base), "dir_stem": stem, "display_base": "创造世界",
+            "world": {"type": "creative"}}
+
+
+def test_a_multiplayer_project_accepts_the_role_key(tmp_path):
+    # The launcher sends `multiplayer` for host/guest worlds; the allocator has to forward
+    # the same keys `create_project` validates, or creation dies on the strict key check.
+    created = create_project_in({
+        "base_dir": str(tmp_path), "dir_stem": "multiplayer_host",
+        "display_base": "联机房主", "multiplayer": {"role": "host"}})
+
+    scene = Path(created["path"]) / "scene.ini"
+    config = configparser.ConfigParser(interpolation=None)
+    config.read(scene, encoding="utf-8")
+
+    assert Path(created["path"]).name == "multiplayer_host_1"
+    assert config["multiplayer"]["role"] == "host"
+
+
+def test_directories_are_sequential_and_the_name_follows(tmp_path):
+    first = create_project_in(_request(tmp_path))
+    second = create_project_in(_request(tmp_path))
+
+    assert Path(first["path"]).name == "creative_world_1"
+    assert Path(second["path"]).name == "creative_world_2"
+    assert first["name"] == "创造世界_1"
+    assert second["name"] == "创造世界_2"
+
+
+def test_the_project_is_actually_written(tmp_path):
+    created = create_project_in(_request(tmp_path))
+    assert (Path(created["path"]) / "scene.ini").is_file()
+    assert Path(created["project_path"]) == Path(created["path"])
+    assert Path(created["base_dir"]) == tmp_path
+
+
+def test_an_occupied_slot_is_skipped(tmp_path):
+    (tmp_path / "creative_world_1").mkdir()
+    (tmp_path / "creative_world_2").mkdir()
+
+    created = create_project_in(_request(tmp_path))
+    assert Path(created["path"]).name == "creative_world_3"
+
+
+def test_cpp_no_longer_allocates_the_directory():
+    service = (ROOT / "src/systems/ui/cef/editor_scene_service.cpp").read_text(encoding="utf-8-sig")
+    start = service.index("NativeResult create_launcher_project(")
+    end = service.index("\n}\n", start)
+    body = service[start:end]
+    assert "create_directories" not in body, "C++ must not create the project directory"
+    assert "std::filesystem::exists" not in body, "C++ must not probe for a free name"
+    assert "create_project_in" in body, "creation goes through the archive service allocator"
+
+
+def test_the_recent_list_is_resolved_in_one_call(tmp_path):
+    """The launcher asks once, not once per entry.
+
+    C++ used to read the history, then call `project_info` for every item - each a blocking
+    service round trip from the CEF UI thread (10 entries measured 190ms before the panel drew).
+    `recent_projects` reads the ini and resolves every entry itself, and reports a missing
+    project instead of refusing the whole list.
+    """
+    from runtime.archive.project import recent_projects
+
+    created = create_project_in(_request(tmp_path))
+    ini = tmp_path / "CoronaEditor.ini"
+    ini.write_text("[History]\nrecent_projects = [%s, %s]\n"
+                   % (json.dumps(created["path"]), json.dumps(str(tmp_path / "gone"))),
+                   encoding="utf-8")
+
+    listed = recent_projects({"ini": str(ini)})
+    entries = listed["projects"]
+    assert [entry["if_exists"] for entry in entries] == [True, False]
+    assert entries[0]["path"] == created["path"]
+    assert entries[0]["name"] == created["name"]
+    assert entries[1]["name"] == "gone"
+    assert entries[1]["last_edited"] == "-"
+
+    service = (ROOT / "src/systems/ui/cef/editor_scene_service.cpp").read_text(encoding="utf-8-sig")
+    start = service.index("nlohmann::json recent_projects_native()")
+    body = service[start:service.index("\n}\n", start)]
+    assert '"recent_projects"' in body, "the launcher must use the batched call"
+    assert '"project_info"' not in body, "the per-entry round trip must stay gone"

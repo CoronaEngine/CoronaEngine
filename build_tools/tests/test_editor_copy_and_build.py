@@ -17,23 +17,6 @@ def _load_copy_module():
     return module
 
 
-def test_runtime_contract_is_deployed_and_loads_without_repository_docs(tmp_path):
-    import sys
-    module = _load_copy_module()
-    source = REPO_ROOT / "CoronaEditor" / "editor" / "script_runtime" / "blockly"
-    destination = tmp_path / "中文 runtime" / "CabbageEditor" / "script_runtime" / "blockly"
-    module.copy_tree(source, destination, merge_content=True)
-    spec = importlib.util.spec_from_file_location("deployed_contract", destination / "ai_node_graph_contract.py")
-    contract = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = contract
-    try:
-        spec.loader.exec_module(contract)
-        assert contract.CONTRACT_PATH.parent == destination
-        assert contract.load_contract_catalog()["blocks"]
-    finally:
-        sys.modules.pop(spec.name, None)
-
-
 def test_editor_copy_removes_stale_python_sources_from_deployed_editor(tmp_path):
     module = _load_copy_module()
     source = tmp_path / "editor"
@@ -96,6 +79,29 @@ def test_editor_copy_preserves_deployed_project_and_generated_data(tmp_path):
     assert generated_script.exists()
 
 
+def test_editor_copy_union_cleanup_keeps_files_owned_by_any_source(tmp_path):
+    module = _load_copy_module()
+    editor_source = tmp_path / "editor"
+    python_source = tmp_path / "embedded_python"
+    destination = tmp_path / "CabbageEditor"
+
+    (editor_source / "Frontend" / "src").mkdir(parents=True)
+    (editor_source / "Frontend" / "src" / "main.js").write_text("js\n", encoding="utf-8")
+    (python_source / "runtime").mkdir(parents=True)
+    (python_source / "runtime" / "bootstrap.py").write_text("py\n", encoding="utf-8")
+    stale = destination / "runtime" / "removed.py"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("stale\n", encoding="utf-8")
+
+    module.copy_tree(editor_source, destination, merge_content=True, cleanup=False)
+    module.copy_tree(python_source, destination, merge_content=True, cleanup=False)
+    module._cleanup_stale_files([editor_source, python_source], destination, module._ignore)
+
+    assert (destination / "Frontend" / "src" / "main.js").exists()
+    assert (destination / "runtime" / "bootstrap.py").exists()
+    assert not stale.exists()
+
+
 def _prepare_frontend_build(module, tmp_path):
     frontend = tmp_path / "Frontend"
     node = tmp_path / "node"
@@ -107,42 +113,34 @@ def _prepare_frontend_build(module, tmp_path):
 
 
 @pytest.mark.parametrize("merge_content", [True, False])
-def test_editor_upgrade_retires_ai_packages_without_losing_local_data(tmp_path, merge_content):
+def test_editor_upgrade_drops_retired_sources_and_keeps_local_data(tmp_path, merge_content):
+    """An old deployment's AI package goes; the files an operator kept stay."""
     module = _load_copy_module()
     source = tmp_path / "source" / "editor"
-    entry = source / "plugins" / "AITool" / "main.py"
-    entry.parent.mkdir(parents=True)
-    entry.write_text("CURRENT_AI = True\n", encoding="utf-8")
+    (source / "plugins").mkdir(parents=True)
+    (source / "plugins" / "ProjectArchive.py").write_text("CURRENT = True\n", encoding="utf-8")
     output = tmp_path / "deployed"
     destination = output if merge_content else output / "editor"
-    old = destination / "plugins" / "AITool" / "Quasar"
-    old.mkdir(parents=True)
-    retained = {
-        "module_settings.yaml": "old config",
-        "private/.env": "private-key-must-survive",
-        "__pycache__/runtime.pyc": "old bytecode",
-        "runtime.py": "old source",
-        "custom.json": "local data",
-    }
-    for name, content in retained.items():
-        path = old / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-    bridge = destination / "plugins" / "AITool" / "cai_extensions"
-    bridge.mkdir()
-    (bridge / "paths.pyc").write_text("old bridge", encoding="utf-8")
+
+    # An older deployment still ships a package this tree no longer has, next to
+    # data an operator keeps: only the retired source file may disappear.
+    retired = destination / "plugins" / "AITool" / "main.py"
+    retired.parent.mkdir(parents=True)
+    retired.write_text("OLD_AI = True\n", encoding="utf-8")
+    local = destination / "plugins" / "AITool" / "custom.json"
+    local.write_text("local data", encoding="utf-8")
+    protected = destination / "data" / "keep.txt"
+    protected.parent.mkdir()
+    protected.write_text("project data", encoding="utf-8")
     key_file = destination / ".env"
     key_file.write_text("DEEPSEEK_API_KEY=keep", encoding="utf-8")
 
     module.copy_tree(source, output, merge_content=merge_content)
-    module.copy_tree(source, output, merge_content=merge_content)
 
-    assert not old.exists()
-    assert not bridge.exists()
-    backups = list((destination / ".retired-plugins").glob("Quasar-*"))
-    assert len(backups) == 1
-    for name, content in retained.items():
-        assert (backups[0] / name).read_text(encoding="utf-8") == content
+    assert not retired.exists()
+    assert (destination / "plugins" / "ProjectArchive.py").is_file()
+    assert local.read_text(encoding="utf-8") == "local data"
+    assert protected.read_text(encoding="utf-8") == "project data"
     assert key_file.read_text(encoding="utf-8") == "DEEPSEEK_API_KEY=keep"
 
 

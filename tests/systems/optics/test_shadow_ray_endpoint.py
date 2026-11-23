@@ -6,6 +6,9 @@ no renderer, GPU, or engine build is needed.
 """
 
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from toolchain import find_compiler  # noqa: E402
 import re
 import shutil
 import subprocess
@@ -30,7 +33,7 @@ def extract_function(source, signature):
 
 @pytest.fixture(scope="module")
 def shadow_ray_harness():
-    compiler = shutil.which("g++")
+    compiler = find_compiler()
     if not compiler:
         pytest.skip("Standalone CPU shadow-ray regression requires g++")
     interaction = (ROOT / "vision/src/base/scattering/interaction.h").read_text(encoding="utf-8")

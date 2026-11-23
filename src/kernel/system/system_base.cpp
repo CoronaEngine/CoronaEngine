@@ -70,6 +70,23 @@ void SystemBase::start() {
     thread_ = std::thread(&SystemBase::thread_loop, this);
 }
 
+void SystemBase::start_inline() {
+    std::lock_guard<std::mutex> lock(control_mutex_);
+
+    if (state_ != SystemState::idle && state_ != SystemState::stopped) {
+        return;
+    }
+
+    should_run_.store(true, std::memory_order_release);
+    is_paused_.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> exit_lock(thread_exit_mutex_);
+        thread_finished_ = false;
+    }
+    state_.store(SystemState::running, std::memory_order_release);
+    // 刻意不建线程：update() 由调度者按 DAG 顺序调用
+}
+
 void SystemBase::pause() {
     std::lock_guard<std::mutex> lock(control_mutex_);
 

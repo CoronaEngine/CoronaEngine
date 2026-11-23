@@ -561,6 +561,9 @@ void PeerManager::poll() {
         default:
             break;
         }
+        // A user callback runs without enet_mutex and may stop this host.
+        // Finish releasing the current event before retiring this poll pass.
+        if (!impl_->host) return;
     }
 
     // Process queued receive events before checking liveness so a packet

@@ -1,0 +1,106 @@
+"""Single-scene archive loading facade.
+
+Archive format parsing belongs to :mod:`runtime.archive`; this plugin owns
+only the request facade and its load-policy/diagnostic mapping.
+"""
+
+from __future__ import annotations
+
+import configparser
+from pathlib import Path
+from uuid import uuid4
+
+from runtime.archive.errors import ArchiveParseError
+from runtime.archive.parser import parse_archive
+from runtime.archive.portable import recover_scene, validate_assets
+from runtime.archive.writer import save_scene
+from runtime.archive.project import (create_project_in, project_info, recent_projects, update_metadata)
+from runtime.archive.arguments import require_keys
+from runtime.archive.assets import asset_operation
+from runtime.archive.documents import read_document, commit_document
+from runtime.archive.editor_settings import editor_settings
+from runtime.archive.project_files import file_manager
+from runtime.bridge_errors import BridgeError
+
+
+class ProjectArchive:
+    """Internal Script Service facade for the pure archive parser."""
+
+    asset_operation = staticmethod(asset_operation)
+    read_document = staticmethod(read_document)
+    commit_document = staticmethod(commit_document)
+    editor_settings = staticmethod(editor_settings)
+    file_manager = staticmethod(file_manager)
+    create_project_in = staticmethod(create_project_in)
+    project_info = staticmethod(project_info)
+    recent_projects = staticmethod(recent_projects)
+
+    @staticmethod
+    def update_metadata(request):
+        return update_metadata(request)
+
+    @staticmethod
+    def parse(payload: dict | str) -> dict:
+        request = payload if isinstance(payload, dict) else {"path": str(payload)}
+        require_keys(request, required=('path',),
+                     optional=('load_policy', 'archive_session', 'project_path'))
+        path = str(request.get("path") or "").strip()
+        load_policy = str(request.get("load_policy") or "prompt").strip().lower()
+        if load_policy not in {"prompt", "degraded"}:
+            # A caller error, not an archive outcome: the diagnostics list below is for
+            # scenes that were read and found wanting.
+            raise BridgeError("INVALID_ARGUMENT", f"Unsupported load policy: {load_policy}")
+        try:
+            source = Path(path)
+            if source.is_dir() or source.name == "scene.ini":
+                recover_scene((source if source.is_dir() else source.parent).resolve())
+            snapshot = parse_archive(path)
+            snapshot["archive_session"] = uuid4().hex
+            if snapshot.get("archive_type") == "portable_scene":
+                missing = validate_assets(Path(snapshot["project_root"]), snapshot["extensions"]["ini_sections"],
+                                          verify_hashes=True)
+                snapshot["diagnostics"].extend(missing)
+        except ArchiveParseError as exc:
+            return {
+                "ok": False,
+                "status": "invalid_archive",
+                "diagnostics": [exc.to_diagnostic()],
+            }
+
+        diagnostics = list(snapshot.get("diagnostics") or [])
+        requires_confirmation = any(
+            item.get("severity", "error") == "error" or item.get("requires_confirmation", True)
+            for item in diagnostics
+        )
+        if requires_confirmation and load_policy == "prompt":
+            status = "decision_required"
+        elif requires_confirmation:
+            status = "ready_degraded"
+        else:
+            status = "ready"
+        return {
+            "ok": True,
+            "status": status,
+            "snapshot": snapshot,
+            "diagnostics": diagnostics,
+        }
+
+    @staticmethod
+    def save(request: dict) -> dict:
+        """Write the live scene through the archive service.
+
+        A failed write is a refusal, not a value: the scene layer rejects with the code
+        instead of forwarding ``{"ok": false}`` for every caller to re-check.
+        """
+        try:
+            return save_scene(request)
+        except ArchiveParseError as error:
+            raise BridgeError("SAVE_FAILED", str(error)) from error
+        except OSError as error:
+            raise BridgeError("SAVE_FAILED", str(error)) from error
+        except (KeyError, TypeError, ValueError, configparser.Error) as error:
+            raise BridgeError("INVALID_ARGUMENT", str(error)) from error
+
+
+__all__ = ["ProjectArchive"]
+

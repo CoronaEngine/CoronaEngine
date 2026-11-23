@@ -8,11 +8,12 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from build_tools.git_workspace import ensure_workspace, inspect_workspace, remote_version_advice, sync_workspace
+from build_tools.git_workspace import (ensure_workspace, head_on_remote, inspect_workspace,
+                                      remote_version_advice, sync_workspace)
 from build_tools.git_tool import ensure_git
 from build_tools.ninja_tool import ensure_ninja
 from build_tools.paths import LOCAL_RECIPES, REPO_ROOT
-from build_tools.source_workspaces import WORKSPACES
+from build_tools.source_workspaces import WORKSPACES, find_workspace, rewrite_pin
 from build_tools.workflow import (
     CONFIGURATIONS,
     DEFAULT_CONFIGURATION,
@@ -32,6 +33,48 @@ from build_tools.workflow import (
 
 DEFAULT_TARGET = "corona_engine"
 WORKSPACE_COMMANDS = {f"{workspace.key}-sync": workspace for workspace in WORKSPACES}
+
+
+def pin_workspaces(repo_root: Path, keys: list[str], commit: str | None = None) -> None:
+    """Point the pinned commits at a commit.
+
+    ``commit`` is used when the working checkout is not the one the build reads:
+    the build checkout is kept at the pin, so its HEAD cannot advance the pin.
+    Without it, the checkout's HEAD is the source, and a commit that is not on
+    the remote branch is reported before the file changes.
+    """
+    if commit is not None and len(keys) != 1:
+        raise RuntimeError("Name one workspace when pinning an explicit commit")
+    for key in keys:
+        workspace = find_workspace(key)
+        directory = repo_root / workspace.directory
+        status = inspect_workspace(repo_root, workspace)
+        if not status.cloned and commit is None:
+            raise RuntimeError(f"{workspace.name} is not cloned at {directory}")
+        if commit is not None:
+            head = commit.lower()
+            if not status.cloned:
+                print(f"[WARN] {workspace.name} is not cloned, so the commit cannot be verified")
+        else:
+            head = status.head.lower()
+            if not head:
+                raise RuntimeError(f"{workspace.name} HEAD could not be read")
+            if status.dirty:
+                print(f"[WARN] {workspace.name} has uncommitted changes; the pin will point at HEAD anyway")
+            if status.detached:
+                print(f"[WARN] {workspace.name} is on a detached HEAD, so the commit belongs to no branch")
+            if head_on_remote(directory) is False:
+                print(f"[WARN] {workspace.name} HEAD is on no remote branch; push it before pinning")
+            if status.branch and status.branch != workspace.ref:
+                print(f"[WARN] {workspace.name} is on {status.branch}, not the pinned {workspace.ref}")
+        if head == workspace.commit:
+            print(f"{workspace.name}: already pinned at {head}")
+            continue
+        rewrite_pin(key, head)
+        print(f"{workspace.name}: {workspace.commit[:12]} -> {head[:12]}")
+        print(f"  next: python build_tools/dev.py {workspace.key}-sync")
+
+
 RECIPE_TOGGLE_ENV = "CORONA_CONAN_EXPORT_LOCAL_RECIPES"
 TARGET_FAMILY_OPTIONS: dict[str, tuple[str, ...]] = {
     "core": (
@@ -162,7 +205,15 @@ def execute(args: argparse.Namespace) -> None:
         install(configuration, target_family, update=True)
         cmake_configure(REPO_ROOT, configuration, target_family)
     elif args.command in WORKSPACE_COMMANDS:
-        sync_workspace(REPO_ROOT, WORKSPACE_COMMANDS[args.command])
+        workspace = WORKSPACE_COMMANDS[args.command]
+        sync_workspace(REPO_ROOT, workspace)
+    elif args.command == "pin":
+        targets = list(args.targets)
+        # `pin editor <commit>` pins an explicit commit; `pin` alone uses HEAD.
+        explicit = None
+        if len(targets) > 1:
+            explicit = targets.pop()
+        pin_workspaces(REPO_ROOT, targets or [workspace.key for workspace in WORKSPACES], explicit)
     elif args.command == "clean":
         clean_repo(REPO_ROOT)
     else:
@@ -177,7 +228,10 @@ def create_parser() -> argparse.ArgumentParser:
             "Builds align local HEAD to build_tools/source_workspaces.py, preserving "
             "nonconflicting edits. Differences from the latest remote branch only warn. "
             "horizon-sync and editor-sync also synchronize submodules explicitly. "
-            "update additionally refreshes Conan dependencies."
+            "update additionally refreshes Conan dependencies. "
+            "pin writes the checkouts' current HEAD into source_workspaces.py "
+            "(optionally for one workspace: pin editor), or an explicit commit "
+            "(pin editor <sha>) when the build checkout is pin-aligned."
         ),
     )
     parser.add_argument(
@@ -185,7 +239,7 @@ def create_parser() -> argparse.ArgumentParser:
         choices=(
             "status", "install", "configure", "build", "build-fast", "rebuild", "update",
             *WORKSPACE_COMMANDS,
-            "clean", "_bootstrap",
+            "pin", "clean", "_bootstrap",
         ),
     )
     parser.add_argument("targets", nargs="*")

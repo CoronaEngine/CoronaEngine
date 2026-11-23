@@ -1,14 +1,17 @@
 #include <corona/systems/optics/optics_system.h>
+#include <corona/systems/optics/optics_commands.h>
 #include <corona/engine/engine_runtime_api.h>
 #include "base/mgr/global.h"
 #include "base/mgr/pipeline.h"
 #include "base/mgr/switch_profile.h"
 #include "base/scattering/material.h"
+#include "base/illumination/light.h"
 #include "base/sensor/sensor.h"
 #include "hotfix/module_interface.h"
 #include "vision/vision_camera_adapter.h"
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
+#include <nlohmann/json.hpp>
 #include "vision/vision_zero_copy_bridge.h"
 #include <filesystem>
 #include <fstream>
@@ -35,16 +38,80 @@ struct VisionEngineSceneTest {
     static void expect(bool value, const char* message) {
         if (!value) throw std::runtime_error(message);
     }
+    static std::uintptr_t create_test_camera() {
+        auto& hub = SharedDataHub::instance();
+        const auto handle = hub.create_camera();
+        hub.seed_camera_snapshot(handle);
+        return handle;
+    }
+    static void destroy_test_camera(std::uintptr_t handle) {
+        auto& hub = SharedDataHub::instance();
+        hub.clear_camera_state_updates(handle);
+        hub.remove_camera_snapshot_row(handle);
+        hub.destroy_camera(handle);
+    }
+    static void check_camera_command_snapshots() {
+        auto& hub = SharedDataHub::instance();
+        const auto camera = create_test_camera();
+        const auto other = create_test_camera();
+        const auto before = hub.camera_row(camera);
+        Corona::API::set_vision_render_mode("restir", camera);
+        Corona::API::set_vision_denoise(false, camera);
+        Corona::API::set_vision_denoiser("svgf", camera);
+        Corona::API::set_vision_accumulation(true, camera);
+        Corona::API::set_vision_stable_planes(false, camera);
+        CameraMoveCommand move;
+        move.camera_handle = camera;
+        move.position = {1.f, 2.f, -3.f};
+        move.forward = {0.f, 0.f, 1.f};
+        move.world_up = {0.f, 1.f, 0.f};
+        move.fov = 55.f;
+        hub.enqueue_camera_move(move);
+        expect(Corona::API::get_vision_render_mode(camera) == "restir" &&
+                   hub.camera_row(camera)->vision_render_mode == CameraVisionRenderMode::PathTracing,
+               "pending mode must be visible without changing the committed snapshot");
+
+        // Exercise the production command/publication boundary without a GPU.
+        OpticsSystem system;
+        system.apply_camera_and_transform_updates();
+        const auto committed = hub.camera_row(camera);
+        expect(committed && committed->vision_render_mode == CameraVisionRenderMode::ReSTIR &&
+                   !committed->vision_denoise && committed->vision_denoiser == CameraVisionDenoiser::SVGF &&
+                   committed->vision_accumulation && !committed->vision_stable_planes &&
+                   committed->position.x == 1.f && committed->position.y == 2.f && committed->fov == 55.f,
+               "Optics must publish applied settings and pose before rendering");
+        expect(Corona::API::get_vision_render_mode(camera) == "restir" &&
+                   !Corona::API::get_requested_vision_denoise(camera) &&
+                   Corona::API::get_requested_vision_denoiser(camera) == "svgf" &&
+                   Corona::API::get_requested_vision_accumulation(camera) &&
+                   !Corona::API::get_requested_vision_stable_planes(camera),
+               "acknowledged getters must retain applied settings after pending commands are drained");
+        expect(!hub.requested_camera_vision_denoise(camera) &&
+                   !hub.requested_camera_vision_denoiser(camera) &&
+                   !hub.requested_camera_vision_accumulation(camera) &&
+                   !hub.requested_camera_vision_stable_planes(camera) &&
+                   hub.drain_camera_state_updates().empty() && hub.drain_camera_moves().empty(),
+               "the command boundary must consume updates and retire their acknowledged requests");
+        expect(before->vision_render_mode == CameraVisionRenderMode::PathTracing && before->vision_denoise &&
+                   hub.camera_row(other)->vision_render_mode == CameraVisionRenderMode::PathTracing,
+               "publication must preserve previous snapshot values and unrelated cameras");
+        hub.enqueue_camera_release({camera});
+        system.apply_camera_and_transform_updates();
+        expect(!hub.camera_row(camera) && hub.camera_row(other).has_value(),
+               "the next published snapshot must remove released cameras");
+        destroy_test_camera(other);
+    }
     static void check_mode_api() {
         auto& hub = SharedDataHub::instance();
-        const auto handle = hub.camera_storage().allocate();
+        const auto handle = create_test_camera();
         expect(Corona::API::get_vision_denoise(handle),
                "new camera denoise must retain its enabled default");
         expect(Corona::API::get_requested_vision_denoise(handle) &&
                    !hub.requested_camera_vision_denoise(handle).has_value(),
                "new cameras must have no retained denoise request");
         // Exercise queued false -> true transitions independently of defaults.
-        { auto camera = hub.camera_storage().acquire_write(handle); camera->vision_denoise = false; }
+        { auto camera = Corona::find_camera(handle); camera->vision_denoise = false; }
+        hub.publish_camera_snapshot();
         Corona::API::set_vision_render_mode("ReSTIR", handle);
         auto updates = hub.drain_camera_state_updates();
         expect(updates.size() == 1 && updates[0].camera_handle == handle &&
@@ -52,15 +119,16 @@ struct VisionEngineSceneTest {
                    updates[0].fields == CameraStateUpdateField::VisionRenderMode,
                "ReSTIR API must enqueue the requested enum rather than falling back to PT");
         {
-            auto camera = hub.camera_storage().acquire_write(handle);
+            auto camera = Corona::find_camera(handle);
             camera->vision_render_mode = updates[0].vision_render_mode;
         }
+        hub.publish_camera_snapshot();
         expect(Corona::API::get_vision_render_mode(handle) == "restir",
                "camera snapshots must serialize ReSTIR for persistence and UI");
 
         Corona::API::set_vision_denoise(true, handle);
-        expect(!Corona::API::get_vision_denoise(handle),
-               "denoise setter must queue the update instead of mutating the camera cross-thread");
+        expect(Corona::API::get_vision_denoise(handle) && !hub.camera_row(handle)->vision_denoise,
+               "denoise getter must overlay the queued value without changing the committed snapshot");
         expect(Corona::API::get_requested_vision_denoise(handle),
                "saving immediately after a setter must observe the requested value");
         updates = hub.drain_camera_state_updates();
@@ -71,9 +139,10 @@ struct VisionEngineSceneTest {
         expect(Corona::API::get_requested_vision_denoise(handle),
                "saving while a drained update is in flight must retain the requested value");
         {
-            auto camera = hub.camera_storage().acquire_write(handle);
+            auto camera = Corona::find_camera(handle);
             camera->vision_denoise = updates[0].vision_denoise;
         }
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_denoise(handle, updates[0].sequence);
         expect(!hub.requested_camera_vision_denoise(handle).has_value() &&
                    Corona::API::get_requested_vision_denoise(handle),
@@ -113,9 +182,10 @@ struct VisionEngineSceneTest {
                                          CameraStateUpdateField::VisionDenoise),
                "latest denoise value must win without losing a pending algorithm switch");
         {
-            auto camera = hub.camera_storage().acquire_write(handle);
+            auto camera = Corona::find_camera(handle);
             camera->vision_denoise = updates[0].vision_denoise;
         }
+        hub.publish_camera_snapshot();
         expect(!Corona::API::get_vision_denoise(handle),
                "committed explicit false must remain false");
 
@@ -144,11 +214,12 @@ struct VisionEngineSceneTest {
         const auto in_flight = updates[0];
         Corona::API::set_vision_denoise(false, handle);
         {
-            auto camera = hub.camera_storage().acquire_write(handle);
+            auto camera = Corona::find_camera(handle);
             camera->vision_denoise = in_flight.vision_denoise;
         }
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_denoise(handle, in_flight.sequence);
-        expect(Corona::API::get_vision_denoise(handle) &&
+        expect(hub.camera_row(handle)->vision_denoise && !Corona::API::get_vision_denoise(handle) &&
                    hub.requested_camera_vision_denoise(handle).has_value() &&
                    !Corona::API::get_requested_vision_denoise(handle),
                "acknowledging an older in-flight request must not erase a newer queued false");
@@ -159,17 +230,19 @@ struct VisionEngineSceneTest {
         expect(!Corona::API::get_requested_vision_denoise(handle),
                "a repeated old acknowledgement must not erase a newer in-flight request");
         {
-            auto camera = hub.camera_storage().acquire_write(handle);
+            auto camera = Corona::find_camera(handle);
             camera->vision_denoise = updates[0].vision_denoise;
         }
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_denoise(handle, updates[0].sequence);
         expect(!hub.requested_camera_vision_denoise(handle).has_value() &&
                    !Corona::API::get_requested_vision_denoise(handle),
                "latest acknowledgement must remove transient state and expose committed false");
         {
-            auto camera = hub.camera_storage().acquire_write(handle);
+            auto camera = Corona::find_camera(handle);
             camera->vision_denoise = true;
         }
+        hub.publish_camera_snapshot();
         expect(Corona::API::get_requested_vision_denoise(handle),
                "acknowledged preference must not permanently shadow later committed camera changes");
 
@@ -183,11 +256,11 @@ struct VisionEngineSceneTest {
         const auto releases = hub.drain_camera_releases();
         expect(releases.size() == 1 && releases[0].camera_handle == handle,
                "release cleanup must preserve the render-thread release command");
-        hub.camera_storage().deallocate(handle);
+        destroy_test_camera(handle);
     }
     static void check_accumulation_api() {
         auto& hub = SharedDataHub::instance();
-        const auto handle = hub.camera_storage().allocate();
+        const auto handle = create_test_camera();
         expect(!Corona::API::get_vision_accumulation(handle), "new cameras must default to no accumulation");
         Corona::API::set_vision_render_mode("progressive_path_tracing", handle);
         auto updates = hub.drain_camera_state_updates();
@@ -224,11 +297,12 @@ struct VisionEngineSceneTest {
                                              CameraStateUpdateField::VisionDenoise),
                    "mode and both checkboxes must merge without replacing each other");
             {
-                auto camera = hub.camera_storage().acquire_write(handle);
+                auto camera = Corona::find_camera(handle);
                 camera->vision_render_mode = updates[0].vision_render_mode;
                 camera->vision_accumulation = updates[0].vision_accumulation;
                 camera->vision_denoise = updates[0].vision_denoise;
             }
+            hub.publish_camera_snapshot();
             hub.acknowledge_camera_vision_accumulation(handle, updates[0].sequence);
             hub.acknowledge_camera_vision_denoise(handle, updates[0].sequence);
             expect(Corona::API::get_vision_render_mode(handle) == mode &&
@@ -250,12 +324,12 @@ struct VisionEngineSceneTest {
                    hub.drain_camera_state_updates().empty(),
                "camera release must clear queued and in-flight accumulation preferences");
         hub.drain_camera_releases();
-        hub.camera_storage().deallocate(handle);
+        destroy_test_camera(handle);
     }
     static void check_frame_timing() {
         auto& hub = SharedDataHub::instance();
-        const auto first = hub.camera_storage().allocate();
-        const auto second = hub.camera_storage().allocate();
+        const auto first = create_test_camera();
+        const auto second = create_test_camera();
         expect(!hub.camera_frame_timing(first), "new camera must not have stale frame timing");
         const auto start = std::chrono::steady_clock::now();
         hub.publish_camera_frame_timing(first, 24.9, 6.5, CameraVisionRenderMode::ReSTIR, start);
@@ -289,19 +363,19 @@ struct VisionEngineSceneTest {
         hub.drain_camera_releases();
         expect(!hub.camera_frame_timing(first) && !hub.camera_frame_timing(second),
                "released camera timings must be discarded");
-        hub.camera_storage().deallocate(first);
-        hub.camera_storage().deallocate(second);
+        destroy_test_camera(first);
+        destroy_test_camera(second);
     }
     static void check_stable_planes_api() {
         auto& hub = SharedDataHub::instance();
-        const auto handle = hub.camera_storage().allocate();
-        const auto other = hub.camera_storage().allocate();
+        const auto handle = create_test_camera();
+        const auto other = create_test_camera();
         expect(Corona::API::get_vision_stable_planes(handle) &&
                    Corona::API::get_requested_vision_stable_planes(handle) &&
                    !hub.requested_camera_vision_stable_planes(handle).has_value(),
                "new cameras must enable stable planes without a pending request");
         Corona::API::set_vision_stable_planes(false, handle);
-        expect(Corona::API::get_vision_stable_planes(handle) &&
+        expect(hub.camera_row(handle)->vision_stable_planes && !Corona::API::get_vision_stable_planes(handle) &&
                    !Corona::API::get_requested_vision_stable_planes(handle) &&
                    Corona::API::get_requested_vision_stable_planes(other),
                "queued stable-plane preferences must remain camera-local and immediately persistable");
@@ -314,11 +388,12 @@ struct VisionEngineSceneTest {
         const auto in_flight = updates[0];
         Corona::API::set_vision_stable_planes(true, handle);
         {
-            auto camera = hub.camera_storage().acquire_write(handle);
+            auto camera = Corona::find_camera(handle);
             camera->vision_stable_planes = in_flight.vision_stable_planes;
         }
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_stable_planes(handle, in_flight.sequence);
-        expect(!Corona::API::get_vision_stable_planes(handle) &&
+        expect(!hub.camera_row(handle)->vision_stable_planes && Corona::API::get_vision_stable_planes(handle) &&
                    Corona::API::get_requested_vision_stable_planes(handle) &&
                    hub.requested_camera_vision_stable_planes(handle).has_value(),
                "an old stable-plane acknowledgement must preserve the newer request");
@@ -336,10 +411,11 @@ struct VisionEngineSceneTest {
                                              CameraStateUpdateField::VisionRenderMode),
                    "stable planes must merge independently with mode, accumulation and denoise");
             {
-                auto camera = hub.camera_storage().acquire_write(handle);
+                auto camera = Corona::find_camera(handle);
                 camera->vision_stable_planes = updates[0].vision_stable_planes;
                 camera->vision_render_mode = updates[0].vision_render_mode;
             }
+            hub.publish_camera_snapshot();
             hub.acknowledge_camera_vision_stable_planes(handle, updates[0].sequence);
             expect(!hub.requested_camera_vision_stable_planes(handle).has_value() &&
                        !Corona::API::get_requested_vision_stable_planes(handle) &&
@@ -359,20 +435,22 @@ struct VisionEngineSceneTest {
                    hub.drain_camera_state_updates().empty(),
                "camera release must clear queued and in-flight stable-plane requests");
         hub.drain_camera_releases();
-        hub.camera_storage().deallocate(handle);
-        hub.camera_storage().deallocate(other);
+        destroy_test_camera(handle);
+        destroy_test_camera(other);
     }
     static void check_denoiser_api() {
         auto& hub = SharedDataHub::instance();
-        const auto handle = hub.camera_storage().allocate();
-        const auto other = hub.camera_storage().allocate();
+        const auto handle = create_test_camera();
+        const auto other = create_test_camera();
         expect(Corona::API::get_vision_denoiser(handle) == "reblur" &&
                    !hub.requested_camera_vision_denoiser(handle).has_value(),
                "new cameras must retain REBLUR without a pending override");
-        { auto camera = hub.camera_storage().acquire_write(handle); camera->vision_denoiser = CameraVisionDenoiser::Scene; }
+        { auto camera = Corona::find_camera(handle); camera->vision_denoiser = CameraVisionDenoiser::Scene; }
+        hub.publish_camera_snapshot();
         Corona::API::set_vision_denoiser("ReBLUR", handle);
         Corona::API::set_vision_denoise(true, handle);
-        expect(Corona::API::get_vision_denoiser(handle) == "scene" &&
+        expect(hub.camera_row(handle)->vision_denoiser == CameraVisionDenoiser::Scene &&
+                   Corona::API::get_vision_denoiser(handle) == "reblur" &&
                    Corona::API::get_requested_vision_denoiser(handle) == "reblur" &&
                    Corona::API::get_requested_vision_denoiser(other) == "reblur",
                "denoiser requests must be camera-local and immediately persistable");
@@ -385,22 +463,25 @@ struct VisionEngineSceneTest {
         const auto in_flight = updates[0];
         Corona::API::set_vision_denoiser("svgf", handle);
         {
-            auto camera = hub.camera_storage().acquire_write(handle);
+            auto camera = Corona::find_camera(handle);
             camera->vision_denoiser = in_flight.vision_denoiser;
             camera->vision_denoise = in_flight.vision_denoise;
         }
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_denoiser(handle, in_flight.sequence);
         hub.acknowledge_camera_vision_denoise(handle, in_flight.sequence);
-        expect(Corona::API::get_vision_denoiser(handle) == "reblur" &&
+        expect(hub.camera_row(handle)->vision_denoiser == CameraVisionDenoiser::ReBLUR &&
+                   Corona::API::get_vision_denoiser(handle) == "svgf" &&
                    Corona::API::get_requested_vision_denoiser(handle) == "svgf",
                "an older acknowledgement must not discard a newer denoiser request");
         updates = hub.drain_camera_state_updates();
         expect(updates.size() == 1 && updates[0].fields == CameraStateUpdateField::VisionDenoiser,
                "denoiser type changes must not change the enable switch");
         {
-            auto camera = hub.camera_storage().acquire_write(handle);
+            auto camera = Corona::find_camera(handle);
             camera->vision_denoiser = updates[0].vision_denoiser;
         }
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_denoiser(handle, updates[0].sequence);
         expect(!hub.requested_camera_vision_denoiser(handle).has_value() &&
                    Corona::API::get_requested_vision_denoiser(handle) == "svgf" &&
@@ -414,17 +495,17 @@ struct VisionEngineSceneTest {
                    hub.drain_camera_state_updates().empty(),
                "camera release must clear pending denoiser preferences");
         hub.drain_camera_releases();
-        hub.camera_storage().deallocate(handle);
-        hub.camera_storage().deallocate(other);
+        destroy_test_camera(handle);
+        destroy_test_camera(other);
     }
     static void check_reblur_settings_api() {
         auto& hub = SharedDataHub::instance();
-        const auto camera = hub.camera_storage().allocate();
-        const auto other = hub.camera_storage().allocate();
+        const auto camera = create_test_camera();
+        const auto other = create_test_camera();
         Corona::API::set_vision_reblur_settings(R"({"max_history":12})", camera);
         Corona::API::set_vision_denoise(false, camera);
         auto updates = hub.drain_camera_state_updates();
-        expect(updates.size() == 1 && updates[0].vision_reblur_settings == R"({"max_history":12})" &&
+        expect(updates.size() == 1 && updates[0].vision_reblur_settings == nlohmann::json::parse(R"({"max_history":12})") &&
                    Corona::API::get_requested_vision_reblur_settings(camera) == R"({"max_history":12})" &&
                    Corona::API::get_requested_vision_reblur_settings(other) == "{}",
                "REBLUR preferences must remain camera-local and persistable while in flight");
@@ -434,9 +515,10 @@ struct VisionEngineSceneTest {
                "older acknowledgements must preserve newer REBLUR settings");
         updates = hub.drain_camera_state_updates();
         {
-            auto state = hub.camera_storage().acquire_write(camera);
+            auto state = Corona::find_camera(camera);
             state->vision_reblur_settings = updates[0].vision_reblur_settings;
         }
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_reblur_settings(camera, updates[0].sequence);
         expect(!hub.requested_camera_vision_reblur_settings(camera).has_value() &&
                    Corona::API::get_requested_vision_reblur_settings(camera) == R"({"max_history":20})",
@@ -446,20 +528,20 @@ struct VisionEngineSceneTest {
         expect(!hub.requested_camera_vision_reblur_settings(camera) && hub.drain_camera_state_updates().empty(),
                "camera release must discard REBLUR requests");
         hub.drain_camera_releases();
-        hub.camera_storage().deallocate(camera);
-        hub.camera_storage().deallocate(other);
+        destroy_test_camera(camera);
+        destroy_test_camera(other);
     }
     static void check_relax_settings_api() {
         auto& hub = SharedDataHub::instance();
-        const auto camera = hub.camera_storage().allocate();
-        const auto other = hub.camera_storage().allocate();
+        const auto camera = create_test_camera();
+        const auto other = create_test_camera();
         Corona::API::set_vision_denoiser("RELAX", camera);
         Corona::API::set_vision_relax_settings(R"({"diffuse_history":12})", camera);
         Corona::API::set_vision_denoise(false, camera);
         auto updates = hub.drain_camera_state_updates();
         expect(updates.size() == 1 && updates[0].vision_denoiser == CameraVisionDenoiser::ReLAX &&
                    Corona::API::get_requested_vision_denoiser(camera) == "relax" &&
-                   updates[0].vision_relax_settings == R"({"diffuse_history":12})" &&
+                   updates[0].vision_relax_settings == nlohmann::json::parse(R"({"diffuse_history":12})") &&
                    Corona::API::get_requested_vision_relax_settings(camera) == R"({"diffuse_history":12})" &&
                    Corona::API::get_requested_vision_relax_settings(other) == "{}",
                "RELAX preferences must remain camera-local and persistable while in flight");
@@ -469,9 +551,10 @@ struct VisionEngineSceneTest {
                "older acknowledgements must preserve newer RELAX settings");
         updates = hub.drain_camera_state_updates();
         {
-            auto state = hub.camera_storage().acquire_write(camera);
+            auto state = Corona::find_camera(camera);
             state->vision_relax_settings = updates[0].vision_relax_settings;
         }
+        hub.publish_camera_snapshot();
         hub.acknowledge_camera_vision_relax_settings(camera, updates[0].sequence);
         expect(!hub.requested_camera_vision_relax_settings(camera).has_value() &&
                    Corona::API::get_requested_vision_relax_settings(camera) == R"({"diffuse_history":20})",
@@ -481,8 +564,8 @@ struct VisionEngineSceneTest {
         expect(!hub.requested_camera_vision_relax_settings(camera) && hub.drain_camera_state_updates().empty(),
                "camera release must discard RELAX requests");
         hub.drain_camera_releases();
-        hub.camera_storage().deallocate(camera);
-        hub.camera_storage().deallocate(other);
+        destroy_test_camera(camera);
+        destroy_test_camera(other);
     }
     static void sync_receiver_camera(vision::Pipeline& pipeline) {
         CameraDevice camera;
@@ -606,8 +689,8 @@ struct VisionEngineSceneTest {
                                   vision::Pipeline* previous_pipeline = nullptr) {
         const auto source_settings = pipeline.renderer().integrator()->settings();
         auto& hub = SharedDataHub::instance();
-        const auto first = hub.camera_storage().allocate();
-        const auto second = hub.camera_storage().allocate();
+        const auto first = hub.create_camera();
+        const auto second = hub.create_camera();
         const std::string settings = R"({"max_depth":0,"min_depth":2,"rr_threshold":0.5})";
         Corona::API::set_vision_pt_settings(settings, first);
         auto updates = hub.drain_camera_state_updates();
@@ -622,7 +705,7 @@ struct VisionEngineSceneTest {
         auto prepare = [&](std::uintptr_t handle, const std::string& json) {
             if (previous_pipeline) previous_pipeline->activate_global_context();
             expect(system.prepare_vision_camera_view(system.active_vision_runtime(), handle,
-                       16, 16, false, true, true, CameraVisionDenoiser::Scene, "{}", "{}", json),
+                       16, 16, false, true, true, CameraVisionDenoiser::Scene, vision::DataWrap::object(), vision::DataWrap::object(), vision::DataWrap::parse(json)),
                    "PT camera settings must prepare a usable view");
             sync_receiver_camera(pipeline);
         };
@@ -670,14 +753,14 @@ struct VisionEngineSceneTest {
         pipeline.remove_view_context(second);
         for (auto handle : {first, second}) {
             hub.clear_camera_state_updates(handle);
-            hub.camera_storage().deallocate(handle);
+            hub.destroy_camera(handle);
         }
         std::cout << "PASS: camera-local PT parameters, history reset, GPU depth and scene defaults\n";
     }
     static void check_restir_settings(OpticsSystem& system, vision::Pipeline& pipeline) {
         auto& hub = SharedDataHub::instance();
-        const auto first = hub.camera_storage().allocate();
-        const auto second = hub.camera_storage().allocate();
+        const auto first = hub.create_camera();
+        const auto second = hub.create_camera();
         const std::string settings = R"({"max_depth":3,"min_depth":2,"rr_threshold":0.5,
           "direct":{"M_light":7,"M_bsdf":2,"max_age":12,"diffuse_factor":0.2,
             "temporal":{"open":false,"history_limit":4,"theta":25,"depth":0.2,"radius":6},
@@ -688,7 +771,7 @@ struct VisionEngineSceneTest {
         Corona::API::set_vision_restir_settings(settings, first);
         auto updates = hub.drain_camera_state_updates();
         expect(updates.size() == 1 && updates[0].fields == CameraStateUpdateField::VisionRestirSettings &&
-                   Corona::API::get_requested_vision_restir_settings(first) == settings &&
+                   nlohmann::json::parse(Corona::API::get_requested_vision_restir_settings(first)) == nlohmann::json::parse(settings) &&
                    Corona::API::get_requested_vision_restir_settings(second) == "{}",
                "ReSTIR settings must be queued independently per camera and persist while in flight");
         Corona::API::set_vision_restir_settings(R"({"direct":{"max_age":8}})", first);
@@ -698,7 +781,7 @@ struct VisionEngineSceneTest {
         hub.clear_camera_state_updates(first);
         auto prepare = [&](std::uintptr_t camera, const std::string& json) {
             expect(system.prepare_vision_camera_view(system.active_vision_runtime(), camera,
-                       16, 16, false, true, true, CameraVisionDenoiser::Scene, "{}", "{}", "{}", json),
+                       16, 16, false, true, true, CameraVisionDenoiser::Scene, vision::DataWrap::object(), vision::DataWrap::object(), vision::DataWrap::object(), vision::DataWrap::parse(json)),
                    "ReSTIR camera settings must prepare a usable view");
             // Each new view owns a sensor. Keep it facing the receiver so
             // zero-candidate assertions measure shading, not the visible sky.
@@ -723,15 +806,15 @@ struct VisionEngineSceneTest {
         const auto initial_history = pipeline.frame_index();
         prepare(first, defaults.dump());
         {
-            auto camera = hub.camera_storage().acquire_read(first);
-            expect(camera->vision_restir_applied_settings == defaults.dump() &&
+            auto camera = Corona::find_camera(first);
+            expect(camera->vision_restir_applied_settings == defaults &&
                        pipeline.frame_index() == initial_history,
                    "equivalent override inputs must publish readiness without resetting history");
         }
         prepare(first, R"({"direct.M_light":7})");
         {
-            auto camera = hub.camera_storage().acquire_read(first);
-            expect(camera->vision_restir_applied_settings == defaults.dump() &&
+            auto camera = Corona::find_camera(first);
+            expect(camera->vision_restir_applied_settings == defaults &&
                        pipeline.frame_index() == initial_history,
                    "invalid direct engine inputs must not advance the applied marker or reset history");
         }
@@ -823,15 +906,15 @@ struct VisionEngineSceneTest {
         pipeline.remove_view_context(second);
         for (auto camera : {first, second}) {
             hub.clear_camera_state_updates(camera);
-            hub.camera_storage().deallocate(camera);
+            hub.destroy_camera(camera);
         }
         std::cout << "PASS: camera-local ReSTIR settings, GPU contributions, recompilation and history\n";
     }
     static void check_independent_denoiser(OpticsSystem& system, vision::Pipeline& pipeline,
                                           const char* algorithm) {
-        auto& camera_storage = SharedDataHub::instance().camera_storage();
-        const auto first_camera = camera_storage.allocate();
-        const auto second_camera = camera_storage.allocate();
+        auto& hub = Corona::SharedDataHub::instance();
+        const auto first_camera = hub.create_camera();
+        const auto second_camera = hub.create_camera();
         auto prepare = [&](std::uintptr_t camera, CameraVisionDenoiser type, bool enabled = true) {
             expect(system.prepare_vision_camera_view(system.active_vision_runtime(), camera,
                        16, 16, enabled, false, true, type), "denoiser selection must prepare a usable view");
@@ -858,27 +941,27 @@ struct VisionEngineSceneTest {
         prepare(first_camera, CameraVisionDenoiser::ReBLUR);
         expect(pipeline.frame_buffer() == reblur_framebuffer.get() && pipeline.frame_index() == reblur_history,
                "reapplying the same denoiser must preserve compiled kernels and history");
-        const std::string parameters = R"({"max_history":12,"fast_history":4,"history_fix_frames":2,"history_fix_stride":8,"diffuse_prepass":0,"specular_prepass":25,"min_radius":2,"max_radius":20,"lobe_fraction":0.25,"roughness_fraction":0.5,"plane_sensitivity":0.125,"min_hit_weight":0.5,"stabilization":0.5,"reconstruction":2,"anti_firefly":false,"antilag_sigma":2,"antilag_sensitivity":1})";
+        const auto parameters = vision::DataWrap::parse(R"({"max_history":12,"fast_history":4,"history_fix_frames":2,"history_fix_stride":8,"diffuse_prepass":0,"specular_prepass":25,"min_radius":2,"max_radius":20,"lobe_fraction":0.25,"roughness_fraction":0.5,"plane_sensitivity":0.125,"min_hit_weight":0.5,"stabilization":0.5,"reconstruction":2,"anti_firefly":false,"antilag_sigma":2,"antilag_sensitivity":1})");
         expect(system.prepare_vision_camera_view(system.active_vision_runtime(), first_camera,
                    16, 16, true, false, true, CameraVisionDenoiser::ReBLUR, parameters),
                "REBLUR parameters must update a live view");
         expect(pipeline.frame_buffer() == reblur_framebuffer.get() && pipeline.frame_index() == 0,
                "parameter edits must reset history without recreating the framebuffer");
         auto* filter = dynamic_cast<vision::IlluminationIntegrator*>(pipeline.renderer().integrator().get())->denoiser();
-        const auto applied = vision::DataWrap::parse(filter->reblur_settings_json());
-        expect(applied == vision::DataWrap::parse(parameters),
+        const auto applied = filter->reblur_settings();
+        expect(applied == parameters,
                "all seventeen editor values must reach the actual REBLUR filter");
         vision::DenoiserDesc source_desc{"ReBLUR"};
         for (const auto& [key, value] : applied.items()) source_desc.set_value(key, value);
         const auto source_filter = vision::Node::create_shared<vision::Denoiser>(source_desc);
-        expect(vision::DataWrap::parse(source_filter->reblur_settings_json()) == applied,
+        expect(source_filter->reblur_settings() == applied,
                "scene descriptors must load all exposed parameters");
-        source_filter->set_reblur_settings(R"({"max_history":7})");
-        const auto overridden = vision::DataWrap::parse(source_filter->reblur_settings_json());
+        source_filter->set_reblur_settings(vision::DataWrap::parse(R"({"max_history":7})"));
+        const auto overridden = source_filter->reblur_settings();
         expect(overridden["max_history"] == 7 && overridden["reconstruction"] == 2 && overridden["antilag_sigma"] == 2,
                "partial camera overrides must retain scene values");
-        source_filter->set_reblur_settings("{}");
-        expect(vision::DataWrap::parse(source_filter->reblur_settings_json()) == applied,
+        source_filter->set_reblur_settings(vision::DataWrap::parse("{}"));
+        expect(source_filter->reblur_settings() == applied,
                "clearing overrides must restore source settings");
         render(pipeline, "REBLUR-edited-parameters");
         const auto edited_history = pipeline.frame_index();
@@ -904,37 +987,37 @@ struct VisionEngineSceneTest {
         const auto default_relax_history = pipeline.frame_index();
         auto* default_relax = dynamic_cast<vision::IlluminationIntegrator*>(pipeline.renderer().integrator().get())->denoiser();
         system.prepare_vision_camera_view(system.active_vision_runtime(), first_camera,
-            16, 16, true, false, true, CameraVisionDenoiser::ReLAX, "{}", default_relax->relax_settings_json());
+            16, 16, true, false, true, CameraVisionDenoiser::ReLAX, vision::DataWrap::object(), default_relax->relax_settings());
         expect(pipeline.frame_index() == default_relax_history,
                "applying unchanged effective RELAX defaults must preserve history even when JSON changes");
-        const std::string relax_parameters = R"({"diffuse_history":12,"specular_history":16,"diffuse_fast_history":4,"specular_fast_history":5,"history_fix_frames":2,"history_fix_stride":8,"history_fix_normal_power":4,"variance_history_threshold":2,"diffuse_prepass":0,"specular_prepass":25,"min_hit_weight":0.5,"atrous_iterations":3,"diffuse_phi":4,"specular_phi":2,"lobe_fraction":0.25,"roughness_fraction":0.5,"specular_variance_boost":1,"specular_lobe_slack":0.125,"color_box_sigma":3,"depth_threshold":0.03125,"luminance_relaxation":0.75,"normal_relaxation":0.5,"roughness_relaxation":0.25,"antilag_acceleration":0.5,"antilag_spatial_sigma":2,"antilag_temporal_sigma":1,"antilag_reset":0.75,"anti_firefly":true,"roughness_stopping":false,"reconstruction":1})";
+        const auto relax_parameters = vision::DataWrap::parse(R"({"diffuse_history":12,"specular_history":16,"diffuse_fast_history":4,"specular_fast_history":5,"history_fix_frames":2,"history_fix_stride":8,"history_fix_normal_power":4,"variance_history_threshold":2,"diffuse_prepass":0,"specular_prepass":25,"min_hit_weight":0.5,"atrous_iterations":3,"diffuse_phi":4,"specular_phi":2,"lobe_fraction":0.25,"roughness_fraction":0.5,"specular_variance_boost":1,"specular_lobe_slack":0.125,"color_box_sigma":3,"depth_threshold":0.03125,"luminance_relaxation":0.75,"normal_relaxation":0.5,"roughness_relaxation":0.25,"antilag_acceleration":0.5,"antilag_spatial_sigma":2,"antilag_temporal_sigma":1,"antilag_reset":0.75,"anti_firefly":true,"roughness_stopping":false,"reconstruction":1})");
         expect(system.prepare_vision_camera_view(system.active_vision_runtime(), first_camera,
                    16, 16, true, false, true, CameraVisionDenoiser::ReLAX, parameters, relax_parameters),
                "RELAX parameters must update a live view");
         expect(pipeline.frame_buffer() == relax_framebuffer.get() && pipeline.frame_index() == 0,
                "RELAX parameter edits must reset history without recreating the framebuffer");
         filter = dynamic_cast<vision::IlluminationIntegrator*>(pipeline.renderer().integrator().get())->denoiser();
-        const auto relax_applied = vision::DataWrap::parse(filter->relax_settings_json());
-        expect(filter->impl_type() == "ReLAX" && relax_applied == vision::DataWrap::parse(relax_parameters),
+        const auto relax_applied = filter->relax_settings();
+        expect(filter->impl_type() == "ReLAX" && relax_applied == relax_parameters,
                "all thirty editor values must reach the actual RELAX filter independently of REBLUR");
         vision::DenoiserDesc relax_desc{"ReLAX"};
         for (const auto& [key, value] : relax_applied.items()) relax_desc.set_value(key, value);
         const auto relax_source = vision::Node::create_shared<vision::Denoiser>(relax_desc);
-        expect(vision::DataWrap::parse(relax_source->relax_settings_json()) == relax_applied,
+        expect(relax_source->relax_settings() == relax_applied,
                "RELAX scene descriptors must load all exposed parameters");
-        relax_source->set_relax_settings(R"({"diffuse_history":7})");
-        const auto relax_partial = vision::DataWrap::parse(relax_source->relax_settings_json());
+        relax_source->set_relax_settings(vision::DataWrap::parse(R"({"diffuse_history":7})"));
+        const auto relax_partial = relax_source->relax_settings();
         expect(relax_partial["diffuse_history"] == 7 && relax_partial["specular_history"] == 16 &&
                    relax_partial["reconstruction"] == 1 && relax_partial["roughness_stopping"] == false,
                "partial RELAX camera overrides must retain scene values");
-        relax_source->set_relax_settings("{}");
-        expect(vision::DataWrap::parse(relax_source->relax_settings_json()) == relax_applied,
+        relax_source->set_relax_settings(vision::DataWrap::parse("{}"));
+        expect(relax_source->relax_settings() == relax_applied,
                "clearing RELAX overrides must restore source settings");
         render(pipeline, "RELAX-edited-parameters");
         const auto relax_history = pipeline.frame_index();
         system.prepare_vision_camera_view(system.active_vision_runtime(), first_camera,
             16, 16, true, false, true, CameraVisionDenoiser::ReLAX, parameters,
-            vision::DataWrap::parse(relax_parameters).dump(2));
+            vision::DataWrap(relax_parameters));
         expect(pipeline.frame_index() == relax_history,
                "unchanged RELAX parameters must preserve temporal history");
         prepare(second_camera, CameraVisionDenoiser::SVGF);
@@ -947,8 +1030,8 @@ struct VisionEngineSceneTest {
         pipeline.commit_command();
         pipeline.remove_view_context(first_camera);
         pipeline.remove_view_context(second_camera);
-        camera_storage.deallocate(first_camera);
-        camera_storage.deallocate(second_camera);
+        hub.destroy_camera(first_camera);
+        hub.destroy_camera(second_camera);
     }
     static void check_independent_stable_planes(OpticsSystem& system, vision::Pipeline& pipeline) {
         auto prepare = [&](std::uintptr_t handle, bool enabled) {
@@ -1294,7 +1377,8 @@ struct VisionEngineSceneTest {
         pipeline.remove_view_context(402u);
         std::cout << "PASS: hotfix rebuilds base and camera GPU kernels while retaining view state\n";
     }
-    static void run(bool shared_display_only = false, bool hotfix_only = false) {
+    static void run(bool shared_display_only = false, bool hotfix_only = false,
+                    bool imported_emission_only = false) {
         namespace fs = std::filesystem;
         const auto base = fs::current_path() / "engine-scene-test-assets";
         fs::create_directories(base);
@@ -1308,21 +1392,52 @@ struct VisionEngineSceneTest {
         Resource::ModelImportOptions options; options.scene_geometry = true;
         auto id = Resource::ResourceManager::get_instance().import_sync(base / "receiver.obj", options);
         expect(id != 0, "Corona must import the mesh fixture");
-        const auto model = hub.model_resource_storage().allocate();
-        const auto transform = hub.model_transform_storage().allocate();
-        const auto geometry = hub.geometry_storage().allocate();
-        const auto optics = hub.optics_storage().allocate();
-        const auto profile = hub.profile_storage().allocate();
-        const auto actor = hub.actor_storage().allocate();
-        const auto environment = hub.environment_storage().allocate();
-        const auto scene = hub.scene_storage().allocate();
-        { auto w = hub.model_resource_storage().acquire_write(model); w->model_id = id; }
-        { auto w = hub.geometry_storage().acquire_write(geometry); w->model_resource_handle = model; w->transform_handle = transform; }
-        { auto w = hub.optics_storage().acquire_write(optics); w->geometry_handle = geometry; }
-        { auto w = hub.profile_storage().acquire_write(profile); w->geometry_handle = geometry; w->optics_handle = optics; }
-        { auto w = hub.actor_storage().acquire_write(actor); w->profile_handles = {profile}; }
-        { auto w = hub.environment_storage().acquire_write(environment); w->sun_intensity = 0; w->sky_intensity = 1; }
-        { auto w = hub.scene_storage().acquire_write(scene); w->actor_handles = {actor}; w->environment = environment; }
+        const auto model = hub.create_model_resource();
+        const auto transform = hub.create_transform();
+        const auto geometry = hub.create_geometry();
+        const auto optics = hub.create_optics();
+        const auto profile = hub.create_profile_component();
+        const auto actor = hub.create_actor_component();
+        const auto environment = hub.create_environment();
+        const auto scene = hub.create_scene();
+        { auto* w = hub.try_model_resource(model); w->model_id = id; }
+        { auto w = Corona::find_geometry(geometry); w->model_resource_handle = model; w->transform_handle = transform; }
+        { auto w = Corona::find_optics(optics); w->geometry_handle = geometry; }
+        { auto w = hub.try_profile(profile); w->geometry_handle = geometry; w->optics_handle = optics; }
+        { auto w = Corona::find_actor(actor); w->profile_handles = {profile}; }
+        { auto* w = hub.try_environment(environment); w->sun_intensity = 0; w->sky_intensity = 1; }
+        { auto w = Corona::find_scene(scene); w->actor_handles = {actor}; w->environment = environment; }
+        if (imported_emission_only) {
+            // Both external importers publish emission through Principled,
+            // then materialization queues visibility for the same optics.
+            auto material = std::make_shared<Materials::Principled>();
+            material->surface.emissive = {2.f, 2.f, 2.f};
+            material->emission_two_sided = true;
+            material->expressions = std::make_shared<const nlohmann::json>(nlohmann::json{
+                {"base_color", {0.f, 0.f, 0.f}}, {"emission", {2.f, 2.f, 2.f}},
+                {"roughness", 1.f}, {"specular", 0.f}, {"two_sided", true}});
+            OpticsUpdateCommand appearance;
+            appearance.optics_handle = optics;
+            appearance.geometry_handle = geometry;
+            appearance.fields = OpticsField::Principled | OpticsField::MaterialOverrides;
+            appearance.principled = material;
+            appearance.material_overrides = std::make_shared<const Materials::Overrides>();
+            OpticsUpdateCommand visible;
+            visible.optics_handle = optics;
+            visible.fields = OpticsField::Visible;
+            visible.visible = true;
+            OpticsCommandChannel::Buffer queue;
+            queue.push(appearance);
+            queue.push(visible);
+            for (const auto& update : queue.drain()) {
+                auto w = Corona::find_optics(update.optics_handle);
+                apply_optics_update(*w, update);
+            }
+            auto* env = hub.try_environment(environment);
+            env->sky_intensity = 0.f;
+            env->authored_lighting = std::make_shared<const nlohmann::json>(nlohmann::json{
+                {"directionals", nlohmann::json::array()}, {"environments", nlohmann::json::array()}});
+        }
         {
             OpticsSystem system;
             expect(system.load_engine_built_vision_scene(CameraVisionRenderMode::PathTracing), "Corona scene must initialize PT");
@@ -1335,6 +1450,17 @@ struct VisionEngineSceneTest {
             render(*pt, "Corona-PT");
             if (hotfix_only) {
                 check_hotfix_renderers(*pt);
+            } else if (imported_emission_only) {
+                unsigned area_lights = 0;
+                for (const auto& light : pt->scene().light_manager().lights()) {
+                    if (light->match(vision::LightType::Area)) ++area_lights;
+                }
+                expect(area_lights == 1, "imported emission must create a Vision area light after visibility coalescing");
+                system.apply_vision_render_mode(CameraVisionRenderMode::ReSTIR);
+                auto restir = vision::Global::instance().pipeline_shared();
+                Vision::sync_vision_camera(*restir, camera);
+                render(*restir, "Imported-emission-ReSTIR");
+                std::cout << "PASS: imported emission survives visibility and lights PT/ReSTIR without a sky\n";
             } else if (shared_display_only) {
                 check_shared_display(*pt);
             } else {
@@ -1343,7 +1469,7 @@ struct VisionEngineSceneTest {
                 check_independent_accumulation(system, *pt, "pt");
                 // Rebuild from the edited Corona resources: no proxy actor or
                 // external scene cache is involved in either mode.
-                { auto w = hub.model_transform_storage().acquire_write(transform); w->position.x = 0.2f; }
+                { auto w = Corona::find_transform(transform); w->position.x = 0.2f; }
                 system.apply_vision_render_mode(CameraVisionRenderMode::ProgressivePathTracing);
                 auto progressive = vision::Global::instance().pipeline_shared();
                 Vision::sync_vision_camera(*progressive, camera);
@@ -1363,15 +1489,15 @@ struct VisionEngineSceneTest {
                 check_restir_settings(system, *restir);
             }
         }
-        hub.scene_storage().deallocate(scene);
-        hub.environment_storage().deallocate(environment);
-        hub.actor_storage().deallocate(actor);
-        hub.profile_storage().deallocate(profile);
-        hub.optics_storage().deallocate(optics);
-        hub.geometry_storage().deallocate(geometry);
-        hub.model_transform_storage().deallocate(transform);
-        hub.model_resource_storage().deallocate(model);
-        if (!shared_display_only && !hotfix_only) {
+        hub.destroy_scene(scene);
+        hub.destroy_environment(environment);
+        hub.destroy_actor_component(actor);
+        hub.destroy_profile_component(profile);
+        hub.destroy_optics(optics);
+        hub.destroy_geometry(geometry);
+        hub.destroy_transform(transform);
+        hub.destroy_model_resource(model);
+        if (!shared_display_only && !hotfix_only && !imported_emission_only) {
             // Exercise the embedded base fallback after removing the fixture's
             // geometry/environment, so its deterministic output is black.
             vision::Global::instance().set_device(&device);
@@ -1396,9 +1522,16 @@ int main(int argc, char** argv) {
     } runtime_cleanup;
     try {
         if (argc == 2 && std::string(argv[1]) == "--hotfix") {
-            Corona::Systems::VisionEngineSceneTest::run(false, true);
+            Corona::Systems::VisionEngineSceneTest::run(false, true, false);
             return 0;
         }
+        // Keep the imported-material regression independent of the camera API
+        // contract suite; its fixture supplies the camera directly.
+        if (argc == 2 && std::string(argv[1]) == "--imported-emission") {
+            Corona::Systems::VisionEngineSceneTest::run(false, false, true);
+            return 0;
+        }
+        Corona::Systems::VisionEngineSceneTest::check_camera_command_snapshots();
         Corona::Systems::VisionEngineSceneTest::check_mode_api();
         Corona::Systems::VisionEngineSceneTest::check_accumulation_api();
         Corona::Systems::VisionEngineSceneTest::check_stable_planes_api();

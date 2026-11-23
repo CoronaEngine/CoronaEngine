@@ -1,5 +1,4 @@
 #pragma once
-#include <oneapi/tbb/concurrent_hash_map.h>
 
 #include <atomic>
 #include <chrono>
@@ -9,6 +8,7 @@
 #include <optional>
 #include <shared_mutex>
 #include <thread>
+#include <unordered_map>
 
 namespace Corona::Resource {
 
@@ -39,7 +39,9 @@ struct ResourceEntry {
     std::atomic<int> ref_count{0};              // 资源引用计数，防止共享资源提前释放
     std::atomic<bool> pinned{false};            // 标记为不可淘汰（LRU evict 时跳过）
     std::atomic<std::size_t> estimated_bytes{0}; // 该资源占用的估算内存字节数
-    std::chrono::system_clock::time_point last_access;  // touch() 时更新，用于淘汰优先级
+    // 原子：acquire_read() 只在条目共享锁下降级更新它，裸值会与并发读者竞争。
+    std::atomic<std::chrono::system_clock::time_point> last_access{
+        std::chrono::system_clock::time_point{}};  // 用于淘汰优先级
 };
 
 /**
@@ -89,7 +91,7 @@ class ReadHandle {
     ReadHandle& operator=(const ReadHandle&) = delete;
 
     ~ReadHandle() {
-        if (entry_) entry_->ref_count--;
+        if (entry_) entry_->ref_count.fetch_sub(1, std::memory_order_acq_rel);
     }
 
     /**
@@ -151,7 +153,7 @@ class WriteHandle {
     WriteHandle& operator=(const WriteHandle&) = delete;
 
     ~WriteHandle() {
-        if (entry_) entry_->ref_count--;
+        if (entry_) entry_->ref_count.fetch_sub(1, std::memory_order_acq_rel);
     }
 
     /**
@@ -262,8 +264,8 @@ class ResourceCache {
         if (entry->state != LoadState::Ready || !entry->resource) {
             return {};
         }
-        entry->ref_count++;
-        entry->last_access = std::chrono::system_clock::now();
+        entry->ref_count.fetch_add(1, std::memory_order_relaxed);
+        entry->last_access.store(std::chrono::system_clock::now(), std::memory_order_relaxed);
         return ReadHandle<T>(std::move(entry), std::move(lock));
     }
 
@@ -286,8 +288,8 @@ class ResourceCache {
         if (!lock.owns_lock() || entry->state != LoadState::Ready || !entry->resource) {
             return {};
         }
-        entry->ref_count++;
-        entry->last_access = std::chrono::system_clock::now();
+        entry->ref_count.fetch_add(1, std::memory_order_relaxed);
+        entry->last_access.store(std::chrono::system_clock::now(), std::memory_order_relaxed);
         return ReadHandle<T>(std::move(entry), std::move(lock));
     }
 
@@ -308,8 +310,8 @@ class ResourceCache {
         if (entry->state != LoadState::Ready || !entry->resource) {
             return {};
         }
-        entry->ref_count++;
-        entry->last_access = std::chrono::system_clock::now();
+        entry->ref_count.fetch_add(1, std::memory_order_relaxed);
+        entry->last_access.store(std::chrono::system_clock::now(), std::memory_order_relaxed);
         return WriteHandle<T>(std::move(entry), std::move(lock));
     }
 
@@ -341,8 +343,8 @@ class ResourceCache {
                 if (entry->state != LoadState::Ready || !entry->resource) {
                     return {};
                 }
-                entry->ref_count++;
-                entry->last_access = std::chrono::system_clock::now();
+                entry->ref_count.fetch_add(1, std::memory_order_relaxed);
+                entry->last_access.store(std::chrono::system_clock::now(), std::memory_order_relaxed);
                 return WriteHandle<T>(std::move(entry), std::move(lock));
             }
             if (std::chrono::steady_clock::now() >= deadline) {
@@ -376,8 +378,8 @@ class ResourceCache {
         if (!lock.owns_lock() || entry->state != LoadState::Ready || !entry->resource) {
             return {};
         }
-        entry->ref_count++;
-        entry->last_access = std::chrono::system_clock::now();
+        entry->ref_count.fetch_add(1, std::memory_order_relaxed);
+        entry->last_access.store(std::chrono::system_clock::now(), std::memory_order_relaxed);
         return WriteHandle<T>(std::move(entry), std::move(lock));
     }
 
@@ -413,7 +415,9 @@ class ResourceCache {
     std::size_t memory_budget() const;
 
    private:
-    tbb::concurrent_hash_map<TResourceID, std::shared_ptr<ResourceEntry>> resources_{};
+    // 读写都只覆盖“指针表”，条目内部另有 shared_mutex；查表时持有共享锁即可。
+    mutable std::shared_mutex mutex_;
+    std::unordered_map<TResourceID, std::shared_ptr<ResourceEntry>> resources_;
     std::atomic<std::size_t> memory_budget_{0};  // 0 = 不限制
 };
 

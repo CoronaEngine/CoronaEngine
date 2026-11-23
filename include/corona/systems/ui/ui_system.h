@@ -41,9 +41,11 @@ class UiSystem : public Kernel::ISystem {
     void update() override;
     void shutdown() override;
 
-    // 主线程系统不需要线程控制，提供空实现
+    // stop() drains UI surfaces while the DAG consumers are still running.
+    // Engine calls it before SystemManager::stop_all(); repeated calls are safe.
     void start() override;
     void stop() override;
+
     void pause() override {}
     void resume() override {}
 

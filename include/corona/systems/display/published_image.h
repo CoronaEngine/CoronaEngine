@@ -1,10 +1,12 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 #include <cstdint>
 #include <memory>
 #include <optional>
 
 #include "corona/systems/display/image_frame_metadata.h"
+#include <corona/shared_data_hub.h>
 #include "corona/systems/display/surface_frame_coordinator.h"
 
 namespace Corona::Systems::Detail {
@@ -20,12 +22,12 @@ namespace Corona::Systems::Detail {
  */
 class PublishedImage {
     struct State {
-        explicit State(std::uintptr_t handle) : image_handle(handle) {
+        explicit State(EntityId handle) : image_handle(handle) {
             (void)coordinator.activate(image_handle);
             snapshot = coordinator.capture(image_handle);
         }
 
-        const std::uintptr_t image_handle;
+        const EntityId image_handle;
         SurfaceFrameCoordinator coordinator;
         SurfaceFrameCoordinator::Snapshot snapshot;
     };
@@ -33,23 +35,21 @@ class PublishedImage {
    public:
     PublishedImage() = default;
 
-    explicit PublishedImage(std::uintptr_t image_handle)
+    explicit PublishedImage(EntityId image_handle)
         : state_(image_handle == 0 ? nullptr : std::make_shared<State>(image_handle)) {}
 
-    template <typename Storage>
-    [[nodiscard]] auto acquire_write(Storage& storage) const {
-        using Access = SurfaceFrameCoordinator::FrameAccess<typename Storage::WriteHandle>;
+    [[nodiscard]] auto acquire_write(Corona::SharedDataHub& hub) const {
+        using Access = SurfaceFrameCoordinator::FrameAccess<Corona::ImageAccess>;
         if (!state_) {
             return std::optional<Access>{};
         }
         return state_->coordinator.begin_frame(state_->snapshot, [&]() {
-            return storage.acquire_write(state_->image_handle);
+            return hub.image_write(state_->image_handle);
         });
     }
 
-    template <typename Storage>
-    [[nodiscard]] auto acquire_write(Storage& storage, ImageFrameMetadata& metadata) const {
-        auto access = acquire_write(storage);
+    [[nodiscard]] auto acquire_write(Corona::SharedDataHub& hub, ImageFrameMetadata& metadata) const {
+        auto access = acquire_write(hub);
         // Event snapshots can lag behind a producer replacing the image in the
         // same slot. Resolve all sampling metadata while holding that slot's lock.
         metadata = access ? access->images()->metadata : ImageFrameMetadata{};

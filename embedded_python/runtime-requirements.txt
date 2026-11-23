@@ -1,0 +1,9 @@
+# Third-party packages deployed next to the engine's embedded Python.
+#
+# The engine's own Python (archive services, script runtime, native bridge) imports only the
+# standard library, so this list stays empty and the deployed runtime is the standard library
+# plus the Python DLLs (~30 MB). The dev environment's tooling packages (numpy, Pillow) are
+# declared in requirements.txt: they run from the conda environment, never inside the engine.
+#
+# Add a distribution here only when a runtime script must import it; the deploy reconciles
+# the runtime to this list on the next build.

@@ -1,12 +1,6 @@
-﻿#include <corona/events/engine_events.h>
-#include <corona/events/script_system_events.h>
 #include <horizon/core/logging.h>
-#include <corona/kernel/event/i_event_bus.h>
-#include <corona/kernel/event/i_event_stream.h>
-#include <corona/systems/script/camera_follow_controller.h>
 #include <corona/systems/script/python_api.h>
 #include <corona/systems/script/script_system.h>
-#include <nanobind/nanobind.h>
 #include <windows.h>
 
 #include <chrono>
@@ -16,22 +10,22 @@ namespace Corona::Systems {
 
 ScriptSystem::ScriptSystem()
     : python_api_(std::make_unique<Script::Python::PythonAPI>()) {
-    set_target_fps(60);  // 显示系统高刷新率以提升响应速度
+    // 脚本系统不再由 SystemBase 计时：update() 进入 Python 自己的循环并一直阻塞到退出。
 }
 
 ScriptSystem::~ScriptSystem() = default;
 
 bool ScriptSystem::initialize(Kernel::ISystemContext* ctx) {
-    CFW_LOG_NOTICE("ScriptSystem: Initializing...");
+    CFW_LOG_NOTICE("event=script.system.initializing");
 
     // JS/Python 业务能力走 C++ Editor API；ScriptSystem 不再订阅 UI 事件。
     if (ctx->event_bus() == nullptr) {
-        CFW_LOG_WARNING("ScriptSystem: No event bus available");
+        CFW_LOG_WARNING("event=script.system.event_bus_missing");
     }
 
 #ifdef CORONA_ENABLE_PYTHON_API
     if (!python_api_->initializeInterpreter()) {
-        CFW_LOG_ERROR("ScriptSystem: Python interpreter initialization failed");
+        CFW_LOG_ERROR("event=script.system.python_init_failed");
         return false;
     }
 #endif
@@ -41,7 +35,7 @@ bool ScriptSystem::initialize(Kernel::ISystemContext* ctx) {
 
 void ScriptSystem::stop() {
     if (python_api_) {
-        python_api_->begin_shutdown();
+        python_api_->request_stop();
     }
     constexpr auto kShutdownTimeout = std::chrono::seconds(3);
     if (stop_for(kShutdownTimeout)) {
@@ -62,13 +56,12 @@ void ScriptSystem::stop() {
 
 void ScriptSystem::update() {
 #ifdef CORONA_ENABLE_PYTHON_API
-    CameraFollowController::instance().update(1.0f / 60.0f);
-    python_api_->runPythonScript();
+    python_api_->enter_runtime();
 #endif
 }
 
 void ScriptSystem::shutdown() {
-    CFW_LOG_NOTICE("ScriptSystem: Shutting down...");
+    CFW_LOG_NOTICE("event=script.system.shutting_down");
 
     // 主动关闭 Python 解释器，避免在析构时阻塞
     python_api_->shutdown();

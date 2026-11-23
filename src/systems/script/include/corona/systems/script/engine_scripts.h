@@ -5,16 +5,18 @@
 
 namespace EngineScripts {
 
-// 在给定的 nanobind 模块上注册引擎脚本 API（Actor/Scene 等）。
-void BindAll(nanobind::module_& m);
+// The entries the embedded Python host needs: engine logging, the runtime diagnostic phase
+// and the input queue it drains. Their payload types live here too - `InputEvent` is top
+// level because `drain_input_events` hands it out.
+void BindHostSupport(nanobind::module_& m);
 
-// Register the two host-lifecycle operations that are not editor business API:
-// graceful process exit and the editor camera-input gate.
-void BindEditorHost(nanobind::module_& m);
-
+// The editor transport the Python host needs: the service dispatcher registration and the
+// project session the host compares incoming requests against. See `cef_py_bind.cpp`.
 void BindCef(nanobind::module_& m);
 
-// Called by PythonAPI on the ScriptSystem Python thread while holding the GIL.
-void clear_python_callback_registry();
+// The pull side of the host loop: `poll_service_requests` / `complete_service_request`.
+// Called by `BindCef` so the module still installs exactly two groups; see
+// `service_queue_bindings.cpp`.
+void BindCefServiceQueue(nanobind::module_& m);
 
 }  // namespace EngineScripts

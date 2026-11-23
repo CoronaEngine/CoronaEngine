@@ -83,7 +83,6 @@ function(corona_add_example)
     endif()
 
     corona_install_runtime_deps(${CORONA_EX_NAME})
-    corona_copy_tbb_runtime_artifacts(${CORONA_EX_NAME})
     corona_copy_runtime_files(assimp::assimp ${CORONA_EX_NAME})
 
     # Copy FFmpeg runtime DLLs (video/audio support in corona_resource).

@@ -12,6 +12,8 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
+#include <nlohmann/json_fwd.hpp>
 
 namespace Corona::Script::Python {
 
@@ -51,6 +53,8 @@ struct PythonRuntimeRequest {
     std::string module;
     std::string function;
     std::string payload_json;
+    // Owned service values; no Python handles or serialized DTOs cross threads.
+    std::shared_ptr<const nlohmann::json> service_args;
     Handler handler = nullptr;
     std::shared_ptr<PythonRuntimeCancellation> cancellation;
     std::chrono::steady_clock::time_point deadline =
@@ -65,6 +69,7 @@ struct PythonRuntimeResponse {
     PythonRuntimeResponseStatus status = PythonRuntimeResponseStatus::Error;
     std::string payload_json;
     std::string error;
+    std::shared_ptr<const nlohmann::json> service_result;
 
     static PythonRuntimeResponse success(std::string payload = {});
     static PythonRuntimeResponse failure(std::string message);
@@ -94,6 +99,9 @@ class PythonRuntimeTicket {
     PythonRuntimeResponse response;
 
     PythonRuntimeResponse wait(std::chrono::milliseconds timeout) const;
+    /// Wait until the request completes; no deadline. The caller owns the risk of a hung
+    /// service, so this is only for transports that must not invent a deadline.
+    PythonRuntimeResponse wait() const;
 
    private:
     friend class PythonRuntimeCoordinator;
@@ -107,13 +115,23 @@ class PythonRuntimeCoordinator {
     PythonRuntimeTicket submit(PythonRuntimeRequest request);
     PythonRuntimeResponse submit_and_wait(PythonRuntimeRequest request,
                                           std::chrono::milliseconds timeout);
+    PythonRuntimeResponse submit_and_wait(PythonRuntimeRequest request);
     std::optional<PythonRuntimeRequest> wait_pop(std::chrono::milliseconds timeout);
+    /// Non-blocking pull of the front `limit` queued requests. Only the bound consumer
+    /// thread may drain; any other thread gets an empty vector. A drained entry may
+    /// already be dead: its ticket can be cancelled, timed out, or settled by a terminal
+    /// transition before the drain. Callers must still complete() every drained id;
+    /// a second complete for an already-settled id changes nothing and returns false.
+    std::vector<PythonRuntimeRequest> drain_pending(std::size_t limit = 64);
     bool complete(std::uint64_t request_id, PythonRuntimeResponse response);
 
     void begin_quiescing();
     void begin_draining();
     void begin_python_stopping();
     void stop();
+    /// Ask the owning host loop to stop. Only sets a flag; it never changes state().
+    void request_stop() noexcept;
+    [[nodiscard]] bool stop_requested() const noexcept;
 
     PythonRuntimeState state() const noexcept;
     std::size_t pending_count() const;
@@ -136,6 +154,7 @@ class PythonRuntimeCoordinator {
     std::thread::id consumer_thread_id_;
     std::optional<PythonRuntimeRequest> current_request_;
     std::string execution_phase_ = "created";
+    std::atomic<bool> stop_requested_{false};
 };
 
 PythonRuntimeCoordinator* active_python_runtime_coordinator() noexcept;

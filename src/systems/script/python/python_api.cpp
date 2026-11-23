@@ -1,4 +1,4 @@
-﻿#define PY_SSIZE_T_CLEAN
+#define PY_SSIZE_T_CLEAN
 #include <corona/events/script_system_events.h>
 #include <horizon/core/logging.h>
 #include <corona/kernel/core/kernel_context.h>
@@ -10,6 +10,7 @@
 #include <corona/utils/path_utils.h>
 #include <nanobind/stl/string.h>
 #include <nlohmann/json.hpp>
+#include "python_value.h"
 #include <windows.h>
 
 #include <array>
@@ -44,29 +45,24 @@ PythonAPI::~PythonAPI() {
     detach_python_objects_without_decref();
 }
 
-void PythonAPI::begin_shutdown() {
-    if (shutting_down_.load()) {
+void PythonAPI::request_stop() {
+    if (shutting_down_.exchange(true)) {
         return;
     }
-    if (backend_initialized_.load() && lifecycle_.state() == PythonLifecycleState::Running) {
-        PythonRuntimeRequest request;
-        request.kind = PythonRuntimeRequestKind::LifecycleControl;
-        request.source = "ScriptSystem::stop";
-        request.function = "shutdown";
-        const auto response = runtime_coordinator_.submit_and_wait(
-            std::move(request), std::chrono::milliseconds(2500));
-        if (response.status != PythonRuntimeResponseStatus::Success) {
-            CFW_LOG_ERROR("PythonAPI: cooperative shutdown request failed: {}", response.error);
-        }
-    }
-    shutting_down_.store(true);
-    runtime_coordinator_.begin_quiescing();
-    lifecycle_.request_stop();
+    // No request crosses threads: the owner of the loop polls this flag through
+    // CoronaEngine.should_stop() and runs shutdown_runtime() on its way out.
+    runtime_coordinator_.request_stop();
+    // PythonLifecycle::request_stop() is idempotent and refuses to move a Failed or
+    // Stopped runtime; a bare transition(StopRequested) would do neither. A recorded
+    // failure phase/error (policies 1 and 2) must survive this call.
+    const bool stop_requested = lifecycle_.request_stop();
     std::lock_guard lock(lifecycle_mtx_);
     lifecycle_snapshot_.state = lifecycle_.state();
     lifecycle_snapshot_.shutting_down = true;
-    lifecycle_snapshot_.phase = "shutdown_requested";
-    CFW_LOG_NOTICE("PythonAPI: lifecycle transition -> StopRequested");
+    if (stop_requested && lifecycle_snapshot_.error.empty()) {
+        lifecycle_snapshot_.phase = "shutdown_requested";
+    }
+    CFW_LOG_NOTICE("event=python.lifecycle.state state=stop_requested");
 }
 
 PythonLifecycleSnapshot PythonAPI::lifecycle_snapshot() const {
@@ -84,6 +80,8 @@ std::string PythonAPI::shutdown_diagnostics() const {
     out << "python.lifecycle.shutdown_timeout"
         << " lifecycle_state=" << static_cast<int>(lifecycle_.state())
         << " lifecycle_phase=" << lifecycle_snapshot_.phase
+        << " lifecycle_error="
+        << (lifecycle_snapshot_.error.empty() ? "none" : lifecycle_snapshot_.error)
         << " coordinator_state=" << static_cast<int>(runtime.state)
         << " queued=" << runtime.queued_count
         << " pending=" << runtime.pending_count
@@ -107,9 +105,13 @@ std::string PythonAPI::shutdown_diagnostics() const {
 }
 
 void PythonAPI::shutdown() {
-    begin_shutdown();
+    // The loop owns shutdown_runtime(). If it was never entered, ask it to stop
+    // anyway so a script thread that starts later still exits immediately.
+    if (!entered_.load(std::memory_order_acquire)) {
+        request_stop();
+    }
 
-    CFW_LOG_INFO("PythonAPI: Shutting down Python runtime ownership...");
+    CFW_LOG_INFO("event=python.shutdown.begin");
     lifecycle_.transition(PythonLifecycleState::Stopping);
     runtime_coordinator_.begin_python_stopping();
 
@@ -128,11 +130,16 @@ void PythonAPI::shutdown() {
     {
         std::lock_guard lock(lifecycle_mtx_);
         lifecycle_snapshot_.state = lifecycle_.state();
-        lifecycle_snapshot_.phase = "shutdown_complete";
+        // A recorded failure (hard-fail during init, or a dead/wedged host loop) is
+        // the operator's only clue; shutdown must not replace it with
+        // "shutdown_complete".
+        if (lifecycle_snapshot_.error.empty()) {
+            lifecycle_snapshot_.phase = "shutdown_complete";
+        }
         lifecycle_snapshot_.shutting_down = true;
     }
 
-    CFW_LOG_INFO("PythonAPI: Python shutdown complete");
+    CFW_LOG_INFO("event=python.lifecycle.state state=stopped");
 }
 
 std::size_t PythonAPI::detach_python_objects_without_decref() {
@@ -143,17 +150,8 @@ std::size_t PythonAPI::detach_python_objects_without_decref() {
         if (released.is_valid()) ++detached_count;
     };
     detach(pStartFunc);
-    detach(runtimeUpdateFunc);
-    detach(pEditor);
-    detach(pModule);
-    detach(pFunc);
+    detach(loopFunc);
     return detached_count;
-}
-
-int64_t PythonAPI::nowMsec() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
 }
 
 std::string PythonAPI::wstr2str(const std::wstring& wstr) {
@@ -177,7 +175,7 @@ bool PythonAPI::initializeInterpreterLocked() {
     if (!lifecycle_.transition(PythonLifecycleState::InterpreterInitializing)) {
         return lifecycle_.state() == PythonLifecycleState::InterpreterReady;
     }
-    CFW_LOG_INFO("PythonAPI: Initializing Python interpreter...");
+    CFW_LOG_INFO("event=python.interpreter.initializing");
 
     {
         const auto packaged = PathCfg::inspect_deployed_runtime();
@@ -196,17 +194,16 @@ bool PythonAPI::initializeInterpreterLocked() {
                 lifecycle_snapshot_.phase = phase;
                 lifecycle_snapshot_.error = message;
             }
-            CFW_LOG_CRITICAL("PythonAPI: {}", message);
+            CFW_LOG_CRITICAL("event=python.interpreter.bundled_incomplete detail={}", message);
         };
 
         switch (decision) {
             case PathCfg::PackagedRuntimeDecision::UsePackaged:
-                CFW_LOG_INFO("PythonAPI: {}", packaged.describe());
+                CFW_LOG_INFO("event=python.interpreter.packaged detail={}", packaged.describe());
                 break;
             case PathCfg::PackagedRuntimeDecision::UseFallback:
                 CFW_LOG_WARNING(
-                    "PythonAPI: {}; falling back to the build-machine Python at '{}'. "
-                    "This build output is NOT portable: it only runs where that interpreter exists.",
+                    "event=python.interpreter.fallback reason={} python_home={} portable=false",
                     packaged.describe(), configured_home);
                 break;
             case PathCfg::PackagedRuntimeDecision::RejectNoPackaged:
@@ -238,7 +235,7 @@ bool PythonAPI::initializeInterpreterLocked() {
             lifecycle_snapshot_.phase = step;
             lifecycle_snapshot_.error = status.err_msg ? status.err_msg : "unknown Python error";
         }
-        CFW_LOG_CRITICAL("PythonAPI: {} failed: {}", step, status.err_msg ? status.err_msg : "unknown Python error");
+        CFW_LOG_CRITICAL("event=python.interpreter.step_failed step={} detail={}", step, status.err_msg ? status.err_msg : "unknown Python error");
         PyConfig_Clear(&config);
         config = PyConfig{};
         return false;
@@ -275,7 +272,7 @@ bool PythonAPI::initializeInterpreterLocked() {
             lifecycle_snapshot_.phase = "bundled_runtime_validation";
             lifecycle_snapshot_.error = message;
         }
-        CFW_LOG_CRITICAL("PythonAPI: {}", message);
+        CFW_LOG_CRITICAL("event=python.interpreter.bundled_incomplete detail={}", message);
         PyConfig_Clear(&config);
         config = PyConfig{};
         return false;
@@ -313,8 +310,8 @@ bool PythonAPI::initializeInterpreterLocked() {
         lifecycle_snapshot_.state = lifecycle_.state();
         lifecycle_snapshot_.phase = "interpreter_ready";
     }
-    CFW_LOG_INFO("PythonAPI: Python interpreter initialized successfully");
-    CFW_LOG_INFO("PythonAPI: interpreter paths home='{}' lib='{}' dlls='{}' site-packages='{}'",
+    CFW_LOG_INFO("event=python.lifecycle.state state=interpreter_ready");
+    CFW_LOG_INFO("event=python.interpreter.paths home={} lib={} dlls={} site_packages={}",
                  bundled_home, bundled_lib, bundled_dlls, bundled_site_packages);
 
     return true;
@@ -322,229 +319,170 @@ bool PythonAPI::initializeInterpreterLocked() {
 
 bool PythonAPI::initializeInterpreter() {
     std::lock_guard init_lock(initMtx);
-    return initializeInterpreterLocked();
-}
-
-bool PythonAPI::ensureInitialized() {
-    if (backend_initialized_.load()) {
-        return true;
-    }
-
-    std::lock_guard init_lock(initMtx);
-    if (backend_initialized_.load()) {
+    if (backend_initialized_.load(std::memory_order_acquire)) {
         return true;
     }
     if (!initializeInterpreterLocked()) {
-        lifecycle_.transition(PythonLifecycleState::Failed);
         return false;
     }
-
     if (!lifecycle_.transition(PythonLifecycleState::BackendInitializing)) {
         return lifecycle_.state() == PythonLifecycleState::Running;
     }
 
+    // Failure policy 1 and 2: a missing entry or a throwing run() is a hard
+    // failure - the engine must refuse to start, so the reason has to be visible
+    // in the snapshot and in the log.
+    const auto fail = [this](const std::string& message, const char* phase) {
+        lifecycle_.transition(PythonLifecycleState::Failed);
+        {
+            std::lock_guard lock(lifecycle_mtx_);
+            lifecycle_snapshot_.state = lifecycle_.state();
+            lifecycle_snapshot_.phase = phase;
+            lifecycle_snapshot_.error = message;
+        }
+        CFW_LOG_CRITICAL("event=python.host_entry.failed phase={} detail={}", phase, message);
+    };
+
     {
         nanobind::gil_scoped_acquire gil;
+        const char* phase = "python_entry_resolution";
         try {
             nanobind::module_ entrance = nanobind::module_::import_("main");
-            nanobind::object editor = nanobind::getattr(entrance, "editor");
-            nanobind::object start_attr = nanobind::getattr(entrance, "run");
-            nanobind::object update_attr = nanobind::getattr(editor, "update_runtime");
-            if (nanobind::hasattr(editor, "initialize_runtime")) {
-                nanobind::object init_runtime = nanobind::getattr(editor, "initialize_runtime");
-                init_runtime();
-            }
-            pStartFunc = std::move(start_attr);
-            runtimeUpdateFunc = std::move(update_attr);
-            pEditor = editor;
+            // The only two names C++ resolves by string: everything else is called
+            // from inside Python now.
+            pStartFunc = nanobind::getattr(entrance, "run");
+            loopFunc = nanobind::getattr(entrance, "loop");
+            phase = "python_run";
             pStartFunc();
-            if (nanobind::hasattr(editor, "start_runtime")) {
-                nanobind::object start_runtime = nanobind::getattr(editor, "start_runtime");
-                start_runtime();
-            }
-            if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
-                event_bus->publish<Events::ScriptFinishStartEvent>({});
-            }
-            backend_initialized_.store(true);
-            lifecycle_.transition(PythonLifecycleState::Running);
-            {
-                std::lock_guard lock(lifecycle_mtx_);
-                lifecycle_snapshot_.state = lifecycle_.state();
-                lifecycle_snapshot_.phase = "running";
-            }
-            CFW_LOG_INFO("PythonAPI: Python backend initialized successfully");
-        } catch (const nanobind::python_error& e) {
-            lifecycle_.transition(PythonLifecycleState::Failed);
-            log_python_error(e);
-            // pModule.reset();
-            // pFunc.reset();
+        } catch (const nanobind::python_error& error) {
+            fail(error.what(), phase);
+            log_python_error(error);
             pStartFunc.reset();
-            runtimeUpdateFunc.reset();
+            loopFunc.reset();
             return false;
         }
     }
+
+    backend_initialized_.store(true, std::memory_order_release);
+    lifecycle_.transition(PythonLifecycleState::Running);
+    {
+        std::lock_guard lock(lifecycle_mtx_);
+        lifecycle_snapshot_.state = lifecycle_.state();
+        lifecycle_snapshot_.phase = "running";
+    }
+    CFW_LOG_INFO("event=python.lifecycle.state state=running");
     return true;
 }
 
-void PythonAPI::invokeEntry(bool isReload) {
-    // 如果正在关闭，不执行
-    if (shutting_down_.load()) {
+void PythonAPI::enter_runtime() {
+    // thread_loop keeps calling update() after the loop exits; only the first call
+    // may enter, every later one must return immediately.
+    if (entered_.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
 
-    if (!runtimeUpdateFunc.is_valid()) {
-        return;
-    }
-    runtime_coordinator_.set_execution_phase("gil_wait:editor_update");
-    nanobind::gil_scoped_acquire gil;
-    runtime_coordinator_.set_execution_phase("editor_update");
+    bool loop_failed = false;
+    bool exited_unexpectedly = false;
+    std::string failure_detail;
+    std::string snapshot_json;
+    bool snapshot_valid = false;
 
-    try {
-        //(void)pFunc(isReload ? 1 : 0);
-        runtimeUpdateFunc();
-        runtime_coordinator_.set_execution_phase("idle");
-    } catch (const nanobind::python_error& e) {
-        runtime_coordinator_.set_execution_phase("editor_update_error");
-        log_python_error(e);
-    }
-}
-
-void PythonAPI::sendMessage(const std::string& message) const {
-}
-
-void PythonAPI::runPythonScript() {
-    const auto frame_start = std::chrono::steady_clock::now();
-    if (!runtime_coordinator_.bind_consumer_thread()) {
-        CFW_LOG_CRITICAL("PythonAPI: runPythonScript called from a non-owner thread");
-        return;
-    }
-    // 如果正在关闭，不执行任何 Python 代码
-    if (shutting_down_.load() || lifecycle_.state() == PythonLifecycleState::StopRequested ||
-        lifecycle_.state() == PythonLifecycleState::Stopping ||
-        lifecycle_.state() == PythonLifecycleState::Stopped) {
-        return;
-    }
-
-    if (!ensureInitialized()) {
-        CFW_LOG_ERROR("PythonAPI: Python initialization failed");
-        return;
-    }
-
-    process_runtime_requests();
-    if (shutting_down_.load()) {
-        return;
-    }
-
-    // 再次检查是否正在关闭
-    if (shutting_down_.load()) {
-        return;
-    }
-
-    invokeEntry(false);
-
-    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::steady_clock::now() - frame_start).count();
-    const auto now = nowMsec();
-    auto last = last_overrun_log_ms_.load(std::memory_order_relaxed);
-    if (elapsed >= 50 && now - last >= 5000 &&
-        last_overrun_log_ms_.compare_exchange_strong(last, now)) {
-        CFW_LOG_WARNING("PythonAPI: python.lifecycle.overrun phase=update elapsed_ms={} state={}",
-                        elapsed, static_cast<int>(lifecycle_.state()));
-    }
-}
-
-void PythonAPI::process_runtime_requests() {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(4);
-    for (std::size_t processed = 0; processed < 32; ++processed) {
-        auto request = runtime_coordinator_.wait_pop(std::chrono::milliseconds(0));
-        if (!request) {
-            return;
+    if (!backend_initialized_.load(std::memory_order_acquire) || !loopFunc.is_valid()) {
+        loop_failed = true;
+        failure_detail = "main.loop was never resolved";
+        CFW_LOG_CRITICAL("event=python.host_loop.failed detail=main.loop was never resolved");
+    } else if (!runtime_coordinator_.bind_consumer_thread()) {
+        // Same rule as the old per-frame entry: only the bound consumer may run the
+        // loop, because the pull entries are consumer-thread-only.
+        loop_failed = true;
+        failure_detail = "python host loop entered on a non-owner thread";
+        CFW_LOG_CRITICAL("event=python.runtime.non_owner_thread");
+    } else {
+        runtime_coordinator_.set_execution_phase("waiting");
+        // Published here, not in initializeInterpreter(): UiSystem subscribes during
+        // initialize_all() and ScriptSystem initializes first (priority 60), so the
+        // synchronous bus would drop a publish made there. The first update is the
+        // earliest moment the subscriber can hear it.
+        if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
+            event_bus->publish<Events::ScriptFinishStartEvent>({});
         }
-        runtime_coordinator_.set_execution_phase("coordinator_request:" + request->source + ":" + request->function);
-        auto response = execute_runtime_request(*request);
-        runtime_coordinator_.complete(request->request_id, std::move(response));
-        runtime_coordinator_.set_execution_phase("idle");
-        if (std::chrono::steady_clock::now() >= deadline) {
-            return;
+        nanobind::gil_scoped_acquire gil;
+        try {
+            nanobind::object snapshot = loopFunc();
+            nlohmann::json converted;
+            if (python_to_json(snapshot.ptr(), converted)) {
+                snapshot_json = converted.dump();
+                snapshot_valid = true;
+            } else if (PyErr_Occurred()) {
+                // Consume the conversion error: it must not leak into later C-API use.
+                nanobind::python_error error;
+                CFW_LOG_ERROR("event=python.host_loop.snapshot_failed detail={}", error.what());
+                log_python_error(error);
+            }
+            // Failure policy 3 covers "throwing OR returning early": a clean return
+            // with no stop request means the host loop vanished, not that the engine
+            // asked it to stop.
+            if (!runtime_coordinator_.stop_requested()) {
+                loop_failed = true;
+                exited_unexpectedly = true;
+                failure_detail = "main.loop returned without a stop request";
+                CFW_LOG_CRITICAL(
+                    "event=python.host_loop.exited_unexpectedly "
+                    "detail=main.loop returned without a stop request");
+            }
+        } catch (const nanobind::python_error& error) {
+            // Failure policy 3: degrade, never request engine shutdown.
+            loop_failed = true;
+            failure_detail = error.what();
+            CFW_LOG_CRITICAL("event=python.host_loop.failed detail={}", error.what());
+            log_python_error(error);
+        } catch (const std::exception& error) {
+            loop_failed = true;
+            failure_detail = error.what();
+            CFW_LOG_CRITICAL("event=python.host_loop.failed detail={}", error.what());
+        } catch (...) {
+            loop_failed = true;
+            failure_detail = "unknown exception";
+            CFW_LOG_CRITICAL("event=python.host_loop.failed detail=unknown exception");
         }
+        // Released here, while the interpreter and the GIL still exist. The deleted
+        // LifecycleControl branch used to do this; without it every normal shutdown
+        // would detach these two live references and log the "survived cooperative
+        // shutdown" ERROR from shutdown().
+        pStartFunc.reset();
+        loopFunc.reset();
     }
-}
+    backend_initialized_.store(false, std::memory_order_release);
 
-PythonRuntimeResponse PythonAPI::execute_runtime_request(const PythonRuntimeRequest& request) {
-    if (request.cancelled()) {
-        return PythonRuntimeResponse::timeout();
+    // Both the normal and the degraded exit settle here: pending tickets do not
+    // wake up on their own, and a stuck submit_and_wait() would hang the editor.
+    shutting_down_.store(true, std::memory_order_release);
+    runtime_coordinator_.begin_python_stopping();
+    runtime_coordinator_.stop();
+    lifecycle_.request_stop();
+    lifecycle_.transition(PythonLifecycleState::Stopping);
+    lifecycle_.transition(PythonLifecycleState::Stopped);
+    // The loop is gone; never leave the diagnostic phase describing a dead runtime
+    // as "waiting".
+    runtime_coordinator_.set_execution_phase(loop_failed ? "host_loop_failed" : "host_loop_exited");
+    {
+        std::lock_guard lock(lifecycle_mtx_);
+        if (snapshot_valid) {
+            last_python_shutdown_snapshot_json_ = std::move(snapshot_json);
+        }
+        if (loop_failed && !failure_detail.empty()) {
+            lifecycle_snapshot_.error = std::move(failure_detail);
+        }
+        lifecycle_snapshot_.state = lifecycle_.state();
+        if (loop_failed) {
+            lifecycle_snapshot_.phase =
+                exited_unexpectedly ? "host_loop_exited_unexpectedly" : "host_loop_failed";
+        } else {
+            lifecycle_snapshot_.phase = "host_loop_exited";
+        }
+        lifecycle_snapshot_.shutting_down = true;
     }
-    runtime_coordinator_.set_execution_phase("gil_wait:coordinator_request");
-    nanobind::gil_scoped_acquire gil;
-    runtime_coordinator_.set_execution_phase("coordinator_request");
-    try {
-        if (request.kind == PythonRuntimeRequestKind::LifecycleControl &&
-            request.function == "shutdown") {
-            std::string shutdown_snapshot_json = "{}";
-            if (pEditor.is_valid()) {
-                if (nanobind::hasattr(pEditor, "request_shutdown")) {
-                    nanobind::getattr(pEditor, "request_shutdown")();
-                }
-                if (nanobind::hasattr(pEditor, "shutdown_runtime")) {
-                    auto result = nanobind::getattr(pEditor, "shutdown_runtime")();
-                    auto json = nanobind::module_::import_("json");
-                    shutdown_snapshot_json = nanobind::cast<std::string>(
-                        nanobind::getattr(json, "dumps")(result));
-                }
-            }
-            EngineScripts::clear_python_callback_registry();
-            pStartFunc.reset();
-            runtimeUpdateFunc.reset();
-            pEditor.reset();
-            pModule.reset();
-            pFunc.reset();
-            backend_initialized_.store(false);
-            shutting_down_.store(true);
-            {
-                std::lock_guard lock(lifecycle_mtx_);
-                last_python_shutdown_snapshot_json_ = shutdown_snapshot_json;
-            }
-            return PythonRuntimeResponse::success(std::move(shutdown_snapshot_json));
-        }
-
-        if (request.kind == PythonRuntimeRequestKind::ServiceCall) {
-            if (request.cancelled()) {
-                return PythonRuntimeResponse::timeout();
-            }
-            if (!pEditor.is_valid()) {
-                return PythonRuntimeResponse::failure("python editor is unavailable");
-            }
-            auto dispatcher = nanobind::getattr(pEditor, "dispatch_script_request_from_cpp");
-            auto result = dispatcher(request.payload_json.c_str());
-            if (request.cancelled()) {
-                return PythonRuntimeResponse::timeout();
-            }
-            // The bridge contract is a JSON string. Use CPython's length-aware
-            // conversion and diagnose a protocol mismatch explicitly instead
-            // of surfacing an opaque type-caster "bad cast" to the launcher.
-            if (!PyUnicode_Check(result.ptr())) {
-                return PythonRuntimeResponse::failure(
-                    std::string("Python script dispatcher must return JSON text, got ") +
-                    Py_TYPE(result.ptr())->tp_name);
-            }
-            Py_ssize_t result_size = 0;
-            const char* result_utf8 = PyUnicode_AsUTF8AndSize(result.ptr(), &result_size);
-            if (!result_utf8) throw nanobind::python_error();
-            return PythonRuntimeResponse::success(std::string(result_utf8, static_cast<std::size_t>(result_size)));
-        }
-        if (request.kind == PythonRuntimeRequestKind::Callback && request.handler) {
-            if (request.cancelled()) {
-                return PythonRuntimeResponse::timeout();
-            }
-            return request.handler(request);
-        }
-        return PythonRuntimeResponse::failure("unsupported python runtime request");
-    } catch (const nanobind::python_error& error) {
-        log_python_error(error);
-        return PythonRuntimeResponse::failure(error.what());
-    } catch (const std::exception& error) {
-        return PythonRuntimeResponse::failure(error.what());
-    }
+    CFW_LOG_NOTICE("event=python.lifecycle.state state=stopped");
 }
 
 std::wstring PythonAPI::str2wstr(const std::string& str) {

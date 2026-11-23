@@ -4,6 +4,7 @@
 """
 复制 Editor 资源目录到目标可执行目录下的 CabbageEditor/ 子目录，并使用本地 Node 环境执行前端构建。
 - 通过多次传入 --src-dir 指定多个源目录（如 Backend、Frontend 等）
+- --python-dir 指定 Engine 自有的 Python 源目录（合并到目标根）
 - 目标根目录由 --dest-root 指定（通常是 $<TARGET_FILE_DIR:...>/CabbageEditor ）
 - 然后用 --node-dir 和 --frontend-dir 触发 npm install / npm run build
 注意：日志输出为英文，便于在构建日志中检索。
@@ -17,7 +18,6 @@ import shutil
 import sys
 from pathlib import Path
 import subprocess
-import uuid
 from typing import Optional
 
 
@@ -35,35 +35,54 @@ _STALE_EXTENSIONS = {".py", ".vue", ".js", ".ts", ".jsx", ".tsx", ".css", ".scss
 _PROTECTED_DEPLOYED_ROOTS = (Path("data"), Path("runtime") / "generated", Path(".retired-plugins"))
 
 
-def _retire_removed_ai_packages(src_root: Path, dst_root: Path) -> None:
-    """Move obsolete deployed packages out of the import path, preserving local data."""
-    if not (src_root / "plugins" / "AITool" / "main.py").is_file():
-        return
-    destination = dst_root.resolve()
-    for name in ("Quasar", "cai_extensions"):
-        relative = Path("plugins") / "AITool" / name
-        retired = dst_root / relative
-        if (src_root / relative).exists() or not retired.exists():
-            continue
-        # Do not follow an old deployment junction outside the managed tree.
-        if not retired.resolve().is_relative_to(destination):
-            raise ValueError(f"Retired AI package is outside the deployment: {retired}")
-        archive = dst_root / ".retired-plugins"
-        if not archive.resolve().is_relative_to(destination):
-            raise ValueError(f"Retired plugin archive is outside the deployment: {archive}")
-        archive.mkdir(exist_ok=True)
-        backup = archive / f"{name}-{uuid.uuid4().hex}"
-        retired.rename(backup)
-        echo(f"[editor-copy] Retired {retired}; preserved previous files in {backup}")
+def _should_ignore(name: str) -> bool:
+    """Check if a file/directory should be ignored."""
+    # Direct match list
+    ignored_exact = {
+        # Node/Frontend build artifacts
+        "node_modules", "dist", ".vite", ".turbo",
+        # Python cache and test
+        "__pycache__", ".pytest_cache", ".tox",
+        # IDE and editor
+        ".idea", ".vscode", ".vs", "autosave",
+        # Version control
+        ".git", ".gitignore", ".gitattributes",
+        # Build and deployment
+        "Dockerfile", "docker-compose.yml",
+        # Documentation
+        "README.md", "docs",
+        # Dependencies manifests (dev-only lock files)
+        "requirements.txt", "runtime-requirements.txt", "yarn.lock",
+        # Test files and engine-only python development assets
+        "tests", "test", "frontend_assets",
+        # Temporary and log files
+        ".cache", ".temp", ".tmp", "tmp", ".retired-plugins",
+        # OS files
+        ".DS_Store", "Thumbs.db", "desktop.ini"
+    }
+
+    # Direct match
+    if name in ignored_exact:
+        return True
+
+    # Pattern matching
+    if name.endswith(('.pyc', '.pyo', '.log', '.bak', '.backup', '.md')) or name.endswith('~'):
+        return True
+
+    return False
 
 
-def _cleanup_stale_files(src_root: Path, dst_root: Path, ignore_fn) -> None:
-    """删除目标目录中存在但源目录中已不存在的源码文件（一对一映射）。
+def _ignore(dirpath: str, names: list[str]) -> set[str]:
+    """shutil.copytree compatible ignore function."""
+    return {n for n in names if _should_ignore(n)}
+
+
+def _cleanup_stale_files(sources: list[Path], dst_root: Path, ignore_fn) -> None:
+    """删除目标目录中存在但所有源目录中均不存在的源码文件（多源合并映射）。
     手动递归遍历以跳过 ignore 目录（如 node_modules），避免进入超长路径。"""
-    if not dst_root.exists() or not src_root.exists():
+    source_roots = [source for source in sources if source.exists()]
+    if not dst_root.exists() or not source_roots:
         return
-
-    _retire_removed_ai_packages(src_root, dst_root)
 
     dirs_to_check: list[Path] = []
 
@@ -86,7 +105,7 @@ def _cleanup_stale_files(src_root: Path, dst_root: Path, ignore_fn) -> None:
                 dirs_to_check.append(entry)
             elif entry.is_file() and entry.suffix in _STALE_EXTENSIONS:
                 rel = entry.relative_to(dst_root)
-                if not (src_root / rel).exists():
+                if not any((source_root / rel).exists() for source_root in source_roots):
                     echo(f"[editor-copy] Remove stale: {entry}")
                     try:
                         entry.unlink()
@@ -105,53 +124,12 @@ def _cleanup_stale_files(src_root: Path, dst_root: Path, ignore_fn) -> None:
             pass
 
 
-def copy_tree(src: Path, dst: Path, merge_content: bool = False) -> None:
+def copy_tree(src: Path, dst: Path, merge_content: bool = False, cleanup: bool = True) -> None:
     if not src.exists():
         echo(f"[editor-copy] Skip (not exists): {src}")
         return
     # Ensure destination directory exists
     dst.mkdir(parents=True, exist_ok=True)
-
-    # Avoid copying heavy transient folders and development-only files
-    def _should_ignore(name: str) -> bool:
-        """Check if a file/directory should be ignored."""
-        # Direct match list
-        ignored_exact = {
-            # Node/Frontend build artifacts
-            "node_modules", "dist", ".vite", ".turbo",
-            # Python cache and test
-            "__pycache__", ".pytest_cache", ".tox",
-            # IDE and editor
-            ".idea", ".vscode", ".vs", "autosave",
-            # Version control
-            ".git", ".gitignore", ".gitattributes",
-            # Build and deployment
-            "Dockerfile", "docker-compose.yml",
-            # Documentation
-            "README.md", "docs",
-            # Dependencies manifests (dev-only lock files)
-            "requirements.txt", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-            # Test files
-            "tests", "test",
-            # Temporary and log files
-            ".cache", ".temp", ".tmp", "tmp", ".retired-plugins",
-            # OS files
-            ".DS_Store", "Thumbs.db", "desktop.ini"
-        }
-
-        # Direct match
-        if name in ignored_exact:
-            return True
-
-        # Pattern matching
-        if name.endswith(('.pyc', '.pyo', '.log', '.bak', '.backup', '.md')) or name.endswith('~'):
-            return True
-
-        return False
-
-    def _ignore(dirpath: str, names: list[str]) -> set[str]:
-        """shutil.copytree compatible ignore function."""
-        return {n for n in names if _should_ignore(n)}
 
     if merge_content:
         # Copy the content of src directory directly into dst (no subdirectory created)
@@ -173,8 +151,11 @@ def copy_tree(src: Path, dst: Path, merge_content: bool = False) -> None:
         # Sweep from the merge root. Per-directory cleanup cannot see a source
         # directory that was removed entirely (for example an old compatibility
         # package), so stale Python/JS sources at that depth would otherwise
-        # survive in the deployed CabbageEditor tree.
-        _cleanup_stale_files(src, dst, _ignore)
+        # survive in the deployed CabbageEditor tree. With multiple merge roots
+        # (editor remainder + engine-owned python) the caller performs one
+        # union cleanup instead, so copy-time cleanup is opt-in.
+        if cleanup:
+            _cleanup_stale_files([src], dst, _ignore)
     else:
         # Original behavior: copy src as a subdirectory of dst
         target = dst / src.name
@@ -182,7 +163,8 @@ def copy_tree(src: Path, dst: Path, merge_content: bool = False) -> None:
         try:
             shutil.copytree(src, target, dirs_exist_ok=True, ignore=_ignore)
             # 删除目标中源已不存在的源码文件
-            _cleanup_stale_files(src, target, _ignore)
+            if cleanup:
+                _cleanup_stale_files([src], target, _ignore)
         except Exception as e:
             print(f"[editor-copy] ERROR copying {src} -> {target}: {e}")
 
@@ -277,16 +259,35 @@ def maybe_run_npm(frontend_dir: Path, node_dir: Path) -> int:
     if tmp_dir is not None:
         for key in ("TMP", "TEMP", "TMPDIR"):
             env[key] = str(tmp_dir)
+    # Reproducible bundles come from the lockfile the project uses. The editor pins its
+    # tree with pnpm-lock.yaml (a pnpm lock cannot be consumed by npm), so the deployed
+    # frontend is installed with pnpm --frozen-lockfile; pnpm comes from the npm cache so
+    # the build environment does not need a separate global install. npm is the fallback.
+    pnpm_lock = frontend_dir / "pnpm-lock.yaml"
+    npm_lock = frontend_dir / "package-lock.json"
+    if pnpm_lock.is_file():
+        runner = [str(npm_cmd), "exec", "--yes", "pnpm@9", "--"]
+        install = [*runner, "install", "--frozen-lockfile"]
+        build = [*runner, "run", "build"]
+        label = "pnpm install --frozen-lockfile"
+    elif npm_lock.is_file():
+        install = [str(npm_cmd), "ci"]
+        build = [str(npm_cmd), "run", "build"]
+        label = "npm ci"
+    else:
+        install = [str(npm_cmd), "install"]
+        build = [str(npm_cmd), "run", "build"]
+        label = "npm install (no lockfile: dependency resolution is not pinned)"
     try:
-        echo("[npm-build] Installing dependencies...")
-        rc = stream_run([str(npm_cmd), "install"], cwd=frontend_dir, env=env)
+        echo(f"[npm-build] Installing dependencies ({label})...")
+        rc = stream_run(install, cwd=frontend_dir, env=env)
         if rc != 0:
-            print(f"[npm-build] ERROR: 'npm install' failed (exit code {rc}).", flush=True)
+            print(f"[npm-build] ERROR: '{label}' failed (exit code {rc}).", flush=True)
             return rc
         echo("[npm-build] Building frontend...")
-        rc = stream_run([str(npm_cmd), "run", "build"], cwd=frontend_dir, env=env)
+        rc = stream_run(build, cwd=frontend_dir, env=env)
         if rc != 0:
-            print(f"[npm-build] ERROR: 'npm run build' failed (exit code {rc}).", flush=True)
+            print(f"[npm-build] ERROR: frontend build failed (exit code {rc}).", flush=True)
             return rc
     finally:
         # Only ever remove the directory this function created for the build.
@@ -309,6 +310,8 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Copy editor resources and run npm build")
     ap.add_argument("--dest-root", required=True, help="Destination root directory (CabbageEditor under target dir)")
     ap.add_argument("--src-dir", action="append", default=[], help="Source directory to copy (can be specified multiple times)")
+    ap.add_argument("--python-dir", default=None,
+                    help="Engine-owned python source directory merged into the destination root")
     ap.add_argument("--merge-content", action="store_true",
                     help="Merge source directory content directly into dest (don't create subdirectory)")
     ap.add_argument("--frontend-dir", required=True, help="Frontend directory path for npm build")
@@ -317,14 +320,26 @@ def main(argv: list[str] | None = None) -> int:
 
     dest_root = Path(args.dest_root).resolve()
     src_dirs = [Path(p).resolve() for p in args.src_dir]
+    python_dir = Path(args.python_dir).resolve() if args.python_dir else None
     frontend_dir = Path(args.frontend_dir).resolve()
     node_dir = Path(args.node_dir).resolve()
 
     echo(f"[editor-copy] Dest root: {dest_root}")
     dest_root.mkdir(parents=True, exist_ok=True)
 
-    for s in src_dirs:
-        copy_tree(s, dest_root, merge_content=args.merge_content)
+    merge_sources = [*src_dirs, *([python_dir] if python_dir else [])]
+    for source in merge_sources:
+        copy_tree(source, dest_root, merge_content=args.merge_content, cleanup=False)
+
+    # One union sweep so a file is only removed when no merge source owns it.
+    _cleanup_stale_files(merge_sources, dest_root, _ignore)
+
+    # Development-only python assets must not survive in a deployed tree.
+    for name in ("frontend_assets",):
+        stale = dest_root / name
+        if stale.is_dir():
+            shutil.rmtree(stale, ignore_errors=True)
+            echo(f"[editor-copy] Removed deployed dev assets: {stale}")
 
     # Run npm build last
     return maybe_run_npm(frontend_dir, node_dir)

@@ -95,6 +95,13 @@ class SystemBase : public ISystem {
 
     void start() override;
 
+    /**
+     * @brief 由外部调度者（帧图）驱动：只切状态，不建线程
+     *
+     * update() 之后由调度者在它自己的线程上调用。
+     */
+    void start_inline() override;
+
     void pause() override;
 
     void resume() override;

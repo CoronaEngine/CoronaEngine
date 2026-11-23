@@ -1,10 +1,13 @@
 #include <corona/systems/ui/vulkan_backend.h>
+#include <corona/systems/display/display_frame_commands.h>
+#include <corona/systems/display/display_surface_commands.h>
 
 #include <corona/events/display_system_events.h>
 #include <horizon/core/logging.h>
 #include <corona/kernel/core/kernel_context.h>
 #include <corona/kernel/event/i_event_bus.h>
 #include <corona/shared_data_hub.h>
+#include <corona/ecs/structural_commands.h>
 #include <corona/engine/engine_runtime_api.h>
 
 #include <algorithm>
@@ -87,7 +90,10 @@ bool VulkanBackend::initialize() {
     surface_ = native_handle;
     Corona::API::set_default_surface(surface_);
     if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
-        event_bus->publish<Events::DisplaySurfaceChangedEvent>({surface_});
+        Corona::DisplaySurfaceCommand surface_command{};
+        surface_command.kind = Corona::DisplaySurfaceCommand::Kind::Changed;
+        surface_command.surface = surface_;
+        Corona::DisplaySurfaceCommandChannel::instance().commands().push(std::move(surface_command));
     }
 
     // Register the main window's surface (allocates its image handle, creates initial RT).
@@ -110,7 +116,7 @@ void VulkanBackend::shutdown() {
     for (auto& [surface, render] : surfaces_) {
         if (render && render->image_handle != 0) {
             render->published_image.retire().wait();
-            if (auto image = SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
+            if (auto image = Corona::SharedDataHub::instance().image_write(render->image_handle)) {
                 if (image->consumed_receipt.serial != 0) {
                     render->resources.executor.wait_idle(image->consumed_receipt);
                 }
@@ -122,7 +128,14 @@ void VulkanBackend::shutdown() {
             if (render->resources.last_receipt.serial != 0) {
                 render->resources.executor.wait_idle(render->resources.last_receipt);
             }
-            SharedDataHub::instance().image_storage().deallocate(render->image_handle);
+            // 命令没被接受（DAG 已停机 / 队列拒绝）时不能装作销毁成功：句柄一旦清零，
+            // 这个图像实体和它的 GPU 资源就再也找不回来了 —— 至少把句柄写进日志。
+            if (!Corona::Ecs::request_destroy_image(render->image_handle)) {
+                CFW_LOG_WARNING(
+                    "VulkanBackend: image {} could not be queued for destruction during "
+                    "shutdown; the entity is orphaned with the world",
+                    render->image_handle);
+            }
             render->image_handle = 0;
         }
     }
@@ -146,14 +159,20 @@ bool VulkanBackend::register_surface(void* surface, SDL_Window* window) {
     }
 
     auto render = std::make_unique<PerSurfaceRender>();
-    render->image_handle = SharedDataHub::instance().image_storage().allocate();
+    // 结构创建走 tick 边界命令通道（ECS 单写者，P1）。装配期（引擎初始化、系统线程
+    // 还没开始）由本线程直接应用；运行期由 DAG 在边界创建并结算。
+    render->image_handle = Corona::Ecs::request_create_image(Corona::Ecs::CreateImagePayload{});
+    if (render->image_handle == 0) {
+        CFW_LOG_ERROR("VulkanBackend: failed to create the image entity for surface {}", surface);
+        return false;
+    }
     render->published_image = Detail::PublishedImage(render->image_handle);
     if (auto image_device =
-            SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
+            Corona::SharedDataHub::instance().image_write(render->image_handle)) {
         *image_device = ImageDevice{};
     } else {
         CFW_LOG_ERROR("VulkanBackend: failed to acquire image storage handle for surface {}", surface);
-        SharedDataHub::instance().image_storage().deallocate(render->image_handle);
+        Corona::Ecs::request_destroy_image(render->image_handle);
         return false;
     }
 
@@ -183,7 +202,7 @@ void VulkanBackend::unregister_surface(void* surface) {
     auto& render = *it->second;
     render.published_image.retire().wait();
     if (render.image_handle != 0) {
-        if (auto image = SharedDataHub::instance().image_storage().acquire_write(render.image_handle)) {
+        if (auto image = Corona::SharedDataHub::instance().image_write(render.image_handle)) {
             if (image->consumed_receipt.serial != 0) {
                 render.resources.executor.wait_idle(image->consumed_receipt);
             }
@@ -198,7 +217,13 @@ void VulkanBackend::unregister_surface(void* surface) {
     }
 
     if (render.image_handle != 0) {
-        SharedDataHub::instance().image_storage().deallocate(render.image_handle);
+        // 同上：命令没被接受时把句柄写进日志，别让它悄悄消失。
+        if (!Corona::Ecs::request_destroy_image(render.image_handle)) {
+            CFW_LOG_WARNING(
+                "VulkanBackend: image {} could not be queued for destruction while "
+                "unregistering surface {}; the entity is orphaned with the world",
+                render.image_handle, surface);
+        }
         render.image_handle = 0;
     }
     surfaces_.erase(it);
@@ -216,7 +241,7 @@ void VulkanBackend::new_frame(void* surface) {
 
     // GPU sync: wait for Display to finish consuming our image before we render new content.
     if (auto image_device =
-            SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
+            Corona::SharedDataHub::instance().image_write(render->image_handle)) {
         // The first frame has no Display submission to wait for yet.
         if (image_device->consumed_receipt.serial != 0) {
             render->resources.executor.wait(image_device->consumed_receipt);
@@ -302,7 +327,7 @@ void VulkanBackend::present_surface(void* surface) {
     }
 
     if (auto image_device =
-            SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
+            Corona::SharedDataHub::instance().image_write(render->image_handle)) {
         const auto submit_receipt = render->resources.last_receipt;
         if (submit_receipt.serial == 0) {
             CFW_LOG_WARNING(
@@ -339,7 +364,7 @@ void VulkanBackend::present_surface(void* surface) {
             render->first_present_published = true;
         }
         frame.published_image = render->published_image;
-        event_bus->publish<Events::UIFrameReadyEvent>(frame);
+        Corona::push_ui_frame(frame);
     }
 
     render->resources.frame_ready = false;
@@ -380,7 +405,7 @@ void VulkanBackend::rebuild(void* surface, uint32_t pixel_w, uint32_t pixel_h) {
                      render->resources.last_receipt.serial);
         if (render->image_handle != 0) {
             if (auto image_device =
-                    SharedDataHub::instance().image_storage().acquire_write(render->image_handle)) {
+                    Corona::SharedDataHub::instance().image_write(render->image_handle)) {
                 if (image_device->consumed_receipt.serial != 0) {
                     render->resources.executor.wait_idle(image_device->consumed_receipt);
                 }

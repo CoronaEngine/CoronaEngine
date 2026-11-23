@@ -66,16 +66,14 @@ function(corona_install_runtime_deps target_name)
     get_target_property(_CORONA_DEPS CoronaEngine INTERFACE_CORONA_RUNTIME_DEPS)
 
     if(NOT _CORONA_DEPS)
-        message(STATUS "[Corona:RuntimeDeps] No INTERFACE_CORONA_RUNTIME_DEPS; skipping copy")
-        horizon_install_vulkan_runtime(${target_name})
-        return()
+        message(STATUS "[Corona:RuntimeDeps] No INTERFACE_CORONA_RUNTIME_DEPS; skipping file list copy")
     endif()
 
     set(_CORONA_DESTINATION_DIR "$<TARGET_FILE_DIR:${target_name}>")
 
     set(_CORONA_PY_COPY "${CORONA_BUILD_SCRIPTS_DIR}/copy_files.py")
 
-    if(EXISTS "${_CORONA_PY_COPY}" AND DEFINED Python_EXECUTABLE)
+    if(_CORONA_DEPS AND EXISTS "${_CORONA_PY_COPY}" AND DEFINED Python_EXECUTABLE)
         set(_CORONA_DEPS_DIR "${CMAKE_BINARY_DIR}/runtime_deps")
         file(MAKE_DIRECTORY "${_CORONA_DEPS_DIR}")
         string(MD5 _corona_target_hash "${target_name}")
@@ -93,7 +91,7 @@ function(corona_install_runtime_deps target_name)
             COMMENT     "[Corona:RuntimeDeps] Copy Corona runtime dependencies to target directory -> ${target_name}"
             VERBATIM
         )
-    else()
+    elseif(_CORONA_DEPS)
         if(NOT EXISTS "${_CORONA_PY_COPY}")
             message(STATUS "[Corona:RuntimeDeps] Python copy script not found; falling back to copy_if_different")
         else()
@@ -107,6 +105,66 @@ function(corona_install_runtime_deps target_name)
             COMMENT     "[Corona:RuntimeDeps] Copy runtime deps (fallback) -> ${target_name}"
             VERBATIM
         )
+    endif()
+
+    if(WIN32 AND DEFINED Python_EXECUTABLE)
+        if(DEFINED Python_RUNTIME_LIBRARY_DIRS
+           AND EXISTS "${Python_RUNTIME_LIBRARY_DIRS}/Lib"
+           AND EXISTS "${Python_RUNTIME_LIBRARY_DIRS}/DLLs")
+            set(_CORONA_PY_ENV_DIR "${Python_RUNTIME_LIBRARY_DIRS}")
+        else()
+            get_filename_component(_CORONA_PY_ENV_DIR "${Python_EXECUTABLE}" DIRECTORY)
+        endif()
+        set(_CORONA_PY_LIB_DIR "${_CORONA_PY_ENV_DIR}/Lib")
+        set(_CORONA_PY_DLL_DIR "${_CORONA_PY_ENV_DIR}/DLLs")
+        if(EXISTS "${_CORONA_PY_LIB_DIR}" AND EXISTS "${_CORONA_PY_DLL_DIR}")
+            # The standard library is ~2 GB / 53k files, and cmake -E copy_directory_if_different
+            # compares file contents on every build. The script keeps a size+mtime manifest and
+            # only copies what changed; an unchanged tree costs one stat per file.
+            set(_CORONA_PY_RUNTIME_DIR "${_CORONA_DESTINATION_DIR}/python-runtime")
+            set(_CORONA_PY_DEPLOY_SCRIPT "${CORONA_BUILD_SCRIPTS_DIR}/deploy_python_runtime.py")
+            # requirements.txt lists the dev environment's tooling packages (numpy, Pillow)
+            # and is validated by check_pip_modules; the runtime has its own list so the
+            # engine only ships the standard library unless a script explicitly needs more.
+            set(_CORONA_PY_REQUIREMENTS
+                "${CORONA_EMBEDDED_PYTHON_SOURCE_DIR}/runtime-requirements.txt")
+            set(_CORONA_PY_REQUIREMENTS_ARGS)
+            if(EXISTS "${_CORONA_PY_REQUIREMENTS}")
+                list(APPEND _CORONA_PY_REQUIREMENTS_ARGS --requirements "${_CORONA_PY_REQUIREMENTS}")
+            else()
+                message(WARNING
+                    "[Corona:RuntimeDeps] Python requirements file missing; deploying the whole environment")
+            endif()
+            if(EXISTS "${_CORONA_PY_DEPLOY_SCRIPT}" AND DEFINED Python_EXECUTABLE)
+                add_custom_command(
+                    TARGET ${target_name}
+                    POST_BUILD
+                    COMMAND "${Python_EXECUTABLE}" "${_CORONA_PY_DEPLOY_SCRIPT}"
+                        --source-lib "${_CORONA_PY_LIB_DIR}"
+                        --source-dlls "${_CORONA_PY_DLL_DIR}"
+                        --destination "${_CORONA_PY_RUNTIME_DIR}"
+                        ${_CORONA_PY_REQUIREMENTS_ARGS}
+                    COMMENT "[Corona:RuntimeDeps] Deploy Python runtime (incremental) -> ${target_name}"
+                    VERBATIM
+                )
+            else()
+                add_custom_command(
+                    TARGET ${target_name}
+                    POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+                        "${_CORONA_PY_LIB_DIR}"
+                        "${_CORONA_PY_RUNTIME_DIR}/Lib"
+                    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+                        "${_CORONA_PY_DLL_DIR}"
+                        "${_CORONA_PY_RUNTIME_DIR}/DLLs"
+                    COMMENT "[Corona:RuntimeDeps] Deploy Python standard library and modules (full) -> ${target_name}"
+                    VERBATIM
+                )
+            endif()
+        else()
+            message(WARNING
+                "[Corona:RuntimeDeps] Python runtime directories are incomplete: ${_CORONA_PY_ENV_DIR}")
+        endif()
     endif()
 
     if(CORONA_ENABLE_CEF)
@@ -168,6 +226,31 @@ endfunction()
 # ------------------------------------------------------------------------------
 # Function: collect runtime dependencies during configuration
 # ------------------------------------------------------------------------------
+# Copy the shared libraries this executable actually links, including imported SHARED
+# targets that arrive through a private link chain (FFmpeg, the Vulkan loader).
+# corona_install_runtime_deps copies the engine-owned dependency list, which does not
+# include every Conan-provided DLL; this closes that gap without hard-coded paths.
+function(corona_copy_target_runtime_dlls target_name)
+    if(NOT WIN32)
+        return()
+    endif()
+    if(NOT TARGET ${target_name})
+        message(FATAL_ERROR "corona_copy_target_runtime_dlls: target '${target_name}' does not exist")
+    endif()
+
+    add_custom_command(
+        TARGET ${target_name}
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target_name}>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_RUNTIME_DLLS:${target_name}>"
+            "$<TARGET_FILE_DIR:${target_name}>"
+        COMMAND_EXPAND_LISTS
+        COMMENT "[Corona:RuntimeDeps] Copy shared runtime DLLs -> ${target_name}"
+        VERBATIM)
+endfunction()
+
+
 function(corona_configure_runtime_deps target_name)
     if(NOT TARGET ${target_name})
         message(WARNING "[Corona:RuntimeDeps] Target ${target_name} does not exist; cannot configure runtime dependencies.")
@@ -175,12 +258,22 @@ function(corona_configure_runtime_deps target_name)
     endif()
 
     set(_CORONA_ALL_DEPS)
-    if(DEFINED Python_RUNTIME_LIBRARY_DIRS)
-        file(GLOB _CORONA_PY_DLLS "${Python_RUNTIME_LIBRARY_DIRS}/*.dll")
-        file(GLOB _CORONA_PY_PDBS "${Python_RUNTIME_LIBRARY_DIRS}/*.pdb")
+    if(DEFINED Python_EXECUTABLE)
+        get_filename_component(_CORONA_PY_ENV_DIR "${Python_EXECUTABLE}" DIRECTORY)
+        set(_CORONA_PY_DLL_DIRS "${_CORONA_PY_ENV_DIR}")
+        if(DEFINED Python_RUNTIME_LIBRARY_DIRS
+           AND EXISTS "${Python_RUNTIME_LIBRARY_DIRS}/Lib")
+            list(PREPEND _CORONA_PY_DLL_DIRS "${Python_RUNTIME_LIBRARY_DIRS}")
+        endif()
+        list(APPEND _CORONA_PY_DLL_DIRS "${_CORONA_PY_ENV_DIR}/DLLs")
+        foreach(_corona_py_dll_dir IN LISTS _CORONA_PY_DLL_DIRS)
+            file(GLOB _corona_py_dlls "${_corona_py_dll_dir}/*.dll")
+            file(GLOB _corona_py_pdbs "${_corona_py_dll_dir}/*.pdb")
+            list(APPEND _CORONA_PY_DLLS ${_corona_py_dlls})
+            list(APPEND _CORONA_PY_PDBS ${_corona_py_pdbs})
+        endforeach()
         # Conda keeps native runtime dependencies such as OpenSSL in Library/bin,
         # beside the Python DLLs in DLLs.
-        get_filename_component(_CORONA_PY_ENV_DIR "${Python_EXECUTABLE}" DIRECTORY)
         file(GLOB _CORONA_CONDA_DLLS "${_CORONA_PY_ENV_DIR}/Library/bin/*.dll")
         file(GLOB _CORONA_CONDA_PDBS "${_CORONA_PY_ENV_DIR}/Library/bin/*.pdb")
         list(APPEND _CORONA_PY_DLLS ${_CORONA_CONDA_DLLS})

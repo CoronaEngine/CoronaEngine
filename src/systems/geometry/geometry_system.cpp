@@ -2,14 +2,17 @@
 #include <corona/events/engine_events.h>
 #include <corona/diagnostics/thread_phase.h>
 #include <horizon/core/logging.h>
-#include <horizon/core/storage.h>
 #include <corona/resource/resource.h>
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
 #include <corona/resource/types/animation_pose.h>
 #include <corona/resource/types/image.h>
 #include <corona/shared_data_hub.h>
+#include <corona/ecs/access.h>
+#include <corona/ecs/structural_commands.h>
 #include <corona/systems/geometry/model_node_geometry.h>
+#include <corona/systems/geometry/geometry_commands.h>
+#include <corona/systems/geometry/scene_commands.h>
 #include <corona/spatial/octree.h>
 #include <corona/systems/geometry/geometry_system.h>
 #include <corona/utils/path_utils.h>
@@ -33,12 +36,20 @@
 #include <utility>
 
 #include "geometry_internal.h"
-#include "storage_snapshot.h"
 #include "../common/diagnostic_env.h"
 
 #include <corona/systems/geometry/geometry_mesh_builder.h>
 
 namespace Corona::Systems {
+
+Kernel::ComponentAccess GeometrySystem::component_access() const {
+    Kernel::ComponentAccess access;
+    access.write<GeometryDevice, ModelResource, SceneDevice>()
+          .read<Ecs::Transform, ActorDevice, ProfileDevice, MechanicsDevice,
+                OpticsDevice, AcousticsDevice, CameraDevice>();
+    return access;
+}
+
 
 using namespace GeometryInternal;
 
@@ -47,23 +58,25 @@ namespace {
 // Both cold imports and cache-hit actor rebuilds must publish the same local
 // bounds before their GPU resources become Ready. Otherwise a freshly-created
 // MechanicsDevice keeps its zero AABB and frustum culling tests the actor origin.
-void refresh_geometry_resource_bounds(std::uintptr_t geometry_handle, std::uint64_t model_id) {
+void refresh_geometry_resource_bounds(EntityId geometry_handle, std::uint64_t model_id) {
     auto scene = Resource::ResourceManager::get_instance().acquire_read<Resource::Scene>(model_id);
     if (!scene) return;
     const auto bounds = scene->get_scene_aabb();
-    auto& mechanics = SharedDataHub::instance().mechanics_storage();
     std::vector<std::uintptr_t> handles;
-    // Do not acquire a write lock while a storage iterator retains its read lock.
-    for (auto it = mechanics.cbegin(); it != mechanics.cend(); ++it) {
-        if (it->geometry_handle == geometry_handle) {
-            handles.push_back(reinterpret_cast<std::uintptr_t>(&*it));
+    for (const auto entity : Corona::Ecs::view<MechanicsDevice>()) {
+        const auto handle = Corona::Ecs::to_handle(entity);
+        if (Corona::Ecs::get<MechanicsDevice>(handle).geometry_handle == geometry_handle) {
+            handles.push_back(handle);
         }
     }
     for (auto handle : handles) {
-        if (auto value = mechanics.try_acquire_write(handle);
-            value && value->geometry_handle == geometry_handle) {
-            value->min_xyz = make_fvec3(bounds.min[0], bounds.min[1], bounds.min[2]);
-            value->max_xyz = make_fvec3(bounds.max[0], bounds.max[1], bounds.max[2]);
+        if (auto* value = Corona::find_mechanics(handle);
+            value != nullptr && value->geometry_handle == geometry_handle) {
+            if (auto* mech_bounds = Corona::find_bounds(handle)) {
+                mech_bounds->min = make_fvec3(bounds.min[0], bounds.min[1], bounds.min[2]);
+                mech_bounds->max = make_fvec3(bounds.max[0], bounds.max[1], bounds.max[2]);
+                mech_bounds->valid = true;
+            }
         }
     }
 }
@@ -289,19 +302,27 @@ bool GeometrySystem::initialize(Kernel::ISystemContext* ctx) {
 
 void GeometrySystem::update() {
     // Every stage of this loop can block on a lock with no timeout (storage slot
-    // locks, Vulkan queue acquires, TBB arenas).  Naming the stage on entry makes
+    // locks, Vulkan queue acquires, pool queues).  Naming the stage on entry makes
     // such a stall visible as "Geometry stuck in phase X" instead of silence.
     Corona::Diagnostics::PhaseScope update_phase{"Geometry", "update"};
+    // DAG 降级路径（CORONA_SYSTEMS_DAG=0）没有 tick 边界钩子：在这里兜底应用
+    // 结构命令与场景成员命令。DAG 模式下结构命令的 drain 被门控关闭（边界阶段
+    // 已经消费过），保证"实体集合在一个 tick 内不变"；场景命令的兜底语义不变。
+    Corona::Ecs::apply_pending_structural_commands_legacy_fallback();
+    Corona::apply_pending_scene_commands();
+    // 外部线程（CEF/脚本）对 GeometryDevice 的写入也在这里落地。
+    Corona::apply_pending_geometry_commands();
+    // 兜底：上一轮写盘可能因失败进入退避，这里按时间戳重新尝试排空队列。
+    impl_->pump_lod_disk_writes();
     auto& hub = SharedDataHub::instance();
-    auto& scene_storage = hub.scene_storage();
-    auto& camera_storage = hub.camera_storage();
-    auto& geometry_storage = hub.geometry_storage();
-    auto& transform_storage = hub.model_transform_storage();
+    auto scene_storage = Corona::all_scenes();
+    auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
+    auto geometry_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
     std::vector<std::uintptr_t> scene_handles;
     {
         for (auto it = scene_storage.cbegin(); it != scene_storage.cend(); ++it) {
             const SceneDevice& scene_dev = *it;
-            scene_handles.push_back(reinterpret_cast<std::uintptr_t>(&scene_dev));
+            scene_handles.push_back(it.id());
         }
     }
 
@@ -360,13 +381,13 @@ void GeometrySystem::update() {
     // LOD0 回读和 AABB 写回 GeometryDevice，供 Vision / CPU 物理消费。
     update_phase.set("scene_loop");
 
-    for (std::uintptr_t scene_handle : scene_handles) {
+    for (EntityId scene_handle : scene_handles) {
         const auto scene_begin = std::chrono::steady_clock::now();
         std::vector<std::uintptr_t> actor_handles;
         std::vector<std::uintptr_t> camera_handles;
         {
-            auto scene_read = scene_storage.try_acquire_read(scene_handle);
-            if ( !scene_read.valid() )  continue;
+            auto scene_read = Corona::find_scene(scene_handle);
+            if ( scene_read == nullptr )  continue;
             actor_handles = scene_read->actor_handles;
             camera_handles = scene_read->camera_handles;
         }
@@ -375,42 +396,44 @@ void GeometrySystem::update() {
         std::unordered_set<Impl::Payload> added_actors;
         std::unordered_set<Impl::Payload> pinned_actors;
         std::unordered_set<Impl::Payload> pinned_not_ready;
-        for (std::uintptr_t actor_handle : actor_handles) {
+        for (EntityId actor_handle : actor_handles) {
             if (added_actors.count(actor_handle)) continue;
 
-            auto& actor_storage = hub.actor_storage();
-            auto actor_read = actor_storage.acquire_read(actor_handle);
+            auto actor_read = Corona::find_actor(actor_handle);
+            const auto* actor_read_profiles = Corona::find_profiles(actor_handle);
+            const auto* actor_path = Corona::find_model_path(actor_handle);
             if ( !actor_read ) continue;
             const ActorDevice& actor_dev = *actor_read;
-            if (actor_dev.pinned) pinned_actors.insert(actor_handle);
+            const auto* streaming = Corona::find_streaming(actor_handle);
+            if (streaming != nullptr && streaming->pinned) pinned_actors.insert(actor_handle);
 
-            for (std::uintptr_t profile_handle : actor_dev.profile_handles) {
-                auto& profile_storage = hub.profile_storage();
-                auto profile_read = profile_storage.acquire_read(profile_handle);
-                if (!profile_read.valid()) continue;
+            for (EntityId profile_handle : actor_read_profiles->handles) {
+                auto profile_read = Corona::find_profile(profile_handle);
+                if (profile_read == nullptr) continue;
 
                 const ProfileDevice& profile_dev = *profile_read;
-                std::uintptr_t mechanics_handle = profile_dev.mechanics_handle;
+                EntityId mechanics_handle = profile_dev.mechanics_handle;
                 if ( !mechanics_handle ) continue;
 
-                auto& mechanics_storage = hub.mechanics_storage();
-                auto mechanics_read = mechanics_storage.acquire_read(mechanics_handle);
-                if (!mechanics_read.valid()) continue;
+                auto mechanics_read = Corona::find_mechanics(mechanics_handle);
+                if (mechanics_read == nullptr) continue;
 
-                auto geometry_read = geometry_storage.acquire_read(mechanics_read->geometry_handle);
-                if (!geometry_read.valid() || geometry_read->transform_handle == 0) continue;
+                auto geometry_read = Corona::find_geometry(mechanics_read->geometry_handle);
+                if (geometry_read == nullptr || geometry_read->transform_handle == 0) continue;
 
                 // 无网格的 actor（如音频物体，空 model_path）不参与几何加载/距离剔除，
                 // 否则距离剔除每帧反复请求加载空路径并报 "empty model path" 错误。
-                if (geometry_read->model_path_utf8.empty()) continue;
-                if (actor_dev.pinned &&
+                const auto* geometry_source =
+                    Corona::find_model_source(mechanics_read->geometry_handle);
+                if (geometry_source == nullptr || geometry_source->path_utf8.empty()) continue;
+                if (streaming != nullptr && streaming->pinned &&
                     (geometry_read->gpu_build_state != GeometryDevice::GpuBuildState::Ready ||
                      geometry_read->mesh_handles.empty())) {
                     pinned_not_ready.insert(actor_handle);
                 }
 
-                auto transform_read = transform_storage.acquire_read(geometry_read->transform_handle);
-                if (!transform_read.valid()) continue;
+                auto transform_read = Corona::find_transform(geometry_read->transform_handle);
+                if (transform_read == nullptr) continue;
 
                 const MechanicsDevice& mechanics_dev = *mechanics_read;
                 Spatial::AABB aabb;
@@ -420,8 +443,11 @@ void GeometrySystem::update() {
                         make_fvec3(bounds[0], bounds[1], bounds[2]),
                         make_fvec3(bounds[3], bounds[4], bounds[5]), aabb);
                 } else {
-                    world_aabb_from_local_bounds(*transform_read,
-                        mechanics_dev.min_xyz, mechanics_dev.max_xyz, aabb);
+                    const auto* mech_bounds = Corona::find_bounds(mechanics_handle);
+                    if (mech_bounds != nullptr) {
+                        world_aabb_from_local_bounds(*transform_read, mech_bounds->min,
+                                                     mech_bounds->max, aabb);
+                    }
                 }
                 octree_entries.push_back({actor_handle,aabb});
                 added_actors.insert(actor_handle);
@@ -531,9 +557,9 @@ void GeometrySystem::update() {
         std::vector<std::pair<ktm::fvec3,Math::Frustum>> cameras;
         std::unordered_set<Impl::Payload> visible_actors;
         double visible_query_ms_total = 0.0;
-        for (std::uintptr_t camera_handle : camera_handles) {
-            auto cam_read = camera_storage.try_acquire_read_nowait(camera_handle);
-            if ( !cam_read.valid() ) continue;
+        for (EntityId camera_handle : camera_handles) {
+            auto cam_read = Corona::find_camera(camera_handle);
+            if ( cam_read == nullptr ) continue;
 
             // 填充相机位置和视锥
             const CameraDevice& cam_dev = *cam_read;
@@ -676,7 +702,6 @@ void GeometrySystem::update() {
                     struct LodEvictCandidate { Impl::Payload actor; float distance; };
                     std::vector<LodEvictCandidate> lod_evict_candidates;
 
-                    auto& actor_storage = SharedDataHub::instance().actor_storage();
                     for (auto actor : outside_results) {
                         auto state_it = scene_state.actor_load_states.find(actor);
                         if (state_it == scene_state.actor_load_states.end()) continue;
@@ -684,8 +709,12 @@ void GeometrySystem::update() {
                         if (scene_state.loading_tasks.count(actor)) continue;
                         if (scene_state.unloading_tasks.count(actor)) continue;
 
-                        auto actor_read = actor_storage.try_acquire_read(actor);
-                        if (actor_read.valid() && actor_read->pinned) continue;
+                        auto actor_read = Corona::find_actor(actor);
+                        const auto* actor_read_profiles = Corona::find_profiles(actor);
+                        const auto* actor_path = Corona::find_model_path(actor);
+                        if (actor_read == nullptr) continue;
+                        const auto* streaming = Corona::find_streaming(actor);
+                        if (streaming != nullptr && streaming->pinned) continue;
 
                         auto entry_it = scene_state.actor_to_entry.find(actor);
                         if (entry_it == scene_state.actor_to_entry.end()) continue;
@@ -817,8 +846,8 @@ void GeometrySystem::update() {
                 scene_state.stats.actor_unloaded  = unloaded;
             }
         }
-        auto scene_write = scene_storage.try_acquire_write(scene_handle);
-        if (scene_write.valid()) {
+        auto scene_write = Corona::find_scene(scene_handle);
+        if (scene_write != nullptr) {
             SceneDevice& scene_dev_write = *scene_write;
             scene_dev_write.min_world = root_aabb.min;
             scene_dev_write.max_world = root_aabb.max;
@@ -976,35 +1005,41 @@ void GeometrySystem::update() {
         update_phase.set("memory_pressure_evict");
         evict_under_memory_pressure();
     }
+
+    // ---- 场景状态快照：本 tick 的命令和重建都已落地，发布给 DAG 外的读者 ----
+    update_phase.set("publish_scene_snapshot");
+    hub.publish_geometry_scene_snapshot();
 }
 
 void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {
     auto& hub = SharedDataHub::instance();
-    auto actor_read = hub.actor_storage().try_acquire_read(actor);
-    if (!actor_read.valid()) return;
+    auto actor_read = Corona::find_actor(actor);
+    const auto* actor_read_profiles = Corona::find_profiles(actor);
+    const auto* actor_path = Corona::find_model_path(actor);
+    if (actor_read == nullptr) return;
 
     std::unordered_set<std::uintptr_t> visited_geom;
 
-    for (auto profile_handle : actor_read->profile_handles) {
-        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
+    for (auto profile_handle : actor_read_profiles->handles) {
+        auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;
 
         std::vector<std::uintptr_t> geom_handles;
         if (profile->geometry_handle) geom_handles.push_back(profile->geometry_handle);
         if (profile->mechanics_handle)
-            if (auto m = hub.mechanics_storage().try_acquire_read(profile->mechanics_handle))
+            if (auto m = Corona::find_mechanics(profile->mechanics_handle))
                 if (m->geometry_handle) geom_handles.push_back(m->geometry_handle);
         if (profile->optics_handle)
-            if (auto o = hub.optics_storage().try_acquire_read(profile->optics_handle))
+            if (auto o = Corona::find_optics(profile->optics_handle))
                 if (o->geometry_handle) geom_handles.push_back(o->geometry_handle);
         if (profile->acoustics_handle)
-            if (auto a = hub.acoustics_storage().try_acquire_read(profile->acoustics_handle))
+            if (const auto* a = hub.try_acoustics(profile->acoustics_handle))
                 if (a->geometry_handle) geom_handles.push_back(a->geometry_handle);
 
         for (auto geom_handle : geom_handles) {
             if (!visited_geom.insert(geom_handle).second) continue;
 
-            auto geom_read = hub.geometry_storage().try_acquire_read(geom_handle);
+            auto geom_read = Corona::find_geometry(geom_handle);
             if (!geom_read) continue;
 
             for (uint32_t mesh_idx = 0;
@@ -1046,7 +1081,7 @@ void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {
                 }  // unique_lock 释放
 
                 // 取消该 lod_key 的在途异步构建：LOD1..N 已被释放，
-                // 若 TBB worker 稍后完成构建，process_pending_lod_builds 回写
+                // 若线程池 worker 稍后完成构建，process_pending_lod_builds 回写
                 // 会重新设 ready=true，撤销本次淘汰。
                 //
                 // 线程安全：evict_lods_for_actor 仅在几何线程 update() 中调用，
@@ -1122,19 +1157,12 @@ void GeometrySystem::shutdown() {
     impl_->lod_build_tasks.wait();
     impl_->pending_lod_builds.clear();
 
-    // 停止 LOD 磁盘缓存写入线程：先置停止标志再唤醒，worker 醒来后会把队列中
-    // 剩余任务排空再退出；join 确保线程在 Impl 成员销毁前结束，防止 worker
-    // 访问悬空的 this / 已析构的队列与缓存对象。
-    if (impl_->lod_disk_worker_running.load(std::memory_order_acquire)) {
-        impl_->lod_disk_worker_running.store(false, std::memory_order_release);
-        impl_->lod_disk_write_cv.notify_one();
-        if (impl_->lod_disk_worker && impl_->lod_disk_worker->joinable()) {
-            impl_->lod_disk_worker->join();
-        }
-    }
+    // 等待在途写盘任务结束（等价于原先的 thread::join），确保池任务不会在 Impl
+    // 成员销毁后继续访问 this / 队列 / 缓存对象。
+    impl_->lod_disk_writes.wait();
 
-    // join 之后不会再有新任务入队，但仍做一次防御性排空：覆盖"置停止标志与
-    // worker 检查标志之间"极窄窗口内入队、worker 退出前未及处理的任务，
+    // 之后不会再有新任务入队，但仍做一次同步排空：覆盖"wait 返回与销毁之间"
+    // 极窄窗口内入队、池任务未及处理的任务，
     // 确保已从 lod_levels 移出的数据不丢失（该数据是此级唯一的副本，
     // 丢失后该级不再可恢复）。
     while (true) {
@@ -1269,14 +1297,16 @@ void GeometrySystem::on_load_finished(const Events::ActorLoadFinishedEvent& even
 
     // 加载完成，解除 pin（后续由 Optics/Mechanics 的 touch 续期维持热度）
     {
-        auto actor_read = SharedDataHub::instance().actor_storage().try_acquire_read(event.actor);
-        if (actor_read && !actor_read->model_path.empty()) {
-            auto normalized = actor_read->model_path.is_relative()
-                ? std::filesystem::absolute(actor_read->model_path)
-                : actor_read->model_path;
+        auto actor_read = Corona::find_actor(event.actor);
+        const auto* actor_read_profiles = Corona::find_profiles(event.actor);
+        const auto* actor_path = Corona::find_model_path(event.actor);
+        if (actor_read && !actor_path->value.empty()) {
+            auto normalized = actor_path->value.is_relative()
+                ? std::filesystem::absolute(actor_path->value)
+                : actor_path->value;
             std::error_code ec;
             normalized = std::filesystem::weakly_canonical(normalized, ec);
-            if (ec) normalized = actor_read->model_path;  // 回退，防止 pin 泄漏
+            if (ec) normalized = actor_path->value;  // 回退，防止 pin 泄漏
             auto rid = Resource::ResourceManager::import_uid(normalized, actor_read->model_import_options);
             Resource::ResourceManager::get_instance().unpin(rid);
         }
@@ -1330,8 +1360,10 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
 
     // ---- 第 1 步：以只读模式获取 actor 数据 ----
     // try_acquire_read 返回一个 RAII 读锁守卫，离开作用域自动释放
-    auto actor_read = hub.actor_storage().try_acquire_read(actor);
-    if (!actor_read.valid()) return;  // actor 句柄无效（可能已被销毁），直接返回
+    auto actor_read = Corona::find_actor(actor);
+    const auto* actor_read_profiles = Corona::find_profiles(actor);
+    const auto* actor_path = Corona::find_model_path(actor);
+    if (actor_read == nullptr) return;  // actor 句柄无效（可能已被销毁），直接返回
 
     // ---- 第 2 步：用 visited 集合去重 ----
     // 一个 actor 的多个 profile 可能共享同一个 geometry（例如 optics 和 mechanics 引用同一几何体）
@@ -1340,8 +1372,8 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
 
     // ---- 第 3 步：遍历 actor 身上每个 Profile ----
     // Profile 是"配件槽位"——它聚合了 optics/mechanics/geometry/acoustics 的句柄
-    for (auto profile_handle : actor_read->profile_handles) {
-        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
+    for (auto profile_handle : actor_read_profiles->handles) {
+        auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;  // profile 句柄已失效
 
         // ---- 第 4 步：从 Profile 的 4 条路径收集 geometry 句柄 ----
@@ -1357,7 +1389,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
         }
         // 路径 B：OpticsDevice（视觉渲染设备）→ geometry
         if (profile->optics_handle != 0) {
-            if (auto optics = hub.optics_storage().try_acquire_read(profile->optics_handle)) {
+            if (auto optics = Corona::find_optics(profile->optics_handle)) {
                 if (optics->geometry_handle != 0) {
                     geom_handles.push_back(optics->geometry_handle);
                 }
@@ -1365,7 +1397,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
         }
         // 路径 C：MechanicsDevice（物理/变换设备）→ geometry（最常用的路径）
         if (profile->mechanics_handle != 0) {
-            if (auto mech = hub.mechanics_storage().try_acquire_read(profile->mechanics_handle)) {
+            if (auto mech = Corona::find_mechanics(profile->mechanics_handle)) {
                 if (mech->geometry_handle != 0) {
                     geom_handles.push_back(mech->geometry_handle);
                 }
@@ -1373,7 +1405,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
         }
         // 路径 D：AcousticsDevice（声学设备）→ geometry
         if (profile->acoustics_handle != 0) {
-            if (auto acoustics = hub.acoustics_storage().try_acquire_read(profile->acoustics_handle)) {
+            if (const auto* acoustics = hub.try_acoustics(profile->acoustics_handle)) {
                 if (acoustics->geometry_handle != 0) {
                     geom_handles.push_back(acoustics->geometry_handle);
                 }
@@ -1389,7 +1421,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
             // ---- 第 5.1 步：统计该 geometry 有多少个 mesh（子网格）----
             // 一个 GeometryDevice 可能包含多个 MeshDevice（例如一个模型有多个材质）
             uint32_t mesh_count = 0;
-            if (auto geom_read = hub.geometry_storage().try_acquire_read(geom_handle)) {
+            if (auto geom_read = Corona::find_geometry(geom_handle)) {
                 mesh_count = static_cast<uint32_t>(geom_read->mesh_handles.size());
             } else {
                 continue;  // geometry 句柄已失效
@@ -1412,7 +1444,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
             //   textureBuffer（纹理）
             // clear() 触发每个元素的析构 → HardwareBuffer/HardwareImage 析构 → GPU 显存归还
             // 注意：model_resource_handle 保留不删，以便 reload 时能找到模型资源条目
-            if (auto geom_write = hub.geometry_storage().try_acquire_write(geom_handle)) {
+            if (auto geom_write = Corona::find_geometry(geom_handle)) {
                 geom_write->mesh_handles.clear();
                 geom_write->mesh_instances.clear();
             }  // geom_write 析构时自动释放写锁
@@ -1438,7 +1470,7 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
 // ============================================================================
 bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
                                                   std::uint64_t rid,
-                                                  std::uintptr_t scene_handle) {
+                                                  EntityId scene_handle) {
     // ---- 第 0 步：获取两个全局单例 ----
     // SharedDataHub：管理所有系统共享的设备数据（actor/profile/geometry 等）
     auto& hub = SharedDataHub::instance();
@@ -1446,8 +1478,10 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
     auto& resource_manager = Resource::ResourceManager::get_instance();
 
     // ---- 第 1 步：读取 actor 数据 ----
-    auto actor_read = hub.actor_storage().try_acquire_read(actor);
-    if (!actor_read.valid()) return false;  // actor 句柄无效
+    auto actor_read = Corona::find_actor(actor);
+    const auto* actor_read_profiles = Corona::find_profiles(actor);
+    const auto* actor_path = Corona::find_model_path(actor);
+    if (actor_read == nullptr) return false;  // actor 句柄无效
     bool queued_staged_upload = false;
 
     // ---- 第 2 步：去重集合（与 release 函数逻辑相同）----
@@ -1455,8 +1489,8 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
     std::unordered_set<std::uintptr_t> visited_geometry_handles;
 
     // ---- 第 3 步：遍历 actor 的所有 profile ----
-    for (auto profile_handle : actor_read->profile_handles) {
-        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
+    for (auto profile_handle : actor_read_profiles->handles) {
+        auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;
 
         // ---- 第 4 步：4 条路径收集 geometry 句柄（同 release 逻辑）----
@@ -1472,7 +1506,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
         }
         // 路径 B：光学设备 → geometry
         if (profile->optics_handle != 0) {
-            if (auto optics = hub.optics_storage().try_acquire_read(profile->optics_handle)) {
+            if (auto optics = Corona::find_optics(profile->optics_handle)) {
                 if (optics->geometry_handle != 0) {
                     geom_handles.push_back(optics->geometry_handle);
                 }
@@ -1480,7 +1514,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
         }
         // 路径 C：力学/物理设备 → geometry（渲染对象的主要路径）
         if (profile->mechanics_handle != 0) {
-            if (auto mech = hub.mechanics_storage().try_acquire_read(profile->mechanics_handle)) {
+            if (auto mech = Corona::find_mechanics(profile->mechanics_handle)) {
                 if (mech->geometry_handle != 0) {
                     geom_handles.push_back(mech->geometry_handle);
                 }
@@ -1488,7 +1522,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
         }
         // 路径 D：声学设备 → geometry
         if (profile->acoustics_handle != 0) {
-            if (auto acoustics = hub.acoustics_storage().try_acquire_read(profile->acoustics_handle)) {
+            if (const auto* acoustics = hub.try_acoustics(profile->acoustics_handle)) {
                 if (acoustics->geometry_handle != 0) {
                     geom_handles.push_back(acoustics->geometry_handle);
                 }
@@ -1505,10 +1539,10 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
             // release() 时保留了它（未置零），通过它找到对应的模型资源条目
             // mesh_handles 在 release() 时已 clear()，所以 empty() == true 表示需要重建
             // 初始加载时 Python API 已填充 mesh_handles，此时不为空 → 无需重建
-            std::uintptr_t model_res_handle = 0;  // ModelResource 句柄
+            EntityId model_res_handle = 0;  // ModelResource 句柄
             bool needs_rebuild = false;            // 是否需要重建 GPU 缓冲
             {
-                auto geom_read = hub.geometry_storage().try_acquire_read(geom_handle);
+                auto geom_read = Corona::find_geometry(geom_handle);
                 if (!geom_read) continue;  // geometry 已失效
                 model_res_handle = geom_read->model_resource_handle;
                 // 关键判断：mesh_handles 为空 → 被 release() 清理过 → 需要重建
@@ -1520,7 +1554,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
             // reload 时 import_async 可能分配新的资源 UID，必须更新
             // 无论是否需要 rebuild 都要更新，确保后续 LOD 上传能正确查找到 Scene 数据
             if (model_res_handle != 0) {
-                if (auto model_res = hub.model_resource_storage().try_acquire_write(model_res_handle)) {
+                if (auto model_res = Corona::find_model_resource(model_res_handle)) {
                     model_res->model_id = rid;  // 写入新的资源 UID
                 }
             }
@@ -1549,7 +1583,7 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
                 }
             }  // lod_lock 析构
 
-            if (auto geom_write = hub.geometry_storage().try_acquire_write(geom_handle)) {
+            if (auto geom_write = Corona::find_geometry(geom_handle)) {
                 if (geom_write->model_resource_handle == model_res_handle &&
                     geom_write->mesh_handles.empty()) {
                     geom_write->gpu_build_state = GeometryDevice::GpuBuildState::PendingBuild;
@@ -1573,25 +1607,24 @@ bool GeometrySystem::rebuild_actor_gpu_resources(std::uintptr_t actor,
 
 void GeometrySystem::process_async_tasks() {
     auto& hub = SharedDataHub::instance();
-    auto& actor_storage = hub.actor_storage();
 
     struct CompletedLoadTask {
-        std::uintptr_t scene_handle;
+        EntityId scene_handle;
         std::uintptr_t actor;
         std::uint64_t rid;
     };
     struct CompletedUnloadTask {
-        std::uintptr_t scene_handle;
+        EntityId scene_handle;
         std::uintptr_t actor;
         bool success;
     };
     struct DeferredLoadTask {
-        std::uintptr_t scene_handle;
+        EntityId scene_handle;
         std::uintptr_t actor;
         std::future<std::uint64_t> future;
     };
     struct DeferredUnloadTask {
-        std::uintptr_t scene_handle;
+        EntityId scene_handle;
         std::uintptr_t actor;
         std::future<bool> future;
     };
@@ -1719,15 +1752,17 @@ void GeometrySystem::process_async_tasks() {
                     deferred_residency.push_back(
                         {task.scene_handle, task.actor, /*loaded=*/false});
                 } else {
-                    auto actor_read = actor_storage.try_acquire_read(task.actor);
-                    if (actor_read.valid()) {
-                        if (!actor_read->model_path.empty()) {
-                            auto normalized = actor_read->model_path.is_relative()
-                                ? std::filesystem::absolute(actor_read->model_path)
-                                : actor_read->model_path;
+                    auto actor_read = Corona::find_actor(task.actor);
+                    const auto* actor_read_profiles = Corona::find_profiles(task.actor);
+                    const auto* actor_path = Corona::find_model_path(task.actor);
+                    if (actor_read != nullptr) {
+                        if (!actor_path->value.empty()) {
+                            auto normalized = actor_path->value.is_relative()
+                                ? std::filesystem::absolute(actor_path->value)
+                                : actor_path->value;
                             std::error_code ec;
                             normalized = std::filesystem::weakly_canonical(normalized, ec);
-                            if (ec) normalized = actor_read->model_path;
+                            if (ec) normalized = actor_path->value;
                             auto rid = Resource::ResourceManager::import_uid(normalized, actor_read->model_import_options);
                             scene_state.unloading_tasks[task.actor] =
                                 Resource::ResourceManager::get_instance().remove_cache_async(rid);
@@ -1782,9 +1817,10 @@ void GeometrySystem::on_load_requested(const Events::ActorLoadRequestedEvent& e)
         return;
     }
 
-    auto& actor_storage = SharedDataHub::instance().actor_storage();
-    auto actor_read = actor_storage.try_acquire_read(e.actor);
-    if (!actor_read.valid() || actor_read->model_path.empty()) {
+    auto actor_read = Corona::find_actor(e.actor);
+    const auto* actor_read_profiles = Corona::find_profiles(e.actor);
+    const auto* actor_path = Corona::find_model_path(e.actor);
+    if (actor_read == nullptr || actor_path->value.empty()) {
         CFW_LOG_ERROR("[GeometrySystem] Invalid actor or empty model path: {}", e.actor);
         scene_state.actor_load_states[e.actor] = ActorLoadState::Unloaded;
         lock.unlock();
@@ -1793,13 +1829,13 @@ void GeometrySystem::on_load_requested(const Events::ActorLoadRequestedEvent& e)
     }
 
     CFW_LOG_NOTICE("[GeometrySystem] Start loading actor {} (path: {})",
-                  e.actor, Utils::path_to_utf8(actor_read->model_path));
+                  e.actor, Utils::path_to_utf8(actor_path->value));
 
     // pin 住资源防止加载过程中被预算淘汰踢掉
     // 加载完成后由 on_load_finished 解除 pin，后续由 touch 续期维持热度
-    auto normalized = actor_read->model_path.is_relative()
-        ? std::filesystem::absolute(actor_read->model_path)
-        : actor_read->model_path;
+    auto normalized = actor_path->value.is_relative()
+        ? std::filesystem::absolute(actor_path->value)
+        : actor_path->value;
     std::error_code ec;
     normalized = std::filesystem::weakly_canonical(normalized, ec);
     if (!ec) {
@@ -1807,7 +1843,7 @@ void GeometrySystem::on_load_requested(const Events::ActorLoadRequestedEvent& e)
         Resource::ResourceManager::get_instance().pin(rid);
     }
 
-    scene_state.loading_tasks[e.actor] = Resource::ResourceManager::get_instance().import_async(actor_read->model_path, actor_read->model_import_options);
+    scene_state.loading_tasks[e.actor] = Resource::ResourceManager::get_instance().import_async(actor_path->value, actor_read->model_import_options);
 }
 
 // 锁顺序同 on_load_requested: impl_->mtx → Storage。
@@ -1841,9 +1877,10 @@ void GeometrySystem::on_unload_requested(const Events::ActorUnloadRequestedEvent
         return;
     }
 
-    auto& actor_storage = SharedDataHub::instance().actor_storage();
-    auto actor_read = actor_storage.try_acquire_read(e.actor);
-    if (!actor_read.valid() || actor_read->model_path.empty()) {
+    auto actor_read = Corona::find_actor(e.actor);
+    const auto* actor_read_profiles = Corona::find_profiles(e.actor);
+    const auto* actor_path = Corona::find_model_path(e.actor);
+    if (actor_read == nullptr || actor_path->value.empty()) {
         scene_state.actor_load_states[e.actor] = ActorLoadState::Unloaded;
         lock.unlock();
         impl_->ctx->event_bus()->publish(Events::ActorUnloadFinishedEvent{e.scene, e.actor});
@@ -1852,16 +1889,16 @@ void GeometrySystem::on_unload_requested(const Events::ActorUnloadRequestedEvent
         return;
     }
 
-    auto normalized = actor_read->model_path.is_relative()
-        ? std::filesystem::absolute(actor_read->model_path)
-        : actor_read->model_path;
+    auto normalized = actor_path->value.is_relative()
+        ? std::filesystem::absolute(actor_path->value)
+        : actor_path->value;
     std::error_code ec;
     normalized = std::filesystem::weakly_canonical(normalized, ec);
-    if (ec) normalized = actor_read->model_path;
+    if (ec) normalized = actor_path->value;
     auto rid = Resource::ResourceManager::import_uid(normalized, actor_read->model_import_options);
 
     CFW_LOG_NOTICE("[GeometrySystem] Start unloading actor {} (path: {})",
-                  e.actor, Utils::path_to_utf8(actor_read->model_path));
+                  e.actor, Utils::path_to_utf8(actor_path->value));
     scene_state.unload_retry_counts[e.actor] = 0;
     scene_state.unloading_tasks[e.actor] = Resource::ResourceManager::get_instance().remove_cache_async(rid);
 }
@@ -1916,13 +1953,9 @@ void GeometrySystem::Impl::ensure_lod_disk_cache() {
                 CFW_LOG_NOTICE("[LOD-Disk] LRU 淘汰: {} (该级数据不再可恢复)", key);
             });
 
-        // 启动后台序列化+写盘线程
-        lod_disk_worker_running = true;
-        lod_disk_worker = std::make_unique<std::thread>([this]() {
-            lod_disk_writer_loop();
-        });
-
-        CFW_LOG_NOTICE("[LOD-Disk] 缓存已初始化: dir={} 内存=128MB 磁盘=512MB",
+        // 写盘改为线程池任务（Background 类）：不再为 LOD 单独起线程。
+        CFW_LOG_NOTICE("[LOD-Disk] 缓存已初始化（写盘走线程池 Background 道）: "
+                       "dir={} 内存=128MB 磁盘=512MB",
                        dir.string());
     });
 }
@@ -1940,82 +1973,78 @@ void GeometrySystem::Impl::report_cpu_residency_scene_busy(std::uint64_t model_i
     last_cpu_residency_busy_log = now;
 }
 
-void GeometrySystem::Impl::lod_disk_writer_loop() {
-    CFW_LOG_NOTICE("[LOD-Disk] 写入线程已启动");
-
-    while (lod_disk_worker_running.load(std::memory_order_acquire)) {
-        LodDiskWriteTask task;
-
-        {
-            std::unique_lock lock(lod_disk_write_mutex);
-            lod_disk_write_cv.wait(lock, [this]() {
-                return !pending_lod_disk_writes.empty()
-                    || !lod_disk_worker_running.load(std::memory_order_acquire);
-            });
-
-            if (!lod_disk_worker_running.load(std::memory_order_acquire)) {
-                // 关闭中：排空剩余任务后再退出（含重试逻辑，与正常路径一致）
-                while (!pending_lod_disk_writes.empty()) {
-                    task = std::move(pending_lod_disk_writes.front());
-                    pending_lod_disk_writes.pop_front();
-                    lod_disk_write_inflight_key = task.key;
-                    lock.unlock();
-                    bool ok = write_one_lod_record(task);
-                    lock.lock();
-                    lod_disk_write_inflight_key.clear();
-
-                    if (!ok && task.retry_count < Impl::kMaxLodDiskWriteRetries) {
-                        ++task.retry_count;
-                        CFW_LOG_WARNING("[LOD-Disk] 关闭时写入失败，重试 {}/{}: {}",
-                                       task.retry_count, Impl::kMaxLodDiskWriteRetries,
-                                       task.key);
-                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                        pending_lod_disk_writes.push_front(std::move(task));
-                        continue;
-                    }
-                    if (!ok) {
-                        CFW_LOG_ERROR("[LOD-Disk] 关闭时写入失败已达最大重试次数，丢弃: {}"
-                                      " (model={:#x} mesh={} lod={})",
-                                      task.key, task.model_id, task.mesh_index,
-                                      task.lod_level);
-                    }
-                }
-                break;
-            }
-
-            task = std::move(pending_lod_disk_writes.front());
-            pending_lod_disk_writes.pop_front();
-            // 标记在写 key：restore 侧在"已出队、blob 未写完"窗口内跳过磁盘回读
-            lod_disk_write_inflight_key = task.key;
-        }  // 解锁后再写盘，避免长时间持锁阻塞几何线程入队
-
-        bool write_ok = write_one_lod_record(task);
-        {
-            std::lock_guard clear_lock(lod_disk_write_mutex);
-            lod_disk_write_inflight_key.clear();
+void GeometrySystem::Impl::pump_lod_disk_writes() {
+    LodDiskWriteTask task;
+    {
+        std::lock_guard qlock(lod_disk_write_mutex);
+        if (lod_disk_write_scheduled || pending_lod_disk_writes.empty() || !lod_disk_cache) {
+            return;
         }
-
-        // 写盘失败重试：瞬时错误（磁盘满、CacheManager 内部异常等）短暂退避后重新入队。
-        // 超大 blob（超过内存缓存容量）同样返回 false，但 retry 计数仍递增——超大项
-        // 每次都会失败，达到上限后丢弃，避免无限循环。
-        if (!write_ok && task.retry_count < Impl::kMaxLodDiskWriteRetries) {
-            ++task.retry_count;
-            CFW_LOG_WARNING("[LOD-Disk] 写入失败，重试 {}/{}: {}",
-                           task.retry_count, Impl::kMaxLodDiskWriteRetries, task.key);
-            // 短暂退避：给瞬时错误（磁盘满等）恢复窗口，也避免快速空转
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            {
-                std::lock_guard qlock(lod_disk_write_mutex);
-                pending_lod_disk_writes.push_front(std::move(task));
-            }
-        } else if (!write_ok) {
-            CFW_LOG_ERROR("[LOD-Disk] 写入失败已达最大重试次数，丢弃: {} "
-                          "(model={:#x} mesh={} lod={}, 该级不再可恢复)",
-                          task.key, task.model_id, task.mesh_index, task.lod_level);
+        // 失败退避：原先由 worker 里的 sleep(100ms) 承担，现在由几何线程/任务尾
+        // 按时间戳跳过，避免在线程池 worker 上空转。
+        if (lod_disk_retry_not_before != std::chrono::steady_clock::time_point{} &&
+            std::chrono::steady_clock::now() < lod_disk_retry_not_before) {
+            return;
         }
+        task = std::move(pending_lod_disk_writes.front());
+        pending_lod_disk_writes.pop_front();
+        // 标记在写 key：restore 侧在"已出队、blob 未写完"窗口内跳过磁盘回读
+        lod_disk_write_inflight_key = task.key;
+        lod_disk_write_scheduled = true;
     }
 
-    CFW_LOG_NOTICE("[LOD-Disk] 写入线程已退出");
+    // Background 类：允许被资源导入等长任务推迟，但与 Realtime/Compute 分道，
+    // 不会拖慢几何帧循环。
+    lod_disk_writes.submit(
+        Corona::Concurrency::TaskClass::Background,
+        [this, task = std::move(task)]() mutable {
+            const std::string task_key = task.key;
+            const std::uint64_t task_model = task.model_id;
+            const std::size_t task_mesh = task.mesh_index;
+            const std::size_t task_lod = task.lod_level;
+
+            bool write_ok = false;
+            try {
+                write_ok = write_one_lod_record(task);
+            } catch (const std::exception& error) {
+                CFW_LOG_ERROR("[LOD-Disk] 写入抛出异常: {} ({})", task_key, error.what());
+            } catch (...) {
+                CFW_LOG_ERROR("[LOD-Disk] 写入抛出未知异常: {}", task_key);
+            }
+
+            const bool should_retry =
+                !write_ok && task.retry_count < Impl::kMaxLodDiskWriteRetries;
+            if (should_retry) {
+                ++task.retry_count;
+            }
+            const int retry_count = task.retry_count;
+
+            {
+                std::lock_guard qlock(lod_disk_write_mutex);
+                lod_disk_write_inflight_key.clear();
+                lod_disk_write_scheduled = false;
+                if (should_retry) {
+                    // 失败任务放回队首，退避后再写；数据是该级唯一副本，不能丢。
+                    pending_lod_disk_writes.push_front(std::move(task));
+                    lod_disk_retry_not_before =
+                        std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+                } else {
+                    lod_disk_retry_not_before = {};
+                }
+            }
+
+            if (should_retry) {
+                CFW_LOG_WARNING("[LOD-Disk] 写入失败，退避后重试 {}/{}: {}",
+                                retry_count, Impl::kMaxLodDiskWriteRetries, task_key);
+            } else if (!write_ok) {
+                CFW_LOG_ERROR("[LOD-Disk] 写入失败已达最大重试次数，丢弃: {} "
+                              "(model={:#x} mesh={} lod={}, 该级不再可恢复)",
+                              task_key, task_model, task_mesh, task_lod);
+            }
+
+            // 继续排空队列：下一次提交由本任务发起，不依赖几何帧到达。
+            pump_lod_disk_writes();
+        });
 }
 
 bool GeometrySystem::Impl::write_one_lod_record(const LodDiskWriteTask& task) {
@@ -2065,38 +2094,43 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
     }
 
     // ---- 第 2 步：读取 actor 完整状态，构建 ActorStreamingRecord ----
-    auto actor_read = hub.actor_storage().try_acquire_read(event.actor);
+    auto actor_read = Corona::find_actor(event.actor);
+    const auto* actor_read_profiles = Corona::find_profiles(event.actor);
+    const auto* actor_path = Corona::find_model_path(event.actor);
     if (!actor_read) return;
 
-    // pinned 的 actor 不淘汰
-    if (actor_read->pinned) return;
+    // pinned 的 actor 不淘汰（pinned 在 StreamingPolicy 组件上）
+    const auto* streaming = Corona::find_streaming(event.actor);
+    const bool pinned = streaming != nullptr && streaming->pinned;
+    if (pinned) return;
 
     Corona::Cache::ActorStreamingRecord rec;
-    rec.pinned    = actor_read->pinned;
+    rec.pinned    = pinned;
     rec.scene     = event.scene;
     rec.actor     = event.actor;
-    rec.model_path    = actor_read->model_path;
-    rec.follow_camera = actor_read->follow_camera;
-    rec.profile_handles = actor_read->profile_handles;
+    rec.model_path    = actor_path->value;
+    const auto* follow_camera = Corona::find_follow_camera(event.actor);
+    rec.follow_camera = follow_camera != nullptr && follow_camera->enabled;
+    rec.profile_handles = actor_read_profiles->handles;
 
     // 遍历 profiles 收集 geometry_handles / resource_ids / transform / 运行时标志
     bool transform_captured = false;
     bool optics_captured   = false;
     bool physics_captured  = false;
     std::unordered_set<std::uintptr_t> seen_geoms;
-    auto collect_rid = [&](std::uintptr_t geom_handle) {
+    auto collect_rid = [&](EntityId geom_handle) {
         if (!seen_geoms.insert(geom_handle).second) return;  // 已处理
-        auto geom = hub.geometry_storage().try_acquire_read(geom_handle);
+        auto geom = Corona::find_geometry(geom_handle);
         if (geom && geom->model_resource_handle) {
-            auto mr = hub.model_resource_storage().try_acquire_read(geom->model_resource_handle);
+            auto mr = Corona::find_model_resource(geom->model_resource_handle);
             if (mr && mr->model_id != 0) {
                 rec.resource_ids.push_back(mr->model_id);
             }
         }
     };
 
-    for (auto profile_handle : actor_read->profile_handles) {
-        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
+    for (auto profile_handle : actor_read_profiles->handles) {
+        auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;
 
         // 从 profile.geometry_handle 收集
@@ -2107,7 +2141,7 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
 
         // 从 profile.mechanics_handle → geometry 收集
         if (profile->mechanics_handle) {
-            auto mech = hub.mechanics_storage().try_acquire_read(profile->mechanics_handle);
+            auto mech = Corona::find_mechanics(profile->mechanics_handle);
             if (mech) {
                 if (!physics_captured) {
                     rec.body_type = mech->body_type;
@@ -2117,9 +2151,9 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
                     rec.geometry_handles.push_back(mech->geometry_handle);
                     collect_rid(mech->geometry_handle);
                     if (!transform_captured) {
-                        auto geom = hub.geometry_storage().try_acquire_read(mech->geometry_handle);
+                        auto geom = Corona::find_geometry(mech->geometry_handle);
                         if (geom && geom->transform_handle) {
-                            auto xform = hub.model_transform_storage().try_acquire_read(geom->transform_handle);
+                            auto xform = Corona::find_transform(geom->transform_handle);
                             if (xform) {
                                 rec.transform = *xform;
                                 transform_captured = true;
@@ -2132,9 +2166,9 @@ void GeometrySystem::on_evict_requested(const Events::ActorEvictRequestedEvent& 
 
         // 从首个有效 profile 收集 optics_visible
         if (!optics_captured && profile->optics_handle) {
-            auto optics = hub.optics_storage().try_acquire_read(profile->optics_handle);
-            if (optics) {
-                rec.optics_visible = optics->visible;
+            const auto* visibility = Corona::find_visibility(profile->optics_handle);
+            if (visibility != nullptr) {
+                rec.optics_visible = visibility->visible;
                 optics_captured = true;
             }
         }
@@ -2214,12 +2248,14 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
                        body_type_to_string(rec->body_type), rec->optics_visible, rec->priority);
     } else {
         // 缓存未命中：回退到从 ActorDevice 读取 model_path
-        auto actor_read = hub.actor_storage().try_acquire_read(event.actor);
+        auto actor_read = Corona::find_actor(event.actor);
+        const auto* actor_read_profiles = Corona::find_profiles(event.actor);
+        const auto* actor_path = Corona::find_model_path(event.actor);
         if (!actor_read) {
             CFW_LOG_ERROR("[GeometrySystem] Restore failed: actor {} not in storage", event.actor);
             return;
         }
-        model_path = actor_read->model_path;
+        model_path = actor_path->value;
         CFW_LOG_NOTICE("[GeometrySystem] Restoring actor {} from disk (cache miss, path={})",
                        event.actor, model_path.string());
     }
@@ -2231,7 +2267,8 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
 
     Resource::ModelImportOptions import_options;
     {
-        auto actor = hub.actor_storage().try_acquire_read(event.actor);
+        auto actor = Corona::find_actor(event.actor);
+        const auto* actor_profiles = Corona::find_profiles(event.actor);
         // A contended actor is retried by the visible/offline restore scan. Do
         // not silently substitute default import options and normalize geometry.
         if (!actor) return;
@@ -2243,18 +2280,20 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
     // optics_visible 在 restore 时写回对应的存储槽位，保证 actor 恢复后
     // 渲染/物理看到的是 evict 前的状态而非默认值。
     if (rec) {
-        auto actor_read = hub.actor_storage().try_acquire_read(event.actor);
+        auto actor_read = Corona::find_actor(event.actor);
+        const auto* actor_read_profiles = Corona::find_profiles(event.actor);
+        const auto* actor_path = Corona::find_model_path(event.actor);
         if (actor_read) {
-            for (auto ph : actor_read->profile_handles) {
-                auto profile = hub.profile_storage().try_acquire_read(ph);
+            for (auto ph : actor_read_profiles->handles) {
+                auto profile = Corona::find_profile(ph);
                 if (!profile) continue;
 
                 // 恢复 transform（通过 geometry → transform_handle）
                 if (profile->geometry_handle) {
-                    auto geom = hub.geometry_storage().try_acquire_read(
+                    auto geom = Corona::find_geometry(
                         profile->geometry_handle);
                     if (geom && geom->transform_handle) {
-                        auto xform = hub.model_transform_storage().try_acquire_write(
+                        auto xform = Corona::find_transform(
                             geom->transform_handle);
                         if (xform) {
                             *xform = rec->transform;
@@ -2264,7 +2303,7 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
 
                 // 恢复 body_type
                 if (profile->mechanics_handle) {
-                    auto mech = hub.mechanics_storage().try_acquire_write(
+                    auto mech = Corona::find_mechanics(
                         profile->mechanics_handle);
                     if (mech) {
                         mech->body_type = rec->body_type;
@@ -2273,10 +2312,9 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
 
                 // 恢复 optics_visible
                 if (profile->optics_handle) {
-                    auto optics = hub.optics_storage().try_acquire_write(
-                        profile->optics_handle);
-                    if (optics) {
-                        optics->visible = rec->optics_visible;
+                    auto* visibility = Corona::find_visibility(profile->optics_handle);
+                    if (visibility != nullptr) {
+                        visibility->visible = rec->optics_visible;
                     }
                 }
             }
@@ -2331,7 +2369,7 @@ void GeometrySystem::on_restore_requested(const Events::ActorRestoreRequestedEve
 // ============================================================================
 
 GeometrySystem::RenderMeshBuffers GeometrySystem::select_render_buffers(
-    std::uintptr_t          geometry_handle,
+    EntityId          geometry_handle,
     uint32_t                mesh_index,
     const ktm::fvec3&       camera_pos,
     float                   camera_fov_deg,
@@ -2425,7 +2463,7 @@ GeometrySystem::RenderMeshBuffers GeometrySystem::select_render_buffers(
 }
 
 GeometrySystem::RenderMeshBuffers GeometrySystem::select_render_buffers_for_instance(
-    std::uintptr_t geometry_handle,
+    EntityId geometry_handle,
     uint32_t mesh_index,
     const ktm::fvec3& camera_pos,
     float camera_fov_deg,
@@ -2542,7 +2580,7 @@ GeometrySystem::RenderMeshBuffers GeometrySystem::select_render_buffers_for_inst
 }
 
 GeometrySystem::RenderMeshBuffers GeometrySystem::select_shadow_render_buffers(
-    std::uintptr_t geometry_handle, uint32_t mesh_index,
+    EntityId geometry_handle, uint32_t mesh_index,
     float world_units_per_texel, float max_abs_scale,
     const RenderMeshBuffers& fallback) const {
     std::shared_lock lock(impl_->lod_cache_mutex);
@@ -2575,7 +2613,7 @@ GeometrySystem::RenderMeshBuffers GeometrySystem::select_shadow_render_buffers(
 }
 
 GeometrySystem::RenderMeshBuffers GeometrySystem::resident_render_buffers(
-    std::uintptr_t           geometry_handle,
+    EntityId           geometry_handle,
     uint32_t                 mesh_index,
     const RenderMeshBuffers& fallback) const {
 
@@ -2622,7 +2660,7 @@ GeometrySystem::RenderMeshBuffers GeometrySystem::resident_render_buffers(
 }
 
 const LODMeshBuffers* GeometrySystem::get_lod_buffers(
-    std::uintptr_t geometry_handle,
+    EntityId geometry_handle,
     uint32_t       mesh_index,
     int            lod_level) const {
 
@@ -2641,7 +2679,7 @@ const LODMeshBuffers* GeometrySystem::get_lod_buffers(
     return level.ready ? &level : nullptr;
 }
 
-int GeometrySystem::get_lod_count(std::uintptr_t geometry_handle,
+int GeometrySystem::get_lod_count(EntityId geometry_handle,
                                   uint32_t       mesh_index) const {
     std::shared_lock lock(impl_->lod_cache_mutex);
     auto key = Impl::make_lod_key(geometry_handle, mesh_index);
@@ -2650,7 +2688,7 @@ int GeometrySystem::get_lod_count(std::uintptr_t geometry_handle,
     return static_cast<int>(it->second.levels.size());
 }
 
-int GeometrySystem::resolve_lod_level(std::uintptr_t geometry_handle,
+int GeometrySystem::resolve_lod_level(EntityId geometry_handle,
                                       uint32_t       mesh_index,
                                       float          screen_ratio) const {
 
@@ -2677,7 +2715,7 @@ int GeometrySystem::resolve_lod_level(std::uintptr_t geometry_handle,
 }
 
 const LODMeshBuffers* GeometrySystem::resolve_lod_buffers(
-    std::uintptr_t geometry_handle,
+    EntityId geometry_handle,
     uint32_t       mesh_index,
     float          screen_ratio) const {
 
@@ -2715,7 +2753,7 @@ const LODMeshBuffers* GeometrySystem::resolve_lod_buffers(
 }
 
 std::vector<std::pair<Horizon::HardwareBuffer, Horizon::HardwareBuffer>>
-GeometrySystem::get_skinning_targets(std::uintptr_t geometry_handle, uint32_t mesh_index) const {
+GeometrySystem::get_skinning_targets(EntityId geometry_handle, uint32_t mesh_index) const {
     // 单次 shared_lock 拷出该 mesh 所有 LOD 级别的 (vertex, vertex_storage) 句柄对。
     // 句柄为引用计数拷贝，拷出后保活底层 buffer，供调用方锁外使用。
     std::vector<std::pair<Horizon::HardwareBuffer, Horizon::HardwareBuffer>> out;
@@ -2730,7 +2768,7 @@ GeometrySystem::get_skinning_targets(std::uintptr_t geometry_handle, uint32_t me
 }
 
 std::vector<GeometrySystem::SkinningLodTarget>
-GeometrySystem::get_skinning_lod_targets(std::uintptr_t geometry_handle, uint32_t mesh_index) const {
+GeometrySystem::get_skinning_lod_targets(EntityId geometry_handle, uint32_t mesh_index) const {
     std::vector<SkinningLodTarget> out;
     std::shared_lock lock(impl_->lod_cache_mutex);
     const auto it = impl_->lod_cache.find(Impl::make_lod_key(geometry_handle, mesh_index));
@@ -2752,11 +2790,11 @@ namespace {
 // 收集所有场景所有相机的世界位置（用于流式加载的距离排序）。
 [[nodiscard]] std::vector<ktm::fvec3> collect_camera_positions() {
     auto& hub = SharedDataHub::instance();
-    auto& camera_storage = hub.camera_storage();
+    auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
     std::vector<ktm::fvec3> positions;
-    for (auto sit = hub.scene_storage().cbegin(); sit != hub.scene_storage().cend(); ++sit) {
-        for (std::uintptr_t cam_handle : sit->camera_handles) {
-            if (auto cam = camera_storage.try_acquire_read_nowait(cam_handle)) {
+    for (const auto& scene : Corona::all_scenes()) {
+        for (EntityId cam_handle : scene.camera_handles) {
+            if (auto cam = Corona::find_camera(cam_handle)) {
                 positions.push_back(cam->position);
             }
         }
@@ -2781,7 +2819,7 @@ namespace {
 void GeometrySystem::process_pending_geometry_imports() {
     auto& hub = SharedDataHub::instance();
     auto& resource_manager = Resource::ResourceManager::get_instance();
-    auto& geom_storage = hub.geometry_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     // ---- 心跳：证明扫描仍在运行，并给出未就绪库存 / 在途任务年龄 ----
     // "运行期加载的模型永远显示上传中" 有两种完全不同的成因：
@@ -2815,19 +2853,20 @@ void GeometrySystem::process_pending_geometry_imports() {
                 if (not_ready_count > 4) continue;
                 std::uint64_t model_id = 0;
                 if (geom_dev.model_resource_handle != 0) {
-                    if (auto model = hub.model_resource_storage().try_acquire_read(
+                    if (auto model = Corona::find_model_resource(
                             geom_dev.model_resource_handle)) {
                         model_id = model->model_id;
                     }
                 }
                 not_ready_detail += " [";
                 not_ready_detail += std::to_string(
-                    static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(&geom_dev)));
+                    static_cast<unsigned long long>(it.id()));
                 not_ready_detail += "]" + std::string(state_name(geom_dev.gpu_build_state));
                 not_ready_detail += " meshes=" + std::to_string(geom_dev.mesh_handles.size());
                 not_ready_detail += " model=" + std::to_string(model_id);
                 not_ready_detail += " import_epoch=" + std::to_string(geom_dev.import_epoch);
-                not_ready_detail += " path='" + geom_dev.model_path_utf8 + "'";
+                const auto* source = Corona::find_model_source(it.id());
+                not_ready_detail += " path='" + (source != nullptr ? source->path_utf8 : std::string{}) + "'";
             }
             std::string inflight_detail;
             for (const auto& [task_handle, task] : impl_->pending_import_tasks) {
@@ -2868,8 +2907,8 @@ void GeometrySystem::process_pending_geometry_imports() {
             // 避免与下方 mechanics 槽锁同时持有 → 杜绝跨槽锁序倒置）。
             bool import_ok = false;
             {
-                auto geom_write = geom_storage.try_acquire_write(geom_handle);
-                if (!geom_write.valid()) continue;  // geometry 已销毁
+                auto geom_write = Corona::find_geometry(geom_handle);
+                if (geom_write == nullptr) continue;  // geometry 已销毁
 
                 // 防 slot 复用 ABA：本槽可能在 import 在途期间被 deallocate→复用为新对象
                 // （allocate 时 T{} 把 import_epoch 重置为 0 或新对象有自己的 epoch）。
@@ -2882,15 +2921,16 @@ void GeometrySystem::process_pending_geometry_imports() {
                 }
 
                 if (rid == Resource::IResource::INVALID_UID || rid == 0) {
+                    const auto* source = Corona::find_model_source(geom_handle);
                     CFW_LOG_ERROR("[GeometrySystem] Async import failed for geometry {} (path={})",
-                                  geom_handle, geom_write->model_path_utf8);
+                                  geom_handle, source != nullptr ? source->path_utf8 : std::string{});
                     geom_write->gpu_build_state = GeometryDevice::GpuBuildState::Failed;
                     geom_write->import_epoch = 0;  // 任务结束
                     continue;
                 }
 
                 if (geom_write->model_resource_handle) {
-                    if (auto mr = hub.model_resource_storage().try_acquire_write(geom_write->model_resource_handle)) {
+                    if (auto mr = Corona::find_model_resource(geom_write->model_resource_handle)) {
                         mr->model_id = rid;
                     }
                 }
@@ -2911,9 +2951,9 @@ void GeometrySystem::process_pending_geometry_imports() {
     // ---- 阶段 2：为新的 PendingImport 发起 import_async（距离排序 + 每帧预算）----
     // 仅对尚无在途任务的 PendingImport geometry 发起，避免重复 import。
     // 近处对象先 import（流式体验），且每帧最多发起 kMaxImportsPerFrame 个，
-    // 避免一次性把大量模型全压进 TBB 线程池造成内存/解析突发。
+    // 避免一次性把大量模型全压进线程池的 Background 道造成内存/解析突发。
     struct ToImport {
-        std::uintptr_t geom_handle;
+        EntityId geom_handle;
         std::string    path;
         ktm::fvec3     world_pos;
         Resource::ModelImportOptions options;
@@ -2922,13 +2962,14 @@ void GeometrySystem::process_pending_geometry_imports() {
     for (auto it = geom_storage.cbegin(); it != geom_storage.cend(); ++it) {
         const GeometryDevice& geom_dev = *it;
         if (geom_dev.gpu_build_state != GeometryDevice::GpuBuildState::PendingImport) continue;
-        auto geom_handle = reinterpret_cast<std::uintptr_t>(&geom_dev);
+        auto geom_handle = it.id();
         if (impl_->pending_import_tasks.count(geom_handle)) {
             // 正常只是一帧的窗口（任务已发起、结果未回）。若长期如此，心跳里的
             // import_tasks age_ms 会持续增长 —— 那说明在途任务本身没跑完。
             continue;  // 已在途
         }
-        if (geom_dev.model_path_utf8.empty()) {
+        const auto* geom_source = Corona::find_model_source(geom_handle);
+        if (geom_source == nullptr || geom_source->path_utf8.empty()) {
             CFW_LOG_WARNING("[GeometrySystem] Skipping PendingImport geometry {:#x} — model_path is empty",
                             geom_handle);
             continue;
@@ -2936,11 +2977,11 @@ void GeometrySystem::process_pending_geometry_imports() {
 
         ktm::fvec3 world_pos = make_fvec3(0.0f, 0.0f, 0.0f);
         if (geom_dev.transform_handle != 0) {
-            if (auto tr = hub.model_transform_storage().try_acquire_read(geom_dev.transform_handle)) {
+            if (auto tr = Corona::find_transform(geom_dev.transform_handle)) {
                 world_pos = tr->position;
             }
         }
-        to_import.push_back({geom_handle, geom_dev.model_path_utf8, world_pos, geom_dev.import_options});
+        to_import.push_back({geom_handle, geom_source->path_utf8, world_pos, geom_dev.import_options});
     }
     if (to_import.empty()) return;
 
@@ -2964,8 +3005,8 @@ void GeometrySystem::process_pending_geometry_imports() {
         // 写锁内再校验仍为 PendingImport 且无 epoch，避免与并发状态变更竞争。
         const std::uint64_t epoch = impl_->next_import_epoch++;
         {
-            auto geom_write = geom_storage.try_acquire_write(item.geom_handle);
-            if (!geom_write.valid()) continue;  // 已销毁
+            auto geom_write = Corona::find_geometry(item.geom_handle);
+            if (geom_write == nullptr) continue;  // 已销毁
             if (geom_write->gpu_build_state != GeometryDevice::GpuBuildState::PendingImport ||
                 geom_write->import_epoch != 0) {
                 CFW_LOG_WARNING("[GeometryImport] launch aborted geometry={} state={} import_epoch={}",
@@ -2989,7 +3030,7 @@ void GeometrySystem::process_pending_geometry_imports() {
 void GeometrySystem::process_pending_geometry_builds() {
     auto& hub = SharedDataHub::instance();
     auto& resource_manager = Resource::ResourceManager::get_instance();
-    auto& geom_storage = hub.geometry_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     // 先回收 worker 结果。Geometry 更新线程只做短暂状态写回，不在这里创建
     // HardwareBuffer/HardwareImage，避免把 GPU 构建时间算进主更新帧。
@@ -3035,7 +3076,7 @@ void GeometrySystem::process_pending_geometry_builds() {
             const auto model_id = task.model_id;
             const auto texture_cache = task.texture_cache;
             impl_->pending_geometry_builds.emplace(handle, std::move(task));
-            impl_->geometry_build_tasks.run(
+            impl_->geometry_build_tasks.submit(Corona::Concurrency::TaskClass::Compute, 
                 [model_id, first_mesh, batch_count, texture_cache, promise, &resource_manager]() {
                     Corona::Diagnostics::PhaseScope build_phase{"GeometryWorker", "build_batch"};
                     std::vector<MeshDevice> result;
@@ -3064,11 +3105,11 @@ void GeometrySystem::process_pending_geometry_builds() {
             continue;
         }
         std::optional<std::pair<Impl::Payload, Impl::Payload>> load_finished_event;
-        if (auto geom_write = geom_storage.try_acquire_write(handle)) {
+        if (auto geom_write = Corona::find_geometry(handle)) {
             if (geom_write->gpu_build_state == GeometryDevice::GpuBuildState::PendingBuild &&
                 geom_write->mesh_handles.empty() && geom_write->model_resource_handle != 0) {
                 std::uint64_t current_model = 0;
-                if (auto model = hub.model_resource_storage().try_acquire_read(geom_write->model_resource_handle)) {
+                if (auto model = Corona::find_model_resource(geom_write->model_resource_handle)) {
                     current_model = model->model_id;
                 }
                 if (current_model == task.model_id) {
@@ -3104,7 +3145,7 @@ void GeometrySystem::process_pending_geometry_builds() {
     // 收集 gpu_build_state==PendingBuild 且 model_id 已就绪的 geometry。
     // 仅记录 (geom_handle, model_id, world_pos)，不在持有遍历期间做重活。
     struct PendingBuild {
-        std::uintptr_t geom_handle;
+        EntityId geom_handle;
         std::uint64_t  model_id;
         ktm::fvec3     world_pos;  // 用于按相机距离排序（近处先建）
     };
@@ -3114,7 +3155,7 @@ void GeometrySystem::process_pending_geometry_builds() {
         const GeometryDevice& geom_dev = *it;
         if (geom_dev.gpu_build_state != GeometryDevice::GpuBuildState::PendingBuild) continue;
         if (!geom_dev.model_resource_handle) continue;
-        const auto geom_handle = reinterpret_cast<std::uintptr_t>(&geom_dev);
+        const auto geom_handle = it.id();
         // Actor reload/rebuild may have filled the mesh handles while the
         // geometry was still marked PendingBuild. Record it and transition the
         // state after the read-only iteration; never acquire a write lock while
@@ -3124,7 +3165,7 @@ void GeometrySystem::process_pending_geometry_builds() {
             continue;
         }
         std::uint64_t model_id = 0;
-        if (auto model_res = hub.model_resource_storage().try_acquire_read(geom_dev.model_resource_handle)) {
+        if (auto model_res = Corona::find_model_resource(geom_dev.model_resource_handle)) {
             model_id = model_res->model_id;
         }
         if (model_id == 0) continue;  // import 尚未完成，下帧再试
@@ -3132,7 +3173,7 @@ void GeometrySystem::process_pending_geometry_builds() {
         // 读取世界位置（transform 缺失时退化为原点，仍可构建、只是排序权重为 0）
         ktm::fvec3 world_pos = make_fvec3(0.0f, 0.0f, 0.0f);
         if (geom_dev.transform_handle != 0) {
-            if (auto tr = hub.model_transform_storage().try_acquire_read(geom_dev.transform_handle)) {
+            if (auto tr = Corona::find_transform(geom_dev.transform_handle)) {
                 world_pos = tr->position;
             }
         }
@@ -3141,7 +3182,7 @@ void GeometrySystem::process_pending_geometry_builds() {
     }
 
     for (const auto geom_handle : completed_while_queued) {
-        if (auto geom_write = geom_storage.try_acquire_write(geom_handle)) {
+        if (auto geom_write = Corona::find_geometry(geom_handle)) {
             if (geom_write->gpu_build_state == GeometryDevice::GpuBuildState::PendingBuild &&
                 !geom_write->mesh_handles.empty()) {
                 geom_write->gpu_build_state = GeometryDevice::GpuBuildState::Ready;
@@ -3189,7 +3230,7 @@ void GeometrySystem::process_pending_geometry_builds() {
             item.geom_handle,
             Impl::PendingGeometryBuild{item.model_id, epoch, 0, mesh_count, batch_count, {},
                                        texture_cache, promise->get_future()});
-        impl_->geometry_build_tasks.run(
+        impl_->geometry_build_tasks.submit(Corona::Concurrency::TaskClass::Compute, 
             [model_id = item.model_id, batch_count, texture_cache, promise, &resource_manager]() {
                 Corona::Diagnostics::PhaseScope build_phase{"GeometryWorker", "build_first_batch"};
                 std::vector<MeshDevice> result;
@@ -3224,16 +3265,16 @@ void GeometrySystem::upload_lod_from_scene_data() {
 
     auto& resource_manager = Resource::ResourceManager::get_instance();
     auto& hub = SharedDataHub::instance();
-    auto& geom_storage = hub.geometry_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     for (auto it = geom_storage.cbegin(); it != geom_storage.cend(); ++it) {
         const GeometryDevice& geom_dev = *it;
-        auto geom_handle = reinterpret_cast<std::uintptr_t>(&geom_dev);
+        auto geom_handle = it.id();
         if (!geom_dev.model_resource_handle) continue;
 
         // 通过 ModelResource 解析真正的 ResourceManager UID
         std::uint64_t model_id = 0;
-        if (auto model_res = hub.model_resource_storage().try_acquire_read(geom_dev.model_resource_handle)) {
+        if (auto model_res = Corona::find_model_resource(geom_dev.model_resource_handle)) {
             model_id = model_res->model_id;
         }
         if (model_id == 0) continue;
@@ -3421,11 +3462,11 @@ void GeometrySystem::upload_lod_from_scene_data() {
 void GeometrySystem::reconcile_lod_residency() {
     auto& resource_manager = Resource::ResourceManager::get_instance();
     auto& hub = SharedDataHub::instance();
-    auto& geom_storage = hub.geometry_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     struct Lod0DeviceEviction {
-        std::uintptr_t geometry_handle = 0;
-        std::uintptr_t expected_model_resource_handle = 0;
+        EntityId geometry_handle = 0;
+        EntityId expected_model_resource_handle = 0;
         std::vector<std::uint32_t> mesh_indices;
     };
     std::vector<Lod0DeviceEviction> pending_lod0_evictions;
@@ -3454,10 +3495,10 @@ void GeometrySystem::reconcile_lod_residency() {
     struct Viewer { ktm::fvec3 pos; float epsilon; };
     std::vector<Viewer> viewers;
     {
-        auto& camera_storage = hub.camera_storage();
-        for (auto sit = hub.scene_storage().cbegin(); sit != hub.scene_storage().cend(); ++sit) {
-            for (std::uintptr_t cam_handle : sit->camera_handles) {
-                if (auto cam = camera_storage.try_acquire_read_nowait(cam_handle)) {
+        auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
+        for (const auto& scene : Corona::all_scenes()) {
+            for (EntityId cam_handle : scene.camera_handles) {
+                if (auto cam = Corona::find_camera(cam_handle)) {
                     const float eps = compute_angular_epsilon(
                         lod_pixel_budget, cam->fov,
                         static_cast<float>(cam->height));
@@ -3489,11 +3530,11 @@ void GeometrySystem::reconcile_lod_residency() {
     //   1) 为并集里尚未驻留的级发起异步构建；
     //   2) 释放并集外、且已超过宽限帧的已驻留级（LOD0 也照常参与释放）。
     // 这样 GPU 上留下的，就是"当前这一帧真正被某个实例用到的级"。
-    const auto reconcile_shared_asset = [&](std::uintptr_t geom_handle,
+    const auto reconcile_shared_asset = [&](EntityId geom_handle,
                                             std::uint32_t mesh_idx,
                                             std::uint64_t lod_key,
                                             std::uint64_t model_id,
-                                            std::uintptr_t model_resource_handle,
+                                            EntityId model_resource_handle,
                                             const ktm::fvec3& world_center) {
         std::uint64_t demand_mask = 0;
         std::size_t   level_count = 0;
@@ -3631,7 +3672,7 @@ void GeometrySystem::reconcile_lod_residency() {
                         auto promise = std::make_shared<std::promise<Impl::LODBuildResult>>();
                         impl_->pending_lod_builds[lod_key] = Impl::PendingLodBuild{
                             model_id, epoch, level, promise->get_future()};
-                        impl_->lod_build_tasks.run(
+                        impl_->lod_build_tasks.submit(Corona::Concurrency::TaskClass::Compute, 
                             [verts = std::move(verts_copy), inds = std::move(inds_copy),
                              promise]() {
                                 Impl::LODBuildResult r;
@@ -3758,16 +3799,19 @@ void GeometrySystem::reconcile_lod_residency() {
 
     // 先结束 Geometry storage 的只读迭代，再执行下面可能需要的 Geometry 写锁。
     // ConstIterator 持有 storage 读锁；禁止在其作用域内升级同一 storage 的写锁。
-    const auto geometry_handles = GeometryInternal::snapshot_storage_handles(geom_storage);
+    std::vector<EntityId> geometry_handles;
+    for (auto geometry_it = geom_storage.cbegin(); geometry_it != geom_storage.cend(); ++geometry_it) {
+        geometry_handles.push_back(geometry_it.id());
+    }
 
     // 预分配为 geometry 数 × 8（覆盖多数多 mesh geometry 场景，减少 vector reallocation）。
     lod_budget_entries.reserve(geometry_handles.size() * 8);
     for (const auto geom_handle : geometry_handles) {
-        std::uintptr_t model_resource_handle = 0;
-        std::uintptr_t transform_handle = 0;
+        EntityId model_resource_handle = 0;
+        EntityId transform_handle = 0;
         std::uint32_t mesh_count = 0;
         {
-            auto geom_read = geom_storage.try_acquire_read(geom_handle);
+            auto geom_read = Corona::find_geometry(geom_handle);
             if (!geom_read) continue;
             model_resource_handle = geom_read->model_resource_handle;
             transform_handle = geom_read->transform_handle;
@@ -3776,7 +3820,7 @@ void GeometrySystem::reconcile_lod_residency() {
         if (!model_resource_handle) continue;
 
         std::uint64_t model_id = 0;
-        if (auto model_res = hub.model_resource_storage().try_acquire_read(model_resource_handle)) {
+        if (auto model_res = Corona::find_model_resource(model_resource_handle)) {
             model_id = model_res->model_id;
         }
         if (model_id == 0) continue;
@@ -3787,7 +3831,7 @@ void GeometrySystem::reconcile_lod_residency() {
         bool have_transform = false;
         float scale_factor = 1.0f;
         if (transform_handle) {
-            if (auto tr = hub.model_transform_storage().try_acquire_read(transform_handle)) {
+            if (auto tr = Corona::find_transform(transform_handle)) {
                 transform = *tr;
                 have_transform = true;
                 scale_factor = std::max({std::abs(tr->scale.x),
@@ -4112,7 +4156,7 @@ void GeometrySystem::reconcile_lod_residency() {
                             auto promise = std::make_shared<std::promise<Impl::LODBuildResult>>();
                             impl_->pending_lod_builds[lod_key] =
                                 Impl::PendingLodBuild{model_id, entry_epoch, demand, promise->get_future()};
-                            impl_->lod_build_tasks.run(
+                            impl_->lod_build_tasks.submit(Corona::Concurrency::TaskClass::Compute, 
                                 [verts = std::move(verts), inds = std::move(inds), promise]() {
                                     Impl::LODBuildResult r;
                                     try {
@@ -4155,7 +4199,7 @@ void GeometrySystem::reconcile_lod_residency() {
                             auto promise = std::make_shared<std::promise<Impl::LODBuildResult>>();
                             impl_->pending_shadow_lod_builds[lod_key] =
                                 Impl::PendingLodBuild{model_id, epoch, shadow_demand, promise->get_future(), Impl::LodBuildPurpose::Shadow};
-                            impl_->lod_build_tasks.run([verts=std::move(verts), inds=std::move(inds), promise]() {
+                            impl_->lod_build_tasks.submit(Corona::Concurrency::TaskClass::Compute, [verts=std::move(verts), inds=std::move(inds), promise]() {
                                 Impl::LODBuildResult r; try {
                                     auto buffers = GeometryDetail::make_draw_buffers(verts, inds);
                                     r.vertex_buffer = r.vertex_storage = std::move(buffers.vertices);
@@ -4207,7 +4251,7 @@ void GeometrySystem::reconcile_lod_residency() {
                             auto promise = std::make_shared<std::promise<Impl::LODBuildResult>>();
                             impl_->pending_lod_builds[lod_key] =
                                 Impl::PendingLodBuild{model_id, entry_epoch, 0, promise->get_future()};
-                            impl_->lod_build_tasks.run(
+                            impl_->lod_build_tasks.submit(Corona::Concurrency::TaskClass::Compute, 
                                 [verts = std::move(verts), inds = std::move(inds), promise]() {
                                     Impl::LODBuildResult r;
                                     try {
@@ -4272,7 +4316,7 @@ void GeometrySystem::reconcile_lod_residency() {
     // All Geometry storage read iterators/accessors are out of scope here.
     // Only now may this function acquire Geometry storage write locks.
     for (const auto& eviction : pending_lod0_evictions) {
-        auto geom_write = geom_storage.try_acquire_write(eviction.geometry_handle);
+        auto geom_write = Corona::find_geometry(eviction.geometry_handle);
         if (!geom_write ||
             geom_write->model_resource_handle != eviction.expected_model_resource_handle) {
             continue;
@@ -4826,8 +4870,9 @@ void GeometrySystem::reconcile_cpu_residency() {
                 }
 
                 if (queued) {
-                    // notify 放在队列锁外，避免 worker 被唤醒后立刻阻塞在锁上
-                    impl_->lod_disk_write_cv.notify_one();
+                    // 提交放在队列锁外，避免池 worker 立刻阻塞在锁上。
+                    // 同一时刻只允许一个写盘任务在飞，其余排队等任务尾部再 pump。
+                    impl_->pump_lod_disk_writes();
                     // moved-from vector 标准上仅保证 valid-but-unspecified；后续
                     // evict/restore 逻辑依赖 empty() 判断，显式 clear 守规
                     //（所有主流实现移动后即为空，clear 为零开销）
@@ -4864,7 +4909,7 @@ namespace {
            static_cast<bool>(geo.index_storage);
 }
 
-void log_invalid_mesh_slot_once(std::uintptr_t geometry_handle,
+void log_invalid_mesh_slot_once(EntityId geometry_handle,
                                 std::uint32_t mesh_index,
                                 const GeometrySystem::RenderMeshBuffers& geo,
                                 const Horizon::HardwareImage& texture) {
@@ -4890,7 +4935,7 @@ void log_invalid_mesh_slot_once(std::uintptr_t geometry_handle,
 /// 内部辅助：共享 LOD 路由 + MeshSlot 构建逻辑（有/无相机两条路径共用）
 [[nodiscard]] std::vector<GeometrySystem::MeshSlot>
 build_mesh_slots(const GeometrySystem*        gs,
-                 std::uintptr_t               geometry_handle,
+                 EntityId               geometry_handle,
                  const GeometryDevice&        geom,
                  bool                         use_camera,
                  const ktm::fvec3&            camera_pos,
@@ -4971,12 +5016,12 @@ build_mesh_slots(const GeometrySystem*        gs,
 }  // namespace
 
 std::vector<GeometrySystem::MeshSlot>
-GeometrySystem::query_mesh_slots(std::uintptr_t geometry_handle) const {
-    auto& geom_storage = SharedDataHub::instance().geometry_storage();
+GeometrySystem::query_mesh_slots(EntityId geometry_handle) const {
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
     // 读锁即可：query_mesh_slots 只复制句柄值，不修改 GeometryDevice 状态。
     // storeSampledDescriptor 由调用方在拿到 MeshSlot 后自行调用（对本地副本操作，
     // 无需持有 geometry 锁）。
-    auto geom = geom_storage.try_acquire_read(geometry_handle);
+    auto geom = Corona::find_geometry(geometry_handle);
     if (!geom || geom->mesh_handles.empty()) return {};
 
     return build_mesh_slots(this, geometry_handle, *geom,
@@ -4984,14 +5029,14 @@ GeometrySystem::query_mesh_slots(std::uintptr_t geometry_handle) const {
 }
 
 std::vector<GeometrySystem::MeshSlot>
-GeometrySystem::query_mesh_slots(std::uintptr_t    geometry_handle,
+GeometrySystem::query_mesh_slots(EntityId    geometry_handle,
                                  const ktm::fvec3& camera_pos,
                                  float             camera_fov_deg,
                                  const ktm::fvec3& world_center,
                                  float             bounding_radius,
                                  const ktm::fmat4x4* actor_transform) const {
-    auto& geom_storage = SharedDataHub::instance().geometry_storage();
-    auto geom = geom_storage.try_acquire_read(geometry_handle);
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
+    auto geom = Corona::find_geometry(geometry_handle);
     if (!geom || geom->mesh_handles.empty()) return {};
 
     return build_mesh_slots(this, geometry_handle, *geom,
@@ -5000,7 +5045,7 @@ GeometrySystem::query_mesh_slots(std::uintptr_t    geometry_handle,
                             false, 0.0f, 1.0f, actor_transform);
 }
 
-void GeometrySystem::request_shadow_lod(std::uintptr_t geometry_handle,
+void GeometrySystem::request_shadow_lod(EntityId geometry_handle,
                                         uint32_t mesh_index,
                                         float world_units_per_texel,
                                         float max_abs_scale,
@@ -5026,12 +5071,12 @@ void GeometrySystem::request_shadow_lod(std::uintptr_t geometry_handle,
 }
 
 std::vector<GeometrySystem::MeshSlot>
-GeometrySystem::query_shadow_mesh_slots(std::uintptr_t geometry_handle,
+GeometrySystem::query_shadow_mesh_slots(EntityId geometry_handle,
                                         float world_units_per_texel,
                                         float max_abs_scale,
                                         std::uint64_t frame) const {
-    auto& geom_storage = SharedDataHub::instance().geometry_storage();
-    auto geom = geom_storage.try_acquire_read(geometry_handle);
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
+    auto geom = Corona::find_geometry(geometry_handle);
     if (!geom || geom->mesh_handles.empty()) return {};
 
     for (uint32_t mesh_index = 0;
@@ -5047,15 +5092,15 @@ GeometrySystem::query_shadow_mesh_slots(std::uintptr_t geometry_handle,
 
 std::vector<std::vector<GeometrySystem::ShadowMeshSlot>>
 GeometrySystem::query_shadow_mesh_slots_batch(
-    std::uintptr_t geometry_handle,
+    EntityId geometry_handle,
     std::span<const ShadowLodQuery> cascades,
     float max_abs_scale,
     std::uint64_t frame) const {
     std::vector<std::vector<ShadowMeshSlot>> result(cascades.size());
     if (cascades.empty()) return result;
 
-    auto& geom_storage = SharedDataHub::instance().geometry_storage();
-    auto geom = geom_storage.try_acquire_read(geometry_handle);
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
+    auto geom = Corona::find_geometry(geometry_handle);
     if (!geom || geom->mesh_handles.empty()) return result;
 
     std::vector<GeometryDetail::ShadowLodQueryInput> query_inputs;
@@ -5210,14 +5255,14 @@ GeometrySystem::query_shadow_mesh_slots_batch(
 void GeometrySystem::update_cpu_resource_ledger() {
     auto& hub = SharedDataHub::instance();
     auto& rm  = Resource::ResourceManager::get_instance();
-    auto& geom_storage = hub.geometry_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     // ---- 阶段 1：收集当前驻留的 model_id（Scene rid）----
     std::unordered_set<std::uint64_t> live_model_ids;
     for (auto it = geom_storage.cbegin(); it != geom_storage.cend(); ++it) {
         if (!it->model_resource_handle) continue;
         std::uint64_t model_id = 0;
-        if (auto mr = hub.model_resource_storage().try_acquire_read(it->model_resource_handle))
+        if (auto mr = Corona::find_model_resource(it->model_resource_handle))
             model_id = mr->model_id;
         if (model_id != 0) live_model_ids.insert(model_id);
     }
@@ -5357,29 +5402,31 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
     out_cpu_bytes = 0;
     auto& hub = SharedDataHub::instance();
 
-    auto actor_read = hub.actor_storage().try_acquire_read(actor);
-    if (!actor_read.valid()) return;
+    auto actor_read = Corona::find_actor(actor);
+    const auto* actor_read_profiles = Corona::find_profiles(actor);
+    const auto* actor_path = Corona::find_model_path(actor);
+    if (actor_read == nullptr) return;
 
     std::unordered_set<std::uintptr_t> visited_geoms;
     std::unordered_set<std::uint64_t>  visited_models;
     std::unordered_set<const Memory::GpuMemToken*> visited_textures;
 
-    for (auto profile_handle : actor_read->profile_handles) {
-        auto profile = hub.profile_storage().try_acquire_read(profile_handle);
+    for (auto profile_handle : actor_read_profiles->handles) {
+        auto profile = Corona::find_profile(profile_handle);
         if (!profile) continue;
 
         std::vector<std::uintptr_t> geom_handles;
         if (profile->geometry_handle) geom_handles.push_back(profile->geometry_handle);
         if (profile->optics_handle) {
-            if (auto o = hub.optics_storage().try_acquire_read(profile->optics_handle))
+            if (auto o = Corona::find_optics(profile->optics_handle))
                 if (o->geometry_handle) geom_handles.push_back(o->geometry_handle);
         }
         if (profile->mechanics_handle) {
-            if (auto m = hub.mechanics_storage().try_acquire_read(profile->mechanics_handle))
+            if (auto m = Corona::find_mechanics(profile->mechanics_handle))
                 if (m->geometry_handle) geom_handles.push_back(m->geometry_handle);
         }
         if (profile->acoustics_handle) {
-            if (auto a = hub.acoustics_storage().try_acquire_read(profile->acoustics_handle))
+            if (const auto* a = hub.try_acoustics(profile->acoustics_handle))
                 if (a->geometry_handle) geom_handles.push_back(a->geometry_handle);
         }
 
@@ -5389,7 +5436,7 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
             uint32_t      mesh_count = 0;
             std::uint64_t model_id   = 0;
             {
-                auto geom = hub.geometry_storage().try_acquire_read(geom_handle);
+                auto geom = Corona::find_geometry(geom_handle);
                 if (!geom) continue;
                 mesh_count = static_cast<uint32_t>(geom->mesh_handles.size());
                 for (const auto& md : geom->mesh_handles) {
@@ -5402,7 +5449,7 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
                     }
                 }
                 if (geom->model_resource_handle) {
-                    if (auto mr = hub.model_resource_storage().try_acquire_read(geom->model_resource_handle))
+                    if (auto mr = Corona::find_model_resource(geom->model_resource_handle))
                         model_id = mr->model_id;
                 }
             }
@@ -5453,8 +5500,9 @@ void GeometrySystem::evict_under_memory_pressure() {
             for (const auto& [actor, state] : st.actor_load_states) {
                 if (state != ActorLoadState::Loaded) continue;
                 if (st.loading_tasks.count(actor) || st.unloading_tasks.count(actor)) continue;
-                if (auto a = hub.actor_storage().try_acquire_read(actor)) {
-                    if (a->pinned) continue;
+                if (auto a = Corona::find_actor(actor)) {
+                    const auto* streaming = Corona::find_streaming(actor);
+                    if (streaming != nullptr && streaming->pinned) continue;
                 } else {
                     continue;
                 }

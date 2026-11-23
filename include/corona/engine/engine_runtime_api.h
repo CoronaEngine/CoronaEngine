@@ -1,5 +1,7 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
+
 #include <corona/systems/geometry/model_node_state.h>
 #include <corona/resource/model_import_options.h>
 #include <nlohmann/json_fwd.hpp>
@@ -19,7 +21,6 @@ namespace Corona {
 class Model;
 
 namespace API {
-struct ModelNodePickResult { std::uintptr_t actor_handle{0}; std::uint32_t node_index{UINT32_MAX}; };
 
 struct GeometryRenderStatus {
     bool observed{false};
@@ -38,10 +39,15 @@ struct GeometryRenderStatus {
 void set_default_surface(void* surface);
 [[nodiscard]] void* get_default_surface();
 
-// Editor camera input ownership. Blockly/game runtimes disable only editor
-// camera controls; keyboard and mouse events continue to reach script input.
-void set_editor_camera_input_enabled(bool enabled);
-[[nodiscard]] bool is_editor_camera_input_enabled();
+// ============================================================================
+// 失败传播契约（Task 1c，spec §5.1）
+//
+// 下面这些类型都通过 tick 边界的结构命令创建实体（`Ecs::request_create_*`）。
+// 命令失败时（DAG 停机 / 无进展预算耗尽 / 队列满）**不会**有实体存在，句柄保持 0，
+// 构造函数的 CRITICAL/ERROR 日志说明原因；失败**必须**通过 `is_valid()` 报告给调用方，
+// 由调用方中止这条对象的装配。装载路径尤其不允许把无效实体加进场景：那会产出
+// "少一个 actor 但一切正常"的半装载结果（Task 1c 之前正是如此丢掉了 actor 实体）。
+// ============================================================================
 
 // ============================================================================
 // Geometry: 作为所有组件的锚点，存储位置/旋转/缩放和模型数据
@@ -71,9 +77,17 @@ class Geometry {
     [[nodiscard]] std::vector<ModelNodeOverride> get_model_node_overrides() const;
     bool set_model_node_overrides(const std::vector<ModelNodeOverride>& overrides);
 
-    void set_position(const std::array<float, 3>& pos);
-    void set_rotation(const std::array<float, 3>& euler);
-    void set_scale(const std::array<float, 3>& size);
+    /// The single inbound channel for a geometry transform: one complete TRS, one command.
+    ///
+    /// The decomposed set_position/set_rotation/set_scale pair-up was removed with it. Each of
+    /// those enqueued its own single-field TransformUpdateCommand, and SharedDataHub coalesces per
+    /// transform handle, so a caller that set position then rotation then scale only ever had the
+    /// LAST field applied - actor creation, transform patches, property patches and resource
+    /// rebinding all silently lost position and rotation. Callers that hold a partial patch must
+    /// complete it from the current values first, exactly as Camera::set() requires a full pose.
+    void set_transform(const std::array<float, 3>& position,
+                       const std::array<float, 3>& rotation,
+                       const std::array<float, 3>& scale);
     // Column-major affine matrix. Preserve shear and reflection without TRS decomposition.
     void set_matrix(const std::array<float, 16>& matrix);
     [[nodiscard]] std::array<float, 16> get_matrix() const;
@@ -98,7 +112,7 @@ class Geometry {
     [[nodiscard]] std::uint64_t get_model_id() const;
     [[nodiscard]] GeometryRenderStatus get_render_status() const;
     /// Instance geometry storage handle, also used by editor configuration APIs.
-    [[nodiscard]] std::uintptr_t get_handle() const;
+    [[nodiscard]] EntityId get_handle() const;
 
    private:
     friend class Mechanics;
@@ -109,45 +123,59 @@ class Geometry {
     Geometry() = default;
 
    protected:
-    [[nodiscard]] std::uintptr_t get_transform_handle() const;
-    [[nodiscard]] std::uintptr_t get_model_resource_handle() const;
+    [[nodiscard]] EntityId get_transform_handle() const;
+    [[nodiscard]] EntityId get_model_resource_handle() const;
 
    private:
-    std::uintptr_t handle_{};
-    std::uintptr_t transform_handle_{};
-    std::uintptr_t model_resource_handle_{};
+    EntityId handle_{};
+    EntityId transform_handle_{};
+    EntityId model_resource_handle_{};
     std::filesystem::path model_path_;
 };
 
 // ============================================================================
 // Mechanics: 物理/力学组件，依赖 Geometry
 // ============================================================================
+
+/// One mechanics edit. Omitted fields are left untouched, so a single-field change reads as
+/// set_properties({.body_type = "phantom"}) and a batch as several designated initializers.
+/// This replaces the six set_mass / set_restitution / set_damping / set_body_type /
+/// set_linear_lock / set_angular_lock calls that had to be issued one field at a time.
+struct MechanicsProperties {
+    std::optional<float> mass;
+    std::optional<float> restitution;
+    std::optional<float> damping;
+    std::optional<std::string> body_type;
+    std::optional<std::array<bool, 3>> linear_lock;
+    std::optional<std::array<bool, 3>> angular_lock;
+};
+
+/// One mechanics read: every field from a single snapshot, so a caller reading several fields
+/// cannot observe a combination that never existed. Each point getter used to rebuild the whole
+/// snapshot+pending view, and the mechanics tick may apply a pending command between two of them.
+struct MechanicsState {
+    float mass{1.0f};
+    float restitution{0.8f};
+    float damping{0.99f};
+    std::string body_type{"dynamic"};
+    std::array<bool, 3> linear_lock{};
+    std::array<bool, 3> angular_lock{};
+};
+
 class Mechanics {
    public:
     explicit Mechanics(Geometry& geo);
     ~Mechanics();
 
-    void set_mass(float mass);
-    [[nodiscard]] float get_mass() const;
-    void set_restitution(float restitution);
-    [[nodiscard]] float get_restitution() const;
-    void set_damping(float damping);
-    [[nodiscard]] float get_damping() const;
-
-    // 物体类型：决定物体如何参与物理模拟（"dynamic"/"kinematic"/"static"）
-    void set_body_type(std::string_view type);
-    [[nodiscard]] std::string get_body_type() const;
-
-    // 轴锁定：锁定指定轴上的线性运动（平移）
-    void set_linear_lock(bool lock_x, bool lock_y, bool lock_z);
-    [[nodiscard]] std::tuple<bool, bool, bool> get_linear_lock() const;
-
-    // 轴锁定：锁定指定轴上的角度运动（旋转）
-    void set_angular_lock(bool lock_x, bool lock_y, bool lock_z);
-    [[nodiscard]] std::tuple<bool, bool, bool> get_angular_lock() const;
+    /// The single mechanics write entry point: one command carrying every field given.
+    void set_properties(const MechanicsProperties& properties);
+    /// The single mechanics read entry point: one consistent snapshot of every field.
+    [[nodiscard]] MechanicsState get_state() const;
+    /// 构造时的结构创建是否成功（失败时 handle_ = 0，见顶部失败传播契约）。
+    [[nodiscard]] bool is_valid() const;
 
     // 设置碰撞回调（参数为对方 actor 句柄、began(true=enter,false=exit)、法线、碰撞点）
-    void set_collision_callback(std::function<void(std::uintptr_t, bool, const std::array<float, 3>&, const std::array<float, 3>&)> callback);
+    void set_collision_callback(std::function<void(EntityId, bool, const std::array<float, 3>&, const std::array<float, 3>&)> callback);
 
     // 设置移动回调
     void set_on_move_callback(std::function<void()> callback);
@@ -155,83 +183,113 @@ class Mechanics {
    private:
     friend class Actor;
 
-    [[nodiscard]] std::uintptr_t get_handle() const;
+    [[nodiscard]] EntityId get_handle() const;
     [[nodiscard]] Geometry* get_geometry() const;
 
     Geometry* geometry_;
-    std::uintptr_t handle_{};
+    EntityId handle_{};
 };
 
 // ============================================================================
 // Optics: 光学/渲染组件，依赖 Geometry
 // ============================================================================
+/// One optics edit. Omitted fields are left untouched, so a single-field change reads as
+/// set_properties({.metallic = 1.0f}) and a material batch as several designated initializers.
+/// Replaces the sixteen per-field setters (metallic/roughness/subsurface/specular/specular_tint/
+/// anisotropic/sheen/sheen_tint/clearcoat/clearcoat_gloss/visible/lighting_enabled/ambient/
+/// diffuse/specular_color/shininess) that had to be issued one field at a time.
+struct OpticsProperties {
+    std::optional<float> metallic;
+    std::optional<float> roughness;
+    std::optional<float> subsurface;
+    std::optional<float> specular;
+    std::optional<float> specular_tint;
+    std::optional<float> anisotropic;
+    std::optional<float> sheen;
+    std::optional<float> sheen_tint;
+    std::optional<float> clearcoat;
+    std::optional<float> clearcoat_gloss;
+    std::optional<bool> visible;
+    std::optional<bool> lighting_enabled;
+    std::optional<std::array<float, 3>> ambient;
+    std::optional<std::array<float, 3>> diffuse;
+    std::optional<std::array<float, 3>> specular_color;
+    std::optional<float> shininess;
+};
+
+/// One optics read: every field from a single snapshot. actor_to_json read five of these fields
+/// in one expression, and each point getter rebuilt the snapshot+pending view, so the result could
+/// straddle a pending optics command being applied.
+struct OpticsState {
+    float metallic{0.0f};
+    float roughness{0.5f};
+    float subsurface{0.0f};
+    float specular{0.5f};
+    float specular_tint{0.0f};
+    float anisotropic{0.0f};
+    float sheen{0.0f};
+    float sheen_tint{0.5f};
+    float clearcoat{0.0f};
+    float clearcoat_gloss{1.0f};
+    bool visible{true};
+    bool lighting_enabled{true};
+    std::array<float, 3> ambient{0.2f, 0.2f, 0.2f};
+    std::array<float, 3> diffuse{0.8f, 0.8f, 0.8f};
+    std::array<float, 3> specular_color{1.0f, 1.0f, 1.0f};
+    float shininess{32.0f};
+};
+
 class Optics {
    public:
     explicit Optics(Geometry& geo);
     ~Optics();
 
-    void set_metallic(float metallic);
-    [[nodiscard]] float get_metallic() const;
-    void set_roughness(float roughness);
-    [[nodiscard]] float get_roughness() const;
-    void set_subsurface(float subsurface);
-    [[nodiscard]] float get_subsurface() const;
-    void set_specular(float specular);
-    [[nodiscard]] float get_specular() const;
-    void set_specular_tint(float specularTint);
-    [[nodiscard]] float get_specular_tint() const;
-    void set_anisotropic(float anisotropic);
-    [[nodiscard]] float get_anisotropic() const;
-    void set_sheen(float sheen);
-    [[nodiscard]] float get_sheen() const;
-    void set_sheen_tint(float sheenTint);
-    [[nodiscard]] float get_sheen_tint() const;
-    void set_clearcoat(float clearcoat);
-    [[nodiscard]] float get_clearcoat() const;
-    void set_clearcoat_gloss(float clearcoatGloss);
-    [[nodiscard]] float get_clearcoat_gloss() const;
-    void set_visible(bool visible);
-    [[nodiscard]] bool get_visible() const;
-
-    // 光照影响开关：false 时物体不受灯光照射影响（仍渲染但不接收光照计算）
-    void set_lighting_enabled(bool enabled);
-    [[nodiscard]] bool get_lighting_enabled() const;
-
-    void set_ambient(const std::array<float, 3>& ambient);
-    [[nodiscard]] std::array<float, 3> get_ambient() const;
-    void set_diffuse(const std::array<float, 3>& diffuse);
-    [[nodiscard]] std::array<float, 3> get_diffuse() const;
-    void set_specular_color(const std::array<float, 3>& specular);
-    [[nodiscard]] std::array<float, 3> get_specular_color() const;
-    void set_shininess(float shininess);
-    [[nodiscard]] float get_shininess() const;
+    /// The single optics write entry point: one command carrying every field given.
+    void set_properties(const OpticsProperties& properties);
+    /// The single optics read entry point: one consistent snapshot of every field.
+    [[nodiscard]] OpticsState get_state() const;
+    /// 构造时的结构创建是否成功（失败时 handle_ = 0，见顶部失败传播契约）。
+    [[nodiscard]] bool is_valid() const;
 
    private:
     friend class Actor;
 
-    [[nodiscard]] std::uintptr_t get_handle() const;
+    [[nodiscard]] EntityId get_handle() const;
     [[nodiscard]] Geometry* get_geometry() const;
 
     Geometry* geometry_;
-    std::uintptr_t handle_{};
+    EntityId handle_{};
 };
 
 // ============================================================================
 // Acoustics: 声学组件，依赖 Geometry
 // ============================================================================
+/// One acoustics edit. Omitted fields are left untouched. Replaces the three per-field setters
+/// (set_volume / set_audio_enabled / set_audio_resource) that had to be issued one at a time.
+struct AcousticsProperties {
+    std::optional<float> volume;
+    std::optional<bool> audio_enabled;
+    std::optional<std::uint64_t> audio_resource;
+};
+
+/// One acoustics read: every field from a single snapshot.
+struct AcousticsState {
+    float volume{1.0f};
+    bool audio_enabled{true};
+    std::uint64_t audio_resource{0};
+};
+
 class Acoustics {
    public:
     explicit Acoustics(Geometry& geo);
     ~Acoustics();
 
-    void set_volume(float volume);
-    [[nodiscard]] float get_volume() const;
-    void set_audio_enabled(bool enabled);
-    [[nodiscard]] bool get_audio_enabled() const;
-
-    /// 绑定要播放的音频资源 id（空间音频物体）
-    void set_audio_resource(std::uint64_t resource_id);
-    [[nodiscard]] std::uint64_t get_audio_resource() const;
+    /// The single acoustics write entry point: one command carrying every field given.
+    void set_properties(const AcousticsProperties& properties);
+    /// The single acoustics read entry point: one consistent snapshot of every field.
+    [[nodiscard]] AcousticsState get_state() const;
+    /// 构造时的结构创建是否成功（失败时 handle_ = 0，见顶部失败传播契约）。
+    [[nodiscard]] bool is_valid() const;
     /// 在本组件（actor）的世界位置处播放绑定的音频
     void play(bool loop);
     /// 停止本组件的播放
@@ -240,11 +298,11 @@ class Acoustics {
    private:
     friend class Actor;
 
-    [[nodiscard]] std::uintptr_t get_handle() const;
+    [[nodiscard]] EntityId get_handle() const;
     [[nodiscard]] Geometry* get_geometry() const;
 
     Geometry* geometry_;
-    std::uintptr_t handle_{};
+    EntityId handle_{};
 };
 
 // ============================================================================
@@ -262,6 +320,10 @@ class Actor {
         Geometry* geometry{nullptr};
     };
 
+    /// Add one profile. Returns nullptr (and registers nothing) when the profile is
+    /// inconsistent with the geometry **or when the engine-side ProfileStorage entity could
+    /// not be created** (the structural command did not settle). Callers must treat nullptr as
+    /// a failed actor materialization: a Profile* without its storage is a half-linked actor.
     Profile* add_profile(const Profile& profile);
     void remove_profile(const Profile* profile);
     void set_active_profile(const Profile* profile);
@@ -274,33 +336,51 @@ class Actor {
     // Relative sources require an absolute scene/project source_base_dir.
     // Clear and rebind (or reload the scene) to refresh changed directory links.
 
-    [[nodiscard]] std::uintptr_t get_handle() const;
+    [[nodiscard]] EntityId get_handle() const;
+    /// 构造时的结构创建是否成功（失败时 handle_ = 0，见顶部失败传播契约）。
+    /// 装载路径必须在把 actor 加进场景之前检查它，否则会产出"少一个 actor 但一切正常"
+    /// 的半装载结果。
+    [[nodiscard]] bool is_valid() const;
 
    private:
     friend class Scene;
 
-    std::uintptr_t handle_{};
-    std::unordered_map<std::uintptr_t, Profile> profiles_;
-    std::unordered_map<std::uintptr_t, std::uintptr_t> profile_storage_handles_;
-    std::uintptr_t active_profile_handle_{0};
-    std::uintptr_t next_profile_handle_{1};
-};
-
-// ============================================================================
-// ImageEffects: 图像效果类
-// ============================================================================
-class ImageEffects {
-   public:
-    ImageEffects();
-    ~ImageEffects();
-
-   private:
-    std::uintptr_t handle_{};
+    EntityId handle_{};
+    std::unordered_map<EntityId, Profile> profiles_;
+    std::unordered_map<EntityId, EntityId> profile_storage_handles_;
+    EntityId active_profile_handle_{0};
+    EntityId next_profile_handle_{1};
 };
 
 // ============================================================================
 // Camera: 相机类（合并了原 Viewport 的功能）
 // ============================================================================
+
+/// Everything one viewport edit can change. `open` is optional on purpose: the two callers differ
+/// only in whether the edit also drives the window lifecycle. Omitting it changes the rectangle and
+/// speed and leaves the open state alone (this was set_view_settings); providing it opens or closes
+/// the view and carries the rectangle and speed with it (set_view_state).
+///
+/// set_view_state / set_view_settings / set_viewport_rect were three names for those two
+/// behaviours, and set_viewport_rect was an unimplemented stub that silently did nothing.
+struct CameraViewState {
+    std::optional<bool> open;
+    int x{120};
+    int y{120};
+    int width{960};
+    int height{540};
+    float move_speed{1.0f};
+};
+
+/// One camera pose read: every pose field from a single snapshot. The four point getters each
+/// rebuilt the snapshot+pending view, and several callers read all of them in one expression.
+struct CameraPose {
+    std::array<float, 3> position{0.0f, 0.0f, 0.0f};
+    std::array<float, 3> forward{0.0f, 0.0f, 1.0f};
+    std::array<float, 3> world_up{0.0f, 1.0f, 0.0f};
+    float fov{45.0f};
+};
+
 class Camera {
    public:
     Camera();
@@ -310,15 +390,14 @@ class Camera {
 
     void set(const std::array<float, 3>& position, const std::array<float, 3>& forward,
              const std::array<float, 3>& world_up, float fov);
-    [[nodiscard]] std::uintptr_t get_handle() const;
+    [[nodiscard]] EntityId get_handle() const;
+    /// 构造时的结构创建是否成功（失败时 handle_ = 0，见顶部失败传播契约）。
+    [[nodiscard]] bool is_valid() const;
     void set_surface(void* surface);
     [[nodiscard]] void* get_surface() const;
     void set_offscreen_capture_mode(bool enabled);
     void save_screenshot(const std::string& path) const;
-    // Fixed-frame captures use the same final viewport image as ordinary screenshots.
-    bool save_screenshot_sync(const std::string& path, unsigned render_frames = 0,
-                              unsigned warmup_frames = 0, const std::string& timings_path = "",
-                              unsigned timeout_seconds = 0) const;
+    bool save_screenshot_sync(const std::string& path) const;
 
     void set_output_mode(const std::string& mode);
     [[nodiscard]] std::string get_output_mode() const;
@@ -350,36 +429,26 @@ class Camera {
     void set_vision_stable_planes(bool enabled);
     [[nodiscard]] bool get_vision_stable_planes() const;
     [[nodiscard]] bool get_requested_vision_stable_planes() const;
-    void set_view_state(bool open, int x, int y, int width, int height, float move_speed);
-    void set_move_speed(float move_speed);
-    [[nodiscard]] std::array<float, 6> get_view_state() const;
+    /// The single viewport entry point: one complete state, one command. See CameraViewState.
+    void set_view(const CameraViewState& state);
+    /// The single viewport read entry point. `open` is always present on the way out.
+    [[nodiscard]] CameraViewState get_view() const;
 
-    [[nodiscard]] std::array<float, 3> get_position() const;
-    [[nodiscard]] std::array<float, 3> get_forward() const;
-    [[nodiscard]] std::array<float, 3> get_world_up() const;
-    [[nodiscard]] float get_fov() const;
+    /// The single pose read entry point: one consistent snapshot of the pose.
+    [[nodiscard]] CameraPose get_pose() const;
     void set_projection(float x_sign, float near_plane, float far_plane);
     // x sign, near clip, far clip.
     // Return the accepted settings even before the render thread consumes them.
     [[nodiscard]] std::array<float, 3> get_projection() const;
 
     // ========== 原 Viewport 功能 ==========
-    void set_image_effects(ImageEffects* effects);
-    [[nodiscard]] ImageEffects* get_image_effects();
-    [[nodiscard]] bool has_image_effects() const;
-    void remove_image_effects();
-
     void set_size(int width, int height);
     [[nodiscard]] std::array<int, 2> get_size() const;
-    void set_viewport_rect(int x, int y, int width, int height);
-    [[nodiscard]] std::uintptr_t pick_actor_at_pixel(int x, int y) const;
-    [[nodiscard]] ModelNodePickResult pick_model_node_at_pixel(int x, int y) const;
 
    private:
     friend class Scene;
 
-    std::uintptr_t handle_{};
-    ImageEffects* image_effects_{nullptr};
+    EntityId handle_{};
     int width_{1920};
     int height_{1080};
     std::array<float, 3> projection_{1.0f, 0.1f, 100.0f};
@@ -388,6 +457,36 @@ class Camera {
 // ============================================================================
 // Environment: 环境类
 // ============================================================================
+
+/// One environment edit. Omitted fields are left untouched, so a single-field change reads as
+/// set_properties({.sky_intensity = 20.0f}) and a batch as several designated initializers.
+/// Replaces the eight set_sun_direction / set_sun_intensity / set_sky_intensity / set_floor_grid /
+/// set_gravity / set_floor_y / set_floor_restitution / set_fixed_dt calls that had to be issued
+/// one field at a time.
+struct EnvironmentProperties {
+    std::optional<std::array<float, 3>> sun_direction;
+    std::optional<float> sun_intensity;
+    std::optional<float> sky_intensity;
+    std::optional<bool> floor_grid;
+    std::optional<std::array<float, 3>> gravity;
+    std::optional<float> floor_y;
+    std::optional<float> floor_restitution;
+    std::optional<float> fixed_dt;
+};
+
+/// One environment read: every field from a single snapshot. The eight point getters each rebuilt
+/// the snapshot+pending view, so a caller reading several fields could straddle a pending command.
+struct EnvironmentState {
+    std::array<float, 3> sun_direction{0.0f, 1.0f, 0.0f};
+    float sun_intensity{10.0f};
+    float sky_intensity{20.0f};
+    bool floor_grid{true};
+    std::array<float, 3> gravity{0.0f, -9.8f, 0.0f};
+    float floor_y{0.0f};
+    float floor_restitution{0.6f};
+    float fixed_dt{1.0f / 60.0f};
+};
+
 class Environment {
    public:
     Environment();
@@ -396,30 +495,19 @@ class Environment {
     void set_vision_rtxpt_display(bool auto_exposure, float exposure_compensation,
                                   float exposure_value, float min_ev, float max_ev, float bloom_intensity = 0.f);
 
-    void set_sun_direction(const std::array<float, 3>& direction);
-    [[nodiscard]] std::array<float, 3> get_sun_direction() const;
-    void set_sun_intensity(float intensity);
-    [[nodiscard]] float get_sun_intensity() const;
-    void set_sky_intensity(float intensity);
-    [[nodiscard]] float get_sky_intensity() const;
-    void set_floor_grid(bool enabled) const;
-    [[nodiscard]] bool get_floor_grid() const;
-
-    void set_gravity(const std::array<float, 3>& gravity);
-    [[nodiscard]] std::array<float, 3> get_gravity() const;
-    void set_floor_y(float y);
-    [[nodiscard]] float get_floor_y() const;
-    void set_floor_restitution(float restitution);
-    [[nodiscard]] float get_floor_restitution() const;
-    void set_fixed_dt(float dt);
-    [[nodiscard]] float get_fixed_dt() const;
+    /// The single environment write entry point: one command carrying every field given.
+    void set_properties(const EnvironmentProperties& properties);
+    /// The single environment read entry point: one consistent snapshot of every field.
+    [[nodiscard]] EnvironmentState get_state() const;
+    /// 构造时的结构创建是否成功（失败时 handle_ = 0，见顶部失败传播契约）。
+    [[nodiscard]] bool is_valid() const;
 
    private:
     friend class Scene;
 
-    [[nodiscard]] std::uintptr_t get_handle() const;
+    [[nodiscard]] EntityId get_handle() const;
 
-    std::uintptr_t handle_{};
+    EntityId handle_{};
 };
 
 // ============================================================================
@@ -429,6 +517,9 @@ class Scene {
    public:
     Scene();
     ~Scene();
+
+    /// 构造时的结构创建是否成功（失败时 handle_ = 0，见顶部失败传播契约）。
+    [[nodiscard]] bool is_valid() const;
 
     // Retain authored media independently of the current renderer's policy.
     void set_authored_media(std::shared_ptr<const nlohmann::json> media);
@@ -452,7 +543,7 @@ class Scene {
     void remove_camera(Camera* camera);
     void clear_cameras();
     void set_active_camera(Camera* camera);
-    [[nodiscard]] std::uintptr_t get_active_camera_handle() const;
+    [[nodiscard]] EntityId get_active_camera_handle() const;
 
     [[nodiscard]] std::size_t camera_count() const;
     [[nodiscard]] bool has_camera(const Camera* camera) const;
@@ -471,82 +562,89 @@ class Scene {
     [[nodiscard]] bool is_simulation_enabled() const;
 
    private:
-    std::uintptr_t handle_{};
+    EntityId handle_{};
 
     Environment* environment_{nullptr};
     std::vector<Actor*> actors_;
     std::vector<Camera*> cameras_;
     std::unordered_set<const Actor*> actors_index_;
     std::unordered_set<const Camera*> cameras_index_;
+    // 本对象的"读己之写"镜像：enabled/simulation_enabled 现在以命令形式异步
+    // 落地到 SceneDevice，getter 若继续读槽位会看到上一 tick 的旧值。
+    // 这两个字段只由本对象的 setter 写，DAG 侧不写它们，因此镜像即权威。
+    bool enabled_{true};
+    bool simulation_enabled_{false};
 };
 
 // ============================================================================
 // Render backend control (Native vs Vision)
 // ============================================================================
-/// 兼容接口：引擎始终包含 Vision，返回 true；不代表 Vulkan 设备已经初始化成功。
-[[nodiscard]] bool is_vision_available();
-
 /// 请求切换光学渲染后端。mode: "native" 或 "vision"。
 /// Vision 设备在需要渲染时延迟初始化。
-void set_render_backend(const std::string& mode, std::uintptr_t camera_handle = 0);
+void set_render_backend(const std::string& mode, EntityId camera_handle = 0);
 
 /// 获取当前请求的渲染后端，返回 "native" 或 "vision"。
-[[nodiscard]] std::string get_render_backend(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_render_backend(EntityId camera_handle = 0);
 
 /// Set the Vision algorithm without changing independent denoise/accumulation preferences.
 /// Legacy "svgf" selects "path_tracing" and enables denoise; "ssat" remains supported.
 /// Legacy "progressive_path_tracing" selects "path_tracing" and enables accumulation.
-void set_vision_render_mode(const std::string& mode, std::uintptr_t camera_handle = 0);
+void set_vision_render_mode(const std::string& mode, EntityId camera_handle = 0);
 
 /// 获取当前 camera 请求的 Vision 渲染技术。
-[[nodiscard]] std::string get_vision_render_mode(std::uintptr_t camera_handle = 0);
+[[nodiscard]] std::string get_vision_render_mode(EntityId camera_handle = 0);
 
 /// Queue an independent SVGF preference for this camera (disabled by default).
-void set_vision_denoise(bool enabled, std::uintptr_t camera_handle = 0);
+void set_vision_denoise(bool enabled, EntityId camera_handle = 0);
 
 /// Return the camera's committed SVGF preference.
-[[nodiscard]] bool get_vision_denoise(std::uintptr_t camera_handle = 0);
+[[nodiscard]] bool get_vision_denoise(EntityId camera_handle = 0);
 
 /// Return the latest uncommitted preference, or committed state when none is pending.
 /// Persistence uses this to preserve setter requests even while a render update is in flight.
-[[nodiscard]] bool get_requested_vision_denoise(std::uintptr_t camera_handle = 0);
+[[nodiscard]] bool get_requested_vision_denoise(EntityId camera_handle = 0);
 
 /// Select "scene", "svgf", "reblur" or "relax", independently of the enable switch.
-void set_vision_denoiser(const std::string& type, std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_vision_denoiser(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_requested_vision_denoiser(std::uintptr_t camera_handle = 0);
-void set_vision_reblur_settings(const std::string& json, std::uintptr_t camera_handle = 0);
-void set_vision_pt_settings(const std::string& json, std::uintptr_t camera_handle = 0);
-void set_vision_restir_settings(const std::string& json, std::uintptr_t camera_handle = 0);
-void set_vision_relax_settings(const std::string& json, std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_requested_vision_reblur_settings(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_requested_vision_pt_settings(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_requested_vision_restir_settings(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_requested_vision_relax_settings(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_effective_vision_reblur_settings(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_effective_vision_pt_settings(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_effective_vision_restir_settings(std::uintptr_t camera_handle = 0);
-[[nodiscard]] std::string get_effective_vision_relax_settings(std::uintptr_t camera_handle = 0);
+void set_vision_denoiser(const std::string& type, EntityId camera_handle = 0);
+[[nodiscard]] std::string get_vision_denoiser(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_denoiser(EntityId camera_handle = 0);
+enum class VisionSettingsFamily { Pt, Restir, Reblur, Relax };
+void set_vision_settings(VisionSettingsFamily family, const nlohmann::json& settings, EntityId camera_handle);
+[[nodiscard]] nlohmann::json get_requested_vision_settings(VisionSettingsFamily family, EntityId camera_handle);
+[[nodiscard]] nlohmann::json get_effective_vision_settings(VisionSettingsFamily family, EntityId camera_handle);
+// String adapters for independent legacy callers. Native communication uses values.
+void set_vision_reblur_settings(const std::string& json, EntityId camera_handle = 0);
+void set_vision_pt_settings(const std::string& json, EntityId camera_handle = 0);
+void set_vision_restir_settings(const std::string& json, EntityId camera_handle = 0);
+void set_vision_relax_settings(const std::string& json, EntityId camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_reblur_settings(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_pt_settings(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_restir_settings(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_requested_vision_relax_settings(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_effective_vision_reblur_settings(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_effective_vision_pt_settings(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_effective_vision_restir_settings(EntityId camera_handle = 0);
+[[nodiscard]] std::string get_effective_vision_relax_settings(EntityId camera_handle = 0);
 
 /// Queue an independent accumulation preference for this camera (disabled by default).
-void set_vision_accumulation(bool enabled, std::uintptr_t camera_handle = 0);
+void set_vision_accumulation(bool enabled, EntityId camera_handle = 0);
 
 /// Return the camera's committed accumulation preference.
-[[nodiscard]] bool get_vision_accumulation(std::uintptr_t camera_handle = 0);
+[[nodiscard]] bool get_vision_accumulation(EntityId camera_handle = 0);
 
 /// Return the latest uncommitted preference, or committed state when none is pending.
 /// Persistence uses this while a render update is in flight.
-[[nodiscard]] bool get_requested_vision_accumulation(std::uintptr_t camera_handle = 0);
+[[nodiscard]] bool get_requested_vision_accumulation(EntityId camera_handle = 0);
 
 /// Queue an independent stable-plane preference for this camera (enabled by default).
-void set_vision_stable_planes(bool enabled, std::uintptr_t camera_handle = 0);
+void set_vision_stable_planes(bool enabled, EntityId camera_handle = 0);
 
 /// Return the camera's committed stable-plane preference.
-[[nodiscard]] bool get_vision_stable_planes(std::uintptr_t camera_handle = 0);
+[[nodiscard]] bool get_vision_stable_planes(EntityId camera_handle = 0);
 
 /// Return the latest uncommitted preference, or committed state when none is pending.
 /// Persistence uses this while a render update is in flight.
-[[nodiscard]] bool get_requested_vision_stable_planes(std::uintptr_t camera_handle = 0);
+[[nodiscard]] bool get_requested_vision_stable_planes(EntityId camera_handle = 0);
 
 // ============================================================================
 // Media (video/audio) import

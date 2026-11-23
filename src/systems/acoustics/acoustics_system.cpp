@@ -6,8 +6,17 @@
 #include <corona/resource/types/audio.h>
 #include <corona/shared_data_hub.h>
 #include <corona/systems/acoustics/acoustics_system.h>
+#include <corona/systems/acoustics/acoustics_commands.h>
 
 namespace Corona::Systems {
+
+Kernel::ComponentAccess AcousticsSystem::component_access() const {
+    Kernel::ComponentAccess access;
+    access.write<AcousticsDevice>()
+          .read<SceneDevice, CameraDevice, Ecs::Transform, GeometryDevice>();
+    return access;
+}
+
 
 bool AcousticsSystem::initialize(Kernel::ISystemContext* ctx) {
     CFW_LOG_NOTICE("AcousticsSystem: Initializing...");
@@ -55,7 +64,7 @@ void AcousticsSystem::destroy_playback(ActivePlayback& ap) {
     // ap.handle 在 ActivePlayback 析构时自动释放（unref + 解锁）。
 }
 
-void AcousticsSystem::process_play_request(std::uint64_t resource_id, bool loop, std::uintptr_t acoustics_handle) {
+void AcousticsSystem::process_play_request(std::uint64_t resource_id, bool loop, EntityId acoustics_handle) {
     if (!engine_ready_) {
         return;
     }
@@ -142,7 +151,7 @@ void AcousticsSystem::process_play_request(std::uint64_t resource_id, bool loop,
                  resource_id, meta.sample_rate, meta.channels, loop, spatial);
 }
 
-void AcousticsSystem::process_stop_request(std::uint64_t resource_id, std::uintptr_t acoustics_handle) {
+void AcousticsSystem::process_stop_request(std::uint64_t resource_id, EntityId acoustics_handle) {
     std::lock_guard lock(playback_mutex_);
     for (auto it = active_playbacks_.begin(); it != active_playbacks_.end();) {
         if (!*it) {
@@ -163,7 +172,41 @@ void AcousticsSystem::process_stop_request(std::uint64_t resource_id, std::uintp
     }
 }
 
+namespace {
+
+/// 应用入站声学参数命令（P3）：单写者入口，tick 开头一次。
+void apply_pending_acoustics_updates() {
+    auto& channel = Corona::AcousticsCommandChannel::instance();
+    auto commands = channel.commands().drain();
+    if (commands.empty()) {
+        return;
+    }
+
+    for (const auto& command : commands) {
+        auto* device = Corona::SharedDataHub::instance().try_acoustics(command.acoustics_handle);
+        if (!device) {
+            continue;
+        }
+        if (Corona::has_acoustics_field(command.fields, Corona::AcousticsField::Volume)) {
+            device->volume = command.volume;
+        }
+        if (Corona::has_acoustics_field(command.fields, Corona::AcousticsField::AudioEnabled)) {
+            device->audio_enabled = command.audio_enabled;
+        }
+        if (Corona::has_acoustics_field(command.fields, Corona::AcousticsField::ResourceId)) {
+            device->resource_id = command.resource_id;
+        }
+    }
+}
+
+}  // namespace
+
 void AcousticsSystem::update() {
+    // 先落地外部提交的声学参数，再处理播放/停止请求。
+    apply_pending_acoustics_updates();
+    // Playback/API readers use committed snapshots once pending values drain.
+    Corona::publish_acoustics_snapshot();
+
     // --- 消费命令队列 ---
     {
         std::lock_guard lock(cmd_mutex_);
@@ -184,7 +227,6 @@ void AcousticsSystem::update() {
     {
         std::lock_guard lock(playback_mutex_);
 
-        auto& acoustics_storage = SharedDataHub::instance().acoustics_storage();
 
         auto it = active_playbacks_.begin();
         while (it != active_playbacks_.end()) {
@@ -197,8 +239,8 @@ void AcousticsSystem::update() {
             // 空间音频：其声学组件被释放（actor 删除）→ 当作结束清理，避免悬空。
             bool finished = false;
             if (ap.spatial) {
-                auto acc = acoustics_storage.try_acquire_read(ap.acoustics_handle);
-                if (!acc.valid()) {
+                const auto* acc = SharedDataHub::instance().try_acoustics(ap.acoustics_handle);
+                if (acc == nullptr) {
                     finished = true;
                 }
             }
@@ -223,14 +265,14 @@ void AcousticsSystem::update_spatial() {
 
     // --- (a) listener ← 场景活动相机 ---
     {
-        auto& scene_storage = hub.scene_storage();
-        auto& camera_storage = hub.camera_storage();
+    auto scene_storage = Corona::all_scenes();
+        auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
         for (const auto& scene : scene_storage) {
             if (!scene.enabled || scene.active_camera_handle == 0) {
                 continue;
             }
-            auto cam = camera_storage.try_acquire_read(scene.active_camera_handle);
-            if (cam.valid()) {
+            auto cam = Corona::find_camera(scene.active_camera_handle);
+            if (cam != nullptr) {
                 ma_engine_listener_set_position(&engine_, 0, cam->position.x, cam->position.y, cam->position.z);
                 ma_engine_listener_set_direction(&engine_, 0, cam->forward.x, cam->forward.y, cam->forward.z);
                 ma_engine_listener_set_world_up(&engine_, 0, cam->world_up.x, cam->world_up.y, cam->world_up.z);
@@ -246,9 +288,7 @@ void AcousticsSystem::update_spatial() {
             return;
         }
 
-        auto& acoustics_storage = hub.acoustics_storage();
-        auto& geometry_storage = hub.geometry_storage();
-        auto& transform_storage = hub.model_transform_storage();
+        auto geometry_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
         for (auto& ap_ptr : active_playbacks_) {
             auto& ap = *ap_ptr;
@@ -256,9 +296,9 @@ void AcousticsSystem::update_spatial() {
                 continue;
             }
 
-            std::uintptr_t geometry_handle = 0;
-            auto acc = acoustics_storage.try_acquire_read(ap.acoustics_handle);
-            if (!acc.valid()) {
+            EntityId geometry_handle = 0;
+            const auto* acc = hub.try_acoustics(ap.acoustics_handle);
+            if (acc == nullptr) {
                 continue;  // 组件已释放，留给监控循环清理
             }
             geometry_handle = acc->geometry_handle;
@@ -268,12 +308,12 @@ void AcousticsSystem::update_spatial() {
             if (geometry_handle == 0) {
                 continue;
             }
-            auto geo = geometry_storage.try_acquire_read(geometry_handle);
-            if (!geo.valid() || geo->transform_handle == 0) {
+            auto geo = Corona::find_geometry(geometry_handle);
+            if (geo == nullptr || geo->transform_handle == 0) {
                 continue;
             }
-            auto xf = transform_storage.try_acquire_read(geo->transform_handle);
-            if (xf.valid()) {
+            auto xf = Corona::find_transform(geo->transform_handle);
+            if (xf != nullptr) {
                 ma_sound_set_position(&ap.sound, xf->position.x, xf->position.y, xf->position.z);
             }
         }

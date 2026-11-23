@@ -31,23 +31,9 @@ add_test(NAME EngineStartupConfigDeploymentTests
 set_tests_properties(EngineStartupConfigTests EngineStartupConfigDeploymentTests
     PROPERTIES TIMEOUT 20)
 
-add_executable(corona_ui_surface_removal_race_tests
-    test_ui_surface_removal_race.cpp
-    ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp
-    ${PROJECT_SOURCE_DIR}/src/systems/ui/ui_surface_lifecycle.cpp
-)
-target_include_directories(corona_ui_surface_removal_race_tests
-    PRIVATE ${PROJECT_SOURCE_DIR}/include
-)
-target_link_libraries(corona_ui_surface_removal_race_tests
-    PRIVATE corona_display_system corona::resource::manager
-)
-if(COMMAND helicon_install_runtime_deps)
-    helicon_install_runtime_deps(corona_ui_surface_removal_race_tests)
-endif()
-add_test(NAME UiSurfaceRemovalRaceTests
-         COMMAND corona_ui_surface_removal_race_tests)
-set_tests_properties(UiSurfaceRemovalRaceTests PROPERTIES TIMEOUT 15)
+# UiSurfaceRemovalRaceTests was retired with DisplayCallbackGate (commit 462f0933 removed its
+# source) but the target kept being registered with only library sources, so it had no `main`
+# and could never link. Nothing references it any more.
 
 add_executable(corona_vision_reblur_tests test_vision_reblur.cpp)
 target_include_directories(corona_vision_reblur_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
@@ -138,7 +124,8 @@ add_test(NAME VisionHotfixRendererTests COMMAND corona_vision_engine_scene_tests
 set_tests_properties(VisionHotfixRendererTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
     RUN_SERIAL TRUE TIMEOUT 300)
-set_tests_properties(VisionCameraSettingsTests VisionSharedDisplayTests PROPERTIES
+add_test(NAME VisionImportedEmissionTests COMMAND corona_vision_engine_scene_tests --imported-emission)
+set_tests_properties(VisionCameraSettingsTests VisionSharedDisplayTests VisionImportedEmissionTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
     RUN_SERIAL TRUE TIMEOUT 300)
 set_tests_properties(VisionEngineSceneTests PROPERTIES
@@ -154,6 +141,11 @@ target_include_directories(corona_vision_restir_estimator_tests PRIVATE
 target_link_libraries(corona_vision_restir_estimator_tests PRIVATE
     corona::engine vision-all_libs vision-integrator-ReSTIR)
 add_test(NAME VisionReSTIREstimatorTests COMMAND corona_vision_restir_estimator_tests)
+add_test(NAME VisionReSTIRWinnerTargetTests COMMAND corona_vision_restir_estimator_tests)
+set_tests_properties(VisionReSTIRWinnerTargetTests PROPERTIES
+    WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
+    ENVIRONMENT "VISION_TEST_GI_WINNER_TARGET_ONLY=1"
+    RUN_SERIAL TRUE TIMEOUT 180)
 add_test(NAME VisionPrincipledStablePlanes
     COMMAND corona_vision_restir_estimator_tests --principled-stable-planes)
 set_tests_properties(VisionPrincipledStablePlanes PROPERTIES
@@ -173,83 +165,8 @@ add_test(NAME VisionReSTIRGISupport
     COMMAND ${Python_EXECUTABLE} ${CMAKE_SOURCE_DIR}/vision/src/tests/test_restir_gi_support.py)
 set_tests_properties(VisionReSTIRPairwiseMIS VisionReSTIRGISupport PROPERTIES TIMEOUT 30)
 
-add_executable(corona_collaborative_editor_loopback_tests
-    test_collaborative_editor_loopback.cpp
-    ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp
-)
-target_include_directories(corona_collaborative_editor_loopback_tests
-    PRIVATE ${PROJECT_SOURCE_DIR}/include
-            ${PROJECT_SOURCE_DIR}/src/systems/ui
-)
-target_link_libraries(corona_collaborative_editor_loopback_tests
-    PRIVATE corona_ui_system corona::resource::manager
-)
-if(COMMAND helicon_install_runtime_deps)
-    helicon_install_runtime_deps(corona_collaborative_editor_loopback_tests)
-endif()
-add_custom_command(TARGET corona_collaborative_editor_loopback_tests POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/libcef.dll,${CEF_ROOT}/Release/libcef.dll>"
-            "$<TARGET_FILE_DIR:corona_collaborative_editor_loopback_tests>/libcef.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/chrome_elf.dll,${CEF_ROOT}/Release/chrome_elf.dll>"
-            "$<TARGET_FILE_DIR:corona_collaborative_editor_loopback_tests>/chrome_elf.dll"
-    VERBATIM
-)
-add_test(NAME CollaborativeEditorLoopbackTests
-         COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/archive_driver.py
-                 $<TARGET_FILE:corona_collaborative_editor_loopback_tests> ${CORONA_EDITOR_SOURCE_DIR})
-get_filename_component(_CORONA_LOOPBACK_PYTHON_DIR "${Python_EXECUTABLE}" DIRECTORY)
-set(_CORONA_LOOPBACK_PATH_DIRS "${_CORONA_LOOPBACK_PYTHON_DIR}")
-foreach(_tbb_runtime IN LISTS CORONA_TBB_REDIS_DLLS)
-    get_filename_component(_tbb_runtime_dir "${_tbb_runtime}" DIRECTORY)
-    list(APPEND _CORONA_LOOPBACK_PATH_DIRS "${_tbb_runtime_dir}")
-endforeach()
-list(REMOVE_DUPLICATES _CORONA_LOOPBACK_PATH_DIRS)
-set(_CORONA_LOOPBACK_ENVIRONMENT)
-foreach(_runtime_dir IN LISTS _CORONA_LOOPBACK_PATH_DIRS)
-    list(APPEND _CORONA_LOOPBACK_ENVIRONMENT
-         "PATH=path_list_prepend:${_runtime_dir}")
-endforeach()
-set_tests_properties(CollaborativeEditorLoopbackTests PROPERTIES
-    RUN_SERIAL TRUE
-    TIMEOUT 30
-    ENVIRONMENT_MODIFICATION "${_CORONA_LOOPBACK_ENVIRONMENT}"
-)
-add_executable(corona_native_file_probe EXCLUDE_FROM_ALL native_file_probe.cpp)
-target_link_libraries(corona_native_file_probe PRIVATE corona::engine corona_ui_system)
 
-add_executable(corona_archive_roundtrip_tests
-    test_archive_roundtrip.cpp
-    ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp)
-target_include_directories(corona_archive_roundtrip_tests PRIVATE
-    ${PROJECT_SOURCE_DIR}/include ${PROJECT_SOURCE_DIR}/src/systems/ui
-    ${PROJECT_SOURCE_DIR}/src/systems/script/include)
-target_link_libraries(corona_archive_roundtrip_tests PRIVATE
-    corona_ui_system corona::resource::manager)
-if(COMMAND helicon_install_runtime_deps)
-    helicon_install_runtime_deps(corona_archive_roundtrip_tests)
-endif()
-add_custom_command(TARGET corona_archive_roundtrip_tests POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/libcef.dll,${CEF_ROOT}/Release/libcef.dll>"
-        "$<TARGET_FILE_DIR:corona_archive_roundtrip_tests>/libcef.dll"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "$<IF:$<CONFIG:Debug>,${CEF_ROOT}/Debug/chrome_elf.dll,${CEF_ROOT}/Release/chrome_elf.dll>"
-        "$<TARGET_FILE_DIR:corona_archive_roundtrip_tests>/chrome_elf.dll"
-    VERBATIM)
-add_test(NAME ArchiveRoundtripTests COMMAND ${Python_EXECUTABLE}
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_archive_roundtrip.py
-    $<TARGET_FILE:corona_archive_roundtrip_tests> ${CORONA_EDITOR_SOURCE_DIR})
-set_tests_properties(ArchiveRoundtripTests PROPERTIES
-    RUN_SERIAL TRUE TIMEOUT 180
-    ENVIRONMENT_MODIFICATION "${_CORONA_LOOPBACK_ENVIRONMENT}")
 
-unset(_CORONA_LOOPBACK_PYTHON_DIR)
-unset(_CORONA_LOOPBACK_PATH_DIRS)
-unset(_CORONA_LOOPBACK_ENVIRONMENT)
-unset(_runtime_dir)
-unset(_tbb_runtime_dir)
 
 add_executable(corona_ui_multisurface_smoke
     ui_multisurface_smoke.cpp
@@ -261,6 +178,7 @@ target_include_directories(corona_ui_multisurface_smoke
 )
 target_link_libraries(corona_ui_multisurface_smoke
     PRIVATE corona_ui_system corona_display_system corona_script_system corona::resource::manager
+            EnTT::EnTT nlohmann_json::nlohmann_json
 )
 if(COMMAND helicon_install_runtime_deps)
     helicon_install_runtime_deps(corona_ui_multisurface_smoke)

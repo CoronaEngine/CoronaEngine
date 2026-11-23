@@ -97,7 +97,6 @@ target_link_libraries(CoronaResourceManager
     PUBLIC
     nlohmann_json::nlohmann_json
     Horizon
-    TBB::tbb
     ktm::ktm
 )
 

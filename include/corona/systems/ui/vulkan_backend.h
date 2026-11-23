@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/kernel/entity_id.h>
 // quad_compositor.h is the self-contained base: it owns the GLSL pipeline includes,
 // ViewportRenderResources, QuadDraw, and QuadCompositor. Include it (not the reverse) to
 // avoid a circular dependency.
@@ -77,7 +78,7 @@ class VulkanBackend {
     // Per-surface rendering + presentation state.
     struct PerSurfaceRender {
         ViewportRenderResources resources;
-        std::uintptr_t image_handle = 0;
+        EntityId image_handle = 0;
         Detail::PublishedImage published_image;
         uint64_t frame_index = 0;
         UI::SurfaceCompletionTicket first_present_ticket;

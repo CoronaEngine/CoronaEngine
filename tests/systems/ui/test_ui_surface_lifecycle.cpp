@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "corona/events/display_system_events.h"
+#include "corona/systems/display/display_frame_commands.h"
 #include "corona/systems/ui/ui_surface_lifecycle.h"
 
 namespace {
@@ -444,6 +445,46 @@ void timed_out_removal_does_not_destroy_native_handle() {
            "native handle can be destroyed only after acknowledgement");
 }
 
+void coalesced_ui_frames_retain_the_first_present_acknowledgement() {
+    UiSurfaceLifecycle surface;
+    surface.registration_ticket().succeed();
+    Corona::UIFrameCommandChannel::Buffer buffer;
+    Corona::Events::UIFrameReadyEvent frame;
+    frame.surface = reinterpret_cast<void*>(std::uintptr_t{1});
+    frame.image_handle = 7;
+    frame.frame_index = 1;
+    frame.width = 300;
+    frame.height = 200;
+    frame.first_present_ticket = surface.first_present_ticket();
+    buffer.push({frame});
+    frame.first_present_ticket.reset();
+    frame.frame_index = 2;
+    buffer.push({frame});
+    frame.frame_index = 3;
+    frame.width = 900;
+    frame.height = 776;
+    buffer.push({frame});
+    const auto commands = buffer.drain();
+    expect(commands.size() == 1 && commands[0].event.frame_index == 3,
+           "coalescing must retain only the newest UI frame");
+    expect(commands[0].event.width == 900 && commands[0].event.height == 776,
+           "coalescing must retain the latest frame dimensions");
+    expect(commands[0].event.first_present_ticket.has_value(),
+           "newer UI frames must not discard the pending first-present ticket");
+    commands[0].event.first_present_ticket->succeed();
+    expect(surface.state() == UiSurfaceState::Active,
+           "presenting the coalesced frame must allow the native window to become visible");
+
+    frame.first_present_ticket = surface.first_present_ticket();
+    buffer.push({frame});
+    frame.image_handle = 8;
+    frame.first_present_ticket.reset();
+    buffer.push({frame});
+    const auto replacement = buffer.drain();
+    expect(!replacement[0].event.first_present_ticket,
+           "another image allocation must not inherit an obsolete producer's ticket");
+}
+
 void shutdown_order_is_display_then_images_then_sdl() {
     std::vector<const char*> order;
     order.push_back("display_remove_ack");
@@ -480,6 +521,7 @@ int main() {
     legacy_event_aggregate_publishers_remain_compatible();
     secondary_window_protocol_keeps_native_handle_hidden_until_first_present();
     timed_out_removal_does_not_destroy_native_handle();
+    coalesced_ui_frames_retain_the_first_present_acknowledgement();
     shutdown_order_is_display_then_images_then_sdl();
     std::cout << "UI surface lifecycle tests passed\n";
     return 0;

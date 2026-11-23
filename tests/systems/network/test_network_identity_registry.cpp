@@ -30,16 +30,16 @@ using Corona::Network::StorageID;
 
 /// Registers one actor device plus one profile device so build_identity() succeeds.
 std::uintptr_t make_actor(Corona::SharedDataHub& hub) {
-    const auto actor = hub.actor_storage().allocate();
-    const auto profile = hub.profile_storage().allocate();
-    if (auto device = hub.actor_storage().try_acquire_write(actor)) {
+    const auto actor = hub.create_actor_component();
+    const auto profile = hub.create_profile_component();
+    if (auto device = Corona::find_actor(actor)) {
         device->profile_handles.push_back(profile);
     }
     return actor;
 }
 
 void release_actor(Corona::SharedDataHub& hub, std::uintptr_t actor) {
-    hub.actor_storage().deallocate(actor);
+    hub.destroy_actor_component(actor);
 }
 
 }  // namespace

@@ -1,5 +1,11 @@
 #include "native_material.h"
+#include <corona/systems/display/display_frame_commands.h>
+#include <corona/systems/acoustics/acoustics_commands.h>
+#include <corona/systems/mechanics/mechanics_commands.h>
+#include <corona/systems/optics/environment_commands.h>
+#include <corona/systems/optics/optics_commands.h>
 #include "native_camera.h"
+#include "camera_viewport_updates.h"
 #include <corona/utils/runtime_paths.h>
 #include <corona/utils/scene_path_key.h>
 #include <corona/diagnostics/thread_phase.h>
@@ -50,11 +56,8 @@
 #include <utility>
 #include <vector>
 
-#include <oneapi/tbb/task_group.h>
-
 #include "hardware.h"
 #include "../common/render_resource_bindings.h"
-#include "actor_pick_result.h"
 #include "native_diagnostics.h"
 #include "optics_debug_labels.h"
 #include "../common/diagnostic_env.h"
@@ -184,12 +187,12 @@ struct OpticsDiagConfig {
     return cfg;
 }
 
-[[nodiscard]] bool diag_actor_allowed(std::uintptr_t actor_handle) {
+[[nodiscard]] bool diag_actor_allowed(EntityId actor_handle) {
     const auto& diag = optics_diag_config();
     return !diag.only_actor || *diag.only_actor == actor_handle;
 }
 
-[[nodiscard]] bool diag_geometry_allowed(std::uintptr_t geometry_handle) {
+[[nodiscard]] bool diag_geometry_allowed(EntityId geometry_handle) {
     const auto& diag = optics_diag_config();
     return !diag.only_geometry || *diag.only_geometry == geometry_handle;
 }
@@ -252,8 +255,8 @@ struct OpticsDiagConfig {
     return out.str();
 }
 
-void log_invalid_optics_mesh_once(std::uintptr_t actor_handle,
-                                  std::uintptr_t geometry_handle,
+void log_invalid_optics_mesh_once(EntityId actor_handle,
+                                  EntityId geometry_handle,
                                   std::uint32_t mesh_index,
                                   bool slot_valid,
                                   bool vertex_valid,
@@ -279,8 +282,8 @@ void log_invalid_optics_mesh_once(std::uintptr_t actor_handle,
                     vertex_descriptor, index_descriptor, texture_descriptor);
 }
 
-void log_optics_material_once(std::uintptr_t actor_handle,
-                              std::uintptr_t geometry_handle,
+void log_optics_material_once(EntityId actor_handle,
+                              EntityId geometry_handle,
                               std::uint32_t mesh_index,
                               std::uint32_t material_id,
                               std::uint32_t texture_descriptor,
@@ -545,142 +548,6 @@ struct OpticsEventViewport {
     desc.blend_enabled = false; // RSM flux is the nearest solar-visible surface.
     return desc;
 }
-constexpr char kMouseIconRelativePath[] = "assets/icon/mouse_icon.png";
-constexpr std::array<const char*, 3> kGizmoAxisRelativePaths{{
-    "assets/icon/axis_x.png",
-    "assets/icon/axis_y.png",
-    "assets/icon/axis_z.png",
-}};
-
-struct CursorIconPixels {
-    std::vector<unsigned char> rgba;
-    int width = 0;
-    int height = 0;
-};
-
-std::filesystem::path find_mouse_icon_path() {
-    std::error_code ec;
-    auto current = Corona::Utils::executable_directory();
-    if (!ec) {
-        for (auto dir = current; !dir.empty(); dir = dir.parent_path()) {
-            auto candidate = dir / kMouseIconRelativePath;
-            if (std::filesystem::exists(candidate, ec) && !ec) {
-                return candidate;
-            }
-            ec.clear();
-            if (dir == dir.parent_path()) {
-                break;
-            }
-        }
-    }
-    return std::filesystem::path(kMouseIconRelativePath);
-}
-
-std::optional<CursorIconPixels> load_mouse_icon_pixels() {
-    const auto icon_path = find_mouse_icon_path();
-    const auto image_id = Corona::Resource::ResourceManager::get_instance().import_sync(icon_path);
-    if (image_id == Corona::Resource::IResource::INVALID_UID) {
-        CFW_LOG_WARNING("Optics cursor icon load failed: {}", icon_path.string());
-        return std::nullopt;
-    }
-
-    auto image = Corona::Resource::ResourceManager::get_instance().acquire_read<Corona::Resource::Image>(image_id);
-    if (!image || image->get_width() <= 0 || image->get_height() <= 0 || image->get_data() == nullptr) {
-        CFW_LOG_WARNING("Optics cursor icon data invalid: {}", icon_path.string());
-        return std::nullopt;
-    }
-
-    CursorIconPixels pixels;
-    pixels.width = image->get_width();
-    pixels.height = image->get_height();
-    const int channels = image->get_channels();
-    const auto pixel_count = static_cast<size_t>(pixels.width) * static_cast<size_t>(pixels.height);
-    pixels.rgba.resize(pixel_count * 4);
-    const unsigned char* src = image->get_data();
-    if (channels == 4) {
-        std::copy(src, src + pixel_count * 4, pixels.rgba.begin());
-    } else if (channels == 3) {
-        for (size_t i = 0; i < pixel_count; ++i) {
-            pixels.rgba[i * 4 + 0] = src[i * 3 + 0];
-            pixels.rgba[i * 4 + 1] = src[i * 3 + 1];
-            pixels.rgba[i * 4 + 2] = src[i * 3 + 2];
-            pixels.rgba[i * 4 + 3] = 255;
-        }
-    } else if (channels == 1) {
-        for (size_t i = 0; i < pixel_count; ++i) {
-            pixels.rgba[i * 4 + 0] = src[i];
-            pixels.rgba[i * 4 + 1] = src[i];
-            pixels.rgba[i * 4 + 2] = src[i];
-            pixels.rgba[i * 4 + 3] = 255;
-        }
-    } else {
-        CFW_LOG_WARNING("Optics cursor icon has unsupported channel count: {}", channels);
-        return std::nullopt;
-    }
-    return pixels;
-}
-
-std::filesystem::path find_relative_asset_path(const std::filesystem::path& relative_path) {
-    std::error_code ec;
-    auto current = Corona::Utils::executable_directory();
-    if (!ec) {
-        for (auto dir = current; !dir.empty(); dir = dir.parent_path()) {
-            auto candidate = dir / relative_path;
-            if (std::filesystem::exists(candidate, ec) && !ec) {
-                return candidate;
-            }
-            ec.clear();
-            if (dir == dir.parent_path()) {
-                break;
-            }
-        }
-    }
-    return relative_path;
-}
-
-std::optional<CursorIconPixels> load_rgba_icon_pixels(
-    const std::filesystem::path& relative_path,
-    std::string_view label) {
-    const auto icon_path = find_relative_asset_path(relative_path);
-    const auto image_id = Corona::Resource::ResourceManager::get_instance().import_sync(icon_path);
-    if (image_id == Corona::Resource::IResource::INVALID_UID) {
-        CFW_LOG_WARNING("{} load failed: {}", label, icon_path.string());
-        return std::nullopt;
-    }
-    auto image =
-        Corona::Resource::ResourceManager::get_instance().acquire_read<Corona::Resource::Image>(image_id);
-    if (!image || image->get_width() <= 0 || image->get_height() <= 0 ||
-        image->get_data() == nullptr) {
-        CFW_LOG_WARNING("{} data invalid: {}", label, icon_path.string());
-        return std::nullopt;
-    }
-
-    CursorIconPixels pixels;
-    pixels.width = image->get_width();
-    pixels.height = image->get_height();
-    const int channels = image->get_channels();
-    const auto pixel_count =
-        static_cast<std::size_t>(pixels.width) * static_cast<std::size_t>(pixels.height);
-    pixels.rgba.resize(pixel_count * 4);
-    const unsigned char* src = image->get_data();
-    if (channels == 4) {
-        std::copy(src, src + pixel_count * 4, pixels.rgba.begin());
-    } else if (channels == 3 || channels == 1) {
-        for (std::size_t i = 0; i < pixel_count; ++i) {
-            const auto source = i * static_cast<std::size_t>(channels);
-            pixels.rgba[i * 4 + 0] = src[source + 0];
-            pixels.rgba[i * 4 + 1] = channels == 1 ? src[source] : src[source + 1];
-            pixels.rgba[i * 4 + 2] = channels == 1 ? src[source] : src[source + 2];
-            pixels.rgba[i * 4 + 3] = 255;
-        }
-    } else {
-        CFW_LOG_WARNING("{} has unsupported channel count: {}", label, channels);
-        return std::nullopt;
-    }
-    return pixels;
-}
-
-
 
 void mix_hash(std::size_t& sig, std::size_t value) {
     sig ^= value + 0x9e3779b97f4a7c15ULL + (sig << 6) + (sig >> 2);
@@ -695,24 +562,6 @@ void mix_hash_float(std::size_t& sig, float value) {
 
 constexpr uint64_t kVisionRuntimeIdleEvictFrames = 240;
 
-void apply_pending_camera_moves() {
-    auto& hub = Corona::SharedDataHub::instance();
-    auto moves = hub.drain_camera_moves();
-    if (moves.empty()) {
-        return;
-    }
-
-    auto& camera_storage = hub.camera_storage();
-    for (const auto& move : moves) {
-        if (auto camera = camera_storage.try_acquire_write(move.camera_handle)) {
-            camera->position = move.position;
-            camera->forward = move.forward;
-            camera->world_up = move.world_up;
-            camera->fov = move.fov;
-        }
-    }
-}
-
 void apply_pending_camera_viewport_updates() {
     auto& hub = Corona::SharedDataHub::instance();
     auto updates = hub.drain_camera_viewport_updates();
@@ -720,59 +569,38 @@ void apply_pending_camera_viewport_updates() {
         return;
     }
 
-    CFW_LOG_INFO("Optics: applying {} camera viewport update(s)", updates.size());
+    // 逐帧都会收到视口更新：聚合行降到 DEBUG（历史上 70 秒刷过 899 行完全相同的 INFO）。
+    CFW_LOG_DEBUG("Optics: applying {} camera viewport update(s)", updates.size());
 
-    auto& camera_storage = hub.camera_storage();
     for (const auto& update : updates) {
-        if (auto camera = camera_storage.acquire_write(update.camera_handle)) {
+        // 只在视口真的变化时打一条 INFO；重复的相同更新不再刷屏。
+        bool viewport_changed = false;
+        if (auto camera = Corona::find_camera(update.camera_handle)) {
+            viewport_changed = camera->surface != update.surface ||
+                               camera->view_open != update.view_open ||
+                               camera->view_x != update.x || camera->view_y != update.y ||
+                               camera->view_width != update.width ||
+                               camera->view_height != update.height;
+        }
+        if (Corona::Systems::apply_camera_viewport_update(hub, update) && viewport_changed) {
             CFW_LOG_INFO("Optics: camera viewport handle={} surface={} open={} rect={}x{}+{},{} render={}x{}",
                          update.camera_handle, update.surface, update.view_open, update.width,
                          update.height, update.x, update.y, update.render_width,
                          update.render_height);
-            camera->surface = update.surface;
-            camera->follows_default_surface = false;
-            camera->view_open = update.view_open;
-            camera->viewport_rect_active = true;
-            camera->view_x = update.x;
-            camera->view_y = update.y;
-            camera->view_width = update.width;
-            camera->view_height = update.height;
-            const auto render_width =
-                static_cast<std::uint32_t>(std::max(update.render_width, 1));
-            const auto render_height =
-                static_cast<std::uint32_t>(std::max(update.render_height, 1));
-            camera->width = render_width;
-            camera->height = render_height;
-            camera->aspect = static_cast<float>(render_width) /
-                             static_cast<float>(render_height);
-        }
-        if(update.surface && !update.view_open) {
-            // One embedded viewport owns a surface. Explicit floating camera
-            // windows remain independent; old saved cameras must not render
-            // an additional backend behind the active story viewport.
-            std::vector<std::uintptr_t> obsolete;
-            for(const auto& camera:std::as_const(camera_storage)) {
-                const auto handle=reinterpret_cast<std::uintptr_t>(&camera);
-                if(handle!=update.camera_handle && camera.surface==update.surface && !camera.view_open)
-                    obsolete.push_back(handle);
-            }
-            for(auto handle:obsolete)if(auto camera=camera_storage.try_acquire_write(handle)) {
-                if(camera->surface==update.surface && !camera->view_open){camera->surface=nullptr;camera->follows_default_surface=false;}
-            }
         }
     }
 }
 
-void apply_pending_camera_state_updates() {
+std::vector<Corona::CameraStateUpdateCommand> apply_pending_camera_state_updates() {
     auto& hub = Corona::SharedDataHub::instance();
     auto updates = hub.drain_camera_state_updates();
     if (updates.empty()) {
-        return;
+        return updates;
     }
 
-    auto& camera_storage = hub.camera_storage();
+    auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
     for (const auto& update : updates) {
-        if (auto camera = camera_storage.acquire_write(update.camera_handle)) {
+        if (auto camera = Corona::find_camera(update.camera_handle)) {
             if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::Projection)) {
                 camera->projection_x_sign = update.projection_x_sign;
                 camera->near_plane = update.near_plane;
@@ -832,18 +660,24 @@ void apply_pending_camera_state_updates() {
             if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::ViewState)) {
                 camera->view_open = update.view_open;
+            }
+            if (Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::ViewState) ||
+                Corona::has_camera_state_field(update.fields, Corona::CameraStateUpdateField::ViewSettings)) {
                 camera->view_x = update.view_x;
                 camera->view_y = update.view_y;
                 camera->view_width = update.view_width;
                 camera->view_height = update.view_height;
                 camera->move_speed = update.move_speed;
             }
-            if (Corona::has_camera_state_field(
-                    update.fields, Corona::CameraStateUpdateField::MoveSpeed)) {
-                camera->move_speed = update.move_speed;
-            }
         }
-        // Retain the accepted preference until the camera write is committed.
+    }
+    return updates;
+}
+
+void acknowledge_camera_state_updates(const std::vector<Corona::CameraStateUpdateCommand>& updates) {
+    auto& hub = Corona::SharedDataHub::instance();
+    for (const auto& update : updates) {
+        // Retire requests only after the committed snapshot is published.
         // A newer request may arrive during this batch; its sequence must survive.
         if (Corona::has_camera_state_field(
                 update.fields, Corona::CameraStateUpdateField::VisionDenoise)) {
@@ -875,14 +709,64 @@ void apply_pending_camera_state_updates() {
     }
 }
 
+void apply_pending_camera_moves() {
+    auto& hub = Corona::SharedDataHub::instance();
+    auto moves = hub.drain_camera_moves();
+    if (moves.empty()) {
+        return;
+    }
+
+    auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
+    for (const auto& move : moves) {
+        if (auto camera = Corona::find_camera(move.camera_handle)) {
+            camera->position = move.position;
+            camera->forward = move.forward;
+            camera->world_up = move.world_up;
+            camera->fov = move.fov;
+        }
+    }
+}
+
+void apply_pending_transform_updates() {
+    auto& hub = Corona::SharedDataHub::instance();
+    auto updates = hub.drain_transform_updates();
+    if (updates.empty()) {
+        return;
+    }
+
+    for (const auto& update : updates) {
+        if (auto transform = Corona::find_transform(update.transform_handle)) {
+            if (Corona::has_transform_field(update.fields, Corona::TransformField::Position)) {
+                transform->position = update.position;
+            }
+            if (Corona::has_transform_field(update.fields, Corona::TransformField::Rotation)) {
+                transform->euler_rotation = update.euler_rotation;
+            }
+            if (Corona::has_transform_field(update.fields, Corona::TransformField::Scale)) {
+                transform->scale = update.scale;
+            }
+            if (Corona::has_transform_field(update.fields, Corona::TransformField::Matrix)) {
+                // 列主序仿射矩阵：与 API::Geometry::set_matrix 的写入口径一致，
+                // TRS 归一化为单位（矩阵本身已经含平移/旋转/缩放/剪切）。
+                for (int c = 0; c < 4; ++c) {
+                    for (int r = 0; r < 4; ++r) {
+                        transform->affine_basis[c][r] = update.matrix[c * 4 + r];
+                    }
+                }
+                transform->affine_basis[3] = ktm::fvec4{0.0f, 0.0f, 0.0f, 1.0f};
+                transform->position = update.position;
+                transform->euler_rotation = ktm::fvec3{0.0f, 0.0f, 0.0f};
+                transform->scale = ktm::fvec3{1.0f, 1.0f, 1.0f};
+            }
+        }
+    }
+}
+
 void apply_pending_camera_releases() {
     auto& hub = Corona::SharedDataHub::instance();
     for (const auto& release : hub.drain_camera_releases()) {
         hub.clear_camera_state_updates(release.camera_handle);
-        if (release.actor_pick_handle != 0) {
-            hub.actor_pick_storage().deallocate(release.actor_pick_handle);
-        }
-        hub.camera_storage().deallocate(release.camera_handle);
+        hub.destroy_camera(release.camera_handle);
     }
 }
 
@@ -1321,17 +1205,14 @@ bool collect_actor_instances_for_visibility(
     const auto& diag = optics_diag_config();
 
     auto& hub = Corona::SharedDataHub::instance();
-    auto& actor_storage = hub.actor_storage();
-    auto& profile_storage = hub.profile_storage();
-    auto& optics_storage = hub.optics_storage();
-    auto& geom_storage = hub.geometry_storage();
-    auto& transform_storage = hub.model_transform_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     bool has_instances = false;
     uint32_t recorded_draws = 0;
     uint32_t object_id = 1;
     for (auto actor_handle : scene.actor_handles) {
-        auto actor = actor_storage.try_acquire_read(actor_handle);
+        auto actor = Corona::find_actor(actor_handle);
+        const auto* actor_profiles = Corona::find_profiles(actor_handle);
         if (!actor) {
             ++object_id;
             continue;
@@ -1343,13 +1224,12 @@ bool collect_actor_instances_for_visibility(
 
         // ������Դ����ʱ�䣨���� ResourceManager LRU��
         {
-            auto& model_res_storage = hub.model_resource_storage();
-            for (auto ph : actor->profile_handles) {
-                auto prof = profile_storage.try_acquire_read(ph);
+            for (auto ph : actor_profiles->handles) {
+                auto prof = Corona::find_profile(ph);
                 if (!prof || !prof->geometry_handle) continue;
-                auto g = geom_storage.try_acquire_read(prof->geometry_handle);
+                auto g = Corona::find_geometry(prof->geometry_handle);
                 if (!g || !g->model_resource_handle) continue;
-                auto mr = model_res_storage.try_acquire_read(g->model_resource_handle);
+                auto mr = Corona::find_model_resource(g->model_resource_handle);
                 if (mr && mr->model_id) {
                     Corona::Resource::ResourceManager::get_instance().touch(mr->model_id);
                 }
@@ -1357,20 +1237,23 @@ bool collect_actor_instances_for_visibility(
             }
         }
 
-        if (actor->follow_camera != follow_camera_pass) {
+        const auto* actor_follow_camera = Corona::find_follow_camera(actor_handle);
+        if ((actor_follow_camera != nullptr && actor_follow_camera->enabled) !=
+            follow_camera_pass) {
             ++object_id;
             continue;
         }
 
-        for (auto profile_handle : actor->profile_handles) {
-            auto profile = profile_storage.try_acquire_read(profile_handle);
+        for (auto profile_handle : actor_profiles->handles) {
+            auto profile = Corona::find_profile(profile_handle);
             if (!profile || profile->optics_handle == 0) continue;
 
-            auto optics_acc = optics_storage.try_acquire_read(profile->optics_handle);
+            auto optics_acc = Corona::find_optics(profile->optics_handle);
             if (!optics_acc) continue;
             const auto& optics = *optics_acc;
+            const auto* optics_visibility = Corona::find_visibility(profile->optics_handle);
 
-            if (!optics.visible) {
+            if (optics_visibility == nullptr || !optics_visibility->visible) {
                 ++object_id;
                 continue;
             }
@@ -1378,17 +1261,17 @@ bool collect_actor_instances_for_visibility(
                 continue;
             }
             // ---- ��ȡ���α任��Ϣ���������ɣ�texture �� query_mesh_slots �ڲ������----
-            std::uintptr_t transform_handle_a = 0;
+            EntityId transform_handle_a = 0;
             float          nlc_scale_a   = 1.0f;
             ktm::fvec3     nlc_offset_a  = {0.0f, 0.0f, 0.0f};
-            if (auto geom_r = geom_storage.try_acquire_read(optics.geometry_handle)) {
+            if (auto geom_r = Corona::find_geometry(optics.geometry_handle)) {
                 transform_handle_a = geom_r->transform_handle;
                 nlc_scale_a        = geom_r->native_local_correction_scale;
                 nlc_offset_a       = geom_r->native_local_correction_offset;
             }
 
             ktm::fmat4x4 model_matrix{ktm::fmat4x4::from_eye()};
-            if (auto transform = transform_storage.try_acquire_read(transform_handle_a)) {
+            if (auto transform = Corona::find_transform(transform_handle_a)) {
                 model_matrix = transform->compute_matrix();
                 // ����ȡ�� nlc �������� apply_native_local_correction �߼�
                 if (std::abs(nlc_scale_a - 1.0f) > 1e-6f ||
@@ -1463,7 +1346,8 @@ bool collect_actor_instances_for_visibility(
                 {
                     batch.materials.push_back(Corona::Systems::OpticsDetail::pack_native_material(
                         ms, optics, texture_descriptor, diag.disable_textures || diag.force_solid_material,
-                        optics.bEnableLighting && !diag.force_solid_material));
+                        optics_visibility != nullptr && optics_visibility->receives_lighting &&
+                            !diag.force_solid_material));
                 }
                 log_optics_material_once(actor_handle,
                                          optics.geometry_handle,
@@ -1701,9 +1585,9 @@ void apply_pending_default_surface_camera_update() {
     auto& hub = Corona::SharedDataHub::instance();
     const auto update = hub.take_default_surface_camera_update();
     if (!update) return;
-    for (const auto& scene : std::as_const(hub.scene_storage())) {
+    for (const auto& scene : Corona::all_scenes()) {
         if (!scene.enabled) continue;
-        auto camera = hub.camera_storage().try_acquire_write(select_scene_camera_handle(scene));
+        auto camera = Corona::find_camera(select_scene_camera_handle(scene));
         if (!camera || !camera->follows_default_surface ||
             (camera->surface && camera->surface != update->surface)) continue;
         camera->surface = update->surface;
@@ -1748,7 +1632,8 @@ template<typename Views>
     using namespace Corona::Systems::Vision;
     if (!vision_media_enabled(camera.vision_render_mode, camera.vision_accumulation,
                               camera.vision_denoise, true)) return false;
-    const auto settings = vision::DataWrap::parse(camera.vision_pt_settings, nullptr, false);
+    // Settings are typed JSON on the component (no wire-format round trip).
+    const auto& settings = camera.vision_pt_settings;
     const auto requested = settings.find("participating_media");
     return requested != settings.end() && requested->is_boolean() && requested->get<bool>();
 }
@@ -1762,17 +1647,17 @@ void add_vision_media_feedback(vision::DataWrap& settings, std::size_t imported_
 
 [[nodiscard]] std::optional<Corona::CameraDevice> active_scene_camera_values() {
     auto& hub = Corona::SharedDataHub::instance();
-    for (const auto& scene : std::as_const(hub.scene_storage())) {
+    for (const auto& scene : Corona::all_scenes()) {
         if (!scene.enabled) continue;
         const auto handle = select_scene_camera_handle(scene);
-        if (auto camera = hub.camera_storage().try_acquire_read(handle)) return *camera;
+        if (auto camera = Corona::find_camera(handle)) return *camera;
     }
     return std::nullopt;
 }
 
 [[nodiscard]] Corona::EnvironmentDevice vision_environment_for_scene(const Corona::SceneDevice& scene) {
     if (scene.environment != 0) {
-        if (auto env = Corona::SharedDataHub::instance().environment_storage().try_acquire_read(scene.environment)) {
+        if (const auto* env = Corona::SharedDataHub::instance().try_environment(scene.environment)) {
             return *env;
         }
     }
@@ -1785,7 +1670,7 @@ void add_vision_media_feedback(vision::DataWrap& settings, std::size_t imported_
 // EngineBuilt currently represents the single enabled Corona scene. Never use
 // EnvironmentDevice's bright defaults when that scene has no environment.
 [[nodiscard]] Corona::EnvironmentDevice engine_vision_environment() {
-    for (const auto& scene : std::as_const(Corona::SharedDataHub::instance().scene_storage())) {
+    for (const auto& scene : Corona::all_scenes()) {
         if (scene.enabled) return vision_environment_for_scene(scene);
     }
     return vision_environment_for_scene(Corona::SceneDevice{});
@@ -1800,37 +1685,38 @@ constexpr std::size_t kVisionInteractiveInstanceLimit = 1024;
 
 void fallback_large_scenes_to_native_renderer() {
     auto& hub = Corona::SharedDataHub::instance();
-    auto& actor_storage = hub.actor_storage();
-    auto& profile_storage = hub.profile_storage();
-    auto& optics_storage = hub.optics_storage();
-    auto& geometry_storage = hub.geometry_storage();
-    auto& camera_storage = hub.camera_storage();
+    auto geometry_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
+    auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
 
-    for (const auto& scene : std::as_const(hub.scene_storage())) {
+    for (const auto& scene : Corona::all_scenes()) {
         if (!scene.enabled) continue;
         const bool has_vision_camera = std::any_of(scene.camera_handles.begin(), scene.camera_handles.end(),
             [&](auto handle) {
-                const auto camera = camera_storage.try_acquire_read(handle);
+                const auto camera = Corona::find_camera(handle);
                 return camera && camera->render_backend == Corona::CameraRenderBackend::Vision;
             });
         if (!has_vision_camera) continue;
 
         std::size_t instance_count = 0;
         for (const auto actor_handle : scene.actor_handles) {
-            const auto actor = actor_storage.try_acquire_read(actor_handle);
+            const auto actor = Corona::find_actor(actor_handle);
             if (!actor) continue;
-            for (const auto profile_handle : actor->profile_handles) {
-                const auto profile = profile_storage.try_acquire_read(profile_handle);
+            const auto* actor_profiles = Corona::find_profiles(actor_handle);
+            if (actor_profiles == nullptr) continue;
+            for (const auto profile_handle : actor_profiles->handles) {
+                const auto profile = Corona::find_profile(profile_handle);
             if (!profile || profile->optics_handle == 0) continue;
-                const auto optics = optics_storage.try_acquire_read(profile->optics_handle);
-                const auto geometry = optics ? geometry_storage.try_acquire_read(optics->geometry_handle)
-                                             : decltype(geometry_storage.try_acquire_read(0)){};
-                if (!optics || !optics->visible || !geometry) continue;
+                const auto optics = Corona::find_optics(profile->optics_handle);
+                const auto geometry = optics ? Corona::find_geometry(optics->geometry_handle)
+                                             : decltype(Corona::find_geometry(0)){};
+                const auto* optics_visibility = Corona::find_visibility(profile->optics_handle);
+                if (!optics || optics_visibility == nullptr || !optics_visibility->visible ||
+                    !geometry) continue;
                 if (!geometry->mesh_instances.empty()) {
                     instance_count += geometry->mesh_instances.size();
                 } else if (!geometry->mesh_handles.empty()) {
                     instance_count += geometry->mesh_handles.size();
-                } else if (auto model = hub.model_resource_storage().try_acquire_read(geometry->model_resource_handle)) {
+                } else if (auto model = Corona::find_model_resource(geometry->model_resource_handle)) {
                     if (auto resource = Corona::Resource::ResourceManager::get_instance()
                             .acquire_read<Corona::Resource::Scene>(model->model_id)) {
                         instance_count += resource->data.mesh_instances.empty()
@@ -1844,7 +1730,7 @@ void fallback_large_scenes_to_native_renderer() {
         if (instance_count <= kVisionInteractiveInstanceLimit) continue;
 
         for (const auto camera_handle : scene.camera_handles) {
-            const auto camera = camera_storage.try_acquire_write(camera_handle);
+            const auto camera = Corona::find_camera(camera_handle);
             if (!camera || camera->render_backend != Corona::CameraRenderBackend::Vision) continue;
             camera->render_backend = Corona::CameraRenderBackend::Native;
             CFW_LOG_WARNING(
@@ -1858,11 +1744,11 @@ void fallback_large_scenes_to_native_renderer() {
     const std::function<bool(std::uintptr_t)>& pending_capture = {}) {
     VisionModeSelection selection;
 
-    for (const auto& scene : std::as_const(Corona::SharedDataHub::instance().scene_storage())) {
+    for (const auto& scene : Corona::all_scenes()) {
         if (!scene.enabled) continue;
         for (const auto camera_handle : scene.camera_handles) {
             auto camera =
-                Corona::SharedDataHub::instance().camera_storage().try_acquire_read(camera_handle);
+                Corona::find_camera(camera_handle);
             if (!camera || camera->render_backend != Corona::CameraRenderBackend::Vision ||
                 (camera->surface == nullptr && (!pending_capture || !pending_capture(camera_handle)))) {
                 continue;
@@ -2056,6 +1942,16 @@ void bind_pipeline_scene_gpu_resource(
 }  // namespace
 
 namespace Corona::Systems {
+
+Kernel::ComponentAccess OpticsSystem::component_access() const {
+    Kernel::ComponentAccess access;
+    access.write<OpticsDevice, CameraDevice, ImageDevice>()
+          .read<Ecs::Transform, GeometryDevice, OpticsDevice, CameraDevice,
+                SceneDevice, EnvironmentDevice, ActorDevice, ProfileDevice,
+                AcousticsDevice, MechanicsDevice>();
+    return access;
+}
+
 using RenderDetail::RetainSubmission;
 using RenderDetail::bind_storage_image;
 using RenderDetail::bind_sampled_image;
@@ -2121,7 +2017,7 @@ struct OpticsSystem::VisionPipelineRuntime {
     std::unordered_map<std::uintptr_t, Horizon::SubmitReceipt> interop_submissions;
     Horizon::HardwareExecutor* interop_executor{nullptr};
 
-    void wait_for_interop_submission(std::uintptr_t camera_handle,
+    void wait_for_interop_submission(EntityId camera_handle,
                                      std::string_view reason,
                                      bool log_wait = true) noexcept {
         auto receipt_it = interop_submissions.find(camera_handle);
@@ -2178,7 +2074,7 @@ struct OpticsSystem::VisionPipelineRuntime {
         }
         Vision::drain_vision_interop_submissions(
             interop_submissions,
-            [&](std::uintptr_t camera_handle, const Horizon::SubmitReceipt& receipt) {
+            [&](EntityId camera_handle, const Horizon::SubmitReceipt& receipt) {
                 if (interop_executor == nullptr) {
                     CFW_LOG_ERROR(
                         "OpticsSystem: missing executor while draining Vision interop submission "
@@ -2277,14 +2173,14 @@ struct OpticsSystem::VisionPipelineRuntime {
 };
 
 bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
-                                            std::uintptr_t camera_handle,
+                                            EntityId camera_handle,
                                             uint32_t width, uint32_t height,
                                             bool denoise, bool accumulation, bool stable_planes,
                                             CameraVisionDenoiser denoiser,
-                                            const std::string& reblur_settings,
-                                            const std::string& relax_settings,
-                                            const std::string& pt_settings,
-                                            const std::string& restir_settings,
+                                            const nlohmann::json& reblur_settings,
+                                            const nlohmann::json& relax_settings,
+                                            const nlohmann::json& pt_settings,
+                                            const nlohmann::json& restir_settings,
                                             VisionCameraFeedback* deferred_feedback,
                                             std::size_t imported_media_count) {
     vision::switch_profile::Scope profile{"view.prepare", "view"};
@@ -2345,10 +2241,9 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
     if (is_restir || runtime.mode == CameraVisionRenderMode::PathTracing ||
         runtime.mode == CameraVisionRenderMode::ProgressivePathTracing) {
         auto* integrator = pipeline->renderer().integrator().get();
-        const auto &json = is_restir ? restir_settings : pt_settings;
-        auto overrides = vision::DataWrap::parse(json, nullptr, false);
+        const auto& json = is_restir ? restir_settings : pt_settings;
+        auto overrides = json.is_object() ? json : vision::DataWrap::object();
         if (!is_restir) {
-            if (!overrides.is_object()) overrides = vision::DataWrap::object();
             overrides["participating_media"] = runtime.participating_media;
             if (!runtime.participating_media && overrides.contains("medium_diagnostics"))
                 overrides["medium_diagnostics"] = false;
@@ -2357,9 +2252,11 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
         if (changed) pipeline->invalidate();
         if (is_restir) {
             if (Vision::validate_restir_settings(overrides).empty()) {
+                // Media counts and the effective policy reach the editor every frame: the
+                // request cannot know whether the runtime mode denied participating media.
                 auto effective = integrator->settings();
                 add_vision_media_feedback(effective, imported_media_count, 0, false);
-                feedback.restir_effective = effective.dump();
+                feedback.restir_effective = effective;
                 feedback.restir_applied = json;
             }
         } else {
@@ -2367,20 +2264,20 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
             add_vision_media_feedback(effective, imported_media_count,
                                       pipeline->scene().geometry().boundary_count(),
                                       runtime.participating_media);
-            feedback.pt_effective = effective.dump();
+            feedback.pt_effective = effective;
         }
     }
     if (auto* illumination = dynamic_cast<vision::IlluminationIntegrator*>(pipeline->renderer().integrator().get())) {
         if (auto* filter = illumination->denoiser(); filter && filter->set_reblur_settings(reblur_settings)) {
             pipeline->invalidate();
-            feedback.reblur_effective = filter->reblur_settings_json();
+            feedback.reblur_effective = filter->reblur_settings();
         }
-        feedback.reblur_contexts = illumination->reblur_context_settings().dump();
+        feedback.reblur_contexts = illumination->reblur_context_settings();
         if (auto* filter = illumination->denoiser(); filter && filter->impl_type() == "ReLAX") {
             const bool changed = filter->set_relax_settings(relax_settings);
             if (changed) pipeline->invalidate();
             if (view_created || changed) {
-                feedback.relax_effective = filter->relax_settings_json();
+                feedback.relax_effective = filter->relax_settings();
             }
         }
     }
@@ -2417,11 +2314,11 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
     return true;
 }
 
-void OpticsSystem::publish_vision_camera_feedback(std::uintptr_t camera_handle,
+void OpticsSystem::publish_vision_camera_feedback(EntityId camera_handle,
                                                  const VisionCameraFeedback& feedback) {
     if (!feedback.restir_effective && !feedback.pt_effective &&
         !feedback.reblur_effective && !feedback.relax_effective && !feedback.reblur_contexts) return;
-    auto camera = SharedDataHub::instance().camera_storage().try_acquire_write(camera_handle);
+    auto camera = Corona::find_camera(camera_handle);
     if (!camera) return;
     if (feedback.restir_effective) camera->vision_restir_effective_settings = *feedback.restir_effective;
     if (feedback.restir_applied) camera->vision_restir_applied_settings = *feedback.restir_applied;
@@ -2486,7 +2383,7 @@ void OpticsSystem::evict_idle_vision_runtimes(uint64_t frame_index) {
         const bool has_open_view = std::any_of(
             runtime->view_denoise_states.begin(), runtime->view_denoise_states.end(),
             [](const auto& view) {
-                auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(view.first);
+                auto camera = Corona::find_camera(view.first);
                 return camera && camera->surface != nullptr &&
                        camera->render_backend == CameraRenderBackend::Vision;
             });
@@ -2657,11 +2554,9 @@ bool OpticsSystem::initialize_render_pipelines() {
             visibility_vert_glsl_t{},
             visibility_frag_glsl_t{},
             make_visibility_pipeline_desc(false));
-        hardware_->actorPickPipeline.emplace(actor_pick_comp_glsl, ktm::uvec3(1, 1, 1));
         hardware_->screenshotReadbackPipeline.emplace(image_readback_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->opticsOverlayPipeline.emplace(optics_overlay_comp_glsl, ktm::uvec3(8, 8, 1));
-        hardware_->opticsGizmoPipeline.emplace(optics_gizmo_comp_glsl, ktm::uvec3(8, 8, 1));
-        hardware_->opticsCursorPipeline.emplace(optics_cursor_comp_glsl, ktm::uvec3(8, 8, 1));
+
         hardware_->opticsUiWarpPipeline.emplace(optics_ui_warp_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->opticsCompositePipeline.emplace(optics_composite_comp_glsl, ktm::uvec3(8, 8, 1));
         hardware_->visionDisplayExtent.as_push_constant();
@@ -2759,7 +2654,6 @@ void OpticsSystem::release_native_render_resources() {
     // Pipelines retain bound images and buffers. Erasing the view map alone
     // does not release those resources, even after all GPU work has completed.
     hardware_->visibilityPipeline.reset();
-    hardware_->actorPickPipeline.reset();
     hardware_->refractionOpaquePipeline.reset();
     hardware_->refractionExitPipeline.reset();
     hardware_->refractionFrontPipeline.reset();
@@ -2794,121 +2688,11 @@ void OpticsSystem::release_native_render_resources() {
     // Picking shares visibility shaders, but needs no Native lighting resources.
     hardware_->visibilityPipeline.emplace(visibility_vert_glsl_t{}, visibility_frag_glsl_t{},
                                           make_visibility_pipeline_desc());
-    hardware_->actorPickPipeline.emplace(actor_pick_comp_glsl, ktm::uvec3(1, 1, 1));
     CFW_LOG_INFO("NativeResourceLifecycle released: lighting, material, view resources and bindings");
 }
 
-bool OpticsSystem::ensure_cursor_icon_texture() {
-    if (!hardware_) {
-        return false;
-    }
-    if (hardware_->cursorIconImage) {
-        return true;
-    }
-    if (hardware_->cursorIconLoadAttempted) {
-        return false;
-    }
-    hardware_->cursorIconLoadAttempted = true;
 
-    auto pixels = load_mouse_icon_pixels();
-    if (!pixels) {
-        return false;
-    }
-
-    Horizon::HardwareImage icon(Horizon::HardwareImageDesc::texture_2d(
-        static_cast<uint32_t>(pixels->width),
-        static_cast<uint32_t>(pixels->height),
-        Horizon::Format::SRGBA8_UNORM,
-        Horizon::ImageUsage_Sampled | Horizon::ImageUsage_TransferDst,
-        "optics.cursor_icon"));
-    if (!icon) {
-        CFW_LOG_WARNING("Optics cursor icon GPU image creation failed");
-        return false;
-    }
-
-    Horizon::HardwareExecutor executor;
-    const auto upload_pixels = std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(pixels->rgba.data()),
-        pixels->rgba.size());
-    // Horizon �Ƴ��� HardwareImage::upload()����Ϊ staging buffer + copy_from()��
-    Horizon::HardwareBufferDesc staging_desc;
-    staging_desc.element_count = upload_pixels.size_bytes();
-    staging_desc.element_size = 1;
-    staging_desc.usage = Horizon::BufferUsage_TransferSrc;
-    staging_desc.cpu_access = Horizon::CpuAccessMode::Write;
-    const Horizon::HardwareBuffer staging(staging_desc, upload_pixels);
-
-    const Horizon::SubmitReceipt upload_receipt =
-        executor.stream()
-            << icon.copy_from(staging)
-            << Horizon::commit();
-    executor.wait_idle(upload_receipt);
-    hardware_->cursorIconImage = std::move(icon);
-    CFW_LOG_INFO("Optics cursor icon uploaded ({}x{})", pixels->width, pixels->height);
-    return true;
-}
-
-bool OpticsSystem::ensure_gizmo_axis_textures() {
-    if (!hardware_) {
-        return false;
-    }
-    if (std::all_of(hardware_->gizmoAxisImages.begin(),
-                    hardware_->gizmoAxisImages.end(),
-                    [](const Horizon::HardwareImage& image) {
-                        return static_cast<bool>(image);
-                    })) {
-        return true;
-    }
-    if (hardware_->gizmoAxisLoadAttempted) {
-        return false;
-    }
-    hardware_->gizmoAxisLoadAttempted = true;
-
-    std::array<CursorIconPixels, 3> pixels;
-    for (std::size_t i = 0; i < pixels.size(); ++i) {
-        auto loaded = load_rgba_icon_pixels(kGizmoAxisRelativePaths[i], "Optics gizmo axis");
-        if (!loaded) {
-            return false;
-        }
-        pixels[i] = std::move(*loaded);
-    }
-
-    Horizon::HardwareExecutor executor;
-    for (std::size_t i = 0; i < pixels.size(); ++i) {
-        Horizon::HardwareImage image(Horizon::HardwareImageDesc::texture_2d(
-            static_cast<std::uint32_t>(pixels[i].width),
-            static_cast<std::uint32_t>(pixels[i].height),
-            Horizon::Format::SRGBA8_UNORM,
-            Horizon::ImageUsage_Sampled | Horizon::ImageUsage_TransferDst,
-            i == 0 ? "optics.gizmo_axis_x"
-                   : (i == 1 ? "optics.gizmo_axis_y" : "optics.gizmo_axis_z")));
-        if (!image) {
-            CFW_LOG_WARNING("Optics gizmo axis GPU image creation failed at {}", i);
-            return false;
-        }
-        const auto bytes = std::span<const std::byte>(
-            reinterpret_cast<const std::byte*>(pixels[i].rgba.data()),
-            pixels[i].rgba.size());
-
-        // Use staging buffer + copy_from() like cursor icon (new Horizon API)
-        Horizon::HardwareBufferDesc staging_desc;
-        staging_desc.element_count = bytes.size_bytes();
-        staging_desc.element_size = 1;
-        staging_desc.usage = Horizon::BufferUsage_TransferSrc;
-        staging_desc.cpu_access = Horizon::CpuAccessMode::Write;
-        const Horizon::HardwareBuffer staging(staging_desc, bytes);
-
-        const auto receipt = executor.stream()
-            << image.copy_from(staging)
-            << Horizon::commit();
-        executor.wait_idle(receipt);
-        hardware_->gizmoAxisImages[i] = std::move(image);
-    }
-    CFW_LOG_INFO("Optics gizmo axis textures uploaded");
-    return true;
-}
-
-void OpticsSystem::bind_native_view_resources(std::uintptr_t camera_handle,
+void OpticsSystem::bind_native_view_resources(EntityId camera_handle,
                                               uint32_t width,
                                               uint32_t height,
                                               uint64_t frame_index) {
@@ -2954,7 +2738,7 @@ void OpticsSystem::bind_native_view_resources(std::uintptr_t camera_handle,
 
 }
 
-void OpticsSystem::ensure_ui_view_resources(std::uintptr_t camera_handle,
+void OpticsSystem::ensure_ui_view_resources(EntityId camera_handle,
                                             uint32_t width,
                                             uint32_t height,
                                             uint64_t frame_index) {
@@ -3023,11 +2807,11 @@ OpticsSystem::SurfaceRenderTarget& OpticsSystem::acquire_surface_target(void* su
 
     // Allocate one ImageStorage slot when this surface first needs an output.
     if (target.image_handle == 0) {
-        target.image_handle = SharedDataHub::instance().image_storage().allocate();
+        target.image_handle = Corona::SharedDataHub::instance().create_image();
         target.published_image = Detail::PublishedImage(target.image_handle);
         // Clear any image and GPU receipts retained from a previous allocation.
         if (auto accessor =
-                SharedDataHub::instance().image_storage().acquire_write(target.image_handle)) {
+                Corona::SharedDataHub::instance().image_write(target.image_handle)) {
             *accessor = ImageDevice{};
         }
     }
@@ -3037,7 +2821,7 @@ OpticsSystem::SurfaceRenderTarget& OpticsSystem::acquire_surface_target(void* su
         target.width != width || target.height != height) {
         if (target.image_handle != 0) {
             if (auto image_device =
-                    SharedDataHub::instance().image_storage().acquire_write(target.image_handle)) {
+                    Corona::SharedDataHub::instance().image_write(target.image_handle)) {
                 if (image_device->consumed_receipt.serial != 0) {
                     hardware_->executor.wait_idle(image_device->consumed_receipt);
                 }
@@ -3059,7 +2843,7 @@ OpticsSystem::SurfaceRenderTarget& OpticsSystem::acquire_surface_target(void* su
 }
 
 OpticsSystem::SurfaceRenderTarget& OpticsSystem::acquire_offscreen_screenshot_target(
-    std::uintptr_t camera_handle,
+    EntityId camera_handle,
     uint32_t width,
     uint32_t height,
     uint64_t frame_index) {
@@ -3107,9 +2891,9 @@ void OpticsSystem::release_surface_target(SurfaceRenderTarget& target) {
     // Invalidate cached Display layers and snapshots before waiting. An entered
     // frame keeps its image access until its final consumed receipt is written.
     target.published_image.retire().wait();
-    auto& storage = SharedDataHub::instance().image_storage();
+    auto& storage = Corona::SharedDataHub::instance();
     {
-        auto image = storage.acquire_write(target.image_handle);
+        auto image = storage.image_write(target.image_handle);
         if (image->submit_receipt.serial != 0) {
             hardware_->executor.wait_idle(image->submit_receipt);
         }
@@ -3118,7 +2902,7 @@ void OpticsSystem::release_surface_target(SurfaceRenderTarget& target) {
         }
         *image = ImageDevice{};
     }
-    storage.deallocate(target.image_handle);
+    storage.destroy_image(target.image_handle);
     target.image_handle = 0;
     target.published_image = {};
 }
@@ -3153,22 +2937,11 @@ bool OpticsSystem::initialize(Kernel::ISystemContext* ctx) {
         return false;
     }
 
-    try {
-        actor_pick_readback_worker_ =
-            std::make_unique<OpticsDetail::ActorPickReadbackWorker>(64);
-        actor_pick_readback_worker_->start();
-    } catch (const std::exception& error) {
-        CFW_LOG_CRITICAL("OpticsSystem: Failed to start actor pick readback worker: {}",
-                         error.what());
-        actor_pick_readback_worker_.reset();
-        return false;
-    }
-
     if (auto* event_bus = ctx->event_bus()) {
         screenshot_request_sub_id_ = event_bus->subscribe<Events::ScreenshotRequestEvent>(
             [this](const Events::ScreenshotRequestEvent& event) {
                 if (event.camera_handle == 0 || event.file_path.empty() ||
-                    !SharedDataHub::instance().camera_storage().try_acquire_read(event.camera_handle)) {
+                    !Corona::find_camera(event.camera_handle)) {
                     if (event.completion_promise) {
                         event.completion_promise->set_value(false);
                     }
@@ -3298,7 +3071,51 @@ bool OpticsSystem::ensure_native_frame_slot() {
     return throttle.try_acquire_slot();
 }
 
+void apply_pending_optics_updates() {
+    auto& channel = Corona::OpticsCommandChannel::instance();
+    auto commands = channel.commands().drain();
+    if (commands.empty()) {
+        return;
+    }
+
+    for (const auto& command : commands) {
+        auto* device = Corona::find_optics(command.optics_handle);
+        if (!device) {
+            continue;
+        }
+        auto* visibility = Corona::find_visibility(command.optics_handle);
+        if (!visibility) {
+            continue;
+        }
+        Corona::apply_optics_update(*device, *visibility, command);
+    }
+}
+
+void OpticsSystem::apply_camera_and_transform_updates() {
+    // Explicit viewport/state commands take precedence over default surface size.
+    apply_pending_default_surface_camera_update();
+    apply_pending_camera_viewport_updates();
+    const auto state_updates = apply_pending_camera_state_updates();
+    apply_pending_camera_moves();
+    apply_pending_transform_updates();
+    apply_pending_camera_releases();
+    SharedDataHub::instance().publish_camera_snapshot();
+    // 变换快照：外部读者（get_position/get_matrix/面板）只读这一份投影，
+    // 不再对 slot 加锁。必须在 transform 命令应用之后重建，才是"本 tick 的最终值"。
+    SharedDataHub::instance().publish_transform_snapshot();
+    acknowledge_camera_state_updates(state_updates);
+}
+
 void OpticsSystem::update() {
+    // [P3/P5 合并保留] DAG 降级路径没有 tick 边界阶段：这里保证 Environment
+    // 与 Optics 标量命令、相机姿态命令仍会被应用（DAG 模式下边界阶段已 drain，
+    // 这些调用是幂等的空操作）。
+    Corona::apply_pending_environment_updates();
+    apply_pending_optics_updates();
+    // Visibility/material getters must retain consumed values even when the
+    // render cap below skips GPU work for this tick.
+    Corona::publish_optics_snapshot();
+
     // Event-driven wakes may bypass SystemBase's periodic wait. An explicitly
     // requested render cap must still bound GPU submissions during such bursts.
     const auto now = std::chrono::steady_clock::now();
@@ -3323,13 +3140,7 @@ void OpticsSystem::update() {
     // Promote requests first, then drain those changes. Requests arriving later
     // must wait for the next frame instead of capturing this frame's old state.
     begin_screenshot_frame();
-    apply_pending_camera_moves();
-    // Explicit camera viewport/state commands below take precedence over the
-    // default surface size, matching the previous follows_default_surface rule.
-    apply_pending_default_surface_camera_update();
-    apply_pending_camera_viewport_updates();
-    apply_pending_camera_state_updates();
-    apply_pending_camera_releases();
+    apply_camera_and_transform_updates();
 
     // �ӳٻ�ȡ GeometrySystem ָ�루������ initialize() �л�ȡ����������
     // initialize_all() ��������ϵͳ��get_system() Ҳ��ͬ�� �� �ǵݹ� mutex �������
@@ -3345,13 +3156,13 @@ void OpticsSystem::update() {
     fallback_large_scenes_to_native_renderer();
     std::vector<std::uintptr_t> requested_vision_cameras;
     bool native_view_requested = false;
-    for (const auto& scene : std::as_const(SharedDataHub::instance().scene_storage())) {
+    for (const auto& scene : Corona::all_scenes()) {
         if (!scene.enabled) {
             continue;
         }
         for (const auto camera_handle : scene.camera_handles) {
             if (auto camera =
-                    SharedDataHub::instance().camera_storage().try_acquire_read(camera_handle);
+                    Corona::find_camera(camera_handle);
                 camera) {
                 if (camera->render_backend == CameraRenderBackend::Vision &&
                     (camera->surface != nullptr || has_pending_screenshot(camera_handle))) {
@@ -3375,7 +3186,7 @@ void OpticsSystem::update() {
             CFW_LOG_WARNING("OpticsSystem: Vision init failed, falling back affected cameras to Native");
             for (const auto camera_handle : requested_vision_cameras) {
                 if (auto camera =
-                        SharedDataHub::instance().camera_storage().acquire_write(camera_handle)) {
+                        Corona::find_camera(camera_handle)) {
                     camera->render_backend = CameraRenderBackend::Native;
                 }
             }
@@ -3384,7 +3195,7 @@ void OpticsSystem::update() {
 
     if (!hardware_->shaderHasInit ||
         !hardware_->opticsOverlayPipeline ||
-        !hardware_->opticsCursorPipeline || !hardware_->opticsUiWarpPipeline ||
+        !hardware_->opticsUiWarpPipeline ||
         !hardware_->opticsCompositePipeline) {
         return;
     }
@@ -3403,11 +3214,14 @@ void OpticsSystem::update() {
 OpticsSystem::RenderFramePlan OpticsSystem::build_render_frame_plan() {
     RenderFramePlan plan;
     std::unordered_set<std::uintptr_t> scheduled;
-    for (const auto& scene : std::as_const(SharedDataHub::instance().scene_storage())) {
+    auto scenes = Corona::all_scenes();
+    for (auto scene_it = scenes.begin(); scene_it != scenes.end(); ++scene_it) {
+        const auto& scene = *scene_it;
         if (!scene.enabled) continue;
-        const auto scene_handle = reinterpret_cast<std::uintptr_t>(&scene);
+        // 场景句柄直接来自实体句柄（entt 里引用地址不是实体 ID）。
+        const auto scene_handle = scene_it.id();
         for (const auto handle : scene.camera_handles) {
-            auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(handle);
+            auto camera = Corona::find_camera(handle);
             if (!camera) continue;
             plan.has_vision_cameras |= camera->render_backend == CameraRenderBackend::Vision;
             if (!camera->surface && !has_pending_screenshot(handle)) continue;
@@ -3426,18 +3240,17 @@ std::optional<OpticsSystem::LockedRenderView> OpticsSystem::lock_render_view(
     const RenderView& view, CameraRenderBackend backend) {
     // Scene structure stays locked, while camera values are copied under a
     // short read lock. UI presentation and input must not wait for a GPU frame.
-    auto scene = SharedDataHub::instance().scene_storage().try_acquire_read(view.scene_handle);
+    auto scene = Corona::find_scene(view.scene_handle);
     if (!scene || !scene->enabled ||
         std::find(scene->camera_handles.begin(), scene->camera_handles.end(), view.camera_handle) ==
             scene->camera_handles.end()) return std::nullopt;
-    auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(view.camera_handle);
+    auto camera = Corona::find_camera(view.camera_handle);
     if (!camera || camera->render_backend != backend ||
         (!camera->surface && !has_pending_screenshot(view.camera_handle))) return std::nullopt;
-    return LockedRenderView{std::move(scene), *camera};
+    return LockedRenderView{scene, *camera};
 }
 
 void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
-    drain_viewport_ui_pointer_commands();
     fail_expired_pending_screenshots();
     fail_unrenderable_pending_screenshots();
 
@@ -3527,16 +3340,24 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         auto& target = *target_ptr;
 
         if (!offscreen_screenshot) {
+            // 只把串号取出来，不跨 GPU 往返持锁。
+            // 以前 wait(consumed_receipt) 写在 acquire_write 的作用域里，
+            // 一次几毫秒的设备往返全程霸占该 ImageStorage 槽位的写锁，
+            // 主线程（UI 发布 UIFrameReady、Editor API 写 Storage）会被
+            // 这段时间直接堵住；五个系统收进一条 DAG 线程后，这段阻塞还会
+            // 把整条链一起拖住，所以锁范围必须和等待分离。
+            Horizon::SubmitReceipt consumed{};
             if (auto consumed_device =
-                    SharedDataHub::instance().image_storage().acquire_write(target.image_handle)) {
-                if (consumed_device->consumed_receipt.serial != 0) {
-                    hardware_->executor.wait(consumed_device->consumed_receipt);
-                }
+                    Corona::SharedDataHub::instance().image_write(target.image_handle)) {
+                consumed = consumed_device->consumed_receipt;
+            }
+            if (consumed.serial != 0) {
+                hardware_->executor.wait(consumed);
             }
         }
         bind_native_view_resources(cam_handle, camera->width, camera->height,
                                    frame_index);
-        locked->scene = SharedDataHub::instance().scene_storage().try_acquire_read(view.scene_handle);
+        locked->scene = Corona::find_scene(view.scene_handle);
         if (!locked->scene || !locked->scene->enabled ||
             std::find(locked->scene->camera_handles.begin(), locked->scene->camera_handles.end(), cam_handle) ==
                 locked->scene->camera_handles.end()) continue;
@@ -3586,11 +3407,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         visibility.visibilityData = hardware_->visibilityImage;
         visibility.bind_depth_target(hardware_->depthImage);
 
-        auto& actor_storage = SharedDataHub::instance().actor_storage();
-        auto& profile_storage = SharedDataHub::instance().profile_storage();
-        auto& optics_storage = SharedDataHub::instance().optics_storage();
-        auto& geom_storage = SharedDataHub::instance().geometry_storage();
-        auto& transform_storage = SharedDataHub::instance().model_transform_storage();
+        auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
         const auto& diag = optics_diag_config();
 
         RenderInstanceBatch sceneBatch;
@@ -3624,7 +3441,8 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             uint32_t recorded_draws = 0;
             uint32_t object_id = 1;
             for (auto actor_handle : scene.actor_handles) {
-                auto actor = actor_storage.try_acquire_read(actor_handle);
+                auto actor = Corona::find_actor(actor_handle);
+                const auto* actor_profiles = Corona::find_profiles(actor_handle);
                 if (!actor) {
                     ++object_id;
                     continue;
@@ -3645,14 +3463,12 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
 
                 // ������Դ����ʱ�䣨���� ResourceManager LRU��
                 {
-                    auto& model_res_storage =
-                        SharedDataHub::instance().model_resource_storage();
-                    for (auto ph : actor->profile_handles) {
-                        auto prof = profile_storage.try_acquire_read(ph);
+                    for (auto ph : actor_profiles->handles) {
+                        auto prof = Corona::find_profile(ph);
                         if (!prof || !prof->geometry_handle) continue;
-                        auto g = geom_storage.try_acquire_read(prof->geometry_handle);
+                        auto g = Corona::find_geometry(prof->geometry_handle);
                         if (!g || !g->model_resource_handle) continue;
-                        auto mr = model_res_storage.try_acquire_read(g->model_resource_handle);
+                        auto mr = Corona::find_model_resource(g->model_resource_handle);
                         if (mr && mr->model_id) {
                             Corona::Resource::ResourceManager::get_instance().touch(mr->model_id);
                         }
@@ -3660,7 +3476,9 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     }
                 }
 
-                if (actor->follow_camera != follow_camera_pass) {
+                const auto* actor_follow_camera = Corona::find_follow_camera(actor_handle);
+        if ((actor_follow_camera != nullptr && actor_follow_camera->enabled) !=
+            follow_camera_pass) {
                     ++object_id;
                     continue;
                 }
@@ -3671,15 +3489,17 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     continue;
                 }
 
-                for (auto profile_handle : actor->profile_handles) {
-                    auto profile = profile_storage.try_acquire_read(profile_handle);
+                for (auto profile_handle : actor_profiles->handles) {
+                    auto profile = Corona::find_profile(profile_handle);
                     if (!profile || profile->optics_handle == 0) continue;
 
-                    auto optics_acc = optics_storage.try_acquire_read(profile->optics_handle);
+                    auto optics_acc = Corona::find_optics(profile->optics_handle);
                     if (!optics_acc) continue;
                     const auto& optics = *optics_acc;
+                    const auto* optics_visibility =
+                        Corona::find_visibility(profile->optics_handle);
 
-                    if (!optics.visible) {
+                    if (optics_visibility == nullptr || !optics_visibility->visible) {
                         ++object_id;
                         continue;
                     }
@@ -3687,10 +3507,10 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                         continue;
                     }
                     // ---- ��ȡ���α任��Ϣ��������----
-                    std::uintptr_t transform_handle_b = 0;
+                    EntityId transform_handle_b = 0;
                     float          nlc_scale_b  = 1.0f;
                     ktm::fvec3     nlc_offset_b = {0.0f, 0.0f, 0.0f};
-                    if (auto geom_r = geom_storage.try_acquire_read(optics.geometry_handle)) {
+                    if (auto geom_r = Corona::find_geometry(optics.geometry_handle)) {
                         transform_handle_b = geom_r->transform_handle;
                         nlc_scale_b        = geom_r->native_local_correction_scale;
                         nlc_offset_b       = geom_r->native_local_correction_offset;
@@ -3698,7 +3518,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
 
                     ktm::fmat4x4 model_matrix{ktm::fmat4x4::from_eye()};
                     ktm::fvec3   world_center{0.0f, 0.0f, 0.0f};
-                    if (auto transform = transform_storage.try_acquire_read(transform_handle_b)) {
+                    if (auto transform = Corona::find_transform(transform_handle_b)) {
                         model_matrix = transform->compute_matrix();
                         world_center = transform->position;
                         if (std::abs(nlc_scale_b - 1.0f) > 1e-6f ||
@@ -3723,11 +3543,10 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     float bounding_radius = 1.0f;
                     bool  have_bounds     = false;
                     if (geometry_system_) {
-                        auto& ms = SharedDataHub::instance().mechanics_storage();
-                        if (auto mech = ms.try_acquire_read(profile->mechanics_handle)) {
-                            float dx = mech->max_xyz.x - mech->min_xyz.x;
-                            float dy = mech->max_xyz.y - mech->min_xyz.y;
-                            float dz = mech->max_xyz.z - mech->min_xyz.z;
+                        if (const auto* mech = Corona::find_bounds(profile->mechanics_handle)) {
+                            float dx = mech->max.x - mech->min.x;
+                            float dy = mech->max.y - mech->min.y;
+                            float dz = mech->max.z - mech->min.z;
                             bounding_radius = std::sqrt(dx*dx + dy*dy + dz*dz) * 0.5f;
                             have_bounds = true;
                         }
@@ -3804,9 +3623,12 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                         const ktm::fmat4x4 mesh_model_matrix =
                             multiply_ktm_mat4(model_matrix, ms.instance_transform);
                         auto materialID = static_cast<uint32_t>(batch.materials.size());
+                        const auto* optics_visibility =
+                            Corona::find_visibility(profile->optics_handle);
                         batch.materials.push_back(Corona::Systems::OpticsDetail::pack_native_material(
                             ms, optics, texture_descriptor, diag.disable_textures || diag.force_solid_material,
-                            optics.bEnableLighting && !diag.force_solid_material));
+                            optics_visibility != nullptr && optics_visibility->receives_lighting &&
+                            !diag.force_solid_material));
                         if (optics.principled && !diag.disable_textures && !diag.force_solid_material) {
                             auto appearance=hardware_->appearance_cache.obtain(optics.principled);
                             if (appearance) {
@@ -3938,9 +3760,9 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         struct ShadowCasterSnapshot {
             std::unordered_map<uint32_t,uint32_t> material_ids;
             std::size_t material_revision{};
-            std::uintptr_t actor_handle = 0;
-            std::uintptr_t profile_handle = 0;
-            std::uintptr_t geometry_handle = 0;
+            EntityId actor_handle = 0;
+            EntityId profile_handle = 0;
+            EntityId geometry_handle = 0;
             std::uint64_t pose_revision = 0;
             ktm::fmat4x4 model_matrix{ktm::fmat4x4::from_eye()};
             Corona::Systems::OpticsDetail::ShadowCasterBoundsSnapshot bounds{};
@@ -3963,33 +3785,37 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             }
             shadow_casters.reserve(scene.actor_handles.size());
             for (auto actor_handle : scene.actor_handles) {
-                auto actor = actor_storage.try_acquire_read(actor_handle);
-                if (!actor || actor->follow_camera ||
+                auto actor = Corona::find_actor(actor_handle);
+                const auto* actor_profiles = Corona::find_profiles(actor_handle);
+                const auto* actor_follow_camera = Corona::find_follow_camera(actor_handle);
+                if (!actor ||
+                    (actor_follow_camera != nullptr && actor_follow_camera->enabled) ||
                     !diag_actor_allowed(actor_handle) ||
                     !resident_snapshot.contains(actor_handle)) {
                     continue;
                 }
-                for (auto profile_handle : actor->profile_handles) {
-                    auto profile = profile_storage.try_acquire_read(profile_handle);
+                for (auto profile_handle : actor_profiles->handles) {
+                    auto profile = Corona::find_profile(profile_handle);
                     if (!profile || profile->optics_handle == 0 ||
                         profile->mechanics_handle == 0) {
                         continue;
                     }
-                    auto optics_acc = optics_storage.try_acquire_read(profile->optics_handle);
-                    if (!optics_acc || !optics_acc->visible ||
+                    auto optics_acc = Corona::find_optics(profile->optics_handle);
+                    const auto* optics_visibility =
+                        Corona::find_visibility(profile->optics_handle);
+                    if (!optics_acc || optics_visibility == nullptr ||
+                        !optics_visibility->visible ||
                         !diag_geometry_allowed(optics_acc->geometry_handle)) {
                         continue;
                     }
                     // Clear glass transmits the solar field approximately;
                     // colored shadows and caustics require a separate model.
                     if(optics_acc->principled && optics_acc->principled->transmission>=.999f)continue;
-                    auto geom = geom_storage.try_acquire_read(optics_acc->geometry_handle);
+                    auto geom = Corona::find_geometry(optics_acc->geometry_handle);
                     if (!geom || geom->transform_handle == 0) continue;
                     auto transform =
-                        transform_storage.try_acquire_read(geom->transform_handle);
-                    auto mech = SharedDataHub::instance()
-                                    .mechanics_storage()
-                                    .try_acquire_read(profile->mechanics_handle);
+                        Corona::find_transform(geom->transform_handle);
+                    const auto* mech = Corona::find_mechanics(profile->mechanics_handle);
                     if (!transform || !mech) continue;
 
                     ShadowCasterSnapshot snapshot;
@@ -4006,8 +3832,11 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                         1.0e-6f}) * std::max(
                             std::abs(geom->native_local_correction_scale), 1.0e-6f);
 
-                    for (const auto& corner :
-                         bounds_corners(mech->min_xyz, mech->max_xyz)) {
+                    const auto* mech_bounds = Corona::find_bounds(profile->mechanics_handle);
+                    const auto corners = mech_bounds != nullptr
+                                             ? bounds_corners(mech_bounds->min, mech_bounds->max)
+                                             : bounds_corners(ktm::fvec3{}, ktm::fvec3{});
+                    for (const auto& corner : corners) {
                         const auto point = transform_point(snapshot.model_matrix, corner);
                         if (!snapshot.bounds.valid) {
                             snapshot.bounds.world_bounds.min = point;
@@ -4072,14 +3901,16 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                          ++cascade) {
                         caster.cascade_slots[cascade] = std::move(slots[cascade]);
                     }
-                    auto profile=SharedDataHub::instance().profile_storage().acquire_read(caster.profile_handle);
-                    auto optics=SharedDataHub::instance().optics_storage().acquire_read(profile->optics_handle);
+                    auto profile=Corona::find_profile(caster.profile_handle);
+                    auto optics=Corona::find_optics(profile->optics_handle);
                     caster.material_revision=optics->principled?optics->principled->revision:0;
                     for(const auto& cascade_slots:caster.cascade_slots)for(const auto& slot:cascade_slots) {
                         if(caster.material_ids.contains(slot.mesh_index))continue;
                         caster.material_ids.emplace(slot.mesh_index,static_cast<uint32_t>(rsm_materials.size()));
                         const auto descriptor=slot.texture?slot.texture.store_descriptor():0u;
-                        rsm_materials.push_back(OpticsDetail::pack_native_material(slot,*optics,descriptor,false,optics->bEnableLighting));
+                        const auto* caster_visibility = Corona::find_visibility(profile->optics_handle);
+                        const bool caster_lit = caster_visibility != nullptr && caster_visibility->receives_lighting;
+                        rsm_materials.push_back(OpticsDetail::pack_native_material(slot,*optics,descriptor,false,caster_lit));
                         if(slot.texture)rsm_material_images.push_back(slot.texture);
                         if(slot.material) {
                             sceneBatch.resource_keep_alive->model_materials.push_back(slot.material);
@@ -4289,8 +4120,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         native_environment.sun_intensity=0.f;
         native_environment.sky_intensity=0.f;
         if (scene.environment != 0) {
-            if (auto env = SharedDataHub::instance().environment_storage().try_acquire_read(
-                    scene.environment)) {
+            if (const auto* env = SharedDataHub::instance().try_environment(scene.environment)) {
                 sun_dir = env->sun_position;
                 floor_grid_enabled = env->floor_grid_enabled;
                 sun_color = env->sun_color;
@@ -4309,8 +4139,8 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         // During async import the actor may not yet have a visible
         // scene-batch instance. Inspect the storage globally so the
         // loading guard is active from the first import frame.
-        for (auto it = shared_hub.geometry_storage().cbegin();
-             it != shared_hub.geometry_storage().cend(); ++it) {
+        auto geometry_components = Corona::Ecs::all_components<Corona::GeometryDevice>();
+        for (auto it = geometry_components.cbegin(); it != geometry_components.cend(); ++it) {
             if (it->gpu_build_state == GeometryDevice::GpuBuildState::PendingImport ||
                 it->gpu_build_state == GeometryDevice::GpuBuildState::PendingBuild) {
                 geometry_loading = true;
@@ -4651,52 +4481,6 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         // ����ȡ�Թ��߷������ʵ local size(���� Horizon SPIR-V patch ����)��
         // ����ֱ�Ӵ������� gbufferSize �ᵼ�� 64x ����(Խ�� guard ʹ�����ԶԵ����˷�)��
         // dispatch_extent replaces dispatch_groups in new Horizon
-        auto actor_pick_request = take_pending_actor_pick(cam_handle, *camera);
-        std::optional<OpticsDetail::ActorPickReadbackWorker::Reservation>
-            actor_pick_reservation;
-        std::optional<Horizon::HardwareBuffer> actor_pick_result_buffer;
-
-        const auto reject_actor_pick = [&](std::string_view reason) {
-            if (actor_pick_request) {
-                CFW_LOG_WARNING(
-                    "OpticsSystem: Actor pick request {} was not submitted: {}",
-                    actor_pick_request->request_id,
-                    reason);
-                fail_actor_pick(*actor_pick_request);
-                actor_pick_request.reset();
-            }
-            actor_pick_result_buffer.reset();
-            actor_pick_reservation.reset();
-        };
-
-        if (actor_pick_request) {
-            if (diag.skip_deferred_compute) {
-                reject_actor_pick("deferred compute is disabled");
-            } else if (!actor_pick_readback_worker_ ||
-                       !(actor_pick_reservation =
-                             actor_pick_readback_worker_->reserve())) {
-                reject_actor_pick("readback queue is full or unavailable");
-            } else {
-                try {
-                    actor_pick_result_buffer.emplace(
-                        make_storage_buffer<std::uint32_t>(
-                            1, "optics.actor_pick.request",
-                            Horizon::CpuAccessMode::ReadWrite));
-                    auto& actorPick = *hardware_->actorPickPipeline;
-                    actorPick.pushConsts.pixel = upload_value(
-                        ktm::uvec2{actor_pick_request->x, actor_pick_request->y});
-                    bind_storage_image(actorPick, actorPick.pushConsts.visibilityImageIndex, hardware_->visibilityImage);
-                    bind_storage_buffer(actorPick, actorPick.pushConsts.outputBufferIndex, *actor_pick_result_buffer);
-                } catch (const std::exception& error) {
-                    CFW_LOG_ERROR(
-                        "OpticsSystem: Failed to create actor pick result buffer: {}",
-                        error.what());
-                    reject_actor_pick("result buffer creation failed");
-                }
-            }
-        }
-
-
         Horizon::SubmitReceipt latest_submit_receipt;
         {
             const auto native_submit_start = PerfClock::now();
@@ -4717,25 +4501,24 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                     const auto native_shadow_start = PerfClock::now();
                     std::array<std::exception_ptr, kShadowCascadeCount>
                         cascade_errors{};
-                    oneapi::tbb::task_group cascade_tasks;
+                    // 4 级 cascade 曾由 TBB task_group 并行录制；为移除 TBB 改为
+                    // 顺序录制。若该段被实测为瓶颈，可改投线程池 Realtime 任务
+                    // 并用 TaskGroup::wait() 汇合。
                     Corona::Systems::OpticsDetail::for_each_enabled_shadow_cascade(
                         diag.shadow_cascade_mask,
                         kShadowCascadeCount,
                         [&](std::uint32_t cascade) {
-                            cascade_tasks.run([&, cascade] {
-                                try {
-                                    record_shadow_cascade(
-                                        hardware_->shadowInfoBufferObjects
-                                            .lightViewProj[cascade],
-                                        hardware_->shadowCascadeImages[cascade],
-                                        cascade);
-                                } catch (...) {
-                                    cascade_errors[cascade] =
-                                        std::current_exception();
-                                }
-                            });
+                            try {
+                                record_shadow_cascade(
+                                    hardware_->shadowInfoBufferObjects
+                                        .lightViewProj[cascade],
+                                    hardware_->shadowCascadeImages[cascade],
+                                    cascade);
+                            } catch (...) {
+                                cascade_errors[cascade] =
+                                    std::current_exception();
+                            }
                         });
-                    cascade_tasks.wait();
 
                     Corona::Systems::OpticsDetail::for_each_enabled_shadow_cascade(
                         diag.shadow_cascade_mask,
@@ -4869,12 +4652,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             }
 
             if (native_submission_cancelled) {
-                reject_actor_pick("native frame submission was cancelled");
                 continue;
-            }
-
-            if (actor_pick_request) {
-                *stream << hardware_->actorPickPipeline->dispatch_extent(1, 1);
             }
 
             if (!is_debug_mode) {
@@ -4883,7 +4661,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
                 presented_target = compose_surface_ui_overlay(
                     *stream,
                     cam_handle, *camera, scene, target, render_target,
-                    ui_state.mode, ui_state.calibration, frame_index);
+                    ui_state, frame_index);
             }
 
             // Recorded draws retain resource handles; no scene/asset contents
@@ -4937,21 +4715,6 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
             sky_sh_initialized_ = true;
         }
 
-        if (actor_pick_request && actor_pick_result_buffer && actor_pick_reservation) {
-            enqueue_actor_pick_readback(*actor_pick_request,
-                                        std::move(*actor_pick_result_buffer),
-                                        latest_submit_receipt,
-                                        sceneBatch.actorHandles,
-                                        sceneBatch.nodeIndices,
-                                        std::move(*actor_pick_reservation));
-        }
-
-
-            // �������������ϳ�ʱ commit�������� follow-actor ʱ��ԭ����Ϊ
-            // ����ʱ render_target �����Ϸ� scene pass �ύ����
-
-
-
         Corona::Systems::OpticsDetail::NativePerfSample native_perf_sample;
         native_perf_sample.total_ms = elapsed_ms(native_frame_start, PerfClock::now());
         native_perf_sample.throttle_wait_ms = native_throttle_wait_ms;
@@ -4985,7 +4748,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         const ImagePixelExtent presented_extent{target.width, target.height};
         const auto viewport = optics_event_viewport(*camera, presented_extent);
         if (auto image_device =
-                SharedDataHub::instance().image_storage().acquire_write(target.image_handle)) {
+                Corona::SharedDataHub::instance().image_write(target.image_handle)) {
             if (latest_submit_receipt.serial == 0) {
                 CFW_LOG_WARNING(
                     "OpticsSystem: publishing native frame with empty submit receipt "
@@ -5009,7 +4772,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
         }
 
         if (auto* event_bus = context()->event_bus()) {
-            event_bus->publish<Events::OpticsFrameReadyEvent>({surface,
+            Corona::push_optics_frame({surface,
                                                                target.image_handle,
                                                                frame_index,
                                                                presented_extent.width,
@@ -5023,57 +4786,19 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
     }
 }
 
-void OpticsSystem::drain_viewport_ui_pointer_commands() {
-    auto commands = SharedDataHub::instance().drain_viewport_ui_pointer_commands();
-    for (const auto& command : commands) {
-        if (command.camera_handle == 0) {
-            continue;
-        }
-
-        auto& state = viewport_cursor_states_[command.camera_handle];
-        if (command.sequence < state.sequence) {
-            continue;
-        }
-
-        std::string event_type = command.event_type;
-        std::transform(event_type.begin(), event_type.end(), event_type.begin(), [](unsigned char ch) {
-            return static_cast<char>(std::tolower(ch));
-        });
-        const bool hide_event =
-            event_type == "leave" || event_type == "mouseout" ||
-            event_type == "pointerleave" || event_type == "cancel" ||
-            event_type == "pointercancel" || event_type == "blur";
-
-        state.x = command.x;
-        state.y = command.y;
-        state.buttons = command.buttons;
-        state.modifiers = command.modifiers;
-        state.cursor_shape = command.cursor_shape;
-        state.sequence = command.sequence;
-        state.visible = !hide_event && command.cursor_shape != ViewportUiCursorShape::Hidden;
-    }
-}
-
 Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
     Horizon::HardwareStream& stream,
-    std::uintptr_t camera_handle,
+    EntityId camera_handle,
     const CameraDevice& camera,
     const SceneDevice& scene,
     SurfaceRenderTarget& target,
     Horizon::HardwareImage& background,
-    ViewportUiMode mode,
-    const ViewportUiCalibration& calibration,
+    const ViewportUiState& ui_state,
     uint64_t frame_index) {
     auto& uiVisibility = *hardware_->uiVisibilityPipeline;
     auto& opticsOverlay = *hardware_->opticsOverlayPipeline;
-    auto& opticsGizmo = *hardware_->opticsGizmoPipeline;
-    auto& opticsCursor = *hardware_->opticsCursorPipeline;
     auto& opticsUiWarp = *hardware_->opticsUiWarpPipeline;
     auto& opticsComposite = *hardware_->opticsCompositePipeline;
-
-    // 计算光标渲染工作组数量（本地大小为 8x8，根据 Horizon SPIR-V patch）
-    uint32_t cursorDispatchWidth = hardware_->gbufferSize.x;
-    uint32_t cursorDispatchHeight = hardware_->gbufferSize.y;
 
     // follow-camera UI 使用正交投影并且跟随特定 actor 的世界空间位置而源自相机。
     const ktm::fmat4x4 camera_basis = make_camera_basis_matrix(camera);
@@ -5106,48 +4831,14 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
                                                ui_indirect_buffers);
     stream << RetainSubmission{uiBatch.resource_keep_alive};
 
-    const bool stereo_ui = mode == ViewportUiMode::Stereo3D;
-    const bool cursor_icon_ready = stereo_ui && ensure_cursor_icon_texture();
-    const auto cursor_it = viewport_cursor_states_.find(camera_handle);
-    const bool cursor_visible =
-        stereo_ui && cursor_icon_ready && cursor_it != viewport_cursor_states_.end() && cursor_it->second.visible &&
-        cursor_it->second.cursor_shape != ViewportUiCursorShape::Hidden &&
-        std::isfinite(cursor_it->second.x) && std::isfinite(cursor_it->second.y);
-    const ViewportCursorState* cursor_state =
-        cursor_visible ? &cursor_it->second : nullptr;
-
-    const auto gizmo_state =
-        SharedDataHub::instance().viewport_gizmo_state(camera_handle);
-    OpticsDetail::ViewportGizmoLayout gizmo_layout;
-    bool gizmo_visible = false;
-    if (gizmo_state.target.actor_handle != 0 && ensure_gizmo_axis_textures()) {
-        auto& hub = SharedDataHub::instance();
-        const auto transform_handle =
-            hub.resolve_actor_primary_transform_handle(
-                gizmo_state.target.actor_handle);
-        if (transform_handle) {
-            if (auto transform =
-                    hub.model_transform_storage().try_acquire_read(
-                        *transform_handle)) {
-                gizmo_layout = OpticsDetail::make_viewport_gizmo_layout(
-                    camera.compute_view_proj_matrix(),
-                    transform->position,
-                    hardware_->gbufferSize.x,
-                    hardware_->gbufferSize.y,
-                    128.0f);
-                gizmo_visible = gizmo_layout.visible;
-            }
-        }
-    }
+    const auto& calibration = ui_state.calibration;
+    const bool stereo_ui = ui_state.mode == ViewportUiMode::Stereo3D;
 
     const auto ui_instance_count = static_cast<std::uint32_t>(uiBatch.instances.size());
     auto& ui_log_state = ui_pass_log_states_[camera_handle];
     if (!ui_log_state.has_state ||
         ui_log_state.has_follow_camera_instances != has_follow_camera_instances ||
         ui_log_state.stereo_ui != stereo_ui ||
-        ui_log_state.cursor_visible != cursor_visible ||
-        ui_log_state.gizmo_target != (gizmo_state.target.actor_handle != 0) ||
-        ui_log_state.gizmo_visible != gizmo_visible ||
         ui_log_state.instance_count != ui_instance_count ||
         ui_log_state.width != hardware_->gbufferSize.x ||
         ui_log_state.height != hardware_->gbufferSize.y) {
@@ -5155,29 +4846,22 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
             .has_state = true,
             .has_follow_camera_instances = has_follow_camera_instances,
             .stereo_ui = stereo_ui,
-            .cursor_visible = cursor_visible,
-            .gizmo_target = gizmo_state.target.actor_handle != 0,
-            .gizmo_visible = gizmo_visible,
             .instance_count = ui_instance_count,
             .width = hardware_->gbufferSize.x,
             .height = hardware_->gbufferSize.y,
         };
-        CFW_LOG_INFO("Optics UI pass: camera={} mode={} follow_camera_instances={} gizmo_target={} gizmo={} cursor={} output={}x{} warp={}",
+        CFW_LOG_INFO("Optics UI pass: camera={} mode={} follow_camera_instances={} output={}x{} warp={}",
                      camera_handle,
                      stereo_ui ? "stereo3d" : "flat2d",
                      ui_instance_count,
-                     gizmo_state.target.actor_handle != 0 ? "set" : "none",
-                     gizmo_visible ? "visible" : "hidden",
-                     cursor_visible ? "visible" : "hidden",
                      hardware_->gbufferSize.x,
                      hardware_->gbufferSize.y,
-                     (stereo_ui &&
-                      (has_follow_camera_instances || gizmo_visible || cursor_visible))
+                     (stereo_ui && has_follow_camera_instances)
                          ? "submitted"
                          : "skipped");
     }
 
-    if (!has_follow_camera_instances && !gizmo_visible && !cursor_visible) {
+    if (!has_follow_camera_instances) {
         return &background;
     }
 
@@ -5244,84 +4928,8 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
         }
     }
 
-    if (!follow_camera_overlay_ready && !gizmo_visible && !cursor_visible) {
+    if (!follow_camera_overlay_ready) {
         return &background;
-    }
-
-    if (gizmo_visible) {
-        bind_storage_image(opticsGizmo, opticsGizmo.pushConsts.outputImage, target.ui_overlay);
-        opticsGizmo.pushConsts.outputWidth = hardware_->gbufferSize.x;
-        opticsGizmo.pushConsts.outputHeight = hardware_->gbufferSize.y;
-        opticsGizmo.pushConsts.originX = 0u;
-        opticsGizmo.pushConsts.originY = 0u;
-        opticsGizmo.pushConsts.gizmoOrigin = upload_value(gizmo_layout.origin);
-        opticsGizmo.pushConsts.xDirection =
-            upload_value(gizmo_layout.axes[0].direction);
-        opticsGizmo.pushConsts.yDirection =
-            upload_value(gizmo_layout.axes[1].direction);
-        opticsGizmo.pushConsts.zDirection =
-            upload_value(gizmo_layout.axes[2].direction);
-        bind_sampled_image(opticsGizmo, opticsGizmo.pushConsts.xImage, hardware_->gizmoAxisImages[0]);
-        bind_sampled_image(opticsGizmo, opticsGizmo.pushConsts.yImage, hardware_->gizmoAxisImages[1]);
-        bind_sampled_image(opticsGizmo, opticsGizmo.pushConsts.zImage, hardware_->gizmoAxisImages[2]);
-        opticsGizmo.pushConsts.activeAxis =
-            static_cast<std::uint32_t>(gizmo_state.active_axis);
-        opticsGizmo.pushConsts.hoverAxis =
-            static_cast<std::uint32_t>(gizmo_state.hover_axis);
-        opticsGizmo.pushConsts.preserveExisting =
-            follow_camera_overlay_ready ? 1u : 0u;
-        opticsGizmo.pushConsts.axisLength = 128.0f;
-        const auto& sprite_metadata =
-            OpticsDetail::kViewportGizmoSpriteMetadata;
-        opticsGizmo.pushConsts.xSourceAnchorTip =
-            upload_value(ktm::fvec4{
-                sprite_metadata[0].anchor.x, sprite_metadata[0].anchor.y,
-                sprite_metadata[0].tip.x, sprite_metadata[0].tip.y});
-        opticsGizmo.pushConsts.ySourceAnchorTip =
-            upload_value(ktm::fvec4{
-                sprite_metadata[1].anchor.x, sprite_metadata[1].anchor.y,
-                sprite_metadata[1].tip.x, sprite_metadata[1].tip.y});
-        opticsGizmo.pushConsts.zSourceAnchorTip =
-            upload_value(ktm::fvec4{
-                sprite_metadata[2].anchor.x, sprite_metadata[2].anchor.y,
-                sprite_metadata[2].tip.x, sprite_metadata[2].tip.y});
-    }
-
-    if (cursor_visible && cursor_state != nullptr) {
-        const bool preserve_existing_overlay =
-            follow_camera_overlay_ready || gizmo_visible;
-        uint32_t cursor_origin_x = 0;
-        uint32_t cursor_origin_y = 0;
-        uint32_t cursor_width = hardware_->gbufferSize.x;
-        uint32_t cursor_height = hardware_->gbufferSize.y;
-        if (preserve_existing_overlay && hardware_->gbufferSize.x > 0u &&
-            hardware_->gbufferSize.y > 0u) {
-            constexpr int32_t kCursorPadding = 4;
-            constexpr uint32_t kCursorExtent = 56;
-            const auto cursor_x = static_cast<int32_t>(std::floor(cursor_state->x));
-            const auto cursor_y = static_cast<int32_t>(std::floor(cursor_state->y));
-            cursor_origin_x = static_cast<uint32_t>(std::max(cursor_x - kCursorPadding, 0));
-            cursor_origin_y = static_cast<uint32_t>(std::max(cursor_y - kCursorPadding, 0));
-            cursor_origin_x = std::min(cursor_origin_x, hardware_->gbufferSize.x - 1u);
-            cursor_origin_y = std::min(cursor_origin_y, hardware_->gbufferSize.y - 1u);
-            cursor_width = std::min(kCursorExtent, hardware_->gbufferSize.x - cursor_origin_x);
-            cursor_height = std::min(kCursorExtent, hardware_->gbufferSize.y - cursor_origin_y);
-        }
-
-        bind_storage_image(opticsCursor, opticsCursor.pushConsts.outputImage, target.ui_overlay);
-        opticsCursor.pushConsts.outputWidth = hardware_->gbufferSize.x;
-        opticsCursor.pushConsts.outputHeight = hardware_->gbufferSize.y;
-        opticsCursor.pushConsts.originX = cursor_origin_x;
-        opticsCursor.pushConsts.originY = cursor_origin_y;
-        opticsCursor.pushConsts.cursorX = cursor_state->x;
-        opticsCursor.pushConsts.cursorY = cursor_state->y;
-        opticsCursor.pushConsts.cursorShape =
-            static_cast<std::uint32_t>(cursor_state->cursor_shape);
-        bind_sampled_image(opticsCursor, opticsCursor.pushConsts.cursorImage, hardware_->cursorIconImage);
-        opticsCursor.pushConsts.cursorSize = 48.0f;
-        opticsCursor.pushConsts.preserveExisting = preserve_existing_overlay ? 1u : 0u;
-        cursorDispatchWidth = cursor_width;
-        cursorDispatchHeight = cursor_height;
     }
 
     if (stereo_ui) {
@@ -5351,12 +4959,6 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
         stream << uiVisibility.extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y)
                << opticsOverlay.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
     }
-    if (gizmo_visible) {
-        stream << opticsGizmo.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
-    }
-    if (cursor_visible) {
-        stream << opticsCursor.dispatch_extent(cursorDispatchWidth, cursorDispatchHeight);
-    }
     if (stereo_ui) {
         stream << opticsUiWarp.dispatch_extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
     }
@@ -5364,214 +4966,6 @@ Horizon::HardwareImage* OpticsSystem::compose_surface_ui_overlay(
     // ע�⣺�˴��� commit���ɵ��÷��ں���ʱ��ͳһ�ύ��
 
     return &background;
-}
-
-std::optional<OpticsSystem::ActorPickRequest> OpticsSystem::take_pending_actor_pick(
-    std::uintptr_t camera_handle, const CameraDevice& camera) {
-    auto& hub = SharedDataHub::instance();
-    const auto command = hub.take_actor_pick_request(camera_handle);
-    if (!command) {
-        return std::nullopt;
-    }
-
-    const auto pick_handle = camera.actor_pick_handle;
-    const auto camera_width = camera.width;
-    const auto camera_height = camera.height;
-    if (pick_handle == 0 || camera_width == 0 || camera_height == 0) {
-        hub.enqueue_actor_pick_completion({camera_handle, command->scene_id, command->request_id,
-                                           "error", 0, command->x, command->y});
-        return std::nullopt;
-    }
-
-    auto pick = hub.actor_pick_storage().try_acquire_write(pick_handle);
-    if (!pick) {
-        hub.enqueue_actor_pick_completion({camera_handle, command->scene_id, command->request_id,
-                                           "error", 0, command->x, command->y});
-        return std::nullopt;
-    }
-
-    ActorPickRequest request;
-    request.pick_handle = pick_handle;
-    request.camera_handle = camera_handle;
-    request.scene_id = command->scene_id;
-    request.request_id = command->request_id;
-    request.x = command->x;
-    request.y = command->y;
-    pick->pending = false;
-
-    if (request.x >= camera_width || request.y >= camera_height) {
-        hub.enqueue_actor_pick_completion({camera_handle, request.scene_id, request.request_id,
-                                           "miss", 0, request.x, request.y});
-        return std::nullopt;
-    }
-
-    pick->result_ready = false;
-    return request;
-}
-
-void OpticsSystem::complete_actor_pick(const ActorPickRequest& request,
-                                       const std::vector<std::uintptr_t>& scene_actor_handles,
-                                       const std::vector<std::uint32_t>& node_indices,
-                                       bool read_ok,
-                                       std::uint32_t instance_id) {
-    const auto resolved =
-        OpticsDetail::resolve_actor_pick_result(read_ok, instance_id, scene_actor_handles, node_indices);
-
-    auto& hub = SharedDataHub::instance();
-    if (auto pick = hub.actor_pick_storage().try_acquire_write(request.pick_handle)) {
-        pick->actor_handle = resolved.actor_handle;
-        pick->node_index = resolved.node_index;
-        pick->result_x = request.x;
-        pick->result_y = request.y;
-        pick->result_request_id = request.request_id;
-        pick->result_ready = true;
-    }
-    hub.enqueue_actor_pick_completion({request.camera_handle, request.scene_id, request.request_id,
-                                       std::string(resolved.status), resolved.actor_handle,
-                                       request.x, request.y, resolved.node_index});
-}
-
-void OpticsSystem::fail_actor_pick(const ActorPickRequest& request) {
-    complete_actor_pick(request, {}, {}, false, 0);
-}
-
-void OpticsSystem::enqueue_actor_pick_readback(
-    ActorPickRequest request,
-    Horizon::HardwareBuffer result_buffer,
-    Horizon::SubmitReceipt receipt,
-    std::vector<std::uintptr_t> scene_actor_handles,
-    std::vector<std::uint32_t> node_indices,
-    OpticsDetail::ActorPickReadbackWorker::Reservation reservation) {
-    if (!actor_pick_readback_worker_ || receipt.serial == 0) {
-        fail_actor_pick(request);
-        return;
-    }
-
-    const auto fallback_buffer = result_buffer;
-    const bool enqueued = actor_pick_readback_worker_->submit(
-        std::move(reservation),
-        [this, request, result_buffer, receipt, scene_actor_handles, node_indices]() mutable {
-            std::uint32_t instance_id = 0;
-            bool read_ok = false;
-            try {
-                // executor.wait() only queues the receipt's tokens for the *next*
-                // commit on the render thread; the host must instead wait for this
-                // submission's own timeline value, otherwise the read below can
-                // observe the previous frame's instance id (wrong actor picked) and
-                // the worker mutates the render thread's executor from a foreign
-                // thread for no reason.
-                hardware_->executor.wait_completed(receipt);
-                std::uint32_t value = 0;
-                if (result_buffer.read_bytes(std::span<std::byte>(
-                        reinterpret_cast<std::byte*>(&value), sizeof(value)))) {
-                    instance_id = value;
-                    read_ok = true;
-                } else {
-                    CFW_LOG_ERROR("OpticsSystem: Failed to read actor pick result from GPU");
-                }
-            } catch (const std::exception& error) {
-                CFW_LOG_ERROR("OpticsSystem: Actor pick receipt wait/read failed: {}",
-                              error.what());
-            } catch (...) {
-                CFW_LOG_ERROR("OpticsSystem: Actor pick receipt wait/read failed");
-            }
-            complete_actor_pick(request, scene_actor_handles, node_indices, read_ok, instance_id);
-        });
-
-    if (!enqueued) {
-        // This is only expected during an abnormal lifecycle race. Preserve the
-        // GPU buffer until its receipt completes before reporting the failure.
-        try {
-            hardware_->executor.wait_completed(receipt);
-            (void)fallback_buffer;
-        } catch (...) {
-        }
-        fail_actor_pick(request);
-    }
-}
-
-void OpticsSystem::process_vision_actor_pick(std::uintptr_t camera_handle,
-                                             const CameraDevice& camera,
-                                             const SceneDevice& scene,
-                                             uint64_t frame_index) {
-    const auto actor_pick_request = take_pending_actor_pick(camera_handle, camera);
-    if (!actor_pick_request) {
-        return;
-    }
-
-    if (!actor_pick_readback_worker_) {
-        fail_actor_pick(*actor_pick_request);
-        return;
-    }
-    auto actor_pick_reservation = actor_pick_readback_worker_->reserve();
-    if (!actor_pick_reservation) {
-        CFW_LOG_WARNING("OpticsSystem: Vision actor pick readback queue is full");
-        fail_actor_pick(*actor_pick_request);
-        return;
-    }
-
-    std::optional<Horizon::HardwareBuffer> actor_pick_result_buffer;
-    try {
-        actor_pick_result_buffer.emplace(
-            make_storage_buffer<std::uint32_t>(
-                1, "optics.actor_pick.vision_request",
-                Horizon::CpuAccessMode::ReadWrite));
-    } catch (const std::exception& error) {
-        CFW_LOG_ERROR("OpticsSystem: Failed to create Vision actor pick result buffer: {}",
-                      error.what());
-        fail_actor_pick(*actor_pick_request);
-        return;
-    }
-
-    bind_native_view_resources(camera_handle, camera.width, camera.height, frame_index);
-    auto& visibility = *hardware_->visibilityPipeline;
-
-    hardware_->vpUniformBufferObjects.viewProjMatrix =
-        multiply_ktm_mat4(OpticsDetail::native_projection(camera), camera.compute_view_matrix());
-    (void)write_object_bytes(hardware_->vpUniformBuffer,
-                             hardware_->vpUniformBufferObjects);
-    const uint32_t scene_vp_descriptor = hardware_->vpUniformBuffer.store_descriptor();
-
-    RenderInstanceBatch scene_batch;
-    std::vector<Corona::Horizon::HardwareBuffer> actor_pick_indirect_buffers;
-    collect_actor_instances_for_visibility(scene,
-                                           visibility,
-                                           scene_vp_descriptor,
-                                           false,
-                                           nullptr,
-                                           scene_batch,
-                                           geometry_system_,
-                                           frame_index,
-                                           actor_pick_indirect_buffers);
-    if (!upload_instance_tables(scene_batch,
-                                *hardware_,
-                                hardware_->instanceInfoBuffer,
-                                hardware_->instanceInfoCapacity,
-                                hardware_->materialTableBuffer,
-                                hardware_->materialTableCapacity,
-                                "optics.actor_pick")) {
-        visibility.clear_records();
-        scene_batch.clear();
-    }
-
-    auto& actor_pick = *hardware_->actorPickPipeline;
-    actor_pick.pushConsts.pixel =
-        upload_value(ktm::uvec2{actor_pick_request->x, actor_pick_request->y});
-    bind_storage_image(actor_pick, actor_pick.pushConsts.visibilityImageIndex, hardware_->visibilityImage);
-    bind_storage_buffer(actor_pick, actor_pick.pushConsts.outputBufferIndex, *actor_pick_result_buffer);
-
-    auto actor_pick_stream = hardware_->executor.stream();
-    actor_pick_stream << RetainSubmission{scene_batch.resource_keep_alive};
-    actor_pick_stream << visibility.extent(hardware_->gbufferSize.x, hardware_->gbufferSize.y);
-    const Horizon::SubmitReceipt actor_pick_receipt =
-        actor_pick_stream << actor_pick.dispatch_extent(1, 1) << Horizon::commit();
-    hardware_->last_receipt = actor_pick_receipt;
-    enqueue_actor_pick_readback(*actor_pick_request,
-                                std::move(*actor_pick_result_buffer),
-                                actor_pick_receipt,
-                                scene_batch.actorHandles,
-                                scene_batch.nodeIndices,
-                                std::move(*actor_pick_reservation));
 }
 
 void OpticsSystem::begin_screenshot_frame() {
@@ -5582,7 +4976,7 @@ void OpticsSystem::begin_screenshot_frame() {
     incoming_screenshots_.clear();
 }
 
-bool OpticsSystem::has_pending_screenshot(std::uintptr_t camera_handle) {
+bool OpticsSystem::has_pending_screenshot(EntityId camera_handle) {
     std::lock_guard<std::mutex> lock(screenshot_mutex_);
     return std::any_of(pending_screenshots_.begin(), pending_screenshots_.end(),
                        [camera_handle](const PendingScreenshot& req) {
@@ -5590,7 +4984,7 @@ bool OpticsSystem::has_pending_screenshot(std::uintptr_t camera_handle) {
                        });
 }
 
-void OpticsSystem::fail_pending_screenshots(std::uintptr_t camera_handle) {
+void OpticsSystem::fail_pending_screenshots(EntityId camera_handle) {
     std::vector<PendingScreenshot> matched;
     {
         std::lock_guard<std::mutex> lock(screenshot_mutex_);
@@ -5658,14 +5052,14 @@ void OpticsSystem::fail_unrenderable_pending_screenshots() {
     }
 
     for (const auto camera_handle : pending_handles) {
-        if (!SharedDataHub::instance().camera_storage().try_acquire_read(camera_handle)) {
+        if (!Corona::find_camera(camera_handle)) {
             fail_pending_screenshots(camera_handle);
             continue;
         }
 
         bool in_enabled_scene = false;
         bool in_any_scene = false;
-        for (const auto& scene : std::as_const(SharedDataHub::instance().scene_storage())) {
+        for (const auto& scene : Corona::all_scenes()) {
             if (std::find(scene.camera_handles.begin(), scene.camera_handles.end(), camera_handle) ==
                 scene.camera_handles.end()) {
                 continue;
@@ -5682,7 +5076,7 @@ void OpticsSystem::fail_unrenderable_pending_screenshots() {
     }
 }
 
-void OpticsSystem::process_pending_screenshots(std::uintptr_t camera_handle,
+void OpticsSystem::process_pending_screenshots(EntityId camera_handle,
                                                Horizon::HardwareImage& render_target) {
     std::vector<PendingScreenshot> matched;
     {
@@ -5772,11 +5166,6 @@ void OpticsSystem::shutdown() {
 
     fail_pending_screenshots(0);
 
-    if (actor_pick_readback_worker_) {
-        actor_pick_readback_worker_->shutdown();
-        actor_pick_readback_worker_.reset();
-    }
-
     if (hardware_) {
         // Note: executor.wait() enqueues the receipt's tokens for the *next*
         // commit, so this drain does not block on the GPU. That is intentional
@@ -5821,30 +5210,31 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
     };
 
     auto& hub = SharedDataHub::instance();
-    auto& actor_storage = hub.actor_storage();
-    auto& profile_storage = hub.profile_storage();
-    auto& optics_storage = hub.optics_storage();
-    auto& geom_storage = hub.geometry_storage();
-    auto& transform_storage = hub.model_transform_storage();
+    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
     const auto mix_scene = [&](const SceneDevice& scene_dev) {
         if (!scene_dev.enabled) return;
         mix(scene_dev.authored_media_revision);
         mix(reinterpret_cast<std::size_t>(scene_dev.authored_media.get()));
         for (auto actor_handle : scene_dev.actor_handles) {
-            auto actor = actor_storage.try_acquire_read(actor_handle);
+            auto actor = Corona::find_actor(actor_handle);
+            const auto* actor_profiles = Corona::find_profiles(actor_handle);
             if (!actor) continue;
             mix(static_cast<std::size_t>(actor_handle));
-            for (auto profile_handle : actor->profile_handles) {
-                auto profile = profile_storage.try_acquire_read(profile_handle);
+            for (auto profile_handle : actor_profiles->handles) {
+                auto profile = Corona::find_profile(profile_handle);
                 if (!profile || profile->optics_handle == 0) continue;
 
-                auto optics = optics_storage.try_acquire_read(profile->optics_handle);
+                auto optics = Corona::find_optics(profile->optics_handle);
                 if (!optics) continue;
 
                 // visible toggle changes topology of the Vision scene.
-                mix(optics->visible ? 0x1u : 0x2u);
-                if (!optics->visible) continue;
+                const auto* optics_visibility =
+                    Corona::find_visibility(profile->optics_handle);
+                const bool optics_visible =
+                    optics_visibility != nullptr && optics_visibility->visible;
+                mix(optics_visible ? 0x1u : 0x2u);
+                if (!optics_visible) continue;
 
                 // Material parameters bridged into the Vision principled BSDF.
                 mix(optics->principled ? optics->principled->revision : 0u);
@@ -5859,11 +5249,11 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
                 mix_float(optics->clearcoat);
                 mix_float(optics->clearcoatGloss);
 
-                auto geom = geom_storage.try_acquire_read(optics->geometry_handle);
+                auto geom = Corona::find_geometry(optics->geometry_handle);
                 if (!geom) continue;
                 mix(static_cast<std::size_t>(optics->geometry_handle));
                 mix(static_cast<std::size_t>(geom->model_resource_handle));
-                if (auto model = hub.model_resource_storage().try_acquire_read(geom->model_resource_handle)) {
+                if (auto model = Corona::find_model_resource(geom->model_resource_handle)) {
                     mix(static_cast<std::size_t>(model->model_id));
                 }
                 mix(static_cast<std::size_t>(geom->gpu_build_state));
@@ -5906,7 +5296,7 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
 
                 // Hash the actual affine transform, including authored shear and
                 // reflection. TRS alone misses matrix-only external-scene edits.
-                if (auto transform = transform_storage.try_acquire_read(geom->transform_handle)) {
+                if (auto transform = Corona::find_transform(geom->transform_handle)) {
                     const auto matrix = transform->compute_matrix();
                     for (int column = 0; column < 4; ++column)
                         for (int row = 0; row < 4; ++row) mix_float(matrix[column][row]);
@@ -5917,7 +5307,7 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
     if (locked_scene) {
         mix_scene(*locked_scene);
     } else {
-        for (const auto& scene : std::as_const(hub.scene_storage())) {
+        for (const auto& scene : Corona::all_scenes()) {
             mix_scene(scene);
         }
     }
@@ -6105,7 +5495,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                 const auto camera_handle = it->first;
                 bool camera_exists = false;
                 bool retain_bridge = false;
-                if (auto camera = SharedDataHub::instance().camera_storage().try_acquire_read(
+                if (auto camera = Corona::find_camera(
                         camera_handle)) {
                     camera_exists = true;
                     retain_bridge = camera->surface != nullptr;
@@ -6140,7 +5530,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
             }
             for (auto it = runtime.retained_contexts.begin();
                  it != runtime.retained_contexts.end();) {
-                if (SharedDataHub::instance().camera_storage().try_acquire_read(*it)) {
+                if (Corona::find_camera(*it) != nullptr) {
                     ++it;
                     continue;
                 }
@@ -6183,8 +5573,6 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                  (has_pending_screenshot(cam_handle) && !runtime.engine_geometry_ready))) return;
             active_contexts.insert(cam_handle);
             runtime.retained_contexts.erase(cam_handle);
-            vision_phase.set("vision:pick");
-            if (!rendering_fallback) process_vision_actor_pick(cam_handle, camera, *locked.scene, frame_index);
             locked.scene = {};
             vision_phase.set("vision:lighting");
             if (!sync_engine_vision_lighting(runtime, environment)) return;
@@ -6491,7 +5879,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                     ? acquire_surface_target(surface, w, h, frame_index)
                     : acquire_offscreen_screenshot_target(cam_handle, w, h, frame_index);
                 if (auto consumed_device =
-                        SharedDataHub::instance().image_storage().try_acquire_read(
+                        Corona::SharedDataHub::instance().image_write(
                             target.image_handle)) {
                     if (consumed_device->consumed_receipt.serial != 0) {
                         hardware_->executor.wait(consumed_device->consumed_receipt);
@@ -6515,11 +5903,11 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                     vision_phase.set("vision:overlay");
                     // Overlay geometry is read directly under a short scene
                     // lock. Its GPU submission keeps the resource handles alive.
-                    auto scene = SharedDataHub::instance().scene_storage().try_acquire_read(view.scene_handle);
+                    auto scene = Corona::find_scene(view.scene_handle);
                     if (!scene || !scene->enabled) return;
                     presented = compose_surface_ui_overlay(
                         stream, cam_handle, camera, *scene, target, target.final_output,
-                        ui_state.mode, ui_state.calibration, frame_index);
+                        ui_state, frame_index);
                 }
 
                 vision_phase.set("vision:publish");
@@ -6541,7 +5929,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                 const ImagePixelExtent presented_extent{target.width, target.height};
                 const auto viewport = optics_event_viewport(camera, presented_extent);
                 if (auto image_device =
-                        SharedDataHub::instance().image_storage().acquire_write(
+                        Corona::SharedDataHub::instance().image_write(
                             target.image_handle)) {
                     if (vision_submit_receipt.serial == 0) {
                         CFW_LOG_WARNING(
@@ -6566,7 +5954,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                 }
 
                 if (auto* event_bus = context()->event_bus()) {
-                    event_bus->publish<Events::OpticsFrameReadyEvent>(
+                    Corona::push_optics_frame(
                         {surface,
                          target.image_handle,
                          frame_index,
@@ -6662,7 +6050,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
         auto* runtime = &surface_runtime;
         VisionPipelineKey key{view.vision_mode, view.participating_media};
         if (view.participating_media) {
-            auto scene = SharedDataHub::instance().scene_storage().try_acquire_read(view.scene_handle);
+            auto* scene = Corona::find_scene(view.scene_handle);
             if (!scene || !scene->enabled) continue;
             key.authored_media = scene->authored_media;
             key.authored_media_revision = scene->authored_media_revision;

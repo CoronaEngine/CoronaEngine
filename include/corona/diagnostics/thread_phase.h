@@ -3,7 +3,7 @@
 /// Phase watchdog for engine system threads.
 ///
 /// A system runs its own `update()` loop, and every blocking wait inside it
-/// (storage slot locks, resource entry locks, GPU queue acquires, TBB arenas)
+/// (storage slot locks, resource entry locks, GPU queue acquires, pool queues)
 /// silently freezes that system for as long as the wait lasts.  From the logs
 /// that is indistinguishable from "the system is idle": it simply stops
 /// producing output, and the per-system `[UI/Frame]` averages are cumulative, so

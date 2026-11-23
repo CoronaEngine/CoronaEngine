@@ -26,9 +26,9 @@ static int last_error() { return errno; }
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <vector>
-#include <thread>
 
 namespace Corona::Network {
 
@@ -40,9 +40,14 @@ struct Discovery::Impl {
     OnPeerDiscovered callback;
 
     std::atomic<bool> running{false};
-    std::thread broadcast_thread;
     std::vector<struct sockaddr_in> broadcast_addrs;
     struct sockaddr_in listen_addr{};
+
+    /// 下一次广播的时间点。广播改为由 poll()（Network 线程）按节拍驱动，
+    /// 不再需要一条只做 sendto + sleep 的专用线程。
+    std::chrono::steady_clock::time_point next_broadcast{};
+    static constexpr auto broadcast_interval =
+        std::chrono::milliseconds(kDiscoveryIntervalMs);
 
 #ifdef _WIN32
     bool wsa_initialized = false;
@@ -192,16 +197,31 @@ struct Discovery::Impl {
         }
     }
 
+    /// 到期则向所有已注册广播地址发一轮发现包（由 Network 线程的 poll() 驱动）。
+    void send_broadcast_if_due() {
+        const auto now = std::chrono::steady_clock::now();
+        if (now < next_broadcast) return;
+        next_broadcast = now + broadcast_interval;
+
+        for (const auto& target : broadcast_addrs) {
+            const auto sent = sendto(
+                sock,
+                reinterpret_cast<const char*>(&outgoing_packet),
+                sizeof(DiscoveryPacket), 0,
+                reinterpret_cast<const struct sockaddr*>(&target),
+                sizeof(target));
+            if (sent == SOCKET_ERROR) {
+                CFW_LOG_DEBUG("Discovery: broadcast send failed, errno={}", last_error());
+            }
+        }
+    }
+
     bool stop() {
         bool expected = true;
         if (!running.compare_exchange_strong(expected, false)) return false;
 
-        // Shutdown the socket first so broadcast thread's sendto() unblocks
+        // 广播已在 poll() 内同步发送，这里只需关闭 socket。
         close_socket();
-
-        if (broadcast_thread.joinable()) {
-            broadcast_thread.join();
-        }
         cleanup_sockets();
         return true;
     }
@@ -240,31 +260,9 @@ bool Discovery::start(uint16_t port, const std::string& instance_name,
 
     impl_->running.store(true);
 
-    // Start broadcast thread
-    impl_->broadcast_thread = std::thread([this]() {
-        int elapsed = 0;
-        while (impl_->running.load()) {
-            for (const auto& target : impl_->broadcast_addrs) {
-                const auto sent = sendto(
-                    impl_->sock,
-                    reinterpret_cast<const char*>(&impl_->outgoing_packet),
-                    sizeof(DiscoveryPacket), 0,
-                    reinterpret_cast<const struct sockaddr*>(&target),
-                    sizeof(target));
-                if (sent == SOCKET_ERROR) {
-                    CFW_LOG_DEBUG("Discovery: broadcast send failed, errno={}", last_error());
-                }
-            }
-
-            // Sleep in short chunks so stop() joins quickly instead of
-            // waiting up to a full kDiscoveryIntervalMs.
-            elapsed = 0;
-            while (elapsed < kDiscoveryIntervalMs && impl_->running.load()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                elapsed += 50;
-            }
-        }
-    });
+    // 立即发一轮，之后由 Network 线程的 poll() 按 kDiscoveryIntervalMs 节拍续发。
+    impl_->next_broadcast = std::chrono::steady_clock::now();
+    impl_->send_broadcast_if_due();
     return true;
 }
 
@@ -278,6 +276,9 @@ void Discovery::set_on_peer_discovered(OnPeerDiscovered cb) {
 
 void Discovery::poll() {
     if (impl_->sock == INVALID_SOCKET || !impl_->running.load()) return;
+
+    // 广播：原先由专用线程按 500ms 节拍发送，现在并入本 tick（Network 线程）。
+    impl_->send_broadcast_if_due();
 
     DiscoveryPacket incoming;
     struct sockaddr_in sender_addr{};

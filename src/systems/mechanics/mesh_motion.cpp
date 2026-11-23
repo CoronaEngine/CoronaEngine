@@ -29,7 +29,7 @@ void MechanicsSystem::process_mesh_moves() {
     for(auto& request:pending) {
         auto run=[&]() -> MeshMoveEvent {
             const auto& q=request.command;
-            auto unavailable=[&](const char* reason, std::uintptr_t handle=0) -> MeshMoveEvent {
+            auto unavailable=[&](const char* reason, EntityId handle=0) -> MeshMoveEvent {
                 if(GpuPerformance::enabled()) CFW_LOG_INFO("Mesh movement pending: actor={} reason={} handle={}",q.actor,reason,handle);
                 return {};
             };
@@ -38,55 +38,60 @@ void MechanicsSystem::process_mesh_moves() {
                std::any_of(q.velocity.begin(),q.velocity.end(),[](float x) { return !std::isfinite(x) || std::abs(x)>24; })) return {"invalid"};
             if(std::chrono::steady_clock::now()-request.submitted>std::chrono::seconds(2)) return {"expired"};
             if(!impl_->gpu_collision) return unavailable("pipeline");
-            for(const auto& scene:std::as_const(hub.scene_storage())) {
+    auto motion_scenes = Corona::all_scenes();
+            for(auto scene_it = motion_scenes.cbegin(); scene_it != motion_scenes.cend(); ++scene_it) {
+                const auto& scene = *scene_it;
                 if(!scene.enabled || std::find(scene.camera_handles.begin(),scene.camera_handles.end(),q.camera)==scene.camera_handles.end() ||
                    std::find(scene.actor_handles.begin(),scene.actor_handles.end(),q.actor)==scene.actor_handles.end()) continue;
-                const auto scene_handle=reinterpret_cast<std::uintptr_t>(&scene);
+                const auto scene_handle=scene_it.id();
                 std::vector<GpuCollisionPipeline::Instance> obstacles;
                 std::vector<std::uintptr_t> obstacle_actors;
                 struct Bounds { std::array<float,3> low{},high{};bool valid{}; };
                 std::vector<Bounds> obstacle_bounds;Bounds moving_bounds;
                 GpuCollisionPipeline::Instance moving{};
                 ModelTransform original;
-                std::uintptr_t transform_handle{};
+                EntityId transform_handle{};
                 for(auto actor_handle:scene.actor_handles) {
-                    auto actor=hub.actor_storage().try_acquire_read(actor_handle);
+                    auto actor=Corona::find_actor(actor_handle);
+                    const auto* actor_profiles = Corona::find_profiles(actor_handle);
                     if(!actor) return unavailable("actor",actor_handle);
                     std::unordered_set<std::uintptr_t> seen_geometry;
-                    for(auto ph:actor->profile_handles) {
-                        auto profile=hub.profile_storage().try_acquire_read(ph);
+                    for(auto ph:actor_profiles->handles) {
+                        auto profile=Corona::find_profile(ph);
                         if(!profile) return unavailable("profile",ph);
                         // Runtime Actor profiles keep geometry on their components;
                         // geometry_handle is only populated by some import paths.
                         auto geometry_handle=profile->geometry_handle;
                         Bounds local;
                         if(profile->mechanics_handle) {
-                            auto body=hub.mechanics_storage().try_acquire_read(profile->mechanics_handle);
+                            auto body=Corona::find_mechanics(profile->mechanics_handle);
                             if(!body) return unavailable("mechanics",profile->mechanics_handle);
                             if(actor_handle!=q.actor && body->body_type==BodyType::Phantom) continue;
                             if(!geometry_handle) geometry_handle=body->geometry_handle;
-                            for(unsigned k=0;k<3;++k){local.low[k]=body->min_xyz[k];local.high[k]=body->max_xyz[k];}local.valid=true;
+                            const auto* body_bounds=Corona::find_bounds(profile->mechanics_handle);
+                            if(body_bounds){for(unsigned k=0;k<3;++k){local.low[k]=body_bounds->min[k];local.high[k]=body_bounds->max[k];}local.valid=true;}
                         }
                         if(profile->optics_handle) {
-                            auto optics=hub.optics_storage().try_acquire_read(profile->optics_handle);
+                            auto optics=Corona::find_optics(profile->optics_handle);
                             if(!optics) return unavailable("optics",profile->optics_handle);
-                            if(actor_handle!=q.actor && !optics->visible) continue;
+                            const auto* optics_visibility=hub.try_visibility(profile->optics_handle);
+                            if(actor_handle!=q.actor && optics_visibility && !optics_visibility->visible) continue;
                             if(!geometry_handle) geometry_handle=optics->geometry_handle;
                         }
                         if(!geometry_handle && profile->acoustics_handle) {
-                            auto acoustics=hub.acoustics_storage().try_acquire_read(profile->acoustics_handle);
+                            const auto* acoustics=hub.try_acoustics(profile->acoustics_handle);
                             if(!acoustics) return unavailable("acoustics",profile->acoustics_handle);
                             geometry_handle=acoustics->geometry_handle;
                         }
                         if(!geometry_handle || !seen_geometry.insert(geometry_handle).second) continue;
-                        auto geometry=hub.geometry_storage().try_acquire_read(geometry_handle);
+                        auto geometry=Corona::find_geometry(geometry_handle);
                         if(!geometry) return unavailable("geometry",geometry_handle);
                         if(geometry->is_skinned && geometry->skinned_aabb_valid){for(unsigned k=0;k<3;++k){local.low[k]=geometry->skinned_aabb_min[k];local.high[k]=geometry->skinned_aabb_max[k];}local.valid=true;}
-                        auto resource=hub.model_resource_storage().try_acquire_read(geometry->model_resource_handle);
+                        auto resource=Corona::find_model_resource(geometry->model_resource_handle);
                         if(!resource || !resource->model_id) return unavailable("resource",geometry->model_resource_handle);
                         // Never replace unavailable/deforming triangles with a proxy.
                         if(!impl_->gpu_collision->contains(geometry_handle,resource->model_id)) return unavailable("triangles",geometry_handle);
-                        auto transform=hub.model_transform_storage().try_acquire_read(geometry->transform_handle);
+                        auto transform=Corona::find_transform(geometry->transform_handle);
                         if(!transform) return unavailable("transform",geometry->transform_handle);
                         GpuCollisionPipeline::Matrix matrix{};
                         const auto m=transform->compute_matrix();
@@ -137,9 +142,9 @@ void MechanicsSystem::process_mesh_moves() {
                     if(future->wait_for(std::chrono::seconds(0))!=std::future_status::ready)return false;
                     auto apply=[&]() -> MeshMoveEvent {
                         const auto result=future->get();auto& hub=SharedDataHub::instance();
-                        auto scene=hub.scene_storage().try_acquire_read(scene_handle);
+                        auto scene=Corona::find_scene(scene_handle);
                         if(!scene || !scene->enabled || std::find(scene->actor_handles.begin(),scene->actor_handles.end(),q.actor)==scene->actor_handles.end())return {"stale_scene"};
-                        auto target=hub.model_transform_storage().try_acquire_write(transform_handle);if(!target)return {"stale_scene"};
+                        auto target=Corona::find_transform(transform_handle);if(!target)return {"stale_scene"};
                         const auto current=target->compute_matrix(),before=original.compute_matrix();
                         for(int c=0;c<4;++c)for(int r=0;r<4;++r)if(current[c][r]!=before[c][r])return {"superseded"};
                         target->position.x+=result.displacement[0];target->position.y+=result.displacement[1];target->position.z+=result.displacement[2];
@@ -165,6 +170,6 @@ void MechanicsSystem::process_mesh_moves() {
             if(request.completion)request.completion(std::move(event));
         }
     }
-    std::erase_if(mesh_movers_,[&](const auto& item) { return !hub.actor_storage().try_acquire_read(item.first); });
+    std::erase_if(mesh_movers_,[&](const auto& item) { return !Corona::find_actor(item.first); });
 }
 }

@@ -1,3 +1,26 @@
+# EnTT 世界骨架：创建/附加/查询/视图/销毁，以及句柄宽度契约。
+# 只依赖 entt 与引擎 include 根，不需要链接整个 Kernel。
+add_executable(corona_entity_world_tests
+    test_entity_world.cpp
+)
+target_include_directories(corona_entity_world_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(corona_entity_world_tests PRIVATE EnTT::EnTT)
+add_test(NAME EntityWorldTests
+         COMMAND corona_entity_world_tests)
+
+# ECS E1：actor/profile/scene 实体模型（header-only，链接 entt + ktm）。
+add_executable(corona_actor_world_tests
+    test_actor_world.cpp
+)
+target_include_directories(corona_actor_world_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(corona_actor_world_tests PRIVATE EnTT::EnTT ktm::ktm)
+add_test(NAME ActorWorldTests
+         COMMAND corona_actor_world_tests)
+
 add_executable(corona_system_stop_timeout_tests
     test_system_stop_timeout.cpp
 )
@@ -27,3 +50,43 @@ target_compile_definitions(corona_storage_lock_timeout_tests PRIVATE
 target_link_libraries(corona_storage_lock_timeout_tests PRIVATE Horizon)
 add_test(NAME StorageLockTimeoutTests
          COMMAND corona_storage_lock_timeout_tests)
+
+# 帧图（DAG 调度器）契约测试：拓扑序、环检测、速率门控、子树关闭、异常中止、统计。
+add_executable(corona_frame_graph_tests
+    test_frame_graph.cpp
+)
+target_link_libraries(corona_frame_graph_tests PRIVATE CoronaEngineKernel)
+add_test(NAME FrameGraphTests
+         COMMAND corona_frame_graph_tests)
+
+# 单线程 DAG 执行器：依赖装配、执行序、帧时间注入、速率门控、异常隔离、线程生命周期。
+add_executable(corona_systems_thread_tests
+    test_systems_thread.cpp
+)
+target_link_libraries(corona_systems_thread_tests PRIVATE CoronaEngineKernel)
+add_test(NAME SystemsThreadTests
+         COMMAND corona_systems_thread_tests)
+
+# 跨线程交互原语：入站命令队列（P0）
+add_executable(corona_command_buffer_tests
+    test_command_buffer.cpp
+)
+target_link_libraries(corona_command_buffer_tests PRIVATE CoronaEngineKernel)
+add_test(NAME CommandBufferTests
+         COMMAND corona_command_buffer_tests)
+
+# 跨线程交互原语：只读快照通道 + 单写者断言（P0）
+add_executable(corona_snapshot_channel_tests
+    test_snapshot_channel.cpp
+)
+target_link_libraries(corona_snapshot_channel_tests PRIVATE CoronaEngineKernel)
+add_test(NAME SnapshotChannelTests
+         COMMAND corona_snapshot_channel_tests)
+
+# tick 边界阶段（P4）：结构变更与全局参数必须在所有节点之前落地
+add_executable(corona_tick_boundary_tests
+    test_tick_boundary.cpp
+)
+target_link_libraries(corona_tick_boundary_tests PRIVATE CoronaEngineKernel)
+add_test(NAME TickBoundaryTests
+         COMMAND corona_tick_boundary_tests)

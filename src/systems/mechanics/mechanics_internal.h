@@ -1,5 +1,6 @@
 #pragma once
 
+#include <corona/concurrency/thread_pool.h>
 #include <corona/events/scene_system_events.h>
 #include <corona/resource/resource_manager.h>
 #include <corona/systems/geometry/geometry_system.h>
@@ -257,9 +258,9 @@ inline ktm::fvec3 world_inertia_inv_apply(const ktm::fmat3x3& R_body_to_world,
 
 // 本帧单个 mechanics 物体的碰撞/渲染用几何缓存
 struct MechanicsWorldAABB {
-    std::uintptr_t handle;               // mechanics 设备句柄键
-    std::uintptr_t geom_handle = 0;      // geometry actor 句柄（skinned_collision_cache 的键）
-    std::uintptr_t transform_handle;     // 几何上的 ModelTransform 句柄
+    EntityId handle;               // mechanics 设备句柄键
+    EntityId geom_handle = 0;      // geometry actor 句柄（skinned_collision_cache 的键）
+    EntityId transform_handle;     // 几何上的 ModelTransform 句柄
     ktm::fvec3 min_world;                // 世界 AABB 最小角
     ktm::fvec3 max_world;                // 世界 AABB 最大角
     ktm::fvec3 center_world;             // AABB 中心（亦作 AABB 窄相参考点）
@@ -305,8 +306,8 @@ struct DeferredCollisionCallback {
 /// Phase 3 — 碰撞→IK target 延迟更新（帧末锁外执行，避免物理循环持锁写 GeometryDevice）。
 /// 三角窄相末轮命中蒙皮物体时入队；帧末统一写入匹配的 contact_driven IK 链的 target/weight。
 struct DeferredIkTargetUpdate {
-    std::uintptr_t geom_handle;       // GeometryDevice（含 ik_chains）
-    std::uintptr_t transform_handle;  // 用于 world→model 坐标变换
+    EntityId geom_handle;       // GeometryDevice（含 ik_chains）
+    EntityId transform_handle;  // 用于 world→model 坐标变换
     int node_idx;                     // 接触骨骼的 SkeletonData::nodes 下标
     ktm::fvec3 contact_world;         // 世界空间接触点（从 tri_result.contact_point 拷贝）
     ktm::fvec3 normal{0.0f, 1.0f, 0.0f};
@@ -330,7 +331,7 @@ struct BodyRuntimeState {
     // Last accepted input or physics write, never a fresh end-of-step read.
     // This detects edits through every Transform writer, including scripts/UI.
     ModelTransform last_transform;
-    std::uintptr_t last_transform_handle = 0;
+    EntityId last_transform_handle = 0;
     // Velocities and sleep timers are authoritative on GPU across fixed steps.
     // CPU retains only routing state and explicit timer-reset commands.
     bool sleeping = false;
@@ -341,7 +342,7 @@ struct BodyRuntimeState {
     float last_move_callback_time = -kMoveCallbackMinInterval;
     ktm::fvec3 last_move_callback_pos = make_fvec3(1e9f, 1e9f, 1e9f);
 
-    bool observe_transform(std::uintptr_t handle, const ModelTransform& transform) {
+    bool observe_transform(EntityId handle, const ModelTransform& transform) {
         const bool changed = !orientation_initialized || last_transform_handle != handle ||
                              !same_transform(last_transform, transform);
         if (!changed) return false;
@@ -626,16 +627,14 @@ inline bool ensure_collision_mesh(
 }
 
 /// 获取 mechanics handle 对应的 model_id
-inline std::uint64_t get_model_id_for_mechanics(std::uintptr_t mech_handle) {
-    auto& mechanics_storage = Corona::SharedDataHub::instance().mechanics_storage();
-    auto& geometry_storage = Corona::SharedDataHub::instance().geometry_storage();
-    auto& model_resource_storage = Corona::SharedDataHub::instance().model_resource_storage();
+inline std::uint64_t get_model_id_for_mechanics(EntityId mech_handle) {
+    auto geometry_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
 
-    auto m_acc = mechanics_storage.try_acquire_read(mech_handle);
+    auto m_acc = Corona::find_mechanics(mech_handle);
     if (!m_acc) return 0;
-    auto geom_acc = geometry_storage.try_acquire_read(m_acc->geometry_handle);
+    auto geom_acc = Corona::find_geometry(m_acc->geometry_handle);
     if (!geom_acc) return 0;
-    auto res_acc = model_resource_storage.try_acquire_read(geom_acc->model_resource_handle);
+    auto res_acc = Corona::find_model_resource(geom_acc->model_resource_handle);
     if (!res_acc) return 0;
     return res_acc->model_id;
 }
@@ -1036,8 +1035,9 @@ struct MechanicsSystem::Impl {
     MechanicsInternal::PreparedGpuPipeline<GpuRigidIntegrationPipeline> gpu_rigid_integration;
     MechanicsInternal::PreparedGpuPipeline<GpuContactSolverPipeline> gpu_contact_solver;
     MechanicsInternal::PreparedGpuPipeline<GpuFloorSleepPipeline> gpu_floor_sleep;
-    // Declared after slots so workers join before those slots are destroyed.
-    std::vector<std::jthread> gpu_preparation_workers;
+    // Declared after slots so the task group waits before those slots are destroyed.
+    Corona::Concurrency::TaskGroup gpu_preparation_tasks;
+    bool gpu_preparation_started{false};
     void start_gpu_preparation();
     std::size_t collision_preparation_cursor{};
     using GpuMeshIdentity = std::tuple<std::uintptr_t, std::uint64_t, std::size_t, std::size_t>;
@@ -1085,13 +1085,14 @@ struct MechanicsSystem::Impl {
     std::unordered_set<std::pair<std::uintptr_t, std::uintptr_t>, MechanicsInternal::PairHash> prev_active_collisions;
     std::vector<std::function<void()>> deferred_move_callbacks;
     std::vector<MechanicsInternal::DeferredCollisionCallback> deferred_collision_callbacks;
-    MechanicsInternal::BodyRuntimeState& body(std::uintptr_t handle) {
+    MechanicsInternal::BodyRuntimeState& body(EntityId handle) {
         return bodies.try_emplace(handle).first->second;
     }
 
     void clear_runtime_state() {
-        for (auto& worker : gpu_preparation_workers) worker.request_stop();
-        gpu_preparation_workers.clear();
+        // 预热任务可能仍在池中运行并访问下面的 pipeline，必须先等它们结束，
+        // 等价于原先 jthread 向量的 request_stop + 析构 join。
+        gpu_preparation_tasks.wait();
         collision_preparation_cursor = 0;
         gpu_submission_batch.reset();
         gpu_floor_sleep.reset();

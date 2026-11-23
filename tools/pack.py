@@ -3,12 +3,10 @@
 CabbageEditor 项目打包脚本
 
 将项目打包为 tar.gz 格式，排除运行时生成内容、环境依赖、缓存等非必要文件。
-默认包含 InnerAgentWorkflow 子仓库代码。
 
 用法:
     python pack.py                     # 默认打包
     python pack.py --output my.tar.gz  # 指定输出文件名
-    python pack.py --exclude-workflow  # 排除子仓库
     python pack.py --dry-run           # 仅预览文件列表
 """
 
@@ -32,7 +30,6 @@ EXCLUDE_DIRS = {
     ".git",
     # 运行时生成
     "autosave",
-    "workflow_output",
     "tests/output",
     # 环境依赖
     ".venv",
@@ -101,13 +98,12 @@ EXCLUDE_FILES = {
 }
 
 
-def should_exclude(path: str, exclude_workflow: bool = False) -> bool:
+def should_exclude(path: str) -> bool:
     """
     判断路径是否应该被排除
 
     参数:
         path: 相对于项目根目录的路径
-        exclude_workflow: 是否排除 InnerAgentWorkflow 子仓库
 
     返回:
         True 表示应该排除，False 表示应该包含
@@ -115,10 +111,6 @@ def should_exclude(path: str, exclude_workflow: bool = False) -> bool:
     # 标准化路径
     path = path.replace(os.sep, "/")
     parts = path.split("/")
-
-    # 检查是否排除子仓库
-    if exclude_workflow and path.startswith("InnerAgentWorkflow"):
-        return True
 
     # 检查目录排除规则
     for part in parts:
@@ -146,16 +138,12 @@ def should_exclude(path: str, exclude_workflow: bool = False) -> bool:
     return False
 
 
-def get_files_to_pack(
-    root_dir: Path,
-    exclude_workflow: bool = False,
-) -> list[tuple[Path, str]]:
+def get_files_to_pack(root_dir: Path) -> list[tuple[Path, str]]:
     """
     获取需要打包的文件列表
 
     参数:
         root_dir: 项目根目录
-        exclude_workflow: 是否排除 InnerAgentWorkflow 子仓库
 
     返回:
         列表，每项为 (绝对路径, 相对路径)
@@ -171,16 +159,13 @@ def get_files_to_pack(
         dirnames[:] = [
             d
             for d in dirnames
-            if not should_exclude(
-                os.path.join(rel_dir, d) if rel_dir else d,
-                exclude_workflow,
-            )
+            if not should_exclude(os.path.join(rel_dir, d) if rel_dir else d)
         ]
 
         # 处理文件
         for filename in filenames:
             rel_path = os.path.join(rel_dir, filename) if rel_dir else filename
-            if not should_exclude(rel_path, exclude_workflow):
+            if not should_exclude(rel_path):
                 abs_path = Path(dirpath) / filename
                 files_to_pack.append((abs_path, rel_path))
 
@@ -199,7 +184,6 @@ def format_size(size_bytes: int) -> str:
 def create_archive(
     root_dir: Path,
     output_path: Path,
-    exclude_workflow: bool = False,
     dry_run: bool = False,
 ) -> tuple[int, int]:
     """
@@ -208,13 +192,12 @@ def create_archive(
     参数:
         root_dir: 项目根目录
         output_path: 输出文件路径
-        exclude_workflow: 是否排除 InnerAgentWorkflow 子仓库
         dry_run: 是否仅预览
 
     返回:
         (文件数量, 压缩包大小)
     """
-    files = get_files_to_pack(root_dir, exclude_workflow)
+    files = get_files_to_pack(root_dir)
 
     if dry_run:
         print("\n📋 将要打包的文件列表：")
@@ -230,7 +213,6 @@ def create_archive(
 
     print(f"\n📦 正在创建压缩包: {output_path}")
     print(f"   项目目录: {root_dir}")
-    print(f"   包含子仓库: {'否' if exclude_workflow else '是'}")
     print()
 
     with tarfile.open(output_path, "w:gz", compresslevel=9) as tar:
@@ -258,7 +240,6 @@ def main():
 示例:
   python pack.py                        # 默认打包
   python pack.py -o release.tar.gz      # 指定输出文件名
-  python pack.py --exclude-workflow     # 排除 InnerAgentWorkflow 子仓库
   python pack.py --dry-run              # 预览将要打包的文件
         """,
     )
@@ -269,12 +250,6 @@ def main():
         type=str,
         default=None,
         help="输出文件名（默认: CabbageEditor-YYYYMMDD.tar.gz）",
-    )
-
-    parser.add_argument(
-        "--exclude-workflow",
-        action="store_true",
-        help="排除 InnerAgentWorkflow 子仓库",
     )
 
     parser.add_argument(
@@ -307,7 +282,6 @@ def main():
     file_count, archive_size = create_archive(
         root_dir=root_dir,
         output_path=output_path,
-        exclude_workflow=args.exclude_workflow,
         dry_run=args.dry_run,
     )
 

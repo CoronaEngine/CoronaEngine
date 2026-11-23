@@ -1,6 +1,6 @@
 """Inspect the local engine's CEF test endpoint (enable it only for the test run).
 
-This exercises the deployed frontend and native manifest transport. Start the
+This exercises the deployed frontend and named V8 bindings. Start the
 engine with the thermal watchdog, CORONA_CEF_REMOTE_DEBUG_PORT=9222, and a low
 CORONA_OPTICS_MAX_FPS for visual checks. It never launches an unguarded engine.
 """
@@ -19,7 +19,9 @@ class Frontend:
         if host not in ("127.0.0.1", "::1"):
             raise ValueError("Only the local engine endpoint is allowed")
         address = "[::1]" if host == "::1" else host
-        with urlopen(f"http://{address}:{port}/json/list", timeout=3) as response:
+        # Render-resource preparation can stall discovery as well as the CDP
+        # socket. Use the same bounded connection budget for both phases.
+        with urlopen(f"http://{address}:{port}/json/list", timeout=20) as response:
             targets = [item for item in json.load(response) if item["type"] == "page"]
         if target_id is not None:
             targets = [item for item in targets if item["id"] == target_id]
@@ -53,11 +55,6 @@ class Frontend:
             raise RuntimeError(result["exceptionDetails"])
         return result.get("result", {}).get("value")
 
-    def api(self, name, args):
-        request = json.dumps(dict(api=name, args=args))
-        return self.evaluate("new Promise((resolve,reject)=>window.cefQuery({request:" + json.dumps(request) +
-                             ",persistent:false,onSuccess:r=>resolve(JSON.parse(r)),onFailure:(c,m)=>reject(new Error(c+':'+m))}))")
-
     def click_text(self, text):
         # Derive the click location from the deployed DOM, then send a real CEF
         # pointer event so normal application handlers perform navigation.
@@ -78,9 +75,7 @@ if __name__ == "__main__":
     operations.add_argument("--text", action="store_true")
     operations.add_argument("--click")
     operations.add_argument("--expression")
-    operations.add_argument("--api")
     operations.add_argument("--screenshot", type=Path)
-    parser.add_argument("--args", default="[]")
     args = parser.parse_args()
     frontend = Frontend(args.port, args.host)
     if args.text:
@@ -89,8 +84,6 @@ if __name__ == "__main__":
         result = frontend.click_text(args.click)
     elif args.expression:
         result = frontend.evaluate(args.expression)
-    elif args.api:
-        result = frontend.api(args.api, json.loads(args.args))
     else:
         result = frontend.call("Page.captureScreenshot", dict(format="png"))
         args.screenshot.parent.mkdir(parents=True, exist_ok=True)

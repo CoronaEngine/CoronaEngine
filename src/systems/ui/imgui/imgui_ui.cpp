@@ -8,12 +8,15 @@
 #include "camera_timing_overlay.h"
 #include "cef/browser_manager.h"
 #include "cef/cef_client.h"
+#include "cef/cef_process.h"
+#include "cef/cef_window_operations.h"
 #include "sdl/sdl_utils.h"
 #include <imgui.h>
 #include <imgui_internal.h> // DockBuilder default layout; pinned with the core library.
 #include <backends/imgui_impl_sdl3.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 #ifdef _WIN32
 #include <windows.h>
@@ -28,9 +31,22 @@ struct ContentRect {
     bool hovered;
 };
 std::string window_name(const BrowserTab& tab) {
-    if (tab.docking_pos == "main") return kMainWorkspaceName;
+    if (tab.main_workspace) return kMainWorkspaceName;
     return (tab.panel_title.empty() ? tab.name : tab.panel_title) + "###Corona.Panel." +
         (tab.panel_id.empty() ? std::to_string(tab.tab_id) : tab.panel_id);
+}
+// A camera view renders at the host window's physical pixels, capped with the
+// same 1080p-area policy the main viewport applies on the Web side. The display
+// rect stays full-size, so a capped frame is upscaled rather than cropped.
+constexpr int kMaxCameraViewRenderPixels = 1920 * 1080;
+void cap_camera_view_render_extent(int& width, int& height) {
+    if (width <= 0 || height <= 0) return;
+    const auto pixels = static_cast<std::int64_t>(width) * static_cast<std::int64_t>(height);
+    if (pixels <= kMaxCameraViewRenderPixels) return;
+    const double ratio = std::sqrt(static_cast<double>(kMaxCameraViewRenderPixels) /
+                                   static_cast<double>(pixels));
+    width = std::max(1, static_cast<int>(std::lround(static_cast<double>(width) * ratio)));
+    height = std::max(1, static_cast<int>(std::lround(static_cast<double>(height) * ratio)));
 }
 void set_visible(BrowserTab& tab, bool visible) {
     if (tab.cef_visible == visible || !tab.client) return;
@@ -44,8 +60,7 @@ void request_close(BrowserTab& tab) {
     // Legacy camera pages retain their existing native close path.
     if (!tab.panel_id.empty() && tab.client) {
         if (auto browser = tab.client->GetBrowser()) {
-            browser->GetMainFrame()->ExecuteJavaScript(
-                "window.__coronaEmit?.('native-panel-close')", "", 0);
+            request_corona_window_close(browser->GetIdentifier());
             return;
         }
     }
@@ -60,8 +75,14 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL3_ProcessEvent(&event);
-        if (event.type == SDL_EVENT_QUIT || (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
-            event.window.windowID == SDL_GetWindowID(context.window))) *context.running = false;
+        if (event.type == SDL_EVENT_QUIT) *context.running = false;
+        // The title-bar button goes through the same exit request the Web's close_process uses,
+        // so the scene is written before the process stops. If the request cannot be queued,
+        // stop anyway - a window that cannot be closed is worse than an unsaved scene.
+        else if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED &&
+                 event.window.windowID == SDL_GetWindowID(context.window)) {
+            if (!request_application_exit()) *context.running = false;
+        }
         if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
             if (auto* captured = manager.get_tab(captured_tab_); captured && captured->client)
                 if (auto browser = captured->client->GetBrowser()) browser->GetHost()->SendCaptureLostEvent();
@@ -87,13 +108,14 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
     auto* main_viewport = ImGui::GetMainViewport();
     dockspace_ = ImGui::GetID("Corona.Editor.Dockspace");
     if (!ImGui::DockBuilderGetNode(dockspace_)) {
+        // The first-run skeleton: side and bottom zones the user can drop panels into.
+        // Which panel lands where is the user's layout, remembered by ImGui.
         ImGui::DockBuilderAddNode(dockspace_, ImGuiDockNodeFlags_DockSpace);
         ImGui::DockBuilderSetNodeSize(dockspace_, main_viewport->WorkSize);
         auto center = dockspace_;
-        default_docks_["left"] = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.22f, nullptr, &center);
-        default_docks_["right"] = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.28f, nullptr, &center);
-        default_docks_["bottom"] = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.28f, nullptr, &center);
-        default_docks_["center"] = center;
+        ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.22f, nullptr, &center);
+        ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.28f, nullptr, &center);
+        ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.28f, nullptr, &center);
         ImGui::DockBuilderFinish(dockspace_);
     }
     draw_editor_dockspace(dockspace_, main_viewport);
@@ -101,13 +123,11 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
     std::sort(snapshot.begin(), snapshot.end(), [](auto a, auto b) { return a.tab_id < b.tab_id; });
     std::vector<ContentRect> contents;
     for (auto [tab_id, tab] : snapshot) {
-        if (!tab || !tab->open || tab->minimized) {
+        if (!tab || !tab->open) {
             if (tab) set_visible(*tab, false);
             continue;
         }
-        const bool main = tab->docking_pos == "main";
-        if (tab->detach_state == BrowserTab::DetachState::Detaching) tab->native_force_viewport = true;
-        if (tab->detach_state == BrowserTab::DetachState::Redocking) tab->native_force_viewport = false;
+        const bool main = tab->main_workspace;
         const auto name = window_name(*tab);
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar |
             ImGuiWindowFlags_NoScrollWithMouse;
@@ -117,33 +137,20 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             flags |= ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBackground;
         }
         ImGuiWindowClass window_class;
-        if (tab->camera_view || tab->native_force_viewport)
-            window_class.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+        if (tab->camera_view) window_class.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
         ImGui::SetNextWindowClass(&window_class);
-        if (!main && !tab->dock_initialized) {
-            ImGui::SetNextWindowSize(ImVec2(static_cast<float>(std::max(tab->dock_width, 320)),
-                static_cast<float>(std::max(tab->dock_height, 240))), ImGuiCond_FirstUseEver);
-            if (tab->native_docked && !ImGui::FindWindowSettingsByID(ImHashStr(name.c_str()))) {
-                const std::string& zone = tab->docking_pos;
-                const auto it = default_docks_.find(zone);
-                const auto target = it != default_docks_.end() && ImGui::DockBuilderGetNode(it->second)
-                    ? it->second : resolve_default_panel_dock(dockspace_, zone);
-                ImGui::SetNextWindowDockID(target, ImGuiCond_FirstUseEver);
-            } else if (tab->detach_state != BrowserTab::DetachState::Detaching) {
+        if (!main && !tab->laid_out) {
+            ImGui::SetNextWindowSize(ImVec2(static_cast<float>(std::max(tab->width, 320)),
+                static_cast<float>(std::max(tab->height, 240))), ImGuiCond_FirstUseEver);
+            if (tab->camera_view) {
+                // A camera surface always opens in its own window at the rect the camera saved.
+                ImGui::SetNextWindowDockID(0);
                 ImGui::SetNextWindowPos(ImVec2(main_viewport->Pos.x + tab->initial_x,
                     main_viewport->Pos.y + tab->initial_y), ImGuiCond_FirstUseEver);
             }
-            tab->dock_initialized = true;
-        }
-        if (!main && tab->detach_state == BrowserTab::DetachState::Detaching) {
-            ImGui::SetNextWindowDockID(0);
-            ImGui::SetNextWindowPos(ImVec2(static_cast<float>(tab->detach_x), static_cast<float>(tab->detach_y)));
-            ImGui::SetNextWindowSize(ImVec2(static_cast<float>(std::max(tab->detach_w, 240)),
-                static_cast<float>(std::max(tab->detach_h, 180))));
-            tab->detach_state = BrowserTab::DetachState::Docked;
-        } else if (!main && tab->detach_state == BrowserTab::DetachState::Redocking) {
-            ImGui::SetNextWindowDockID(dockspace_);
-            tab->detach_state = BrowserTab::DetachState::Docked;
+            // Everything else stays wherever ImGui put it: a new window opens floating and
+            // the layout saved in imgui.ini is what keeps it there.
+            tab->laid_out = true;
         }
         bool open = true;
         bool visible;
@@ -159,7 +166,6 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
             visible = ImGui::Begin(name.c_str(), &open, flags);
         }
-        if (ImGui::IsWindowDocked()) tab->native_force_viewport = false;
         const auto origin = ImGui::GetCursorScreenPos();
         auto size = ImGui::GetContentRegionAvail();
         const bool usable = visible && size.x > 0 && size.y > 0;
@@ -234,8 +240,6 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
         const auto surface = native_surface_from_sdl_window(window);
         tab->platform_window_id = id;
         tab->platform_handle_raw = surface;
-        tab->host_surface = viewport == main_viewport ? nullptr : surface;
-        tab->detach_state = viewport == main_viewport ? BrowserTab::DetachState::Docked : BrowserTab::DetachState::Detached;
         int logical_w = 1, logical_h = 1, pixel_w = 1, pixel_h = 1;
         SDL_GetWindowSize(window, &logical_w, &logical_h);
         SDL_GetWindowSizeInPixels(window, &pixel_w, &pixel_h);
@@ -265,13 +269,17 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
             SDL_SetTextInputArea(window, &area, 0);
         }
         if (tab->camera_view) {
-            const int width = std::max(1, static_cast<int>(content.size.x * sx));
-            const int height = std::max(1, static_cast<int>(content.size.y * sy));
-            CameraViewportManager::instance().bind_surface(content.tab_id, surface, x, y, width, height);
-            CameraViewportManager::instance().update_layout(content.tab_id, x, y, width, height);
+            // The native camera frame follows the window's physical pixels. The
+            // Web side no longer owns this size: it only resizes the window.
+            const int pixel_width = std::max(1, static_cast<int>(std::lround(content.size.x * sx)));
+            const int pixel_height = std::max(1, static_cast<int>(std::lround(content.size.y * sy)));
+            int render_width = pixel_width, render_height = pixel_height;
+            cap_camera_view_render_extent(render_width, render_height);
+            CameraViewportManager::instance().bind_surface(content.tab_id, surface, x, y, render_width, render_height);
+            CameraViewportManager::instance().update_layout(content.tab_id, x, y, pixel_width, pixel_height);
         }
         if (tab->web_camera_handle && tab->web_camera_width > 0) {
-            // The DOM rectangle is also the picking/gizmo coordinate boundary.
+            // The DOM rectangle is also the picking coordinate boundary.
             // Use it for the main view too, rather than stretching its image
             // across a different native-window rectangle.
             SharedDataHub::instance().enqueue_camera_viewport_update({
@@ -282,14 +290,9 @@ void UiFrameRunner::run_frame(UiFrameContext& context) {
                 .height = std::max(1, static_cast<int>(tab->web_camera_height * sy)),
                 .render_width = std::max(1, static_cast<int>(tab->web_camera_render_width * sx)),
                 .render_height = std::max(1, static_cast<int>(tab->web_camera_render_height * sy)),
+                .authority = tab->web_camera_authority,
             });
         }
-    }
-    if (auto* hover = manager.get_tab(hovered_tab_); hover) {
-        const bool hide = hover->hide_system_cursor.load() &&
-            (!hover->use_custom_system_cursor.load() || hover->cursor_inside_camera_image.load());
-        if (hide) SDL_HideCursor();
-        else SDL_ShowCursor();
     }
     render_imgui_platform_windows(*context.vulkan_backend);
     for (auto [tab_id, tab] : manager.tabs_snapshot()) {
