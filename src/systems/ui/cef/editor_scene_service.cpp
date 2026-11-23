@@ -460,6 +460,13 @@ NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
     item.engine_actor->set_actor_guid(item.actor_guid);
     item.engine_actor->set_follow_camera(item.follow_camera);
     scene.engine_scene->add_actor(item.engine_actor.get());
+    // 插入时的动画目录版本就是新 actor 的基线：插入本身已经让场景树前进一次
+    // （调用方负责 ++tree_revision）。若这里不记基线，几何在插入前就已异步绑定好
+    // 动画目录时，下一帧的 tick_native_animation_updates() 会把"目录已到达"再算成
+    // 一次树变化 —— 一次创建/重绑就看得到两次 revision。
+    if (auto player = actor_animation_player(item)) {
+        item.animation_revision = player->revision();
+    }
     scene.actors.push_back(std::move(item));
     return scene.actors.back();
 }
@@ -3859,14 +3866,20 @@ void tick_native_animation_updates() {
         if (!scene) return false;
         for (auto& actor : scene->actors) {
             auto player = actor_animation_player(actor);
-            if (!player || actor.animation_revision == player->revision()) continue;
+            if (!player) continue;
             const auto state = player->snapshot();
+            if (actor.animation_revision == state.revision) continue;
             actor.animation_revision = state.revision;
-            if (state.load_status == "ready" && actor.persisted_animation_sources != state.sources) {
+            // 场景树只报告**动画目录真的可用**的变化（clips 已就绪）：加载中 / 无动画
+            // 的 error 抖动不是树的变化，读树也看不到任何字段差异（动画面板按需读状态）。
+            // 否则一次创建/重绑之后的相邻帧 loading→error 会把同一次操作算成两次
+            // tree_revision，读方看到"一次操作两次变化"。
+            const bool catalog_available = state.load_status == "ready" && !state.clips.empty();
+            if (catalog_available && actor.persisted_animation_sources != state.sources) {
                 actor.persisted_animation_sources = state.sources;
                 actor.actor_version = std::max(actor.actor_version + 1, 1);
             }
-            ++scene->tree_revision;
+            if (catalog_available) ++scene->tree_revision;
         }
         frame_scene_when_ready(*scene);
         return true;
