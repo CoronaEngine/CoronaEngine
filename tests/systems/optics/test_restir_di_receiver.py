@@ -1,9 +1,9 @@
-"""Run the production Falcor DI receiver gates and tiled history addressing on the CPU."""
+"""Run the production ReSTIR DI receiver gates and tiled history addressing on the CPU."""
 from _restir_cpu import ROOT, body, compile_run
 
 
-def test_falcor_receiver_history():
-    base = ROOT / "vision/src/render_core/integrator/falcor_di"
+def test_restir_di_receiver_history():
+    base = ROOT / "vision/src/render_core/integrator/restir_di"
     common = (base / "common.h").read_text(encoding="utf-8")
     reuse = (base / "reuse.h").read_text(encoding="utf-8")
     reservoir = (base / "reservoir.h").read_text(encoding="utf-8")
@@ -72,8 +72,8 @@ int main() {
             }
         }
     }
-    std::cout << "PASS Falcor DI receiver rejection, exact visibility reuse and three tiled slices";
+    std::cout << "PASS ReSTIR DI receiver rejection, exact visibility reuse and three tiled slices";
 }
 """
     compile_run(program.replace("__FUNCTIONS__", "\n".join(head + block for head, block in functions)),
-                "falcor-di-receiver")
+                "restir-di-receiver")

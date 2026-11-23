@@ -1,4 +1,4 @@
-// Check generic guide-storage and the actual Falcor / RTXPT output codecs,
+// Check generic guide-storage and the actual ReSTIR DI / RTXPT GI output codecs,
 // including GPU allocation sizes, readback, resize and restore.
 #define VISION_PLUGIN_NAME "ReSTIR"
 #define VISION_CATEGORY "integrator"

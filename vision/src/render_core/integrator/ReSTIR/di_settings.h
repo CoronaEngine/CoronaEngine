@@ -47,7 +47,7 @@ public:
     }
 
     bool render_UI(Widgets *widgets) noexcept override {
-        return widgets->use_tree("Falcor DI", [&] {
+        return widgets->use_tree("ReSTIR DI", [&] {
             changed_ |= widgets->check_box("switch", &open_);
             if (open_) render_sub_UI(widgets);
         });

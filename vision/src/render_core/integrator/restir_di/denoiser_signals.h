@@ -1,7 +1,7 @@
 #pragma once
 #include "dsl/dsl.h"
 
-namespace vision::falcor_di {
+namespace vision::restir_di {
 using namespace ocarina;
 
 struct DenoiserContribution {

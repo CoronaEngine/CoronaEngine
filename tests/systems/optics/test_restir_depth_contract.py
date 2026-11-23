@@ -32,7 +32,7 @@ struct Node{DataWrap data={{"max_recursion",5u},{"M_light",10u},{"open",true}};
 class Harness {
 public:
     Param<uint> max_depth_{16},min_depth_{5};Param<float>rr_threshold_{1};uint apply_count=0;
-    bool falcor_di_needs_compile_=false,reference_gi_needs_compile_=false;
+    bool restir_di_needs_compile_=false,reference_gi_needs_compile_=false;
     std::shared_ptr<Node>di_settings_=std::make_shared<Node>(),indirect_=std::make_shared<Node>(),gi_receiver_=std::make_shared<Node>();
     DataWrap scene_restir_settings_;
     explicit Harness(uint depth){max_depth_=depth;__CONSTRUCTOR__ scene_restir_settings_=settings();}

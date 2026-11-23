@@ -2,7 +2,7 @@
 
 #include "rtxpt_gi_denoiser_diagnostic.h"
 #include "di_radiance.h"
-#include "render_core/integrator/falcor_di/reservoir.h"
+#include "render_core/integrator/restir_di/reservoir.h"
 #include "base/mgr/global.h"
 #include "math/util.h"
 #include <cstdlib>
@@ -23,7 +23,7 @@ OC_STRUCT(vision, RtxptGIShadowDiagnostic, values, ids) {};
 OC_STRUCT(vision, RtxptGIEnvironmentDiagnostic, values, identity) {};
 
 namespace vision::rtxpt_gi {
-// Opt-in observation of already finalized Falcor DI samples. Only diagnostic
+// Opt-in observation of already finalized ReSTIR DI samples. Only diagnostic
 // buffers are written; the existing reservoirs, rays and radiance stay read-only.
 inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuffer &fb,
                                         uint frame, uint2 size, const DIRadiance &direct,
@@ -35,7 +35,7 @@ inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuf
                                                    diagnostic_geometry.gpu_resource()->device()};
     OC_INFO("GI shadow diagnostic: host mapping begin");
     if (Toolkit::spectrum()->impl_type() != "srgb")
-        throw std::runtime_error("GI shadow diagnostic requires the active Falcor DI RGB spectrum");
+        throw std::runtime_error("GI shadow diagnostic requires the active ReSTIR DI RGB spectrum");
 
     vector<uint4> primitives;
     const auto &instances = Toolkit::scene().instances();
@@ -56,18 +56,18 @@ inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuf
     const bool has_environment = environment && any(environment->power() != make_float3(0.f));
     const uint environment_index = has_environment ? uint(primitives.size()) : InvalidUI32;
     if (has_environment) primitives.push_back(make_uint4(InvalidUI32));
-    if (primitives.empty()) throw std::runtime_error("GI shadow diagnostic found no Falcor DI lights");
+    if (primitives.empty()) throw std::runtime_error("GI shadow diagnostic found no ReSTIR DI lights");
     OC_INFO_FORMAT("GI shadow diagnostic: {} light entries; recording witness kernel", primitives.size());
 
-    // These exact names/layouts are already registered by the active Falcor DI
+    // These exact names/layouts are already registered by the active ReSTIR DI
     // instance. FrameBuffer returns their existing allocations without writes.
-    const auto reservoir_storage = fb.prepare_screen_storage("Falcor DI packed reservoir", make_uint2(16u),
-                                                             16u * 16u * 3u * sizeof(falcor_di::Reservoir));
-    const auto position_storage = fb.prepare_screen_storage("Falcor DI surface position and depth", make_uint2(1u),
+    const auto reservoir_storage = fb.prepare_screen_storage("ReSTIR DI packed reservoir", make_uint2(16u),
+                                                             16u * 16u * 3u * sizeof(restir_di::Reservoir));
+    const auto position_storage = fb.prepare_screen_storage("ReSTIR DI surface position and depth", make_uint2(1u),
                                                             2u * sizeof(uint4));
-    const auto normal_storage = fb.prepare_screen_storage("Falcor DI surface normals", make_uint2(1u),
+    const auto normal_storage = fb.prepare_screen_storage("ReSTIR DI surface normals", make_uint2(1u),
                                                           2u * sizeof(uint2));
-    Buffer<falcor_di::Reservoir> reservoirs{reservoir_storage.view_as<falcor_di::Reservoir>()};
+    Buffer<restir_di::Reservoir> reservoirs{reservoir_storage.view_as<restir_di::Reservoir>()};
     Buffer<uint4> positions{position_storage.view_as<uint4>()};
     Buffer<uint2> normals{normal_storage.view_as<uint2>()};
     const auto indices = native_reblur_diagnostic_indices(size);
@@ -92,10 +92,10 @@ inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuf
         Uint flags = 0u;
         Uint pt_instance = InvalidUI32, pt_primitive = InvalidUI32;
         auto hit = fb.cur_visibility_buffer_var(frame).read(index);
-        auto reservoir = reservoirs.read(falcor_di::reservoir_index(size, pixel, Uint{slice}), false);
+        auto reservoir = reservoirs.read(restir_di::reservoir_index(size, pixel, Uint{slice}), false);
         row.ids[0u] = make_uint4(reservoir.light_index, InvalidUI32, InvalidUI32, reservoir.packed_uv);
         row.ids[3u] = make_uint4(hit.prim_id, InvalidUI32, frame, slice);
-        $if(falcor_di::valid_reservoir(reservoir)) { flags |= 2u; };
+        $if(restir_di::valid_reservoir(reservoir)) { flags |= 2u; };
         $if(reservoir.light_index == environment_index && environment_index != InvalidUI32) { flags |= 4u; };
         $if(hit->is_hit()) {
             flags |= 1u;
@@ -107,7 +107,7 @@ inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuf
             row.values[2u] = make_float4(make_float3(0.f), reservoir.weight);
             row.values[3u] = make_float4(make_float3(0.f), reservoir.target);
             row.values[4u] = make_float4(make_float3(0.f), reservoir.count);
-            $if(falcor_di::valid_reservoir(reservoir) && reservoir.light_index < uint(primitives.size()) &&
+            $if(restir_di::valid_reservoir(reservoir) && reservoir.light_index < uint(primitives.size()) &&
                 reservoir.light_index != environment_index) {
                 const Uint4 primitive = primitive_buffer.read(reservoir.light_index);
                 row.ids[0u] = make_uint4(reservoir.light_index, primitive.x, primitive.y, reservoir.packed_uv);
@@ -117,7 +117,7 @@ inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuf
                 const auto p0 = geo.compute_light_eval_context(primitive.x, primitive.y, make_float2(1.f, 0.f));
                 const auto p1 = geo.compute_light_eval_context(primitive.x, primitive.y, make_float2(0.f, 1.f));
                 const auto p2 = geo.compute_light_eval_context(primitive.x, primitive.y, make_float2(0.f));
-                const Bool cacheable = primitive.w != 0u && p0.PDF_pos > 0.f && falcor_di::finite(p0.PDF_pos) &&
+                const Bool cacheable = primitive.w != 0u && p0.PDF_pos > 0.f && restir_di::finite(p0.PDF_pos) &&
                                        all(p0.ng == p1.ng) && all(p0.ng == p2.ng);
                 auto point = geo.compute_light_eval_context(primitive.x, primitive.y, bary);
                 $if(cacheable) {
@@ -140,7 +140,7 @@ inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuf
                 });
                 const Uint surface_index = (frame & 1u) * pixels + index;
                 const Float3 receiver = as<float4>(positions.read(surface_index, false)).xyz();
-                const Float3 receiver_ng = falcor_di::unpack_normal(normals.read(surface_index, false).y);
+                const Float3 receiver_ng = restir_di::unpack_normal(normals.read(surface_index, false).y);
                 const Float3 segment = point.pos - receiver;
                 const Float distance = length(segment);
                 const Float3 wi = segment / distance;
@@ -150,15 +150,15 @@ inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuf
                 row.values[2u] = make_float4(point.pos, reservoir.weight);
                 row.values[3u] = make_float4(point.ng, reservoir.target);
                 row.values[4u] = make_float4(emission, reservoir.count);
-                $if(dot(segment, point.ng) < 0.f && distance > falcor_di::ray_epsilon &&
-                    pdf > 0.f && falcor_di::finite(pdf)) {
+                $if(dot(segment, point.ng) < 0.f && distance > restir_di::ray_epsilon &&
+                    pdf > 0.f && restir_di::finite(pdf)) {
                     flags |= 8u;
                     auto old_ray = it.spawn_ray(wi, max(0.f, distance - 1e-4f));
                     const Float3 reuse_origin = Interaction::custom_offset_ray_origin(receiver, receiver_ng, wi);
                     const Float3 reuse_segment = wi * distance + (receiver - reuse_origin);
                     const Float reuse_distance = length(reuse_segment);
-                    auto reuse_ray = falcor_di::make_light_ray(reuse_origin, reuse_segment / reuse_distance,
-                                                               Float{0.f}, reuse_distance - falcor_di::ray_epsilon);
+                    auto reuse_ray = restir_di::make_light_ray(reuse_origin, reuse_segment / reuse_distance,
+                                                               Float{0.f}, reuse_distance - restir_di::ray_epsilon);
                     auto pt_ray = it.spawn_ray_to(point.pos);
                     Float3 evaluated = make_float3(0.f);
                     Toolkit::scene().materials().dispatch(it.material_id(), [&](const Material *material) {
@@ -199,7 +199,7 @@ inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuf
     };
     kernel.function()->set_block_dim(64u, 1u, 1u);
     OC_INFO("GI shadow diagnostic: witness kernel recorded");
-    auto shader = device.compile(kernel, "RTXPT GI read-only Falcor shadow witness");
+    auto shader = device.compile(kernel, "RTXPT GI read-only ReSTIR DI shadow witness");
     vector<RtxptGIShadowDiagnostic> host(count);
     stream << index_buffer.upload(indices.data()) << primitive_buffer.upload(primitives.data())
            << shader().dispatch(count) << output.download(host.data()) << synchronize() << ocarina::commit();
@@ -208,10 +208,10 @@ inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuf
         file.write(reinterpret_cast<const char *>(data.data()), data.size() * sizeof(data[0]));
         if (!file) throw std::runtime_error("GI shadow diagnostic write failed");
     };
-    write("falcor_shadow.indices.u32", indices);
-    write("falcor_shadow.records.bin", host);
-    write("falcor_shadow.light_primitives.u32", primitives);
-    std::ofstream metadata(directory / "falcor_shadow.json");
+    write("restir_di_shadow.indices.u32", indices);
+    write("restir_di_shadow.records.bin", host);
+    write("restir_di_shadow.light_primitives.u32", primitives);
+    std::ofstream metadata(directory / "restir_di_shadow.json");
     metadata << "{\n\"version\":1,\"frame\":" << frame << ",\"width\":" << size.x << ",\"height\":" << size.y
         << ",\"count\":" << count << ",\"stride\":288,\"layout\":\"AOS: float4 values[14], uint4 ids[4]\","
         << "\"environment_index\":" << environment_index << ",\"slice\":" << slice << ",\n"
@@ -282,7 +282,7 @@ struct EnvironmentDiagnosticSample {
             const auto light = environment->sample_wi(it, u, swl);
             incoming = light.eval.L.vec3(); endpoint = light.p_light; pdf = light.eval.pdf;
         } else {
-            const Float3 wi = falcor_di::environment_direction(u);
+            const Float3 wi = restir_di::environment_direction(u);
             endpoint = it.pos + wi * Toolkit::scene().world_diameter();
             LightEvalContext point{endpoint};
             incoming = environment->evaluate_wi(it, point, swl, LightEvalMode::L).L.vec3();
@@ -291,7 +291,7 @@ struct EnvironmentDiagnosticSample {
     });
     const Bool solar = luminance(incoming) > 1000.f;
     result.events.x = cast<float>(solar);
-    $if(pdf > 0.f && falcor_di::finite(pdf) && any(incoming > make_float3(0.f))) {
+    $if(pdf > 0.f && restir_di::finite(pdf) && any(incoming > make_float3(0.f))) {
         const Float3 wi = normalize(endpoint - it.pos);
         const Float3 f = bsdf.evaluate(it.wo, wi, MaterialEvalMode::F).f.vec3();
         $if(any(f > make_float3(0.f))) {

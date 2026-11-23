@@ -211,7 +211,7 @@ void check_scene_signals(bool restir, bool lifecycle = false) {
     std::ofstream(fixture / "rear.obj") << "v -4 -4 -1.2\nv 0 4 -1.2\nv 4 -4 -1.2\nvn 0 0 -1\nf 1//1 2//1 3//1\n";
     for (uint scenario = 0; scenario < 12u; ++scenario) {
         const bool pt = scenario == 0u || scenario >= 7u;
-        const bool falcor_di = scenario == 1u || scenario == 4u;
+        const bool restir_di = scenario == 1u || scenario == 4u;
         if (pt == restir) continue;
         if (lifecycle && scenario != 5u) continue;
         scene["scene"]["materials"] = receiver_materials;
@@ -249,9 +249,9 @@ void check_scene_signals(bool restir, bool lifecycle = false) {
         integrator["param"]["indirect"]["factor"] = gi_factor;
         integrator["param"]["max_depth"] = scenario == 7u ? 1u : 4u;
         integrator["param"]["mis_mode"] = scenario >= 8u ? 2u : 0u;
-        integrator["param"]["direct"]["open"] = pt || falcor_di;
+        integrator["param"]["direct"]["open"] = pt || restir_di;
         integrator["param"]["direct"]["max_recursion"] = 1u;
-        integrator["param"]["indirect"]["open"] = !falcor_di;
+        integrator["param"]["indirect"]["open"] = !restir_di;
         integrator["param"]["indirect"]["backend"] = "rtxpt";
         Global::instance().set_scene_path(fixture);
         auto pipeline = Corona::Tests::make_vision_test_pipeline(scene, fixture); pipelines.push_back(pipeline);
@@ -281,7 +281,7 @@ void check_scene_signals(bool restir, bool lifecycle = false) {
                 << fb.denoiser_layer_view(fb.denoiser_diffuse(), 0u).download(d.data()) << fb.denoiser_layer_view(fb.denoiser_specular(), 0u).download(s.data())
                 << fb.denoiser_layer_view(fb.denoiser_bypass(), 0u).download(b.data());
             pipeline->stream() << synchronize() << commit();
-            if (falcor_di || scenario == 2u || scenario == 3u) {
+            if (restir_di || scenario == 2u || scenario == 3u) {
                 for (uint y = 4u; y < 12u; ++y) for (uint x = 4u; x < 12u; ++x) {
                     measured_diffuse += d[y * 16u + x].x;
                     measured_specular += s[y * 16u + x].z;
@@ -303,11 +303,11 @@ void check_scene_signals(bool restir, bool lifecycle = false) {
             }
             for (uint i = 0; i < count; ++i) for (uint c = 0; c < 3u; ++c) {
                 const float sum = d[i][c] + s[i][c] + b[i][c];
-                check_raw_lobe_energy(sum, pixels[i][c], pt ? 0.f : (falcor_di ? di_factor : gi_factor),
+                check_raw_lobe_energy(sum, pixels[i][c], pt ? 0.f : (restir_di ? di_factor : gi_factor),
                                       scenario, frame, i, c);
             }
         }
-        if (falcor_di || scenario == 2u || scenario == 3u) {
+        if (restir_di || scenario == 2u || scenario == 3u) {
             expect(measured_diffuse > 0.f && measured_specular > 0.f,
                    "the selected DI or GI producer must contribute to both material lobes");
         }

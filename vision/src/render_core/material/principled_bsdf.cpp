@@ -757,7 +757,7 @@ public:
     }
 
     // GI-only construction. Keep the ordinary material path above verbatim so
-    // compression cannot alter ordinary PT or Falcor DI shader generation.
+    // compression cannot alter ordinary PT or ReSTIR DI shader generation.
     [[nodiscard]] UP<Lobe> create_gi_lobe_set(const Interaction &it, const SampledWavelengths &swl) const noexcept {
         uint gi_configuration = (uint(two_sided_) << 6u) | (uint(sheen_mode_ == SheenLTC::Approximate) << 7u);
         for (uint i = 0u; i < LobeType::Count; ++i) gi_configuration |= uint(switches_[i]) << i;

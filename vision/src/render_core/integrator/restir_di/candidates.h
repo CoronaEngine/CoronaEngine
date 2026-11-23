@@ -3,7 +3,7 @@
 #include "brdf.h"
 #include "reservoir.h"
 
-namespace vision::falcor_di {
+namespace vision::restir_di {
 
 // Initial RIS uses the balance heuristic and the unnormalized receiver target.
 inline constexpr uint initial_light_count = 10u;
@@ -21,7 +21,7 @@ inline constexpr uint ris_point_words = 3u;
 }
 
 inline void presample_light(const Context &ctx, const Uint2 &position, TSampler &sampler) {
-    sampler->set_seed(position, ctx.frame, Dimension::FalcorDI_presample);
+    sampler->set_seed(position, ctx.frame, Dimension::ReSTIRDI_presample);
     const Float u = sampler->next_1d();
     Float cumulative = 0.f;
     Uint selected = InvalidUI32;
@@ -128,9 +128,9 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
     Float bsdf_replacement = 0.f;
     // Use a separate stream for light proposals, then restore the BSDF stream.
     sampler->temporary([&](Sampler *light_sampler) {
-        light_sampler->set_seed(pixel / screen_tile_size, ctx.frame, Dimension::FalcorDI_tile);
+        light_sampler->set_seed(pixel / screen_tile_size, ctx.frame, Dimension::ReSTIRDI_tile);
         const Uint tile = cast<uint>(light_sampler->next_1d() * float(tile_count));
-        light_sampler->set_seed(pixel, ctx.frame, Dimension::FalcorDI_candidates);
+        light_sampler->set_seed(pixel, ctx.frame, Dimension::ReSTIRDI_candidates);
         $for(i, light_count) {
             const Uint offset = cast<uint>(light_sampler->next_1d() * float(tile_size));
             const Uint ris_index = tile * tile_size + offset;
@@ -219,4 +219,4 @@ inline void presample_light(const Context &ctx, const Uint2 &position, TSampler 
     return reservoir;
 }
 
-} // namespace vision::falcor_di
+} // namespace vision::restir_di

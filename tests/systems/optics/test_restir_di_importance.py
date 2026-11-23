@@ -1,4 +1,4 @@
-"""Execute production Falcor DI sample/PDF helpers in a standalone CPU shim.
+"""Execute production ReSTIR DI sample/PDF helpers in a standalone CPU shim.
 
 These fixtures verify the new importance contract. The previous uniform sampler
 with its uniform PDF is valid; it does not satisfy this new conditional-PDF input.
@@ -12,7 +12,7 @@ import subprocess
 import pytest
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p/'vision/src').is_dir())
-COMMON = ROOT/'vision/src/render_core/integrator/falcor_di/common.h'
+COMMON = ROOT/'vision/src/render_core/integrator/restir_di/common.h'
 TEMP = ROOT/'.workspace/tmp/gi-di-fix-20261115/production-helper-tests'
 
 

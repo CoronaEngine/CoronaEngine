@@ -109,7 +109,7 @@ void restir_selects_rt_and_preserves_scene_parameters() {
                !desc.output_desc.denoise, "ReSTIR must select ReBLUR and leave denoising under camera control");
     expect(data["render"]["integrator"]["param"]["direct"]["max_recursion"] == 1 &&
                data["render"]["integrator"]["param"]["indirect"]["backend"] == "rtxpt",
-           "ReSTIR defaults must select the Falcor primary receiver and RTXPT GI");
+           "ReSTIR defaults must select the ReSTIR DI primary receiver and RTXPT GI");
     expect(desc.renderer_desc.integrator_desc["direct"]["M_light"].as_uint() == 12,
            "ReSTIR must preserve source sampling settings");
     for (const auto channel : {"direct", "indirect"}) {

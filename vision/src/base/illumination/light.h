@@ -67,7 +67,7 @@ struct LightSurfacePoint {
 };
 
 class Light : public Node, public GUIRenderable, public Encodable, public ShaderGraph {
-    friend class FalcorDIExperiment;
+    friend class ReSTIRDI;
 public:
     using Desc = LightDesc;
 

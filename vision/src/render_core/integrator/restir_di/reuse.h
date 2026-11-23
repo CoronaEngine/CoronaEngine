@@ -3,7 +3,7 @@
 #include "brdf.h"
 #include "reservoir.h"
 
-namespace vision::falcor_di {
+namespace vision::restir_di {
 
 // Bitterli et al. 2020, doi:10.1145/3386569.3392481.
 // Lin et al. 2022 GRIS supplemental, section S.1.2 (generalized pairwise MIS).
@@ -56,7 +56,7 @@ struct ReceiverTargets {
 [[nodiscard]] inline Float history_target(const Context &ctx, const Float3 &emission, const LightEvalContext &point,
                                           const Uint &light_index, const HistoryInput &history,
                                           const SampledWavelengths &swl, const Bool &trace) {
-    return outline("Falcor DI history target", [&] {
+    return outline("ReSTIR DI history target", [&] {
         const TriangleSample sample = evaluate_light_point(ctx, light_index, emission, point, history.surface);
         Float target = 0.f;
         $if(sample.pdf > 0.f) {
@@ -190,7 +190,7 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
     ReservoirVar output = current;
     if (!use_temporal && !use_spatial) return output;
     $if(ctx.has_history) {
-        sampler->set_seed(pixel, ctx.frame, Dimension::FalcorDI_reuse);
+        sampler->set_seed(pixel, ctx.frame, Dimension::ReSTIRDI_reuse);
         const Float2 motion_vector = motion(pixel_index(pixel, ctx.extent));
         const Float2 jitter = sampler->next_2d();
         const Float2 projected = cast<float2>(pixel) + motion_vector + jitter - 0.5f;
@@ -270,4 +270,4 @@ inline void stream_pair(const Context &ctx, ReservoirVar &output, Float &canonic
     return output;
 }
 
-} // namespace vision::falcor_di
+} // namespace vision::restir_di

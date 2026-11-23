@@ -3,7 +3,7 @@
 #include "common.h"
 #include "base/scattering/material.h"
 
-namespace vision::falcor_di {
+namespace vision::restir_di {
 
 // The triangle sample includes the emitter geometry term. The material
 // evaluator includes the receiver cosine, as in the final shading pass.
@@ -29,4 +29,4 @@ namespace vision::falcor_di {
     return target;
 }
 
-} // namespace vision::falcor_di
+} // namespace vision::restir_di

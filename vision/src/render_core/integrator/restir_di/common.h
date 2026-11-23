@@ -1,34 +1,3 @@
-/***************************************************************************
- # Copyright (c) 2015-24, NVIDIA CORPORATION. All rights reserved.
- #
- # Redistribution and use in source and binary forms, with or without
- # modification, are permitted provided that the following conditions
- # are met:
- #  * Redistributions of source code must retain the above copyright
- #    notice, this list of conditions and the following disclaimer.
- #  * Redistributions in binary form must reproduce the above copyright
- #    notice, this list of conditions and the following disclaimer in the
- #    documentation and/or other materials provided with the distribution.
- #  * Neither the name of NVIDIA CORPORATION nor the names of its
- #    contributors may be used to endorse or promote products derived
- #    from this software without specific prior written permission.
- #
- # THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS "AS IS" AND ANY
- # EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- # IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- # PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
- # CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
- # EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
- # PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- # PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
- # OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- **************************************************************************/
-
-// Adapted from Falcor 9 RTXDIApplicationBridge.slangh and SurfaceData.slang
-// at 759aad033ff610fb0d82c74f7e0a508d0096d5f2 for CoronaEngine's DSL.
-
 #pragma once
 
 #include "base/mgr/geometry.h"
@@ -42,7 +11,7 @@
 #include <cmath>
 #include <stdexcept>
 
-namespace vision::falcor_di {
+namespace vision::restir_di {
 
 struct Reservoir {
     uint light_index{InvalidUI32};
@@ -61,9 +30,9 @@ struct LightTriangleGeometry {
 
 static_assert(sizeof(LightTriangleGeometry) == 64u);
 
-} // namespace vision::falcor_di
+} // namespace vision::restir_di
 
-OC_STRUCT(vision::falcor_di, Reservoir, light_index, packed_uv, count, target, weight) {
+OC_STRUCT(vision::restir_di, Reservoir, light_index, packed_uv, count, target, weight) {
     [[nodiscard]] Float2 uv() const {
         return cast<float2>(make_uint2(packed_uv & 65535u, packed_uv >> 16u)) / 65535.f;
     }
@@ -74,9 +43,9 @@ OC_STRUCT(vision::falcor_di, Reservoir, light_index, packed_uv, count, target, w
     }
 };
 
-OC_STRUCT(vision::falcor_di, LightTriangleGeometry, p0, p1, p2, ng, emission, pdf_pos) {};
+OC_STRUCT(vision::restir_di, LightTriangleGeometry, p0, p1, p2, ng, emission, pdf_pos) {};
 
-namespace vision::falcor_di {
+namespace vision::restir_di {
 
 inline constexpr float ray_epsilon = 0.001f;
 inline constexpr uint tile_size = 1024u;
@@ -88,11 +57,11 @@ inline constexpr float environment_ray_distance = 1e16f;
     float power = 0.f;
     for (float weight : area_weights) {
         if (!(weight >= 0.f) || !std::isfinite(weight))
-            throw std::runtime_error("Falcor DI requires finite nonnegative light power");
+            throw std::runtime_error("ReSTIR DI requires finite nonnegative light power");
         power += weight;
     }
     if (!std::isfinite(power) || (!(power > 0.f) && !has_environment))
-        throw std::runtime_error("Falcor DI found no finite light power");
+        throw std::runtime_error("ReSTIR DI found no finite light power");
     vector<float> result(area_weights.size(), 0.f);
     if (power > 0.f) {
         const float mass = has_environment ? .5f : 1.f;
@@ -278,7 +247,7 @@ struct TriangleSample {
                 const bool delta = environment->match(LightType::DeltaDirection);
                 const auto eval = environment->evaluate_wi(ref, point, swl, delta ? LightEvalMode::L : LightEvalMode::All);
                 emission = eval.L.vec3();
-                // Falcor's selector PMF is accounted for separately. The
+                // The light selector PMF is accounted for separately. The
                 // framework LightSampler's selector must not enter this PDF.
                 if (delta) point.PDF_pos = uniform_sphere_PDF();
                 else point.PDF_pos = eval.pdf;
@@ -378,4 +347,4 @@ struct TriangleSample {
     return make_uint4(light_index, hit.prim_id, as<uint>(uv.x), as<uint>(uv.y));
 }
 
-} // namespace vision::falcor_di
+} // namespace vision::restir_di

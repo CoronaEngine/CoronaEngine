@@ -19,7 +19,7 @@
 #include "ReSTIR/rtxpt_gi_primary_light_diagnostic.h"
 #include "ReSTIR/denoiser_signals.h"
 #include "ReSTIR/physical_di_reblur.h"
-#include "falcor_di_experiment.h"
+#include "restir_di.h"
 #include "restir_gi_experiment.h"
 #include <cstdlib>
 #include <fstream>
@@ -31,7 +31,7 @@ struct NativeReblurComposeParam {
     BufferDesc<float4> gi_diffuse0, gi_specular0, gi_diffuse1, gi_specular1, gi_diffuse2, gi_specular2;
     float direct_factor{1.f}, indirect_factor{1.f};
 };
-struct FalcorDILobeStageParam {
+struct ReSTIRDILobeStageParam {
     BufferDesc<float4> diffuse, specular, bypass;
     float factor{1.f};
 };
@@ -39,7 +39,7 @@ struct FalcorDILobeStageParam {
 OC_PARAM_STRUCT(vision, NativeReblurComposeParam, di_diffuse, di_specular, di_bypass,
                 gi_bypass, output, gi_diffuse0, gi_specular0, gi_diffuse1, gi_specular1,
                 gi_diffuse2, gi_specular2, direct_factor, indirect_factor) {};
-OC_PARAM_STRUCT(vision, FalcorDILobeStageParam, diffuse, specular, bypass, factor) {};
+OC_PARAM_STRUCT(vision, ReSTIRDILobeStageParam, diffuse, specular, bypass, factor) {};
 
 namespace vision {
 namespace {
@@ -112,14 +112,14 @@ private:
     DataWrap scene_restir_settings_;
     Shader<void(uint, float, float, uint)> combine_;
     Shader<void(float, float)> prepare_denoiser_;
-    Shader<void(FalcorDILobeStageParam)> stage_falcor_di_lobes_;
+    Shader<void(ReSTIRDILobeStageParam)> stage_restir_di_lobes_;
     Shader<void()> compose_denoiser_;
     mutable float2 denoiser_factors_{make_float2(-1.f)};
-    mutable std::unique_ptr<FalcorDIExperiment> falcor_di_;
+    mutable std::unique_ptr<ReSTIRDI> restir_di_;
     mutable std::unique_ptr<GIReceiver> gi_receiver_;
-    mutable std::string falcor_di_error_;
-    mutable bool falcor_di_needs_compile_{true};
-    mutable bool falcor_di_was_active_{};
+    mutable std::string restir_di_error_;
+    mutable bool restir_di_needs_compile_{true};
+    mutable bool restir_di_was_active_{};
     mutable std::unique_ptr<RestirGIExperiment> reference_gi_;
     mutable bool reference_gi_needs_compile_{true};
     mutable bool reference_gi_was_active_{};
@@ -128,8 +128,8 @@ private:
     mutable uint2 native_denoiser_size_{};
     Shader<void(NativeReblurComposeParam)> native_reblur_compose_;
 
-    [[nodiscard]] const char *falcor_di_mode() const noexcept {
-        const char *mode = std::getenv("VISION_FALCOR_DI_MODE");
+    [[nodiscard]] const char *restir_di_mode() const noexcept {
+        const char *mode = std::getenv("VISION_RESTIR_DI_MODE");
         if (mode && *mode) return mode;
         return di_settings_->pairwise() ? "pairwise" : "basic";
     }
@@ -151,7 +151,7 @@ private:
             native_di_denoiser_->prepare();
             native_di_denoiser_->compile();
             native_denoiser_size_ = pipeline()->resolution();
-            OC_INFO("RTXPT GI + Falcor DI + REBLUR active: private_planes=3, physical_DI_contexts=1, GI_contexts=3, shared_transport=false");
+            OC_INFO("RTXPT GI + ReSTIR DI + REBLUR active: private_planes=3, physical_DI_contexts=1, GI_contexts=3, shared_transport=false");
         } else if (any(native_denoiser_size_ != pipeline()->resolution())) {
             native_di_denoiser_->update_resolution(pipeline()->resolution());
             native_denoiser_size_ = pipeline()->resolution();
@@ -170,17 +170,17 @@ public:
             if (const char *reason = indirect_->backend_incompatibility()) return reason;
         }
         if (!di_settings_->open()) return nullptr;
-        if (di_settings_->max_recursion() != 1u) return "Falcor DI requires direct.max_recursion = 1";
+        if (di_settings_->max_recursion() != 1u) return "ReSTIR DI requires direct.max_recursion = 1";
         if (spectrum()->impl_type() != "srgb" || frame_buffer().impl_type() != "normal")
-            return "Falcor DI requires an RGB spectrum and the normal framebuffer";
-        if (jitter_primary_samples()) return "Falcor DI requires centered primary samples";
+            return "ReSTIR DI requires an RGB spectrum and the normal framebuffer";
+        if (jitter_primary_samples()) return "ReSTIR DI requires centered primary samples";
         if (!scene().sensor()->supports_screen_position_reconstruction())
-            return "Falcor DI requires a perspective camera with zero aperture";
-        if (pipeline()->geometry().process_mediums()) return "Falcor DI does not support participating media";
+            return "ReSTIR DI requires a perspective camera with zero aperture";
+        if (pipeline()->geometry().process_mediums()) return "ReSTIR DI does not support participating media";
         if (indirect_->open() && suffix_depth() == 0u) return "ReSTIR GI requires max_depth above 1";
         if (indirect_->open() && !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled() &&
-            !native_reblur_requested()) return "Combined Falcor DI and GI require ReBLUR with RTXPT GI, or denoising disabled";
-        if (!falcor_di_needs_compile_ && !falcor_di_error_.empty()) return falcor_di_error_.c_str();
+            !native_reblur_requested()) return "Combined ReSTIR DI and GI require ReBLUR with RTXPT GI, or denoising disabled";
+        if (!restir_di_needs_compile_ && !restir_di_error_.empty()) return restir_di_error_.c_str();
         return nullptr;
     }
 
@@ -223,7 +223,7 @@ public:
                     "GI runtime object layout changed; restart the engine before reloading the integrator.");
         IlluminationIntegrator::restore(old_obj);
         VS_HOTFIX_MOVE_ATTRS(di_settings_, di_radiance_, indirect_, scene_restir_settings_,
-                             combine_, prepare_denoiser_, stage_falcor_di_lobes_, compose_denoiser_, denoiser_factors_, denoiser_,
+                             combine_, prepare_denoiser_, stage_restir_di_lobes_, compose_denoiser_, denoiser_factors_, denoiser_,
                              native_di_denoiser_, native_denoiser_size_, native_reblur_compose_)
         di_settings_->set_integrator(shared_from_this());
         indirect_->set_integrator(shared_from_this());
@@ -231,7 +231,7 @@ public:
 
     void update_resolution(ocarina::uint2 res) noexcept override {
         gi_receiver_.reset();
-        falcor_di_needs_compile_ = true;
+        restir_di_needs_compile_ = true;
         reference_gi_needs_compile_ = true;
         di_radiance_->update_resolution(res);
         indirect_->update_resolution(res);
@@ -244,7 +244,7 @@ public:
     void update_runtime_object(const vision::IObjectConstructor *constructor) noexcept override {
         std::tuple tp = {addressof(indirect_)};
         HotfixSystem::replace_objects(constructor, tp);
-        falcor_di_needs_compile_ = true;
+        restir_di_needs_compile_ = true;
         gi_receiver_.reset();
     }
 
@@ -326,7 +326,7 @@ public:
         const bool was_indirect_enabled = indirect_->open();
         di_settings_->set_settings(candidate["direct"]);
         indirect_->set_settings(candidate["indirect"]);
-        falcor_di_needs_compile_ = true;
+        restir_di_needs_compile_ = true;
         reference_gi_needs_compile_ = true;
         auto transport = candidate;
         transport["max_depth"] = candidate["max_depth"].get<uint>() - 1u;
@@ -347,7 +347,7 @@ public:
             OC_ASSERT(!separate());
             OC_INFO_FORMAT("Native ReSTIR GI material contract: separate={}, suffix_depth={}", separate(), suffix_depth());
         }
-        falcor_di_needs_compile_ = true;
+        restir_di_needs_compile_ = true;
         reference_gi_needs_compile_ = true;
         gi_receiver_.reset();
         indirect_->compile(true);
@@ -387,7 +387,7 @@ public:
                 frame_buffer().denoiser_bypass().write(i, merged.bypass);
             };
             prepare_denoiser_ = device().compile(pack_lobes, "Denoiser-MergeReSTIRLobes");
-            Kernel stage_falcor_lobes = [&](Var<FalcorDILobeStageParam> p) {
+            Kernel stage_di_lobes = [&](Var<ReSTIRDILobeStageParam> p) {
                 Uint i = dispatch_id();
                 Float4 diffuse = p.diffuse.read(i);
                 Float4 specular = p.specular.read(i);
@@ -395,7 +395,7 @@ public:
                 frame_buffer().denoiser_specular().write(i, make_float4(specular.xyz() * p.factor, specular.w));
                 frame_buffer().denoiser_bypass().write(i, p.bypass.read(i) * p.factor);
             };
-            stage_falcor_di_lobes_ = device().compile(stage_falcor_lobes, "REBLUR-StageFalcorDI");
+            stage_restir_di_lobes_ = device().compile(stage_di_lobes, "REBLUR-StageReSTIRDI");
             Kernel compose_lobes = [&] {
                 Uint i = dispatch_id();
                 Float3 total = frame_buffer().denoiser_diffuse().read(i).xyz() +
@@ -466,7 +466,7 @@ public:
             stream << synchronize() << commit();
             Global::SceneGpuContextScope context{scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
             indirect_->set_native_reblur_enabled(native_denoising);
-            falcor_di_needs_compile_ = true;
+            restir_di_needs_compile_ = true;
         }
         if (!native_denoising && native_di_denoiser_) native_di_denoiser_->set_enabled(false);
         const bool compact = !denoiser_enabled || precise_lobes;
@@ -476,7 +476,7 @@ public:
             stream << synchronize() << commit();
             di_radiance_->set_compact_radiance(compact);
             indirect_->set_compact_radiance(compact);
-            falcor_di_needs_compile_ = true;
+            restir_di_needs_compile_ = true;
             reference_gi_needs_compile_ = true;
             pipeline()->upload_bindless_array();
             Global::SceneGpuContextScope scene_gpu_context{
@@ -500,7 +500,7 @@ public:
         };
 
         submit(frame_buffer().compute_GBuffer(frame_index_), &cur_stage_profile_.gbuffer_ms);
-        const char *falcor_mode = falcor_di_mode();
+        const char *di_mode = restir_di_mode();
         const bool gi_enabled = indirect_->open();
         const char *reference_gi_mode = std::getenv("VISION_RESTIR_GI_MODE");
         const char *multibounce_value = std::getenv("VISION_RESTIR_GI_MULTIBOUNCE_BENCH");
@@ -514,33 +514,33 @@ public:
             scene().sensor()->supports_screen_position_reconstruction() &&
             !pipeline()->geometry().process_mediums();
         const bool publish_gi_proposal = native_denoising && rtxpt_gi::primary_light_diagnostic_enabled();
-        const bool falcor_lobe_signals = native_denoising ||
+        const bool di_lobe_signals = native_denoising ||
             (!gi_enabled && denoiser_ && denoiser_->requires_lobe_signals());
-        const bool falcor_requested = di_settings_->open();
-        const bool prepare_falcor = falcor_requested && (falcor_di_needs_compile_ ||
-            (falcor_di_ && !falcor_di_->matches(rp->resolution(), falcor_mode, gi_enabled, publish_gi_proposal, falcor_lobe_signals)));
-        if (prepare_falcor) {
+        const bool di_requested = di_settings_->open();
+        const bool prepare_di = di_requested && (restir_di_needs_compile_ ||
+            (restir_di_ && !restir_di_->matches(rp->resolution(), di_mode, gi_enabled, publish_gi_proposal, di_lobe_signals)));
+        if (prepare_di) {
             stream << synchronize() << commit();
             Global::SceneGpuContextScope scene_gpu_context{
                 scene().geometry().bindless_array(), scene().geometry().gpu_resource()->device()};
-            falcor_di_needs_compile_ = false;
-            falcor_di_.reset();
-            falcor_di_error_.clear();
+            restir_di_needs_compile_ = false;
+            restir_di_.reset();
+            restir_di_error_.clear();
             try {
                 if (publish_gi_proposal && frame_buffer().hit_bsdfs_size() == 0u) {
                     frame_buffer().prepare_hit_bsdfs();
                     pipeline()->upload_bindless_array();
                 }
-                falcor_di_ = std::make_unique<FalcorDIExperiment>(*di_settings_, *di_radiance_, falcor_mode,
-                                                               gi_enabled, publish_gi_proposal, falcor_lobe_signals);
+                restir_di_ = std::make_unique<ReSTIRDI>(*di_settings_, *di_radiance_, di_mode,
+                                                        gi_enabled, publish_gi_proposal, di_lobe_signals);
             } catch (const std::exception &error) {
-                falcor_di_error_ = error.what();
-                OC_WARNING_FORMAT("Falcor DI unavailable: {}", error.what());
+                restir_di_error_ = error.what();
+                OC_WARNING_FORMAT("ReSTIR DI unavailable: {}", error.what());
                 return;
             }
         }
-        const bool use_falcor = falcor_requested && falcor_di_;
-        const bool receiver_needed = gi_enabled && !use_falcor;
+        const bool use_di = di_requested && restir_di_;
+        const bool receiver_needed = gi_enabled && !use_di;
         const bool prepare_receiver = receiver_needed && !gi_receiver_;
         if (prepare_receiver) {
             stream << synchronize() << commit();
@@ -549,13 +549,13 @@ public:
             gi_receiver_ = std::make_unique<GIReceiver>();
             gi_receiver_->compile();
         }
-        const auto primary_flags = use_falcor ? falcor_di_->primary_flags() :
+        const auto primary_flags = use_di ? restir_di_->primary_flags() :
             receiver_needed ? gi_receiver_->primary_flags() : BufferView<uint>{};
-        if (prepare_receiver || prepare_falcor || use_falcor != falcor_di_was_active_ || frame_index_ == 0u) {
+        if (prepare_receiver || prepare_di || use_di != restir_di_was_active_ || frame_index_ == 0u) {
             OC_INFO_FORMAT("ReSTIR surface storage: full_bytes=0, primary_flag_bytes={}", primary_flags.size_in_byte());
             indirect_->invalidate_history();
         }
-        falcor_di_was_active_ = use_falcor;
+        restir_di_was_active_ = use_di;
         const bool reference_gi_rejected = reference_gi_mode && *reference_gi_mode && !reference_gi_requested;
         if (reference_gi_rejected && !reference_gi_rejected_) {
             OC_WARNING("Reference GI inactive: requires DI+GI, max_depth=2 (or explicit multibounce benchmark5/16/1), max_recursion=1, zero-aperture perspective camera, RGB normal framebuffer, "
@@ -579,8 +579,8 @@ public:
         const bool use_reference_gi = reference_gi_requested && reference_gi_;
         if (prepare_reference_gi || use_reference_gi != reference_gi_was_active_) indirect_->invalidate_history();
         reference_gi_was_active_ = use_reference_gi;
-        if (use_falcor) {
-            submit(falcor_di_->dispatch(frame_index_), &cur_stage_profile_.restir_di_ms);
+        if (use_di) {
+            submit(restir_di_->dispatch(frame_index_), &cur_stage_profile_.restir_di_ms);
         } else {
             if (di_radiance_->compact_radiance()) {
                 submit(rp->reset_buffer(di_radiance_->raw_radiance().view(), make_uint2(0u), "DI radiance clear"),
@@ -623,11 +623,11 @@ public:
             const auto directory = evaluation_debug::directory(frame_index_);
             if (directory.empty()) return;
             fs::create_directories(directory);
-            if (native_denoising && use_falcor && !string_view(stage).starts_with("composite_")) {
+            if (native_denoising && use_di && !string_view(stage).starts_with("composite_")) {
                 rtxpt_gi::NativeReblurDiagnosticViews views;
-                views.di_diffuse = falcor_di_->denoiser_diffuse();
-                views.di_specular = falcor_di_->denoiser_specular();
-                views.di_bypass = falcor_di_->denoiser_bypass();
+                views.di_diffuse = restir_di_->denoiser_diffuse();
+                views.di_specular = restir_di_->denoiser_specular();
+                views.di_bypass = restir_di_->denoiser_bypass();
                 views.gi_stable = indirect_->native_reblur_bypass();
                 if (string_view(stage) == "producer" && std::getenv("VISION_GI_GUIDE_REUSE_FULL_READBACK")) {
                     auto prefix_view = indirect_->native_reblur_prefix().view_as<RtxptGIPrefixPlane>();
@@ -747,7 +747,7 @@ public:
         }
         debug_readback("raw");
         const bool denoiser = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled() && denoiser_->requires_lobe_signals();
-        if (native_denoising && use_falcor) {
+        if (native_denoising && use_di) {
             const auto physical_di_settings = physical_di_reblur_settings(
                 DataWrap::parse(denoiser_->reblur_settings_json())).dump();
             if (!native_di_denoiser_ || any(native_denoiser_size_ != pipeline()->resolution()) ||
@@ -759,7 +759,7 @@ public:
             physical.use_stable_planes = false;
             physical.layer_count = 1u; physical.layer_index = 0u;
             physical.allow_fused_composition = false; physical.compose_only = false;
-            auto dd = falcor_di_->denoiser_diffuse(), ds = falcor_di_->denoiser_specular();
+            auto dd = restir_di_->denoiser_diffuse(), ds = restir_di_->denoiser_specular();
             physical.lobe_signals = {dd, ds, dd, ds};
             submit(native_di_denoiser_->dispatch(physical), &cur_stage_profile_.spatial_angular_ms);
             if (!evaluation_debug::directory(frame_index_).empty())
@@ -777,7 +777,7 @@ public:
             }
             NativeReblurComposeParam p;
             p.di_diffuse = dd.descriptor(); p.di_specular = ds.descriptor();
-            p.di_bypass = falcor_di_->denoiser_bypass().descriptor();
+            p.di_bypass = restir_di_->denoiser_bypass().descriptor();
             p.gi_bypass = indirect_->native_reblur_bypass().descriptor();
             p.output = frame_buffer().rt_buffer().view().descriptor();
             p.direct_factor = di_settings_->factor(); p.indirect_factor = indirect_->factor();
@@ -799,13 +799,13 @@ public:
             if (denoiser && any(factors != denoiser_factors_)) {
                 denoiser_->set_enabled(false); denoiser_->set_enabled(true); denoiser_factors_ = factors;
             }
-            if (use_falcor && !gi_enabled && falcor_lobe_signals) {
-                FalcorDILobeStageParam signals;
-                signals.diffuse = falcor_di_->denoiser_diffuse().descriptor();
-                signals.specular = falcor_di_->denoiser_specular().descriptor();
-                signals.bypass = falcor_di_->denoiser_bypass().descriptor();
+            if (use_di && !gi_enabled && di_lobe_signals) {
+                ReSTIRDILobeStageParam signals;
+                signals.diffuse = restir_di_->denoiser_diffuse().descriptor();
+                signals.specular = restir_di_->denoiser_specular().descriptor();
+                signals.bypass = restir_di_->denoiser_bypass().descriptor();
                 signals.factor = factors.x;
-                submit(stage_falcor_di_lobes_(signals).dispatch(rp->resolution()), &cur_stage_profile_.combine_ms);
+                submit(stage_restir_di_lobes_(signals).dispatch(rp->resolution()), &cur_stage_profile_.combine_ms);
             } else if (!precise_lobes || !gi_enabled)
                 submit(prepare_denoiser_(factors.x, factors.y).dispatch(pipeline()->resolution()),
                        &cur_stage_profile_.combine_ms);

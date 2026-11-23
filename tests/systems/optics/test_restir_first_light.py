@@ -11,7 +11,7 @@ import subprocess
 import pytest
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p/'vision/src').is_dir())
-FALCOR = ROOT/'vision/src/render_core/integrator/falcor_di'
+RESTIR_DI = ROOT/'vision/src/render_core/integrator/restir_di'
 POLICY = ROOT/'vision/src/base/scattering/gi_ideal_glass.h'
 TEMP = ROOT/'.workspace/tmp/rtxpt-first-light-fix-20261115/production-tests'
 
@@ -106,9 +106,9 @@ int main(int argc,char**argv){try{std::string mode=argv[1];
 
 @lru_cache(None)
 def executable():
-    brdf=(FALCOR/'brdf.h').read_text(encoding='utf-8-sig')
-    candidates=(FALCOR/'candidates.h').read_text(encoding='utf-8-sig')
-    reuse=(FALCOR/'reuse.h').read_text(encoding='utf-8-sig')
+    brdf=(RESTIR_DI/'brdf.h').read_text(encoding='utf-8-sig')
+    candidates=(RESTIR_DI/'candidates.h').read_text(encoding='utf-8-sig')
+    reuse=(RESTIR_DI/'reuse.h').read_text(encoding='utf-8-sig')
     policy=POLICY.read_text(encoding='utf-8-sig')
     parts=[definition(brdf,'[[nodiscard]] inline Float target_weight(')]
     if 'inline Bool reflection_supported(' in brdf:

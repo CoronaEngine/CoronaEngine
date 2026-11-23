@@ -451,7 +451,7 @@ struct PTPathCapture {
                        const BSDFSample &, const Uint &, const SampledSpectrum &)> on_sample;
     std::function<void(const Interaction &)> on_endpoint;
     // Already weighted camera-path emitter/miss contributions. Empty observers
-    // generate no extra expressions in ordinary PT or Falcor DI shaders.
+    // generate no extra expressions in ordinary PT or ReSTIR DI shaders.
     std::function<void(const TriangleHitVar &, const Float3 &, const Uint &,
                        const Float3 &, const Float3 &)> on_emission;
 };

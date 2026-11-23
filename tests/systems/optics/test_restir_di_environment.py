@@ -1,4 +1,4 @@
-"""Production Falcor DI environment helpers, compiled on CPU without the engine.
+"""Production ReSTIR DI environment helpers, compiled on CPU without the engine.
 
 Direction/PDF and light-mass helpers run unchanged. Independent quadrature checks
 the 10-light/1-BSDF estimator's measure; receiver-motion and UV16 fixtures specify
@@ -13,9 +13,9 @@ import tempfile
 from unittest import SkipTest
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'vision/src').is_dir())
-COMMON = ROOT / 'vision/src/render_core/integrator/falcor_di/common.h'
+COMMON = ROOT / 'vision/src/render_core/integrator/restir_di/common.h'
 CANDIDATES = COMMON.with_name('candidates.h')
-TEMP = ROOT / '.workspace/tmp/rtxpt-corona-dsl-20261108/falcor-environment-tests'
+TEMP = ROOT / '.workspace/tmp/rtxpt-corona-dsl-20261108/restir-di-environment-tests'
 
 
 def _definition(source, signature):
@@ -30,9 +30,9 @@ def _definition(source, signature):
 
 def test_production_environment_helpers_are_available():
     source = COMMON.read_text(encoding='utf-8-sig')
-    assert 'Float3 environment_direction(' in source, 'Production Falcor DI environment direction helper is absent'
-    assert 'Float2 environment_uv(' in source, 'Production Falcor DI environment UV helper is absent'
-    assert 'light_selection_probabilities(' in source, 'Production Falcor DI environment light-mass helper is absent'
+    assert 'Float3 environment_direction(' in source, 'Production ReSTIR DI environment direction helper is absent'
+    assert 'Float2 environment_uv(' in source, 'Production ReSTIR DI environment UV helper is absent'
+    assert 'light_selection_probabilities(' in source, 'Production ReSTIR DI environment light-mass helper is absent'
 
 
 PROGRAM = r'''
@@ -72,12 +72,12 @@ template<EPort>using oc_float3=Float3;
 __SPHERE_IMPLEMENTATION__
 Float3 square_to_sphere(const Float2 &u){return square_to_sphere_impl<EPort::D>(u);}
 __PDF__
-namespace vision::falcor_di {
+namespace vision::restir_di {
 __CONSTANTS__
 __HELPERS__
 }
 __ALIAS_CLASS__
-using namespace vision::falcor_di;
+using namespace vision::restir_di;
 void require(bool ok,const char*message){if(!ok)throw std::runtime_error(message);}
 void near(double actual,double expected,double tolerance,const char*message){
     if(!std::isfinite(actual)||std::abs(actual-expected)>tolerance){
@@ -270,10 +270,10 @@ __BUILD__
     program = program.replace('__ALIAS_CLASS__', alias_class)
     compiler = shutil.which('g++')
     if not compiler:
-        raise SkipTest('g++ is required for the standalone Falcor environment fixture')
+        raise SkipTest('g++ is required for the standalone ReSTIR DI environment fixture')
     TEMP.mkdir(parents=True, exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix='run-', dir=TEMP))
-    source, binary = directory / 'falcor_environment.cpp', directory / 'falcor_environment.exe'
+    source, binary = directory / 'restir_di_environment.cpp', directory / 'restir_di_environment.exe'
     source.write_text(program, encoding='utf-8')
     result = subprocess.run([compiler, '-std=c++20', '-O2', str(source), '-o', str(binary)],
                             text=True, capture_output=True, check=False)

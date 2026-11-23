@@ -18,7 +18,7 @@ namespace vision::rtxpt_gi {
     return enabled && enabled[0] == '1';
 }
 
-// Observe the original, already generated Falcor/GI BSDF proposal. No new
+// Observe the original, already generated ReSTIR DI/GI BSDF proposal. No new
 // samples, reservoir writes or image writes; each valid proposal traces two rays.
 inline void download_primary_light_diagnostics(Device &device, Stream &stream, FrameBuffer &fb,
                                                uint frame, uint2 size, const DIRadiance &direct,
@@ -31,9 +31,9 @@ inline void download_primary_light_diagnostics(Device &device, Stream &stream, F
         throw std::runtime_error("GI primary light diagnostic requires RGB");
     const auto indices = native_reblur_diagnostic_indices(size);
     const uint count = uint(indices.size()), pixels = size.x * size.y;
-    const auto position_storage = fb.prepare_screen_storage("Falcor DI surface position and depth", make_uint2(1u),
+    const auto position_storage = fb.prepare_screen_storage("ReSTIR DI surface position and depth", make_uint2(1u),
                                                            2u * sizeof(uint4));
-    const auto normal_storage = fb.prepare_screen_storage("Falcor DI surface normals", make_uint2(1u),
+    const auto normal_storage = fb.prepare_screen_storage("ReSTIR DI surface normals", make_uint2(1u),
                                                          2u * sizeof(uint2));
     Buffer<uint4> positions{position_storage.view_as<uint4>()};
     Buffer<uint2> normals{normal_storage.view_as<uint2>()};
@@ -61,8 +61,8 @@ inline void download_primary_light_diagnostics(Device &device, Stream &stream, F
             const Uint surface_index = (frame & 1u) * pixels + index;
             const Float3 receiver = as<float4>(positions.read(surface_index, false)).xyz();
             const Uint2 packed_normal = normals.read(surface_index, false);
-            const Float3 ns = falcor_di::unpack_normal(packed_normal.x);
-            const Float3 ng = falcor_di::unpack_normal(packed_normal.y);
+            const Float3 ns = restir_di::unpack_normal(packed_normal.x);
+            const Float3 ng = restir_di::unpack_normal(packed_normal.y);
             row.values[0u] = make_float4(it.pos, proposal.pdf);
             row.values[1u] = make_float4(it.wo, dot(ns, it.wo));
             row.values[2u] = make_float4(ns, dot(ns, wi));
@@ -77,7 +77,7 @@ inline void download_primary_light_diagnostics(Device &device, Stream &stream, F
                 row.ids[0u].w = bsdf_flags;
                 $if(BxDFFlag::is_specular(bsdf_flags)) { flags |= 4u; };
                 $if(dot(ns, wi) > 0.f) { flags |= 8u; };
-                const Bool valid = proposal.pdf > 0.f && falcor_di::finite(proposal.pdf) &&
+                const Bool valid = proposal.pdf > 0.f && restir_di::finite(proposal.pdf) &&
                                    all(!ocarina::isnan(wi)) && all(!ocarina::isinf(wi)) && length_squared(wi) > 0.f;
                 $if(valid) {
                     flags |= 2u;
@@ -87,13 +87,13 @@ inline void download_primary_light_diagnostics(Device &device, Stream &stream, F
                     row.ids[1u].x = eval.flags;
                     $if(BxDFFlag::is_transmission(eval.flags)) { flags |= 8192u; };
                     $if(!BxDFFlag::is_specular(bsdf_flags) && dot(ns, wi) > 0.f) { flags |= 16u; };
-                    const Float3 falcor_origin = Interaction::custom_offset_ray_origin(receiver, ng, wi);
+                    const Float3 restir_di_origin = Interaction::custom_offset_ray_origin(receiver, ng, wi);
                     // Same proposal, exact current DI ray versus ordinary PT ray.
                     // Record both even when DI's hemisphere gate rejects the proposal.
                     for (uint mode = 0u; mode < 2u; ++mode) {
                         auto ray = mode == 0u
-                            ? falcor_di::make_light_ray(falcor_origin, wi, Float{falcor_di::ray_epsilon},
-                                                       Float{falcor_di::environment_ray_distance})
+                            ? restir_di::make_light_ray(restir_di_origin, wi, Float{restir_di::ray_epsilon},
+                                                       Float{restir_di::environment_ray_distance})
                             : it.spawn_ray(wi);
                         const uint base = 8u + 4u * mode;
                         row.values[base] = ray.org_min;
@@ -180,18 +180,18 @@ inline void download_primary_light_diagnostics(Device &device, Stream &stream, F
         << ",\"count\":" << count << ",\"stride\":368,\"layout\":\"AOS float4 values[18],uint4 ids[5]\","
            "\"values\":[\"primaryPos,storedProposalPDF\",\"wo,dotPackedNsWo\",\"packedNs,dotPackedNsWi\","
            "\"packedNg,ordinarySameDirectionPDF\",\"storedWi,length\",\"storedF,0\",\"ordinarySameDirectionF,0\",\"rawDI\","
-           "\"falcorOrigin,tmin\",\"falcorFirstPosition,distance\",\"falcorLe,ordinaryLightPDF\",\"falcorBSDFTermWithoutMIS,0\","
+           "\"restirDIOrigin,tmin\",\"restirDIFirstPosition,distance\",\"restirDILe,ordinaryLightPDF\",\"restirDIBSDFTermWithoutMIS,0\","
            "\"ptOrigin,tmin\",\"ptFirstPosition,distance\",\"ptLe,ordinaryLightPDF\",\"ptBSDFTermWithoutMIS,0\","
            "\"GIroughness,metallic,transmission,ior\",\"GIshadingNormal,dotWo\"],"
            "\"ids\":[\"primaryInstance,primitive,material,ordinaryBSDFflags\",\"ordinaryEvalFlags,GIbsdfFlags,GIparameterFlags,bits\","
-           "\"falcorFirstInstance,primitive,material,light\",\"ptFirstInstance,primitive,material,light\",\"pixel,frame,0,0\"],"
+           "\"restirDIFirstInstance,primitive,material,light\",\"ptFirstInstance,primitive,material,light\",\"pixel,frame,0,0\"],"
            "\"bits\":{\"primaryHit\":1,\"validProposal\":2,\"ordinarySpecular\":4,\"positiveHemisphere\":8,\"DIeligible\":16,"
-           "\"falcorHit\":32,\"falcorEmitterGeometry\":64,\"falcorMissEnvironment\":128,\"ptHit\":256,\"ptEmitterGeometry\":512,"
-           "\"ptMissEnvironment\":1024,\"ptPositiveFirstLight\":2048,\"falcorPositiveFirstLight\":4096,\"ordinaryEvalTransmission\":8192,"
+           "\"restirDIHit\":32,\"restirDIEmitterGeometry\":64,\"restirDIMissEnvironment\":128,\"ptHit\":256,\"ptEmitterGeometry\":512,"
+           "\"ptMissEnvironment\":1024,\"ptPositiveFirstLight\":2048,\"restirDIPositiveFirstLight\":4096,\"ordinaryEvalTransmission\":8192,"
            "\"GIspecular\":16384,\"GIparametersCaptured\":32768,\"GIidealGlass\":65536},"
            "\"ownership\":\"Existing GI capture excludes first BSDF emission/miss at bounces<=1; independent BSDF term has no MIS and is not a corrected estimate\","
-           "\"proposal\":\"Original fb.hit_bsdfs written before Falcor DI hemisphere/light-hit gates; no new sampling\","
-           "\"rays\":\"Exact Falcor packed-surface custom offset,tmin.001,tmax1e16 versus ordinary it.spawn_ray stored wi\","
+           "\"proposal\":\"Original fb.hit_bsdfs written before ReSTIR DI hemisphere/light-hit gates; no new sampling\","
+           "\"rays\":\"Exact ReSTIR DI packed-surface custom offset,tmin.001,tmax1e16 versus ordinary it.spawn_ray stored wi\","
            "\"scope\":\"Only diagnostic buffers written; original image, sampler and reservoirs untouched\"}\n";
     if (!metadata) throw std::runtime_error("GI primary light diagnostic metadata write failed");
     OC_INFO_FORMAT("GI primary light diagnostic: downloaded {} original proposal witnesses", count);

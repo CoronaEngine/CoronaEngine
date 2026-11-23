@@ -2,7 +2,7 @@
 
 #include "common.h"
 
-namespace vision::falcor_di {
+namespace vision::restir_di {
 
 [[nodiscard]] inline Bool valid_reservoir(const ReservoirVar &reservoir) {
     return reservoir.light_index != InvalidUI32 && reservoir.weight > 0.f && reservoir.target > 0.f;
@@ -69,4 +69,4 @@ inline void finalize_reservoir(ReservoirVar &reservoir, const Float &numerator, 
     reservoir.weight = select(finite(weight) && weight > 0.f, weight, 0.f);
 }
 
-} // namespace vision::falcor_di
+} // namespace vision::restir_di
