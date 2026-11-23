@@ -7,6 +7,7 @@
 #include <corona/kernel/core/kernel_context.h>
 #include <corona/kernel/event/i_event_bus.h>
 #include <corona/shared_data_hub.h>
+#include <corona/ecs/structural_commands.h>
 #include <corona/engine/engine_runtime_api.h>
 
 #include <algorithm>
@@ -127,7 +128,7 @@ void VulkanBackend::shutdown() {
             if (render->resources.last_receipt.serial != 0) {
                 render->resources.executor.wait_idle(render->resources.last_receipt);
             }
-            Corona::SharedDataHub::instance().destroy_image(render->image_handle);
+            Corona::Ecs::request_destroy_image(render->image_handle);
             render->image_handle = 0;
         }
     }
@@ -151,14 +152,20 @@ bool VulkanBackend::register_surface(void* surface, SDL_Window* window) {
     }
 
     auto render = std::make_unique<PerSurfaceRender>();
-    render->image_handle = Corona::SharedDataHub::instance().create_image();
+    // 结构创建走 tick 边界命令通道（ECS 单写者，P1）。装配期（引擎初始化、系统线程
+    // 还没开始）由本线程直接应用；运行期由 DAG 在边界创建并结算。
+    render->image_handle = Corona::Ecs::request_create_image(Corona::Ecs::CreateImagePayload{});
+    if (render->image_handle == 0) {
+        CFW_LOG_ERROR("VulkanBackend: failed to create the image entity for surface {}", surface);
+        return false;
+    }
     render->published_image = Detail::PublishedImage(render->image_handle);
     if (auto image_device =
             Corona::SharedDataHub::instance().image_write(render->image_handle)) {
         *image_device = ImageDevice{};
     } else {
         CFW_LOG_ERROR("VulkanBackend: failed to acquire image storage handle for surface {}", surface);
-        Corona::SharedDataHub::instance().destroy_image(render->image_handle);
+        Corona::Ecs::request_destroy_image(render->image_handle);
         return false;
     }
 
@@ -203,7 +210,7 @@ void VulkanBackend::unregister_surface(void* surface) {
     }
 
     if (render.image_handle != 0) {
-        Corona::SharedDataHub::instance().destroy_image(render.image_handle);
+        Corona::Ecs::request_destroy_image(render.image_handle);
         render.image_handle = 0;
     }
     surfaces_.erase(it);

@@ -1011,6 +1011,8 @@ class SharedDataHub {
     // image 已删除 Storage：组件直接挂在实体上，跨线程访问用锁租约串行化。
     EntityId create_image();
     void destroy_image(EntityId handle);
+    /// 摘掉该图的写租约表项（拥有者线程的销毁原语与 `destroy_image` 共用）。
+    void forget_image_lock(EntityId handle);
     [[nodiscard]] ImageAccess image_write(EntityId handle);
     [[nodiscard]] ImageReadAccess image_read(EntityId handle);
     [[nodiscard]] std::vector<EntityId> image_handles();

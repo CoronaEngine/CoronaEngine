@@ -42,7 +42,14 @@ SharedDataHub& SharedDataHub::instance() {
 }
 
 // Storage accessors definitions
-EntityId SharedDataHub::create_model_resource() { return Ecs::emplace<ModelResource>(); }
+//
+// **拥有者线程专用原语**，且只是默认初始值的便捷入口：权威实现在
+// `Ecs::create_*_entity()`（`include/corona/ecs/structural_commands.h`），由 tick
+// 边界的应用器调用。这些包装保留给单线程测试夹具与引擎装配期（还没有 DAG 线程）。
+// 生产调用点一律走 `Ecs::request_create_*()` / `Ecs::request_destroy_entity()`。
+EntityId SharedDataHub::create_model_resource() {
+    return Ecs::create_model_resource_entity(Ecs::CreateModelResourcePayload{});
+}
 void SharedDataHub::destroy_model_resource(EntityId handle) { Ecs::destroy(handle); }
 ModelResource* SharedDataHub::try_model_resource(EntityId handle) {
     return Ecs::try_get<ModelResource>(handle);
@@ -54,7 +61,9 @@ ModelResource* find_model_resource(EntityId handle) {
     return SharedDataHub::instance().try_model_resource(handle);
 }
 
-EntityId SharedDataHub::create_transform() { return Ecs::emplace<ModelTransform>(); }
+EntityId SharedDataHub::create_transform() {
+    return Ecs::create_transform_entity(Ecs::CreateTransformPayload{});
+}
 void SharedDataHub::destroy_transform(EntityId handle) { Ecs::destroy(handle); }
 ModelTransform* SharedDataHub::try_transform(EntityId handle) {
     return Ecs::try_get<ModelTransform>(handle);
@@ -67,10 +76,6 @@ ModelTransform* find_transform(EntityId handle) {
 }
 
 EntityId SharedDataHub::create_geometry() {
-    // **拥有者线程专用**，且只是默认初始值的便捷入口：权威实现在
-    // `Ecs::create_geometry_entity()`（`include/corona/ecs/structural_commands.h`），
-    // 由 tick 边界的应用器调用。本函数保留给单线程测试夹具（没有 DAG 线程）。
-    // 生产调用点一律走 `Ecs::request_create_geometry()`（结构命令 + 同步应答）。
     return Ecs::create_geometry_entity(Ecs::CreateGeometryPayload{});
 }
 void SharedDataHub::destroy_geometry(EntityId handle) { Ecs::destroy(handle); }
@@ -91,8 +96,7 @@ Ecs::ModelSource* find_model_source(EntityId handle) {
 }
 
 EntityId SharedDataHub::create_mechanics() {
-    const auto entity = Ecs::World::instance().create<MechanicsDevice, Ecs::Bounds>();
-    return Ecs::to_handle(entity);
+    return Ecs::create_mechanics_entity(Ecs::CreateMechanicsPayload{});
 }
 void SharedDataHub::destroy_mechanics(EntityId handle) { Ecs::destroy(handle); }
 MechanicsDevice* SharedDataHub::try_mechanics(EntityId handle) {
@@ -111,7 +115,9 @@ Ecs::Bounds* find_bounds(EntityId handle) {
     return SharedDataHub::instance().try_bounds(handle);
 }
 
-EntityId SharedDataHub::create_acoustics() { return Ecs::emplace<AcousticsDevice>(); }
+EntityId SharedDataHub::create_acoustics() {
+    return Ecs::create_acoustics_entity(Ecs::CreateAcousticsPayload{});
+}
 void SharedDataHub::destroy_acoustics(EntityId handle) { Ecs::destroy(handle); }
 AcousticsDevice* SharedDataHub::try_acoustics(EntityId handle) {
     return Ecs::try_get<AcousticsDevice>(handle);
@@ -121,8 +127,7 @@ const AcousticsDevice* SharedDataHub::try_acoustics(EntityId handle) const {
 }
 
 EntityId SharedDataHub::create_optics() {
-    const auto entity = Ecs::World::instance().create<OpticsDevice, Ecs::Visibility>();
-    return Ecs::to_handle(entity);
+    return Ecs::create_optics_entity(Ecs::CreateOpticsPayload{});
 }
 void SharedDataHub::destroy_optics(EntityId handle) { Ecs::destroy(handle); }
 OpticsDevice* SharedDataHub::try_optics(EntityId handle) {
@@ -141,7 +146,9 @@ Ecs::Visibility* find_visibility(EntityId handle) {
     return SharedDataHub::instance().try_visibility(handle);
 }
 
-EntityId SharedDataHub::create_profile_component() { return Ecs::emplace<ProfileDevice>(); }
+EntityId SharedDataHub::create_profile_component() {
+    return Ecs::create_profile_entity(Ecs::CreateProfilePayload{});
+}
 void SharedDataHub::destroy_profile_component(EntityId handle) { Ecs::destroy(handle); }
 ProfileDevice* SharedDataHub::try_profile(EntityId handle) {
     return Ecs::try_get<ProfileDevice>(handle);
@@ -154,11 +161,7 @@ ProfileDevice* find_profile(EntityId handle) {
 }
 
 EntityId SharedDataHub::create_actor_component() {
-    const auto entity =
-        Ecs::World::instance()
-            .create<ActorDevice, Ecs::StreamingPolicy, Ecs::ModelPath, Ecs::Profiles,
-                    Ecs::FollowCamera>();
-    return Ecs::to_handle(entity);
+    return Ecs::create_actor_entity(Ecs::CreateActorPayload{});
 }
 void SharedDataHub::destroy_actor_component(EntityId handle) { Ecs::destroy(handle); }
 ActorDevice* SharedDataHub::try_actor(EntityId handle) {
@@ -264,7 +267,9 @@ void SharedDataHub::clear_actor_metadata(EntityId actor_handle) {
     actor_guids_.erase(actor_handle);
 }
 
-EntityId SharedDataHub::create_camera() { return Ecs::emplace<CameraDevice>(); }
+EntityId SharedDataHub::create_camera() {
+    return Ecs::create_camera_entity(Ecs::CreateCameraPayload{});
+}
 void SharedDataHub::destroy_camera(EntityId handle) { Ecs::destroy(handle); }
 CameraDevice* SharedDataHub::try_camera(EntityId handle) {
     return Ecs::try_get<CameraDevice>(handle);
@@ -276,7 +281,9 @@ CameraDevice* find_camera(EntityId handle) {
     return SharedDataHub::instance().try_camera(handle);
 }
 
-EntityId SharedDataHub::create_environment() { return Ecs::emplace<EnvironmentDevice>(); }
+EntityId SharedDataHub::create_environment() {
+    return Ecs::create_environment_entity(Ecs::CreateEnvironmentPayload{});
+}
 void SharedDataHub::destroy_environment(EntityId handle) { Ecs::destroy(handle); }
 EnvironmentDevice* SharedDataHub::try_environment(EntityId handle) {
     return Ecs::try_get<EnvironmentDevice>(handle);
@@ -285,7 +292,9 @@ const EnvironmentDevice* SharedDataHub::try_environment(EntityId handle) const {
     return Ecs::try_get_const<EnvironmentDevice>(handle);
 }
 
-EntityId SharedDataHub::create_scene() { return Ecs::emplace<SceneDevice>(); }
+EntityId SharedDataHub::create_scene() {
+    return Ecs::create_scene_entity(Ecs::CreateScenePayload{});
+}
 void SharedDataHub::destroy_scene(EntityId handle) { Ecs::destroy(handle); }
 SceneDevice* SharedDataHub::try_scene(EntityId handle) {
     return Ecs::try_get<SceneDevice>(handle);
@@ -297,9 +306,13 @@ SceneDevice* find_scene(EntityId handle) {
     return SharedDataHub::instance().try_scene(handle);
 }
 
-EntityId SharedDataHub::create_image() { return Ecs::emplace<ImageDevice>(); }
+EntityId SharedDataHub::create_image() {
+    return Ecs::create_image_entity(Ecs::CreateImagePayload{});
+}
 void SharedDataHub::destroy_image(EntityId handle) {
-    Ecs::destroy(handle);
+    Ecs::destroy_image_entity(handle);
+}
+void SharedDataHub::forget_image_lock(EntityId handle) {
     std::lock_guard<std::mutex> guard(image_locks_mutex_);
     image_locks_.erase(handle);
 }

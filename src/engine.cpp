@@ -90,6 +90,10 @@ static void configure_structural_command_frame_period(Kernel::ISystemManager* sy
  * Display 每 tick 都跑但内容一致时会自己跳过 present。
  */
 static void configure_systems_dag(Kernel::ISystemManager* sys_mgr) {
+    // 从此刻起"会有线程来 drain 结构命令队列"：装配期（系统线程还不存在）的
+    // 结构变更由调用线程直接应用，装配完成后一律排队结算。降级路径同样适用。
+    Corona::Ecs::StructuralCommandChannel::instance().notify_owner_expected();
+
     const char* dag_env = std::getenv("CORONA_SYSTEMS_DAG");
     if (dag_env != nullptr && std::string_view{dag_env} == "0") {
         configure_structural_command_frame_period(sys_mgr);

@@ -7,21 +7,27 @@
  * 1. 超时是失败且**不留下实体**：调用方返回 0，registry 实体数不变；迟到的
  *    drain 必须跳过已被放弃的请求（不能创建无人签收的实体）；
  * 2. 停机结算：仍在等待的调用方立刻拿到失败，而不是等满预算；
- * 3. 停机后新请求立即拒绝（不排队、不阻塞）；
+ * 3. 停机后新请求立即拒绝（不排队、不阻塞）——包括**拥有者线程自己**的创建请求
+ *    （停机判定先于重入判定，见 `test_the_owner_thread_cannot_create_once_shutdown_begins`）；
  * 4. 重入：拥有者线程自己调用 → 直接应用，不入队（否则自死锁）；
  * 5. 正常路径：假 DAG 线程 drain → 应用 → 句柄有效、初始组件值正确；
  * 6. 默认超时 = 真实 tick 的两帧（下限 17ms），显式覆盖优先；
- * 7. 所有等待都有界：每个等待都断言 elapsed < 一个上界。
+ * 7. 装配前（还没有拥有者）调用线程直接应用：引擎装配期与单线程夹具的既定行为；
+ * 8. 所有等待都有界：每个等待都断言 elapsed < 一个上界；
+ * 9. 批量创建成本：N=200 个 actor 通过公开 API 创建/销毁的实测墙钟时间。
  */
 
 #include <corona/ecs/structural_commands.h>
+#include <corona/engine/engine_runtime_api.h>
 
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -81,6 +87,33 @@ void test_the_default_timeout_is_two_frames_of_the_real_tick() {
     CHECK(channel.timeout() == 123ms);
     channel.clear_timeout_override();
     CHECK(channel.timeout() == 17ms);
+}
+
+/// 装配前：还没有任何拥有者存在时，调用线程直接应用（引擎装配期 / 单线程夹具）。
+///
+/// 这条必须**先于**任何 `on_dag_started()` 运行：装配方一旦宣布拥有者存在，
+/// 例外就结束。它也解释了为什么引擎初始化阶段（系统线程还没起）创建 surface
+/// 图像不会失败。
+void test_before_assembly_the_calling_thread_applies_directly() {
+    auto& channel = StructuralCommandChannel::instance();
+    CHECK(!channel.owner_expected());
+    channel.clear_timeout_override();
+    channel.set_tick_period(8333us);
+    channel.set_timeout(60ms);
+
+    const auto before = entity_count();
+    const auto stats_before = channel.stats();
+
+    const auto started = Clock::now();
+    const Corona::EntityId handle = Corona::Ecs::request_create_geometry(make_payload(0x0BEF));
+    const long long waited = elapsed_ms(started);
+
+    CHECK(handle != 0);
+    CHECK(waited < 60);                   // 没有等 tick
+    CHECK(channel.commands().size() == 0);  // 没有入队
+    CHECK(entity_count() == before + 1);
+    CHECK(channel.stats().pre_assembly == stats_before.pre_assembly + 1);
+    CHECK(channel.stats().inline_applied == stats_before.inline_applied);
 }
 
 /// 正常路径：假 DAG 线程 drain → 应用 → 调用方拿到有效句柄与初始组件值。
@@ -239,15 +272,139 @@ void test_the_owner_thread_applies_inline() {
     }
 }
 
+/// 停机判定先于重入判定：**拥有者线程自己**在停机开始后的创建请求也必须被拒绝。
+///
+/// `request_*` 先检查 `stopped_` 再看 `affinity`，正是为了让"引擎正在关停、DAG
+/// 线程自己还在跑最后一个 tick"这种情况也拿不到新实体：新建的实体会落在一个马上
+/// 被拆掉的世界上。这条谁都不许改成"拥有者可以例外"。
+void test_the_owner_thread_cannot_create_once_shutdown_begins() {
+    auto& channel = StructuralCommandChannel::instance();
+    channel.set_tick_period(8333us);
+    channel.clear_timeout_override();
+    channel.set_timeout(50ms);
+    channel.on_dag_started();
+
+    // tick 边界的 drain 把当前线程登记为 registry 的拥有者
+    Corona::Ecs::apply_pending_structural_commands();
+    CHECK(channel.affinity().is_owner_thread());
+    CHECK(!channel.stopped());
+
+    channel.on_dag_stopping("structural command test shutdown begins");
+    CHECK(channel.stopped());
+
+    const auto before = entity_count();
+    const auto stats_before = channel.stats();
+
+    const auto started = Clock::now();
+    const Corona::EntityId handle = Corona::Ecs::request_create_geometry(make_payload(0x5109));
+    const long long waited = elapsed_ms(started);
+
+    CHECK(handle == 0);                    // 被拒绝，而不是被应用
+    CHECK(waited < 50);                    // 立即拒绝，不排队、不等待
+    CHECK(entity_count() == before);       // 没有创建任何实体
+    CHECK(channel.commands().size() == 0); // 没有入队
+    CHECK(channel.stats().rejected == stats_before.rejected + 1);
+    // 也没有悄悄走"重入直接应用"的路径
+    CHECK(channel.stats().inline_applied == stats_before.inline_applied);
+}
+
+/// 批量创建成本：N=200 个 actor 通过**公开 API** 创建/销毁的实测墙钟。
+///
+/// 同步应答契约意味着每个请求要等一次 tick 边界：这条用例量出"每个结构命令
+/// 的边界成本"，并把它与"直接调用创建原语"的基线和上限断言放在一起。它不追求
+/// 好看的数字，只保证成本线性、有界，并把真实数值打出来供 Task 1b 报告引用。
+void test_bulk_creation_cost_through_the_public_api() {
+    constexpr int kCount = 200;
+
+    auto& channel = StructuralCommandChannel::instance();
+    channel.clear_timeout_override();
+    channel.set_tick_period(8333us);   // 120Hz：一帧 8.33ms
+    channel.set_timeout(500ms);
+    channel.on_dag_started();
+    // 上面的用例把本线程登记成了拥有者；这里要让假 DAG 线程成为拥有者，
+    // 否则 200 个请求会全部走重入直接应用，量到的就不是边界成本。
+    channel.affinity().reset();
+    CHECK(!channel.affinity().is_owner_thread());
+
+    // 基线：同一个创建原语直接调用（拥有者线程 / 装配前的成本）
+    std::vector<Corona::EntityId> baseline_handles;
+    baseline_handles.reserve(kCount);
+    const auto baseline_started = Clock::now();
+    for (int i = 0; i < kCount; ++i) {
+        baseline_handles.push_back(
+            Corona::Ecs::create_transform_entity(Corona::Ecs::CreateTransformPayload{}));
+    }
+    const long long baseline_ms = elapsed_ms(baseline_started);
+    for (const auto handle : baseline_handles) {
+        Corona::Ecs::destroy(handle);
+    }
+
+    std::atomic<bool> stop{false};
+    std::thread owner([&]() {
+        // 120Hz 边界：用截止时间 + yield 自旋，而不是 sleep_for —— Windows 默认计时器
+        // 分辨率是 15.6ms，sleep_for(8333us) 实际会睡约 15.6ms，量出来的就不是 120Hz。
+        auto next = Clock::now();
+        while (!stop.load(std::memory_order_relaxed)) {
+            Corona::Ecs::apply_pending_structural_commands();
+            next += std::chrono::microseconds{8333};
+            while (!stop.load(std::memory_order_relaxed) && Clock::now() < next) {
+                std::this_thread::yield();
+            }
+        }
+    });
+
+    std::vector<std::unique_ptr<Corona::API::Actor>> actors;
+    actors.reserve(kCount);
+    const auto create_started = Clock::now();
+    for (int i = 0; i < kCount; ++i) {
+        actors.push_back(std::make_unique<Corona::API::Actor>());
+    }
+    const long long create_ms = elapsed_ms(create_started);
+
+    int valid = 0;
+    for (const auto& actor : actors) {
+        if (actor->get_handle() != 0) {
+            ++valid;
+        }
+    }
+
+    const auto destroy_started = Clock::now();
+    actors.clear();
+    const long long destroy_ms = elapsed_ms(destroy_started);
+
+    stop.store(true, std::memory_order_relaxed);
+    owner.join();
+
+    const double per_create_ms = static_cast<double>(create_ms) / kCount;
+    const double per_destroy_ms = static_cast<double>(destroy_ms) / kCount;
+    std::printf("  [bulk] %d actors through the public API: create %lldms (%.2fms/actor), "
+                "destroy %lldms (%.2fms/actor); direct primitive baseline %lldms (%.3fms/actor)\n",
+                kCount, create_ms, per_create_ms, destroy_ms, per_destroy_ms, baseline_ms,
+                static_cast<double>(baseline_ms) / kCount);
+
+    CHECK(valid == kCount);                 // 每个请求都结算成功
+    CHECK(create_ms >= 0 && destroy_ms >= 0);
+    // 有界：一条命令最多等一个 tick（8.33ms）+ 余量；200 个请求的线性成本不可能超过
+    // 200×50ms。超过就说明边界没有在 drain（或每次都在等满超时预算）。
+    CHECK(per_create_ms < 50.0);
+    CHECK(per_destroy_ms < 50.0);
+    CHECK(create_ms < kCount * 50);
+    // 边界成本必须明显高于直接调用原语，否则量到的不是同步应答的成本。
+    CHECK(baseline_ms < create_ms);
+}
+
 }  // namespace
 
 int main() {
     std::printf("== Structural command (settlement / re-entrancy / timeout / shutdown) ==\n");
     test_the_default_timeout_is_two_frames_of_the_real_tick();
+    test_before_assembly_the_calling_thread_applies_directly();
     test_a_running_owner_applies_the_request();
     test_a_timeout_fails_and_leaves_no_entity_behind();
     test_stop_settles_waiting_callers_and_rejects_new_requests();
     test_the_owner_thread_applies_inline();
+    test_the_owner_thread_cannot_create_once_shutdown_begins();
+    test_bulk_creation_cost_through_the_public_api();
 
     if (g_failures == 0) {
         std::printf("OK: %d checks passed\n", g_checks);

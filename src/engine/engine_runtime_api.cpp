@@ -215,12 +215,17 @@ std::string vision_render_mode_to_string(Corona::CameraVisionRenderMode mode) {
 // ########################
 Corona::API::Scene::Scene()
     : handle_(0) {
-    handle_ = SharedDataHub::instance().create_scene();
+    // 结构创建走 tick 边界命令通道（ECS 单写者，P1）：调用方不再直接写 registry。
+    handle_ = Corona::Ecs::request_create_scene(Corona::Ecs::CreateScenePayload{});
+    if (handle_ == 0) {
+        CFW_LOG_CRITICAL("[Scene::Scene] Failed to create the scene entity "
+                         "(the structural command did not settle; see the diagnostic above)");
+    }
 }
 
 Corona::API::Scene::~Scene() {
     if (handle_ != 0) {
-        SharedDataHub::instance().destroy_scene(handle_);
+        Corona::Ecs::request_destroy_entity(handle_, "destroy_scene");
         handle_ = 0;
     }
 }
@@ -479,20 +484,24 @@ bool Corona::API::Scene::is_simulation_enabled() const {
 // ########################
 Corona::API::Environment::Environment()
     : handle_(0) {
-    handle_ = SharedDataHub::instance().create_environment();
-    if (handle_ != 0) {
-        if (auto* accessor = SharedDataHub::instance().try_environment(handle_)) {
-            accessor->sun_position.x = 1.0f;
-            accessor->sun_position.y = 1.0f;
-            accessor->sun_position.z = 1.0f;
-            accessor->floor_grid_enabled = 1;
-        }
+    // 初始值随 payload 一起交给拥有者线程：不再"先创建再补字段"（那等于在 UI
+    // 线程写组件）。默认值与 EnvironmentDevice 的默认构造一致（sun_position 未初始化，
+    // 这里保持旧行为的显式初值）。
+    Corona::Ecs::CreateEnvironmentPayload payload{};
+    payload.environment.sun_position.x = 1.0f;
+    payload.environment.sun_position.y = 1.0f;
+    payload.environment.sun_position.z = 1.0f;
+    payload.environment.floor_grid_enabled = 1;
+    handle_ = Corona::Ecs::request_create_environment(std::move(payload));
+    if (handle_ == 0) {
+        CFW_LOG_CRITICAL("[Environment::Environment] Failed to create the environment entity "
+                         "(the structural command did not settle; see the diagnostic above)");
     }
 }
 
 Corona::API::Environment::~Environment() {
     if (handle_ != 0) {
-        SharedDataHub::instance().destroy_environment(handle_);
+        Corona::Ecs::request_destroy_entity(handle_, "destroy_environment");
         handle_ = 0;
     }
 }
@@ -664,17 +673,22 @@ Corona::API::Geometry::Geometry(const std::string& model_path, Resource::ModelIm
     // 契约变化：构造后 model_id / AABB **尚未就绪**（get_aabb() 暂返回 0，
     // Mechanics AABB 暂为 0）。GeometrySystem 在 import 完成后回填 MechanicsDevice
     // 的 AABB，八叉树每帧重读自然自愈；前端读 AABB 的逻辑需容忍"最终一致"。
-    model_resource_handle_ = SharedDataHub::instance().create_model_resource();
-    if (auto* handle = SharedDataHub::instance().try_model_resource(model_resource_handle_)) {
-        handle->model_id = 0;  // 待 import 完成后由 GeometrySystem 填入
-    } else {
-        CFW_LOG_ERROR("[Geometry::Geometry] Failed to create model resource component");
-        SharedDataHub::instance().destroy_model_resource(model_resource_handle_);
-        model_resource_handle_ = 0;
+    model_resource_handle_ = Corona::Ecs::request_create_model_resource(
+        Corona::Ecs::CreateModelResourcePayload{});
+    if (model_resource_handle_ == 0) {
+        CFW_LOG_ERROR("[Geometry::Geometry] Failed to create model resource component "
+                      "(the structural command did not settle; see the diagnostic above)");
         return;
     }
 
-    transform_handle_ = SharedDataHub::instance().create_transform();
+    transform_handle_ = Corona::Ecs::request_create_transform(Corona::Ecs::CreateTransformPayload{});
+    if (transform_handle_ == 0) {
+        CFW_LOG_ERROR("[Geometry::Geometry] Failed to create the transform entity "
+                      "(the structural command did not settle; see the diagnostic above)");
+        Corona::Ecs::request_destroy_entity(model_resource_handle_, "destroy_model_resource");
+        model_resource_handle_ = 0;
+        return;
+    }
 
     // 结构创建走 tick 边界命令通道（ECS 单写者，P1）：把实体与初始组件值装成
     // 一条命令，由 DAG 线程在 tick 边界创建并把 EntityId 交回。句柄到手时实体
@@ -693,9 +707,9 @@ Corona::API::Geometry::Geometry(const std::string& model_path, Resource::ModelIm
     if (handle_ == 0) {
         CFW_LOG_CRITICAL("[Geometry::Geometry] Failed to create the geometry entity "
                          "(the structural command did not settle; see the diagnostic above)");
-        // 清理已分配的资源
-        SharedDataHub::instance().destroy_transform(transform_handle_);
-        SharedDataHub::instance().destroy_model_resource(model_resource_handle_);
+        // 清理已分配的资源（同样走结构通道，由拥有者线程销毁）
+        Corona::Ecs::request_destroy_entity(transform_handle_, "destroy_transform");
+        Corona::Ecs::request_destroy_entity(model_resource_handle_, "destroy_model_resource");
         transform_handle_ = 0;
         model_resource_handle_ = 0;
         return;
@@ -704,13 +718,13 @@ Corona::API::Geometry::Geometry(const std::string& model_path, Resource::ModelIm
 
 Corona::API::Geometry::~Geometry() {
     if (handle_ != 0) {
-        SharedDataHub::instance().destroy_geometry(handle_);
+        Corona::Ecs::request_destroy_entity(handle_, "destroy_geometry");
     }
     if (transform_handle_ != 0) {
-        SharedDataHub::instance().destroy_transform(transform_handle_);
+        Corona::Ecs::request_destroy_entity(transform_handle_, "destroy_transform");
     }
     if (model_resource_handle_ != 0) {
-        SharedDataHub::instance().destroy_model_resource(model_resource_handle_);
+        Corona::Ecs::request_destroy_entity(model_resource_handle_, "destroy_model_resource");
     }
 }
 
@@ -727,13 +741,13 @@ Corona::API::Geometry::Geometry(Corona::API::Geometry&& other) noexcept
 Corona::API::Geometry& Corona::API::Geometry::operator=(Corona::API::Geometry&& other) noexcept {
     if (this != &other) {
         if (handle_ != 0) {
-            SharedDataHub::instance().destroy_geometry(handle_);
+            Corona::Ecs::request_destroy_entity(handle_, "destroy_geometry");
         }
         if (transform_handle_ != 0) {
-            SharedDataHub::instance().destroy_transform(transform_handle_);
+            Corona::Ecs::request_destroy_entity(transform_handle_, "destroy_transform");
         }
         if (model_resource_handle_ != 0) {
-            SharedDataHub::instance().destroy_model_resource(model_resource_handle_);
+            Corona::Ecs::request_destroy_entity(model_resource_handle_, "destroy_model_resource");
         }
         handle_ = other.handle_;
         transform_handle_ = other.transform_handle_;
@@ -836,7 +850,13 @@ Corona::API::Geometry Corona::API::Geometry::from_image(const std::string& image
 
     // 图片无 Resource::Scene，model_resource_handle 保持 0：Vision adapter 会回退到
     // 从 vertexBuffer 拷回 CPU mesh 的路径（load_cpu_mesh_from_buffers），无需 model resource。
-    geo.transform_handle_ = SharedDataHub::instance().create_transform();
+    geo.transform_handle_ =
+        Corona::Ecs::request_create_transform(Corona::Ecs::CreateTransformPayload{});
+    if (geo.transform_handle_ == 0) {
+        CFW_LOG_CRITICAL("[Geometry::from_image] Failed to create the transform entity "
+                         "(the structural command did not settle; see the diagnostic above)");
+        return geo;
+    }
     // 同上：结构创建走命令通道，初始组件值（含已上传的 mesh）随 payload 一起
     // 交给 DAG 线程，UI 线程不再直接写 registry / 组件。
     Corona::Ecs::CreateGeometryPayload payload{};
@@ -847,7 +867,7 @@ Corona::API::Geometry Corona::API::Geometry::from_image(const std::string& image
     if (geo.handle_ == 0) {
         CFW_LOG_CRITICAL("[Geometry::from_image] Failed to create the geometry entity "
                          "(the structural command did not settle; see the diagnostic above)");
-        SharedDataHub::instance().destroy_transform(geo.transform_handle_);
+        Corona::Ecs::request_destroy_entity(geo.transform_handle_, "destroy_transform");
         geo.transform_handle_ = 0;
     }
     return geo;
@@ -1125,19 +1145,18 @@ Corona::API::Optics::Optics(Geometry& geo)
         return;
     }
 
-    handle_ = SharedDataHub::instance().create_optics();
-    if (auto accessor = Corona::find_optics(handle_)) {
-        accessor->geometry_handle = geo.get_handle();
-    } else {
-        CFW_LOG_ERROR("[Optics::Optics] Failed to acquire write access to optics storage");
-        SharedDataHub::instance().destroy_optics(handle_);
-        handle_ = 0;
+    Corona::Ecs::CreateOpticsPayload payload{};
+    payload.optics.geometry_handle = geo.get_handle();
+    handle_ = Corona::Ecs::request_create_optics(std::move(payload));
+    if (handle_ == 0) {
+        CFW_LOG_ERROR("[Optics::Optics] Failed to create the optics entity "
+                      "(the structural command did not settle; see the diagnostic above)");
     }
 }
 
 Corona::API::Optics::~Optics() {
     if (handle_ != 0) {
-        SharedDataHub::instance().destroy_optics(handle_);
+        Corona::Ecs::request_destroy_entity(handle_, "destroy_optics");
     }
 }
 
@@ -1327,25 +1346,23 @@ Corona::API::Mechanics::Mechanics(Geometry& geo)
         CFW_LOG_WARNING("[Mechanics::Mechanics] Failed to read geometry; using default AABB");
     }
 
-    // 创建 MechanicsDevice
-    handle_ = SharedDataHub::instance().create_mechanics();
-    if (auto accessor = Corona::find_mechanics(handle_)) {
-        accessor->geometry_handle = geo.get_handle();
-        if (auto* bounds = SharedDataHub::instance().try_bounds(handle_)) {
-            bounds->min = min_xyz;
-            bounds->max = max_xyz;
-            bounds->valid = true;
-        }
-    } else {
-        CFW_LOG_ERROR("[Mechanics::Mechanics] Failed to acquire write access to mechanics storage");
-        SharedDataHub::instance().destroy_mechanics(handle_);
-        handle_ = 0;
+    // 创建 MechanicsDevice：初始值（几何句柄 + 由 model resource 推导的 AABB）
+    // 随 payload 一起交给拥有者线程，UI 线程不再写组件。
+    Corona::Ecs::CreateMechanicsPayload payload{};
+    payload.mechanics.geometry_handle = geo.get_handle();
+    payload.bounds.min = min_xyz;
+    payload.bounds.max = max_xyz;
+    payload.bounds.valid = true;
+    handle_ = Corona::Ecs::request_create_mechanics(std::move(payload));
+    if (handle_ == 0) {
+        CFW_LOG_ERROR("[Mechanics::Mechanics] Failed to create the mechanics entity "
+                      "(the structural command did not settle; see the diagnostic above)");
     }
 }
 
 Corona::API::Mechanics::~Mechanics() {
     if (handle_ != 0) {
-        SharedDataHub::instance().destroy_mechanics(handle_);
+        Corona::Ecs::request_destroy_entity(handle_, "destroy_mechanics");
     }
 }
 
@@ -1496,19 +1513,18 @@ Corona::API::Acoustics::Acoustics(Geometry& geo)
         return;
     }
 
-    handle_ = SharedDataHub::instance().create_acoustics();
-    if (auto* accessor = SharedDataHub::instance().try_acoustics(handle_)) {
-        accessor->geometry_handle = geo.get_handle();
-    } else {
-        CFW_LOG_ERROR("[Acoustics::Acoustics] Failed to create acoustics component");
-        SharedDataHub::instance().destroy_acoustics(handle_);
-        handle_ = 0;
+    Corona::Ecs::CreateAcousticsPayload payload{};
+    payload.acoustics.geometry_handle = geo.get_handle();
+    handle_ = Corona::Ecs::request_create_acoustics(std::move(payload));
+    if (handle_ == 0) {
+        CFW_LOG_ERROR("[Acoustics::Acoustics] Failed to create the acoustics entity "
+                      "(the structural command did not settle; see the diagnostic above)");
     }
 }
 
 Corona::API::Acoustics::~Acoustics() {
     if (handle_ != 0) {
-        SharedDataHub::instance().destroy_acoustics(handle_);
+        Corona::Ecs::request_destroy_entity(handle_, "destroy_acoustics");
     }
 }
 
@@ -1600,20 +1616,25 @@ Corona::API::Geometry* Corona::API::Acoustics::get_geometry() const {
 // ########################
 Corona::API::Actor::Actor()
     : handle_(0), active_profile_handle_(0), next_profile_handle_(1) {
-    handle_ = SharedDataHub::instance().create_actor_component();
+    handle_ = Corona::Ecs::request_create_actor(Corona::Ecs::CreateActorPayload{});
+    if (handle_ == 0) {
+        CFW_LOG_CRITICAL("[Actor::Actor] Failed to create the actor entity "
+                         "(the structural command did not settle; see the diagnostic above)");
+    }
 }
 
 Corona::API::Actor::~Actor() {
     for (const auto& [_, storage_profile_handle] : profile_storage_handles_) {
         if (storage_profile_handle != 0) {
-            SharedDataHub::instance().destroy_profile_component(storage_profile_handle);
+            Corona::Ecs::request_destroy_entity(storage_profile_handle,
+                                                "destroy_profile_component");
         }
     }
     profile_storage_handles_.clear();
 
     if (handle_ != 0) {
         SharedDataHub::instance().clear_actor_metadata(handle_);
-        SharedDataHub::instance().destroy_actor_component(handle_);
+        Corona::Ecs::request_destroy_entity(handle_, "destroy_actor_component");
     }
 }
 
@@ -1649,18 +1670,18 @@ Corona::API::Actor::Profile* Corona::API::Actor::add_profile(const Profile& prof
         active_profile_handle_ = profile_handle;
     }
 
-    // 将 Profile 写入引擎侧 ProfileStorage，ActorDevice 只保存 ProfileStorage 的句柄
-    EntityId storage_profile_handle = SharedDataHub::instance().create_profile_component();
-    if (auto* p = SharedDataHub::instance().try_profile(storage_profile_handle)) {
-        // Actor 作为组件类的 friend，可以读取组件句柄；但不能直接调用 Geometry 的受保护 get_handle()
-        p->optics_handle = profile.optics ? profile.optics->get_handle() : 0;
-        p->acoustics_handle = profile.acoustics ? profile.acoustics->get_handle() : 0;
-        p->mechanics_handle = profile.mechanics ? profile.mechanics->get_handle() : 0;
-        p->geometry_handle = 0;
-    } else {
-        CFW_LOG_ERROR("[Actor::add_profile] Failed to create profile component");
-        SharedDataHub::instance().destroy_profile_component(storage_profile_handle);
-        storage_profile_handle = 0;
+    // 将 Profile 写入引擎侧 ProfileStorage，ActorDevice 只保存 ProfileStorage 的句柄。
+    // 初始字段随 payload 一起交给拥有者线程：不再"先创建再补字段"。
+    Corona::Ecs::CreateProfilePayload profile_payload{};
+    profile_payload.profile.optics_handle = profile.optics ? profile.optics->get_handle() : 0;
+    profile_payload.profile.acoustics_handle = profile.acoustics ? profile.acoustics->get_handle() : 0;
+    profile_payload.profile.mechanics_handle = profile.mechanics ? profile.mechanics->get_handle() : 0;
+    profile_payload.profile.geometry_handle = 0;
+    EntityId storage_profile_handle =
+        Corona::Ecs::request_create_profile(std::move(profile_payload));
+    if (storage_profile_handle == 0) {
+        CFW_LOG_ERROR("[Actor::add_profile] Failed to create profile component "
+                      "(the structural command did not settle; see the diagnostic above)");
     }
     profile_storage_handles_[profile_handle] = storage_profile_handle;
 
@@ -1742,7 +1763,7 @@ void Corona::API::Actor::remove_profile(const Profile* profile) {
     }
 
     if (storage_profile_handle != 0) {
-        SharedDataHub::instance().destroy_profile_component(storage_profile_handle);
+        Corona::Ecs::request_destroy_entity(storage_profile_handle, "destroy_profile_component");
     }
 }
 
@@ -1849,24 +1870,24 @@ Corona::API::Camera::Camera()
 
     float fov = 45.0f;
 
-    handle_ = SharedDataHub::instance().create_camera();
-    if (auto accessor = Corona::find_camera(handle_)) {
-        accessor->position = pos_vec;
-        accessor->forward = fwd_vec;
-        accessor->world_up = up_vec;
-        accessor->fov = fov;
-        accessor->width = static_cast<std::uint32_t>(width_);
-        accessor->height = static_cast<std::uint32_t>(height_);
-        accessor->aspect = static_cast<float>(width_) / static_cast<float>(height_);
-        accessor->surface = get_default_surface();
-    } else {
-        CFW_LOG_ERROR("[Camera::Camera] Failed to acquire write access to camera storage");
-        SharedDataHub::instance().destroy_camera(handle_);
-        handle_ = 0;
+    // 初始相机姿态随 payload 一起交给拥有者线程：不再"先创建再补字段"。
+    Corona::Ecs::CreateCameraPayload payload{};
+    payload.camera.position = pos_vec;
+    payload.camera.forward = fwd_vec;
+    payload.camera.world_up = up_vec;
+    payload.camera.fov = fov;
+    payload.camera.width = static_cast<std::uint32_t>(width_);
+    payload.camera.height = static_cast<std::uint32_t>(height_);
+    payload.camera.aspect = static_cast<float>(width_) / static_cast<float>(height_);
+    payload.camera.surface = get_default_surface();
+    handle_ = Corona::Ecs::request_create_camera(std::move(payload));
+    if (handle_ == 0) {
+        CFW_LOG_ERROR("[Camera::Camera] Failed to create the camera entity "
+                      "(the structural command did not settle; see the diagnostic above)");
     }
 
-    // 播种首帧快照必须在相机槽位的写锁**释放之后**：seed 内部会再读同一个槽位，
-    // 而 shared_timed_mutex 不可重入 —— 在锁内调用会自死锁（表现为创建相机时整个程序卡住）。
+    // 播种首帧快照：实体已在 tick 边界创建并结算，这里把当前姿态写进快照，
+    // 避免"创建后到首个 Optics tick 之间"的 get_* 读到默认值。
     if (handle_ != 0) {
         SharedDataHub::instance().seed_camera_snapshot(handle_);
     }
@@ -1889,24 +1910,21 @@ Corona::API::Camera::Camera(const std::array<float, 3>& position, const std::arr
     up_vec.y = world_up[1];
     up_vec.z = world_up[2];
 
-    handle_ = SharedDataHub::instance().create_camera();
-    if (auto accessor = Corona::find_camera(handle_)) {
-        accessor->position = pos_vec;
-        accessor->forward = fwd_vec;
-        accessor->world_up = up_vec;
-        accessor->fov = fov;
-        accessor->width = static_cast<std::uint32_t>(width_);
-        accessor->height = static_cast<std::uint32_t>(height_);
-        accessor->aspect = static_cast<float>(width_) / static_cast<float>(height_);
-        accessor->surface = get_default_surface();
-    } else {
-        CFW_LOG_ERROR("[Camera::Camera] Failed to acquire write access to camera storage");
-        SharedDataHub::instance().destroy_camera(handle_);
-        handle_ = 0;
+    Corona::Ecs::CreateCameraPayload payload{};
+    payload.camera.position = pos_vec;
+    payload.camera.forward = fwd_vec;
+    payload.camera.world_up = up_vec;
+    payload.camera.fov = fov;
+    payload.camera.width = static_cast<std::uint32_t>(width_);
+    payload.camera.height = static_cast<std::uint32_t>(height_);
+    payload.camera.aspect = static_cast<float>(width_) / static_cast<float>(height_);
+    payload.camera.surface = get_default_surface();
+    handle_ = Corona::Ecs::request_create_camera(std::move(payload));
+    if (handle_ == 0) {
+        CFW_LOG_ERROR("[Camera::Camera] Failed to create the camera entity "
+                      "(the structural command did not settle; see the diagnostic above)");
     }
 
-    // 播种首帧快照必须在相机槽位的写锁**释放之后**：seed 内部会再读同一个槽位，
-    // 而 shared_timed_mutex 不可重入 —— 在锁内调用会自死锁（表现为创建相机时整个程序卡住）。
     if (handle_ != 0) {
         SharedDataHub::instance().seed_camera_snapshot(handle_);
     }

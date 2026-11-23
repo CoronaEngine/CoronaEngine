@@ -1,15 +1,16 @@
 #pragma once
 
-/// ECS **结构命令**通道：registry 的跨线程创建边界（P1 / spec §5.1）。
+/// ECS **结构命令**通道：registry 的跨线程结构变更边界（P1 / spec §5.1）。
 ///
 /// `entt::registry` 没有任何同步（见 `ecs/world.h` 的线程约定）：它必须只被一个
-/// 线程触碰。但 `create_geometry()` 的调用方是编辑器 UI / 脚本线程，而 DAG 线程
-/// 同时在遍历同一 registry —— 这是"两个写者 + 一个读者"的未同步状态。
+/// 线程触碰。但 `create_*` / `destroy_*` 的调用方是编辑器 UI / 脚本线程，而 DAG
+/// 线程同时在遍历同一 registry —— 这是"两个写者 + 一个读者"的未同步状态。
 ///
-/// 因此结构创建不再由调用方直接写 registry：
+/// 因此结构变更不再由调用方直接写 registry：
 ///
 ///   create_* 不创建实体：组装"初始组件值"入队 → 同步等待 DAG 在 tick 边界
 ///   创建 → 拿回 `EntityId`。句柄到手时实体已经存在，没有"先无效后生效"的中间态。
+///   destroy_* 同契约，但返回 bool：销毁不能无限等待。
 ///
 /// 为什么是 **Fifo**：创建顺序有语义（actor 先于它的 profile、场景先于成员），
 /// 不能合并；与 `scene_commands.h` / `mechanics_structural_commands.h` 同一选择。
@@ -26,6 +27,13 @@
 ///    `CORONA_ECS_STRUCTURAL_TIMEOUT_MS` 可覆盖。超时按失败返回并写诊断，不静默吞。
 /// 4. **停机**：DAG 停止时把队列里未消费的请求全部以失败结算
 ///    （与 Python 桥 `transition_and_cancel` 同一原则）。
+///
+/// ---- 装配前（`notify_owner_expected()` 之前）----
+/// 引擎装配阶段（系统线程还没启动）与单线程测试夹具里**不存在第二个写者**，
+/// 也没有任何线程会来 drain 队列。这段时间的请求由调用线程直接应用（并记
+/// `stats.pre_assembly`），否则 UI 初始化建 surface 图像这类装配期结构写会超时失败。
+/// 装配方一旦宣布"拥有者即将上线"（DAG 装配 / 降级路径装配完成 / DAG 线程启动），
+/// 之后所有请求一律经由队列结算 —— 见 `owner_expected()`。
 
 #include <corona/ecs/access.h>
 #include <corona/ecs/components.h>
@@ -47,7 +55,9 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace Corona::Ecs {
@@ -57,6 +67,8 @@ inline constexpr std::int64_t kMinStructuralTimeoutMs = 17;
 
 /// 显式/自动超时的上限：再长也不该把一个 UI / 脚本线程挂住。
 inline constexpr std::int64_t kMaxStructuralTimeoutMs = 5000;
+
+
 
 /// 装配方告知真实帧周期之前使用的保守假设（120Hz）。
 inline constexpr std::int64_t kDefaultFramePeriodUs = 8333;
@@ -113,25 +125,26 @@ class StructuralRequest {
         return result_;
     }
 
-    /// 拥有者线程：持锁创建并结算。请求已被放弃 / 已结算时返回 false（跳过创建）。
-    template <typename Create>
-    bool apply(Create&& create) {
+    /// 拥有者线程：持锁应用并结算。请求已被放弃 / 已结算时返回 false（跳过应用）。
+    template <typename Apply>
+    bool apply(Apply&& apply) {
         std::unique_lock lock(mutex_);
         if (settled_) {
             // 已被等待方放弃（超时）或被停机结算：跳过，绝不创建无人签收的实体。
             return false;
         }
         try {
-            result_.handle = create();
+            result_.handle = apply();
             if (result_.handle == 0) {
-                result_.error = "entity creation returned an invalid handle";
+                result_.error = "structural command returned an invalid handle";
             }
         } catch (const std::exception& error) {
             result_.handle = 0;
-            result_.error = std::string{"exception while creating the entity: "} + error.what();
+            result_.error = std::string{"exception while applying the structural command: "} +
+                            error.what();
         } catch (...) {
             result_.handle = 0;
-            result_.error = "unknown exception while creating the entity";
+            result_.error = "unknown exception while applying the structural command";
         }
         settled_ = true;
         lock.unlock();
@@ -168,22 +181,99 @@ class StructuralRequest {
     Result result_{};
 };
 
-/// 创建几何实体时携带的初始组件值。命令里装的是**值**，不是裸指针：
-/// 调用方线程写、DAG 线程读，中间的交接由队列的互斥量负责。
+// ============================================================================
+// 每类结构变更携带的初始组件值
+// ============================================================================
+//
+// 命令里装的是**值**，不是裸指针：调用方线程写、DAG 线程读，中间的交接由队列的
+// 互斥量负责。payload 默认构造出来的值与 `World::create<T>()` 的默认组件值一致，
+// 所以"默认值包装"（`SharedDataHub::create_*`）和"显式 payload"不会有两套事实。
+
+/// `create_model_resource`
+struct CreateModelResourcePayload {
+    ModelResource value{};
+};
+
+/// `create_transform`
+struct CreateTransformPayload {
+    ModelTransform value{};
+};
+
+/// `create_geometry`
 struct CreateGeometryPayload {
     GeometryDevice geometry;
     ModelSource model_source;
 };
 
-/// 结构命令种类。1b 会在这里加入 scene / actor / profile / destroy。
-enum class StructuralCommandKind : std::uint8_t {
-    CreateGeometry,
+/// `create_mechanics`
+struct CreateMechanicsPayload {
+    MechanicsDevice mechanics;
+    Bounds bounds;
 };
 
+/// `create_optics`
+struct CreateOpticsPayload {
+    OpticsDevice optics;
+    Visibility visibility;
+};
+
+/// `create_acoustics`
+struct CreateAcousticsPayload {
+    AcousticsDevice acoustics;
+};
+
+/// `create_profile_component`
+struct CreateProfilePayload {
+    ProfileDevice profile;
+};
+
+/// `create_actor_component`
+struct CreateActorPayload {
+    ActorDevice actor;
+    StreamingPolicy streaming;
+    ModelPath model_path;
+    Profiles profiles;
+    FollowCamera follow_camera;
+};
+
+/// `create_camera`
+struct CreateCameraPayload {
+    CameraDevice camera;
+};
+
+/// `create_environment`
+struct CreateEnvironmentPayload {
+    EnvironmentDevice environment;
+};
+
+/// `create_scene`
+struct CreateScenePayload {
+    SceneDevice scene;
+};
+
+/// `create_image`：没有初始值 payload。
+/// `ImageDevice` 装的是 GPU 句柄与收据，内容一律在**每图写租约**（`image_write`）
+/// 下写入；把它拷进命令只会让两张图短暂共享同一批 GPU 句柄。
+struct CreateImagePayload {};
+
+/// `destroy_*`：销毁只需要句柄。`release_image_lock` 表示同时摘掉该图的写租约表项
+/// （`destroy_image` 的语义；其它种类只是 `Ecs::destroy`）。
+struct DestroyEntityPayload {
+    EntityId handle{0};
+    bool release_image_lock{false};
+};
+
+using StructuralPayload = std::variant<
+    CreateModelResourcePayload, CreateTransformPayload, CreateGeometryPayload,
+    CreateMechanicsPayload, CreateOpticsPayload, CreateAcousticsPayload,
+    CreateProfilePayload, CreateActorPayload, CreateCameraPayload,
+    CreateEnvironmentPayload, CreateScenePayload, CreateImagePayload,
+    DestroyEntityPayload>;
+
 struct StructuralCommand {
-    StructuralCommandKind kind{StructuralCommandKind::CreateGeometry};
     std::shared_ptr<StructuralRequest> request;  ///< 结算槽（唯一，key 即序号）
-    CreateGeometryPayload geometry;
+    StructuralPayload payload;                   ///< 初始组件值 / 待销毁句柄
+    std::string_view what{"structural command"};  ///< 诊断用操作名（字面量，静态生命期）
 };
 
 struct StructuralCommandKey {
@@ -192,9 +282,182 @@ struct StructuralCommandKey {
     }
 };
 
-/// 拥有者线程：创建实体并把初始组件值一次性写进去（不产生"裸实体"）。
-/// 前向声明：通道的 `apply_pending()` 在类内用到它，定义放在通道之后。
-[[nodiscard]] inline EntityId create_geometry_entity(CreateGeometryPayload payload);
+// ============================================================================
+// 拥有者线程：创建 / 销毁原语（不产生"裸实体"）
+// ============================================================================
+//
+// 每个组件种类只有一个权威创建原语，初始值一次性写入。`SharedDataHub::create_*`
+// 是"默认值 payload"的薄包装（单线程测试夹具与装配期用），tick 边界的应用器
+// 直接调用这些函数。
+
+[[nodiscard]] inline EntityId create_model_resource_entity(CreateModelResourcePayload payload) {
+    auto& world = World::instance();
+    const Entity entity = world.create<ModelResource>();
+    world.get<ModelResource>(entity) = payload.value;
+    return to_handle(entity);
+}
+
+[[nodiscard]] inline EntityId create_transform_entity(CreateTransformPayload payload) {
+    auto& world = World::instance();
+    const Entity entity = world.create<ModelTransform>();
+    world.get<ModelTransform>(entity) = std::move(payload.value);
+    return to_handle(entity);
+}
+
+[[nodiscard]] inline EntityId create_geometry_entity(CreateGeometryPayload payload) {
+    auto& world = World::instance();
+    const Entity entity = world.create<GeometryDevice, ModelSource>();
+    world.get<GeometryDevice>(entity) = std::move(payload.geometry);
+    world.get<ModelSource>(entity) = std::move(payload.model_source);
+    return to_handle(entity);
+}
+
+[[nodiscard]] inline EntityId create_mechanics_entity(CreateMechanicsPayload payload) {
+    auto& world = World::instance();
+    const Entity entity = world.create<MechanicsDevice, Bounds>();
+    world.get<MechanicsDevice>(entity) = std::move(payload.mechanics);
+    world.get<Bounds>(entity) = payload.bounds;
+    return to_handle(entity);
+}
+
+[[nodiscard]] inline EntityId create_optics_entity(CreateOpticsPayload payload) {
+    auto& world = World::instance();
+    const Entity entity = world.create<OpticsDevice, Visibility>();
+    world.get<OpticsDevice>(entity) = std::move(payload.optics);
+    world.get<Visibility>(entity) = payload.visibility;
+    return to_handle(entity);
+}
+
+[[nodiscard]] inline EntityId create_acoustics_entity(CreateAcousticsPayload payload) {
+    auto& world = World::instance();
+    const Entity entity = world.create<AcousticsDevice>();
+    world.get<AcousticsDevice>(entity) = std::move(payload.acoustics);
+    return to_handle(entity);
+}
+
+[[nodiscard]] inline EntityId create_profile_entity(CreateProfilePayload payload) {
+    auto& world = World::instance();
+    const Entity entity = world.create<ProfileDevice>();
+    world.get<ProfileDevice>(entity) = payload.profile;
+    return to_handle(entity);
+}
+
+[[nodiscard]] inline EntityId create_actor_entity(CreateActorPayload payload) {
+    auto& world = World::instance();
+    const Entity entity = world.create<ActorDevice, StreamingPolicy, ModelPath, Profiles,
+                                        FollowCamera>();
+    world.get<ActorDevice>(entity) = std::move(payload.actor);
+    world.get<StreamingPolicy>(entity) = payload.streaming;
+    world.get<ModelPath>(entity) = std::move(payload.model_path);
+    world.get<Profiles>(entity) = std::move(payload.profiles);
+    world.get<FollowCamera>(entity) = payload.follow_camera;
+    return to_handle(entity);
+}
+
+[[nodiscard]] inline EntityId create_camera_entity(CreateCameraPayload payload) {
+    auto& world = World::instance();
+    const Entity entity = world.create<CameraDevice>();
+    world.get<CameraDevice>(entity) = std::move(payload.camera);
+    return to_handle(entity);
+}
+
+[[nodiscard]] inline EntityId create_environment_entity(CreateEnvironmentPayload payload) {
+    auto& world = World::instance();
+    const Entity entity = world.create<EnvironmentDevice>();
+    world.get<EnvironmentDevice>(entity) = std::move(payload.environment);
+    return to_handle(entity);
+}
+
+[[nodiscard]] inline EntityId create_scene_entity(CreateScenePayload payload) {
+    auto& world = World::instance();
+    const Entity entity = world.create<SceneDevice>();
+    world.get<SceneDevice>(entity) = std::move(payload.scene);
+    return to_handle(entity);
+}
+
+[[nodiscard]] inline EntityId create_image_entity(CreateImagePayload) {
+    const Entity entity = World::instance().create<ImageDevice>();
+    return to_handle(entity);
+}
+
+/// 销毁图像实体：连同它的每图写租约表项一起摘掉（租约持锁期间锁对象本身必须存活）。
+inline void destroy_image_entity(EntityId handle) {
+    if (handle == 0) {
+        return;
+    }
+    destroy(handle);
+    SharedDataHub::instance().forget_image_lock(handle);
+}
+
+inline void destroy_entity_owner(DestroyEntityPayload payload) {
+    if (payload.handle == 0) {
+        return;
+    }
+    if (payload.release_image_lock) {
+        destroy_image_entity(payload.handle);
+        return;
+    }
+    destroy(payload.handle);
+}
+
+// ---------------------------------------------------------------------------
+// payload → 应用（统一返回 EntityId：0 表示失败；销毁返回被销毁的句柄）
+// ---------------------------------------------------------------------------
+
+[[nodiscard]] inline EntityId apply_structural_payload(CreateModelResourcePayload& payload) {
+    return create_model_resource_entity(std::move(payload));
+}
+[[nodiscard]] inline EntityId apply_structural_payload(CreateTransformPayload& payload) {
+    return create_transform_entity(std::move(payload));
+}
+[[nodiscard]] inline EntityId apply_structural_payload(CreateGeometryPayload& payload) {
+    return create_geometry_entity(std::move(payload));
+}
+[[nodiscard]] inline EntityId apply_structural_payload(CreateMechanicsPayload& payload) {
+    return create_mechanics_entity(std::move(payload));
+}
+[[nodiscard]] inline EntityId apply_structural_payload(CreateOpticsPayload& payload) {
+    return create_optics_entity(std::move(payload));
+}
+[[nodiscard]] inline EntityId apply_structural_payload(CreateAcousticsPayload& payload) {
+    return create_acoustics_entity(std::move(payload));
+}
+[[nodiscard]] inline EntityId apply_structural_payload(CreateProfilePayload& payload) {
+    return create_profile_entity(std::move(payload));
+}
+[[nodiscard]] inline EntityId apply_structural_payload(CreateActorPayload& payload) {
+    return create_actor_entity(std::move(payload));
+}
+[[nodiscard]] inline EntityId apply_structural_payload(CreateCameraPayload& payload) {
+    return create_camera_entity(std::move(payload));
+}
+[[nodiscard]] inline EntityId apply_structural_payload(CreateEnvironmentPayload& payload) {
+    return create_environment_entity(std::move(payload));
+}
+[[nodiscard]] inline EntityId apply_structural_payload(CreateScenePayload& payload) {
+    return create_scene_entity(std::move(payload));
+}
+[[nodiscard]] inline EntityId apply_structural_payload(CreateImagePayload& payload) {
+    return create_image_entity(std::move(payload));
+}
+[[nodiscard]] inline EntityId apply_structural_payload(DestroyEntityPayload& payload) {
+    const EntityId handle = payload.handle;
+    if (handle == 0) {
+        return 0;
+    }
+    destroy_entity_owner(std::move(payload));
+    return handle;
+}
+
+/// 分发：variant 的哪一个分支就决定创建/销毁哪一类实体（没有第二条"kind"事实）。
+[[nodiscard]] inline EntityId apply_structural_payload(StructuralPayload& payload) {
+    return std::visit([](auto& value) -> EntityId { return apply_structural_payload(value); },
+                      payload);
+}
+
+// ============================================================================
+// 通道
+// ============================================================================
 
 /// 通道本身：队列 + 拥有者线程标识 + 生命周期状态 + 诊断计数。
 class StructuralCommandChannel {
@@ -206,6 +469,7 @@ class StructuralCommandChannel {
     struct Stats {
         std::uint64_t requested{0};       ///< 入队的外部请求数
         std::uint64_t inline_applied{0};  ///< 重入规则下直接应用的请求数
+        std::uint64_t pre_assembly{0};    ///< 装配前（无拥有者存在）直接应用的请求数
         std::uint64_t applied{0};         ///< 由 DAG 应用并成功结算的请求数
         std::uint64_t failed{0};          ///< 等待方拿到失败的请求数（每条只记一次）
         std::uint64_t rejected{0};        ///< 未入队就拒绝的请求数（停机/队列满）
@@ -266,8 +530,23 @@ class StructuralCommandChannel {
 
     // ------------------------------------------------------------ 生命周期
 
-    /// DAG 线程即将开始 tick：重新接受请求。
-    void on_dag_started() noexcept { stopped_.store(false, std::memory_order_release); }
+    /// DAG 线程即将开始 tick：重新接受请求，并确认"拥有者即将上线"。
+    void on_dag_started() noexcept {
+        owner_expected_.store(true, std::memory_order_release);
+        stopped_.store(false, std::memory_order_release);
+    }
+
+    /// 装配方宣布"拥有者即将上线"（DAG 装配完成 / 降级路径装配完成）。
+    /// 从此不再有"装配前直接应用"的例外，所有结构变更都排队结算。
+    void notify_owner_expected() noexcept {
+        owner_expected_.store(true, std::memory_order_release);
+    }
+
+    /// 是否已有装配方承诺"会有线程来 drain 队列"。
+    /// false = 装配前（系统线程还不存在，调用方是唯一写者）或单线程夹具。
+    [[nodiscard]] bool owner_expected() const noexcept {
+        return owner_expected_.load(std::memory_order_acquire);
+    }
 
     /// DAG 线程即将停止：先关入口，再把未消费的请求全部以失败结算。
     /// 与 Python 桥 `transition_and_cancel` 同一原则：停机不能让任何请求悬空。
@@ -305,16 +584,8 @@ class StructuralCommandChannel {
                 continue;
             }
             try {
-                bool applied = false;
-                switch (command.kind) {
-                    case StructuralCommandKind::CreateGeometry: {
-                        CreateGeometryPayload payload = std::move(command.geometry);
-                        applied = request->apply([payload = std::move(payload)]() mutable {
-                            return create_geometry_entity(std::move(payload));
-                        });
-                        break;
-                    }
-                }
+                const bool applied = request->apply(
+                    [&command]() { return apply_structural_payload(command.payload); });
                 if (!applied && request->abandoned()) {
                     // 等待方已超时放弃：命令被跳过，不创建无人签收的实体。
                     // 成功与失败都由等待方在 wait() 返回时各记一次，这里不重复计数。
@@ -323,10 +594,10 @@ class StructuralCommandChannel {
             } catch (const std::exception& error) {
                 // settle_failure 唤醒等待方，由它记一次 failed。
                 request->settle_failure(std::string{"structural command failed: "} + error.what());
-                CFW_LOG_ERROR("[Ecs/StructuralCommand] apply failed: {}", error.what());
+                CFW_LOG_ERROR("[Ecs/StructuralCommand] {} failed: {}", command.what, error.what());
             } catch (...) {
                 request->settle_failure("structural command failed: unknown exception");
-                CFW_LOG_ERROR("[Ecs/StructuralCommand] apply failed: unknown exception");
+                CFW_LOG_ERROR("[Ecs/StructuralCommand] {} failed: unknown exception", command.what);
             }
         }
         return true;
@@ -366,6 +637,7 @@ class StructuralCommandChannel {
 
     void record_requested() { note([](Stats& s) { ++s.requested; }); }
     void record_inline_applied() { note([](Stats& s) { ++s.inline_applied; }); }
+    void record_pre_assembly() { note([](Stats& s) { ++s.pre_assembly; }); }
     void record_rejected() { note([](Stats& s) { ++s.rejected; }); }
     void record_applied() { note([](Stats& s) { ++s.applied; }); }
     void record_failed() { note([](Stats& s) { ++s.failed; }); }
@@ -383,22 +655,16 @@ class StructuralCommandChannel {
 
     Buffer commands_;
     Kernel::ThreadAffinity affinity_;
-    std::atomic<bool> stopped_{false};              ///< 停机后拒绝新请求
-    std::atomic<bool> boundary_installed_{false};   ///< DAG tick 边界钩子已安装
+    std::atomic<bool> stopped_{false};            ///< 停机后拒绝新请求
+    std::atomic<bool> owner_expected_{false};     ///< 已有装配方承诺"会有人 drain"
+    std::atomic<bool> boundary_installed_{false}; ///< DAG tick 边界钩子已安装
     std::atomic<std::uint64_t> request_ids_{0};
     std::atomic<std::int64_t> frame_period_us_{kDefaultFramePeriodUs};
+
     std::atomic<std::int64_t> timeout_override_ms_{structural_timeout_override_ms()};
     mutable std::mutex stats_mutex_;
     Stats stats_{};
 };
-
-[[nodiscard]] inline EntityId create_geometry_entity(CreateGeometryPayload payload) {
-    auto& world = World::instance();
-    const Entity entity = world.create<GeometryDevice, ModelSource>();
-    world.get<GeometryDevice>(entity) = std::move(payload.geometry);
-    world.get<ModelSource>(entity) = std::move(payload.model_source);
-    return to_handle(entity);
-}
 
 /// 应用入站结构命令（tick 边界，先于 scene 命令）。绑定/刷新 registry 的拥有者线程。
 inline bool apply_pending_structural_commands() {
@@ -427,42 +693,73 @@ inline void on_dag_thread_stopping() {
     StructuralCommandChannel::instance().on_dag_stopping("systems DAG thread is stopping");
 }
 
-/// 请求创建几何实体（任意调用线程）。
+// ============================================================================
+// 请求入口（任意调用线程）
+// ============================================================================
+
+/// 提交一条结构命令并按"同步应答"契约结算。
 ///
+/// - 停机后即使调用方是 DAG 线程也不允许再写 registry：引擎正在关停，新建实体会
+///   落在一个马上要被拆掉的世界上。所以停机判定在重入判定之前。
 /// - 调用方就是 DAG 线程 → 直接应用（重入规则）；
+/// - 装配前（还没有拥有者） → 调用方直接应用（此时不存在第二个写者）；
 /// - 否则入队并同步等待，最多 `timeout()`；超时/停机/队列满都返回 0 并写诊断。
 ///
-/// @return 有效实体句柄；失败返回 0（实体不存在，调用方按失败处理）。
-[[nodiscard]] inline EntityId request_create_geometry(CreateGeometryPayload payload) {
+/// `loud` 决定失败时的日志级别：创建是 ERROR（调用方拿到的是无效句柄），销毁是
+/// WARNING（对象本来就在退出路径上，停机期拒绝销毁是预期行为）。
+[[nodiscard]] inline EntityId submit_structural_command(StructuralPayload payload,
+                                                       std::string_view what,
+                                                       bool loud = true) {
     auto& channel = StructuralCommandChannel::instance();
 
-    // 停机后即使调用方是 DAG 线程也不允许再写 registry：引擎正在关停，
-    // 新建实体会落在一个马上要被拆掉的世界上。所以停机判定在重入判定之前。
     if (channel.stopped()) {
         channel.record_rejected();
-        CFW_LOG_ERROR(
-            "[Ecs/StructuralCommand] create_geometry rejected: the systems DAG is not accepting "
-            "structural commands (stopped)");
+        if (loud) {
+            CFW_LOG_ERROR(
+                "[Ecs/StructuralCommand] {} rejected: the systems DAG is not accepting "
+                "structural commands (stopped)",
+                what);
+        } else {
+            CFW_LOG_WARNING(
+                "[Ecs/StructuralCommand] {} rejected: the systems DAG is not accepting "
+                "structural commands (stopped)",
+                what);
+        }
         return 0;
     }
 
-    // 重入：系统在 DAG 线程内部创建实体。入队后等自己 = 自死锁。
+    // 重入：系统在 DAG 线程内部创建/销毁实体。入队后等自己 = 自死锁。
     if (channel.affinity().is_owner_thread()) {
         channel.record_inline_applied();
-        return create_geometry_entity(std::move(payload));
+        return apply_structural_payload(payload);
+    }
+
+    // 装配前：装配方还没宣布拥有者存在（系统线程尚未装配、或单线程夹具）。
+    // 此时调用线程就是唯一的写者，直接应用；记 pre_assembly 以便诊断里一眼看出
+    // "这条结构变更没有经过 tick 边界"。
+    if (!channel.owner_expected()) {
+        channel.record_pre_assembly();
+        return apply_structural_payload(payload);
     }
 
     auto request = std::make_shared<StructuralRequest>(channel.next_request_id());
     StructuralCommand command{};
-    command.kind = StructuralCommandKind::CreateGeometry;
     command.request = request;
-    command.geometry = std::move(payload);
+    command.payload = std::move(payload);
+    command.what = what;
     if (!channel.commands().push(std::move(command))) {
         channel.record_rejected();
-        CFW_LOG_ERROR(
-            "[Ecs/StructuralCommand] create_geometry rejected: structural command queue is full "
-            "({} pending); the DAG is not draining it",
-            channel.commands().size());
+        if (loud) {
+            CFW_LOG_ERROR(
+                "[Ecs/StructuralCommand] {} rejected: structural command queue is full "
+                "({} pending); the DAG is not draining it",
+                what, channel.commands().size());
+        } else {
+            CFW_LOG_WARNING(
+                "[Ecs/StructuralCommand] {} rejected: structural command queue is full "
+                "({} pending); the DAG is not draining it",
+                what, channel.commands().size());
+        }
         return 0;
     }
     channel.record_requested();
@@ -474,21 +771,90 @@ inline void on_dag_thread_stopping() {
         const bool abandoned = request->abandoned();
         if (abandoned) {
             channel.record_timeout();
-            CFW_LOG_ERROR(
-                "[Ecs/StructuralCommand] create_geometry timed out after {}ms: {}; owner thread {}; "
-                "the late command is skipped, no entity is created",
-                timeout.count(), result.error,
-                channel.affinity().bound()
-                    ? "is bound but did not drain the request"
-                    : "has never drained this channel (DAG not running?)");
+            if (loud) {
+                CFW_LOG_ERROR(
+                    "[Ecs/StructuralCommand] {} timed out after {}ms: {}; owner thread {}; "
+                    "the late command is skipped, nothing is applied",
+                    what, timeout.count(), result.error,
+                    channel.affinity().bound()
+                        ? "is bound but did not drain the request"
+                        : "has never drained this channel (DAG not running?)");
+            } else {
+                CFW_LOG_WARNING(
+                    "[Ecs/StructuralCommand] {} timed out after {}ms: {}; the late command "
+                    "is skipped, nothing is applied",
+                    what, timeout.count(), result.error);
+            }
         } else {
             channel.record_failed();
-            CFW_LOG_ERROR("[Ecs/StructuralCommand] create_geometry failed: {}", result.error);
+            if (loud) {
+                CFW_LOG_ERROR("[Ecs/StructuralCommand] {} failed: {}", what, result.error);
+            } else {
+                CFW_LOG_WARNING("[Ecs/StructuralCommand] {} failed: {}", what, result.error);
+            }
         }
         return 0;
     }
     channel.record_applied();
     return result.handle;
+}
+
+// ---- 创建（返回有效句柄；0 = 失败，调用方按失败处理）----
+
+[[nodiscard]] inline EntityId request_create_model_resource(CreateModelResourcePayload payload) {
+    return submit_structural_command(StructuralPayload{std::move(payload)}, "create_model_resource");
+}
+[[nodiscard]] inline EntityId request_create_transform(CreateTransformPayload payload) {
+    return submit_structural_command(StructuralPayload{std::move(payload)}, "create_transform");
+}
+[[nodiscard]] inline EntityId request_create_geometry(CreateGeometryPayload payload) {
+    return submit_structural_command(StructuralPayload{std::move(payload)}, "create_geometry");
+}
+[[nodiscard]] inline EntityId request_create_mechanics(CreateMechanicsPayload payload) {
+    return submit_structural_command(StructuralPayload{std::move(payload)}, "create_mechanics");
+}
+[[nodiscard]] inline EntityId request_create_optics(CreateOpticsPayload payload) {
+    return submit_structural_command(StructuralPayload{std::move(payload)}, "create_optics");
+}
+[[nodiscard]] inline EntityId request_create_acoustics(CreateAcousticsPayload payload) {
+    return submit_structural_command(StructuralPayload{std::move(payload)}, "create_acoustics");
+}
+[[nodiscard]] inline EntityId request_create_profile(CreateProfilePayload payload) {
+    return submit_structural_command(StructuralPayload{std::move(payload)}, "create_profile_component");
+}
+[[nodiscard]] inline EntityId request_create_actor(CreateActorPayload payload) {
+    return submit_structural_command(StructuralPayload{std::move(payload)}, "create_actor_component");
+}
+[[nodiscard]] inline EntityId request_create_camera(CreateCameraPayload payload) {
+    return submit_structural_command(StructuralPayload{std::move(payload)}, "create_camera");
+}
+[[nodiscard]] inline EntityId request_create_environment(CreateEnvironmentPayload payload) {
+    return submit_structural_command(StructuralPayload{std::move(payload)}, "create_environment");
+}
+[[nodiscard]] inline EntityId request_create_scene(CreateScenePayload payload) {
+    return submit_structural_command(StructuralPayload{std::move(payload)}, "create_scene");
+}
+[[nodiscard]] inline EntityId request_create_image(CreateImagePayload payload) {
+    return submit_structural_command(StructuralPayload{std::move(payload)}, "create_image");
+}
+
+// ---- 销毁（同契约；返回是否结算成功，0 句柄视为"没有要销毁的东西"）----
+
+[[nodiscard]] inline bool request_destroy_entity(EntityId handle,
+                                                 std::string_view what = "destroy_entity") {
+    if (handle == 0) {
+        return true;
+    }
+    return submit_structural_command(
+               StructuralPayload{DestroyEntityPayload{handle, false}}, what, false) != 0;
+}
+
+[[nodiscard]] inline bool request_destroy_image(EntityId handle) {
+    if (handle == 0) {
+        return true;
+    }
+    return submit_structural_command(
+               StructuralPayload{DestroyEntityPayload{handle, true}}, "destroy_image", false) != 0;
 }
 
 }  // namespace Corona::Ecs
