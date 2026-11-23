@@ -915,7 +915,7 @@ try {
     assert.deepEqual(sceneRead.selection, {});
     assert.equal(typeof camera.opaque_handle, 'string');
     await main.evaluate(`corona.scene.select_actor('scene.ini','scene','',{
-      sourceViewport:'cameraView',sourceCameraId:'smoke-camera',node_index:4294967294
+      source_viewport:'cameraView',source_camera_id:'smoke-camera',node_index:4294967294
     })`);
     const selection = await main.evaluate('corona.scene.read_active().then(value=>value.selection)');
     assert.deepEqual(selection, { scene: 'scene.ini', actor_type: 'scene', actor: '',
@@ -923,12 +923,12 @@ try {
     // Selection source IDs are opaque metadata, matching the native camera/max
     // round-trip contract. They are not filesystem paths or window identities.
     await main.evaluate(`corona.scene.select_actor('scene.ini','scene','',{
-      sourceViewport:'cameraView',sourceCameraId:'camera/max'
+      source_viewport:'cameraView',source_camera_id:'camera/max'
     })`);
     assert.equal(await main.evaluate('corona.scene.read_active().then(value=>value.selection.source_camera_id)'), 'camera/max');
     const beforeInvalid = await main.evaluate('corona.scene.read_active()');
-    for (const context of ['null', '{sourceViewport:"unknown"}', '{sourceViewport:"cameraView",sourceCameraId:22}',
-      '{sourceViewport:"cameraView",sourceCameraId:""}',
+    for (const context of ['null', '{source_viewport:"unknown"}', '{source_viewport:"cameraView",source_camera_id:22}',
+      '{source_viewport:"cameraView",source_camera_id:""}',
       '{node_index:-1}', '{node_index:4294967295}']) {
       assert.equal(await main.evaluate(`corona.scene.select_actor('scene.ini','scene','',${context}).catch(error=>error.code)`), 'INVALID_ARGUMENT', context);
     }
@@ -1497,7 +1497,7 @@ try {
     stage = 'deleting Actor through scoped typed V8';
     console.log(`CEF smoke: ${stage}`);
     const deleteScope = { archive_session: camera.archive_session };
-    await main.evaluate(`corona.scene.select_actor('scene.ini','model',${JSON.stringify(actor.name)},{sourceViewport:'main'})`);
+    await main.evaluate(`corona.scene.select_actor('scene.ini','model',${JSON.stringify(actor.name)},{source_viewport:'main'})`);
     assert.equal((await main.evaluate('corona.scene.read_active()')).selection.actor_guid, actor.actor_guid);
     const deleteBefore = await main.evaluate(`corona.scene.read_scene({...(${JSON.stringify(deleteScope)}),scene:'scene.ini',actors:'index'})`);
     const deleted = await main.evaluate(`corona.scene.delete_actor('scene.ini',${JSON.stringify(actor.actor_guid)},${JSON.stringify(deleteScope)})`);
@@ -1535,16 +1535,17 @@ try {
       assert.equal(await main.evaluate(`corona.window.set_window_presentation({scene_id:"scene.ini",camera_id:"smoke-camera",mode:'${mode}'})`), true);
     }
     assert.equal(await main.evaluate('corona.window.set_window_presentation({scene_id:"scene.ini",camera_id:"smoke-camera",width:400,height:300})'), true);
-    assert.equal((await viewportPatch(cameraClient, JSON.stringify({ ...cameraScope, mode: 'stereo3d', pointer: pointerState }))).systemCursorHidden, true);
+    // Viewport configuration carries mode/calibration/bounds only; the pointer state is native.
+    assert.equal((await viewportPatch(cameraClient, JSON.stringify({ ...cameraScope, mode: 'stereo3d' }))).mode, 'stereo3d');
     assert.deepEqual(await main.evaluate('corona.window.close({scene_id:"scene.ini",camera_id:"smoke-camera"})'), {closed:1});
-    assert.equal((await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d' }))).pointer.cursor, 'hidden',
-      'native window removal must release the pointer even before renderer cleanup');
+    assert.equal((await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d' }))).mode, 'stereo3d',
+      'the viewport stays configurable after a camera window is removed');
     await main.evaluate('corona.window.close({scene_id:""})');
     const recreated = await create_camera({ ...options, route_path: '/CameraView?uiWindow=retiring-camera' });
     assert.notEqual(recreated.window_token, created.window_token);
     assert.equal(recreated.existing, false);
     assert.deepEqual(await main.evaluate('corona.window.close({scene_id:"scene.ini"})'), { closed: 1 });
-    assert.equal((await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'stereo3d', pointer: pointerState }))).systemCursorHidden, true);
+    assert.equal((await viewportPatch(main, JSON.stringify({ ...cameraScope, mode: 'flat2d' }))).mode, 'flat2d');
     const reloaded = await main.evaluate(`corona.project.open_project(${JSON.stringify(cameraWorld)})`);
     assert.equal(reloaded.ok, true);
     assert.equal(await main.evaluate(`corona.window.create_panel({...${JSON.stringify(options)},kind:'camera'}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
@@ -1555,8 +1556,7 @@ try {
     assert.equal(await main.evaluate(`corona.scene.read_scene({...(${JSON.stringify(cameraReadScope)}),scene:'scene.ini',cameras:true}).catch(e=>e.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.notEqual(activeAgain.archive_session, camera.archive_session);
     const replacedPointer = await viewportPatch(main, JSON.stringify({ archive_session: activeAgain.archive_session, mode: 'flat2d' }));
-    assert.equal(replacedPointer.pointer.cursor, 'hidden');
-    assert.equal(replacedPointer.systemCursorHidden, false);
+    assert.equal(replacedPointer.mode, 'flat2d');
     assert.equal(await main.evaluate(`corona.scene.focus_actor(...${JSON.stringify(focusArgs)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.equal(await main.evaluate(`corona.viewport.capture_screenshot('scene.ini','smoke-camera',${JSON.stringify(screenshotOptions)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.equal(await cameraPatch(main, JSON.stringify({ ...cameraScope, position: [9, 8, 7] }), '.catch(error=>error.code)'), 'PROJECT_CONTEXT_CHANGED');
