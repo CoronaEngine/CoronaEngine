@@ -1,7 +1,7 @@
 #pragma once
 
-#include "rtxpt_gi_prefix_storage.h"
-#include "rtxpt_gi_candidate.h"
+#include "restir_gi_prefix_storage.h"
+#include "restir_gi_candidate.h"
 #include "base/scattering/half_storage.h"
 #include "base/scattering/material.h"
 #include "base/scattering/gi_principled_parameters.h"
@@ -10,24 +10,24 @@
 namespace vision {
 // GI-only packed RGB Principled receiver. Numeric lobe parameters36B,
 // geometry/identity/configuration48B, material-reuse guides12B. No Interaction.
-struct RtxptGIPTSurface {
+struct ReSTIRGIPTSurface {
     float4 position_depth{};
     uint4 frame{}, encoded_view{};
     array<uint, 9> material{};
     array<uint, 3> guides{};
 };
-static_assert(sizeof(RtxptGIPTSurface) == 96u);
+static_assert(sizeof(ReSTIRGIPTSurface) == 96u);
 // Explicit validation only, never allocated by normal rendering.
-struct RtxptGIPTReference {
+struct ReSTIRGIPTReference {
     array<float4, 13> fields{};
     uint4 identity{}, metadata{}, hit_words{};
 };
-static_assert(sizeof(RtxptGIPTReference) == 256u);
+static_assert(sizeof(ReSTIRGIPTReference) == 256u);
 }
-OC_STRUCT(vision, RtxptGIPTSurface, position_depth, frame, encoded_view, material, guides) {};
-OC_STRUCT(vision, RtxptGIPTReference, fields, identity, metadata, hit_words) {};
+OC_STRUCT(vision, ReSTIRGIPTSurface, position_depth, frame, encoded_view, material, guides) {};
+OC_STRUCT(vision, ReSTIRGIPTReference, fields, identity, metadata, hit_words) {};
 
-namespace vision::rtxpt_gi {
+namespace vision::restir_gi {
 [[nodiscard]] inline Float2 standard_oct(const Float3 &normal) noexcept {
     Float3 n = normal / (abs(normal.x) + abs(normal.y) + abs(normal.z));
     Float2 wrapped = (1.f - abs(n.yx())) * select(n.xy() >= make_float2(0.f), Float2{make_float2(1.f)}, Float2{make_float2(-1.f)});
@@ -103,8 +103,8 @@ struct PTSurfaceView {
     }
 };
 
-[[nodiscard]] inline RtxptGIPTSurfaceVar pack_pt_surface(const PTSurfaceView &s) noexcept {
-    RtxptGIPTSurfaceVar p;
+[[nodiscard]] inline ReSTIRGIPTSurfaceVar pack_pt_surface(const PTSurfaceView &s) noexcept {
+    ReSTIRGIPTSurfaceVar p;
     $if(s.valid) {
         p.position_depth = make_float4(s.it.pos, s.depth);
         p.frame = make_uint4(pack_storage_half2(standard_oct(normalize(s.it.ng))),
@@ -125,7 +125,7 @@ struct PTSurfaceView {
     };
     return p;
 }
-[[nodiscard]] inline PTSurfaceView unpack_pt_surface(const RtxptGIPTSurfaceVar &p) noexcept {
+[[nodiscard]] inline PTSurfaceView unpack_pt_surface(const ReSTIRGIPTSurfaceVar &p) noexcept {
     PTSurfaceView s;
     s.it.pos = p.position_depth.xyz(); s.depth = p.position_depth.w;
     s.it.ng = standard_unoct(unpack_storage_half2(p.frame.x));
@@ -152,8 +152,8 @@ struct PTSurfaceView {
     return s;
 }
 
-[[nodiscard]] inline RtxptGIPTReferenceVar pack_pt_reference(const PTSurfaceView &s) noexcept {
-    RtxptGIPTReferenceVar p;
+[[nodiscard]] inline ReSTIRGIPTReferenceVar pack_pt_reference(const PTSurfaceView &s) noexcept {
+    ReSTIRGIPTReferenceVar p;
     p.fields[0] = make_float4(s.it.pos, s.it.prim_area);
     p.fields[1] = make_float4(s.it.wo, s.depth);
     p.fields[2] = make_float4(s.it.time, s.roughness.x);
@@ -173,7 +173,7 @@ struct PTSurfaceView {
     return p;
 }
 
-[[nodiscard]] inline PTSurfaceView unpack_pt_reference(const RtxptGIPTReferenceVar &p) noexcept {
+[[nodiscard]] inline PTSurfaceView unpack_pt_reference(const ReSTIRGIPTReferenceVar &p) noexcept {
     PTSurfaceView s;
     s.it.pos = p.fields[0].xyz(); s.it.prim_area = p.fields[0].w;
     s.it.wo = p.fields[1].xyz(); s.depth = p.fields[1].w;
@@ -195,5 +195,5 @@ struct PTSurfaceView {
     return s;
 }
 
-void build_pt_prefix(const PrefixStorage &storage, RtxptGI &env, const Uint &primary_flag) noexcept;
+void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env, const Uint &primary_flag) noexcept;
 }

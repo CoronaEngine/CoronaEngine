@@ -7,7 +7,7 @@ import tempfile
 from _restir_cpu import body
 from test_gi_ideal_glass import PROGRAM, ROOT
 
-TEMP = ROOT / '.workspace/tmp/rtxpt-gi-signal-mis-20261115/signals'
+TEMP = ROOT / '.workspace/tmp/restir-gi-signal-mis-20261115/signals'
 SOURCE = ROOT / 'vision/src/base/integral/integrator.cpp'
 
 
@@ -64,7 +64,7 @@ int main(){try{
 
 
 def test_actual_per_plane_signal_events_keep_prefix_and_remove_fresh_once():
-    source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/rtxpt_gi.cpp').read_text(encoding='utf-8-sig')
+    source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/restir_gi.cpp').read_text(encoding='utf-8-sig')
     helpers = []
     for signature in ('void gi_signal_switch_plane(', 'void gi_signal_commit(', 'void gi_signal_commit_visit('):
         assert signature in source, f'GI per-plane production helper missing: {signature}'
@@ -76,7 +76,7 @@ def test_actual_per_plane_signal_events_keep_prefix_and_remove_fresh_once():
     policy = (ROOT / 'vision/src/base/scattering/gi_ideal_glass.h').read_text(encoding='utf-8-sig')
     declaration, implementation = body(policy, 'Bool gi_camera_emission_owned_by_di(')
     helpers.append(declaration + implementation)
-    native = (ROOT / 'vision/src/render_core/integrator/ReSTIR/rtxpt_gi_denoiser.h').read_text(encoding='utf-8-sig')
+    native = (ROOT / 'vision/src/render_core/integrator/ReSTIR/restir_gi_denoiser.h').read_text(encoding='utf-8-sig')
     native_helpers = []
     for signature in ('Float native_reblur_combine_hit(', 'Float4 native_reblur_commit('):
         declaration, implementation = body(native, signature)
@@ -186,7 +186,7 @@ int main(){try{
     return 0;
 }catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}}
 '''
-    run(PROGRAM[:PROGRAM.index('__HELPERS__')] + shim + 'namespace rtxpt_gi{' + '\n'.join(native_helpers) + '}' + '\n'.join(helpers) + checks.replace('__CALLBACK__', callback), 'plane-events')
+    run(PROGRAM[:PROGRAM.index('__HELPERS__')] + shim + 'namespace restir_gi{' + '\n'.join(native_helpers) + '}' + '\n'.join(helpers) + checks.replace('__CALLBACK__', callback), 'plane-events')
 
 
 def test_actual_shared_nee_fragment_uses_base_only_exact_light_direction():

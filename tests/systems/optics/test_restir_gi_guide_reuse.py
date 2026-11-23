@@ -10,7 +10,7 @@ import tempfile
 from unittest import SkipTest
 
 ROOT = Path(__file__).resolve().parents[3]
-SOURCE = ROOT / "vision/src/render_core/integrator/ReSTIR/rtxpt_gi_prefix_storage.h"
+SOURCE = ROOT / "vision/src/render_core/integrator/ReSTIR/restir_gi_prefix_storage.h"
 TEMP = ROOT / ".workspace/tmp/gi-guide-reuse-20261119/overlay-tests"
 HELPERS = (
     "pt_prefix_depth", "pt_prefix_consumed", "pt_prefix_ideal_path",
@@ -73,16 +73,16 @@ struct Guide {
     Float4 diffuse_factor{1.f,1.f,1.f,0.f},specular_factor{1.f,1.f,1.f,0.f};
 };using GuideVar=Guide;
 }
-struct RtxptGIPrefixPlane {
+struct ReSTIRGIPrefixPlane {
     Uint4 hit_words{};Float4 origin_distance{},direction_vertex{},throughput_flags{};
     Uint4 interiors_branch{};Float4 virtual_position{};
-};using RtxptGIPrefixPlaneVar=RtxptGIPrefixPlane;
+};using ReSTIRGIPrefixPlaneVar=ReSTIRGIPrefixPlane;
 PRODUCTION_HELPERS
 EXTRA_HELPERS
 void require(bool value,const char*message){if(!value)throw std::runtime_error(message);}
 void equal(const void*a,const void*b,std::size_t n,const char*message){require(std::memcmp(a,b,n)==0,message);}
 uint finite_bits(uint bits){return (bits&0x7f800000u)==0x7f800000u?bits^0x00800000u:bits;}
-static_assert(sizeof(reblur::Guide)==80u&&sizeof(RtxptGIPrefixPlane)==96u);
+static_assert(sizeof(reblur::Guide)==80u&&sizeof(ReSTIRGIPrefixPlane)==96u);
 int main(){
     try{
         uint64_t cases=0u;
@@ -92,7 +92,7 @@ int main(){
         for(uint h=0u;h<65536u;++h){
             if((h&0x7c00u)==0x7c00u)continue;
             for(uint depth=0u;depth<=5u;++depth)for(uint control=0u;control<4u;++control){
-                RtxptGIPrefixPlane node;
+                ReSTIRGIPrefixPlane node;
                 node.hit_words={0x12345678u,0xabcdef01u,0x3eaaaaabu,0x80000000u};
                 node.origin_distance={91.f,92.f,93.f,-17.123456f};
                 node.direction_vertex={.2534567f,-.501234f,3.1234f,float(depth)};
@@ -136,7 +136,7 @@ int main(){
         // Storing a guide must keep all transport controls and strip only the
         // nonpersistent reserved/relaxation bits from its identity flags.
         for(uint relaxation=0u;relaxation<256u;++relaxation){
-            RtxptGIPrefixPlane node;
+            ReSTIRGIPrefixPlane node;
             node.hit_words.x=17u;
             pt_prefix_store_controls(node,5u,true,true);
             reblur::Guide guide;
@@ -184,7 +184,7 @@ def test_pt_terminal_overlay_preserves_actual_gpu_fp32_motion():
             0x00800000u,0x80800000u,0x33800000u,0x33800001u,0x39007000u,0x39008000u,
             0xb9007000u,0x39007001u,0x3f800001u,0xbf800001u,0x477fe001u,0x47800000u,
             0x7f7fffffu,0xff7fffffu,0x3eaaaaabu,0xbeaaaaabu,0x40000000u,0xc0000000u}){
-            RtxptGIPrefixPlane node;
+            ReSTIRGIPrefixPlane node;
             node.hit_words.x=17u;
             node.virtual_position={1.f,2.f,3.f,4.f};
             pt_prefix_store_controls(node,2u,false,true);

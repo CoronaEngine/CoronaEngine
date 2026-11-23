@@ -1,4 +1,4 @@
-"""Production RTXPT roulette probability and analytical transport protocols.
+"""Production ReSTIR GI roulette probability and analytical transport protocols.
 
 The probability helper is extracted unchanged and compiled with CPU scalar DSL
 shims. Transport fixtures enumerate Bernoulli outcomes rather than sampling:
@@ -20,8 +20,8 @@ TEMP = ROOT / '.workspace/tmp/rtxpt-corona-dsl-20261108/rr-transport-tests'
 
 def _helper():
     source = SOURCE.read_text(encoding='utf-8-sig')
-    signature = 'Float rtxpt_rr_probability('
-    assert signature in source, 'Production rtxpt_rr_probability helper is absent'
+    signature = 'Float restir_gi_rr_probability('
+    assert signature in source, 'Production restir_gi_rr_probability helper is absent'
     start = source.index(signature)
     opening = source.index('{', start)
     depth, end = 1, opening + 1
@@ -62,16 +62,16 @@ void near(double actual, double expected, double tolerance, const char *message)
     }
 }
 void probability_test() {
-    near(rtxpt_rr_probability(make_float3(0.f), 4u, 16u), .7225, 2e-7, "black early path probability");
-    near(rtxpt_rr_probability(make_float3(.25f), 8u, 16u), .1225, 2e-7, "quarter-throughput analytic probability");
-    near(rtxpt_rr_probability(make_float3(1.f), 8u, 16u), 0., 0., "bright path before tail ramp");
-    near(rtxpt_rr_probability(make_float3(1.f), 12u, 16u), .3, 1e-7, "three-quarter depth tail ramp");
-    near(rtxpt_rr_probability(make_float3(.25f), 12u, 16u), .4225, 2e-7, "brightness and tail terms combine");
-    near(rtxpt_rr_probability(make_float3(0.f), 12u, 16u), 1., 0., "dark late path saturates at certain termination");
-    near(rtxpt_rr_probability(make_float3(4.f), 16u, 16u), .6, 1e-7, "bright terminal depth probability helper");
-    near(rtxpt_rr_probability(make_float3(-1.f), 4u, 16u), .7225, 2e-7, "negative luminance clamps before sqrt");
-    const auto red = rtxpt_rr_probability({.25f / .212671f, 0.f, 0.f}, 8u, 16u);
-    const auto green = rtxpt_rr_probability({0.f, .25f / .715160f, 0.f}, 8u, 16u);
+    near(restir_gi_rr_probability(make_float3(0.f), 4u, 16u), .7225, 2e-7, "black early path probability");
+    near(restir_gi_rr_probability(make_float3(.25f), 8u, 16u), .1225, 2e-7, "quarter-throughput analytic probability");
+    near(restir_gi_rr_probability(make_float3(1.f), 8u, 16u), 0., 0., "bright path before tail ramp");
+    near(restir_gi_rr_probability(make_float3(1.f), 12u, 16u), .3, 1e-7, "three-quarter depth tail ramp");
+    near(restir_gi_rr_probability(make_float3(.25f), 12u, 16u), .4225, 2e-7, "brightness and tail terms combine");
+    near(restir_gi_rr_probability(make_float3(0.f), 12u, 16u), 1., 0., "dark late path saturates at certain termination");
+    near(restir_gi_rr_probability(make_float3(4.f), 16u, 16u), .6, 1e-7, "bright terminal depth probability helper");
+    near(restir_gi_rr_probability(make_float3(-1.f), 4u, 16u), .7225, 2e-7, "negative luminance clamps before sqrt");
+    const auto red = restir_gi_rr_probability({.25f / .212671f, 0.f, 0.f}, 8u, 16u);
+    const auto green = restir_gi_rr_probability({0.f, .25f / .715160f, 0.f}, 8u, 16u);
     near(red, green, 2e-7, "equal-luminance colors must have equal roulette probability");
     near(red, .1225, 2e-7, "roulette must use luminance rather than maximum component");
     std::cout << "PASS analytic probability, luminance, depth ramp and clamp boundaries\n";
@@ -82,7 +82,7 @@ void range_test() {
         for (float brightness : {0.f, 1e-12f, .001f, .025f, .25f, 1.f, 10000.f}) {
             float previous = -1.f;
             for (Uint depth = 1u; depth <= total; ++depth) {
-                const auto q = rtxpt_rr_probability(make_float3(brightness), depth, total);
+                const auto q = restir_gi_rr_probability(make_float3(brightness), depth, total);
                 require(std::isfinite(q) && q >= 0.f && q <= 1.f, "roulette probability left [0,1]");
                 require(q >= previous, "fixed-throughput termination must not decrease with depth");
                 previous = q;
@@ -92,7 +92,7 @@ void range_test() {
         for (Uint depth = 1u; depth <= total; ++depth) {
             float previous = 1.f;
             for (float brightness : {0.f, 1e-12f, .001f, .025f, .25f, 1.f, 10000.f}) {
-                const auto q = rtxpt_rr_probability(make_float3(brightness), depth, total);
+                const auto q = restir_gi_rr_probability(make_float3(brightness), depth, total);
                 require(q <= previous + 1e-7f, "brighter camera throughput must not terminate more often");
                 previous = q;
             }
@@ -111,7 +111,7 @@ void expectation_test() {
     unsigned fixtures = 0;
     for (float brightness : {0.f, .025f, .25f, 1.f}) {
         for (Uint depth : {4u, 8u, 9u, 11u}) {
-            const double q = rtxpt_rr_probability(make_float3(brightness), depth, 16u);
+            const double q = restir_gi_rr_probability(make_float3(brightness), depth, 16u);
             for (double endpoint : {0., .2, 3.}) for (double continuation : {0., .5, 7.}) {
                 if (q == 1.) continue;
                 const auto killed = endpoint_first(q, q * .5, endpoint, continuation);
@@ -135,8 +135,8 @@ void expectation_test() {
     std::cout << "PASS " << fixtures << " exhaustive two-outcome means and variances versus immediate RR\n";
 }
 void boundaries_test() {
-    const double zero = rtxpt_rr_probability(make_float3(1.f), 8u, 16u);
-    const double one = rtxpt_rr_probability(make_float3(0.f), 12u, 16u);
+    const double zero = restir_gi_rr_probability(make_float3(1.f), 8u, 16u);
+    const double one = restir_gi_rr_probability(make_float3(0.f), 12u, 16u);
     require(zero == 0. && one == 1., "fixtures must exercise exact probability endpoints");
     for (double uniform : {0., .25, .5, .999999999999}) {
         const auto a = endpoint_first(zero, uniform, 2., 5.);
@@ -144,13 +144,13 @@ void boundaries_test() {
         const auto b = endpoint_first(one, uniform, 2., 5.);
         require(!b.downstream && b.radiance == 2., "certain termination must retain only the unboosted endpoint");
     }
-    const double q = rtxpt_rr_probability(make_float3(.25f), 8u, 16u);
+    const double q = restir_gi_rr_probability(make_float3(.25f), 8u, 16u);
     require(!endpoint_first(q, std::nextafter(q, 0.), 2., 5.).downstream, "sample below threshold should terminate");
     require(endpoint_first(q, q, 2., 5.).downstream, "strict-less RR threshold equality should survive");
     // Four leaves cover two decisions. Reweighted throughput determines the
     // second probability; expectation remains unchanged at both vertices.
-    const double q0 = rtxpt_rr_probability(make_float3(.1f), 6u, 16u);
-    const double q1 = rtxpt_rr_probability(make_float3(.1f) / float(1. - q0), 10u, 16u);
+    const double q0 = restir_gi_rr_probability(make_float3(.1f), 6u, 16u);
+    const double q1 = restir_gi_rr_probability(make_float3(.1f) / float(1. - q0), 10u, 16u);
     double mean = 0.;
     for (bool alive0 : {false, true}) for (bool alive1 : {false, true}) {
         const double probability = (alive0 ? 1. - q0 : q0) * (alive1 ? 1. - q1 : q1);
@@ -184,11 +184,11 @@ def _executable():
     helper = _helper()
     compiler = shutil.which('g++')
     if not compiler:
-        raise SkipTest('g++ is required for the standalone RTXPT RR fixture')
+        raise SkipTest('g++ is required for the standalone ReSTIR GI RR fixture')
     TEMP.mkdir(parents=True, exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix='run-', dir=TEMP))
-    source = directory / 'rtxpt_rr_transport.cpp'
-    executable = directory / 'rtxpt_rr_transport.exe'
+    source = directory / 'restir_gi_rr_transport.cpp'
+    executable = directory / 'restir_gi_rr_transport.exe'
     source.write_text(PROGRAM.replace('__PRODUCTION_HELPER__', helper), encoding='utf-8')
     result = subprocess.run(
         [compiler, '-std=c++20', '-O2', str(source), '-o', str(executable)],

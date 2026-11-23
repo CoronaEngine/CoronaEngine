@@ -252,7 +252,7 @@ void check_scene_signals(bool restir, bool lifecycle = false) {
         integrator["param"]["direct"]["open"] = pt || restir_di;
         integrator["param"]["direct"]["max_recursion"] = 1u;
         integrator["param"]["indirect"]["open"] = !restir_di;
-        integrator["param"]["indirect"]["backend"] = "rtxpt";
+        integrator["param"]["indirect"]["backend"] = "restir_gi";
         Global::instance().set_scene_path(fixture);
         auto pipeline = Corona::Tests::make_vision_test_pipeline(scene, fixture); pipelines.push_back(pipeline);
         auto *illumination = dynamic_cast<IlluminationIntegrator *>(pipeline->renderer().integrator().get());

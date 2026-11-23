@@ -1,7 +1,7 @@
 #pragma once
 #include "base/integral/restir_shadow.h"
 
-#include "ReSTIR/rtxpt_gi.h"
+#include "ReSTIR/restir_gi.h"
 #include "restir_gi/history.h"
 #include "restir_gi/literal.h"
 #include <array>
@@ -480,7 +480,7 @@ class RestirGIExperiment final : private Toolkit {
         else spatial1_=device().compile(spatial,"RestirGI reference spatial reuse 1");
     }
 
-    void compile_resolve(RtxptGI &output) {
+    void compile_resolve(ReSTIRGI &output) {
         auto &camera=scene().sensor();
         Kernel resolve=[&](Uint frame,Float4x4 raster_to_camera,Float4x4 world_to_camera) {
             camera->load_data();
@@ -552,7 +552,7 @@ class RestirGIExperiment final : private Toolkit {
     }
 
 public:
-    RestirGIExperiment(RtxptGI &output,std::string_view mode)
+    RestirGIExperiment(ReSTIRGI &output,std::string_view mode)
         : extent_{pipeline()->resolution()},frame_buffer_{&frame_buffer()},mode_{mode},diagnostic_{diagnostic_requested()} {
         if(mode!="half"&&mode!="full"&&mode!="half_feedback"&&mode!="full_feedback")
             throw std::runtime_error("VISION_RESTIR_GI_MODE must be half, full, half_feedback, or full_feedback");

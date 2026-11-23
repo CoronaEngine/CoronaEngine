@@ -1,16 +1,8 @@
 #pragma once
 #include "render_core/denoiser/ReBLUR/filter.h"
 
-/*
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
- * NVIDIA CORPORATION and its licensors retain all intellectual property
- * and proprietary rights in and to this software, related documentation
- * and any modifications thereto. Any use, reproduction, disclosure or
- * distribution of this software and related documentation without an express
- * license agreement from NVIDIA CORPORATION is strictly prohibited.
- * Typed DSL translation of the matched StablePlanes helper mathematics.
- */
-namespace vision::rtxpt_gi {
+// Typed DSL translation of the StablePlanes helper mathematics.
+namespace vision::restir_gi {
 static_assert(sizeof(reblur::Guide) == 80u);
 static_assert(offsetof(reblur::Guide, position) == 0u && offsetof(reblur::Guide, identity) == 16u);
 static_assert(offsetof(reblur::Guide, normal_roughness) == 32u && offsetof(reblur::Guide, diffuse_factor) == 48u && offsetof(reblur::Guide, specular_factor) == 64u);
@@ -71,4 +63,4 @@ struct NativeReblurStorage {
     return 3u | (f32tof16(clamp(depth_motion, -65504.f, 65504.f)) << 16u);
 }
 
-}// namespace vision::rtxpt_gi
+}// namespace vision::restir_gi

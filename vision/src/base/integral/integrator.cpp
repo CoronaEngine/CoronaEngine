@@ -31,7 +31,7 @@ Float3 pt_signal_specular_fraction(const Float3 &direct_fraction, const Bool &ba
     return emission ? suffix_fraction : ocarina::select(bounce == base_bounce, direct_fraction, suffix_fraction);
 }
 
-Float rtxpt_rr_probability(const Float3 &camera_beta, const Uint &surface_depth, const Uint &total_depth) {
+Float restir_gi_rr_probability(const Float3 &camera_beta, const Uint &surface_depth, const Uint &total_depth) {
     Float terminate = saturate(0.85f - sqrt(max(luminance(camera_beta), 0.f)));
     return saturate(terminate * terminate +
         max((cast<float>(surface_depth) / cast<float>(total_depth) - 0.5f) * 1.2f, 0.f));
@@ -112,7 +112,7 @@ IlluminationIntegrator::IlluminationIntegrator(const vision::IntegratorDesc &des
       mis_mode_(MISMode(desc["mis_mode"].as_int(0))),
       separate_(desc["separate"].as_bool(false)),
       denoiser_(Node::create_shared<Denoiser>(desc.denoiser_desc)) {
-    if (desc.value("indirect")["backend"].as_string("legacy") == "rtxpt") separate_ = true;
+    if (desc.value("indirect")["backend"].as_string("") == "restir_gi") separate_ = true;
 }
 
 DataWrap IlluminationIntegrator::illumination_settings() const {
@@ -335,7 +335,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         OC_ASSERT(!scene().process_mediums());
         OC_INFO("Ordinary PT NEE cost diagnostic: proposals retained, visibility and direct F/PDF skipped, no media");
     }
-    const char *nee_diagnostic = hc.rtxpt_sampling ? std::getenv("VISION_GI_NEE_DIAGNOSTIC") : nullptr;
+    const char *nee_diagnostic = hc.restir_gi_sampling ? std::getenv("VISION_GI_NEE_DIAGNOSTIC") : nullptr;
     const bool nee_one_by_one = nee_diagnostic && string_view(nee_diagnostic) == "1x1";
     OC_ERROR_IF(nee_diagnostic && !nee_one_by_one, "GI NEE diagnostic supports only 1x1.");
     const uint nee_candidates = nee_one_by_one ? 1u : 6u;
@@ -494,7 +494,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             $if(include_emission) {
                 SampledSpectrum d = [&] {
                     if (!hc.path_capture || !hc.path_capture->record_radiance) return evaluate_miss(rs, prev_surface_ng, scatter_pdf, bounces, swl,
-                                                              hc.rtxpt_sampling ? nee_full_samples : 1u,
+                                                              hc.restir_gi_sampling ? nee_full_samples : 1u,
                                                               emission_delta) * throughput;
                     auto incoming = evaluate_miss(rs, prev_surface_ng, scatter_pdf, bounces, swl, 1u,
                                                   emission_delta);
@@ -576,7 +576,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             p_ref.ng = prev_surface_ng;
             LightEval eval = light_sampler->evaluate_hit_wi(p_ref, it, swl);
             SampledSpectrum tr = spectrum()->one();
-            Float weight = hc.rtxpt_sampling
+            Float weight = hc.restir_gi_sampling
                 ? select(ocarina::isinf(scatter_pdf), 1.f, MIS_weight_n<D>(1, scatter_pdf, int(nee_full_samples), eval.pdf))
                 : MIS_weight<D>(scatter_pdf, eval.pdf);
             if (gi_previous_delta) weight = select(*gi_previous_delta, 1.f, weight);
@@ -614,7 +614,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
     $for(&bounces, 0, max_depth) {
         continuation_ready = false;
         mis_bsdf(bounces, true);
-        if (hc.rtxpt_sampling) {
+        if (hc.restir_gi_sampling) {
             // Native RR always visits the next emission/miss endpoint first.
             $if(pending_rr_death) { $break; };
             throughput *= pending_rr_boost;
@@ -628,7 +628,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         if (hc.restir_shadow_connections) light_sample_infinite.emplace(false);
         Bool occluded = false;
         SampledSpectrum tr = spectrum()->one();
-        if (!hc.rtxpt_sampling) {
+        if (!hc.restir_gi_sampling) {
             if (hc.work_counters) hc.work_counters->bsdf.w += 1u;
             if (hc.restir_shadow_connections) {
                 light_sample = restir_shadow::sample_light(*light_sampler, it, sampler, swl, *light_sample_infinite);
@@ -661,7 +661,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             if (hc.captured_secondary_normal) {
                 $if(bounces == 0u) { *hc.captured_secondary_normal = evaluator.shading_frame().normal(); };
             }
-            if (!hc.rtxpt_sampling) {
+            if (!hc.restir_gi_sampling) {
                 if (cost_skip_nee) {
                     if (hc.work_counters) hc.work_counters->bsdf.x += 1u;
                     bsdf_sample = evaluator.sample(it.wo, sampler);
@@ -769,7 +769,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                 MaterialEvaluator evaluator(lambert_it, swl);
                 evaluator.update_frame(shading);
                 evaluator.link(make_unique<DiffuseLobe>(SampledSpectrum{swl, .7f}, swl, shading));
-                if (cost_skip_nee && !hc.rtxpt_sampling) {
+                if (cost_skip_nee && !hc.restir_gi_sampling) {
                     if (hc.work_counters) hc.work_counters->bsdf.x += 1u;
                     bsdf_sample = evaluator.sample(it.wo, sampler);
                     Ld = spectrum()->zero();
@@ -897,7 +897,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         if (hc.rr_depth_offset) { rr_depth += *hc.rr_depth_offset; }
         Float rr_lum = lum;
         if (hc.rr_survival_scale) { rr_lum *= *hc.rr_survival_scale; }
-        if (hc.rtxpt_sampling) {
+        if (hc.restir_gi_sampling) {
             Uint surface_depth = rr_depth + 1u;
             Uint total_depth = max_depth;
             if (hc.rr_depth_offset) total_depth += *hc.rr_depth_offset;
@@ -905,7 +905,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                 Float3 camera_beta = spectrum()->linear_srgb(throughput, swl);
                 if (hc.rr_camera_throughput) camera_beta *= *hc.rr_camera_throughput;
                 if (hc.work_counters) hc.work_counters->rr.x += 1u;
-                Float terminate = rtxpt_rr_probability(camera_beta, surface_depth, total_depth);
+                Float terminate = restir_gi_rr_probability(camera_beta, surface_depth, total_depth);
                 pending_rr_death = sampler->next_1d() < terminate;
                 if (hc.work_counters) { $if(pending_rr_death) { hc.work_counters->rr.y += 1u; }; }
                 $if(!pending_rr_death) { pending_rr_boost = 1.f / (1.f - terminate); };

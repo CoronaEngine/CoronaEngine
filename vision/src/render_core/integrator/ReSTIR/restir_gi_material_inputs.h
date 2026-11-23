@@ -7,53 +7,9 @@
 #include <cmath>
 #include <limits>
 
-namespace vision::rtxpt_gi {
+namespace vision::restir_gi {
 namespace detail {
 
-/*
-* Copyright (c) 2014-2021, NVIDIA CORPORATION. All rights reserved.
-*
-* Permission is hereby granted, free of charge, to any person obtaining a
-* copy of this software and associated documentation files (the "Software"),
-* to deal in the Software without restriction, including without limitation
-* the rights to use, copy, modify, merge, publish, distribute, sublicense,
-* and/or sell copies of the Software, and to permit persons to whom the
-* Software is furnished to do so, subject to the following conditions:
-*
-* The above copyright notice and this permission notice shall be included in
-* all copies or substantial portions of the Software.
-*
-* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-* IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-* FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
-* THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-* LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-* FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-* DEALINGS IN THE SOFTWARE.
-*/
-/*
-The MIT License
-
-Copyright (c) 2016-2017 Gary Hsu
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-*/
 // Read only actual Number nodes. Uniform image averages are not scalar inputs.
 [[nodiscard]] inline optional<vector<float>> standard_number_values(const ShaderNodeSlot *slot) noexcept {
     if (!slot || !slot->valid() || slot->node()->impl_type() != "number") return {};
@@ -119,9 +75,9 @@ struct StandardSourceMetadata {
     float3 sigma_a;
 };
 
-// MaterialHeader layout and Donut->Falcor priority remapping are taken from
-// matched MaterialData.hlsli and PathTracerBridgeDonut.hlsli. Absorption is the
-// original loadHomogeneousVolumeData expression, evaluated once on the host.
+// MaterialData.hlsli defines the header layout. PathTracerBridgeDonut.hlsli
+// maps nested priorities 0..14 to header values 1..15.
+// The host evaluates the loadHomogeneousVolumeData absorption expression once.
 [[nodiscard]] inline StandardSourceMetadata standard_source_metadata(
     const DataWrap &source, bool legacy_thin = false) noexcept {
     const bool has_source = source.is_object();
@@ -180,13 +136,13 @@ public:
                 ? native_source.value("workflow", desc["rtxpt_workflow"].as_string(""))
                 : desc["rtxpt_workflow"].as_string("");
             OC_ERROR_IF(!workflow.empty() && workflow != "specular_glossiness" && workflow != "metallic_roughness",
-                        "RTXPT GI: unknown explicit material workflow {}", workflow);
+                        "ReSTIR GI: unknown explicit material workflow {}", workflow);
             const bool sg = detail::standard_specular_glossiness_workflow(workflow,
                 detail::standard_values_equal(detail::standard_number_values(material->input_slot("metallic")), 0.f), nonunit);
             uint flags = sg ? SpecularGlossiness : 0u;
             const auto ior_values = detail::standard_number_values(material->input_slot("ior"));
             const bool source_ior = native_source.is_object() && native_source.contains("ior");
-            OC_ERROR_IF(!source_ior && material->input_slot("ior") && (!ior_values || ior_values->empty()), "RTXPT GI material IoR must be a numeric input");
+            OC_ERROR_IF(!source_ior && material->input_slot("ior") && (!ior_values || ior_values->empty()), "ReSTIR GI material IoR must be a numeric input");
             const float material_ior = source_ior ? native_source["ior"].get<float>()
                 : ior_values && !ior_values->empty() ? ior_values->front() : 1.5f;
             float cutoff = .5f;
@@ -194,7 +150,7 @@ public:
                 const bool mask = native_source.value("alpha_mode", string{"OPAQUE"}) == "MASK";
                 const bool base_texture = native_source.value("has_base_texture", detail::standard_base_texture(*material) != nullptr);
                 OC_ERROR_IF(mask && base_texture && !detail::standard_base_texture(*material),
-                            "RTXPT GI alpha source needs an accessible original base texture");
+                            "ReSTIR GI alpha source needs an accessible original base texture");
                 if (mask && base_texture) { flags |= AlphaTested; has_alpha_tested_ = true; }
                 if (native_source.value("exclude_from_nee", false)) { flags |= VisibilityExcluded; has_visibility_exclusions_ = true; }
                 cutoff = native_source.value("alpha_cutoff", cutoff);
@@ -207,7 +163,7 @@ public:
                 ++sg_count;
                 legacy_count += uint(workflow.empty());
                 const auto &encoded_factor = specular_multiply ? specular_rhs : specular_number;
-                OC_ERROR_IF(!encoded_factor || encoded_factor->empty(), "RTXPT GI unsupported specular/glossiness source expression");
+                OC_ERROR_IF(!encoded_factor || encoded_factor->empty(), "ReSTIR GI unsupported specular/glossiness source expression");
                 for (uint c = 0u; c < 3u; ++c)
                     factor[c] = (*encoded_factor)[std::min<size_t>(c, encoded_factor->size() - 1u)] * .04f;
                 if (native_source.is_object() && native_source.contains("specular_factor"))
@@ -216,12 +172,12 @@ public:
                 if (detail::standard_gloss_texture(*material)) {
                     const auto *weight = detail::standard_child(material->input_slot("roughness"), "t");
                     const auto scalar = detail::standard_number_values(detail::standard_child(weight, "rhs"));
-                    OC_ERROR_IF(!scalar || scalar->empty(), "RTXPT GI gloss texture needs a numeric factor");
+                    OC_ERROR_IF(!scalar || scalar->empty(), "ReSTIR GI gloss texture needs a numeric factor");
                     flags |= GlossTexture;
                     gloss = scalar->front();
                 } else {
                     const auto roughness = detail::standard_number_values(material->input_slot("roughness"));
-                    OC_ERROR_IF(!roughness || roughness->empty(), "RTXPT GI unsupported gloss source expression");
+                    OC_ERROR_IF(!roughness || roughness->empty(), "ReSTIR GI unsupported gloss source expression");
                     flags |= ConstantGloss;
                     gloss = 1.f - roughness->front();
                 }
@@ -235,11 +191,11 @@ public:
             values[size_t(id) * 3u + 1u] = make_uint4(std::bit_cast<uint>(factor.x), std::bit_cast<uint>(factor.y), std::bit_cast<uint>(factor.z), resolved.header_x);
             values[size_t(id) * 3u + 2u] = make_uint4(std::bit_cast<uint>(resolved.sigma_a.x), std::bit_cast<uint>(resolved.sigma_a.y), std::bit_cast<uint>(resolved.sigma_a.z), resolved.header_y);
         });
-        metadata_ = device().create_buffer<uint4>(values.size(), "RTXPT GI source material metadata");
+        metadata_ = device().create_buffer<uint4>(values.size(), "ReSTIR GI source material metadata");
         metadata_.upload_immediately(values.data());
-        OC_INFO_FORMAT("RTXPT GI material inputs: materials={}, specular_glossiness={}, legacy_exporter={}, metadata_bytes={}",
+        OC_INFO_FORMAT("ReSTIR GI material inputs: materials={}, specular_glossiness={}, legacy_exporter={}, metadata_bytes={}",
                        materials.all_instance_num(), sg_count, legacy_count, values.size() * sizeof(uint4));
-        OC_INFO_FORMAT("RTXPT GI alpha metadata: tested={}, visibility_exclusions={}", has_alpha_tested_, has_visibility_exclusions_);
+        OC_INFO_FORMAT("ReSTIR GI alpha metadata: tested={}, visibility_exclusions={}", has_alpha_tested_, has_visibility_exclusions_);
     }
 
     [[nodiscard]] Float ior(const Uint &material_id, const SampledWavelengths &swl) const noexcept {
@@ -287,4 +243,4 @@ public:
 
 };
 
-}// namespace vision::rtxpt_gi
+}// namespace vision::restir_gi

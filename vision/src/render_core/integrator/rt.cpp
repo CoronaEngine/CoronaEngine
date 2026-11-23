@@ -11,12 +11,12 @@
 #include "ReSTIR/di_settings.h"
 #include "ReSTIR/di_radiance.h"
 #include "ReSTIR/gi_receiver.h"
-#include "ReSTIR/rtxpt_gi.h"
-#include "ReSTIR/rtxpt_gi_lights.h"
-#include "ReSTIR/rtxpt_gi_denoiser_diagnostic.h"
-#include "ReSTIR/rtxpt_gi_denoiser_prepare.h"
-#include "ReSTIR/rtxpt_gi_shadow_diagnostic.h"
-#include "ReSTIR/rtxpt_gi_primary_light_diagnostic.h"
+#include "ReSTIR/restir_gi.h"
+#include "ReSTIR/restir_gi_lights.h"
+#include "ReSTIR/restir_gi_denoiser_diagnostic.h"
+#include "ReSTIR/restir_gi_denoiser_prepare.h"
+#include "ReSTIR/restir_gi_shadow_diagnostic.h"
+#include "ReSTIR/restir_gi_primary_light_diagnostic.h"
 #include "ReSTIR/denoiser_signals.h"
 #include "ReSTIR/physical_di_reblur.h"
 #include "restir_di.h"
@@ -108,7 +108,7 @@ private:
 
     SP<DISettings> di_settings_;
     SP<DIRadiance> di_radiance_;
-    SP<RtxptGI> indirect_;
+    SP<ReSTIRGI> indirect_;
     DataWrap scene_restir_settings_;
     Shader<void(uint, float, float, uint)> combine_;
     Shader<void(float, float)> prepare_denoiser_;
@@ -151,7 +151,7 @@ private:
             native_di_denoiser_->prepare();
             native_di_denoiser_->compile();
             native_denoiser_size_ = pipeline()->resolution();
-            OC_INFO("RTXPT GI + ReSTIR DI + REBLUR active: private_planes=3, physical_DI_contexts=1, GI_contexts=3, shared_transport=false");
+            OC_INFO("ReSTIR GI + ReSTIR DI + REBLUR active: private_planes=3, physical_DI_contexts=1, GI_contexts=3, shared_transport=false");
         } else if (any(native_denoiser_size_ != pipeline()->resolution())) {
             native_di_denoiser_->update_resolution(pipeline()->resolution());
             native_denoiser_size_ = pipeline()->resolution();
@@ -179,7 +179,7 @@ public:
         if (pipeline()->geometry().process_mediums()) return "ReSTIR DI does not support participating media";
         if (indirect_->open() && suffix_depth() == 0u) return "ReSTIR GI requires max_depth above 1";
         if (indirect_->open() && !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled() &&
-            !native_reblur_requested()) return "Combined ReSTIR DI and GI require ReBLUR with RTXPT GI, or denoising disabled";
+            !native_reblur_requested()) return "Combined ReSTIR DI and GI require ReBLUR with ReSTIR GI, or denoising disabled";
         if (!restir_di_needs_compile_ && !restir_di_error_.empty()) return restir_di_error_.c_str();
         return nullptr;
     }
@@ -206,10 +206,10 @@ public:
         const Desc &desc = static_cast<const Desc &>(node_desc);
         di_settings_ = make_shared<DISettings>(shared_from_this(), desc["direct"]);
         di_radiance_ = make_shared<DIRadiance>();
-        indirect_ = make_shared<RtxptGI>(shared_from_this(), desc["indirect"]);
-        // The RTXPT candidate path uses inline full BSDF evaluation.
+        indirect_ = make_shared<ReSTIRGI>(shared_from_this(), desc["indirect"]);
+        // The ReSTIR GI candidate path evaluates the full BSDF inline.
         separate_ = false;
-        OC_INFO("RTXPT GI candidate material layout: inline full BSDF (separate=false)");
+        OC_INFO("ReSTIR GI candidate material layout: inline full BSDF (separate=false)");
         scene_restir_settings_ = settings();
     }
 
@@ -219,7 +219,7 @@ public:
         const auto *previous = hotfix::hotfix_detail::restore_source(*this, old_obj);
         if (!previous) return;
         const RuntimeObject *previous_gi = previous->indirect_.get();
-        OC_ERROR_IF(previous_gi && string_view{previous_gi->class_name()} != hotfix::type_string<RtxptGI>(),
+        OC_ERROR_IF(previous_gi && string_view{previous_gi->class_name()} != hotfix::type_string<ReSTIRGI>(),
                     "GI runtime object layout changed; restart the engine before reloading the integrator.");
         IlluminationIntegrator::restore(old_obj);
         VS_HOTFIX_MOVE_ATTRS(di_settings_, di_radiance_, indirect_, scene_restir_settings_,
@@ -513,7 +513,7 @@ public:
             spectrum()->impl_type() == "srgb" && frame_buffer().impl_type() == "normal" &&
             scene().sensor()->supports_screen_position_reconstruction() &&
             !pipeline()->geometry().process_mediums();
-        const bool publish_gi_proposal = native_denoising && rtxpt_gi::primary_light_diagnostic_enabled();
+        const bool publish_gi_proposal = native_denoising && restir_gi::primary_light_diagnostic_enabled();
         const bool di_lobe_signals = native_denoising ||
             (!gi_enabled && denoiser_ && denoiser_->requires_lobe_signals());
         const bool di_requested = di_settings_->open();
@@ -559,7 +559,7 @@ public:
         const bool reference_gi_rejected = reference_gi_mode && *reference_gi_mode && !reference_gi_requested;
         if (reference_gi_rejected && !reference_gi_rejected_) {
             OC_WARNING("Reference GI inactive: requires DI+GI, max_depth=2 (or explicit multibounce benchmark5/16/1), max_recursion=1, zero-aperture perspective camera, RGB normal framebuffer, "
-                       "no denoiser, primary jitter or media; using RTXPT GI.");
+                       "no denoiser, primary jitter or media; using ReSTIR GI.");
         }
         reference_gi_rejected_ = reference_gi_rejected;
         const bool prepare_reference_gi = reference_gi_requested && (reference_gi_needs_compile_ ||
@@ -573,7 +573,7 @@ public:
             try {
                 reference_gi_ = std::make_unique<RestirGIExperiment>(*indirect_, reference_gi_mode);
             } catch (const std::exception &error) {
-                OC_WARNING_FORMAT("Reference GI unavailable, using RTXPT GI: {}", error.what());
+                OC_WARNING_FORMAT("Reference GI unavailable, using ReSTIR GI: {}", error.what());
             }
         }
         const bool use_reference_gi = reference_gi_requested && reference_gi_;
@@ -624,15 +624,15 @@ public:
             if (directory.empty()) return;
             fs::create_directories(directory);
             if (native_denoising && use_di && !string_view(stage).starts_with("composite_")) {
-                rtxpt_gi::NativeReblurDiagnosticViews views;
+                restir_gi::NativeReblurDiagnosticViews views;
                 views.di_diffuse = restir_di_->denoiser_diffuse();
                 views.di_specular = restir_di_->denoiser_specular();
                 views.di_bypass = restir_di_->denoiser_bypass();
                 views.gi_stable = indirect_->native_reblur_bypass();
                 if (string_view(stage) == "producer" && std::getenv("VISION_GI_GUIDE_REUSE_FULL_READBACK")) {
-                    auto prefix_view = indirect_->native_reblur_prefix().view_as<RtxptGIPrefixPlane>();
+                    auto prefix_view = indirect_->native_reblur_prefix().view_as<ReSTIRGIPrefixPlane>();
                     auto header_view = indirect_->native_reblur_headers();
-                    vector<RtxptGIPrefixPlane> prefix(prefix_view.size());
+                    vector<ReSTIRGIPrefixPlane> prefix(prefix_view.size());
                     vector<uint4> headers(header_view.size());
                     stream << prefix_view.download(prefix.data()) << header_view.download(headers.data())
                            << synchronize() << commit();
@@ -645,39 +645,39 @@ public:
                 }
                 // Readback-only materialization; normal rendering has no Guide array.
                 auto guides = device().create_buffer<reblur::Guide>(size_t(pipeline()->pixel_num()) * StablePlaneCount,
-                    "RTXPT GI diagnostic-only decoded guides");
-                auto prefixes = indirect_->native_reblur_prefix().view_as<RtxptGIPrefixPlane>();
+                    "ReSTIR GI diagnostic-only decoded guides");
+                auto prefixes = indirect_->native_reblur_prefix().view_as<ReSTIRGIPrefixPlane>();
                 auto headers = indirect_->native_reblur_headers();
                 auto motion_y = indirect_->native_reblur_motion_y();
-                Kernel decode = [&](BufferVar<RtxptGIPrefixPlane> prefix_records, BufferVar<uint4> prefix_headers,
+                Kernel decode = [&](BufferVar<ReSTIRGIPrefixPlane> prefix_records, BufferVar<uint4> prefix_headers,
                                     BufferVar<float> prefix_motion_y, BufferVar<reblur::Guide> output, Uint2 resolution) {
                     Uint2 pixel = dispatch_idx().xy();
                     $if(any(pixel >= resolution)) { $return(); };
                     for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
-                        auto guide = rtxpt_gi::load_pt_reblur_guide(prefix_records, prefix_headers, prefix_motion_y, pixel, resolution, Uint{layer},
+                        auto guide = restir_gi::load_pt_reblur_guide(prefix_records, prefix_headers, prefix_motion_y, pixel, resolution, Uint{layer},
                             [&](const Uint &instance) { return pipeline()->geometry().data()->instances().read(instance).mat_id; });
                         output.write(layer * resolution.x * resolution.y + pixel.y * resolution.x + pixel.x, guide);
                     }
                 };
-                auto decode_shader = device().compile(decode, "RTXPT GI diagnostic-only Guide decode");
+                auto decode_shader = device().compile(decode, "ReSTIR GI diagnostic-only Guide decode");
                 stream << decode_shader(prefixes, headers, motion_y, guides.view(), rp->resolution()).dispatch(rp->resolution());
                 for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
                     views.gi_diffuse[layer] = indirect_->native_reblur_diffuse(layer);
                     views.gi_specular[layer] = indirect_->native_reblur_specular(layer);
                     views.gi_guides[layer] = guides.view(size_t(layer) * pipeline()->pixel_num(), pipeline()->pixel_num()).view_as<std::byte>();
                 }
-                rtxpt_gi::download_native_reblur_diagnostics(device(), stream, views, rp->resolution(), directory, stage);
+                restir_gi::download_native_reblur_diagnostics(device(), stream, views, rp->resolution(), directory, stage);
                 if (string_view(stage) == "raw") {
-                    rtxpt_gi::download_shadow_diagnostics(device(), stream, frame_buffer(), frame_index_,
+                    restir_gi::download_shadow_diagnostics(device(), stream, frame_buffer(), frame_index_,
                                                          rp->resolution(), *di_radiance_, directory);
-                    rtxpt_gi::download_environment_diagnostics(device(), stream, frame_buffer(), frame_index_,
+                    restir_gi::download_environment_diagnostics(device(), stream, frame_buffer(), frame_index_,
                                                               rp->resolution(), directory);
-                    rtxpt_gi::download_primary_light_diagnostics(device(), stream, frame_buffer(), frame_index_,
+                    restir_gi::download_primary_light_diagnostics(device(), stream, frame_buffer(), frame_index_,
                                                                 rp->resolution(), *di_radiance_, directory);
                 }
             }
             if (string_view(stage) == "raw" && gi_enabled && !use_reference_gi) {
-                indirect_->rtxpt_lights().download_validation(directory);
+                indirect_->restir_gi_lights().download_validation(directory);
             }
             if(use_reference_gi&&string_view(stage)=="raw") reference_gi_->download_guides(frame_index_,directory);
             const char *native_diagnostic = std::getenv("VISION_RESTIR_GI_NATIVE_MB_DIAGNOSTIC");
@@ -763,7 +763,7 @@ public:
             physical.lobe_signals = {dd, ds, dd, ds};
             submit(native_di_denoiser_->dispatch(physical), &cur_stage_profile_.spatial_angular_ms);
             if (!evaluation_debug::directory(frame_index_).empty())
-                rtxpt_gi::copy_physical_di_snapshots(stream, frame_index_);
+                restir_gi::copy_physical_di_snapshots(stream, frame_index_);
             for (uint layer = 0u; layer < StablePlaneCount; ++layer) {
                 auto gi = denoise_input();
                 gi.use_stable_planes = true; gi.layer_count = StablePlaneCount; gi.layer_index = layer;

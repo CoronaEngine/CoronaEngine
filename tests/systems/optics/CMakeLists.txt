@@ -7,9 +7,9 @@ add_test(NAME VisionSwitchProfileScopeTests
             ${CMAKE_CURRENT_BINARY_DIR}/switch-profile-scope)
 set_tests_properties(VisionSwitchProfileScopeTests PROPERTIES TIMEOUT 30)
 
-add_test(NAME VisionRTXPTGIReservoirTests
-    COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_rtxpt_gi_native_math.py)
-set_tests_properties(VisionRTXPTGIReservoirTests PROPERTIES LABELS "cpu;vision;restir" SKIP_RETURN_CODE 77 TIMEOUT 60)
+add_test(NAME VisionReSTIRGIReservoirTests
+    COMMAND ${Python_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_restir_gi_native_math.py)
+set_tests_properties(VisionReSTIRGIReservoirTests PROPERTIES LABELS "cpu;vision;restir" SKIP_RETURN_CODE 77 TIMEOUT 60)
 
 
 add_executable(corona_vision_render_mode_config_tests

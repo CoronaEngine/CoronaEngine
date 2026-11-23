@@ -6,17 +6,7 @@
 #include "base/mgr/geometry.h"
 #include "ast/function.h"
 
-/*
- * Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
- * NVIDIA CORPORATION and its licensors retain all intellectual property
- * and proprietary rights in and to this software, related documentation
- * and any modifications thereto. Any use, reproduction, disclosure or
- * distribution of this software and related documentation without an express
- * license agreement from NVIDIA CORPORATION is strictly prohibited.
- * See LICENSE-RTXPT.txt for the original source license.
- */
-
-namespace vision::rtxpt_gi {
+namespace vision::restir_gi {
 // Native RtxdiBridgeUserSettings::rayEpsilon is 1e-4f in the measured source;
 // the benchmark driver does not override it. This is an absolute distance.
 inline constexpr float NativeRayEpsilon = 1e-4f;
@@ -74,9 +64,8 @@ inline constexpr float NativeMaxRayTravel = 1e15f; // matched Config.h
 
 // GI-only alpha traversal on the renderer's closest-hit API. Each rejected
 // alpha triangle advances TMin by one representable distance; accepted opaque
-// geometry remains in the shared acceleration structure. The ordinary tracing
-// entry points are unchanged. Native RTXPT performs the same alpha predicate
-// inside one RayQuery; this adapter can restart traversal for a rejected hit.
+// geometry remains in the shared acceleration structure. This adapter restarts
+// traversal after a rejected hit.
 template<typename MaterialInputs>
 [[nodiscard]] inline TriangleHitVar native_trace_closest(const RayVar &input,
                                                         const MaterialInputs &materials,
@@ -132,4 +121,4 @@ template<typename MaterialInputs>
     return native_trace_closest(ray, materials, swl, true)->is_hit();
 }
 
-}// namespace vision::rtxpt_gi
+}// namespace vision::restir_gi

@@ -53,7 +53,7 @@ struct Capture {
 };
 struct Counters{struct{uint y=0,z=0;}path;};
 struct HitContext{Counters*work_counters=nullptr;Interaction*it=nullptr;Capture*path_capture=nullptr;
-    bool rtxpt_sampling=false,restir_direct_split=true;Float3*Ld=nullptr,*bypass=nullptr;};
+    bool restir_gi_sampling=false,restir_direct_split=true;Float3*Ld=nullptr,*bypass=nullptr;};
 struct LightSampleContext{Float3 pos,ng;};
 struct LightEval{SampledSpectrum L=SampledSpectrum{7.f};float pdf=.25f;};
 struct LightSampler{LightSampler*operator->(){return this;}LightEval evaluate_hit_wi(LightSampleContext,const Interaction&,int){return{};}};
@@ -214,7 +214,7 @@ int main(){try{
 
 
 def test_actual_gi_emission_callback_counts_represented_energy_once_and_preserves_suffix():
-    source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/rtxpt_gi.cpp').read_text(encoding='utf-8-sig')
+    source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/restir_gi.cpp').read_text(encoding='utf-8-sig')
     declaration, implementation = body(source, 'capture.on_emission =')
     callback = declaration + implementation + ';'
     helpers = []
@@ -222,7 +222,7 @@ def test_actual_gi_emission_callback_counts_represented_energy_once_and_preserve
     for signature in ('Bool gi_prefix_stable_emission_allowed(', 'Bool gi_prefix_emission_represented('):
         declaration, implementation = body(source, signature)
         helpers.append(declaration + implementation)
-    terminal_source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/rtxpt_gi_prefix_storage.h').read_text(encoding='utf-8-sig')
+    terminal_source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/restir_gi_prefix_storage.h').read_text(encoding='utf-8-sig')
     terminal_helpers = [line for line in terminal_source.splitlines()
                         if line.startswith('constexpr uint PtPrefix')]
     for signature in ('Uint pt_prefix_depth(', 'Bool pt_prefix_ideal_path(', 'void pt_prefix_store_controls('):
@@ -245,14 +245,14 @@ template<class T>T as(Uint2 v){return{std::bit_cast<float>(v.x),std::bit_cast<fl
 struct HitWords{uint x=7,y=8,z=std::bit_cast<uint>(.25f),w=std::bit_cast<uint>(.5f);Uint2 zw()const{return{z,w};}};
 struct Float4{Float3 direction=make_float3(0,0,-1);float w=3;Float3 xyz()const{return direction;}};
 struct Node{HitWords hit_words;Float4 direction_vertex;struct{uint w{};}interiors_branch;};
-using RtxptGIPrefixPlaneVar=Node;
+using ReSTIRGIPrefixPlaneVar=Node;
 struct Storage{std::array<Node,3>nodes;Node read(uint i)const{return nodes[i];}};
 struct TriangleHitVar{
     uint inst_id=7,prim_id=8;Float2 bary{.25f,.5f};
     const TriangleHitVar*operator->()const{return this;}bool is_miss()const{return prim_id==InvalidUI32;}bool is_hit()const{return!is_miss();}
 };
-namespace rtxpt_gi{constexpr uint PrefixInvalid=~0u,PrefixQueued=~1u;}
-namespace rtxpt_gi{__TERMINAL_HELPERS__}
+namespace restir_gi{constexpr uint PrefixInvalid=~0u,PrefixQueued=~1u;}
+namespace restir_gi{__TERMINAL_HELPERS__}
 struct Capture{float suffix_Lo=11;bool first_reflection_covered_by_di=true;
     std::function<void(const TriangleHitVar&,const Float3&,const Uint&,const Float3&,const Float3&)>on_emission;};
 void require(bool v,const char*m){if(!v)throw std::runtime_error(m);}
@@ -261,7 +261,7 @@ void require(bool v,const char*m){if(!v)throw std::runtime_error(m);}
 int main(){try{
     Capture capture;Storage storage;std::array<uint,3>header{1,21,6};
     for(uint p=0u;p<3u;++p)
-        rtxpt_gi::pt_prefix_store_controls(storage.nodes[p],p==0u?1u:p==2u?2u:3u,false,true);
+        restir_gi::pt_prefix_store_controls(storage.nodes[p],p==0u?1u:p==2u?2u:3u,false,true);
     bool ideal_prefix=true,sampled_stable_event=false;uint sampled_branch=21;
     Float3 sampled_stable=make_float3(0);
     __CALLBACK__
@@ -277,10 +277,10 @@ int main(){try{
     reset();sampled_branch=22;emit();require(sampled_stable.x==0,"pruned branch removed");
     reset();sampled_branch=21;hit.prim_id=9;emit();require(sampled_stable.x==0,"wrong terminal identity accepted");hit.prim_id=8;
     reset();ideal_prefix=false;emit();require(sampled_stable.x==0&&capture.suffix_Lo==11,"opaque/stochastic suffix capture changed");ideal_prefix=true;
-    reset();rtxpt_gi::pt_prefix_store_controls(storage.nodes[1],3u,false,false);emit();require(sampled_stable.x==0,"non-ideal producer path accepted");rtxpt_gi::pt_prefix_store_controls(storage.nodes[1],3u,false,true);
-    reset();header={1,85,86};for(uint p:{1u,2u})rtxpt_gi::pt_prefix_store_controls(storage.nodes[p],4u,false,true);
+    reset();restir_gi::pt_prefix_store_controls(storage.nodes[1],3u,false,false);emit();require(sampled_stable.x==0,"non-ideal producer path accepted");restir_gi::pt_prefix_store_controls(storage.nodes[1],3u,false,true);
+    reset();header={1,85,86};for(uint p:{1u,2u})restir_gi::pt_prefix_store_controls(storage.nodes[p],4u,false,true);
     emit();require(sampled_stable.x==7&&sampled_stable_event,"shared ancestor emission counted twice");
-    reset();header={1,21,6};rtxpt_gi::pt_prefix_store_controls(storage.nodes[1],3u,false,true);
+    reset();header={1,21,6};restir_gi::pt_prefix_store_controls(storage.nodes[1],3u,false,true);
     hit.inst_id=hit.prim_id=storage.nodes[1].hit_words.x=storage.nodes[1].hit_words.y=InvalidUI32;
     emit();require(sampled_stable.x==7,"represented environment miss missing");
     std::cout<<"PASS actual callback hit/miss, direct exclusion, pruning, identity, suffix isolation and shared-ancestor exact-once capture\n";

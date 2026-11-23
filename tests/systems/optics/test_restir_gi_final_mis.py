@@ -13,7 +13,7 @@ import pytest
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'vision/src').is_dir())
 BASE = ROOT / 'vision/src/render_core/integrator/ReSTIR'
-TEMP = ROOT / '.workspace/tmp/rtxpt-gi-signal-mis-20261115/mis'
+TEMP = ROOT / '.workspace/tmp/restir-gi-signal-mis-20261115/mis'
 
 
 def _function(source, marker):
@@ -63,11 +63,11 @@ void near(float actual,double expected,const char*message,double eps=2e-6){
     }
 }
 void require(bool okay,const char*message){if(!okay)throw std::runtime_error(message);}
-namespace vision::rtxpt_gi{
+namespace vision::restir_gi{
 __MIS_HELPERS__
 bool native_occluded(auto&&...){return false;}
 }
-namespace rtxpt_gi=vision::rtxpt_gi;
+namespace restir_gi=vision::restir_gi;
 namespace gi_principled{
 __MATERIAL_FLAGS__
 }
@@ -104,11 +104,11 @@ struct Surface{
         return direction.x>.5f?fresh_rough:selected_rough;
     }
 };
-struct Params{uint rtxpt_final_visibility{},rtxpt_final_mis{1};};
+struct Params{uint restir_gi_final_visibility{},restir_gi_final_mis{1};};
 struct Result{Float3 diffuse,specular;float distance;};
 struct FinalShading{
     SampledWavelengths sampled_wavelengths()const{return{};}
-    int rtxpt_materials()const{return 0;}
+    int restir_gi_materials()const{return 0;}
     Result combine_production(Surface surface,Reservoir selected,Reservoir fresh,Params param={})const{
         Interaction it;float hit_distance=0;
 __FINAL_COMBINATION__
@@ -134,7 +134,7 @@ void final_test(const std::string&which){
         surface.selected_rough=surface.fresh_rough=make_float3(0);
     }else if(which=="sharp"){
         surface.selected_rough=surface.fresh_rough=make_float3(0);
-    }else if(which=="off")param.rtxpt_final_mis=0;
+    }else if(which=="off")param.restir_gi_final_mis=0;
     auto r=FinalShading{}.combine_production(surface,selected,fresh,param);
     if(which=="lambert"){
         near(r.diffuse.x,1.31875,"equal true/rough final diffuse must use 7/8 reused plus 1/8 fresh");
@@ -189,11 +189,11 @@ int main(int argc,char**argv){try{
 
 @lru_cache(maxsize=1)
 def _binary():
-    source = (BASE / 'rtxpt_gi.cpp').read_text(encoding='utf-8-sig')
-    pt = (BASE / 'rtxpt_gi_pt.h').read_text(encoding='utf-8-sig')
+    source = (BASE / 'restir_gi.cpp').read_text(encoding='utf-8-sig')
+    pt = (BASE / 'restir_gi_pt.h').read_text(encoding='utf-8-sig')
     material = (ROOT / 'vision/src/base/scattering/gi_principled_parameters.h').read_text(encoding='utf-8-sig')
     flags = '\n'.join(line for line in material.splitlines() if line.startswith('inline constexpr uint '))
-    start = source.index('Float3 direction = normalize(', source.index('void RtxptGI::compile_final()'))
+    start = source.index('Float3 direction = normalize(', source.index('void ReSTIRGI::compile_final()'))
     end = source.index('Float3 prefix =', start)
     helpers = '\n'.join(_function(source, name) for name in ('Float luminance_legacy(', 'Float mis_initial_weight('))
     rough = _function(pt, '[[nodiscard]] Float3 f_roughness_clamp(')

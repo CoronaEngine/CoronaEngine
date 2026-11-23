@@ -7,7 +7,7 @@
 #include <fstream>
 #include <stdexcept>
 
-namespace vision::rtxpt_gi {
+namespace vision::restir_gi {
 static_assert(sizeof(reblur::Guide) == 80u && offsetof(reblur::Guide, identity) == 16u);
 // Explicit debug readback only. Views refer to live producer or filtered data;
 // caller chooses the stage after all queued writers. No renderer state changes.
@@ -102,4 +102,4 @@ inline void download_native_reblur_diagnostics(Device &device, Stream &stream,
     metadata.close();
     if (!metadata) throw std::runtime_error("Native REBLUR diagnostic metadata write failed");
 }
-}// namespace vision::rtxpt_gi
+}// namespace vision::restir_gi

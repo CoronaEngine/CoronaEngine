@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rtxpt_gi_denoiser_diagnostic.h"
+#include "restir_gi_denoiser_diagnostic.h"
 #include "di_radiance.h"
 #include "render_core/integrator/restir_di/reservoir.h"
 #include "base/mgr/global.h"
@@ -8,21 +8,21 @@
 #include <cstdlib>
 
 namespace vision {
-struct RtxptGIShadowDiagnostic {
+struct ReSTIRGIShadowDiagnostic {
     array<float4, 14> values{};
     array<uint4, 4> ids{};
 };
-struct RtxptGIEnvironmentDiagnostic {
+struct ReSTIRGIEnvironmentDiagnostic {
     array<float4, 6> values{};
     uint4 identity{};
 };
-static_assert(sizeof(RtxptGIShadowDiagnostic) == 288u);
-static_assert(sizeof(RtxptGIEnvironmentDiagnostic) == 112u);
+static_assert(sizeof(ReSTIRGIShadowDiagnostic) == 288u);
+static_assert(sizeof(ReSTIRGIEnvironmentDiagnostic) == 112u);
 }
-OC_STRUCT(vision, RtxptGIShadowDiagnostic, values, ids) {};
-OC_STRUCT(vision, RtxptGIEnvironmentDiagnostic, values, identity) {};
+OC_STRUCT(vision, ReSTIRGIShadowDiagnostic, values, ids) {};
+OC_STRUCT(vision, ReSTIRGIEnvironmentDiagnostic, values, identity) {};
 
-namespace vision::rtxpt_gi {
+namespace vision::restir_gi {
 // Opt-in observation of already finalized ReSTIR DI samples. Only diagnostic
 // buffers are written; the existing reservoirs, rays and radiance stay read-only.
 inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuffer &fb,
@@ -74,7 +74,7 @@ inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuf
     const uint count = uint(indices.size()), pixels = size.x * size.y;
     auto index_buffer = device.create_buffer<uint>(count);
     auto primitive_buffer = device.create_buffer<uint4>(primitives.size());
-    auto output = device.create_buffer<RtxptGIShadowDiagnostic>(count);
+    auto output = device.create_buffer<ReSTIRGIShadowDiagnostic>(count);
     const uint slice = 1u + (frame & 1u);
     auto &geo = Toolkit::geometry();
     auto &spec = Toolkit::spectrum();
@@ -85,7 +85,7 @@ inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuf
         Uint sample_index = dispatch_id();
         Uint index = index_buffer.read(sample_index);
         Uint2 pixel = make_uint2(index % size.x, index / size.x);
-        RtxptGIShadowDiagnosticVar row;
+        ReSTIRGIShadowDiagnosticVar row;
         for (uint i = 0u; i < 14u; ++i) row.values[i] = make_float4(0.f);
         for (uint i = 0u; i < 4u; ++i) row.ids[i] = make_uint4(InvalidUI32);
         row.values[7u] = direct.read_radiance(index);
@@ -199,8 +199,8 @@ inline void download_shadow_diagnostics(Device &device, Stream &stream, FrameBuf
     };
     kernel.function()->set_block_dim(64u, 1u, 1u);
     OC_INFO("GI shadow diagnostic: witness kernel recorded");
-    auto shader = device.compile(kernel, "RTXPT GI read-only ReSTIR DI shadow witness");
-    vector<RtxptGIShadowDiagnostic> host(count);
+    auto shader = device.compile(kernel, "ReSTIR GI read-only ReSTIR DI shadow witness");
+    vector<ReSTIRGIShadowDiagnostic> host(count);
     stream << index_buffer.upload(indices.data()) << primitive_buffer.upload(primitives.data())
            << shader().dispatch(count) << output.download(host.data()) << synchronize() << ocarina::commit();
     const auto write = [&](const char *name, const auto &data) {
@@ -328,7 +328,7 @@ inline void download_environment_diagnostics(Device &device, Stream &stream, Fra
     auto full_mean = device.create_buffer<float4>(pixels);
     auto full_second = device.create_buffer<float4>(pixels);
     auto index_buffer = device.create_buffer<uint>(count);
-    auto sparse = device.create_buffer<RtxptGIEnvironmentDiagnostic>(count);
+    auto sparse = device.create_buffer<ReSTIRGIEnvironmentDiagnostic>(count);
     Kernel full_kernel = [&] {
         Function::current()->require_ray_query_compute_workgroups();
         Uint index = dispatch_id();
@@ -363,11 +363,11 @@ inline void download_environment_diagnostics(Device &device, Stream &stream, Fra
         full_second.write(index, make_float4(square, solar_count / float(full_samples)));
     };
     full_kernel.function()->set_block_dim(64u, 1u, 1u);
-    auto full_shader = device.compile(full_kernel, "RTXPT GI read-only environment importance 64spp oracle");
+    auto full_shader = device.compile(full_kernel, "ReSTIR GI read-only environment importance 64spp oracle");
     Kernel sparse_kernel = [&] {
         Function::current()->require_ray_query_compute_workgroups();
         Uint sample_index = dispatch_id(), index = index_buffer.read(sample_index);
-        RtxptGIEnvironmentDiagnosticVar row;
+        ReSTIRGIEnvironmentDiagnosticVar row;
         for (uint i = 0u; i < 6u; ++i) row.values[i] = make_float4(0.f);
         row.identity = make_uint4(InvalidUI32);
         auto hit = fb.cur_visibility_buffer_var(frame).read(index);
@@ -405,9 +405,9 @@ inline void download_environment_diagnostics(Device &device, Stream &stream, Fra
         sparse.write(sample_index, row);
     };
     sparse_kernel.function()->set_block_dim(64u, 1u, 1u);
-    auto sparse_shader = device.compile(sparse_kernel, "RTXPT GI read-only uniform versus importance 4096spp oracle");
+    auto sparse_shader = device.compile(sparse_kernel, "ReSTIR GI read-only uniform versus importance 4096spp oracle");
     vector<float4> host_mean(pixels), host_second(pixels);
-    vector<RtxptGIEnvironmentDiagnostic> host_sparse(count);
+    vector<ReSTIRGIEnvironmentDiagnostic> host_sparse(count);
     stream << index_buffer.upload(indices.data()) << full_shader().dispatch(pixels)
            << sparse_shader().dispatch(count) << full_mean.download(host_mean.data())
            << full_second.download(host_second.data()) << sparse.download(host_sparse.data())
@@ -436,4 +436,4 @@ inline void download_environment_diagnostics(Device &device, Stream &stream, Fra
            "\"scope\":\"read-only diagnostic, original renderer image and NEE1/1 unchanged\"}\n";
     if (!metadata) throw std::runtime_error("GI environment diagnostic metadata write failed");
 }
-}// namespace vision::rtxpt_gi
+}// namespace vision::restir_gi

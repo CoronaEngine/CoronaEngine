@@ -1,18 +1,18 @@
 #pragma once
 
-#include "rtxpt_gi_shadow_diagnostic.h"
+#include "restir_gi_shadow_diagnostic.h"
 #include "base/scattering/gi_principled_parameters.h"
 
 namespace vision {
-struct RtxptGIPrimaryLightDiagnostic {
+struct ReSTIRGIPrimaryLightDiagnostic {
     array<float4, 18> values{};
     array<uint4, 5> ids{};
 };
-static_assert(sizeof(RtxptGIPrimaryLightDiagnostic) == 368u);
+static_assert(sizeof(ReSTIRGIPrimaryLightDiagnostic) == 368u);
 }
-OC_STRUCT(vision, RtxptGIPrimaryLightDiagnostic, values, ids) {};
+OC_STRUCT(vision, ReSTIRGIPrimaryLightDiagnostic, values, ids) {};
 
-namespace vision::rtxpt_gi {
+namespace vision::restir_gi {
 [[nodiscard]] inline bool primary_light_diagnostic_enabled() noexcept {
     const char *enabled = std::getenv("VISION_GI_PRIMARY_LIGHT_DIAGNOSTIC");
     return enabled && enabled[0] == '1';
@@ -38,14 +38,14 @@ inline void download_primary_light_diagnostics(Device &device, Stream &stream, F
     Buffer<uint4> positions{position_storage.view_as<uint4>()};
     Buffer<uint2> normals{normal_storage.view_as<uint2>()};
     auto index_buffer = device.create_buffer<uint>(count);
-    auto output = device.create_buffer<RtxptGIPrimaryLightDiagnostic>(count);
+    auto output = device.create_buffer<ReSTIRGIPrimaryLightDiagnostic>(count);
     auto &geo = Toolkit::geometry();
     auto &lights = Toolkit::renderer().light_sampler();
     const bool has_environment = lights->env_light() != nullptr;
     Kernel kernel = [&] {
         Function::current()->require_ray_query_compute_workgroups();
         Uint sample_index = dispatch_id(), index = index_buffer.read(sample_index);
-        RtxptGIPrimaryLightDiagnosticVar row;
+        ReSTIRGIPrimaryLightDiagnosticVar row;
         for (uint i = 0u; i < 18u; ++i) row.values[i] = make_float4(0.f);
         for (uint i = 0u; i < 5u; ++i) row.ids[i] = make_uint4(InvalidUI32);
         row.ids[1u] = make_uint4(0u);
@@ -136,7 +136,7 @@ inline void download_primary_light_diagnostics(Device &device, Stream &stream, F
         output.write(sample_index, row);
     };
     kernel.function()->set_block_dim(64u, 1u, 1u);
-    auto shader = device.compile(kernel, "RTXPT GI read-only original primary BSDF first-light witness");
+    auto shader = device.compile(kernel, "ReSTIR GI read-only original primary BSDF first-light witness");
     // A separate lexical scope records the GI evaluator's actual flags without
     // changing the ordinary evaluator used above or any existing shaders.
     Kernel gi_kernel = [&] {
@@ -164,8 +164,8 @@ inline void download_primary_light_diagnostics(Device &device, Stream &stream, F
         output.write(sample_index, row);
     };
     gi_kernel.function()->set_block_dim(64u, 1u, 1u);
-    auto gi_shader = device.compile(gi_kernel, "RTXPT GI read-only primary material flags witness");
-    vector<RtxptGIPrimaryLightDiagnostic> host(count);
+    auto gi_shader = device.compile(gi_kernel, "ReSTIR GI read-only primary material flags witness");
+    vector<ReSTIRGIPrimaryLightDiagnostic> host(count);
     stream << index_buffer.upload(indices.data()) << shader().dispatch(count) << gi_shader().dispatch(count)
            << output.download(host.data()) << synchronize() << ocarina::commit();
     const auto write = [&](const char *name, const auto &data) {
@@ -196,4 +196,4 @@ inline void download_primary_light_diagnostics(Device &device, Stream &stream, F
     if (!metadata) throw std::runtime_error("GI primary light diagnostic metadata write failed");
     OC_INFO_FORMAT("GI primary light diagnostic: downloaded {} original proposal witnesses", count);
 }
-}// namespace vision::rtxpt_gi
+}// namespace vision::restir_gi

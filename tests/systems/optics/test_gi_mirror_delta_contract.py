@@ -245,7 +245,7 @@ int main(){
 
 
 def test_actual_rough_mis_surrogate_clears_ideal_metal_without_changing_true_material():
-    source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/rtxpt_gi_pt.h').read_text(encoding='utf-8-sig')
+    source = (ROOT / 'vision/src/render_core/integrator/ReSTIR/restir_gi_pt.h').read_text(encoding='utf-8-sig')
     declaration, implementation = body(source, 'Float3 f_roughness_clamp(')
     shim = r'''
 #include <bit>

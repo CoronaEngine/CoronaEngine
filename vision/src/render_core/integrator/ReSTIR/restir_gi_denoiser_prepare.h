@@ -1,10 +1,10 @@
 #pragma once
 
-#include "rtxpt_gi_prefix_storage.h"
+#include "restir_gi_prefix_storage.h"
 
-namespace vision::rtxpt_gi {
-// RTXPT PostProcess.hlsl ComputeDisocclusionRelaxation. Only the register Guide
-// is changed. Prefix/header records remain immutable for all neighbor readers.
+namespace vision::restir_gi {
+// Apply disocclusion relaxation to the local guide so neighboring pixels
+// can read the original prefix and header records.
 template<typename Planes, typename Headers>
 inline void condition_native_reblur_guide(const Planes &planes, const Headers &headers,
                                           reblur::GuideVar &guide, const Float3 &terminal_direction,
@@ -60,4 +60,4 @@ template<typename Planes, typename Headers, typename MotionY, typename MaterialI
     };
     return guide;
 }
-}// namespace vision::rtxpt_gi
+}// namespace vision::restir_gi

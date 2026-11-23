@@ -1,4 +1,4 @@
-#include "rtxpt_gi_lights.h"
+#include "restir_gi_lights.h"
 #include "base/scattering/half_storage.h"
 #include <algorithm>
 #include <array>
@@ -7,7 +7,7 @@
 #include <fstream>
 #include <stdexcept>
 
-namespace vision::rtxpt_gi {
+namespace vision::restir_gi {
 using namespace ocarina;
 namespace {
 constexpr uint cube_dim = 2048u;
@@ -26,37 +26,37 @@ uint mip_offset(uint dim, uint mip, uint faces = 1u) noexcept {
 
 void NativeLightSampler::prepare() {
     if (spectrum()->impl_type() != "srgb")
-        throw std::runtime_error("RTXPT GI native lighting currently requires the RGB spectrum");
-    if (const char *value = std::getenv("VISION_RTXPT_GI_LIGHT_FEEDBACK"))
+        throw std::runtime_error("ReSTIR GI native lighting currently requires the RGB spectrum");
+    if (const char *value = std::getenv("VISION_RESTIR_GI_LIGHT_FEEDBACK"))
         feedback_enabled_ = std::atoi(value) != 0;
     size_t triangle_count = 0u;
     for (const auto &shape : scene().instances()) {
         if (!shape->has_emission()) continue;
         const auto *light = shape->emission().get();
         if (light->impl_type() != "area" || light->source_desc()["two_sided"].as_bool(false))
-            throw std::runtime_error("RTXPT GI native light table requires one-sided triangle emitters");
+            throw std::runtime_error("ReSTIR GI native light table requires one-sided triangle emitters");
         triangle_count += shape->mesh()->triangles().size();
     }
     for (const auto &light : scene().light_manager().lights())
         if (!light->match(LightType::Area) && !light->match(LightType::Infinite))
-            throw std::runtime_error("RTXPT GI native light table does not yet support analytic lights");
+            throw std::runtime_error("ReSTIR GI native light table does not yet support analytic lights");
     if (triangle_count >= native_max_lights - env_nodes)
-        throw std::runtime_error("RTXPT GI native light count exceeds the matched native light table limit");
+        throw std::runtime_error("ReSTIR GI native light count exceeds the matched native light table limit");
     triangle_count_ = uint(triangle_count);
     light_count_ = env_nodes + triangle_count_;
 
-    lights_ = device().create_buffer<uint4>(size_t(light_count_) * 2u, "RTXPT GI native PolymorphicLightInfo32");
-    environment_nodes_ = device().create_buffer<uint4>(env_nodes + env_dim * env_dim, "RTXPT GI native environment quads and direction lookup");
+    lights_ = device().create_buffer<uint4>(size_t(light_count_) * 2u, "ReSTIR GI native PolymorphicLightInfo32");
+    environment_nodes_ = device().create_buffer<uint4>(env_nodes + env_dim * env_dim, "ReSTIR GI native environment quads and direction lookup");
     const uint env_texels = mip_offset(env_dim, 11u);
-    environment_mips_ = device().create_buffer<float4>(env_texels, "RTXPT GI native equal-area radiance/importance mips");
+    environment_mips_ = device().create_buffer<float4>(env_texels, "ReSTIR GI native equal-area radiance/importance mips");
     environment_cube_ = device().create_buffer<uint2>(mip_offset(cube_dim, cube_mip_count, 6u),
-                                                     "RTXPT GI native 2048 cube half4 mip0-2");
+                                                     "ReSTIR GI native 2048 cube half4 mip0-2");
     const uint proxy_capacity = 8u * std::max(light_count_, native_max_lights / 20u) + light_count_;
-    proxy_indices_ = device().create_buffer<uint>(proxy_capacity, "RTXPT GI native global proxy indices");
-    proxy_counts_ = device().create_buffer<uint>(light_count_, "RTXPT GI native global proxy counts");
-    control_ = device().create_buffer<uint>(8u, "RTXPT GI native global control");
+    proxy_indices_ = device().create_buffer<uint>(proxy_capacity, "ReSTIR GI native global proxy indices");
+    proxy_counts_ = device().create_buffer<uint>(light_count_, "ReSTIR GI native global proxy counts");
+    control_ = device().create_buffer<uint>(8u, "ReSTIR GI native global control");
     update_resolution(pipeline()->resolution());
-    OC_INFO_FORMAT("RTXPT GI native lights: {} env quad slots, {} emitter triangles", env_nodes, triangle_count_);
+    OC_INFO_FORMAT("ReSTIR GI native lights: {} env quad slots, {} emitter triangles", env_nodes, triangle_count_);
 }
 
 void NativeLightSampler::update_resolution(uint2 resolution) noexcept {
@@ -127,4 +127,4 @@ void NativeLightSampler::download_validation(const fs::path &directory) const {
     std::ofstream file(directory / "summary.json");
     file << summary.dump(2);
 }
-}// namespace vision::rtxpt_gi
+}// namespace vision::restir_gi

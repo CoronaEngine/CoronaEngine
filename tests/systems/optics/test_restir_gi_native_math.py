@@ -1,4 +1,4 @@
-"""Analytical CPU checks of the production RTXPT ReSTIR GI DSL math.
+"""Analytical CPU checks of the production ReSTIR GI DSL math.
 
 The renderer/GPU is never built or launched. The real helper definitions are
 compiled with scalar float/vector shims, then checked against transport, ABI,
@@ -13,7 +13,7 @@ from unittest import SkipTest
 from _restir_cpu import body
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'vision/src').is_dir())
-HEADER = ROOT / 'vision/src/render_core/integrator/ReSTIR/rtxpt_gi.h'
+HEADER = ROOT / 'vision/src/render_core/integrator/ReSTIR/restir_gi.h'
 SOURCE = HEADER.with_suffix('.cpp')
 TEMP = ROOT / '.workspace/tmp/rtxpt-corona-dsl-20261108/native-math-tests'
 
@@ -84,10 +84,10 @@ struct SurfacePoint {
 struct GISample {SurfacePoint sp;Values3 Lo;float age{};};
 __STORAGE__
 __RESERVOIR__
-using RtxptGIStorageVar=RtxptGIStorage;using RtxptGIReservoirVar=RtxptGIReservoir;
+using ReSTIRGIStorageVar=ReSTIRGIStorage;using ReSTIRGIReservoirVar=ReSTIRGIReservoir;
 }
 __PRODUCTION_HELPERS__
-using namespace vision;using namespace vision::rtxpt_gi;
+using namespace vision;using namespace vision::restir_gi;
 void require(bool value,const char*message){if(!value)throw std::runtime_error(message);}
 void near(float actual,double expected,double absolute,const char*message){
     if(!std::isfinite(actual)||std::abs(double(actual)-expected)>absolute){
@@ -96,12 +96,12 @@ void near(float actual,double expected,double absolute,const char*message){
     }
 }
 uint bits(float v){return std::bit_cast<uint>(v);}
-RtxptGIReservoir source(float lo=1,float pdf=1,uint mass=1){
-    RtxptGIReservoir r;r.M=mass;r.weight=1;r.sample.Lo.set(make_float3(lo/pdf));
+ReSTIRGIReservoir source(float lo=1,float pdf=1,uint mass=1){
+    ReSTIRGIReservoir r;r.M=mass;r.weight=1;r.sample.Lo.set(make_float3(lo/pdf));
     r.sample.sp.pos.set({0,0,2});r.sample.sp.ng.set({0,0,-1});return r;
 }
 void codec_test(){
-    static_assert(sizeof(RtxptGIStorage)==32,"native reservoir bandwidth ABI");
+    static_assert(sizeof(ReSTIRGIStorage)==32,"native reservoir bandwidth ABI");
     require(encode_radiance(make_float3(0))==0,"black must pack exactly zero");
     require(encode_radiance(make_float3(1e-8f))==0,"below native HDR range must pack black");
     auto black=decode_radiance(0);require(black.x==0&&black.y==0&&black.z==0,"black must decode exactly zero");
@@ -124,7 +124,7 @@ void codec_test(){
     require(packed.words[7]==0,"native unused word must remain zero");
     require(bits(v.weight)==bits(r.weight),"reservoir weight must preserve raw float bits");
     for(uint i=0;i<3;++i)require(bits(v.sample.sp.pos[i])==bits(r.sample.sp.pos[i]),"secondary position must preserve raw float bits");
-    RtxptGIReservoir empty;auto e=unpack(pack(empty));
+    ReSTIRGIReservoir empty;auto e=unpack(pack(empty));
     require(e.M==0&&e.weight==0,"invalidity is M0, not the decoded normal sentinel");
     require(encode_normal({0,0,1})==0,"native +Z oct normal must encode zero");
     auto z=decode_normal(0);near(z.z,1,1e-7,"native zero encoded normal means +Z");
@@ -157,9 +157,9 @@ void jacobian_test(){
     std::cout<<"PASS jacobian: planar/off-axis geometry, reciprocity, scale, degeneracy and acceptance\n";
 }
 void gain_test(){
-    // For cosine proposals, F=rho*p. RTXPT embeds 1/p only in Lbar;
+    // For cosine proposals, F=rho*p. ReSTIR GI embeds 1/p only in Lbar;
     // the physical contribution rho*Lo must not depend on proposal density.
-    RtxptGIReservoir combined;float target=0;uint total=0;constexpr float rho=.7f,Lo=2.f;
+    ReSTIRGIReservoir combined;float target=0;uint total=0;constexpr float rho=.7f,Lo=2.f;
     for(uint i=0;i<16;++i){
         const float pdf=.002f+.019f*float(i);auto v=source(Lo,pdf,1u+i%3);
         v.sample.sp.pos[0]=float(i);v.age=i;const float F=rho*pdf;
@@ -170,7 +170,7 @@ void gain_test(){
     finalize(combined,1.f,target*float(combined.M));
     near(combined.weight*target,rho*Lo,5e-7,"constant transport gain depends on candidate PDF or stream count");
     // A black realization still consumes one sample in the Monte Carlo average.
-    RtxptGIReservoir masked;auto bright=source(Lo,.2f);float bright_target=rho*.2f*bright.sample.Lo.as_vec3().x;
+    ReSTIRGIReservoir masked;auto bright=source(Lo,.2f);float bright_target=rho*.2f*bright.sample.Lo.as_vec3().x;
     combine(masked,bright,.5f,bright_target);
     auto black=source(0,.2f);for(uint i=0;i<3;++i)combine(masked,black,.5f,0.f);
     require(masked.M==4,"black M1 candidates must not be dropped");
@@ -178,20 +178,20 @@ void gain_test(){
     near(masked.weight*bright_target,rho*Lo/4,2e-7,"black stream mass was lost from normalization");
     // Native basic correction depends on the selected source's target, not
     // automatically on the center receiver target (a common erroneous gain).
-    RtxptGIReservoir a=source(),b=source();a.sample.sp.pos[0]=1;b.sample.sp.pos[0]=2;b.M=2;b.weight=4;
+    ReSTIRGIReservoir a=source(),b=source();a.sample.sp.pos[0]=1;b.sample.sp.pos[0]=2;b.M=2;b.weight=4;
     for(bool choose_b:{false,true}){
-        RtxptGIReservoir r;combine(r,a,.5f,2.f);combine(r,b,choose_b?0.f:.9999f,3.f);
+        ReSTIRGIReservoir r;combine(r,a,.5f,2.f);combine(r,b,choose_b?0.f:.9999f,3.f);
         const float selected_target=choose_b?3.f:2.f;
         const float source_target=choose_b?5.f:2.f;
         const float pi_sum=choose_b?13.f:16.f;
         finalize(r,source_target,selected_target*pi_sum);
         near(r.weight*selected_target,choose_b?10.:3.25,2e-6,"basic correction selected-source gain");
     }
-    RtxptGIReservoir pooled=source();pooled.weight=1;
+    ReSTIRGIReservoir pooled=source();pooled.weight=1;
     auto donor=source();donor.weight=4;donor.M=2;donor.age=7;donor.sample.sp.pos[0]=99;
     require(combine(pooled,donor,.5f,.125f),"RIS equality boundary must select the incoming sample");
     require(pooled.M==3&&pooled.weight==2&&pooled.age==7&&pooled.sample.sp.pos[0]==99,"RIS must copy selected payload/age while retaining pooled mass/weight");
-    RtxptGIReservoir invalid;invalid.weight=9;finalize(invalid,1,0);near(invalid.weight,0,0,"zero normalization must yield zero weight");
+    ReSTIRGIReservoir invalid;invalid.weight=9;finalize(invalid,1,0);near(invalid.weight,0,0,"zero normalization must yield zero weight");
     std::cout<<"PASS gain: cosine/pdf cancellation, confidence mass, black candidates, selected-source basic correction\n";
 }
 void mis_test(){
@@ -262,7 +262,7 @@ void depth_guide_test(){
     require(!accepts(2.f,true),"specular guide boundary must reject fallback reuse");
     b=a;b.valid=false;
     require(!accepts(2.f,true),"invalid history cannot supply a temporal sample");
-    std::cout<<"PASS RTXPT GI projected depth, receiver normals, materials and private branch gates\n";
+    std::cout<<"PASS ReSTIR GI projected depth, receiver normals, materials and private branch gates\n";
 }
 struct History {
     static constexpr uint InvalidUI32 = ~0u;
@@ -284,7 +284,7 @@ void history_test(){
     require(history.dispatch(6,true,1),"consecutive matching frames must resume temporal reuse");
     history.reset();
     require(!history.dispatch(7,true,1),"explicit reset must clear previously accepted history");
-    std::cout<<"PASS RTXPT GI frame continuity, camera sampling lattice, temporal switch and reset\n";
+    std::cout<<"PASS ReSTIR GI frame continuity, camera sampling lattice, temporal switch and reset\n";
 }
 int main(int argc,char**argv){
     try{
@@ -300,23 +300,23 @@ int main(int argc,char**argv){
 
 @lru_cache(maxsize=1)
 def _binary():
-    assert HEADER.exists() and SOURCE.exists(), 'Production RTXPT GI component is absent'
+    assert HEADER.exists() and SOURCE.exists(), 'Production ReSTIR GI component is absent'
     source = SOURCE.read_text(encoding='utf-8-sig')
-    start = source.index('namespace vision::rtxpt_gi {')
-    end_token = '}// namespace vision::rtxpt_gi'
+    start = source.index('namespace vision::restir_gi {')
+    end_token = '}// namespace vision::restir_gi'
     end = source.index(end_token, start) + len(end_token)
     helpers = source[start:end]
     header = HEADER.read_text(encoding='utf-8-sig')
     program = SHIM.replace('__PRODUCTION_HELPERS__', helpers)
-    program = program.replace('__SIMILAR__', body(source, 'Bool RtxptGI::similar(')[1])
-    dispatch = body(source, 'CommandBatch RtxptGI::dispatch_reuse(')[1]
+    program = program.replace('__SIMILAR__', body(source, 'Bool ReSTIRGI::similar(')[1])
+    dispatch = body(source, 'CommandBatch ReSTIRGI::dispatch_reuse(')[1]
     program = program.replace('__DISPATCH_HISTORY__', dispatch[1:dispatch.index('uint2 padded')])
-    program = program.replace('__RESET_HISTORY__', body(source, 'void RtxptGI::reset_history(')[1])
-    program = program.replace('__STORAGE__', _struct(header, 'RtxptGIStorage'))
-    program = program.replace('__RESERVOIR__', _struct(header, 'RtxptGIReservoir'))
+    program = program.replace('__RESET_HISTORY__', body(source, 'void ReSTIRGI::reset_history(')[1])
+    program = program.replace('__STORAGE__', _struct(header, 'ReSTIRGIStorage'))
+    program = program.replace('__RESERVOIR__', _struct(header, 'ReSTIRGIReservoir'))
     compiler = shutil.which('g++') or shutil.which('clang++')
     if not compiler:
-        raise SkipTest('RTXPT GI analytical CPU tests require g++ or clang++')
+        raise SkipTest('ReSTIR GI analytical CPU tests require g++ or clang++')
     TEMP.mkdir(parents=True, exist_ok=True)
     directory = tempfile.TemporaryDirectory(prefix='production-', dir=TEMP)
     path = Path(directory.name)
@@ -336,26 +336,26 @@ def _run(fixture):
     print(result.stdout.strip())
 
 
-def test_rtxpt_native32_storage_and_hdr_quantization():
+def test_restir_gi_native32_storage_and_hdr_quantization():
     _run('codec')
 
 
-def test_rtxpt_solid_angle_reconnection_geometry():
+def test_restir_gi_solid_angle_reconnection_geometry():
     _run('jacobian')
 
 
-def test_rtxpt_transport_gain_and_black_stream_mass():
+def test_restir_gi_transport_gain_and_black_stream_mass():
     _run('gain')
 
 
-def test_rtxpt_final_mis_partition_and_clamp_boundaries():
+def test_restir_gi_final_mis_partition_and_clamp_boundaries():
     _run('mis')
 
 
-def test_rtxpt_temporal_depth_guide_uses_the_receiver_guide_domain():
+def test_restir_gi_temporal_depth_guide_uses_the_receiver_guide_domain():
     _run('depth')
 
-def test_rtxpt_temporal_lattice_and_reset():
+def test_restir_gi_temporal_lattice_and_reset():
     _run('history')
 
 

@@ -4,10 +4,10 @@
 #include "base/scattering/interaction.h"
 
 namespace vision {
-class RtxptGI;
+class ReSTIRGI;
 }
 
-namespace vision::rtxpt_gi {
+namespace vision::restir_gi {
 struct CandidateTraceResult {
     GISampleVar sample;
     HitBSDFVar proposal;
@@ -27,4 +27,4 @@ struct CandidateTraceResult {
 
 // GI-owned transport output. Shared PT exports unweighted incident Lo; the
 // reservoir owns inverse proposal PDF, and final shading applies current prefix.
-}// namespace vision::rtxpt_gi
+}// namespace vision::restir_gi

@@ -473,11 +473,12 @@ int main(int argc, char **argv) {
         check_restir_gi_depth_one_continuation(*direct_pipeline);
         check_restir_reservoir_lifetimes(*reused_pipeline);
 
-        // These large facing triangles exercise RTXPT GI Fill on secondary hits.
+        // These large facing triangles exercise ReSTIR GI Fill on secondary hits.
         // The rear triangle is behind the camera, so it contributes only through GI.
         write_file(fixture / "bounce.obj",
                    "v -4 -4 1\nv 0 4 1\nv 4 -4 1\nvn 0 0 -1\nf 1//1 2//1 3//1\n");
         auto bounce_scene = scene_description(false, true);
+        bounce_scene["render"]["integrator"]["param"]["indirect"]["backend"] = "restir_gi";
         auto bounce = bounce_scene["scene"]["shapes"][0];
         bounce["param"]["fn"] = "bounce.obj";
         bounce_scene["scene"]["shapes"].push_back(bounce);
@@ -487,7 +488,7 @@ int main(int argc, char **argv) {
         std::cout << "two_plane_gi_mean=" << bounced.mean() << " measured_hit_samples=" << bounced.samples << '\n';
         expect(bounced.samples == 8u * 8u * 8u, "two-plane GI must complete eight frames of 8x8 receiver samples");
         // The known-good renderer produced a mean of 0.205 on this fixture.
-        expect(bounced.mean() > 0.05, "RTXPT GI must return indirect energy from the second surface");
+        expect(bounced.mean() > 0.05, "ReSTIR GI must return indirect energy from the second surface");
         check_populated_gi_restore(*bounce_pipeline);
 
         fs::remove(fixture / "receiver.obj");

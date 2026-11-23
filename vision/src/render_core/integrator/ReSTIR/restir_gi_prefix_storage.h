@@ -1,37 +1,37 @@
 #pragma once
 
 #include "base/using.h"
-#include "rtxpt_gi_denoiser.h"
+#include "restir_gi_denoiser.h"
 
 namespace vision {
-struct RtxptGICameraParam {
+struct ReSTIRGICameraParam {
     array<float4, 8> columns{}; // current world-to-camera, camera-to-raster
 };
 
 // A queued node overlays hit/virtual/flags with its native image transform.
-struct RtxptGIPrefixPlane {
+struct ReSTIRGIPrefixPlane {
     uint4 hit_words{};
     float4 origin_distance{}, direction_vertex{}, throughput_flags{};
     uint4 interiors_branch{}; // PT path: etaScale bits, incoming ideal-path flag, branch, flags
     float4 virtual_position{};
 };
-struct alignas(16) RtxptGIPrefixAux {
+struct alignas(16) ReSTIRGIPrefixAux {
     float4 prefix_throughput_depth{};
     float4 current_virtual_position{};
     float4 previous_virtual_position{};
     uint4 metadata{}; // planeHash, dominant plane, vertex depth, stable branch
     uint2 packed_motion{}; // binary16 XY pixel motion, Z depth motion, W zero
 };
-static_assert(sizeof(RtxptGIPrefixPlane) == 96u);
-static_assert(sizeof(RtxptGIPrefixAux) == 80u);
+static_assert(sizeof(ReSTIRGIPrefixPlane) == 96u);
+static_assert(sizeof(ReSTIRGIPrefixAux) == 80u);
 }
-OC_PARAM_STRUCT(vision, RtxptGICameraParam, columns) {};
-OC_STRUCT(vision, RtxptGIPrefixPlane, hit_words, origin_distance, direction_vertex,
+OC_PARAM_STRUCT(vision, ReSTIRGICameraParam, columns) {};
+OC_STRUCT(vision, ReSTIRGIPrefixPlane, hit_words, origin_distance, direction_vertex,
           throughput_flags, interiors_branch, virtual_position) {};
-OC_STRUCT(vision, RtxptGIPrefixAux, prefix_throughput_depth, current_virtual_position,
+OC_STRUCT(vision, ReSTIRGIPrefixAux, prefix_throughput_depth, current_virtual_position,
           previous_virtual_position, metadata, packed_motion) {};
 
-namespace vision::rtxpt_gi {
+namespace vision::restir_gi {
 constexpr uint PrefixInvalid = 0xffffffffu, PrefixQueued = 0xfffffffeu;
 constexpr uint PrefixDominantBit = 1u << 8u;
 
@@ -43,19 +43,19 @@ constexpr uint PtPrefixIdealPathBit = 1u << 7u;
 constexpr uint PtPrefixControlMask = 0xfcu;
 constexpr uint PtPrefixGuideMask = 0xffff0003u;
 
-[[nodiscard]] inline Uint pt_prefix_depth(const RtxptGIPrefixPlaneVar &node) noexcept {
+[[nodiscard]] inline Uint pt_prefix_depth(const ReSTIRGIPrefixPlaneVar &node) noexcept {
     return (node.interiors_branch.w & PtPrefixDepthMask) >> 2u;
 }
-[[nodiscard]] inline Bool pt_prefix_consumed(const RtxptGIPrefixPlaneVar &node) noexcept {
+[[nodiscard]] inline Bool pt_prefix_consumed(const ReSTIRGIPrefixPlaneVar &node) noexcept {
     return (node.interiors_branch.w & PtPrefixConsumedBit) != 0u;
 }
-[[nodiscard]] inline Bool pt_prefix_ideal_path(const RtxptGIPrefixPlaneVar &node) noexcept {
+[[nodiscard]] inline Bool pt_prefix_ideal_path(const ReSTIRGIPrefixPlaneVar &node) noexcept {
     return (node.interiors_branch.w & PtPrefixIdealPathBit) != 0u;
 }
-[[nodiscard]] inline Bool pt_prefix_guide_valid(const RtxptGIPrefixPlaneVar &node) noexcept {
+[[nodiscard]] inline Bool pt_prefix_guide_valid(const ReSTIRGIPrefixPlaneVar &node) noexcept {
     return (node.interiors_branch.w & 1u) != 0u;
 }
-inline void pt_prefix_store_controls(RtxptGIPrefixPlaneVar &node, const Uint &depth,
+inline void pt_prefix_store_controls(ReSTIRGIPrefixPlaneVar &node, const Uint &depth,
                                      const Bool &consumed, const Bool &ideal_path) noexcept {
     // Build terminates at at most five vertices; the depth remains an exact
     // integer. Always encode transport controls, including without denoising.
@@ -63,7 +63,7 @@ inline void pt_prefix_store_controls(RtxptGIPrefixPlaneVar &node, const Uint &de
         ocarina::select(consumed, PtPrefixConsumedBit, 0u) |
         ocarina::select(ideal_path, PtPrefixIdealPathBit, 0u);
 }
-inline void pt_prefix_store_guide(RtxptGIPrefixPlaneVar &node, const reblur::GuideVar &guide) noexcept {
+inline void pt_prefix_store_guide(ReSTIRGIPrefixPlaneVar &node, const reblur::GuideVar &guide) noexcept {
     node.origin_distance = make_float4(guide.normal_roughness.xyz(), node.origin_distance.w);
     node.direction_vertex = make_float4(node.direction_vertex.xyz(), guide.normal_roughness.w);
     node.throughput_flags = make_float4(guide.diffuse_factor.xyz(), guide.diffuse_factor.w);
@@ -76,7 +76,7 @@ inline void pt_prefix_store_guide(RtxptGIPrefixPlaneVar &node, const reblur::Gui
     node.interiors_branch.w = (node.interiors_branch.w & PtPrefixControlMask) |
         (guide.identity.w & PtPrefixGuideMask);
 }
-[[nodiscard]] inline reblur::GuideVar pt_prefix_decode_guide(const RtxptGIPrefixPlaneVar &node,
+[[nodiscard]] inline reblur::GuideVar pt_prefix_decode_guide(const ReSTIRGIPrefixPlaneVar &node,
                                                             const Uint &branch, const Uint &material,
                                                             const Float &motion_y) noexcept {
     reblur::GuideVar guide;
@@ -100,15 +100,15 @@ inline void pt_prefix_store_guide(RtxptGIPrefixPlaneVar &node, const reblur::Gui
 }
 
 struct PrefixStorage {
-    mutable ocarina::BindlessArrayBuffer<RtxptGIPrefixPlane> planes;
+    mutable ocarina::BindlessArrayBuffer<ReSTIRGIPrefixPlane> planes;
     mutable ocarina::BindlessArrayBuffer<uint4> headers;
     mutable ocarina::BindlessArrayBuffer<float4> stable_radiance;
     Uint pixel_count;
     NativeReblurStorage denoiser;
-    [[nodiscard]] RtxptGIPrefixPlaneVar read(const Uint &plane) const noexcept {
+    [[nodiscard]] ReSTIRGIPrefixPlaneVar read(const Uint &plane) const noexcept {
         return planes.read(plane * pixel_count + dispatch_id());
     }
-    void write(const Uint &plane, const RtxptGIPrefixPlaneVar &value) const noexcept {
+    void write(const Uint &plane, const ReSTIRGIPrefixPlaneVar &value) const noexcept {
         planes.write(plane * pixel_count + dispatch_id(), value);
     }
 };

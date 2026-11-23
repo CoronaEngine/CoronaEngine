@@ -3,16 +3,7 @@
 #include "base/using.h"
 #include "dsl/data/shared_array.h"
 
-/***************************************************************************
- # Copyright (c) 2023-2024, NVIDIA CORPORATION. All rights reserved.
- # NVIDIA CORPORATION and its licensors retain all intellectual property
- # and proprietary rights in and to this software, related documentation
- # and any modifications thereto. Any use, reproduction, disclosure or
- # distribution of this software and related documentation without an express
- # license agreement from NVIDIA CORPORATION is strictly prohibited.
- **************************************************************************/
-
-namespace vision::rtxpt_gi {
+namespace vision::restir_gi {
 
 // Matched native RTXDI 8x8 two-level wave reduction, expressed in typed DSL.
 // All 64 lanes reach both barriers; invalid padded lanes supply zero weight.
@@ -45,4 +36,4 @@ namespace vision::rtxpt_gi {
     Float average = weights.read(0u);
     return weight > average * multiplier;
 }
-}// namespace vision::rtxpt_gi
+}// namespace vision::restir_gi

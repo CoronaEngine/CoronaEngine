@@ -54,7 +54,7 @@ struct RealTimeDenoiseInput {
     // Optional AOS reblur::Guide records supplied by a private transport
     // producer. REBLUR converts them through its usual SOA/NRD pack path.
     BufferView<std::byte> prepared_reblur_guides;
-    // Immutable RTXPT GI terminals decoded into a register Guide by REBLUR.
+    // Immutable ReSTIR GI terminals decoded into a register Guide by REBLUR.
     BufferView<std::byte> prepared_reblur_prefix;
     BufferView<uint4> prepared_reblur_headers;
     BufferView<float> prepared_reblur_motion_y;

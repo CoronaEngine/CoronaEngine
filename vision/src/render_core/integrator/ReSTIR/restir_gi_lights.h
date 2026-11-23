@@ -2,7 +2,7 @@
 
 #include "common.h"
 
-namespace vision::rtxpt_gi {
+namespace vision::restir_gi {
 
 // Validates scene lights and retains the native light-table diagnostic buffers.
 class NativeLightSampler final : private Toolkit {
@@ -18,4 +18,4 @@ public:
     void update_resolution(uint2 resolution) noexcept;
     void download_validation(const fs::path &directory) const;
 };
-}// namespace vision::rtxpt_gi
+}// namespace vision::restir_gi

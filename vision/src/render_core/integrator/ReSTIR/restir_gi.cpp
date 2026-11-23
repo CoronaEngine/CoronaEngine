@@ -1,13 +1,13 @@
-#include "rtxpt_gi.h"
+#include "restir_gi.h"
 #include "denoiser_signals.h"
-#include "rtxpt_gi_boiling.h"
-#include "rtxpt_gi_candidate.h"
-#include "rtxpt_gi_lights.h"
-#include "rtxpt_gi_material_inputs.h"
-#include "rtxpt_gi_prefix_storage.h"
-#include "rtxpt_gi_pt.h"
-#include "rtxpt_gi_rays.h"
-#include "rtxpt_gi_rng.h"
+#include "restir_gi_boiling.h"
+#include "restir_gi_candidate.h"
+#include "restir_gi_lights.h"
+#include "restir_gi_material_inputs.h"
+#include "restir_gi_prefix_storage.h"
+#include "restir_gi_pt.h"
+#include "restir_gi_rays.h"
+#include "restir_gi_rng.h"
 #include "base/integral/integrator.h"
 #include "base/integral/path_work_capture.h"
 #include "base/scattering/gi_ideal_glass.h"
@@ -17,7 +17,7 @@
 #include <fstream>
 #include <iomanip>
 
-namespace vision::rtxpt_gi {
+namespace vision::restir_gi {
 using namespace ocarina;
 
 Uint encode_radiance(const Float3 &rgb) noexcept {
@@ -89,8 +89,8 @@ Float3 decode_normal(const Uint &packed) noexcept {
     return normalize(make_float3(x, y, z));
 }
 
-RtxptGIStorageVar pack(const RtxptGIReservoirVar &r) noexcept {
-    RtxptGIStorageVar result;
+ReSTIRGIStorageVar pack(const ReSTIRGIReservoirVar &r) noexcept {
+    ReSTIRGIStorageVar result;
     for (uint i = 0; i < 3u; ++i) result.words[i] = as<uint>(r.sample.sp.pos[i]);
     result.words[3] = min(r.M, 255u) | (min(r.age, 255u) << 8u);
     result.words[4] = encode_radiance(r.sample.Lo.as_vec3());
@@ -100,8 +100,8 @@ RtxptGIStorageVar pack(const RtxptGIReservoirVar &r) noexcept {
     return result;
 }
 
-RtxptGIReservoirVar unpack(const RtxptGIStorageVar &stored) noexcept {
-    RtxptGIReservoirVar r;
+ReSTIRGIReservoirVar unpack(const ReSTIRGIStorageVar &stored) noexcept {
+    ReSTIRGIReservoirVar r;
     for (uint i = 0; i < 3u; ++i) r.sample.sp.pos[i] = as<float>(stored.words[i]);
     r.M = stored.words[3] & 255u;
     r.age = (stored.words[3] >> 8u) & 255u;
@@ -125,7 +125,7 @@ Bool validate_jacobian(Float &value) noexcept {
     return valid;
 }
 
-Bool combine(RtxptGIReservoirVar &out, const RtxptGIReservoirVar &source,
+Bool combine(ReSTIRGIReservoirVar &out, const ReSTIRGIReservoirVar &source,
              const Float &random, const Float &target) noexcept {
     Float w = target * source.weight * cast<float>(source.M);
     out.M += source.M;
@@ -138,7 +138,7 @@ Bool combine(RtxptGIReservoirVar &out, const RtxptGIReservoirVar &source,
     return selected;
 }
 
-void finalize(RtxptGIReservoirVar &r, const Float &numerator, const Float &denominator) noexcept {
+void finalize(ReSTIRGIReservoirVar &r, const Float &numerator, const Float &denominator) noexcept {
     r.weight = select(denominator == 0.f, 0.f, r.weight * numerator / denominator);
 }
 
@@ -146,7 +146,7 @@ Float luminance_709(const Float3 &rgb) noexcept {
     return dot(rgb, make_float3(.2126f, .7152f, .0722f));
 }
 
-// RTXPT retains this historical projection for material similarity and final MIS.
+// Material similarity and final MIS use the same luminance weights.
 Float luminance_legacy(const Float3 &rgb) noexcept {
     return dot(rgb, make_float3(.299f, .587f, .114f));
 }
@@ -156,7 +156,7 @@ Float mis_initial_weight(const Float3 &true_f, const Float3 &rough_f) noexcept {
     Float w = saturate(luminance_legacy(exact) / luminance_legacy(exact + rough));
     return w * w * w;
 }
-}// namespace vision::rtxpt_gi
+}// namespace vision::restir_gi
 
 namespace vision {
 using namespace ocarina;
@@ -192,15 +192,15 @@ Int2 temporal_offset(const Int &sample) {
 }
 }// namespace
 
-RtxptGIReservoirVar RtxptGI::read(const Uint &index, uint slice) const noexcept {
-    auto buffer = pipeline()->bindless_array().buffer_var<RtxptGIStorage>(reservoirs_.index_var() + slice);
-    return rtxpt_gi::unpack(buffer.read(index));
+ReSTIRGIReservoirVar ReSTIRGI::read(const Uint &index, uint slice) const noexcept {
+    auto buffer = pipeline()->bindless_array().buffer_var<ReSTIRGIStorage>(reservoirs_.index_var() + slice);
+    return restir_gi::unpack(buffer.read(index));
 }
-void RtxptGI::write(const Uint &index, uint slice, const RtxptGIReservoirVar &r) const noexcept {
-    auto buffer = pipeline()->bindless_array().buffer_var<RtxptGIStorage>(reservoirs_.index_var() + slice);
-    buffer.write(index, rtxpt_gi::pack(r));
+void ReSTIRGI::write(const Uint &index, uint slice, const ReSTIRGIReservoirVar &r) const noexcept {
+    auto buffer = pipeline()->bindless_array().buffer_var<ReSTIRGIStorage>(reservoirs_.index_var() + slice);
+    buffer.write(index, restir_gi::pack(r));
 }
-void RtxptGI::initialize(const Uint &frame, const Uint2 &pixel) const noexcept {
+void ReSTIRGI::initialize(const Uint &frame, const Uint2 &pixel) const noexcept {
     auto &sampler = renderer().sampler();
     sampler->load_data();
     scene().sensor()->load_data();
@@ -212,27 +212,27 @@ void RtxptGI::initialize(const Uint &frame, const Uint2 &pixel) const noexcept {
     });
     emplace_sampled_wavelengths(swl);
 }
-rtxpt_gi::PTSurfaceView RtxptGI::read_pt_surface(const Uint &index, const Uint &frame, bool previous) const noexcept {
+restir_gi::PTSurfaceView ReSTIRGI::read_pt_surface(const Uint &index, const Uint &frame, bool previous) const noexcept {
     Uint plane = select((frame & 1u) == 0u, 1u, 0u);
     if (previous) plane = 1u - plane;
-    auto buffer = pipeline()->bindless_array().buffer_var<RtxptGIPTSurface>(surfaces_.index_var() + plane);
-    return rtxpt_gi::unpack_pt_surface(buffer.read(index));
+    auto buffer = pipeline()->bindless_array().buffer_var<ReSTIRGIPTSurface>(surfaces_.index_var() + plane);
+    return restir_gi::unpack_pt_surface(buffer.read(index));
 }
-void RtxptGI::write_pt_surface(const Uint &index, const rtxpt_gi::PTSurfaceView &surface) const noexcept {
-    auto packed = rtxpt_gi::pack_pt_surface(surface);
+void ReSTIRGI::write_pt_surface(const Uint &index, const restir_gi::PTSurfaceView &surface) const noexcept {
+    auto packed = restir_gi::pack_pt_surface(surface);
     Uint plane = select((frame_index() & 1u) == 0u, 1u, 0u);
-    auto buffer = pipeline()->bindless_array().buffer_var<RtxptGIPTSurface>(surfaces_.index_var() + plane);
+    auto buffer = pipeline()->bindless_array().buffer_var<ReSTIRGIPTSurface>(surfaces_.index_var() + plane);
     buffer.write(index, packed);
     if (references_.has_registered()) {
-        auto reference = pipeline()->bindless_array().buffer_var<RtxptGIPTReference>(references_.index_var());
-        reference.write(index, rtxpt_gi::pack_pt_reference(surface));
+        auto reference = pipeline()->bindless_array().buffer_var<ReSTIRGIPTReference>(references_.index_var());
+        reference.write(index, restir_gi::pack_pt_reference(surface));
     }
 }
-RtxptGIReservoirVar RtxptGI::candidate(const Uint &index, const Interaction &receiver) const noexcept {
-    RtxptGIReservoirVar r;
+ReSTIRGIReservoirVar ReSTIRGI::candidate(const Uint &index, const Interaction &receiver) const noexcept {
+    ReSTIRGIReservoirVar r;
     r.M = 1u;
     r.weight = 0.f;
-    HitBSDFVar hit = rtxpt_proposals_.read(index);
+    HitBSDFVar hit = restir_gi_proposals_.read(index);
     $if(hit.pdf > 0.f && !ocarina::isinf(hit.pdf) && !ocarina::isnan(hit.pdf)) {
         r.sample = samples_.read(index);
         $if(!r.sample.sp->valid()) {
@@ -241,12 +241,12 @@ RtxptGIReservoirVar RtxptGI::candidate(const Uint &index, const Interaction &rec
         };
         // Native secondary normal texture is UNORM16 octahedral, followed by
         // the SDK reservoir's separate SNORM16 packing at the pass boundary.
-        Uint2 encoded = cast<uint2>(saturate(rtxpt_gi::standard_oct(r.sample.sp->normal())) * 65534.f);
-        r.sample.sp->set_normal(rtxpt_gi::standard_unoct(saturate(make_float2(encoded) / 65534.f)));
+        Uint2 encoded = cast<uint2>(saturate(restir_gi::standard_oct(r.sample.sp->normal())) * 65534.f);
+        r.sample.sp->set_normal(restir_gi::standard_unoct(saturate(make_float2(encoded) / 65534.f)));
         // Shared PT exports receiver-independent incident radiance. Keep the
         // proposal density in reservoir W and the current prefix outside Lo.
         Float3 incident = r.sample.Lo.as_vec3();
-        // RTXPT stores this normalized signal in RGBA16_FLOAT before reuse.
+        // Round the normalized signal to FP16 before reuse.
         r.sample.Lo.set(make_float3(f16tof32(f32tof16(incident.x)),
                                    f16tof32(f32tof16(incident.y)),
                                    f16tof32(f32tof16(incident.z))));
@@ -256,38 +256,38 @@ RtxptGIReservoirVar RtxptGI::candidate(const Uint &index, const Interaction &rec
     };
     return r;
 }
-Float RtxptGI::target(const rtxpt_gi::PTSurfaceView &receiver, const RtxptGIReservoirVar &r) const noexcept {
+Float ReSTIRGI::target(const restir_gi::PTSurfaceView &receiver, const ReSTIRGIReservoirVar &r) const noexcept {
     Float value = 0.f;
     $if(r.M != 0u && any(r.sample.Lo.as_vec3() != make_float3(0.f)) && length_squared(r.sample.sp->position() - receiver.it.pos) > 0.f) {
         auto f = receiver.f(normalize(r.sample.sp->position() - receiver.it.pos), sampled_wavelengths());
-        value = max(0.f, zero_if_nan_inf(rtxpt_gi::luminance_709(f * r.sample.Lo.as_vec3())));
+        value = max(0.f, zero_if_nan_inf(restir_gi::luminance_709(f * r.sample.Lo.as_vec3())));
     };
     return value;
 }
-Bool RtxptGI::similar(const rtxpt_gi::PTSurfaceView &a, const rtxpt_gi::PTSurfaceView &b,
+Bool ReSTIRGI::similar(const restir_gi::PTSurfaceView &a, const restir_gi::PTSurfaceView &b,
                       const Float &normal_threshold, const Float &depth_threshold,
                       const Float &expected_depth, const Bool &fallback) const noexcept {
     Bool geometry_match = dot(a.normal, b.normal) >= normal_threshold &&
         (depth_threshold <= 0.f || abs(expected_depth - b.depth) <= depth_threshold * max(expected_depth, b.depth));
     Float ar = a.roughness.y, br = b.roughness.y;
     Bool materials = abs(ar - br) <= .5f * max(ar, br) &&
-        abs(rtxpt_gi::luminance_legacy(a.diffuse_guide) - rtxpt_gi::luminance_legacy(b.diffuse_guide)) <= .25f &&
-        abs(rtxpt_gi::luminance_legacy(a.specular_guide) - rtxpt_gi::luminance_legacy(b.specular_guide)) <= .25f;
+        abs(restir_gi::luminance_legacy(a.diffuse_guide) - restir_gi::luminance_legacy(b.diffuse_guide)) <= .25f &&
+        abs(restir_gi::luminance_legacy(a.specular_guide) - restir_gi::luminance_legacy(b.specular_guide)) <= .25f;
     return a.valid && b.valid && (fallback || geometry_match) && materials && a.plane_hash == b.plane_hash;
 }
 
-void RtxptGI::compile_temporal() noexcept {
+void ReSTIRGI::compile_temporal() noexcept {
     // This policy is host-owned; generate only the selected mode.
-    const uint bias_correction = construct_param().rtxpt_bias_correction;
-    OC_INFO_FORMAT("RTXPT GI compiled bias correction: temporal mode={}", bias_correction);
+    const uint bias_correction = construct_param().restir_gi_bias_correction;
+    OC_INFO_FORMAT("ReSTIR GI compiled bias correction: temporal mode={}", bias_correction);
     Kernel kernel = [&](Var<GIParam> param, Uint frame, Uint2 resolution) {
         Function::current()->require_ray_query_compute_workgroups();
         Uint2 pixel = dispatch_idx().xy();
         Uint index = pixel.x + pixel.y * resolution.x;
         Bool inside = all(pixel < resolution);
         initialize(frame, pixel);
-        Uint rng_state = rtxpt_gi::resampling_seed(pixel, resolution, frame, 5u);
-        RtxptGIReservoirVar result;
+        Uint rng_state = restir_gi::resampling_seed(pixel, resolution, frame, 5u);
+        ReSTIRGIReservoirVar result;
         $if(inside) {
             auto surface = read_pt_surface(index, frame);
             $if(surface.valid) {
@@ -295,15 +295,15 @@ void RtxptGI::compile_temporal() noexcept {
                 auto input = candidate(index, it);
                 auto resample = [&]() {
                     Float selected_target = target(surface, input);
-                    $if(input.M != 0u) { (void)rtxpt_gi::combine(result, input, .5f, selected_target); };
-                    RtxptGIReservoirVar history;
-                    rtxpt_gi::PTSurfaceView history_surface;
+                    $if(input.M != 0u) { (void)restir_gi::combine(result, input, .5f, selected_target); };
+                    ReSTIRGIReservoirVar history;
+                    restir_gi::PTSurfaceView history_surface;
                     Interaction old_it{geometry().process_mediums()};
                     Uint history_index = 0u;
                     Bool found = false, selected_history = false;
                     Uint max_age = param.max_age;
-                    $if(param.temporal != 0u && param.rtxpt_vary_age != 0u) {
-                        max_age = cast<uint>(cast<float>(max_age) * (.5f + .5f * rtxpt_gi::resampling_next(rng_state)));
+                    $if(param.temporal != 0u && param.restir_gi_vary_age != 0u) {
+                        max_age = cast<uint>(cast<float>(max_age) * (.5f + .5f * restir_gi::resampling_next(rng_state)));
                     };
                     $if(param.temporal != 0u) {
                         // Corona stores current-minus-previous pixel motion.
@@ -312,22 +312,22 @@ void RtxptGI::compile_temporal() noexcept {
                             s->set_seed(pixel, frame, Dimension::Camera);
                             ss = s->sensor_sample(pixel, scene().sensor()->filter(), param.camera_jitter != 0u);
                         });
-                        const Uint2 packed_motion = rtxpt_prefix_aux_.read(index).packed_motion;
+                        const Uint2 packed_motion = restir_gi_prefix_aux_.read(index).packed_motion;
                         Float2 motion = make_float2(f16tof32(packed_motion.x & 0xffffu),
                                                    f16tof32(packed_motion.x >> 16u));
                         Int2 projected = make_int2(round(previous_reservoir_coord(ss.p_film, motion) - .5f));
                         Float depth_motion = f16tof32(packed_motion.y & 0xffffu);
                         Float expected = surface.depth + depth_motion;
-                        Int start = cast<int>(rtxpt_gi::resampling_next(rng_state) * 8.f);
+                        Int start = cast<int>(restir_gi::resampling_next(rng_state) * 8.f);
                         Uint uniform = native_jenkins(frame);
                         // No discarded lane may leave before the group boiling barriers.
                         $for(i, 6u) {
                             Bool fallback = i == 5u;
-                            $if(fallback && param.rtxpt_fallback == 0u) { $continue; };
+                            $if(fallback && param.restir_gi_fallback == 0u) { $continue; };
                             Int2 p = projected;
                             $if(i > 0u && !fallback) { p += temporal_offset(start + cast<int>(i)); };
                             $if(fallback) { p = make_int2(pixel); };
-                            $if((param.rtxpt_permutation != 0u && i == 0u) || fallback) { p = permute(p, uniform); };
+                            $if((param.restir_gi_permutation != 0u && i == 0u) || fallback) { p = permute(p, uniform); };
                             $if(any(p < 0) || any(p >= make_int2(resolution))) { $continue; };
                             Uint n = cast<uint>(p.x) + cast<uint>(p.y) * resolution.x;
                             auto previous = read_pt_surface(n, frame, true);
@@ -343,15 +343,15 @@ void RtxptGI::compile_temporal() noexcept {
                     };
                     $if(found) {
                         old_it = history_surface.it;
-                        Float J = rtxpt_gi::jacobian(rtxpt_gi::native_offset_origin(it.pos, it.ng), rtxpt_gi::native_offset_origin(old_it.pos, old_it.ng), history.sample.sp->position(), history.sample.sp->normal());
-                        found = rtxpt_gi::validate_jacobian(J);
+                        Float J = restir_gi::jacobian(restir_gi::native_offset_origin(it.pos, it.ng), restir_gi::native_offset_origin(old_it.pos, old_it.ng), history.sample.sp->position(), history.sample.sp->normal());
+                        found = restir_gi::validate_jacobian(J);
                         history.weight *= J;
                         history.M = min(history.M, param.history_limit);
                         history.age += 1u;
                         found &= history.age <= max_age;
                         $if(found) {
                             Float p = target(surface, history);
-                            selected_history = rtxpt_gi::combine(result, history, rtxpt_gi::resampling_next(rng_state), p);
+                            selected_history = restir_gi::combine(result, history, restir_gi::resampling_next(rng_state), p);
                             selected_target = select(selected_history, p, selected_target);
                         };
                     };
@@ -361,16 +361,16 @@ void RtxptGI::compile_temporal() noexcept {
                             Float p = target(history_surface, result);
                             if (bias_correction == 3u) {
                                 $if(p > 0.f) {
-                                    // Native RTXPT's temporal conservative adapter uses current BVH.
-                                    p *= cast<float>(!rtxpt_gi::native_occluded(it, result.sample.sp->position(), rtxpt_materials(), sampled_wavelengths()));
+                                    // Test the reused sample against the current frame's BVH.
+                                    p *= cast<float>(!restir_gi::native_occluded(it, result.sample.sp->position(), restir_gi_materials(), sampled_wavelengths()));
                                 };
                             }
                             pi = select(selected_history, p, pi);
                             sum += p * cast<float>(history.M);
                         };
-                        rtxpt_gi::finalize(result, pi, sum * selected_target);
+                        restir_gi::finalize(result, pi, sum * selected_target);
                     } else {
-                        rtxpt_gi::finalize(result, 1.f, selected_target * cast<float>(result.M));
+                        restir_gi::finalize(result, 1.f, selected_target * cast<float>(result.M));
                     }
                 };
                 resample();
@@ -378,43 +378,43 @@ void RtxptGI::compile_temporal() noexcept {
         };
         // The flag is dispatch-uniform: every padded lane reaches both native
         // group barriers, or every lane skips the complete boiling filter.
-        $if(param.rtxpt_boiling != 0u) {
-            Float q = rtxpt_gi::luminance_709(result.sample.Lo.as_vec3()) * result.weight;
+        $if(param.restir_gi_boiling != 0u) {
+            Float q = restir_gi::luminance_709(result.sample.Lo.as_vec3()) * result.weight;
             Uint2 local_index = pixel & make_uint2(7u);
-            $if(rtxpt_gi::native_boiling_filter(local_index, param.rtxpt_boiling_strength,
+            $if(restir_gi::native_boiling_filter(local_index, param.restir_gi_boiling_strength,
                                                select(inside, q, 0.f))) {
-                result = RtxptGIReservoirVar{};
+                result = ReSTIRGIReservoirVar{};
             };
         };
         $if(inside) { write(index, 0u, result); };
     };
     kernel.function()->set_block_dim(8u, 8u, 1u);
-    temporal_shader_ = device().compile(kernel, "RTXPT GI temporal resampling");
+    temporal_shader_ = device().compile(kernel, "ReSTIR GI temporal resampling");
 }
 
-void RtxptGI::compile_spatial() noexcept {
+void ReSTIRGI::compile_spatial() noexcept {
     // This policy is host-owned; generate only the selected mode.
-    const uint bias_correction = construct_param().rtxpt_bias_correction;
-    OC_INFO_FORMAT("RTXPT GI compiled bias correction: spatial mode={}", bias_correction);
+    const uint bias_correction = construct_param().restir_gi_bias_correction;
+    OC_INFO_FORMAT("ReSTIR GI compiled bias correction: spatial mode={}", bias_correction);
     Kernel kernel = [&](Var<GIParam> param, Uint frame, Uint2 resolution) {
         Function::current()->require_ray_query_compute_workgroups();
         Uint2 pixel = dispatch_idx().xy();
         $if(any(pixel >= resolution)) { $return(); };
         Uint index = pixel.x + pixel.y * resolution.x;
         initialize(frame, pixel);
-        Uint rng_state = rtxpt_gi::resampling_seed(pixel, resolution, frame, 6u);
+        Uint rng_state = restir_gi::resampling_seed(pixel, resolution, frame, 6u);
         auto surface = read_pt_surface(index, frame);
         auto input = read(index, 0u);
-        RtxptGIReservoirVar result;
-        RtxptGIStorageVar packed_result;
+        ReSTIRGIReservoirVar result;
+        ReSTIRGIStorageVar packed_result;
         $if(surface.valid) {
             Interaction it = surface.it;
             auto resample = [&]() {
                 Float selected_target = target(surface, input);
-                $if(input.M != 0u) { (void)rtxpt_gi::combine(result, input, .5f, selected_target); };
+                $if(input.M != 0u) { (void)restir_gi::combine(result, input, .5f, selected_target); };
                 Uint mask = 0u;
                 Int selected = -1;
-                Uint start = cast<uint>(rtxpt_gi::resampling_next(rng_state) * 8191.f);
+                Uint start = cast<uint>(restir_gi::resampling_next(rng_state) * 8191.f);
                 Uint count = select(param.spatial != 0u, min(param.N, 32u), 0u);
                 auto neighbor_pixel = [&](const Uint &i) {
                     Float2 offset = neighbors_.read((start + i) & 8191u) * param.s_radius;
@@ -427,11 +427,11 @@ void RtxptGI::compile_spatial() noexcept {
                     $if(!similar(surface, neighbor_surface, param.s_dot, param.s_depth, surface.depth)) { $continue; };
                     auto neighbor = read(n, 0u);
                     $if(neighbor.M == 0u) { $continue; };
-                    Float J = rtxpt_gi::jacobian(rtxpt_gi::native_offset_origin(it.pos, it.ng), rtxpt_gi::native_offset_origin(neighbor_surface.it.pos, neighbor_surface.it.ng), neighbor.sample.sp->position(), neighbor.sample.sp->normal());
+                    Float J = restir_gi::jacobian(restir_gi::native_offset_origin(it.pos, it.ng), restir_gi::native_offset_origin(neighbor_surface.it.pos, neighbor_surface.it.ng), neighbor.sample.sp->position(), neighbor.sample.sp->normal());
                     Float p_hat = target(surface, neighbor);
-                    $if(!rtxpt_gi::validate_jacobian(J)) { $continue; };
+                    $if(!restir_gi::validate_jacobian(J)) { $continue; };
                     mask |= 1u << i;
-                    Bool picked = rtxpt_gi::combine(result, neighbor, rtxpt_gi::resampling_next(rng_state), p_hat * J);
+                    Bool picked = restir_gi::combine(result, neighbor, restir_gi::resampling_next(rng_state), p_hat * J);
                     selected = select(picked, cast<int>(i), selected);
                     selected_target = select(picked, p_hat, selected_target);
                 };
@@ -447,27 +447,27 @@ void RtxptGI::compile_spatial() noexcept {
                         Float p_hat = target(neighbor_surface, result);
                         if (bias_correction == 3u) {
                             $if(p_hat > 0.f) {
-                                p_hat *= cast<float>(!rtxpt_gi::native_occluded(n_it, result.sample.sp->position(), rtxpt_materials(), sampled_wavelengths()));
+                                p_hat *= cast<float>(!restir_gi::native_occluded(n_it, result.sample.sp->position(), restir_gi_materials(), sampled_wavelengths()));
                             };
                         }
                         pi = select(selected == cast<int>(i), p_hat, pi);
                         sum += p_hat * cast<float>(neighbor.M);
                     };
-                    rtxpt_gi::finalize(result, pi, sum * selected_target);
+                    restir_gi::finalize(result, pi, sum * selected_target);
                 } else {
-                    rtxpt_gi::finalize(result, 1.f, selected_target * cast<float>(result.M));
+                    restir_gi::finalize(result, 1.f, selected_target * cast<float>(result.M));
                 }
             };
             resample();
         };
-        auto history = pipeline()->bindless_array().buffer_var<RtxptGIStorage>(reservoirs_.index_var() + 1u);
-        history.write(index, rtxpt_gi::pack(result));
+        auto history = pipeline()->bindless_array().buffer_var<ReSTIRGIStorage>(reservoirs_.index_var() + 1u);
+        history.write(index, restir_gi::pack(result));
     };
     kernel.function()->set_block_dim(8u, 8u, 1u);
-    spatial_shader_ = device().compile(kernel, "RTXPT GI spatial resampling");
+    spatial_shader_ = device().compile(kernel, "ReSTIR GI spatial resampling");
 }
 
-void RtxptGI::compile_final() noexcept {
+void ReSTIRGI::compile_final() noexcept {
     const char *signal_override = std::getenv("VISION_GI_SIGNAL_DIAGNOSTIC");
     const string_view signal_mode = signal_override && *signal_override ? string_view{signal_override} : string_view{"full"};
     OC_ERROR_IF(signal_mode != "full" && signal_mode != "half-mis" && signal_mode != "world-miss" &&
@@ -486,7 +486,7 @@ void RtxptGI::compile_final() noexcept {
         Uint index = pixel.x + pixel.y * resolution.x;
         initialize(frame, pixel);
         auto surface = read_pt_surface(index, frame);
-        Float3 radiance = rtxpt_bypass_.read(index).xyz(), specular = radiance;
+        Float3 radiance = restir_gi_bypass_.read(index).xyz(), specular = radiance;
         Float hit_distance = 0.f;
         $if(surface.valid) {
             const auto &it = surface.it;
@@ -498,20 +498,20 @@ void RtxptGI::compile_final() noexcept {
                 auto evaluated = surface.evaluate(direction, sampled_wavelengths());
                 Float3 f = evaluated.diffuse + evaluated.specular;
                 Float3 li = selected.sample.Lo.as_vec3() * selected.weight;
-                $if(param.rtxpt_final_visibility != 0u) {
-                    li *= cast<float>(!rtxpt_gi::native_occluded(it, selected.sample.sp->position(), rtxpt_materials(), sampled_wavelengths()));
+                $if(param.restir_gi_final_visibility != 0u) {
+                    li *= cast<float>(!restir_gi::native_occluded(it, selected.sample.sp->position(), restir_gi_materials(), sampled_wavelengths()));
                 };
                 Float selected_weight = 1.f, initial_weight = 0.f;
                 Float3 fresh_diffuse = make_float3(0.f), fresh_specular = make_float3(0.f);
                 Float initial_distance = 0.f;
-                $if(param.rtxpt_final_mis != 0u) {
-                    // RTXPT GIFinalShading partitions each sampled direction
+                $if(param.restir_gi_final_mis != 0u) {
+                    // ReSTIR GIFinalShading partitions each sampled direction
                     // using true/roughened BRDF response, never proposal PDFs.
                     if (half_mis) {
                         selected_weight = .5f;
                     } else {
                         Float3 rough_f = surface.f_roughness_clamp(.2f, direction, sampled_wavelengths());
-                        selected_weight = 1.f - rtxpt_gi::mis_initial_weight(f, rough_f);
+                        selected_weight = 1.f - restir_gi::mis_initial_weight(f, rough_f);
                     }
                     Bool fresh_valid = half_mis ? fresh.M != 0u : fresh.weight > 0.f;
                     $if(fresh_valid && length_squared(fresh.sample.sp->position() - it.pos) > 0.f) {
@@ -525,14 +525,14 @@ void RtxptGI::compile_final() noexcept {
                             initial_weight = .5f;
                         } else {
                             Float3 fresh_rough_f = surface.f_roughness_clamp(.2f, fresh_direction, sampled_wavelengths());
-                            initial_weight = rtxpt_gi::mis_initial_weight(fresh_f, fresh_rough_f);
+                            initial_weight = restir_gi::mis_initial_weight(fresh_f, fresh_rough_f);
                         }
                     };
                 };
                 Float3 fresh_li = fresh.sample.Lo.as_vec3() * fresh.weight * initial_weight;
                 Float3 diffuse_result = evaluated.diffuse * li * selected_weight + fresh_diffuse * fresh_li;
                 Float3 specular_result = evaluated.specular * li * selected_weight + fresh_specular * fresh_li;
-                Float3 prefix = rtxpt_prefix_aux_.read(index).prefix_throughput_depth.xyz();
+                Float3 prefix = restir_gi_prefix_aux_.read(index).prefix_throughput_depth.xyz();
                 diffuse_result *= prefix;
                 specular_result *= prefix;
                 Bool invalid = any(ocarina::isnan(diffuse_result)) || any(ocarina::isinf(diffuse_result)) ||
@@ -545,7 +545,7 @@ void RtxptGI::compile_final() noexcept {
                 if (mis_distance_only) {
                     // GI diagnostic: retain native RGB weights and replace only
                     // the final distance by the exact previous half-MIS rule.
-                    $if(param.rtxpt_final_mis != 0u) {
+                    $if(param.restir_gi_final_mis != 0u) {
                         Float legacy_initial_distance = 0.f;
                         $if(fresh.M != 0u && length_squared(fresh.sample.sp->position() - it.pos) > 0.f) {
                             legacy_initial_distance = length(fresh.sample.sp->position() - it.pos);
@@ -557,11 +557,11 @@ void RtxptGI::compile_final() noexcept {
                 }
                 if (native_reblur) {
                     const auto output = native_reblur_storage();
-                    Uint plane = rtxpt_prefix_aux_.read(index).metadata.y;
+                    Uint plane = restir_gi_prefix_aux_.read(index).metadata.y;
                     $if(plane < 3u) {
-                        Float4 d = rtxpt_gi::native_reblur_commit(output.read_diffuse(index, plane), diffuse_result, hit_distance);
-                        Float4 s = rtxpt_gi::native_reblur_commit(output.read_specular(index, plane), specular_result, hit_distance);
-                        output.write(index, plane, rtxpt_gi::native_reblur_half(d), rtxpt_gi::native_reblur_half(s));
+                        Float4 d = restir_gi::native_reblur_commit(output.read_diffuse(index, plane), diffuse_result, hit_distance);
+                        Float4 s = restir_gi::native_reblur_commit(output.read_specular(index, plane), specular_result, hit_distance);
+                        output.write(index, plane, restir_gi::native_reblur_half(d), restir_gi::native_reblur_half(s));
                     };
                 }
             };
@@ -588,40 +588,40 @@ void RtxptGI::compile_final() noexcept {
         }
     };
     kernel.function()->set_block_dim(8u, 8u, 1u);
-    final_shader_ = device().compile(kernel, "RTXPT GI final shading");
+    final_shader_ = device().compile(kernel, "ReSTIR GI final shading");
 }
 
-void RtxptGI::reset_history() noexcept {
+void ReSTIRGI::reset_history() noexcept {
     previous_frame_ = InvalidUI32;
     previous_jitter_ = InvalidUI32;
 }
 
-void RtxptGI::resize_reuse_buffers(uint2 resolution) noexcept {
+void ReSTIRGI::resize_reuse_buffers(uint2 resolution) noexcept {
     extent_ = resolution;
     const uint count = resolution.x * resolution.y;
     const bool registered = reservoirs_.has_registered();
-    reservoirs_.super() = device().create_buffer<RtxptGIStorage>(count * 2u, "RTXPT GI SDK32 reservoirs x2");
+    reservoirs_.super() = device().create_buffer<ReSTIRGIStorage>(count * 2u, "ReSTIR GI SDK32 reservoirs x2");
     reservoirs_.register_self(0u, count);
     if (registered) reservoirs_.register_view_index(1u, count, count);
     else reservoirs_.register_view(count, count);
-    vector<RtxptGIStorage> empty(count * 2u);
+    vector<ReSTIRGIStorage> empty(count * 2u);
     reservoirs_.upload_immediately(empty.data());
     const bool surface_registered = surfaces_.has_registered();
-    surfaces_.super() = device().create_buffer<RtxptGIPTSurface>(count * 2u, "RTXPT GI Principled receiver96 x2");
+    surfaces_.super() = device().create_buffer<ReSTIRGIPTSurface>(count * 2u, "ReSTIR GI Principled receiver96 x2");
     surfaces_.register_self(0u, count);
     if (surface_registered) surfaces_.register_view_index(1u, count, count);
     else surfaces_.register_view(count, count);
-    vector<RtxptGIPTSurface> empty_surfaces(count * 2u);
+    vector<ReSTIRGIPTSurface> empty_surfaces(count * 2u);
     surfaces_.upload_immediately(empty_surfaces.data());
     const char *validation = std::getenv("VISION_GI_PT_VALIDATE_OUTPUT");
     if (validation && *validation) {
-        references_.super() = device().create_buffer<RtxptGIPTReference>(count, "GI validation original Interaction only");
+        references_.super() = device().create_buffer<ReSTIRGIPTReference>(count, "GI validation original Interaction only");
         references_.register_self();
     }
     reset_history();
 }
 
-void RtxptGI::prepare_reuse_buffers() noexcept {
+void ReSTIRGI::prepare_reuse_buffers() noexcept {
     const uint2 resolution = pipeline()->resolution();
     if (!reservoirs_.has_registered() || extent_.x != resolution.x || extent_.y != resolution.y)
         resize_reuse_buffers(resolution);
@@ -638,13 +638,13 @@ void RtxptGI::prepare_reuse_buffers() noexcept {
             if (x * x + y * y > .25f) continue;
             values.push_back(make_float2(float(int(x * 250.f)), float(int(y * 250.f))) / 127.f);
         }
-        neighbors_.super() = device().create_buffer<float2>(8192u, "RTXPT GI SDK neighbor offsets");
+        neighbors_.super() = device().create_buffer<float2>(8192u, "ReSTIR GI SDK neighbor offsets");
         neighbors_.register_self();
         neighbors_.upload_immediately(values.data());
     }
 }
 
-void RtxptGI::compile_pt_validation() noexcept {
+void ReSTIRGI::compile_pt_validation() noexcept {
     pt_validation_pending_ = false;
     const char *output = std::getenv("VISION_GI_PT_VALIDATE_OUTPUT");
     if (!output || !*output) return;
@@ -664,8 +664,8 @@ void RtxptGI::compile_pt_validation() noexcept {
         Uint2 pixel = make_uint2(index % extent_.x, index / extent_.x);
         initialize(frame, pixel);
         auto surface = read_pt_surface(index, frame);
-        auto reference = pipeline()->bindless_array().buffer_var<RtxptGIPTReference>(references_.index_var());
-        auto reference_surface = rtxpt_gi::unpack_pt_reference(reference.read(index));
+        auto reference = pipeline()->bindless_array().buffer_var<ReSTIRGIPTReference>(references_.index_var());
+        auto reference_surface = restir_gi::unpack_pt_reference(reference.read(index));
         Float4 result = make_float4(0.f);
         $if(surface.valid) {
             auto original = geometry().compute_surface_interaction(reference_surface.hit, true);
@@ -673,7 +673,7 @@ void RtxptGI::compile_pt_validation() noexcept {
             Float3 f0 = make_float3(0.f), f1 = make_float3(0.f);
             Float p0 = 0.f, p1 = 0.f, f_error = 0.f, p_error = 0.f;
             Bool finite = true;
-            Float3 sampled = rtxpt_proposals_.read(index).wi.as_vec3();
+            Float3 sampled = restir_gi_proposals_.read(index).wi.as_vec3();
             std::array<Float3, 3> directions{normalize(surface.normal + make_float3(.17f, .23f, .31f)),
                 -surface.normal, select(length_squared(sampled) > 0.f, sampled, surface.normal)};
             for (uint i = 0u; i < directions.size(); ++i) {
@@ -703,7 +703,7 @@ void RtxptGI::compile_pt_validation() noexcept {
         // Last32 rows exercise every child independently, including sheen,
         // coat, anisotropy, F82 tint and transmission absent in many scenes.
         $if(dispatch_id() >= 2016u) {
-            rtxpt_gi::PTSurfaceView test;
+            restir_gi::PTSurfaceView test;
             test.it.pos = make_float3(0.f); test.depth = 1.f; test.plane_hash = 1u;
             test.it.ng = make_float3(0.f, 0.f, 1.f);
             test.it.shading.x = make_float3(1.f, 0.f, 0.f);
@@ -728,7 +728,7 @@ void RtxptGI::compile_pt_validation() noexcept {
                     });
                 });
             }
-            auto decoded = rtxpt_gi::unpack_pt_surface(rtxpt_gi::pack_pt_surface(test));
+            auto decoded = restir_gi::unpack_pt_surface(restir_gi::pack_pt_surface(test));
             Float fe = 0.f, pe = 0.f; Bool finite = decoded.valid;
             Uint mask = 0u;
             {
@@ -754,7 +754,7 @@ void RtxptGI::compile_pt_validation() noexcept {
     pt_validation_pending_ = true;
 }
 
-CommandBatch RtxptGI::dispatch_reuse(uint frame, GIParam param) const noexcept {
+CommandBatch ReSTIRGI::dispatch_reuse(uint frame, GIParam param) const noexcept {
     const bool continuous = previous_frame_ != InvalidUI32 && previous_frame_ + 1u == frame;
     const bool same_lattice = previous_jitter_ == param.camera_jitter;
     param.temporal = param.temporal && frame != 0u && continuous && same_lattice;
@@ -798,7 +798,7 @@ CommandBatch RtxptGI::dispatch_reuse(uint frame, GIParam param) const noexcept {
                  << ",\n\"nonfinite_receivers\":" << nonfinite
                  << ",\n\"maximum_relative_F_error\":" << f_error
                  << ",\n\"maximum_relative_PDF_error\":" << p_error
-                 << ",\n\"receiver_bytes\":" << sizeof(RtxptGIPTSurface)
+                 << ",\n\"receiver_bytes\":" << sizeof(ReSTIRGIPTSurface)
                  << ",\n\"material_parameter_bytes\":36,\n\"fixture_cases\":" << fixtures
                  << ",\n\"fixture_lobe_mask\":" << lobe_mask
                  << ",\n\"fixture_maximum_relative_F_error\":" << fixture_f
@@ -810,10 +810,10 @@ CommandBatch RtxptGI::dispatch_reuse(uint frame, GIParam param) const noexcept {
     return batch;
 }
 
-void RtxptGI::download_storage(vector<GISample> &samples, vector<GIReservoir> &reservoirs) const noexcept {
+void ReSTIRGI::download_storage(vector<GISample> &samples, vector<GIReservoir> &reservoirs) const noexcept {
     const uint count = extent_.x * extent_.y;
     samples.resize(count);
-    vector<RtxptGIStorage> packed(count * 2u);
+    vector<ReSTIRGIStorage> packed(count * 2u);
     pipeline()->stream() << samples_.view().download(samples.data())
                          << reservoirs_.view().download(packed.data()) << synchronize() << commit();
     reservoirs.resize(count * 2u);
@@ -842,21 +842,19 @@ void RtxptGI::download_storage(vector<GISample> &samples, vector<GIReservoir> &r
     }
 }
 
-RtxptGI::RtxptGI(IntegratorPtr integrator,
+ReSTIRGI::ReSTIRGI(IntegratorPtr integrator,
                    const vision::ParameterSet &desc)
     : ReSTIR(integrator, desc) {
-    const string backend = desc["backend"].as_string("rtxpt");
-    if (backend == "legacy") {
-        OC_WARNING("The legacy ReSTIR GI backend has been removed; using RTXPT GI.");
-    } else if (backend != "rtxpt") {
-        unsupported_backend_ = "Unsupported ReSTIR GI backend '" + backend + "'. Expected rtxpt.";
+    const string backend = desc["backend"].as_string("restir_gi");
+    if (backend != "restir_gi") {
+        unsupported_backend_ = "Unsupported ReSTIR GI backend '" + backend + "'. Expected restir_gi.";
     }
     // Two GI neighbors balance reuse quality and the cost of support queries.
     spatial_.sample_num = spatial_.open ? desc["spatial"]["sample_num"].as_uint(2u) : 1u;
     spatial_.sampling_radius = desc["spatial"]["radius"].as_float(12.f);
 }
 
-void RtxptGI::compile(bool refresh_lighting) noexcept {
+void ReSTIRGI::compile(bool refresh_lighting) noexcept {
     switch_profile::Scope profile{"ReSTIR.GI.compile", "compile"};
     backend_error_.clear();
     if (!unsupported_backend_.empty()) {
@@ -865,21 +863,21 @@ void RtxptGI::compile(bool refresh_lighting) noexcept {
     }
     if (scene().process_mediums() || spectrum()->dimension() != 3u) {
         backend_error_ = scene().process_mediums()
-            ? "RTXPT GI does not support participating media" : "RTXPT GI requires an RGB spectrum";
+            ? "ReSTIR GI does not support participating media" : "ReSTIR GI requires an RGB spectrum";
         return;
     }
     if (native_reblur_enabled_) prepare_native_reblur_buffers();
-    if (!rtxpt_materials_) rtxpt_materials_ = make_shared<rtxpt_gi::StandardMaterialInputs>();
-    rtxpt_materials_->prepare();
+    if (!restir_gi_materials_) restir_gi_materials_ = make_shared<restir_gi::StandardMaterialInputs>();
+    restir_gi_materials_->prepare();
     // A whole-pipeline compile can follow light or topology replacement.
     // Revalidate lights and rebuild the diagnostic buffers after the scene is rebound.
-    if (refresh_lighting || !rtxpt_lights_) {
-        if (!rtxpt_lights_) rtxpt_lights_ = make_shared<rtxpt_gi::NativeLightSampler>();
+    if (refresh_lighting || !restir_gi_lights_) {
+        if (!restir_gi_lights_) restir_gi_lights_ = make_shared<restir_gi::NativeLightSampler>();
         try {
-            rtxpt_lights_->prepare();
+            restir_gi_lights_->prepare();
         } catch (const std::runtime_error &error) {
             backend_error_ = error.what();
-            rtxpt_lights_.reset();
+            restir_gi_lights_.reset();
             return;
         }
         prepare_reuse_buffers();
@@ -892,7 +890,7 @@ void RtxptGI::compile(bool refresh_lighting) noexcept {
     compile_spatial();
     compile_final();
     compile_pt_validation();
-    OC_INFO("RTXPT ReSTIR GI active: shared ordinary PT, complete BSDF, private proposals, packed32 reservoirs, temporal/spatial reuse");
+    OC_INFO("ReSTIR GI active: shared ordinary PT, complete BSDF, private proposals, packed32 reservoirs, temporal/spatial reuse");
 }
 
 namespace {
@@ -901,7 +899,7 @@ void gi_signal_switch_plane(PTPathCapture &capture, Uint &current_plane,
     current_plane = plane;
     capture.signal_bounce = bounce;
     capture.signal_hit_distance = 0.f;
-    // The global delta-only flag survives plane switches, as in RTXPT.
+    // The delta-only flag belongs to the whole path and survives plane switches.
 }
 
 void gi_signal_commit(Float4 &diffuse, Float4 &specular, const Float3 &secondary,
@@ -909,9 +907,9 @@ void gi_signal_commit(Float4 &diffuse, Float4 &specular, const Float3 &secondary
     // Native CommitDenoiserRadiance merges the whole secondaryL once, using
     // the final sampleHitT even when early delta suffix vertices emitted.
     $if(base_diffuse) {
-        diffuse = rtxpt_gi::native_reblur_commit(diffuse, secondary, hit_distance);
+        diffuse = restir_gi::native_reblur_commit(diffuse, secondary, hit_distance);
     } $else {
-        specular = rtxpt_gi::native_reblur_commit(specular, secondary, hit_distance);
+        specular = restir_gi::native_reblur_commit(specular, secondary, hit_distance);
     };
 }
 
@@ -919,12 +917,12 @@ void gi_signal_commit_visit(Float4 &committed_diffuse, Float4 &committed_specula
                              Float4 &base_diffuse, Float4 &base_specular, Float3 &secondary,
                              const Float &hit_distance, const Bool &scatter_diffuse) {
     gi_signal_commit(base_diffuse, base_specular, secondary, hit_distance, scatter_diffuse);
-    committed_diffuse = rtxpt_gi::native_reblur_commit(committed_diffuse, Float3{base_diffuse.xyz()}, base_diffuse.w);
-    committed_specular = rtxpt_gi::native_reblur_commit(committed_specular, Float3{base_specular.xyz()}, base_specular.w);
+    committed_diffuse = restir_gi::native_reblur_commit(committed_diffuse, Float3{base_diffuse.xyz()}, base_diffuse.w);
+    committed_specular = restir_gi::native_reblur_commit(committed_specular, Float3{base_specular.xyz()}, base_specular.w);
     base_diffuse = make_float4(0.f); base_specular = make_float4(0.f); secondary = make_float3(0.f);
 }
 
-void gi_signal_commit_buffer_visit(const rtxpt_gi::NativeReblurStorage &storage,
+void gi_signal_commit_buffer_visit(const restir_gi::NativeReblurStorage &storage,
                                    const Uint &pixel, const Uint &plane,
                                    Float4 &base_diffuse, Float4 &base_specular, Float3 &secondary,
                                    const Float &hit_distance, const Bool &scatter_diffuse) {
@@ -938,7 +936,7 @@ void gi_signal_commit_buffer_visit(const rtxpt_gi::NativeReblurStorage &storage,
 
 }// namespace
 
-bool RtxptGI::render_UI(Widgets *widgets) noexcept {
+bool ReSTIRGI::render_UI(Widgets *widgets) noexcept {
     return widgets->use_tree("ReSTIR GI", [&] {
         changed_ |= widgets->check_box("switch", &open_);
         if (open_) {
@@ -947,7 +945,7 @@ bool RtxptGI::render_UI(Widgets *widgets) noexcept {
     });
 }
 
-void RtxptGI::render_sub_UI(Widgets *widgets) noexcept {
+void ReSTIRGI::render_sub_UI(Widgets *widgets) noexcept {
     changed_ |= widgets->check_box("temporal", &temporal_.open);
     changed_ |= widgets->drag_uint("max age", &max_age_, 1, 0, 100);
     changed_ |= widgets->drag_float("diffuse factor threshold", &diff_factor_, 0, 1);
@@ -971,20 +969,20 @@ void RtxptGI::render_sub_UI(Widgets *widgets) noexcept {
     }
 }
 
-void RtxptGI::compile_initial_samples() noexcept {
+void ReSTIRGI::compile_initial_samples() noexcept {
     switch_profile::Scope profile{"GI.initial.compile", "compile"};
     const char *nee_diagnostic = std::getenv("VISION_GI_NEE_DIAGNOSTIC");
     OC_ERROR_IF(nee_diagnostic && string_view(nee_diagnostic) != "1x1",
-                "Standard RTXPT GI currently supports NEE 1x1 only.");
-    OC_ERROR_IF(scene().process_mediums(), "Standard RTXPT GI does not support participating media.");
-    OC_ERROR_IF(spectrum()->dimension() != 3u, "Standard RTXPT GI requires RGB rendering.");
+                "Standard ReSTIR GI currently supports NEE 1x1 only.");
+    OC_ERROR_IF(scene().process_mediums(), "Standard ReSTIR GI does not support participating media.");
+    OC_ERROR_IF(spectrum()->dimension() != 3u, "Standard ReSTIR GI requires RGB rendering.");
     OC_INFO("GI NEE diagnostic: 1x1, candidates=1, full_samples=1, visibility=true");
     OC_INFO("GI candidate transport: shared ordinary PT, full MaterialEvaluator, camera_path=true, single_path=true, exports_only=true, NEE=1/1");
-    OC_INFO_FORMAT("ReSTIR GI candidate transport: backend=rtxpt, native_transport=false, candidates_per_pixel=1, NEE_candidates_per_shadow=1, NEE_shadow_samples=1, RR=ordinary immediate, max_surface_depth={}, suffix_depth={}, terminal_endpoint=ordinary PT, BSDF=complete Corona",
+    OC_INFO_FORMAT("ReSTIR GI candidate transport: backend=restir_gi, native_transport=false, candidates_per_pixel=1, NEE_candidates_per_shadow=1, NEE_shadow_samples=1, RR=ordinary immediate, max_surface_depth={}, suffix_depth={}, terminal_endpoint=ordinary PT, BSDF=complete Corona",
                    integrator()->suffix_depth() + 1u, integrator()->suffix_depth());
-    OC_INFO("RTXPT GI private stable planes: count=3, max_vertex_depth=5, primary_replacement=true, incident_Lo=unweighted, shared_ReSTIR_DI_primary=true");
-    OC_INFO("RTXPT GI glass policy: complete pure RGB dielectric, roughness^2<0.0064 ideal delta, exact Fresnel, thick sqrt tint per interface, occupied-slot transmission continuation; ordinary PT/ReSTIR DI unchanged");
-    OC_INFO("RTXPT GI stable emission: continuous first reflection owned by DI; first transmission and uncovered delta reflection retained by PT/Build exactly once");
+    OC_INFO("ReSTIR GI private stable planes: count=3, max_vertex_depth=5, primary_replacement=true, incident_Lo=unweighted, shared_ReSTIR_DI_primary=true");
+    OC_INFO("ReSTIR GI glass policy: complete pure RGB dielectric, roughness^2<0.0064 ideal delta, exact Fresnel, thick sqrt tint per interface, occupied-slot transmission continuation; ordinary PT/ReSTIR DI unchanged");
+    OC_INFO("ReSTIR GI stable emission: continuous first reflection owned by DI; first transmission and uncovered delta reflection retained by PT/Build exactly once");
     // Both private passes consume the same primary flag from the active DI producer.
     Kernel build = [&](Uint frame_index, BufferVar<uint> flags) {
         gi_principled::CompilationScope parameters{false};
@@ -992,10 +990,10 @@ void RtxptGI::compile_initial_samples() noexcept {
         scene().sensor()->load_data();
         sampler()->load_data();
         integrator()->load_data();
-        rtxpt_gi::build_pt_prefix(prefix_storage(), *this, flags.read(dispatch_id()));
+        restir_gi::build_pt_prefix(prefix_storage(), *this, flags.read(dispatch_id()));
     };
     build.function()->set_block_dim(8u, 8u, 1u);
-    rtxpt_prefix_build_ = device().compile(build, "RTXPT GI stable plane build");
+    restir_gi_prefix_build_ = device().compile(build, "ReSTIR GI stable plane build");
     const bool count_work = path_cost::enabled();
     const char *cost_override = std::getenv("VISION_GI_EXPORT_COST");
     const string_view cost_mode = cost_override && *cost_override ? string_view{cost_override} : string_view{"full"};
@@ -1050,7 +1048,7 @@ void RtxptGI::compile_initial_samples() noexcept {
     OC_INFO_FORMAT("GI endpoint normal diagnostic: mode={}, material_normal={}, native_grazing_adjust={}",
                    endpoint_normal_mode, endpoint_normal_mode == "shading-facing", endpoint_normal_mode == "shading-facing");
     OC_INFO_FORMAT("GI Fill transport: ordinary camera PT with observers only, counters={}", count_work);
-    Kernel kernel = [&](Uint frame_index, Var<RtxptGICameraParam> camera, BufferVar<uint> flags) {
+    Kernel kernel = [&](Uint frame_index, Var<ReSTIRGICameraParam> camera, BufferVar<uint> flags) {
         gi_principled::CompilationScope parameters{false, !no_parameter_bridge};
         initial(sampler(), frame_index, spectrum());
         scene().sensor()->load_data(); sampler()->load_data(); integrator()->load_data();
@@ -1067,7 +1065,7 @@ void RtxptGI::compile_initial_samples() noexcept {
             Float3 total = integrator()->Li(ray, Float{1e16f}, integrator()->runtime_suffix_depth() + 1u,
                 spectrum()->one(), false, context, *this);
             if (cost_mode == "plain-output48" || cost_mode == "plain-output48-no-bridge") {
-                rtxpt_bypass_.write(dispatch_id(), make_float4(total, 1.f));
+                restir_gi_bypass_.write(dispatch_id(), make_float4(total, 1.f));
                 auto denoiser = prefix_storage().denoiser;
                 OC_ASSERT(denoiser.enabled());
                 denoiser.write(dispatch_id(), Uint{0u},
@@ -1075,11 +1073,11 @@ void RtxptGI::compile_initial_samples() noexcept {
                 if (work_counters) path_work_counters_.write(dispatch_id(), *work_counters);
                 return;
             }
-            rtxpt_bypass_.write(dispatch_id(), make_float4(total, 1.f));
-            rtxpt_gi::CandidateTraceResult empty;
+            restir_gi_bypass_.write(dispatch_id(), make_float4(total, 1.f));
+            restir_gi::CandidateTraceResult empty;
             empty.sample.Lo.set(make_float3(specular));
             samples_.write(dispatch_id(), empty.sample);
-            rtxpt_proposals_.write(dispatch_id(), empty.proposal);
+            restir_gi_proposals_.write(dispatch_id(), empty.proposal);
             if (work_counters) path_work_counters_.write(dispatch_id(), *work_counters);
             return;
         }
@@ -1127,10 +1125,10 @@ void RtxptGI::compile_initial_samples() noexcept {
             };
             auto match_planes = [&] {
                 $for(plane, 3u) {
-                    $if(header[plane] == rtxpt_gi::PrefixInvalid || header[plane] == rtxpt_gi::PrefixQueued) { $continue; };
+                    $if(header[plane] == restir_gi::PrefixInvalid || header[plane] == restir_gi::PrefixQueued) { $continue; };
                     auto node = storage.read(plane);
                     $if(!gi_prefix_endpoint_matches(sampled_branch, bounce + 1u, -it.wo,
-                        header[plane], rtxpt_gi::pt_prefix_depth(node), node.direction_vertex.xyz())) { $continue; };
+                        header[plane], restir_gi::pt_prefix_depth(node), node.direction_vertex.xyz())) { $continue; };
                     Float2 bary = as<float2>(Uint2{node.hit_words.zw()});
                     $if(hit.inst_id != node.hit_words.x || hit.prim_id != node.hit_words.y ||
                         length_squared(Float2{hit.bary} - bary) > 1e-6f) { $continue; };
@@ -1152,10 +1150,10 @@ void RtxptGI::compile_initial_samples() noexcept {
                         }
                     }
                     gi_signal_switch_plane(capture, signal_plane, plane, bounce);
-                    $if(!terminal_seen && !rtxpt_gi::pt_prefix_consumed(node)) {
+                    $if(!terminal_seen && !restir_gi::pt_prefix_consumed(node)) {
                         terminal_seen = true;
                         $if(plane == dominant) {
-                            rtxpt_gi::PTSurfaceView receiver;
+                            restir_gi::PTSurfaceView receiver;
                             receiver.it = it; receiver.hit = hit;
                             receiver.depth = node.virtual_position.w;
                             receiver.plane_hash = (plane << 24u) | header[plane];
@@ -1178,11 +1176,11 @@ void RtxptGI::compile_initial_samples() noexcept {
                             if (cost_mode == "zero-surface") {
                                 // Keep the same receiver stores; let unused
                                 // interaction payload reconstruction disappear.
-                                rtxpt_gi::PTSurfaceView empty;
+                                restir_gi::PTSurfaceView empty;
                                 write_pt_surface(dispatch_id(), empty);
                             } else if (!skip_surface) write_pt_surface(dispatch_id(), receiver);
                             receiver_written = receiver.valid;
-                            RtxptGIPrefixAuxVar aux;
+                            ReSTIRGIPrefixAuxVar aux;
                             aux.prefix_throughput_depth = make_float4(spectrum()->linear_srgb(throughput, sampled_wavelengths()), receiver.depth);
                             if (!skip_aux) {
                             aux.current_virtual_position = make_float4(node.virtual_position.xyz(), node.origin_distance.w);
@@ -1196,7 +1194,7 @@ void RtxptGI::compile_initial_samples() noexcept {
                             Float previous_depth = scene().sensor()->prev_linear_depth(aux.previous_virtual_position.xyz());
                             aux.packed_motion = make_uint2(f32tof16(motion.x) | (f32tof16(motion.y) << 16u), f32tof16(previous_depth - current_view.z));
                             }
-                            rtxpt_prefix_aux_.write(dispatch_id(), aux);
+                            restir_gi_prefix_aux_.write(dispatch_id(), aux);
                             Bool delta = BxDFFlag::is_specular(sample.eval.flags) || ocarina::isinf(sample.eval.pdf());
                             Float3 physical = spectrum()->linear_srgb(throughput * sample.eval.throughput(), sampled_wavelengths());
                             capture.active = receiver.valid && sample.valid() && !delta && any(physical != make_float3(0.f));
@@ -1204,7 +1202,7 @@ void RtxptGI::compile_initial_samples() noexcept {
                             $if(capture.active) {
                                 HitBSDFVar proposal;
                                 proposal.wi.set(sample.wi); proposal.bsdf.set(sample.eval.f.vec3()); proposal.pdf = sample.eval.pdf();
-                                rtxpt_proposals_.write(dispatch_id(), proposal);
+                                restir_gi_proposals_.write(dispatch_id(), proposal);
                                 GISampleVar empty; empty.sp->set_position(make_float3(0.f)); empty.sp->set_normal(make_float3(0.f)); empty.Lo.set(Float3{make_float3(0.f)});
                                 samples_.write(dispatch_id(), empty);
                             };
@@ -1235,9 +1233,9 @@ void RtxptGI::compile_initial_samples() noexcept {
             $if(gi_prefix_stable_emission_allowed(ideal_prefix, bounce + 1u, sampled_branch,
                 capture.first_reflection_covered_by_di)) {
                 $for(plane, 3u) {
-                    $if(header[plane] == rtxpt_gi::PrefixInvalid || header[plane] == rtxpt_gi::PrefixQueued) { $continue; };
+                    $if(header[plane] == restir_gi::PrefixInvalid || header[plane] == restir_gi::PrefixQueued) { $continue; };
                     auto node = storage.read(plane);
-                    $if(!rtxpt_gi::pt_prefix_ideal_path(node)) { $continue; };
+                    $if(!restir_gi::pt_prefix_ideal_path(node)) { $continue; };
                     Bool identity = hit->is_miss() && node.hit_words.x == InvalidUI32 && node.hit_words.y == InvalidUI32;
                     $if(hit->is_hit()) {
                         Float2 bary = as<float2>(Uint2{node.hit_words.zw()});
@@ -1245,7 +1243,7 @@ void RtxptGI::compile_initial_samples() noexcept {
                             length_squared(Float2{hit.bary} - bary) <= 1e-6f;
                     };
                     represented |= gi_prefix_emission_represented(ideal_prefix, sampled_branch, bounce + 1u,
-                        direction, header[plane], rtxpt_gi::pt_prefix_depth(node), node.direction_vertex.xyz(), identity,
+                        direction, header[plane], restir_gi::pt_prefix_depth(node), node.direction_vertex.xyz(), identity,
                         capture.first_reflection_covered_by_di);
                     $if(represented) { $break; };
                 };
@@ -1333,8 +1331,8 @@ void RtxptGI::compile_initial_samples() noexcept {
             auto sample = samples_.read(dispatch_id());
             sample.Lo.set(ocarina::zero_if_nan_inf(capture.radiance));
             samples_.write(dispatch_id(), sample);
-            auto proposal = rtxpt_proposals_.read(dispatch_id());
-            Float3 prefix = rtxpt_prefix_aux_.read(dispatch_id()).prefix_throughput_depth.xyz();
+            auto proposal = restir_gi_proposals_.read(dispatch_id());
+            Float3 prefix = restir_gi_prefix_aux_.read(dispatch_id()).prefix_throughput_depth.xyz();
             Float3 fresh = prefix * proposal->safe_throughput() * sample.Lo.as_vec3();
             indirect -= fresh;
             if (storage.denoiser.enabled() && !skip_dominant_signal_suffix) {
@@ -1343,17 +1341,17 @@ void RtxptGI::compile_initial_samples() noexcept {
                 signal_secondary -= fresh;
             }
         } $else {
-            rtxpt_gi::CandidateTraceResult empty;
-            rtxpt_proposals_.write(dispatch_id(), empty.proposal);
+            restir_gi::CandidateTraceResult empty;
+            restir_gi_proposals_.write(dispatch_id(), empty.proposal);
             samples_.write(dispatch_id(), empty.sample);
         };
         $if(!receiver_written || capture.receiver_bounce == InvalidUI32) {
-            rtxpt_gi::PTSurfaceView empty;
+            restir_gi::PTSurfaceView empty;
             if (!skip_surface) write_pt_surface(dispatch_id(), empty);
-            RtxptGIPrefixAuxVar aux; rtxpt_prefix_aux_.write(dispatch_id(), aux);
+            ReSTIRGIPrefixAuxVar aux; restir_gi_prefix_aux_.write(dispatch_id(), aux);
         };
         indirect = ocarina::zero_if_nan_inf(indirect);
-        rtxpt_bypass_.write(dispatch_id(), make_float4(indirect + stable, 0.f));
+        restir_gi_bypass_.write(dispatch_id(), make_float4(indirect + stable, 0.f));
         if (work_counters) path_work_counters_.write(dispatch_id(), *work_counters);
         if (storage.denoiser.enabled()) {
             if (buffer_signal_commit) {
@@ -1373,7 +1371,7 @@ void RtxptGI::compile_initial_samples() noexcept {
                 // Unmatched secondary slots still contain this frame's initial zeros.
                 finalize_plane(0u);
                 for (uint p = 1u; p < 3u; ++p) {
-                    $if(header[p] != rtxpt_gi::PrefixInvalid && header[p] != rtxpt_gi::PrefixQueued) {
+                    $if(header[p] != restir_gi::PrefixInvalid && header[p] != restir_gi::PrefixQueued) {
                         finalize_plane(p);
                     };
                 }
@@ -1398,10 +1396,10 @@ void RtxptGI::compile_initial_samples() noexcept {
         }
     };
     kernel.function()->set_block_dim(64u, 1u, 1u);
-    rtxpt_initial_samples_ = device().compile(kernel, "RTXPT GI shared PT initial candidates");
+    restir_gi_initial_samples_ = device().compile(kernel, "ReSTIR GI shared PT initial candidates");
 }
 
-GIParam RtxptGI::construct_param() const noexcept {
+GIParam ReSTIRGI::construct_param() const noexcept {
     GIParam param;
     param.camera_jitter = integrator()->jitter_primary_samples();
     param.max_age = max_age_;
@@ -1419,7 +1417,7 @@ GIParam RtxptGI::construct_param() const noexcept {
     return param;
 }
 
-CommandBatch RtxptGI::dispatch(uint frame_index, bool precise_lobes, BufferView<uint> primary_flags,
+CommandBatch ReSTIRGI::dispatch(uint frame_index, bool precise_lobes, BufferView<uint> primary_flags,
                                 float di_factor, float gi_factor, bool di_active) const noexcept {
     CommandBatch ret;
     const Pipeline *rp = pipeline();
@@ -1434,23 +1432,23 @@ CommandBatch RtxptGI::dispatch(uint frame_index, bool precise_lobes, BufferView<
     const char *stage_profile = std::getenv("VISION_STAGE_PROFILE");
     const bool synchronize_native_stages = stage_profile && string_view(stage_profile) == "1";
     if (synchronize_native_stages) ret << synchronize();
-    ret << rtxpt_prefix_build_(frame_index, primary_flags).dispatch(rp->resolution());
+    ret << restir_gi_prefix_build_(frame_index, primary_flags).dispatch(rp->resolution());
     if (synchronize_native_stages) ret << synchronize();
-    RtxptGICameraParam camera;
+    ReSTIRGICameraParam camera;
     const float4x4 world_to_camera = inverse(scene().sensor()->host_c2w());
     const float4x4 camera_to_raster = inverse(scene().sensor()->host_raster_to_sensor());
     for (uint column = 0u; column < 4u; ++column) {
         camera.columns[column] = world_to_camera[column];
         camera.columns[4u + column] = camera_to_raster[column];
     }
-    ret << rtxpt_initial_samples_(frame_index, camera, primary_flags).dispatch(rp->resolution());
+    ret << restir_gi_initial_samples_(frame_index, camera, primary_flags).dispatch(rp->resolution());
     if (path_cost::enabled()) ret << path_cost::capture(path_work_counters_.view(), frame_index, rp->resolution(), "gi");
     if (synchronize_native_stages) ret << synchronize();
     ret << dispatch_reuse(frame_index, param);
     return ret;
 }
 
-void RtxptGI::update_resolution(ocarina::uint2 res) noexcept {
+void ReSTIRGI::update_resolution(ocarina::uint2 res) noexcept {
     Pipeline *rp = pipeline();
     if (compact_radiance_) {
         raw_radiance_.super() = device().create_buffer<uint2>(rp->pixel_num(), radiance_->name() + " rgb21");
@@ -1459,8 +1457,8 @@ void RtxptGI::update_resolution(ocarina::uint2 res) noexcept {
         raw_radiance_.upload_immediately(zero.data());
     }
     if (reservoirs_.has_registered()) resize_reuse_buffers(res);
-    if (rtxpt_lights_) rtxpt_lights_->update_resolution(res);
-    prepare_rtxpt_candidate_buffers();
+    if (restir_gi_lights_) restir_gi_lights_->update_resolution(res);
+    prepare_restir_gi_candidate_buffers();
     if (native_reblur_enabled_) {
         prepare_native_reblur_buffers();
         if (reservoirs_.has_registered() && backend_error_.empty()) {
@@ -1469,29 +1467,29 @@ void RtxptGI::update_resolution(ocarina::uint2 res) noexcept {
     }
 
     samples_.super() = device().create_buffer<GISample>(rp->pixel_num(),
-                                                        "RtxptGI::samples_");
+                                                        "ReSTIRGI::samples_");
     samples_.register_self();
     vector<GISample> vec{rp->pixel_num(), GISample{}};
     samples_.upload_immediately(vec.data());
 }
 
-void RtxptGI::restore(RuntimeObject *old_obj) noexcept {
+void ReSTIRGI::restore(RuntimeObject *old_obj) noexcept {
     const auto *previous = hotfix::hotfix_detail::restore_source(*this, old_obj);
     if (!previous) return;
-    OC_ERROR_IF(!previous->radiance_->name().ends_with(" [gi-rtxpt-runtime-v4]"),
-                "RTXPT GI runtime resource layout changed; restart the engine before loading the new shaders.");
+    OC_ERROR_IF(!previous->radiance_->name().ends_with(" [restir-gi-runtime-v4]"),
+                "ReSTIR GI runtime resource layout changed; restart the engine before loading the new shaders.");
     ReSTIR::restore(old_obj);
     VS_HOTFIX_MOVE_ATTRS(radiance_, samples_, raw_radiance_, compact_radiance_, radiance_prepared_,
-                       unsupported_backend_, backend_error_, path_work_counters_, rtxpt_proposals_, rtxpt_bypass_, rtxpt_lights_, rtxpt_materials_,
-                       rtxpt_prefix_planes_, rtxpt_prefix_headers_, rtxpt_prefix_stable_, rtxpt_prefix_aux_, rtxpt_prefix_build_, rtxpt_initial_samples_,
+                       unsupported_backend_, backend_error_, path_work_counters_, restir_gi_proposals_, restir_gi_bypass_, restir_gi_lights_, restir_gi_materials_,
+                       restir_gi_prefix_planes_, restir_gi_prefix_headers_, restir_gi_prefix_stable_, restir_gi_prefix_aux_, restir_gi_prefix_build_, restir_gi_initial_samples_,
                        native_reblur_enabled_, native_reblur_diffuse_, native_reblur_specular_, native_reblur_bypass_, native_reblur_motion_y_,
                        reservoirs_, neighbors_, surfaces_, references_, extent_, temporal_shader_, spatial_shader_, final_shader_,
                        pt_validation_, pt_validation_output_, pt_validation_pending_, previous_frame_, previous_jitter_)
 }
 
-void RtxptGI::set_compact_radiance(bool compact) noexcept {
+void ReSTIRGI::set_compact_radiance(bool compact) noexcept {
     if (radiance_prepared_ && compact == compact_radiance_) return;
-    const string suffix = " [gi-rtxpt-runtime-v4]";
+    const string suffix = " [restir-gi-runtime-v4]";
     if (!radiance_->name().ends_with(suffix)) radiance_->set_name(radiance_->name() + suffix);
     ByteBufferView empty{handle_ty{0u}, 0u};
     if (radiance_prepared_) {
@@ -1519,7 +1517,7 @@ void RtxptGI::set_compact_radiance(bool compact) noexcept {
     radiance_prepared_ = true;
 }
 
-vector<float4> RtxptGI::download_radiance() const noexcept {
+vector<float4> ReSTIRGI::download_radiance() const noexcept {
     vector<float4> result(pipeline()->pixel_num());
     if (compact_radiance_) {
         vector<uint2> stored(result.size());
@@ -1531,64 +1529,64 @@ vector<float4> RtxptGI::download_radiance() const noexcept {
     return result;
 }
 
-void RtxptGI::prepare(bool compact_radiance) noexcept {
-    switch_profile::Scope profile{"RtxptGI::prepare", "buffers"};
+void ReSTIRGI::prepare(bool compact_radiance) noexcept {
+    switch_profile::Scope profile{"ReSTIRGI::prepare", "buffers"};
     Pipeline *rp = pipeline();
 
     set_compact_radiance(compact_radiance);
 
     samples_.super() = device().create_buffer<GISample>(rp->pixel_num(),
-                                                        "RtxptGI::samples_");
+                                                        "ReSTIRGI::samples_");
     samples_.register_self();
     vector<GISample> vec{rp->pixel_num(), GISample{}};
     samples_.upload_immediately(vec.data());
-    prepare_rtxpt_candidate_buffers();
+    prepare_restir_gi_candidate_buffers();
 }
 
-void RtxptGI::prepare_rtxpt_candidate_buffers() noexcept {
+void ReSTIRGI::prepare_restir_gi_candidate_buffers() noexcept {
     const uint pixels = pipeline()->pixel_num();
     if (path_cost::enabled()) path_work_counters_ = device().create_buffer<path_cost::PathWorkCounters>(pixels, "GI Fill work counters");
-    rtxpt_proposals_.super() = device().create_buffer<HitBSDF>(pixels,
-        "RtxptGI::rtxpt_proposals_ [native-standard-v1]");
-    rtxpt_proposals_.register_self();
+    restir_gi_proposals_.super() = device().create_buffer<HitBSDF>(pixels,
+        "ReSTIRGI::restir_gi_proposals_ [native-standard-v1]");
+    restir_gi_proposals_.register_self();
     vector<HitBSDF> proposals(pixels);
-    rtxpt_proposals_.upload_immediately(proposals.data());
-    rtxpt_bypass_.super() = device().create_buffer<float4>(pixels,
-        "RtxptGI::rtxpt_bypass_ [native-standard-v1]");
-    rtxpt_bypass_.register_self();
+    restir_gi_proposals_.upload_immediately(proposals.data());
+    restir_gi_bypass_.super() = device().create_buffer<float4>(pixels,
+        "ReSTIRGI::restir_gi_bypass_ [native-standard-v1]");
+    restir_gi_bypass_.register_self();
     vector<float4> bypass(pixels, make_float4(0.f));
-    rtxpt_bypass_.upload_immediately(bypass.data());
-    rtxpt_prefix_planes_.super() = device().create_buffer<RtxptGIPrefixPlane>(pixels * 3u,
-        "RTXPT GI private native three stable planes");
-    rtxpt_prefix_planes_.register_self();
-    rtxpt_prefix_headers_.super() = device().create_buffer<uint4>(pixels,
-        "RTXPT GI private stable plane headers");
-    rtxpt_prefix_headers_.register_self();
-    rtxpt_prefix_stable_.super() = device().create_buffer<float4>(pixels,
-        "RTXPT GI private stable emission without shared direct");
-    rtxpt_prefix_stable_.register_self();
-    rtxpt_prefix_aux_.super() = device().create_buffer<RtxptGIPrefixAux>(pixels,
-        "RTXPT GI private prefix aux and half motion [80B-v2]");
-    rtxpt_prefix_aux_.register_self();
+    restir_gi_bypass_.upload_immediately(bypass.data());
+    restir_gi_prefix_planes_.super() = device().create_buffer<ReSTIRGIPrefixPlane>(pixels * 3u,
+        "ReSTIR GI private native three stable planes");
+    restir_gi_prefix_planes_.register_self();
+    restir_gi_prefix_headers_.super() = device().create_buffer<uint4>(pixels,
+        "ReSTIR GI private stable plane headers");
+    restir_gi_prefix_headers_.register_self();
+    restir_gi_prefix_stable_.super() = device().create_buffer<float4>(pixels,
+        "ReSTIR GI private stable emission without shared direct");
+    restir_gi_prefix_stable_.register_self();
+    restir_gi_prefix_aux_.super() = device().create_buffer<ReSTIRGIPrefixAux>(pixels,
+        "ReSTIR GI private prefix aux and half motion [80B-v2]");
+    restir_gi_prefix_aux_.register_self();
 }
 
-void RtxptGI::prepare_native_reblur_buffers() noexcept {
+void ReSTIRGI::prepare_native_reblur_buffers() noexcept {
     const uint pixels = pipeline()->pixel_num();
     if (native_reblur_diffuse_.size() == size_t(pixels) * 3u &&
         native_reblur_motion_y_.size() == size_t(pixels) * 3u) return;
-    native_reblur_diffuse_ = device().create_buffer<float4>(size_t(pixels) * 3u, "RTXPT GI native REBLUR diffuse x3");
-    native_reblur_specular_ = device().create_buffer<float4>(size_t(pixels) * 3u, "RTXPT GI native REBLUR specular x3");
-    native_reblur_bypass_ = device().create_buffer<float4>(pixels, "RTXPT GI native deterministic stable radiance");
-    native_reblur_motion_y_ = device().create_buffer<float>(size_t(pixels) * 3u, "RTXPT GI native REBLUR FP32 motion Y x3");
+    native_reblur_diffuse_ = device().create_buffer<float4>(size_t(pixels) * 3u, "ReSTIR GI native REBLUR diffuse x3");
+    native_reblur_specular_ = device().create_buffer<float4>(size_t(pixels) * 3u, "ReSTIR GI native REBLUR specular x3");
+    native_reblur_bypass_ = device().create_buffer<float4>(pixels, "ReSTIR GI native deterministic stable radiance");
+    native_reblur_motion_y_ = device().create_buffer<float>(size_t(pixels) * 3u, "ReSTIR GI native REBLUR FP32 motion Y x3");
 }
 
-void RtxptGI::compile_denoiser_passes() noexcept {
+void ReSTIRGI::compile_denoiser_passes() noexcept {
     compile_initial_samples();
     compile_final();
     reset_history();
 }
 
-bool RtxptGI::set_native_reblur_enabled(bool enabled) noexcept {
+bool ReSTIRGI::set_native_reblur_enabled(bool enabled) noexcept {
     if (enabled == native_reblur_enabled_) return false;
     native_reblur_enabled_ = enabled;
     if (reservoirs_.has_registered() && backend_error_.empty()) {
@@ -1605,4 +1603,4 @@ bool RtxptGI::set_native_reblur_enabled(bool enabled) noexcept {
 }
 }// namespace vision
 
-VS_REGISTER_HOTFIX(vision, RtxptGI)
+VS_REGISTER_HOTFIX(vision, ReSTIRGI)

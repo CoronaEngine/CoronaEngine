@@ -1,20 +1,10 @@
-/*
-* Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
-*
-* NVIDIA CORPORATION and its licensors retain all intellectual property
-* and proprietary rights in and to this software, related documentation
-* and any modifications thereto.  Any use, reproduction, disclosure or
-* distribution of this software and related documentation without an express
-* license agreement from NVIDIA CORPORATION is strictly prohibited.
-*/
-
-#include "rtxpt_gi_pt.h"
-#include "rtxpt_gi_rays.h"
-#include "rtxpt_gi.h"
+#include "restir_gi_pt.h"
+#include "restir_gi_rays.h"
+#include "restir_gi.h"
 #include "base/integral/integrator.h"
 #include "base/scattering/gi_ideal_glass.h"
 
-namespace vision::rtxpt_gi {
+namespace vision::restir_gi {
 namespace {
 using namespace ocarina;
 
@@ -85,7 +75,7 @@ using namespace ocarina;
     return make_uint4(hit.inst_id, hit.prim_id, ocarina::as<uint2>(Float2{hit.bary}));
 }
 
-[[nodiscard]] inline Float4x4 unpack_transform(const RtxptGIPrefixPlaneVar &node) noexcept {
+[[nodiscard]] inline Float4x4 unpack_transform(const ReSTIRGIPrefixPlaneVar &node) noexcept {
     Float4 a = ocarina::as<float4>(Uint4{node.hit_words});
     Float4 b = node.virtual_position;
     Float4x4 result = identity();
@@ -99,7 +89,7 @@ void queue_pt_plane(const PrefixStorage &storage, const Uint &plane, const RayVa
                     const Float3 &beta, const Uint &depth, const Float &distance,
                     const Uint &branch, const Bool &dominant, const Bool &ideal_path, const Float &eta_scale,
                     const Float4x4 &matrix) {
-    RtxptGIPrefixPlaneVar node;
+    ReSTIRGIPrefixPlaneVar node;
     node.hit_words = as<uint4>(make_float4(matrix[0].xyz(), matrix[1].x));
     node.virtual_position = make_float4(matrix[1].yz(), matrix[2].xy());
     node.origin_distance = make_float4(ray->origin(), distance);
@@ -112,7 +102,7 @@ void queue_pt_plane(const PrefixStorage &storage, const Uint &plane, const RayVa
 
 }// namespace
 
-void build_pt_prefix(const PrefixStorage &storage, RtxptGI &env, const Uint &primary_flag) noexcept {
+void build_pt_prefix(const PrefixStorage &storage, ReSTIRGI &env, const Uint &primary_flag) noexcept {
     const auto &geometry = Toolkit::geometry();
     const auto &swl = env.sampled_wavelengths();
     auto &lights = Toolkit::renderer().light_sampler();
@@ -225,7 +215,7 @@ void build_pt_prefix(const PrefixStorage &storage, RtxptGI &env, const Uint &pri
             };
             $if(depth == 1u) { header.w = (as<uint>(travelled) & 0xfffffffcu) | (header.w & 3u); };
             $if(continued) { $continue; };
-            RtxptGIPrefixPlaneVar node;
+            ReSTIRGIPrefixPlaneVar node;
             node.hit_words = pack_hit(hit);
             node.origin_distance = make_float4(ray->origin(), travelled);
             node.direction_vertex = make_float4(ray->direction(), cast<float>(depth));

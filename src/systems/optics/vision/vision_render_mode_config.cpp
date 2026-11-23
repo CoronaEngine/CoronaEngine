@@ -107,7 +107,7 @@ void configure_vision_scene_for_mode(::vision::DataWrap& data,
         }
         set_default_vision_json_value(integrator_param["direct"], "max_recursion", 1);
         set_default_vision_json_value(integrator_param["direct"], "M_light", 10);
-        set_default_vision_json_value(integrator_param["indirect"], "backend", "rtxpt");
+        set_default_vision_json_value(integrator_param["indirect"], "backend", "restir_gi");
     }
     auto& denoiser = ensure_vision_json_object(integrator_param, "denoiser");
     const auto selected_denoiser = denoiser.value("type", std::string{});

@@ -13,8 +13,8 @@ import tempfile
 from unittest import SkipTest
 
 ROOT = Path(__file__).resolve().parents[3]
-SOURCE = ROOT / "vision/src/render_core/integrator/ReSTIR/rtxpt_gi_denoiser_prepare.h"
-MATH = SOURCE.with_name("rtxpt_gi_denoiser.h")
+SOURCE = ROOT / "vision/src/render_core/integrator/ReSTIR/restir_gi_denoiser_prepare.h"
+MATH = SOURCE.with_name("restir_gi_denoiser.h")
 TEMP = ROOT / ".workspace/tmp/gi-guide-reuse-20261119/conditioning-tests"
 
 
@@ -80,8 +80,8 @@ template<class T>struct Buffer {
     T read(uint i)const{++reads;return values.at(i);}
     void write(uint i,const T&v){++writes;values.at(i)=v;}
 };
-struct RtxptGIPrefixPlane {Float4 direction_vertex;};
-using RtxptGIPrefixPlaneVar=RtxptGIPrefixPlane;
+struct ReSTIRGIPrefixPlane {Float4 direction_vertex;};
+using ReSTIRGIPrefixPlaneVar=ReSTIRGIPrefixPlane;
 namespace reblur {
 struct Guide {Float4 position;Uint4 identity;Float4 normal_roughness,diffuse_factor,specular_factor;};
 using GuideVar=Guide;
@@ -96,7 +96,7 @@ void equal_bytes(const void*a,const void*b,std::size_t count,const char*message)
 }
 constexpr uint width=3u,height=3u,pixels=width*height;
 struct Fixture {
-    Buffer<RtxptGIPrefixPlane> planes{pixels*3u};
+    Buffer<ReSTIRGIPrefixPlane> planes{pixels*3u};
     Buffer<Uint4> headers{pixels};
     Buffer<reblur::Guide> guides{pixels*3u};
     Fixture(){
@@ -241,7 +241,7 @@ int main(){
 
 
 def test_pt_guide_loader_gates_stale_planes_and_reads_valid_miss_neighbors():
-    from test_rtxpt_gi_guide_reuse import _run_overlay_codec
+    from test_restir_gi_guide_reuse import _run_overlay_codec
 
     source = SOURCE.read_text(encoding="utf-8-sig")
     condition = "template<typename Planes, typename Headers>\n" + _function(
@@ -280,7 +280,7 @@ template<class T>struct CheckedBuffer {
     checks = r'''
         {
             constexpr uint width=3u,height=3u,pixels=width*height,center=4u;
-            CheckedBuffer<RtxptGIPrefixPlane> planes;
+            CheckedBuffer<ReSTIRGIPrefixPlane> planes;
             CheckedBuffer<Uint4> headers;
             CheckedBuffer<float> motion_y;
             for(auto&h:headers.values)h={7u,19u,31u,0u};
@@ -391,7 +391,7 @@ template<class T>struct CheckedBuffer {
             std::cout<<"PASS PT guide loader: "<<loader_cases<<" stale/queued/ineligible/consumed/miss-neighbor cases\n";
         }
 '''
-    _run_overlay_codec(prefix_source=SOURCE.with_name("rtxpt_gi_prefix_storage.h"),
+    _run_overlay_codec(prefix_source=SOURCE.with_name("restir_gi_prefix_storage.h"),
                        extra_helpers=shim + condition + loader, extra_checks=checks)
 
 
