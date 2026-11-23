@@ -116,7 +116,7 @@ settlement；C++ 侧的所有者另走 `cancel_context` 取消工作。
 5. 前端：改 facade → 推送 CoronaEditor → `python build_tools/dev.py pin editor <sha>` →
    `python build_tools/dev.py editor-sync`。
 6. `python -m pytest tests/tools` 与 `ctest`。
-7. 真机验证：按 [integration-smoke.md](integration-smoke.md) 构建 examples 运行时并跑冒烟套件与 CEF 冒烟。
+7. 真机验证：按 [integration-smoke.md](integration-smoke.md) 构建 examples 运行时并跑 CEF 冒烟。
 
 **已删除的两类机械校验**：接口行数 ratchet（测文件大小）与"代码 ↔ 手写名单逐名相等"
 （`test_editor_operation_table.py` 及另两个守卫里的逐名比对）。它们共有的毛病是"改接口必改
