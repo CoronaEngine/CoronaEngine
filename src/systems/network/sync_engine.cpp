@@ -59,8 +59,24 @@ struct SyncEngine::Impl {
     };
     std::unordered_map<std::string, IncomingEditorSnapshot> incoming_editor_snapshots;
 
-    // Snapshot: key → hash of last-synced value
-    std::unordered_map<std::string, std::string> last_synced;
+    /// 脏值键：只看 `(storage, entity_seq)`。字段名由 storage 唯一决定
+    /// （transform→xform / optics→optics / environment→env），迁移前把它编进字符串
+    /// key 只是每行多一次分配。
+    struct SnapshotKey {
+        StorageID storage{StorageID::ST_MODEL_TRANSFORM};
+        std::uint64_t entity_seq{0};
+        [[nodiscard]] bool operator==(const SnapshotKey&) const = default;
+    };
+    struct SnapshotKeyHash {
+        [[nodiscard]] std::size_t operator()(const SnapshotKey& key) const noexcept {
+            return std::hash<std::uint64_t>{}(
+                (static_cast<std::uint64_t>(key.storage) << 56) ^
+                (key.entity_seq & 0x00FFFFFFFFFFFFFFull));
+        }
+    };
+
+    // Snapshot: (storage, seq) → hash of last-synced value.
+    std::unordered_map<SnapshotKey, std::uint64_t, SnapshotKeyHash> last_synced;
     mutable std::mutex snapshot_mutex;
 
     /// 刚提交给拥有者线程的远端 environment 值（线上字节）。
@@ -69,7 +85,7 @@ struct SyncEngine::Impl {
     /// 提交时无法预写 `last_synced` 的 key（key 含本端环境实体的 seq）。下一帧构建
     /// 完成后（同一边界先应用写入、再构建帧），若帧里出现同一份字节，就在那里补记
     /// 对应 key 并跳过发送 —— 否则会把自己刚收到的远端值再广播回去一次。
-    std::optional<std::vector<uint8_t>> applied_environment_value;
+    std::optional<std::vector<std::uint8_t>> applied_environment_value;
 
     // Callbacks
     OnSyncOutgoing on_outgoing;
@@ -79,6 +95,7 @@ struct SyncEngine::Impl {
     ResolveActorGuidForEntity guid_for_entity;
     ResolveEntitySeqForActorGuid entity_for_guid;
     ResolveLocalOwnershipForEntity ownership_for_entity;
+    ResolveIdentityIndex identity_index;
 
     // Sequence counter for outgoing packets
     uint32_t seq = 0;
@@ -102,53 +119,27 @@ struct SyncEngine::Impl {
 
     Impl() : lww_state("uninitialized") {}
 
-    std::string make_key(StorageID sid, uint64_t entity_seq, const std::string& field) {
-        char buf[96];
-        std::snprintf(buf, sizeof(buf), "%u-%016llx-%s",
-                      static_cast<unsigned>(sid),
-                      static_cast<unsigned long long>(entity_seq),
-                      field.c_str());
-        return {buf};
-    }
-
-    struct ResolvedDirtyKey {
-        uint64_t entity_seq = 0;
-        std::string field;
-        bool valid = true;
-    };
-
-    ResolvedDirtyKey resolve_dirty_key(StorageID sid, uint64_t remote_entity_seq,
-                                       const std::string& key) const {
-        constexpr const char* kPrefix = "actor:";
-        const std::string prefix{kPrefix};
-        if (key.rfind(prefix, 0) == 0) {
-            auto field_sep = key.rfind(':');
-            if (field_sep != std::string::npos && field_sep > prefix.size()) {
-                auto guid = key.substr(prefix.size(), field_sep - prefix.size());
-                auto field = key.substr(field_sep + 1);
-                if (entity_for_guid) {
-                    auto local_seq = entity_for_guid(sid, guid);
-                    if (local_seq) {
-                        return {*local_seq, field};
-                    }
-                }
-                return {0, field, false};
-            }
-        }
-        return {remote_entity_seq, key};
-    }
-
-    bool check_snapshot(const std::string& snap_key, const std::string& cur_hash) {
+    /// 拥有者线程（帧构建）调用的**只读**脏值探针：不记账，因此一次被放弃的帧不会
+    /// 留下"已同步"的假记录。
+    [[nodiscard]] bool is_dirty(StorageID storage, std::uint64_t entity_seq,
+                                std::uint64_t hash) const {
         std::lock_guard lock(snapshot_mutex);
-        auto it = last_synced.find(snap_key);
-        if (it != last_synced.end() && it->second == cur_hash) return false;
-        last_synced[snap_key] = cur_hash;
+        const auto it = last_synced.find(SnapshotKey{storage, entity_seq});
+        return it == last_synced.end() || it->second != hash;
+    }
+
+    /// 网络线程（发送时）记账：变化了才返回 true 并写入新哈希。
+    bool check_snapshot(StorageID storage, std::uint64_t entity_seq, std::uint64_t hash) {
+        std::lock_guard lock(snapshot_mutex);
+        auto it = last_synced.find(SnapshotKey{storage, entity_seq});
+        if (it != last_synced.end() && it->second == hash) return false;
+        last_synced[SnapshotKey{storage, entity_seq}] = hash;
         return true;
     }
 
-    void set_snapshot(const std::string& snap_key, const std::string& cur_hash) {
+    void set_snapshot(StorageID storage, std::uint64_t entity_seq, std::uint64_t hash) {
         std::lock_guard lock(snapshot_mutex);
-        last_synced[snap_key] = cur_hash;
+        last_synced[SnapshotKey{storage, entity_seq}] = hash;
     }
 };
 
@@ -234,8 +225,7 @@ bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation
                                                 operation.actor_guid);
         if (!seq) return false;
         TransformState decoded{};
-        if (!decode_transform(operation.value.data(),
-                              static_cast<uint16_t>(operation.value.size()), decoded)) {
+        if (!decode_transform(operation.value.data(), operation.value.size(), decoded)) {
             // 畸形载荷：旧实现是 deserialize 静默 no-op 但仍标 applied，保持一致。
             return true;
         }
@@ -246,7 +236,7 @@ bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation
         if (!submit_remote_state(write)) return false;
         // 脏值哈希按"目标值"记账：下一轮 poll 只有真的与目标不一致时才回传，
         // 因此不会把自己刚收到的远程值再广播一次。
-        impl_->set_snapshot(impl_->make_key(StorageID::ST_MODEL_TRANSFORM, *seq, "xform"),
+        impl_->set_snapshot(StorageID::ST_MODEL_TRANSFORM, *seq,
                             hash_transform(decoded, *seq));
         return true;
     }
@@ -256,8 +246,7 @@ bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation
         const auto seq = impl_->entity_for_guid(StorageID::ST_OPTICS, operation.actor_guid);
         if (!seq) return false;
         OpticsPacked decoded{};
-        if (!decode_optics(operation.value.data(),
-                           static_cast<uint16_t>(operation.value.size()), decoded)) {
+        if (!decode_optics(operation.value.data(), operation.value.size(), decoded)) {
             // 畸形载荷（长度不是 sizeof(OpticsPacked)）：与旧实现的静默 no-op 一致。
             return true;
         }
@@ -266,15 +255,13 @@ bool SyncEngine::apply_operation_to_storage(const EditorSyncOperation& operation
         write.entity_seq = *seq;
         write.optics = decoded;
         if (!submit_remote_state(write)) return false;
-        impl_->set_snapshot(impl_->make_key(StorageID::ST_OPTICS, *seq, "optics"),
-                            hash_optics(decoded, *seq));
+        impl_->set_snapshot(StorageID::ST_OPTICS, *seq, hash_optics(decoded, *seq));
         return true;
     }
 
     if (operation.actor_guid == "__scene__" && operation.field_name == "environment") {
         EnvironmentState decoded{};
-        if (!decode_environment(operation.value.data(),
-                                static_cast<uint16_t>(operation.value.size()), decoded)) {
+        if (!decode_environment(operation.value.data(), operation.value.size(), decoded)) {
             // 畸形载荷（长度不是 20）：与旧实现的静默 no-op 一致。
             return true;
         }
@@ -327,6 +314,9 @@ void SyncEngine::shutdown() {
     impl_->last_synced.clear();
     impl_->pending_editor_operations.clear();
     impl_->incoming_editor_snapshots.clear();
+    impl_->applied_environment_value.reset();
+    // 未应用的远端写入不能落到下一个会话（实体序号会复用）。
+    reset_sync_boundary_state();
 }
 
 // ============================================================================
@@ -342,9 +332,21 @@ void SyncEngine::poll_and_sync() {
     // Task 2：组件读取与线上编码在**拥有者线程**的 tick 边界上完成
     //（`request_sync_frame()` 复用结构命令的存活性等待）。网络线程只做 dirty
     // 记账、LWW 版本与发包，不再 `Ecs::view` / `Ecs::get`。
+    //
+    // 本函数可能等待一个 tick 边界：调用方（`NetworkSystem::update()`）必须在
+    // `pending_mutex` **之外**调用它，UI 线程的 `process_pending_*` 才不会排在这
+    // 次等待后面。
     SyncFrameRequestOptions options;
-    options.guid_for_entity = impl_->guid_for_entity;
-    options.ownership_for_entity = impl_->ownership_for_entity;
+    if (impl_->identity_index) {
+        options.identity_index = impl_->identity_index();
+    } else {
+        options.guid_for_entity = impl_->guid_for_entity;
+        options.ownership_for_entity = impl_->ownership_for_entity;
+    }
+    options.is_dirty = [this](StorageID storage, std::uint64_t entity_seq,
+                              std::uint64_t hash) {
+        return impl_->is_dirty(storage, entity_seq, hash);
+    };
     auto frame = request_sync_frame(std::move(options));
     if (!frame) {
         // DAG 停机 / 已判定不推进：本 tick 不序列化。已入队的远端写入仍在通道里，
@@ -354,9 +356,10 @@ void SyncEngine::poll_and_sync() {
 
     // --- ModelTransform ---
     for (auto& row : frame->transforms) {
-        const auto snap_key = impl_->make_key(StorageID::ST_MODEL_TRANSFORM,
-                                              row.entity_seq, "xform");
-        if (!impl_->check_snapshot(snap_key, row.hash)) continue;
+        if (!impl_->check_snapshot(StorageID::ST_MODEL_TRANSFORM, row.entity_seq,
+                                   row.hash)) {
+            continue;
+        }
         EditorSyncOperation op;
         op.kind = EditorSyncOperationKind::Upsert;
         op.actor_guid = row.actor_guid;
@@ -377,9 +380,9 @@ void SyncEngine::poll_and_sync() {
 
     // --- OpticsDevice (logical material/editor state; geometry handle excluded) ---
     for (auto& row : frame->optics) {
-        const auto snap_key = impl_->make_key(StorageID::ST_OPTICS,
-                                              row.entity_seq, "optics");
-        if (!impl_->check_snapshot(snap_key, row.hash)) continue;
+        if (!impl_->check_snapshot(StorageID::ST_OPTICS, row.entity_seq, row.hash)) {
+            continue;
+        }
         EditorSyncOperation op;
         op.kind = EditorSyncOperationKind::Upsert;
         op.actor_guid = row.actor_guid;
@@ -394,17 +397,17 @@ void SyncEngine::poll_and_sync() {
 
     // --- EnvironmentDevice ---
     for (auto& row : frame->environments) {
-        const auto snap_key = impl_->make_key(StorageID::ST_ENVIRONMENT,
-                                              row.entity_seq, "env");
         // 刚提交的远端 environment 值：key 里的 seq 网络线程无法预知，在这里补记。
         if (impl_->applied_environment_value) {
             if (*impl_->applied_environment_value == row.value) {
-                impl_->set_snapshot(snap_key, row.hash);
+                impl_->set_snapshot(StorageID::ST_ENVIRONMENT, row.entity_seq, row.hash);
                 impl_->applied_environment_value.reset();
                 continue;
             }
         }
-        if (!impl_->check_snapshot(snap_key, row.hash)) continue;
+        if (!impl_->check_snapshot(StorageID::ST_ENVIRONMENT, row.entity_seq, row.hash)) {
+            continue;
+        }
         EditorSyncOperation op;
         op.kind = EditorSyncOperationKind::Upsert;
         op.actor_guid = "__scene__";
@@ -668,10 +671,12 @@ void SyncEngine::set_on_editor_operation_applied(OnEditorOperationApplied cb) {
 void SyncEngine::set_identity_mapping_callbacks(
     ResolveActorGuidForEntity guid_for_entity,
     ResolveEntitySeqForActorGuid entity_for_guid,
-    ResolveLocalOwnershipForEntity ownership_for_entity) {
+    ResolveLocalOwnershipForEntity ownership_for_entity,
+    ResolveIdentityIndex identity_index) {
     impl_->guid_for_entity = std::move(guid_for_entity);
     impl_->entity_for_guid = std::move(entity_for_guid);
     impl_->ownership_for_entity = std::move(ownership_for_entity);
+    impl_->identity_index = std::move(identity_index);
 }
 
 }  // namespace Corona::Network

@@ -3,12 +3,14 @@
 #include <corona/shared_data_hub.h>
 #include <corona/ecs/access.h>
 #include <corona/systems/network/protocol.h>
+#include <corona/systems/network/sync_codec.h>
 
 #include <cstdint>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace Corona::Network {
 
@@ -107,6 +109,31 @@ public:
         auto seq = identity_seq(it->second, storage_id);
         if (seq < 0) return std::nullopt;
         return static_cast<std::uint64_t>(seq);
+    }
+
+    /// 出站同步帧的身份索引快照：`(storage, seq) → (guid, locally_owned)`。
+    ///
+    /// 一次锁、O(actors)，由网络线程每帧调用一次；拥有者线程随后做 O(1) 查表。
+    /// 这取代了"每个实体在 tick 边界上线性扫描 actors_"的 O(entities×actors) 成本。
+    /// 只投影同步关心的两类存储（transform / optics），不复制句柄与其它序号。
+    [[nodiscard]] std::vector<SyncIdentityEntry> sync_identity_index() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::vector<SyncIdentityEntry> rows;
+        rows.reserve(actors_.size() * 2);
+        for (const auto& [guid, identity] : actors_) {
+            if (identity.transform_seq >= 0) {
+                rows.push_back(SyncIdentityEntry{
+                    StorageID::ST_MODEL_TRANSFORM,
+                    static_cast<std::uint64_t>(identity.transform_seq), guid,
+                    identity.locally_owned});
+            }
+            if (identity.optics_seq >= 0) {
+                rows.push_back(SyncIdentityEntry{StorageID::ST_OPTICS,
+                                                 static_cast<std::uint64_t>(identity.optics_seq),
+                                                 guid, identity.locally_owned});
+            }
+        }
+        return rows;
     }
 
     void unregister_actor(const std::string& actor_guid) {

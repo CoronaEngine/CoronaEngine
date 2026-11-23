@@ -10,11 +10,14 @@ touched by a single thread. Every create/destroy/iterate/fetch from another thre
   settle at the tick boundary, Tasks 1a + 1b). `SharedDataHub::create_*` / `destroy_*`
   are owner-side primitives for the tick-boundary appliers, the DAG systems and
   single-threaded test fixtures only;
-- network reads/writes: zero direct touches since Task 2. `sync_engine.cpp` requests a
-  serialized frame from the tick boundary (`sync_boundary.h::request_sync_frame`) and
-  hands incoming remote state to the same boundary (`submit_remote_state`); the
-  component reads/writes live in `src/systems/network/sync_boundary.cpp`, which is an
-  owner-thread file (registered on the structural channel's tick boundary);
+- network reads/writes: zero direct touches **in network translation units** since
+  Task 2. `sync_engine.cpp` requests a serialized frame from the tick boundary
+  (`sync_boundary.h::request_sync_frame`) and hands incoming remote state to the same
+  boundary (`submit_remote_state`); the component reads/writes live in
+  `src/systems/network/sync_boundary.cpp`, which is an owner-thread file (registered on
+  the structural channel's tick boundary). NOT clean yet: the header-only
+  `NetworkIdentityRegistry::register_actor()` (see `KNOWN_HEADER_VIOLATIONS`) still reads
+  components and its production caller runs on the network thread;
 - one non-owner read remains on the UI candidate-surface path (see `EXCEPTIONS`).
 
 So this guard does NOT prove "exactly one thread touches the registry" today. It
@@ -26,6 +29,13 @@ Registry access is matched per line with the whole accessor family:
 
     Ecs::World::instance()  Ecs::emplace  Ecs::destroy  Ecs::view<  Ecs::get<
     Ecs::all_components<  Ecs::try_get  Ecs::try_get_const  Ecs::alive
+
+Network translation units are also matched against the owner-side convenience accessors
+(`Corona::find_*` / `try_*`): the header-only escape is documented in
+`KNOWN_HEADER_VIOLATIONS`, and a *.cpp* in `src/systems/network/` must not reintroduce
+those reads. The accessor family is not enforced engine-wide yet: many pre-existing
+non-owner call sites read components through it (Tasks 5/6 territory), and adding them to
+the global list here would only pile up new allowances.
 
 Lines, not counts: swapping `view<T>` for `all_components<T>` keeps a count equal
 but changes the line, so it fails here instead of silently staying a violation.
@@ -110,6 +120,32 @@ EXCEPTIONS = {
 STRUCTURAL_PRIMITIVE = re.compile(
     r"\b(?:create|destroy)_(?:model_resource|transform|geometry|mechanics|acoustics"
     r"|optics|profile_component|actor_component|camera|environment|scene|image)\s*\(")
+
+# The owner-side convenience accessors (`Corona::find_actor`, `hub.try_optics`, ...).
+# They are registry reads with no synchronization; the header-only network-identity read
+# escaped the `Ecs::` token list through them. Enforced for network *.cpp* units (where
+# Task 2 closed the registry access); NOT engine-wide yet because many pre-existing
+# non-owner call sites use them (Tasks 5/6 territory) and adding them to the global list
+# would only pile up new allowances.
+ACCESSOR_FAMILY = re.compile(
+    r"\b(?:find_(?:actor|profiles|profile|transform|optics|visibility|geometry"
+    r"|model_resource|mechanics|bounds|scene|camera|model_source|streaming|model_path"
+    r"|follow_camera|environment|acoustics|image)"
+    r"|try_(?:actor|profiles|profile|transform|optics|visibility|geometry"
+    r"|model_resource|mechanics|bounds|scene|camera|model_source|streaming|model_path"
+    r"|follow_camera|environment|acoustics|image))\s*\(")
+
+# Known header-only violations the .cpp scanner cannot see. Each entry is a named
+# follow-up, not an allowance: the test asserts the file still exists so this note
+# cannot go stale silently.
+KNOWN_HEADER_VIOLATIONS = {
+    "include/corona/systems/network/network_identity.h":
+        "NetworkIdentityRegistry::register_actor() reads ActorDevice / Profiles / "
+        "GeometryDevice / OpticsDevice / MechanicsDevice / AcousticsDevice through "
+        "find_*/try_*, and its production caller (the RegisterActorIdentity command in "
+        "network_system.cpp) is drained on the network thread. Out of Task 2 scope; "
+        "named follow-up in task-2-report.md §9",
+}
 
 
 def production_sources():
@@ -350,6 +386,9 @@ def test_network_serialisation_runs_on_the_owner_side_of_the_tick_boundary():
         "NetworkSystem::initialize must register the sync boundary on the ECS tick boundary")
     assert "&Corona::Network::apply_pending_sync_boundary" in network, (
         "the registered boundary task must be the owner-side sync applier")
+    assert "add_tick_boundary_stop_task" in channel
+    assert "&Corona::Network::reset_sync_boundary_state" in network, (
+        "the DAG stop hook must clear queued remote writes (no writes across a restart)")
 
     owner = read(ROOT / "src" / "systems" / "network" / "sync_boundary.cpp")
     assert "Ecs::view<" in owner, (
@@ -366,3 +405,31 @@ def test_network_serialisation_runs_on_the_owner_side_of_the_tick_boundary():
     # the owner-side .cpp, listed in OWNER_FILES).
     boundary = read(ROOT / "include" / "corona" / "systems" / "network" / "sync_boundary.h")
     assert "Ecs::view<" not in boundary and "Ecs::get<" not in boundary
+
+
+def test_network_translation_units_do_not_use_registry_accessors():
+    # The `Ecs::` token list above cannot see the owner-side convenience accessors
+    # (`Corona::find_*` / `try_*`), which is exactly how the header-only network-identity
+    # read escapes it. Enforce the family for network .cpp units: a new direct accessor
+    # read on the network thread must fail instead of hiding behind the `Ecs::` spelling.
+    offenders = []
+    network_src = SRC / "systems" / "network"
+    for path in sorted(network_src.rglob("*.cpp")):
+        name = relative(path)
+        if name in OWNER_FILES:
+            # The owner-side applier is allowed to read components; it runs on the owner.
+            continue
+        for number, line in enumerate(read(path).splitlines(), start=1):
+            if ACCESSOR_FAMILY.search(line):
+                offenders.append(f"{name}:{number}: {line.strip()}")
+    assert not offenders, (
+        "network translation units must not read components through the owner-side "
+        "accessors (that is a registry read on the network thread):\n  " +
+        "\n  ".join(offenders))
+
+
+def test_known_header_only_violations_are_named_and_still_exist():
+    for name, reason in KNOWN_HEADER_VIOLATIONS.items():
+        assert (ROOT / name).is_file(), (
+            f"stale known header violation: {name} no longer exists; remove the entry")
+        assert reason.strip(), f"{name} needs a reason / follow-up reference"

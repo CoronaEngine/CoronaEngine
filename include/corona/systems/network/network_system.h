@@ -155,7 +155,7 @@ public:
      * @param scene_name 场景路径（如 "scene.ini"）
      * @param model_path 模型相对路径（如 "Resource/ball.obj"）
      * @param transform  9 个 float: position(3) + rotation(3) + scale(3)
-     * @param optics_packed 打包的 OpticsPacked 结构 (72 字节)
+     * @param optics_packed 打包的 OpticsPacked 结构（84 字节；线上布局见 sync_codec.h）
      * @param optics_size   optics_packed 的大小
      * @param actor_json    完整 Actor 数据 JSON，用于保留别名和基础状态
      */

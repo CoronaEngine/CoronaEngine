@@ -13,6 +13,9 @@
 
 namespace Corona::Network {
 
+/// 身份索引快照的一行；定义在 `sync_codec.h`（这里只作参数类型声明）。
+struct SyncIdentityEntry;
+
 /**
  * @brief Poll-sync engine: dirty-poll the owner-thread sync frame → serialize →
  *        broadcast; receive versioned EDITOR_SYNC operations → LWW merge → write
@@ -40,6 +43,8 @@ public:
                                               const std::string& actor_guid)>;
     using ResolveLocalOwnershipForEntity =
         std::function<std::optional<bool>(StorageID storage_id, uint64_t entity_seq)>;
+    /// 身份索引快照（一次锁、O(actors)），拥有者线程用 O(1) 表解析每帧的身份。
+    using ResolveIdentityIndex = std::function<std::vector<SyncIdentityEntry>()>;
 
     SyncEngine();
     ~SyncEngine();
@@ -99,7 +104,8 @@ public:
     void set_on_editor_operation_applied(OnEditorOperationApplied cb);
     void set_identity_mapping_callbacks(ResolveActorGuidForEntity guid_for_entity,
                                         ResolveEntitySeqForActorGuid entity_for_guid,
-                                        ResolveLocalOwnershipForEntity ownership_for_entity = {});
+                                        ResolveLocalOwnershipForEntity ownership_for_entity = {},
+                                        ResolveIdentityIndex identity_index = {});
 
     /// Apply one versioned editor operation. Exposed for transport adapters
     /// and focused tests; normal network traffic enters via handle_incoming().

@@ -8,15 +8,16 @@
 /// - 拥有者线程（DAG tick 边界）从组件编码出 `value` 字节；
 /// - 网络线程从 `value` 字节解码出待发送/待落地的值（编码/解码本身不碰 registry）。
 ///
-/// 哈希函数与迁移前 `sync_engine.cpp` 里的逐字段实现**逐字节一致**：同样的混入顺序、
-/// 同样的 `uint64_t h = entity_seq` 起点、同样的 `%016llx` 输出。脏值比较里
-/// `last_synced` 只存在内存中，但保持一致仍然重要 —— 它让这次改动只是换线程，
-/// 不是换判定。
+/// 哈希函数只用于**脏值判定**（`last_synced` 只在内存里），不上线。迁移前的实现把
+/// `ktm::fvec3` 的整个 16 字节存储（含 padding）混进哈希；这里改为混"线上值的 9 个
+/// float"，因此哈希值与旧实现不同 —— 但两端（拥有者线程的出站帧与网络线程的入站记账）
+/// 用的是同一个函数，且没有持久化，所以判定语义等价：**线上字节逐字节相同，哈希输入
+/// 变干净了**。
 
 #include <corona/systems/network/protocol.h>
 
+#include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -61,6 +62,17 @@ struct EnvironmentState {
     float exposure{1.0f};
 };
 
+/// 身份解析的一行：出站帧需要 `(storage, seq) → (actor guid, 本地所有权)`。
+///
+/// 由网络线程每帧从身份注册表取一次快照（一次锁、O(actors)），再随帧请求交给拥有者
+/// 线程做 O(1) 查表。这样 tick 边界上不再对每个实体做一次 O(actors) 线性扫描。
+struct SyncIdentityEntry {
+    StorageID storage{StorageID::ST_MODEL_TRANSFORM};
+    std::uint64_t entity_seq{0};
+    std::string actor_guid;
+    bool locally_owned{true};
+};
+
 namespace sync_codec_detail {
 
 inline void mix_bytes(std::uint64_t& hash, const void* data, std::size_t size) {
@@ -70,26 +82,21 @@ inline void mix_bytes(std::uint64_t& hash, const void* data, std::size_t size) {
     }
 }
 
-inline std::string hash_hex(std::uint64_t hash) {
-    char buffer[24];
-    std::snprintf(buffer, sizeof(buffer), "%016llx",
-                  static_cast<unsigned long long>(hash));
-    return std::string{buffer};
-}
-
 }  // namespace sync_codec_detail
 
 // ----------------------------------------------------------------------------
-// 脏值哈希（与迁移前逐字段实现一致）
+// 脏值哈希（输入是线上值，不含 fvec3/结构体 padding）
 // ----------------------------------------------------------------------------
 
-inline std::string hash_transform(const TransformState& state, std::uint64_t entity_seq) {
+[[nodiscard]] inline std::uint64_t hash_transform(const TransformState& state,
+                                                  std::uint64_t entity_seq) {
     std::uint64_t hash = entity_seq;
     sync_codec_detail::mix_bytes(hash, state.xform, sizeof(state.xform));
-    return sync_codec_detail::hash_hex(hash);
+    return hash;
 }
 
-inline std::string hash_optics(const OpticsPacked& packed, std::uint64_t entity_seq) {
+[[nodiscard]] inline std::uint64_t hash_optics(const OpticsPacked& packed,
+                                               std::uint64_t entity_seq) {
     std::uint64_t hash = entity_seq;
     sync_codec_detail::mix_bytes(hash, &packed.visible, sizeof(packed.visible));
     sync_codec_detail::mix_bytes(hash, &packed.bEnableLighting, sizeof(packed.bEnableLighting));
@@ -107,28 +114,29 @@ inline std::string hash_optics(const OpticsPacked& packed, std::uint64_t entity_
     sync_codec_detail::mix_bytes(hash, packed.diffuse, sizeof(packed.diffuse));
     sync_codec_detail::mix_bytes(hash, packed.specular_color, sizeof(packed.specular_color));
     sync_codec_detail::mix_bytes(hash, &packed.shininess, sizeof(packed.shininess));
-    return sync_codec_detail::hash_hex(hash);
+    return hash;
 }
 
-inline std::string hash_environment(const EnvironmentState& state, std::uint64_t entity_seq) {
+[[nodiscard]] inline std::uint64_t hash_environment(const EnvironmentState& state,
+                                                    std::uint64_t entity_seq) {
     std::uint64_t hash = entity_seq;
     sync_codec_detail::mix_bytes(hash, state.sun_position, sizeof(state.sun_position));
     sync_codec_detail::mix_bytes(hash, &state.sun_intensity, sizeof(state.sun_intensity));
     sync_codec_detail::mix_bytes(hash, &state.exposure, sizeof(state.exposure));
-    return sync_codec_detail::hash_hex(hash);
+    return hash;
 }
 
 // ----------------------------------------------------------------------------
 // 编码（拥有者线程从组件 → 线上字节）
 // ----------------------------------------------------------------------------
 
-inline std::vector<std::uint8_t> encode_transform(const TransformState& state) {
+[[nodiscard]] inline std::vector<std::uint8_t> encode_transform(const TransformState& state) {
     std::vector<std::uint8_t> value(sizeof(state.xform));
     std::memcpy(value.data(), state.xform, sizeof(state.xform));
     return value;
 }
 
-inline std::vector<std::uint8_t> encode_optics(const OpticsPacked& packed) {
+[[nodiscard]] inline std::vector<std::uint8_t> encode_optics(const OpticsPacked& packed) {
     // 整份快照逐字节拷贝（含编译器插入的 padding），与迁移前一致：对端用同一个
     // `sizeof(OpticsPacked)` 校验长度，不解释 padding。
     std::vector<std::uint8_t> value(sizeof(packed));
@@ -136,7 +144,8 @@ inline std::vector<std::uint8_t> encode_optics(const OpticsPacked& packed) {
     return value;
 }
 
-inline std::vector<std::uint8_t> encode_environment(const EnvironmentState& state) {
+[[nodiscard]] inline std::vector<std::uint8_t> encode_environment(
+    const EnvironmentState& state) {
     std::vector<std::uint8_t> value(5 * sizeof(float));
     std::memcpy(value.data(), state.sun_position, sizeof(state.sun_position));
     std::memcpy(value.data() + sizeof(state.sun_position), &state.sun_intensity,
@@ -147,11 +156,12 @@ inline std::vector<std::uint8_t> encode_environment(const EnvironmentState& stat
 }
 
 // ----------------------------------------------------------------------------
-// 解码（网络线程从线上字节 → 值；畸形长度一律失败，交给调用方保留旧行为）
+// 解码（网络线程从线上字节 → 值；长度必须**精确**匹配，畸形载荷一律失败）
 // ----------------------------------------------------------------------------
 
-inline bool decode_transform(const std::uint8_t* value, std::uint16_t value_len,
-                             TransformState& out) {
+[[nodiscard]] inline bool decode_transform(const std::uint8_t* value,
+                                           std::size_t value_len,
+                                           TransformState& out) {
     if (value == nullptr || value_len != sizeof(out.xform)) {
         return false;
     }
@@ -159,8 +169,8 @@ inline bool decode_transform(const std::uint8_t* value, std::uint16_t value_len,
     return true;
 }
 
-inline bool decode_optics(const std::uint8_t* value, std::uint16_t value_len,
-                          OpticsPacked& out) {
+[[nodiscard]] inline bool decode_optics(const std::uint8_t* value, std::size_t value_len,
+                                        OpticsPacked& out) {
     if (value == nullptr || value_len != sizeof(out)) {
         return false;
     }
@@ -168,8 +178,9 @@ inline bool decode_optics(const std::uint8_t* value, std::uint16_t value_len,
     return true;
 }
 
-inline bool decode_environment(const std::uint8_t* value, std::uint16_t value_len,
-                               EnvironmentState& out) {
+[[nodiscard]] inline bool decode_environment(const std::uint8_t* value,
+                                             std::size_t value_len,
+                                             EnvironmentState& out) {
     if (value == nullptr || value_len != 5 * sizeof(float)) {
         return false;
     }

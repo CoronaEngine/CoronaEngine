@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -31,6 +32,13 @@ constexpr auto kRemoteOpticsFields =
     Corona::OpticsField::Clearcoat | Corona::OpticsField::ClearcoatGloss |
     Corona::OpticsField::Ambient | Corona::OpticsField::Diffuse |
     Corona::OpticsField::SpecularColor | Corona::OpticsField::Shininess;
+
+/// 入站队列上限（与 `Kernel::CommandBuffer` 的 4096 同一先例）。
+///
+/// 队列按 `(storage, entity_seq)` 合并，所以正常情况下规模不超过"本端有多少个可被
+/// 远端写入的实体"；4096 是防御"对端刷同一个/不同 key"的安全阀，溢出丢最旧并计数，
+/// 绝不把溢出推回 `pending_editor_operations`（那条队列没有上限）。
+constexpr std::size_t kMaxQueuedRemoteWrites = 4096;
 
 /// `Ecs::seq_of(handle)` 的反向映射：对外序号就是实体索引，所以句柄 = seq + 1。
 ///
@@ -58,6 +66,21 @@ struct FrameRequestCommand {
     SyncFrameRequestOptions options;
     std::string what;
 };
+
+/// 入站写入的合并键：`storage` 高 8 位 + 实体序号。
+///
+/// 实体序号是 63 位（`Ecs::seq_of`），这里取低 56 位已经远超任何真实场景；高位放
+/// storage 保证不同种类的写入不会互相覆盖。
+[[nodiscard]] std::uint64_t write_key(const RemoteStateWrite& write) noexcept {
+    return (static_cast<std::uint64_t>(write.storage) << 56) |
+           (write.entity_seq & 0x00FFFFFFFFFFFFFFull);
+}
+
+[[nodiscard]] std::uint64_t identity_key(StorageID storage,
+                                         std::uint64_t entity_seq) noexcept {
+    return (static_cast<std::uint64_t>(storage) << 56) |
+           (entity_seq & 0x00FFFFFFFFFFFFFFull);
+}
 
 // ---------------------------------------------------------------------------
 // 拥有者线程：入站远端状态 → 组件
@@ -140,104 +163,158 @@ struct FrameRequestCommand {
 // 拥有者线程：组件 → 一帧出站状态（唯一的 registry 读取点）
 // ---------------------------------------------------------------------------
 
+/// 身份索引（每帧一次）：key = `storage << 56 | seq`，值 = 该行的 guid/所有权。
+///
+/// 网络线程在请求帧时把注册表快照放进 `options.identity_index`，这里只做 O(1) 查表；
+/// 索引为空时退回逐实体回调（旧调用方 / 单线程夹具），那条路径的复杂度才是 O(actors)。
+using IdentityIndex = std::unordered_map<std::uint64_t, const SyncIdentityEntry*>;
+
+[[nodiscard]] IdentityIndex make_identity_index(const SyncFrameRequestOptions& options) {
+    IdentityIndex index;
+    index.reserve(options.identity_index.size());
+    for (const auto& entry : options.identity_index) {
+        index.emplace(identity_key(entry.storage, entry.entity_seq), &entry);
+    }
+    return index;
+}
+
+struct ResolvedIdentity {
+    std::string actor_guid;
+    bool locally_owned{true};
+};
+
+[[nodiscard]] std::optional<ResolvedIdentity> resolve_identity(
+    const SyncFrameRequestOptions& options, const IdentityIndex& index, StorageID storage,
+    std::uint64_t entity_seq) {
+    if (!options.identity_index.empty()) {
+        const auto it = index.find(identity_key(storage, entity_seq));
+        if (it == index.end()) {
+            return std::nullopt;
+        }
+        return ResolvedIdentity{it->second->actor_guid, it->second->locally_owned};
+    }
+    // 回退路径：逐实体回调（没有索引快照的旧调用方 / 单线程夹具）。
+    if (!options.guid_for_entity) {
+        return std::nullopt;
+    }
+    auto actor_guid = options.guid_for_entity(storage, entity_seq);
+    if (actor_guid.empty()) {
+        return std::nullopt;
+    }
+    bool locally_owned = true;
+    if (options.ownership_for_entity) {
+        const auto owned = options.ownership_for_entity(storage, entity_seq);
+        if (owned) {
+            locally_owned = *owned;
+        }
+    }
+    return ResolvedIdentity{std::move(actor_guid), locally_owned};
+}
+
 [[nodiscard]] SyncFrame build_frame(const SyncFrameRequestOptions& options) {
     SyncFrame frame;
-
-    // 与迁移前的 `poll_and_sync()` 完全同序、同过滤条件、同哈希：
-    //   guid 解析失败 → 不发送；本地所有权明确为 false → 不发送；哈希不变 → 不发送
-    // （最后一步留在网络线程，避免把 `last_synced` 变成跨线程状态）。
-    if (options.guid_for_entity) {
-        for (const auto entity : Corona::Ecs::view<Corona::ModelTransform>()) {
-            const auto handle = Corona::Ecs::to_handle(entity);
-            const auto entity_seq = static_cast<std::uint64_t>(Corona::Ecs::seq_of(handle));
-            auto actor_guid =
-                options.guid_for_entity(StorageID::ST_MODEL_TRANSFORM, entity_seq);
-            if (actor_guid.empty()) {
-                continue;
-            }
-            if (options.ownership_for_entity) {
-                const auto locally_owned = options.ownership_for_entity(
-                    StorageID::ST_MODEL_TRANSFORM, entity_seq);
-                if (locally_owned && !*locally_owned) {
-                    continue;
-                }
-            }
-            const auto* data = Corona::Ecs::try_get<Corona::ModelTransform>(handle);
-            if (data == nullptr) {
-                continue;
-            }
-            TransformState state{};
-            state.xform[0] = data->position.x;
-            state.xform[1] = data->position.y;
-            state.xform[2] = data->position.z;
-            state.xform[3] = data->euler_rotation.x;
-            state.xform[4] = data->euler_rotation.y;
-            state.xform[5] = data->euler_rotation.z;
-            state.xform[6] = data->scale.x;
-            state.xform[7] = data->scale.y;
-            state.xform[8] = data->scale.z;
-            SyncFrameRow row;
-            row.entity_seq = entity_seq;
-            row.actor_guid = std::move(actor_guid);
-            row.hash = hash_transform(state, entity_seq);
-            row.value = encode_transform(state);
-            frame.transforms.push_back(std::move(row));
+    // 身份索引表按需构建：干净帧（稳态下大多数帧）一行都不脏，就不该为它分配
+    // 一张 (storage, seq) 表。dirty 行出现时才建一次，之后 O(1) 查表。
+    IdentityIndex index;
+    bool index_ready = false;
+    auto resolve = [&options, &index, &index_ready](StorageID storage,
+                                                    std::uint64_t entity_seq)
+        -> std::optional<ResolvedIdentity> {
+        if (!options.identity_index.empty() && !index_ready) {
+            index = make_identity_index(options);
+            index_ready = true;
         }
+        return resolve_identity(options, index, storage, entity_seq);
+    };
 
-        for (const auto entity : Corona::Ecs::view<Corona::OpticsDevice>()) {
-            const auto handle = Corona::Ecs::to_handle(entity);
-            const auto entity_seq = static_cast<std::uint64_t>(Corona::Ecs::seq_of(handle));
-            auto actor_guid = options.guid_for_entity(StorageID::ST_OPTICS, entity_seq);
-            if (actor_guid.empty()) {
-                continue;
-            }
-            if (options.ownership_for_entity) {
-                const auto locally_owned =
-                    options.ownership_for_entity(StorageID::ST_OPTICS, entity_seq);
-                if (locally_owned && !*locally_owned) {
-                    continue;
-                }
-            }
-            const auto* data = Corona::Ecs::try_get<Corona::OpticsDevice>(handle);
-            if (data == nullptr) {
-                continue;
-            }
-            const auto* visibility = Corona::Ecs::try_get<Corona::Ecs::Visibility>(handle);
-
-            OpticsPacked packed{};
-            // `OpticsPacked` 的默认值就是迁移前"没有 Visibility 时"的默认值。
-            if (visibility != nullptr) {
-                packed.visible = visibility->visible;
-                packed.bEnableLighting = visibility->receives_lighting;
-            }
-            packed.metallic = data->metallic;
-            packed.roughness = data->roughness;
-            packed.subsurface = data->subsurface;
-            packed.specular = data->specular;
-            packed.specularTint = data->specularTint;
-            packed.anisotropic = data->anisotropic;
-            packed.sheen = data->sheen;
-            packed.sheenTint = data->sheenTint;
-            packed.clearcoat = data->clearcoat;
-            packed.clearcoatGloss = data->clearcoatGloss;
-            packed.ambient[0] = data->ambient.x;
-            packed.ambient[1] = data->ambient.y;
-            packed.ambient[2] = data->ambient.z;
-            packed.diffuse[0] = data->diffuse.x;
-            packed.diffuse[1] = data->diffuse.y;
-            packed.diffuse[2] = data->diffuse.z;
-            packed.specular_color[0] = data->specular_color.x;
-            packed.specular_color[1] = data->specular_color.y;
-            packed.specular_color[2] = data->specular_color.z;
-            packed.shininess = data->shininess;
-
-            SyncFrameRow row;
-            row.entity_seq = entity_seq;
-            row.actor_guid = std::move(actor_guid);
-            row.hash = hash_optics(packed, entity_seq);
-            row.value = encode_optics(packed);
-            frame.optics.push_back(std::move(row));
+    // 顺序与迁移前一致：transform → optics → environment。每个实体先算哈希、问一次
+    // "脏吗"（网络线程的 `last_synced`，只读探针），不脏就跳过身份解析与字节编码；
+    // 脏了才查身份索引、检查所有权、编码线上字节。
+    for (const auto entity : Corona::Ecs::view<Corona::ModelTransform>()) {
+        const auto handle = Corona::Ecs::to_handle(entity);
+        const auto entity_seq = static_cast<std::uint64_t>(Corona::Ecs::seq_of(handle));
+        const auto* data = Corona::Ecs::try_get<Corona::ModelTransform>(handle);
+        if (data == nullptr) {
+            continue;
         }
+        TransformState state{};
+        state.xform[0] = data->position.x;
+        state.xform[1] = data->position.y;
+        state.xform[2] = data->position.z;
+        state.xform[3] = data->euler_rotation.x;
+        state.xform[4] = data->euler_rotation.y;
+        state.xform[5] = data->euler_rotation.z;
+        state.xform[6] = data->scale.x;
+        state.xform[7] = data->scale.y;
+        state.xform[8] = data->scale.z;
+        const auto hash = hash_transform(state, entity_seq);
+        if (options.is_dirty &&
+            !options.is_dirty(StorageID::ST_MODEL_TRANSFORM, entity_seq, hash)) {
+            continue;
+        }
+        auto identity = resolve(StorageID::ST_MODEL_TRANSFORM, entity_seq);
+        if (!identity || !identity->locally_owned) {
+            continue;
+        }
+        SyncFrameRow row;
+        row.entity_seq = entity_seq;
+        row.actor_guid = std::move(identity->actor_guid);
+        row.hash = hash;
+        row.value = encode_transform(state);
+        frame.transforms.push_back(std::move(row));
+    }
+
+    for (const auto entity : Corona::Ecs::view<Corona::OpticsDevice>()) {
+        const auto handle = Corona::Ecs::to_handle(entity);
+        const auto entity_seq = static_cast<std::uint64_t>(Corona::Ecs::seq_of(handle));
+        const auto* data = Corona::Ecs::try_get<Corona::OpticsDevice>(handle);
+        if (data == nullptr) {
+            continue;
+        }
+        const auto* visibility = Corona::Ecs::try_get<Corona::Ecs::Visibility>(handle);
+
+        OpticsPacked packed{};
+        // `OpticsPacked` 的默认值就是迁移前"没有 Visibility 时"的默认值。
+        if (visibility != nullptr) {
+            packed.visible = visibility->visible;
+            packed.bEnableLighting = visibility->receives_lighting;
+        }
+        packed.metallic = data->metallic;
+        packed.roughness = data->roughness;
+        packed.subsurface = data->subsurface;
+        packed.specular = data->specular;
+        packed.specularTint = data->specularTint;
+        packed.anisotropic = data->anisotropic;
+        packed.sheen = data->sheen;
+        packed.sheenTint = data->sheenTint;
+        packed.clearcoat = data->clearcoat;
+        packed.clearcoatGloss = data->clearcoatGloss;
+        packed.ambient[0] = data->ambient.x;
+        packed.ambient[1] = data->ambient.y;
+        packed.ambient[2] = data->ambient.z;
+        packed.diffuse[0] = data->diffuse.x;
+        packed.diffuse[1] = data->diffuse.y;
+        packed.diffuse[2] = data->diffuse.z;
+        packed.specular_color[0] = data->specular_color.x;
+        packed.specular_color[1] = data->specular_color.y;
+        packed.specular_color[2] = data->specular_color.z;
+        packed.shininess = data->shininess;
+
+        const auto hash = hash_optics(packed, entity_seq);
+        if (options.is_dirty &&
+            !options.is_dirty(StorageID::ST_OPTICS, entity_seq, hash)) {
+            continue;
+        }
+        auto identity = resolve(StorageID::ST_OPTICS, entity_seq);
+        if (!identity || !identity->locally_owned) {
+            continue;
+        }
+        SyncFrameRow row;
+        row.entity_seq = entity_seq;
+        row.actor_guid = std::move(identity->actor_guid);
+        row.hash = hash;
+        row.value = encode_optics(packed);
+        frame.optics.push_back(std::move(row));
     }
 
     // 环境是全局状态（`__scene__`），迁移前也不看 actor guid / 所有权。
@@ -254,9 +331,14 @@ struct FrameRequestCommand {
         state.sun_position[2] = data->sun_position.z;
         state.sun_intensity = data->sun_intensity;
         state.exposure = data->exposure;
+        const auto hash = hash_environment(state, entity_seq);
+        if (options.is_dirty &&
+            !options.is_dirty(StorageID::ST_ENVIRONMENT, entity_seq, hash)) {
+            continue;
+        }
         SyncFrameRow row;
         row.entity_seq = entity_seq;
-        row.hash = hash_environment(state, entity_seq);
+        row.hash = hash;
         row.value = encode_environment(state);
         frame.environments.push_back(std::move(row));
     }
@@ -373,9 +455,26 @@ class SyncBoundaryChannel {
             return false;
         }
 
+        const auto key = write_key(write);
         {
             std::lock_guard lock(queue_mutex_);
+            const auto existing = write_index_.find(key);
+            if (existing != write_index_.end()) {
+                // 同一 (storage, entity_seq) 保留最新值，队列位置不变（跨实体的应用
+                // 顺序不承载语义；transform/optics 都是整份快照）。
+                *existing->second = std::move(write);
+                record([](SyncBoundaryStats& stats) { ++stats.remote_writes_coalesced; });
+                return true;
+            }
+            if (writes_.size() >= kMaxQueuedRemoteWrites) {
+                // 丢最旧：对端刷得比边界消费得快时，保留最新的现场更有价值。
+                const auto evicted_key = write_key(writes_.front());
+                write_index_.erase(evicted_key);
+                writes_.pop_front();
+                record([](SyncBoundaryStats& stats) { ++stats.remote_writes_evicted; });
+            }
             writes_.push_back(std::move(write));
+            write_index_.emplace(key, &writes_.back());
         }
         record([](SyncBoundaryStats& stats) { ++stats.remote_writes_submitted; });
         return true;
@@ -395,6 +494,7 @@ class SyncBoundaryChannel {
             std::lock_guard lock(queue_mutex_);
             frames.swap(frames_);
             writes.swap(writes_);
+            write_index_.clear();
         }
 
         // 入站先落地：同一边界构建的帧必须看到本 tick 已应用的远端值，否则会把
@@ -426,14 +526,27 @@ class SyncBoundaryChannel {
                 record([](SyncBoundaryStats& stats) { ++stats.frames_built; });
             } else {
                 // 等待方已放弃（无进展预算耗尽 / 闩锁）：跳过构建，不发送过期字节。
-                record([](SyncBoundaryStats& stats) { ++stats.frames_abandoned; });
+                record([](SyncBoundaryStats& stats) { ++stats.frames_skipped; });
             }
         }
     }
 
+    /// 会话停止 / 引擎关停：清空未应用的入站队列与未服务的帧请求。
+    void reset() {
+        std::lock_guard lock(queue_mutex_);
+        writes_.clear();
+        write_index_.clear();
+        frames_.clear();
+    }
+
     [[nodiscard]] SyncBoundaryStats stats() const {
         std::lock_guard lock(stats_mutex_);
-        return stats_;
+        auto snapshot = stats_;
+        {
+            std::lock_guard queue_lock(queue_mutex_);
+            snapshot.remote_writes_pending = writes_.size();
+        }
+        return snapshot;
     }
 
     void reset_stats() {
@@ -465,7 +578,10 @@ class SyncBoundaryChannel {
 
     mutable std::mutex queue_mutex_;
     std::deque<FrameRequestCommand> frames_;
+    /// 入站队列用 `deque` + 指针索引：`deque` 两端插入/删除不会让已有元素的**指针**
+    /// 失效（迭代器会），所以合并时可以直接原地覆盖。
     std::deque<RemoteStateWrite> writes_;
+    std::unordered_map<std::uint64_t, RemoteStateWrite*> write_index_;
 
     mutable std::mutex stats_mutex_;
     SyncBoundaryStats stats_{};
@@ -488,6 +604,10 @@ bool submit_remote_state(RemoteStateWrite write) {
 
 void apply_pending_sync_boundary() {
     SyncBoundaryChannel::instance().apply_pending();
+}
+
+void reset_sync_boundary_state() {
+    SyncBoundaryChannel::instance().reset();
 }
 
 SyncBoundaryStats sync_boundary_stats() {

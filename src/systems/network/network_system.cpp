@@ -90,6 +90,11 @@ struct NetworkSystem::Impl {
     bool sync_paused = false;
     bool applying_versioned_actor_message = false;
 
+    /// Peer 连接/请求触发的全量快照目标。由收包回调（网络线程、pending_mutex 内）
+    /// 追加，`update()` 在**释放 pending_mutex 之后**逐个执行 —— `sync_full_to()`
+    /// 会等一次 tick 边界，不能在 UI 线程也要拿的锁里跑。
+    std::vector<std::string> pending_full_syncs;
+
     // Network callbacks run independently from the engine/UI update thread.
     // All deferred editor work is exchanged through this mutex-protected set
     // of queues and transfer groups.
@@ -239,7 +244,11 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
         });
     impl_->sync_engine.set_on_full_sync_request(
         [this](const std::string& peer_id) {
-            impl_->sync_engine.sync_full_to(peer_id);
+            // 不在回调里直接 sync_full_to()：它可能等待一个 tick 边界，而回调位于
+            // peer_manager.poll() 内、pending_mutex 之下（UI 线程也会拿这把锁）。
+            // 交给 update() 在锁外执行。
+            std::lock_guard lock(impl_->pending_mutex);
+            impl_->pending_full_syncs.push_back(peer_id);
         });
     impl_->sync_engine.set_identity_mapping_callbacks(
         [this](Network::StorageID storage_id, uint64_t entity_seq) {
@@ -253,7 +262,8 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
             -> std::optional<bool> {
             return impl_->identity_registry.local_ownership_for_storage_seq(
                 storage_id, entity_seq);
-        });
+        },
+        [this]() { return impl_->identity_registry.sync_identity_index(); });
     impl_->sync_engine.set_on_editor_operation_applied(
         [this](const Network::EditorSyncOperation& operation) {
             std::lock_guard lock(impl_->pending_mutex);
@@ -346,6 +356,10 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
             "NetworkSystem: sync serialization is served on the ECS tick boundary "
             "(network thread no longer touches the registry)");
     }
+    // DAG 停机时清掉"等下一次边界"的远端写入/帧请求：否则 DAG 重启后的第一条边界会把
+    // 旧会话的写入落到已经复用的实体序号上。
+    (void)Corona::Ecs::add_tick_boundary_stop_task(
+        &Corona::Network::reset_sync_boundary_state);
 
     return true;
 }
@@ -506,68 +520,92 @@ void publish_network_state(NetworkSystem& sys) {
 void NetworkSystem::update() {
     drain_network_commands(*this);
     publish_network_state(*this);
-    std::lock_guard pending_lock(impl_->pending_mutex);
-    impl_->discovery.poll();
-    if (impl_->session_state != SessionState::Active) return;
 
-    auto now = Impl::Clock::now();
+    bool sync_due = false;
+    std::vector<std::string> full_sync_targets;
+    {
+        // 这个锁保护 pending_* 队列（UI 线程的 process_pending_* 也拿它）。锁内只做
+        // 不会等待的收包/记账；可能等待一个 tick 边界的同步轮询与 peer 快照发送放在
+        // 锁外（见下），否则一次 DAG 卡顿会把 UI 线程挡在同一个 mutex 上最多 10s。
+        std::lock_guard pending_lock(impl_->pending_mutex);
+        impl_->discovery.poll();
+        if (impl_->session_state == SessionState::Active) {
+            auto now = Impl::Clock::now();
 
-    // Poll ENet events every tick
-    impl_->peer_manager.poll();
+            // Poll ENet events every tick
+            impl_->peer_manager.poll();
 
-    if (impl_->stop_session_after_peer_disconnect) {
-        impl_->stop_session_after_peer_disconnect = false;
-        stop_session();
-        return;
-    }
+            if (impl_->stop_session_after_peer_disconnect) {
+                impl_->stop_session_after_peer_disconnect = false;
+                stop_session();
+            } else {
+                // Sync engine tick (~60 Hz) — paused during remote actor creation
+                // to ensure both peers build identical storage layouts (seq_id alignment).
+                sync_due = !impl_->sync_paused &&
+                           now - impl_->last_sync_time >=
+                               std::chrono::milliseconds(Network::kSyncIntervalMs);
+                if (sync_due) {
+                    impl_->last_sync_time = now;
+                }
+                full_sync_targets.swap(impl_->pending_full_syncs);
 
-    // Sync engine tick (~60 Hz) — paused during remote actor creation
-    // to ensure both peers build identical storage layouts (seq_id alignment).
-    if (!impl_->sync_paused && now - impl_->last_sync_time >=
-        std::chrono::milliseconds(Network::kSyncIntervalMs)) {
-        impl_->sync_engine.poll_and_sync();
-        impl_->last_sync_time = now;
-    }
-
-    for (auto it = impl_->incoming_transfers.begin();
-         it != impl_->incoming_transfers.end(); ) {
-        if (now - it->second.last_chunk_time > kTransferTimeout) {
-            CFW_LOG_WARNING("NetworkSystem: Incoming transfer timed out — id={} path='{}'",
+                for (auto it = impl_->incoming_transfers.begin();
+                     it != impl_->incoming_transfers.end(); ) {
+                    if (now - it->second.last_chunk_time > kTransferTimeout) {
+                        CFW_LOG_WARNING(
+                            "NetworkSystem: Incoming transfer timed out — id={} path='{}'",
                             it->second.transfer_id, it->second.model_path);
-            it = impl_->incoming_transfers.erase(it);
-        } else {
-            ++it;
+                        it = impl_->incoming_transfers.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+
+                for (auto it = impl_->pending_file_transfer_groups.begin();
+                     it != impl_->pending_file_transfer_groups.end(); ) {
+                    if (Network::has_file_group_timed_out(
+                            it->second.create_time, it->second.last_activity_time,
+                            now, kTransferTimeout)) {
+                        CFW_LOG_WARNING(
+                            "NetworkSystem: Pending file group timed out — asset='{}' actors={} "
+                            "model='{}' remaining={} transfers={}",
+                            it->second.asset_id, it->second.actor_actions.size(),
+                            it->second.model_path, it->second.remaining_files,
+                            it->second.transfer_ids.size());
+                        for (uint64_t transfer_id : it->second.transfer_ids) {
+                            impl_->transfer_to_group.erase(transfer_id);
+                        }
+                        if (!it->second.asset_id.empty()) {
+                            impl_->asset_to_transfer_group.erase(it->second.asset_id);
+                        }
+                        it = impl_->pending_file_transfer_groups.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+
+                for (auto it = impl_->outgoing_cache.begin();
+                     it != impl_->outgoing_cache.end(); ) {
+                    if (now - it->second.load_time > kOutgoingCacheTtl) {
+                        it = impl_->outgoing_cache.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
         }
     }
 
-    for (auto it = impl_->pending_file_transfer_groups.begin();
-         it != impl_->pending_file_transfer_groups.end(); ) {
-        if (Network::has_file_group_timed_out(
-                it->second.create_time, it->second.last_activity_time,
-                now, kTransferTimeout)) {
-            CFW_LOG_WARNING(
-                "NetworkSystem: Pending file group timed out — asset='{}' actors={} model='{}' "
-                "remaining={} transfers={}",
-                it->second.asset_id, it->second.actor_actions.size(), it->second.model_path,
-                it->second.remaining_files, it->second.transfer_ids.size());
-            for (uint64_t transfer_id : it->second.transfer_ids) {
-                impl_->transfer_to_group.erase(transfer_id);
-            }
-            if (!it->second.asset_id.empty()) {
-                impl_->asset_to_transfer_group.erase(it->second.asset_id);
-            }
-            it = impl_->pending_file_transfer_groups.erase(it);
-        } else {
-            ++it;
+    // 锁外：peer 连接/请求触发的全量快照与常规同步轮询都可能等待一个 tick 边界
+    //（`request_sync_frame` 的存活性等待），绝不能在 pending_mutex 下执行。
+    for (const auto& target : full_sync_targets) {
+        if (impl_->session_state != SessionState::Active) {
+            break;
         }
+        impl_->sync_engine.sync_full_to(target);
     }
-
-    for (auto it = impl_->outgoing_cache.begin(); it != impl_->outgoing_cache.end(); ) {
-        if (now - it->second.load_time > kOutgoingCacheTtl) {
-            it = impl_->outgoing_cache.erase(it);
-        } else {
-            ++it;
-        }
+    if (sync_due && impl_->session_state == SessionState::Active) {
+        impl_->sync_engine.poll_and_sync();
     }
 }
 
@@ -685,6 +723,7 @@ void NetworkSystem::stop_session() {
         impl_->pending_actor_scene_snapshot_requests.clear();
         impl_->pending_actor_scene_snapshots.clear();
         impl_->pending_actor_state_updates.clear();
+        impl_->pending_full_syncs.clear();
         impl_->pending_file_transfer_groups.clear();
         impl_->transfer_to_group.clear();
         impl_->asset_to_transfer_group.clear();
@@ -1262,7 +1301,12 @@ void NetworkSystem::on_peer_connected(const Network::PeerManager::PeerInfo& info
     CFW_LOG_INFO("NetworkSystem: Peer connected — {} ({})", info.id, info.name);
 
     // Snapshot is idempotent and versioned, and is sent only to this peer.
-    impl_->sync_engine.sync_full_to(info.id);
+    {
+        // 不在回调里直接 sync_full_to()：回调位于 peer_manager.poll()/pending_mutex
+        // 之下，而全量快照要等一次 tick 边界。update() 会在锁外执行它。
+        std::lock_guard pending_lock(impl_->pending_mutex);
+        impl_->pending_full_syncs.push_back(info.id);
+    }
     auto request = impl_->sync_engine.make_snapshot_request();
     impl_->peer_manager.send_to_peer_id(info.id, Network::kChannelReliable,
                                         request.data(), request.size(), true);

@@ -534,6 +534,12 @@ inline void destroy_entity_owner(DestroyEntityPayload payload) {
 /// 与 `CORONA_SYSTEMS_DAG=0` 降级模式（GeometrySystem 的兜底 drain）自动都执行它。
 using TickBoundaryTask = void (*)();
 
+/// 与 `TickBoundaryTask` 配对的**停机任务**：DAG 停机时由 `on_dag_stopping()` 调用。
+///
+/// 拥有者线程不再推进之后，任何"排队等下一次边界"的外部状态都必须被清掉，否则它会
+/// 在 DAG 重启后的第一条边界上落到已经复用的实体序号上（网络同步的远端写入就是这种
+/// 状态）。停机任务没有返回值、不得阻塞，只做清理。
+using TickBoundaryStopTask = void (*)();
 /// 通道本身：队列 + 拥有者线程标识 + 生命周期状态 + 诊断计数。
 class StructuralCommandChannel {
    public:
@@ -696,6 +702,9 @@ class StructuralCommandChannel {
     /// 与 Python 桥 `transition_and_cancel` 同一原则：停机不能让任何请求悬空。
     std::size_t on_dag_stopping(std::string_view reason) {
         stopped_.store(true, std::memory_order_release);
+        // 先让外部收口方清掉"等下一次边界"的状态，再结算结构请求：两边互不依赖，
+        // 但清理先做，日志里"结算了多少"后面不会再被停机任务影响。
+        run_boundary_stop_tasks();
         const std::size_t settled = fail_pending(reason);
         CFW_LOG_INFO("[Ecs/StructuralCommand] DAG stopping: settled {} pending structural request(s) as failure",
                      settled);
@@ -754,6 +763,40 @@ class StructuralCommandChannel {
     [[nodiscard]] std::size_t boundary_task_count() const {
         std::lock_guard lock(boundary_tasks_mutex_);
         return boundary_tasks_.size();
+    }
+
+    /// 注册一条停机任务（DAG 停止 / 正在关停时执行）。重复注册返回 false。
+    bool add_boundary_stop_task(TickBoundaryStopTask task) {
+        if (task == nullptr) {
+            return false;
+        }
+        std::lock_guard lock(boundary_tasks_mutex_);
+        if (std::find(boundary_stop_tasks_.begin(), boundary_stop_tasks_.end(), task) !=
+            boundary_stop_tasks_.end()) {
+            return false;
+        }
+        boundary_stop_tasks_.push_back(task);
+        return true;
+    }
+
+    /// 执行停机任务（DAG 停止路径）。单个任务抛异常不阻断其它任务。
+    void run_boundary_stop_tasks() {
+        std::vector<TickBoundaryStopTask> tasks;
+        {
+            std::lock_guard lock(boundary_tasks_mutex_);
+            tasks = boundary_stop_tasks_;
+        }
+        for (const auto task : tasks) {
+            try {
+                task();
+            } catch (const std::exception& error) {
+                CFW_LOG_ERROR("[Ecs/StructuralCommand] tick boundary stop task failed: {}",
+                              error.what());
+            } catch (...) {
+                CFW_LOG_ERROR("[Ecs/StructuralCommand] tick boundary stop task failed: "
+                              "unknown exception");
+            }
+        }
     }
 
     // ------------------------------------------------------------ 应用
@@ -1097,6 +1140,7 @@ class StructuralCommandChannel {
     /// 额外边界任务（网络同步收口）。注册在装配期，执行在拥有者线程。
     mutable std::mutex boundary_tasks_mutex_;
     std::vector<TickBoundaryTask> boundary_tasks_;
+    std::vector<TickBoundaryStopTask> boundary_stop_tasks_;
 
     mutable std::mutex stats_mutex_;
     Stats stats_{};
@@ -1113,6 +1157,11 @@ inline bool apply_pending_structural_commands() {
 /// 重复注册同一函数指针返回 false。
 [[nodiscard]] inline bool add_tick_boundary_task(TickBoundaryTask task) {
     return StructuralCommandChannel::instance().add_boundary_task(task);
+}
+
+/// 注册一条 tick 边界停机任务（DAG 停止时清理"等下一次边界"的外部状态）。
+[[nodiscard]] inline bool add_tick_boundary_stop_task(TickBoundaryStopTask task) {
+    return StructuralCommandChannel::instance().add_boundary_stop_task(task);
 }
 
 /// DAG 降级路径（`CORONA_SYSTEMS_DAG=0`）的兜底 drain：只在装配方**没有**安装
