@@ -38,6 +38,21 @@ target_link_libraries(corona_network_protocol_tests
 
 add_test(NAME NetworkProtocolTests COMMAND corona_network_protocol_tests)
 
+# Task 2: the network sync boundary must be served by the registry owner thread. This
+# test owns a real second thread for the boundary (the production DAG thread), so it can
+# exercise the queue + liveness wait + component apply path that the single-threaded
+# protocol TU cannot.
+add_executable(corona_network_sync_boundary_tests
+    test_network_sync_boundary.cpp
+    ${PROJECT_SOURCE_DIR}/src/shared_data_hub.cpp
+)
+target_link_libraries(corona_network_sync_boundary_tests
+    PRIVATE
+        corona::system::network
+        corona::resource::manager
+)
+add_test(NAME NetworkSyncBoundaryTests COMMAND corona_network_sync_boundary_tests)
+
 add_executable(corona_discovery_tests
     test_discovery.cpp
 )

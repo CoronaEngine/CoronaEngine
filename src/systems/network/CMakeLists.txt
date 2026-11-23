@@ -7,6 +7,7 @@ corona_add_system(network
         network_system.cpp
         peer_manager.cpp
         sync_engine.cpp
+        sync_boundary.cpp
         discovery.cpp
             collaboration_state.cpp
     DEPENDENCIES

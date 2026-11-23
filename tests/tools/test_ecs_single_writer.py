@@ -10,7 +10,14 @@ touched by a single thread. Every create/destroy/iterate/fetch from another thre
   settle at the tick boundary, Tasks 1a + 1b). `SharedDataHub::create_*` / `destroy_*`
   are owner-side primitives for the tick-boundary appliers, the DAG systems and
   single-threaded test fixtures only;
-- network reads/writes are still direct (Task 2);
+- network reads/writes: zero direct touches **in network translation units** since
+  Task 2. `sync_engine.cpp` requests a serialized frame from the tick boundary
+  (`sync_boundary.h::request_sync_frame`) and hands incoming remote state to the same
+  boundary (`submit_remote_state`); the component reads/writes live in
+  `src/systems/network/sync_boundary.cpp`, which is an owner-thread file (registered on
+  the structural channel's tick boundary). NOT clean yet: the header-only
+  `NetworkIdentityRegistry::register_actor()` (see `KNOWN_HEADER_VIOLATIONS`) still reads
+  components and its production caller runs on the network thread;
 - one non-owner read remains on the UI candidate-surface path (see `EXCEPTIONS`).
 
 So this guard does NOT prove "exactly one thread touches the registry" today. It
@@ -22,6 +29,13 @@ Registry access is matched per line with the whole accessor family:
 
     Ecs::World::instance()  Ecs::emplace  Ecs::destroy  Ecs::view<  Ecs::get<
     Ecs::all_components<  Ecs::try_get  Ecs::try_get_const  Ecs::alive
+
+Network translation units are also matched against the owner-side convenience accessors
+(`Corona::find_*` / `try_*`): the header-only escape is documented in
+`KNOWN_HEADER_VIOLATIONS`, and a *.cpp* in `src/systems/network/` must not reintroduce
+those reads. The accessor family is not enforced engine-wide yet: many pre-existing
+non-owner call sites read components through it (Tasks 5/6 territory), and adding them to
+the global list here would only pile up new allowances.
 
 Lines, not counts: swapping `view<T>` for `all_components<T>` keeps a count equal
 but changes the line, so it fails here instead of silently staying a violation.
@@ -71,29 +85,19 @@ OWNER_FILES = {
         "MechanicsSystem runs inside the systems DAG (owner thread)",
     "src/systems/optics/optics_system.cpp":
         "OpticsSystem runs inside the systems DAG (owner thread)",
+    "src/systems/network/sync_boundary.cpp":
+        "network sync boundary applier: NOT the network thread. It is registered as a "
+        "tick-boundary task on the structural command channel (Task 2), so it runs on the "
+        "registry owner thread - the DAG boundary hook in DAG mode, GeometrySystem's "
+        "legacy drain with CORONA_SYSTEMS_DAG=0, or the calling thread in single-threaded "
+        "fixtures before assembly. `sync_engine.cpp` (the network thread) has no registry "
+        "access and no allowance",
 }
 
 # Per-line exceptions for non-owner translation units. `lines` maps the stripped
 # source line to the number of occurrences that are allowed: a duplicate line is a
 # new direct registry access and fails, and so does a stale entry.
 EXCEPTIONS = {
-    "src/systems/network/sync_engine.cpp": {
-        "reason": "SyncEngine reads the registry straight from the network thread; "
-                  "Task 2 moves serialization onto the DAG (spec §1.2)",
-        "lines": {
-            # 2 occurrences each: the serialize and the deserialize loop both iterate
-            # the same component type. Counting per occurrence is why these are 2 here
-            # instead of one unique-line entry.
-            "for (const auto entity : Corona::Ecs::view<ModelTransform>()) {": 2,
-            "for (const auto entity : Corona::Ecs::view<ModelResource>()) {": 1,
-            "for (const auto entity : Corona::Ecs::view<GeometryDevice>()) {": 1,
-            "for (const auto entity : Corona::Ecs::view<OpticsDevice>()) {": 2,
-            "for (const auto entity : Corona::Ecs::view<EnvironmentDevice>()) {": 2,
-            "const ModelTransform& data = Corona::Ecs::get<ModelTransform>(obj_id);": 1,
-            "const OpticsDevice& data = Corona::Ecs::get<OpticsDevice>(obj_id);": 1,
-            "const EnvironmentDevice& data = Corona::Ecs::get<EnvironmentDevice>(obj_id);": 1,
-        },
-    },
     "src/engine/engine_runtime_api.cpp": {
         "reason": "KNOWN VIOLATION in this file, not silently allowed: set_default_surface() "
                   "walks CameraDevice components on the CEF UI path (vulkan_backend.cpp "
@@ -101,9 +105,9 @@ EXCEPTIONS = {
                   "and the writes it triggers already go through the camera command "
                   "channel, but the read still races the DAG. Not removed in Tasks 1a/1b: "
                   "it needs a published camera-follow snapshot (Task 5) or a camera-surface "
-                  "command applied on the owner thread. This file has exactly this one "
-                  "allowance; the other non-owner allowance is the sync_engine.cpp block "
-                  "above (Task 2), and neither covers the other's lines",
+                  "command applied on the owner thread. This is the ONLY per-line "
+                  "non-owner allowance left: the network allowance went to zero in Task 2 "
+                  "(`sync_engine.cpp` no longer touches the registry at all)",
         "lines": {
             "auto camera_storage_ref = Corona::Ecs::all_components<Corona::CameraDevice>();": 1,
         },
@@ -116,6 +120,32 @@ EXCEPTIONS = {
 STRUCTURAL_PRIMITIVE = re.compile(
     r"\b(?:create|destroy)_(?:model_resource|transform|geometry|mechanics|acoustics"
     r"|optics|profile_component|actor_component|camera|environment|scene|image)\s*\(")
+
+# The owner-side convenience accessors (`Corona::find_actor`, `hub.try_optics`, ...).
+# They are registry reads with no synchronization; the header-only network-identity read
+# escaped the `Ecs::` token list through them. Enforced for network *.cpp* units (where
+# Task 2 closed the registry access); NOT engine-wide yet because many pre-existing
+# non-owner call sites use them (Tasks 5/6 territory) and adding them to the global list
+# would only pile up new allowances.
+ACCESSOR_FAMILY = re.compile(
+    r"\b(?:find_(?:actor|profiles|profile|transform|optics|visibility|geometry"
+    r"|model_resource|mechanics|bounds|scene|camera|model_source|streaming|model_path"
+    r"|follow_camera|environment|acoustics|image)"
+    r"|try_(?:actor|profiles|profile|transform|optics|visibility|geometry"
+    r"|model_resource|mechanics|bounds|scene|camera|model_source|streaming|model_path"
+    r"|follow_camera|environment|acoustics|image))\s*\(")
+
+# Known header-only violations the .cpp scanner cannot see. Each entry is a named
+# follow-up, not an allowance: the test asserts the file still exists so this note
+# cannot go stale silently.
+KNOWN_HEADER_VIOLATIONS = {
+    "include/corona/systems/network/network_identity.h":
+        "NetworkIdentityRegistry::register_actor() reads ActorDevice / Profiles / "
+        "GeometryDevice / OpticsDevice / MechanicsDevice / AcousticsDevice through "
+        "find_*/try_*, and its production caller (the RegisterActorIdentity command in "
+        "network_system.cpp) is drained on the network thread. Out of Task 2 scope; "
+        "named follow-up in task-2-report.md §9",
+}
 
 
 def production_sources():
@@ -321,3 +351,95 @@ def test_a_profile_without_engine_storage_fails_the_actor_materialisation():
     assert "profile_ref != nullptr" in materialize, (
         "the editor must take the structural failure path when add_profile returns nullptr")
     assert "StructuralCreateFailed" in materialize
+
+
+def test_the_network_thread_has_no_registry_allowance_at_all():
+    # Task 2: the per-line network allowance is GONE, not reduced. Any direct touch left in
+    # a network translation unit must fail the first test instead of being covered here.
+    assert not any(name.startswith("src/systems/network/") for name in EXCEPTIONS), (
+        "network translation units must have no per-line registry allowance")
+    assert "src/systems/network/sync_engine.cpp" not in OWNER_FILES, (
+        "sync_engine.cpp runs on the network thread; it is not an owner file")
+
+    engine = read(ROOT / "src" / "systems" / "network" / "sync_engine.cpp")
+    assert "request_sync_frame(" in engine, (
+        "the network thread must ask the tick boundary for its outbound frame")
+    assert "submit_remote_state(" in engine, (
+        "incoming remote state must be handed to the tick boundary")
+    for token in ("Ecs::view<", "Ecs::get<", "Ecs::try_get", "Ecs::all_components<",
+                  "Ecs::emplace", "Ecs::destroy", "Ecs::World::instance()"):
+        assert token not in engine, f"network thread must not use {token}"
+
+
+def test_network_serialisation_runs_on_the_owner_side_of_the_tick_boundary():
+    # The serialiser is a task on the SAME boundary as structural commands, so both the DAG
+    # hook and the CORONA_SYSTEMS_DAG=0 fallback (GeometrySystem -> apply_pending) execute
+    # it on the registry owner thread.
+    channel = read(ROOT / "include" / "corona" / "ecs" / "structural_commands.h")
+    assert "using TickBoundaryTask = void (*)();" in channel
+    assert "add_tick_boundary_task" in channel
+    assert "run_boundary_tasks();" in channel, (
+        "apply_pending() must execute the registered boundary tasks")
+
+    network = read(ROOT / "src" / "systems" / "network" / "network_system.cpp")
+    assert "Corona::Ecs::add_tick_boundary_task(" in network, (
+        "NetworkSystem::initialize must register the sync boundary on the ECS tick boundary")
+    assert "&Corona::Network::apply_pending_sync_boundary" in network, (
+        "the registered boundary task must be the owner-side sync applier")
+    assert "add_tick_boundary_stop_task" in channel
+    assert "&Corona::Network::reset_sync_boundary_state" in network, (
+        "the DAG stop hook must clear queued remote writes (no writes across a restart)")
+
+    owner = read(ROOT / "src" / "systems" / "network" / "sync_boundary.cpp")
+    assert "Ecs::view<" in owner, (
+        "the owner-side frame serialiser reads the registry (on the owner thread)")
+    assert "apply_pending()" in owner and "apply_remote_state(" in owner
+
+    # Round-3 hardenings that must not silently regress:
+    #  - the write queue is bounded and coalesces with true write-recency (list + move to
+    #    the back), so "drop oldest" cannot evict a just-refreshed key;
+    #  - the full-sync target list is deduped/capped (one request cannot amplify).
+    assert "kMaxQueuedRemoteWrites = 4096" in owner
+    assert "std::list<RemoteStateWrite>" in owner
+    assert "writes_.erase(existing->second)" in owner and "std::prev(writes_.end())" in owner
+    assert "kMaxPendingFullSyncs" in network and "queue_full_sync(" in network
+    assert "std::erase(pending_full_syncs, peer_id)" in network
+
+    # The wire codec is shared by both threads and must stay pure values: no registry.
+    codec = read(ROOT / "include" / "corona" / "systems" / "network" / "sync_codec.h")
+    assert "Ecs::" not in codec, "sync_codec.h must be pure values (no registry access)"
+    assert "static_assert(sizeof(OpticsPacked) == 84" in codec, (
+        "the optics wire layout is the protocol; pin it")
+
+    # The network-facing header must stay declaration-only (the registry touches are all in
+    # the owner-side .cpp, listed in OWNER_FILES).
+    boundary = read(ROOT / "include" / "corona" / "systems" / "network" / "sync_boundary.h")
+    assert "Ecs::view<" not in boundary and "Ecs::get<" not in boundary
+
+
+def test_network_translation_units_do_not_use_registry_accessors():
+    # The `Ecs::` token list above cannot see the owner-side convenience accessors
+    # (`Corona::find_*` / `try_*`), which is exactly how the header-only network-identity
+    # read escapes it. Enforce the family for network .cpp units: a new direct accessor
+    # read on the network thread must fail instead of hiding behind the `Ecs::` spelling.
+    offenders = []
+    network_src = SRC / "systems" / "network"
+    for path in sorted(network_src.rglob("*.cpp")):
+        name = relative(path)
+        if name in OWNER_FILES:
+            # The owner-side applier is allowed to read components; it runs on the owner.
+            continue
+        for number, line in enumerate(read(path).splitlines(), start=1):
+            if ACCESSOR_FAMILY.search(line):
+                offenders.append(f"{name}:{number}: {line.strip()}")
+    assert not offenders, (
+        "network translation units must not read components through the owner-side "
+        "accessors (that is a registry read on the network thread):\n  " +
+        "\n  ".join(offenders))
+
+
+def test_known_header_only_violations_are_named_and_still_exist():
+    for name, reason in KNOWN_HEADER_VIOLATIONS.items():
+        assert (ROOT / name).is_file(), (
+            f"stale known header violation: {name} no longer exists; remove the entry")
+        assert reason.strip(), f"{name} needs a reason / follow-up reference"

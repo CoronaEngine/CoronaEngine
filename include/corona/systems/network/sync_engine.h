@@ -11,20 +11,26 @@
 #include <vector>
 #include <unordered_map>
 
-namespace Corona {
-    class SharedDataHub;
-}
-
 namespace Corona::Network {
 
+/// 身份索引快照的一行；定义在 `sync_codec.h`（这里只作参数类型声明）。
+struct SyncIdentityEntry;
+
 /**
- * @brief Poll-sync engine: dirty-poll SharedDataHub → serialize → broadcast;
- *        receive versioned EDITOR_SYNC operations → LWW merge → write back.
+ * @brief Poll-sync engine: dirty-poll the owner-thread sync frame → serialize →
+ *        broadcast; receive versioned EDITOR_SYNC operations → LWW merge → write
+ *        back.
  *
- * Architecture assumptions:
- *  - Dirty detection is done by keeping a per-entity hash snapshot and
- *    comparing current data vs that snapshot each tick.
- *  - Editor updates use LwwState versions (Lamport counter + writer peer ID).
+ * Threading contract (Task 2, spec §4.4):
+ *  - The **per-frame path** does not read or write components from the network
+ *    thread: component reads and wire encoding happen on the systems DAG's tick
+ *    boundary (`sync_boundary.h::request_sync_frame`); incoming remote state is
+ *    handed to the same boundary (`submit_remote_state`) and applied there.
+ *    (Exception, tracked separately: `NetworkIdentityRegistry::register_actor()`
+ *    still reads components when the identity registration command is drained —
+ *    see `KNOWN_HEADER_VIOLATIONS` in tests/tools/test_ecs_single_writer.py.)
+ *  - This class keeps the network-thread-only work: per-entity hash snapshots
+ *    (dirty detection), LWW versions and packet framing.
  */
 class SyncEngine {
 public:
@@ -40,6 +46,8 @@ public:
                                               const std::string& actor_guid)>;
     using ResolveLocalOwnershipForEntity =
         std::function<std::optional<bool>(StorageID storage_id, uint64_t entity_seq)>;
+    /// 身份索引快照（一次锁、O(actors)），拥有者线程用 O(1) 表解析每帧的身份。
+    using ResolveIdentityIndex = std::function<std::vector<SyncIdentityEntry>()>;
 
     SyncEngine();
     ~SyncEngine();
@@ -51,7 +59,7 @@ public:
     // Lifecycle
     // ========================================================================
 
-    /// Attach to the SharedDataHub singleton.
+    /// Set the local peer id used for LWW versions.
     void initialize(const std::string& local_peer_id);
 
     /// Clear all tracking state.
@@ -62,10 +70,12 @@ public:
     // ========================================================================
 
     /**
-     * @brief Poll all tracked storages, serialize dirty entries, and call
-     *        on_outgoing for each versioned editor operation to broadcast.
+     * @brief Ask the tick boundary for this frame's state, serialize dirty
+     *        entries, and call on_outgoing for each versioned editor operation.
      *
-     * Called every kSyncIntervalMs from NetworkSystem::update().
+     * Component reads + wire encoding happen on the owner thread
+     * (`request_sync_frame`); this call only does dirty/LWW bookkeeping and
+     * sends. Called every kSyncIntervalMs from NetworkSystem::update().
      */
     void poll_and_sync();
 
@@ -97,7 +107,8 @@ public:
     void set_on_editor_operation_applied(OnEditorOperationApplied cb);
     void set_identity_mapping_callbacks(ResolveActorGuidForEntity guid_for_entity,
                                         ResolveEntitySeqForActorGuid entity_for_guid,
-                                        ResolveLocalOwnershipForEntity ownership_for_entity = {});
+                                        ResolveLocalOwnershipForEntity ownership_for_entity = {},
+                                        ResolveIdentityIndex identity_index = {});
 
     /// Apply one versioned editor operation. Exposed for transport adapters
     /// and focused tests; normal network traffic enters via handle_incoming().

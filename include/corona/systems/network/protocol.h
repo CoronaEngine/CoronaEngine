@@ -516,7 +516,7 @@ inline std::vector<uint8_t> build_hello(const std::string& instance_name,
 // ============================================================================
 struct ActorCreatePacked {
     float transform[9];  // pos(3) + rot(3) + scale(3)
-    // OpticsPacked — see sync_engine.cpp
+    // OpticsPacked — wire layout shared with the sender, see sync_codec.h
     bool visible;
     bool bEnableLighting;
     float metallic;
