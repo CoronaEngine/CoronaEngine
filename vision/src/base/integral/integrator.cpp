@@ -405,6 +405,8 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
     Uint continuation_depth = 0u;
     Bool pending_rr_death = false;
     Float pending_rr_boost = 1.f;
+    optional<Bool> camera_hit_pending;
+    if (!use_media && hc.path_capture && hc.path_capture->reuse_camera_hit) camera_hit_pending.emplace(true);
     auto mis_bsdf = [&](auto &bounces, bool inner) {
         // Host-gated out of ordinary PT. Transmission has no competing DI
         // technique; genuinely discrete reflection is PT-owned as well.
@@ -417,11 +419,19 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                     capture.first_reflection_covered_by_di, bounces)));
             emission_delta = &*gi_unique_emission;
         }
-        if (hc.work_counters) hc.work_counters->trace.x += 1u;
-        if (use_media) {
-            hit = geometry.trace_transport(scene(), sampler, swl, rs, it, throughput, hc.medium_events);
+        auto trace_segment = [&] {
+            if (hc.work_counters) hc.work_counters->trace.x += 1u;
+            return use_media ? geometry.trace_transport(scene(), sampler, swl, rs, it, throughput, hc.medium_events)
+                             : geometry.trace_closest(rs.ray);
+        };
+        if (camera_hit_pending && inner) {
+            // A material-free boundary restarts the same bounce with a different ray.
+            $if(*camera_hit_pending) {
+                hit = frame_buffer().cur_visibility_buffer_var(render_env.frame_index()).read(dispatch_id());
+                *camera_hit_pending = false;
+            } $else { hit = trace_segment(); };
         } else {
-            hit = geometry.trace_closest(rs.ray);
+            hit = trace_segment();
         }
         if (hc.path_capture && hc.path_capture->on_signal && hc.path_capture->record_hit_distance) {
             auto &capture = *hc.path_capture;

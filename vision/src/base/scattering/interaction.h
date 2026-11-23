@@ -431,6 +431,8 @@ struct PTPathCapture {
     bool reuse_signal_distance{false};
     bool evaluate_signal_direct_fraction{true};
     bool native_signal_miss{true};
+    // The caller starts Li with the exact ray stored alongside the frame's visibility hit.
+    bool reuse_camera_hit{false};
     // GI-only reflection DI ownership; ordinary PT never enables this policy.
     bool reflection_only_direct{false};
     Bool first_reflection_covered_by_di{true}, first_scatter_transmission{false};

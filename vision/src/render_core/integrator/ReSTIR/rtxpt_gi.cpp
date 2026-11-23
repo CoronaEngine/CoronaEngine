@@ -1084,6 +1084,7 @@ void RtxptGI::compile_initial_samples() noexcept {
             return;
         }
         PTPathCapture capture;
+        capture.reuse_camera_hit = true;
         capture.reflection_only_direct = true;
         capture.first_reflection_covered_by_di = !BxDFFlag::is_specular(flags.read(dispatch_id()));
         capture.record_radiance = !skip_radiance;
