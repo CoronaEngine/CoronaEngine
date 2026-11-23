@@ -33,7 +33,6 @@ inline void check_reblur_guide_fusion() {
             old(std::getenv(key) ? std::getenv(key) : ""), present(std::getenv(key) != nullptr) { set(key, value); }
         ~Environment() { set(name.c_str(), present ? old.c_str() : nullptr); }
     } profiling{"REBLUR_GPU_PROFILE", nullptr},
-      gi_backend{"VISION_RESTIR_GI_BACKEND", nullptr},
       precise_lobes{"VISION_RESTIR_PRECISE_LOBES", "1"},
       single_debug_frame{"VISION_EVAL_DEBUG_FRAMES", nullptr},
       snapshot_frame{"REBLUR_SNAPSHOT_FRAME", "2"};

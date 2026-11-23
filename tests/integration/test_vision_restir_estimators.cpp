@@ -233,10 +233,8 @@ void configure_headless_process() {
     _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
     _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
     _putenv_s("VISION_DISABLE_DENOISER", "1");
-    _putenv_s("VISION_RESTIR_GI_BACKEND", "");
 #else
     setenv("VISION_DISABLE_DENOISER", "1", 1);
-    unsetenv("VISION_RESTIR_GI_BACKEND");
 #endif
 }
 
@@ -292,7 +290,6 @@ vision::DataWrap scene_description(bool direct, bool reuse = false) {
     parameters["direct"]["open"] = direct;
     parameters["direct"]["max_recursion"] = 1u;
     parameters["indirect"]["open"] = !direct;
-    parameters["indirect"]["backend"] = "rtxpt";
     parameters["indirect"]["temporal"]["open"] = reuse;
     parameters["indirect"]["spatial"]["open"] = reuse;
     return scene;

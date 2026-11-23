@@ -112,16 +112,7 @@ IlluminationIntegrator::IlluminationIntegrator(const vision::IntegratorDesc &des
       mis_mode_(MISMode(desc["mis_mode"].as_int(0))),
       separate_(desc["separate"].as_bool(false)),
       denoiser_(Node::create_shared<Denoiser>(desc.denoiser_desc)) {
-    const char *backend = std::getenv("VISION_RESTIR_GI_BACKEND");
-    if ((backend && string_view(backend) == "rtxpt") ||
-        desc.value("indirect")["backend"].as_string("legacy") == "rtxpt") separate_ = true;
-    // Cost attribution only: use ordinary PT's material dispatch layout while
-    // retaining the same complete BSDF, path samples and export observers.
-    const char *inline_cost = std::getenv("VISION_GI_EXPORT_INLINE_MATERIAL");
-    if (backend && string_view(backend) == "rtxpt" && inline_cost && string_view(inline_cost) == "1") {
-        separate_ = false;
-        OC_INFO("GI export cost diagnostic: ordinary PT material dispatch layout");
-    }
+    if (desc.value("indirect")["backend"].as_string("legacy") == "rtxpt") separate_ = true;
 }
 
 DataWrap IlluminationIntegrator::illumination_settings() const {

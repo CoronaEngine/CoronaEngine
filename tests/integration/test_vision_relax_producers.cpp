@@ -380,13 +380,6 @@ int main(int argc, char **argv) {
         device.init_rtx();
         Global::instance().set_device(&device);
         const std::string_view group = argc > 1 ? argv[1] : "pt";
-        if (group != "pt") {
-#ifdef _WIN32
-            _putenv_s("VISION_RESTIR_GI_BACKEND", "");
-#else
-            unsetenv("VISION_RESTIR_GI_BACKEND");
-#endif
-        }
         check_scene_signals(group != "pt", group == "lifecycle");
         return 0;
     } catch (const std::exception &error) {

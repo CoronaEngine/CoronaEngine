@@ -845,8 +845,7 @@ void RtxptGI::download_storage(vector<GISample> &samples, vector<GIReservoir> &r
 RtxptGI::RtxptGI(IntegratorPtr integrator,
                    const vision::ParameterSet &desc)
     : ReSTIR(integrator, desc) {
-    const char *override_backend = std::getenv("VISION_RESTIR_GI_BACKEND");
-    const string backend = override_backend && *override_backend ? override_backend : desc["backend"].as_string("rtxpt");
+    const string backend = desc["backend"].as_string("rtxpt");
     if (backend == "legacy") {
         OC_WARNING("The legacy ReSTIR GI backend has been removed; using RTXPT GI.");
     } else if (backend != "rtxpt") {
