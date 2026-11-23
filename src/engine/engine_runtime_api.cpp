@@ -1700,8 +1700,17 @@ Corona::API::Actor::Profile* Corona::API::Actor::add_profile(const Profile& prof
     EntityId storage_profile_handle =
         Corona::Ecs::request_create_profile(std::move(profile_payload));
     if (storage_profile_handle == 0) {
+        // ProfileStorage 没创建出来 = 这个 Profile 在引擎侧不存在。绝不能把它当作
+        // "可用 Profile"交出去（那会产出一个 load 报成功、但没有引擎侧 profile 的
+        // 半连接 actor）。回滚内存侧的登记，让调用方拿到 nullptr 并按失败处理。
         CFW_LOG_ERROR("[Actor::add_profile] Failed to create profile component "
-                      "(the structural command did not settle; see the diagnostic above)");
+                      "(the structural command did not settle; see the diagnostic above); "
+                      "the profile is not registered");
+        profiles_.erase(profile_handle);
+        if (active_profile_handle_ == profile_handle) {
+            active_profile_handle_ = profiles_.empty() ? 0 : profiles_.begin()->first;
+        }
+        return nullptr;
     }
     profile_storage_handles_[profile_handle] = storage_profile_handle;
 

@@ -10,7 +10,8 @@
 ///
 ///   create_* 不创建实体：组装"初始组件值"入队 → 同步等待 DAG 在 tick 边界
 ///   创建 → 拿回 `EntityId`。句柄到手时实体已经存在，没有"先无效后生效"的中间态。
-///   destroy_* 同契约，但返回 bool：销毁不能无限等待。
+///   destroy_* 同契约但**不等待**：销毁幂等，调用方不需要同步答案；等待只会把一次
+///   卡死按实体数放大（见下方"销毁"一节）。
 ///
 /// 为什么是 **Fifo**：创建顺序有语义（actor 先于它的 profile、场景先于成员），
 /// 不能合并；与 `scene_commands.h` / `mechanics_structural_commands.h` 同一选择。
@@ -33,6 +34,10 @@
 ///    给的可见性），绝不失败请求。
 /// 4. **停机**：DAG 停止时把队列里未消费的请求全部以失败结算
 ///    （与 Python 桥 `transition_and_cancel` 同一原则）。
+/// 5. **不推进就快速失败**（`DAG_UNRESPONSIVE` 闩锁）：一次无进展超时之后，后续
+///    请求立即失败，而不是各等一个预算 —— 否则装载失败的回滚路径会把一次卡死放大成
+///    "实体数 × 预算"的阻塞。下一次 tick 边界完成（或 DAG 重新启动）自动解锁。
+/// 6. **销毁不等待**：销毁是幂等的，入队即返回；装载回滚因此不会按实体数堆叠预算。
 ///
 /// ---- 装配前（`notify_owner_expected()` 之前）----
 /// 引擎装配阶段（系统线程还没启动）与单线程测试夹具里**不存在第二个写者**，
@@ -213,6 +218,12 @@ class StructuralRequest {
         }
         cv_.notify_all();
         return true;
+    }
+
+    /// 停机式失败结算并取回结果（调用方线程自己用，不计入"等待方放弃"）。
+    [[nodiscard]] Result settle_failure_result(std::string reason) {
+        settle_failure(std::move(reason));
+        return result();
     }
 
     [[nodiscard]] bool abandoned() const {
@@ -522,10 +533,17 @@ class StructuralCommandChannel {
         std::uint64_t failed{0};          ///< 等待方拿到失败的请求数（每条只记一次）
         std::uint64_t rejected{0};        ///< 未入队就拒绝的请求数（停机/队列满）
         std::uint64_t timeouts{0};        ///< 无进展预算耗尽而失败的请求数（failed 的子集）
-        std::uint64_t slow_waits{0};      ///< 超过两帧诊断阈值的等待数（成功/失败都算）
+        std::uint64_t unresponsive_rejections{0}; ///< 闩锁打开后立即失败的请求数（failed 的子集）
+        std::uint64_t slow_waits{0};      ///< 超过两帧诊断阈值的等待数（每条请求最多记一次）
         std::uint64_t abandoned{0};       ///< 等待方放弃后拥有者跳过的命令数
+        std::uint64_t deferred_destroys{0}; ///< 不等待结算的销毁命令数
         std::uint64_t settled_on_stop{0}; ///< 停机时批量结算的请求数（不计入 failed）
     };
+
+    /// 闩锁打开后所有结构请求携带的拒绝原因（日志里可直接搜 "DAG_UNRESPONSIVE"）。
+    static constexpr std::string_view kUnresponsiveReason =
+        "DAG_UNRESPONSIVE: no tick boundary completed for the no-progress budget; the systems "
+        "DAG is not advancing (waiting again is pointless until a boundary completes)";
 
     static StructuralCommandChannel& instance() {
         static StructuralCommandChannel channel;
@@ -588,8 +606,15 @@ class StructuralCommandChannel {
     /// 两个边界应用器都必须调用它：`apply_pending()`（DAG 边界钩子与降级兜底都走
     /// 这里）在 drain 之前发一次。**即使队列为空也要发** —— 等待方要的是
     /// "边界还在推进"这个事实，而不是"队列被消费过"。
-    void publish_tick_boundary() noexcept {
+    void publish_tick_boundary() {
         heartbeat_.fetch_add(1, std::memory_order_release);
+        // 边界完成 = DAG 又开始推进：自动解除"DAG_UNRESPONSIVE"闩锁。
+        if (unresponsive_.exchange(false, std::memory_order_acq_rel)) {
+            CFW_LOG_NOTICE(
+                "[Ecs/StructuralCommand] the systems DAG is advancing again (heartbeat #{}); "
+                "structural requests are accepted again",
+                static_cast<unsigned long long>(heartbeat_.load(std::memory_order_relaxed)));
+        }
     }
 
     /// 当前心跳序号。等待方用它判断"上次记录之后有没有边界完成"。
@@ -597,12 +622,29 @@ class StructuralCommandChannel {
         return heartbeat_.load(std::memory_order_acquire);
     }
 
+    // ------------------------------------------------------------ 闩锁
+
+    /// DAG 是否被判定为"不推进"（DAG_UNRESPONSIVE）。
+    ///
+    /// 一次无进展超时之后，后续结构请求**立即**失败而不是各等一个预算：否则
+    /// 一次卡死 × N 个实体（装载失败的回滚路径会销毁每个已装载 actor 的 ~8 个实体）
+    /// 会放大成 N × 预算 的阻塞，把 CEF/主线程冻住几分钟到几小时。
+    /// 下一次 tick 边界完成（或 DAG 重新启动）会自动清除闩锁。
+    [[nodiscard]] bool unresponsive() const noexcept {
+        return unresponsive_.load(std::memory_order_acquire);
+    }
+
+    /// 等待方发现无进展时打开闩锁（由 `await()` 调用）。
+    void mark_unresponsive() noexcept { unresponsive_.store(true, std::memory_order_release); }
+
     // ------------------------------------------------------------ 生命周期
 
     /// DAG 线程即将开始 tick：重新接受请求，并确认"拥有者即将上线"。
     void on_dag_started() noexcept {
         owner_expected_.store(true, std::memory_order_release);
         stopped_.store(false, std::memory_order_release);
+        // 新的一次 DAG 运行：旧的"不推进"结论作废（否则重启后的第一条请求就被拒）。
+        unresponsive_.store(false, std::memory_order_release);
     }
 
     /// 装配方宣布"拥有者即将上线"（DAG 装配完成 / 降级路径装配完成）。
@@ -698,6 +740,14 @@ class StructuralCommandChannel {
 
     // ------------------------------------------------------------ 等待（存活判据）
 
+    /// `await()` 的结算结果：结果本身 + 失败属于哪一类（决定计数与日志级别）。
+    struct WaitOutcome {
+        StructuralRequest::Result result;  ///< 结算槽里的结果
+        bool abandoned{false};             ///< 等待方放弃（命令会被拥有者跳过）
+        bool no_progress{false};           ///< 无进展预算耗尽（唯一的"真卡死"，计入 timeouts）
+        bool unresponsive{false};          ///< 被闩锁立即拒绝（计入 unresponsive_rejections）
+    };
+
     /// 按**存活性**等待一条请求结算（spec §5.1，Task 1c）。调用方线程执行。
     ///
     /// 失败只有两种原因：
@@ -710,8 +760,10 @@ class StructuralCommandChannel {
     ///
     /// 旧的两帧预算降级为诊断阈值：第一次越过它写一条 WARNING（保留 PhaseWatchdog
     /// 给的可见性），然后继续等。
-    [[nodiscard]] StructuralRequest::Result await(StructuralRequest& request,
-                                                  std::string_view what) {
+    ///
+    /// 无进展超时会打开 `DAG_UNRESPONSIVE` 闩锁：同一次卡死里后续的请求（以及装载
+    /// 失败后的回滚销毁）不再各等一个预算，而是立即失败/立即返回。
+    [[nodiscard]] WaitOutcome await(StructuralRequest& request, std::string_view what) {
         const auto budget = no_progress_budget();
         const auto diagnostic = slow_wait_diagnostic_threshold();
         const auto slice = std::min<std::chrono::milliseconds>(
@@ -722,6 +774,15 @@ class StructuralCommandChannel {
         auto observed = heartbeat();
         std::uint64_t boundaries_seen = 0;
         bool warned = false;
+
+        // 已经判定不推进：请求早已入队，直接放弃，不再等第二个预算。
+        if (unresponsive()) {
+            WaitOutcome outcome{};
+            outcome.result = request.abandon(std::string{kUnresponsiveReason});
+            outcome.abandoned = true;
+            outcome.unresponsive = true;
+            return outcome;
+        }
 
         for (;;) {
             if (request.wait_slice(slice)) {
@@ -736,34 +797,62 @@ class StructuralCommandChannel {
                         what, waited.count(), diagnostic.count(), boundaries_seen,
                         static_cast<unsigned long long>(observed));
                 }
-                return request.result();
+                WaitOutcome outcome{};
+                outcome.result = request.result();
+                return outcome;
             }
 
             const auto now = Clock::now();
             if (stopped()) {
-                return request.abandon(
+                // 停机结算：**不是**无进展超时（不计 timeouts），也不是等待方放弃
+                // （命令已被 settle_failure 标记，拥有者不会应用它）。
+                WaitOutcome outcome{};
+                outcome.result = request.settle_failure_result(
                     "the systems DAG stopped while the request was still pending");
+                return outcome;
+            }
+
+            if (unresponsive()) {
+                // 另一个等待方先一步把闩锁打开了：别在这里再耗一个预算。
+                WaitOutcome outcome{};
+                outcome.result = request.abandon(std::string{kUnresponsiveReason});
+                outcome.abandoned = true;
+                outcome.unresponsive = true;
+                return outcome;
             }
 
             const auto current = heartbeat();
             if (current != observed) {
+                boundaries_seen += current - observed;  // 真心跳数，不是轮询次数
                 observed = current;
                 last_progress = now;
-                ++boundaries_seen;
             }
 
             const auto idle = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - last_progress);
             if (idle >= budget) {
-                record_slow_wait();
+                // 慢 vs 卡死：到这里就是"连续一个预算没有任何边界完成" = 卡死。
+                if (!warned) {
+                    record_slow_wait();  // 每条请求最多记一次，不重复计数
+                }
+                mark_unresponsive();
                 std::string reason = "no tick boundary completed for ";
                 reason += std::to_string(idle.count());
                 reason += "ms (no-progress budget ";
                 reason += std::to_string(budget.count());
                 reason += "ms, last heartbeat #";
                 reason += std::to_string(static_cast<unsigned long long>(observed));
-                reason += "): the systems DAG is not advancing";
-                return request.abandon(std::move(reason));
+                reason += "): the systems DAG is not advancing; ";
+                reason += kUnresponsiveReason;
+                CFW_LOG_ERROR(
+                    "[Ecs/StructuralCommand] {}: further structural requests fail immediately "
+                    "until a tick boundary completes again",
+                    reason);
+                WaitOutcome outcome{};
+                outcome.result = request.abandon(std::move(reason));
+                outcome.abandoned = true;
+                outcome.no_progress = true;
+                return outcome;
             }
 
             if (!warned && std::chrono::duration_cast<std::chrono::milliseconds>(now - started) >=
@@ -802,8 +891,10 @@ class StructuralCommandChannel {
     void record_applied() { note([](Stats& s) { ++s.applied; }); }
     void record_failed() { note([](Stats& s) { ++s.failed; }); }
     void record_timeout() { note([](Stats& s) { ++s.timeouts; ++s.failed; }); }
+    void record_unresponsive_rejection() { note([](Stats& s) { ++s.unresponsive_rejections; ++s.failed; }); }
     void record_slow_wait() { note([](Stats& s) { ++s.slow_waits; }); }
     void record_abandoned() { note([](Stats& s) { ++s.abandoned; }); }
+    void record_deferred_destroy() { note([](Stats& s) { ++s.deferred_destroys; }); }
 
    private:
     StructuralCommandChannel() = default;
@@ -817,6 +908,7 @@ class StructuralCommandChannel {
     Buffer commands_;
     Kernel::ThreadAffinity affinity_;
     std::atomic<bool> stopped_{false};            ///< 停机后拒绝新请求
+    std::atomic<bool> unresponsive_{false};       ///< DAG_UNRESPONSIVE：无进展超时后的闩锁
     std::atomic<bool> owner_expected_{false};     ///< 已有装配方承诺"会有人 drain"
     std::atomic<bool> boundary_installed_{false}; ///< DAG tick 边界钩子已安装
     std::atomic<std::uint64_t> request_ids_{0};
@@ -905,6 +997,22 @@ inline void on_dag_thread_stopping() {
         return apply_structural_payload(payload);
     }
 
+    // DAG_UNRESPONSIVE 闩锁：已经确认边界不推进（一次无进展超时），后面的请求
+    // **立即**失败，不再各等一个预算 —— 否则装载失败后的回滚会按实体数 × 预算放大。
+    // 下一次 tick 边界完成会自动解锁。注意位置：停机 / 重入 / 装配前判定都在它前面，
+    // 因为拥有者线程自己还在跑就说明 DAG 活着。
+    if (channel.unresponsive()) {
+        channel.record_unresponsive_rejection();
+        if (loud) {
+            CFW_LOG_ERROR("[Ecs/StructuralCommand] {} rejected immediately: {}", what,
+                          StructuralCommandChannel::kUnresponsiveReason);
+        } else {
+            CFW_LOG_WARNING("[Ecs/StructuralCommand] {} rejected immediately: {}", what,
+                            StructuralCommandChannel::kUnresponsiveReason);
+        }
+        return 0;
+    }
+
     auto request = std::make_shared<StructuralRequest>(channel.next_request_id());
     StructuralCommand command{};
     command.request = request;
@@ -927,12 +1035,21 @@ inline void on_dag_thread_stopping() {
     }
     channel.record_requested();
 
-    const StructuralRequest::Result result = channel.await(*request, what);
+    const StructuralCommandChannel::WaitOutcome outcome = channel.await(*request, what);
+    const StructuralRequest::Result& result = outcome.result;
     if (!result.ok()) {
-        // 失败只在这里记一次（无进展失败是它的子集），停机/异常路径不再重复计数。
-        const bool abandoned = request->abandoned();
-        if (abandoned) {
+        // 失败只在这里记一次，并且按**原因**分开计数：
+        // - 无进展超时 → timeouts（真卡死）；
+        // - 闩锁立即拒绝 → unresponsive_rejections；
+        // - 停机 / 命令本身失败 → failed（停机不算超时）。
+        if (outcome.no_progress) {
             channel.record_timeout();
+        } else if (outcome.unresponsive) {
+            channel.record_unresponsive_rejection();
+        } else {
+            channel.record_failed();
+        }
+        if (outcome.abandoned) {
             if (loud) {
                 CFW_LOG_ERROR(
                     "[Ecs/StructuralCommand] {} abandoned: {}; owner thread {}; the late "
@@ -947,13 +1064,10 @@ inline void on_dag_thread_stopping() {
                     "nothing is applied",
                     what, result.error);
             }
+        } else if (loud) {
+            CFW_LOG_ERROR("[Ecs/StructuralCommand] {} failed: {}", what, result.error);
         } else {
-            channel.record_failed();
-            if (loud) {
-                CFW_LOG_ERROR("[Ecs/StructuralCommand] {} failed: {}", what, result.error);
-            } else {
-                CFW_LOG_WARNING("[Ecs/StructuralCommand] {} failed: {}", what, result.error);
-            }
+            CFW_LOG_WARNING("[Ecs/StructuralCommand] {} failed: {}", what, result.error);
         }
         return 0;
     }
@@ -1000,23 +1114,79 @@ inline void on_dag_thread_stopping() {
     return submit_structural_command(StructuralPayload{std::move(payload)}, "create_image");
 }
 
-// ---- 销毁（同契约；返回是否结算成功，0 句柄视为"没有要销毁的东西"）----
+// ---- 销毁：**不等待结算**（fire-and-forget）----
+//
+// 销毁是幂等的，调用方不需要"实体已经没了"这个同步答案。等待却会把一次卡死的代价
+// 按实体数放大：装载失败回滚一个 actor 要销毁 ~8 个实体（geometry/transform/
+// model_resource/optics/mechanics/acoustics/profile/actor），每个等满一个无进展预算
+// 就是 8 × 10s；N 个 actor 就是 ~80N 秒的 CEF/主线程冻结。
+//
+// 所以销毁只负责把命令交出去：
+// - 拥有者线程 / 装配前：直接应用（与创建同一规则）；
+// - 停机：world 马上被拆掉，不销毁，记诊断并返回 false（不阻塞）；
+// - 否则入队并**立即返回**。DAG 恢复后下一次边界会应用它；如果 DAG 再也不恢复，
+//   这些实体随进程退出一起消失，日志里点名句柄（见 `kUnresponsiveReason`）。
+
+/// 提交一条不等待结算的结构命令（目前只有销毁用它）。
+[[nodiscard]] inline bool submit_structural_command_without_waiting(StructuralPayload payload,
+                                                                   std::string_view what,
+                                                                   EntityId handle) {
+    auto& channel = StructuralCommandChannel::instance();
+
+    if (channel.stopped()) {
+        channel.record_rejected();
+        CFW_LOG_WARNING(
+            "[Ecs/StructuralCommand] {} #{} rejected: the systems DAG is not accepting "
+            "structural commands (stopped); the entity dies with the world",
+            what, handle);
+        return false;
+    }
+
+    if (channel.affinity().is_owner_thread() || !channel.owner_expected()) {
+        channel.record_inline_applied();
+        apply_structural_payload(payload);
+        return true;
+    }
+
+    auto request = std::make_shared<StructuralRequest>(channel.next_request_id());
+    StructuralCommand command{};
+    command.request = request;
+    command.payload = std::move(payload);
+    command.what = what;
+    if (!channel.commands().push(std::move(command))) {
+        channel.record_rejected();
+        CFW_LOG_WARNING(
+            "[Ecs/StructuralCommand] {} #{} rejected: structural command queue is full "
+            "({} pending); the entity is orphaned until the world is torn down",
+            what, handle, channel.commands().size());
+        return false;
+    }
+    channel.record_deferred_destroy();
+    if (channel.unresponsive()) {
+        // 仍然入队（恢复后会应用），但明确写出"如果 DAG 不恢复，这就是孤儿"。
+        CFW_LOG_WARNING(
+            "[Ecs/StructuralCommand] {} #{} queued without waiting: {}; the entity is "
+            "orphaned until the world is torn down",
+            what, handle, StructuralCommandChannel::kUnresponsiveReason);
+    }
+    return true;
+}
 
 [[nodiscard]] inline bool request_destroy_entity(EntityId handle,
                                                  std::string_view what = "destroy_entity") {
     if (handle == 0) {
         return true;
     }
-    return submit_structural_command(
-               StructuralPayload{DestroyEntityPayload{handle, false}}, what, false) != 0;
+    return submit_structural_command_without_waiting(
+        StructuralPayload{DestroyEntityPayload{handle, false}}, what, handle);
 }
 
 [[nodiscard]] inline bool request_destroy_image(EntityId handle) {
     if (handle == 0) {
         return true;
     }
-    return submit_structural_command(
-               StructuralPayload{DestroyEntityPayload{handle, true}}, "destroy_image", false) != 0;
+    return submit_structural_command_without_waiting(
+        StructuralPayload{DestroyEntityPayload{handle, true}}, "destroy_image", handle);
 }
 
 }  // namespace Corona::Ecs

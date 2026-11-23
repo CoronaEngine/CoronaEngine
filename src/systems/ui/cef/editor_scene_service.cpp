@@ -394,6 +394,21 @@ NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
     } else {
         item.geometry = std::make_unique<Corona::API::Geometry>(path_to_utf8(asset_path), item.import_options);
     }
+    // 结构创建失败必须让整次装载失败：一个 tick 边界没落地就是实体缺失，
+    // 半成品 actor 绝不能进场景（否则 load 报 opened 却少一个 actor）。
+    //
+    // 第一处失败就中止：DAG 被判定为不推进之后，后面的每次创建都会立即失败，
+    // 继续构造只会制造更多无意义日志/空槽（而且这是装载回滚被放大的源头之一）。
+    auto require_engine_entities = [&](bool ok, const char* stage) {
+        if (ok) return;
+        std::string detail = "engine entity create failed while materializing actor '" +
+                             item.name + "' (route '" + item.route + "'): ";
+        detail += stage;
+        detail += " did not settle (see the [Ecs/StructuralCommand] log)";
+        CFW_LOG_CRITICAL("[NativeEditor] {}", detail);
+        throw StructuralCreateFailed(detail);
+    };
+    require_engine_entities(item.geometry->is_valid(), "geometry");
     item.geometry->set_transform(item.position, item.rotation, item.scale);
     if (item.authored_matrix) item.geometry->set_matrix(*item.authored_matrix);
     if (!item.persisted_animation_sources.empty()) {
@@ -417,8 +432,11 @@ NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
     }
 
     item.optics = std::make_unique<Corona::API::Optics>(*item.geometry);
+    require_engine_entities(item.optics->is_valid(), "optics");
     item.mechanics = std::make_unique<Corona::API::Mechanics>(*item.geometry);
+    require_engine_entities(item.mechanics->is_valid(), "mechanics");
     item.acoustics = std::make_unique<Corona::API::Acoustics>(*item.geometry);
+    require_engine_entities(item.acoustics->is_valid(), "acoustics");
     if (item.actor_type == "ui_image") {
         item.optics->set_properties({.lighting_enabled = false});
         item.mechanics->set_properties({.body_type = "phantom"});
@@ -433,29 +451,17 @@ NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
     }
 
     item.engine_actor = std::make_unique<Corona::API::Actor>();
+    require_engine_entities(item.engine_actor->is_valid(), "actor");
     Corona::API::Actor::Profile profile{};
     profile.geometry = item.geometry.get();
     profile.optics = item.optics.get();
     profile.mechanics = item.mechanics.get();
     profile.acoustics = item.acoustics.get();
     auto* profile_ref = item.engine_actor->add_profile(profile);
+    // add_profile 只有在引擎侧 ProfileStorage 真的创建出来时才返回非空指针；
+    // 返回 nullptr = 这个 actor 没有引擎侧 profile（半连接），同样算装载失败。
+    require_engine_entities(profile_ref != nullptr, "profile");
     item.engine_actor->set_active_profile(profile_ref);
-    // 结构创建失败必须让整次装载失败：一个 tick 边界没落地就是实体缺失，
-    // 半成品 actor 绝不能进场景（否则 load 报 opened 却少一个 actor）。
-    if (!item.geometry->is_valid() || !item.optics->is_valid() || !item.mechanics->is_valid() ||
-        !item.acoustics->is_valid() || !item.engine_actor->is_valid() || profile_ref == nullptr) {
-        std::string detail = "engine entity create failed while materializing actor '" +
-                             item.name + "' (route '" + item.route + "'):";
-        if (!item.geometry->is_valid()) detail += " geometry;";
-        if (!item.optics->is_valid()) detail += " optics;";
-        if (!item.mechanics->is_valid()) detail += " mechanics;";
-        if (!item.acoustics->is_valid()) detail += " acoustics;";
-        if (!item.engine_actor->is_valid()) detail += " actor;";
-        if (profile_ref == nullptr) detail += " profile;";
-        detail += " the structural command did not settle (see the [Ecs/StructuralCommand] log)";
-        CFW_LOG_CRITICAL("[NativeEditor] {}", detail);
-        throw StructuralCreateFailed(detail);
-    }
     apply_native_actor_optics_state(item);
     item.engine_actor->set_actor_guid(item.actor_guid);
     item.engine_actor->set_follow_camera(item.follow_camera);
@@ -3754,9 +3760,9 @@ NativeResult open_launcher_project(const std::string& requested_path, const std:
             load_policy == "degraded",
             prepared.diagnostics);
     } catch (const StructuralCreateFailed& error) {
-        // 结构创建失败：整次装载失败，不返回半装载场景。沿用 UI 已认识的
-        // invalid_archive 结果形状，但 stage/code 明确指出"实体没创建出来"，
-        // 日志里另有 [Ecs/StructuralCommand] 的根因。
+        // 结构创建失败：整次装载失败，不返回半装载场景。用**独立** status
+        // （scene_commit_failed）而不是 invalid_archive —— 存档本身没问题，是引擎
+        // 没创建出实体；Web 层对这两个 status 显示不同提示。
         CFW_LOG_CRITICAL("[ProjectLauncher] open_project aborted path='{}': {}", path,
                          error.what());
         prepared.diagnostics.push_back({
@@ -3765,7 +3771,7 @@ NativeResult open_launcher_project(const std::string& requested_path, const std:
             {"message", error.what()}, {"path", path},
         });
         return native_success({
-            {"ok", false}, {"status", "invalid_archive"}, {"path", path},
+            {"ok", false}, {"status", "scene_commit_failed"}, {"path", path},
             {"diagnostics", prepared.diagnostics},
         });
     } catch (const std::exception& error) {

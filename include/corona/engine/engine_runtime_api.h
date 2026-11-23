@@ -320,6 +320,10 @@ class Actor {
         Geometry* geometry{nullptr};
     };
 
+    /// Add one profile. Returns nullptr (and registers nothing) when the profile is
+    /// inconsistent with the geometry **or when the engine-side ProfileStorage entity could
+    /// not be created** (the structural command did not settle). Callers must treat nullptr as
+    /// a failed actor materialization: a Profile* without its storage is a half-linked actor.
     Profile* add_profile(const Profile& profile);
     void remove_profile(const Profile* profile);
     void set_active_profile(const Profile* profile);

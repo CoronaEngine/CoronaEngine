@@ -264,3 +264,44 @@ def test_the_create_wait_is_liveness_based_not_wall_clock():
     assert "notify_owner_expected()" in engine, (
         "engine.cpp must announce that a structural owner thread is coming, otherwise "
         "runtime structural requests keep applying on the calling thread")
+
+
+def test_a_stuck_dag_does_not_multiply_the_wait_per_entity():
+    # Task 1c review: once a no-progress timeout proves the DAG is not advancing, later
+    # requests must fail immediately (the latch), and destroys must never wait - otherwise
+    # a failed load's rollback costs N entities x budget on the CEF/main thread.
+    channel = read(ROOT / "include" / "corona" / "ecs" / "structural_commands.h")
+    assert "unresponsive_" in channel and "mark_unresponsive" in channel
+    assert "kUnresponsiveReason" in channel and "DAG_UNRESPONSIVE" in channel
+    assert "if (channel.unresponsive())" in channel, (
+        "submit_structural_command must reject fast once the DAG is unresponsive")
+    assert "submit_structural_command_without_waiting" in channel
+    destroy = channel.split("request_destroy_entity(EntityId handle")[1].split(
+        "request_destroy_image")[0]
+    assert "submit_structural_command_without_waiting(" in destroy
+    assert "submit_structural_command(" not in destroy, (
+        "destroys must not wait for settlement: the rollback path would multiply the "
+        "no-progress budget by the entity count")
+
+
+def test_a_profile_without_engine_storage_fails_the_actor_materialisation():
+    # Task 1c review: a Profile* handed out without its engine-side ProfileStorage is a
+    # half-linked actor. add_profile must report that, and the editor load path must treat
+    # it as the same failure as a missing actor entity.
+    api = read(ROOT / "src" / "engine" / "engine_runtime_api.cpp")
+    add_profile = api.split("Corona::API::Actor::add_profile")[1].split(
+        "void Corona::API::Actor::remove_profile")[0]
+    assert "storage_profile_handle == 0" in add_profile
+    assert "profiles_.erase(profile_handle)" in add_profile, (
+        "add_profile must roll back the in-memory registration when the storage create "
+        "did not settle")
+    assert "return nullptr" in add_profile, (
+        "add_profile must not hand back a usable Profile when its storage is missing")
+
+    editor = read(ROOT / "src" / "systems" / "ui" / "cef" / "editor_scene_service.cpp")
+    materialize = editor.split("NativeEditorActor& add_native_actor_to_scene")[1].split(
+        "void materialize_actor_snapshot")[0]
+    assert "add_profile(" in materialize
+    assert "profile_ref != nullptr" in materialize, (
+        "the editor must take the structural failure path when add_profile returns nullptr")
+    assert "StructuralCreateFailed" in materialize

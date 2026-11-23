@@ -17,7 +17,14 @@
  * 8. 两帧只是**诊断阈值**（30Hz→67ms 等），无进展预算才是失败判据（默认 10s）；
  * 9. 装配前（还没有拥有者）调用线程直接应用：引擎装配期与单线程夹具的既定行为；
  * 10. 所有等待都有界：每个等待都断言 elapsed < 一个上界；
- * 11. 批量创建成本：N=200 个 actor 通过公开 API 创建/销毁的实测墙钟时间。
+ * 11. **空队列的边界也发心跳**：等待方要的是"边界在推进"，不是"队列被消费过"；
+ * 12. **DAG_UNRESPONSIVE 闩锁**：一次无进展超时之后请求立即失败（不再等预算），
+ *     一次边界完成自动解锁；
+ * 13. **销毁不等待**：闩锁/卡死期间 200 条销毁仍是入队即返回（不按实体数 × 预算放大），
+ *     边界恢复后统一落地，不留孤儿；
+ * 14. **profile 创建没结算不算成功**：`Actor::add_profile` 返回 nullptr 并回滚登记
+ *     （否则装载会产出"没有引擎侧 profile"的半连接 actor）；
+ * 15. 批量创建成本：N=200 个 actor 通过公开 API 创建/销毁的实测墙钟时间。
  */
 
 #include <corona/ecs/structural_commands.h>
@@ -175,6 +182,27 @@ void test_a_running_owner_applies_the_request() {
     }
 }
 
+/// 心跳的契约：**队列为空**的边界也要发心跳。
+///
+/// 等待方要的是"边界还在推进"，而不是"队列被消费过"。如果心跳只在有命令时才发，
+/// 一次加载里的空闲 tick 会被当成卡死。
+void test_an_empty_tick_boundary_still_publishes_the_heartbeat() {
+    auto& channel = StructuralCommandChannel::instance();
+    channel.on_dag_started();
+    channel.affinity().reset();
+
+    // 先清空队列（上一条用例可能留下命令）。
+    Corona::Ecs::apply_pending_structural_commands();
+    CHECK(channel.commands().size() == 0);
+
+    const auto before = channel.heartbeat();
+    const bool applied = Corona::Ecs::apply_pending_structural_commands();
+    CHECK(!applied);                          // 没有命令可应用
+    CHECK(channel.heartbeat() == before + 1);  // 但边界仍然发布了一次心跳
+    CHECK(channel.commands().size() == 0);
+    channel.affinity().reset();
+}
+
 /// 无进展（边界真的卡死）：失败、有界、不创建实体；迟到的 drain 跳过已放弃的请求。
 ///
 /// 注意这是"卡死"而不是"慢"：全程没有任何 tick 边界完成（心跳不动），
@@ -322,6 +350,9 @@ void test_an_owner_that_stalls_for_a_second_then_drains_lets_the_caller_succeed(
 /// 这条用"只发心跳、不 drain"的拥有者：边界一直在推进（心跳在动），但这一条请求
 /// 还没轮到。墙钟已经远超预算，调用方仍然必须继续等 —— 判据是"有没有进展"，
 /// 不是"等了多久"。
+///
+/// 同步点是**入队**：拥有者先等请求真的进队列，再开始心跳。否则 CI 负载下拥有者
+/// 可能把 8 次心跳 + drain 全部跑完而调用方还没提交，请求就永远没人应用（假超时）。
 void test_completed_boundaries_reset_the_no_progress_budget() {
     auto& channel = StructuralCommandChannel::instance();
     channel.clear_no_progress_budget_override();
@@ -336,6 +367,11 @@ void test_completed_boundaries_reset_the_no_progress_budget() {
 
     std::atomic<bool> draining{false};
     std::thread owner([&]() {
+        // 等请求入队（而不是等一个固定时长）。
+        const auto enqueue_deadline = Clock::now() + 2s;
+        while (channel.commands().size() == 0 && Clock::now() < enqueue_deadline) {
+            std::this_thread::yield();
+        }
         // ~320ms 的心跳（40ms 一次）> 150ms 预算，但每次心跳都重置计时器。
         for (int i = 0; i < 8; ++i) {
             channel.publish_tick_boundary();
@@ -359,6 +395,163 @@ void test_completed_boundaries_reset_the_no_progress_budget() {
     CHECK(channel.stats().timeouts == stats_before.timeouts);
     CHECK(channel.commands().size() == 0);
     CHECK(entity_count() == before + 1);
+}
+
+/// DAG_UNRESPONSIVE 闩锁：一次无进展超时之后，后续请求**立即**失败（不再等一个
+/// 预算），一次 tick 边界完成就自动解锁。
+///
+/// 没有闩锁时，"卡死一次 × N 个实体"会把调用方冻住 N × 预算；装载失败的回滚路径
+/// 一次要销毁 ~8 个实体/actor，这样一次卡死就能冻住几分钟到几小时。
+void test_an_unresponsive_dag_rejects_immediately_until_a_boundary_completes() {
+    auto& channel = StructuralCommandChannel::instance();
+    channel.clear_no_progress_budget_override();
+    channel.set_no_progress_budget(60ms);
+    channel.set_tick_period(8333us);
+    channel.on_dag_started();
+    channel.affinity().reset();
+    CHECK(!channel.unresponsive());
+
+    const auto stats_before = channel.stats();
+
+    // 第一次：没有任何边界完成 → 等满 60ms 预算后失败，并打开闩锁。
+    const auto first_started = Clock::now();
+    CHECK(Corona::Ecs::request_create_geometry(make_payload(0x0BAD)) == 0);
+    const long long first_ms = elapsed_ms(first_started);
+    CHECK(first_ms >= 60);
+    CHECK(first_ms < 1000);
+    CHECK(channel.unresponsive());
+    CHECK(channel.stats().timeouts == stats_before.timeouts + 1);
+    CHECK(channel.stats().unresponsive_rejections == stats_before.unresponsive_rejections);
+
+    // 第二次：立即失败 —— 不排队、也不再等一个预算。
+    const auto second_started = Clock::now();
+    CHECK(Corona::Ecs::request_create_geometry(make_payload(0x0BAD)) == 0);
+    const long long second_ms = elapsed_ms(second_started);
+    CHECK(second_ms < 20);
+    CHECK(channel.stats().unresponsive_rejections == stats_before.unresponsive_rejections + 1);
+    CHECK(channel.stats().timeouts == stats_before.timeouts + 1);  // 不是又一次超时
+
+    // 一次边界完成 → 闩锁清除、排队的废弃命令被跳过。
+    Corona::Ecs::apply_pending_structural_commands();
+    CHECK(!channel.unresponsive());
+    CHECK(channel.commands().size() == 0);
+
+    // 解锁后请求重新被接受（假拥有者线程来应用）。
+    channel.affinity().reset();
+    std::atomic<bool> stop{false};
+    std::thread owner([&]() {
+        while (!stop.load(std::memory_order_relaxed)) {
+            Corona::Ecs::apply_pending_structural_commands();
+            std::this_thread::sleep_for(200us);
+        }
+    });
+    const Corona::EntityId handle = Corona::Ecs::request_create_geometry(make_payload(0xA17C));
+    stop.store(true, std::memory_order_relaxed);
+    owner.join();
+    CHECK(handle != 0);
+    CHECK(channel.stats().applied == stats_before.applied + 1);
+}
+
+/// 销毁不等待：DAG 被闩锁/卡死时，回滚销毁必须立即返回，不能按实体数 × 预算放大。
+///
+/// 旧行为：每条 `request_destroy_entity` 都等一个无进展预算（这里 60ms），
+/// 100 个实体就是 6s、一个 actor（~8 个实体）的失败回滚就会卡住调用方。
+/// 新行为：销毁入队即返回（幂等，不需要同步答案），DAG 恢复后下一次边界统一应用。
+void test_teardown_destroys_do_not_wait_on_an_unresponsive_dag() {
+    auto& channel = StructuralCommandChannel::instance();
+    channel.clear_no_progress_budget_override();
+    channel.set_no_progress_budget(60ms);
+    channel.set_tick_period(8333us);
+    channel.on_dag_started();
+    channel.affinity().reset();
+
+    constexpr int kCount = 200;
+    std::vector<Corona::EntityId> handles;
+    handles.reserve(kCount);
+    for (int i = 0; i < kCount; ++i) {
+        handles.push_back(
+            Corona::Ecs::create_transform_entity(Corona::Ecs::CreateTransformPayload{}));
+    }
+    for (const auto handle : handles) {
+        CHECK(handle != 0);
+    }
+    const auto entities_before = entity_count();
+
+    // 一次无进展超时把闩锁打开（先证明它之前是关的）。
+    CHECK(!channel.unresponsive());
+    CHECK(Corona::Ecs::request_create_geometry(make_payload(0xC0DE)) == 0);
+    CHECK(channel.unresponsive());
+    const auto stats_before = channel.stats();
+
+    const auto destroy_started = Clock::now();
+    int queued = 0;
+    for (const auto handle : handles) {
+        if (Corona::Ecs::request_destroy_entity(handle, "destroy_transform")) {
+            ++queued;
+        }
+    }
+    const long long destroy_ms = elapsed_ms(destroy_started);
+
+    CHECK(queued == kCount);
+    // 旧语义会是 200 × 60ms = 12s；新语义是入队即返回。
+    CHECK(destroy_ms < 500);
+    CHECK(channel.stats().deferred_destroys == stats_before.deferred_destroys + kCount);
+    CHECK(channel.stats().timeouts == stats_before.timeouts);  // 销毁不消耗预算
+    CHECK(channel.commands().size() >= static_cast<std::size_t>(kCount));
+
+    // 边界恢复 → 闩锁清除，排队的销毁真的落地（没有孤儿）。
+    Corona::Ecs::apply_pending_structural_commands();
+    CHECK(!channel.unresponsive());
+    CHECK(channel.commands().size() == 0);
+    CHECK(entity_count() == entities_before - static_cast<std::size_t>(kCount));
+}
+
+/// Profile 的结构创建没结算时，`Actor::add_profile` 必须返回 nullptr 并回滚内存登记：
+/// 交出一个没有引擎侧 ProfileStorage 的 Profile 就是"半连接"的 actor（装载会报成功、
+/// 引擎里却没有 profile）。
+void test_a_profile_whose_create_did_not_settle_is_not_registered() {
+    auto& channel = StructuralCommandChannel::instance();
+    channel.clear_no_progress_budget_override();
+    channel.set_no_progress_budget(500ms);
+    channel.set_tick_period(8333us);
+    channel.on_dag_started();
+    channel.affinity().reset();
+
+    std::atomic<bool> stop{false};
+    std::thread owner([&]() {
+        while (!stop.load(std::memory_order_relaxed)) {
+            Corona::Ecs::apply_pending_structural_commands();
+            std::this_thread::sleep_for(200us);
+        }
+    });
+
+    auto geometry = std::make_unique<Corona::API::Geometry>(std::string{});
+    auto optics = std::make_unique<Corona::API::Optics>(*geometry);
+    auto mechanics = std::make_unique<Corona::API::Mechanics>(*geometry);
+    auto acoustics = std::make_unique<Corona::API::Acoustics>(*geometry);
+    auto actor = std::make_unique<Corona::API::Actor>();
+    CHECK(geometry->is_valid());
+    CHECK(optics->is_valid());
+    CHECK(mechanics->is_valid());
+    CHECK(acoustics->is_valid());
+    CHECK(actor->is_valid());
+
+    // 故障注入：DAG 停止后所有结构创建都被拒绝，profile 的创建一定不结算。
+    channel.on_dag_stopping("structural command test: the profile create must fail");
+
+    Corona::API::Actor::Profile profile{};
+    profile.geometry = geometry.get();
+    profile.optics = optics.get();
+    profile.mechanics = mechanics.get();
+    profile.acoustics = acoustics.get();
+    const auto* added = actor->add_profile(profile);
+
+    CHECK(added == nullptr);                 // 不交出半连接的 Profile
+    CHECK(actor->profile_count() == 0);      // 内存登记也回滚了
+    CHECK(actor->get_active_profile() == nullptr);
+
+    stop.store(true, std::memory_order_relaxed);
+    owner.join();
 }
 
 /// 重入：拥有者线程自己调用 → 直接应用，不入队、不自等。
@@ -504,11 +697,12 @@ void test_bulk_creation_cost_through_the_public_api() {
 
     CHECK(valid == kCount);                 // 每个请求都结算成功
     CHECK(create_ms >= 0 && destroy_ms >= 0);
-    // 有界：一条命令最多等一个 tick（8.33ms）+ 余量；200 个请求的线性成本不可能超过
-    // 200×50ms。超过就说明边界没有在 drain（或每次都在等满无进展预算）。
-    CHECK(per_create_ms < 50.0);
-    CHECK(per_destroy_ms < 50.0);
-    CHECK(create_ms < kCount * 50);
+    // 有界（宽松，不依赖 CI 负载）：每条同步创建最多等一个 tick（8.33ms）+ 调度抖动，
+    // 但绝不该等满无进展预算（这里 500ms）。销毁是 fire-and-forget，成本接近 0。
+    // 用预算而不是一个漂亮的小数字做上界，否则慢 CI 上会假红。
+    CHECK(per_create_ms < 500.0);
+    CHECK(per_destroy_ms < 500.0);
+    CHECK(create_ms < kCount * 500);
     // 边界成本必须明显高于直接调用原语，否则量到的不是同步应答的成本。
     CHECK(baseline_ms < create_ms);
 }
@@ -520,10 +714,14 @@ int main() {
     test_two_frames_is_a_diagnostic_threshold_not_a_wait_limit();
     test_before_assembly_the_calling_thread_applies_directly();
     test_a_running_owner_applies_the_request();
+    test_an_empty_tick_boundary_still_publishes_the_heartbeat();
     test_a_stalled_boundary_fails_after_the_no_progress_budget();
     test_stop_settles_waiting_callers_and_rejects_new_requests();
     test_an_owner_that_stalls_for_a_second_then_drains_lets_the_caller_succeed();
     test_completed_boundaries_reset_the_no_progress_budget();
+    test_an_unresponsive_dag_rejects_immediately_until_a_boundary_completes();
+    test_teardown_destroys_do_not_wait_on_an_unresponsive_dag();
+    test_a_profile_whose_create_did_not_settle_is_not_registered();
     test_the_owner_thread_applies_inline();
     test_the_owner_thread_cannot_create_once_shutdown_begins();
     test_bulk_creation_cost_through_the_public_api();
