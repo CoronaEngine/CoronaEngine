@@ -487,8 +487,10 @@ void test_remote_write_queue_policy() {
         expect_true(stats.remote_writes_coalesced == 2,
                     "the two superseded writes are counted as coalesced");
     }
+    // Completion signal is "applied", not "queue empty": the owner drains (pending → 0)
+    // before it applies the writes.
     expect_true(wait_until([] {
-                    return Corona::Network::sync_boundary_stats().remote_writes_pending == 0;
+                    return Corona::Network::sync_boundary_stats().remote_writes_applied >= 1;
                 }),
                 "the coalesced write is applied");
     {
@@ -498,6 +500,7 @@ void test_remote_write_queue_policy() {
     }
 
     // Cap: 5000 distinct keys -> 4096 queued, 904 oldest evicted.
+    std::uint64_t drained_baseline = 0;
     {
         std::lock_guard gate(boundary_gate);
         Corona::Network::reset_sync_boundary_stats();
@@ -517,13 +520,66 @@ void test_remote_write_queue_policy() {
                     "overflow drops the oldest and counts it");
         expect_true(stats.remote_writes_coalesced == 0,
                     "distinct keys are not coalesced");
+        drained_baseline = stats.remote_writes_applied + stats.remote_writes_dropped;
     }
-    expect_true(wait_until([] {
-                    return Corona::Network::sync_boundary_stats().remote_writes_pending == 0;
+    // Wait until every drained write is *settled* (applied or dropped), not merely
+    // swapped out of the queue.
+    expect_true(wait_until([drained_baseline] {
+                    const auto stats = Corona::Network::sync_boundary_stats();
+                    return stats.remote_writes_applied + stats.remote_writes_dropped >=
+                           drained_baseline + 4096;
                 }),
-                "the capped queue drains at the boundary");
+                "the capped queue drains and settles at the boundary");
     expect_true(Corona::Network::sync_boundary_stats().remote_writes_dropped >= 1,
                 "writes to missing entities are dropped (not retried)");
+
+    // Recency: a coalesced key moves to the back, so "drop oldest" evicts the oldest
+    // *write*, not the oldest first-insert position. Without the move, the just-refreshed
+    // key would sit at the front and the next new key would evict it.
+    {
+        std::lock_guard gate(boundary_gate);
+        Corona::Network::reset_sync_boundary_stats();
+        const auto fixture_seq =
+            static_cast<std::uint64_t>(Corona::Ecs::seq_of(fixture.transform));
+        write.entity_seq = fixture_seq;
+        write.transform = Corona::Network::TransformState{};
+        write.transform.xform[0] = 5.0f;
+        expect_true(Corona::Network::submit_remote_state(write),
+                    "oldest write (the fixture) is accepted");
+        for (int i = 1; i < 4096; ++i) {
+            write.entity_seq = 2'000'000 + static_cast<std::uint64_t>(i);
+            write.transform = Corona::Network::TransformState{};
+            (void)Corona::Network::submit_remote_state(write);
+        }
+        // Refresh the oldest key; it must move to the back of the queue.
+        write.entity_seq = fixture_seq;
+        write.transform = Corona::Network::TransformState{};
+        write.transform.xform[0] = 777.0f;
+        expect_true(Corona::Network::submit_remote_state(write),
+                    "coalesced fixture write is accepted");
+        // One more new key: the eviction victim must be the next-oldest write, not the
+        // refreshed fixture entry.
+        write.entity_seq = 2'000'000 + 4096;
+        write.transform = Corona::Network::TransformState{};
+        (void)Corona::Network::submit_remote_state(write);
+        const auto stats = Corona::Network::sync_boundary_stats();
+        expect_true(stats.remote_writes_pending == 4096,
+                    "recency test keeps the 4096 cap");
+        expect_true(stats.remote_writes_coalesced == 1,
+                    "the fixture refresh is counted as a coalesce");
+        expect_true(stats.remote_writes_evicted == 1,
+                    "the new key evicts exactly one oldest write");
+    }
+    expect_true(wait_until([] {
+                    const auto stats = Corona::Network::sync_boundary_stats();
+                    return stats.remote_writes_applied + stats.remote_writes_dropped >= 4096;
+                }),
+                "the recency queue drains and settles");
+    {
+        const auto* transform = Corona::find_transform(fixture.transform);
+        expect_true(transform != nullptr && transform->position.x == 777.0f,
+                    "the refreshed key survives eviction (drop-oldest = oldest write)");
+    }
 
     // Reset: a stopped session must not leave remote state for the next one.
     {

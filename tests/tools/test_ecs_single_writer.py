@@ -395,6 +395,16 @@ def test_network_serialisation_runs_on_the_owner_side_of_the_tick_boundary():
         "the owner-side frame serialiser reads the registry (on the owner thread)")
     assert "apply_pending()" in owner and "apply_remote_state(" in owner
 
+    # Round-3 hardenings that must not silently regress:
+    #  - the write queue is bounded and coalesces with true write-recency (list + move to
+    #    the back), so "drop oldest" cannot evict a just-refreshed key;
+    #  - the full-sync target list is deduped/capped (one request cannot amplify).
+    assert "kMaxQueuedRemoteWrites = 4096" in owner
+    assert "std::list<RemoteStateWrite>" in owner
+    assert "writes_.erase(existing->second)" in owner and "std::prev(writes_.end())" in owner
+    assert "kMaxPendingFullSyncs" in network and "queue_full_sync(" in network
+    assert "std::erase(pending_full_syncs, peer_id)" in network
+
     # The wire codec is shared by both threads and must stay pure values: no registry.
     codec = read(ROOT / "include" / "corona" / "systems" / "network" / "sync_codec.h")
     assert "Ecs::" not in codec, "sync_codec.h must be pure values (no registry access)"

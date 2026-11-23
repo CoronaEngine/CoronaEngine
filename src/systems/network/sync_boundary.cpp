@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -458,25 +459,36 @@ class SyncBoundaryChannel {
         const auto key = write_key(write);
         {
             std::lock_guard lock(queue_mutex_);
+            // 停机/闩锁判定必须在**同一把锁**下重做：`reset()`（停机任务）也拿这把锁。
+            // 否则"检查时还活着、入队时刚停机"的写入会活过清理，落到重启后的复用序号上。
+            if (owner.stopped()) {
+                record([](SyncBoundaryStats& stats) { ++stats.remote_writes_rejected; });
+                return false;
+            }
+            if (owner.unresponsive()) {
+                record([](SyncBoundaryStats& stats) { ++stats.remote_writes_rejected; });
+                return false;
+            }
+
             const auto existing = write_index_.find(key);
             if (existing != write_index_.end()) {
-                // 同一 (storage, entity_seq) 保留最新值，队列位置不变（跨实体的应用
-                // 顺序不承载语义；transform/optics 都是整份快照）。
-                *existing->second = std::move(write);
+                // 同一 (storage, entity_seq) 保留最新值，并把它移到队尾：这样"丢弃最旧"
+                // 指的是最旧的**写入**，而不是最旧的首次入队位置 —— 否则刚刷新过的 key
+                // 可能因为位置靠前而被淘汰，位置靠后的旧值反而活下来。
+                writes_.erase(existing->second);
+                write_index_.erase(existing);
                 record([](SyncBoundaryStats& stats) { ++stats.remote_writes_coalesced; });
-                return true;
-            }
-            if (writes_.size() >= kMaxQueuedRemoteWrites) {
+            } else if (writes_.size() >= kMaxQueuedRemoteWrites) {
                 // 丢最旧：对端刷得比边界消费得快时，保留最新的现场更有价值。
-                const auto evicted_key = write_key(writes_.front());
-                write_index_.erase(evicted_key);
+                write_index_.erase(write_key(writes_.front()));
                 writes_.pop_front();
                 record([](SyncBoundaryStats& stats) { ++stats.remote_writes_evicted; });
             }
             writes_.push_back(std::move(write));
-            write_index_.emplace(key, &writes_.back());
+            write_index_.emplace(key, std::prev(writes_.end()));
+            // submitted 与队列变更在同一把锁下记账，避免"入队成功但计数丢失"的窗口。
+            record([](SyncBoundaryStats& stats) { ++stats.remote_writes_submitted; });
         }
-        record([](SyncBoundaryStats& stats) { ++stats.remote_writes_submitted; });
         return true;
     }
 
@@ -489,7 +501,7 @@ class SyncBoundaryChannel {
         }
 
         std::deque<FrameRequestCommand> frames;
-        std::deque<RemoteStateWrite> writes;
+        std::list<RemoteStateWrite> writes;
         {
             std::lock_guard lock(queue_mutex_);
             frames.swap(frames_);
@@ -540,12 +552,12 @@ class SyncBoundaryChannel {
     }
 
     [[nodiscard]] SyncBoundaryStats stats() const {
-        std::lock_guard lock(stats_mutex_);
+        // 锁序：queue -> stats，与 `submit_remote_state()` 的"持 queue 时记账"一致。
+        // 反过来（stats -> queue）会与入队路径形成 ABBA 死锁。
+        std::lock_guard queue_lock(queue_mutex_);
+        std::lock_guard stats_lock(stats_mutex_);
         auto snapshot = stats_;
-        {
-            std::lock_guard queue_lock(queue_mutex_);
-            snapshot.remote_writes_pending = writes_.size();
-        }
+        snapshot.remote_writes_pending = writes_.size();
         return snapshot;
     }
 
@@ -578,10 +590,11 @@ class SyncBoundaryChannel {
 
     mutable std::mutex queue_mutex_;
     std::deque<FrameRequestCommand> frames_;
-    /// 入站队列用 `deque` + 指针索引：`deque` 两端插入/删除不会让已有元素的**指针**
-    /// 失效（迭代器会），所以合并时可以直接原地覆盖。
-    std::deque<RemoteStateWrite> writes_;
-    std::unordered_map<std::uint64_t, RemoteStateWrite*> write_index_;
+    /// 入站队列用 `std::list` + 迭代器索引：合并时把旧节点摘掉、把最新值压到队尾，
+    /// 这样"丢弃最旧"淘汰的是最旧的**写入**。`std::list` 的删除只让被删节点的迭代器
+    /// 失效，其余节点的索引保持有效。
+    std::list<RemoteStateWrite> writes_;
+    std::unordered_map<std::uint64_t, std::list<RemoteStateWrite>::iterator> write_index_;
 
     mutable std::mutex stats_mutex_;
     SyncBoundaryStats stats_{};

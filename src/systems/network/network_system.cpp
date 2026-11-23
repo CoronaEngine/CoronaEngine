@@ -93,7 +93,21 @@ struct NetworkSystem::Impl {
     /// Peer 连接/请求触发的全量快照目标。由收包回调（网络线程、pending_mutex 内）
     /// 追加，`update()` 在**释放 pending_mutex 之后**逐个执行 —— `sync_full_to()`
     /// 会等一次 tick 边界，不能在 UI 线程也要拿的锁里跑。
-    std::vector<std::string> pending_full_syncs;
+    ///
+    /// 一条快照 = 一份全量状态，所以这里按 peer 去重（只保留最新的一次）并加上限：
+    /// 对端可以反复发 EDITOR_SNAPSHOT_REQUEST，没有去重就会把一条请求放大成 N 次全量
+    /// 发送。规模上界 = 当前 peer 数（通常个位数），`kMaxPendingFullSyncs` 只是安全阀。
+    static constexpr std::size_t kMaxPendingFullSyncs = 16;
+    std::deque<std::string> pending_full_syncs;
+
+    /// 追加一个全量快照目标（去重 + 封顶）。调用方必须持有 `pending_mutex`。
+    void queue_full_sync(std::string peer_id) {
+        std::erase(pending_full_syncs, peer_id);
+        pending_full_syncs.push_back(std::move(peer_id));
+        while (pending_full_syncs.size() > kMaxPendingFullSyncs) {
+            pending_full_syncs.pop_front();
+        }
+    }
 
     // Network callbacks run independently from the engine/UI update thread.
     // All deferred editor work is exchanged through this mutex-protected set
@@ -246,9 +260,9 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
         [this](const std::string& peer_id) {
             // 不在回调里直接 sync_full_to()：它可能等待一个 tick 边界，而回调位于
             // peer_manager.poll() 内、pending_mutex 之下（UI 线程也会拿这把锁）。
-            // 交给 update() 在锁外执行。
+            // 交给 update() 在锁外执行；同一 peer 的重复请求只保留最新一次。
             std::lock_guard lock(impl_->pending_mutex);
-            impl_->pending_full_syncs.push_back(peer_id);
+            impl_->queue_full_sync(peer_id);
         });
     impl_->sync_engine.set_identity_mapping_callbacks(
         [this](Network::StorageID storage_id, uint64_t entity_seq) {
@@ -349,12 +363,13 @@ bool NetworkSystem::initialize(Kernel::ISystemContext* ctx) {
     //（`Ecs::World` 没有同步；`Material` / `OpticsDevice` 是 DAG 私有状态，不发布）。
     // 把收口函数挂到结构命令通道的 tick 边界上：DAG 模式走 engine.cpp 的边界钩子，
     // `CORONA_SYSTEMS_DAG=0` 走 GeometrySystem 的兜底 drain —— 同一条边界、同一个
-    // 拥有者线程。网络线程此后只负责收发字节与 dirty/LWW 记账。
+    // 拥有者线程。网络线程在**每帧路径**上只负责收发字节与 dirty/LWW 记账；身份注册
+    //（`NetworkIdentityRegistry::register_actor`）仍会读组件，是独立跟踪的遗留项。
     if (Corona::Ecs::add_tick_boundary_task(
             &Corona::Network::apply_pending_sync_boundary)) {
         CFW_LOG_NOTICE(
             "NetworkSystem: sync serialization is served on the ECS tick boundary "
-            "(network thread no longer touches the registry)");
+            "(the per-frame path no longer reads components on the network thread)");
     }
     // DAG 停机时清掉"等下一次边界"的远端写入/帧请求：否则 DAG 重启后的第一条边界会把
     // 旧会话的写入落到已经复用的实体序号上。
@@ -522,7 +537,7 @@ void NetworkSystem::update() {
     publish_network_state(*this);
 
     bool sync_due = false;
-    std::vector<std::string> full_sync_targets;
+    std::deque<std::string> full_sync_targets;
     {
         // 这个锁保护 pending_* 队列（UI 线程的 process_pending_* 也拿它）。锁内只做
         // 不会等待的收包/记账；可能等待一个 tick 边界的同步轮询与 peer 快照发送放在
@@ -1305,7 +1320,7 @@ void NetworkSystem::on_peer_connected(const Network::PeerManager::PeerInfo& info
         // 不在回调里直接 sync_full_to()：回调位于 peer_manager.poll()/pending_mutex
         // 之下，而全量快照要等一次 tick 边界。update() 会在锁外执行它。
         std::lock_guard pending_lock(impl_->pending_mutex);
-        impl_->pending_full_syncs.push_back(info.id);
+        impl_->queue_full_sync(info.id);
     }
     auto request = impl_->sync_engine.make_snapshot_request();
     impl_->peer_manager.send_to_peer_id(info.id, Network::kChannelReliable,

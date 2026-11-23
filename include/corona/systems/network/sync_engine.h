@@ -22,10 +22,13 @@ struct SyncIdentityEntry;
  *        back.
  *
  * Threading contract (Task 2, spec §4.4):
- *  - The network thread NEVER touches the ECS registry. Component reads and the
- *    wire encoding happen on the systems DAG's tick boundary
- *    (`sync_boundary.h::request_sync_frame`); incoming remote state is handed to
- *    the same boundary (`submit_remote_state`) and applied there.
+ *  - The **per-frame path** does not read or write components from the network
+ *    thread: component reads and wire encoding happen on the systems DAG's tick
+ *    boundary (`sync_boundary.h::request_sync_frame`); incoming remote state is
+ *    handed to the same boundary (`submit_remote_state`) and applied there.
+ *    (Exception, tracked separately: `NetworkIdentityRegistry::register_actor()`
+ *    still reads components when the identity registration command is drained —
+ *    see `KNOWN_HEADER_VIOLATIONS` in tests/tools/test_ecs_single_writer.py.)
  *  - This class keeps the network-thread-only work: per-entity hash snapshots
  *    (dirty detection), LWW versions and packet framing.
  */

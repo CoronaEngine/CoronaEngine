@@ -155,8 +155,11 @@ public:
      * @param scene_name 场景路径（如 "scene.ini"）
      * @param model_path 模型相对路径（如 "Resource/ball.obj"）
      * @param transform  9 个 float: position(3) + rotation(3) + scale(3)
-     * @param optics_packed 打包的 OpticsPacked 结构（84 字节；线上布局见 sync_codec.h）
-     * @param optics_size   optics_packed 的大小
+     * @param optics_packed 打包的 `Network::ActorCreatePacked`（**120 字节**：36B 线上
+     *                      transform + 84B OpticsPacked 载荷；布局见 protocol.h /
+     *                      sync_codec.h）。调用方传的是 `sizeof(ActorCreatePacked)`，
+     *                      不是单独的 OpticsPacked。
+     * @param optics_size   optics_packed 的大小（即 `sizeof(ActorCreatePacked)`）
      * @param actor_json    完整 Actor 数据 JSON，用于保留别名和基础状态
      */
     void broadcast_actor_create(const std::string& actor_guid,

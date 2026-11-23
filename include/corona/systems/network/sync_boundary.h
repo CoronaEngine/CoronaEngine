@@ -29,6 +29,11 @@
 ///
 /// 队列内部的锁只保护"入队/取走"，不保护组件：组件只在 `apply_pending_sync_boundary()`
 /// 里、拥有者线程上被读写。
+///
+/// **例外（独立跟踪，不在本边界内）**：`NetworkIdentityRegistry::register_actor()`
+/// 仍会在网络线程上读组件（身份注册命令的 drain），见
+/// `tests/tools/test_ecs_single_writer.py` 的 `KNOWN_HEADER_VIOLATIONS`。本边界收口的是
+/// **每帧同步路径**的读写，不是那条遗留注册路径。
 
 #include <corona/systems/network/protocol.h>
 #include <corona/systems/network/sync_codec.h>
