@@ -91,6 +91,22 @@
 
 namespace Corona::Systems::UI {
 
+// ============================================================================
+// 结构创建失败（Task 1c，spec §5.1）
+//
+// 引擎的实体由 tick 边界的结构命令创建（`Ecs::request_create_*`）。命令失败时
+// （DAG 停机 / 无进展预算耗尽 / 队列满）**没有**实体存在，`API::*::is_valid()`
+// 为 false。这种失败不是"模型解码失败"：它不能降级成占位 actor，也不能被静默
+// 跳过 —— 那会产出"少一个 actor 但 load 报 opened"的半装载场景（Task 1c 之前
+// 正是因为 17ms 墙钟超时而丢掉了 actor 实体）。
+//
+// 形状：装载路径抛这个类型，`open_launcher_project` / `reload_native_editor_scene`
+// 把它报成 `ENTITY_CREATE_FAILED` / SCENE_COMMIT_FAILED 并让 `ok:false`。
+// 中间那些"降级成占位 / 标成解码失败"的 catch 必须先重新抛出它。
+struct StructuralCreateFailed : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 // The projection defaults say what a *caller on the CEF UI thread* should do: engine reads
 // are best effort there, so a handler that forgets to think about it cannot freeze the
 // editor. Other callers (the Python script runtime) keep the waiting semantics they rely
@@ -424,6 +440,22 @@ NativeEditorActor& add_native_actor_to_scene(NativeEditorScene& scene,
     profile.acoustics = item.acoustics.get();
     auto* profile_ref = item.engine_actor->add_profile(profile);
     item.engine_actor->set_active_profile(profile_ref);
+    // 结构创建失败必须让整次装载失败：一个 tick 边界没落地就是实体缺失，
+    // 半成品 actor 绝不能进场景（否则 load 报 opened 却少一个 actor）。
+    if (!item.geometry->is_valid() || !item.optics->is_valid() || !item.mechanics->is_valid() ||
+        !item.acoustics->is_valid() || !item.engine_actor->is_valid() || profile_ref == nullptr) {
+        std::string detail = "engine entity create failed while materializing actor '" +
+                             item.name + "' (route '" + item.route + "'):";
+        if (!item.geometry->is_valid()) detail += " geometry;";
+        if (!item.optics->is_valid()) detail += " optics;";
+        if (!item.mechanics->is_valid()) detail += " mechanics;";
+        if (!item.acoustics->is_valid()) detail += " acoustics;";
+        if (!item.engine_actor->is_valid()) detail += " actor;";
+        if (profile_ref == nullptr) detail += " profile;";
+        detail += " the structural command did not settle (see the [Ecs/StructuralCommand] log)";
+        CFW_LOG_CRITICAL("[NativeEditor] {}", detail);
+        throw StructuralCreateFailed(detail);
+    }
     apply_native_actor_optics_state(item);
     item.engine_actor->set_actor_guid(item.actor_guid);
     item.engine_actor->set_follow_camera(item.follow_camera);
@@ -469,6 +501,9 @@ void materialize_actor_snapshot(NativeEditorScene& scene,
                 actor.mechanics->set_properties({.body_type = actor.persisted_body_type});
             }
             return;
+        } catch (const StructuralCreateFailed&) {
+            // 结构创建失败不是资源问题：不降级、不占位，让整次装载失败（loudly）。
+            throw;
         } catch (const std::exception& error) {
             item = native_actor_from_snapshot(actor_data);
             item.load_status = ActorLoadStatus::DecodeFailed;
@@ -543,6 +578,14 @@ NativeEditorCamera materialize_camera_snapshot(NativeEditorScene& scene,
     item.engine_camera->set_view({item.view_open, item.view_x, item.view_y,
                                   item.view_width, item.view_height, item.move_speed});
     if (index > 0) item.engine_camera->set_offscreen_capture_mode(true);
+    if (!item.engine_camera->is_valid()) {
+        const auto detail = "engine entity create failed while materializing camera '" +
+                            item.camera_id +
+                            "': camera; the structural command did not settle (see the "
+                            "[Ecs/StructuralCommand] log)";
+        CFW_LOG_CRITICAL("[NativeEditor] {}", detail);
+        throw StructuralCreateFailed(detail);
+    }
     return item;
 }
 
@@ -578,6 +621,15 @@ NativeEditorScene& materialize_scene_snapshot_into_state(
     try {
         scene.engine_scene = std::make_unique<Corona::API::Scene>();
         scene.environment = std::make_unique<Corona::API::Environment>();
+        if (!scene.engine_scene->is_valid() || !scene.environment->is_valid()) {
+            std::string detail = "engine entity create failed while materializing the scene:";
+            if (!scene.engine_scene->is_valid()) detail += " scene;";
+            if (!scene.environment->is_valid()) detail += " environment;";
+            detail += " the structural command did not settle (see the "
+                      "[Ecs/StructuralCommand] log)";
+            CFW_LOG_CRITICAL("[NativeEditor] {}", detail);
+            throw StructuralCreateFailed(detail);
+        }
         apply_native_scene_environment(scene);
         const auto physics = environment.value("physics", nlohmann::json::object());
         Corona::API::EnvironmentProperties stored_physics;
@@ -2985,6 +3037,10 @@ SceneReply execute_scene_operation(const SceneRequest& request) {
                 return reply;
             }
             value.actor = actor_reply.read.actor_read;
+        } catch (const StructuralCreateFailed& error) {
+            // 结构创建失败不是解码失败：报 ENTITY_CREATE_FAILED，绝不把半成品
+            // 替换 actor 留在场景里。
+            return diagnostic("ENTITY_CREATE_FAILED", error.what(), resolved_path);
         } catch (const std::exception& error) {
             return diagnostic("MODEL_DECODE_FAILED", error.what(), resolved_path);
         }
@@ -3690,6 +3746,21 @@ NativeResult open_launcher_project(const std::string& requested_path, const std:
             prepared.snapshot,
             load_policy == "degraded",
             prepared.diagnostics);
+    } catch (const StructuralCreateFailed& error) {
+        // 结构创建失败：整次装载失败，不返回半装载场景。沿用 UI 已认识的
+        // invalid_archive 结果形状，但 stage/code 明确指出"实体没创建出来"，
+        // 日志里另有 [Ecs/StructuralCommand] 的根因。
+        CFW_LOG_CRITICAL("[ProjectLauncher] open_project aborted path='{}': {}", path,
+                         error.what());
+        prepared.diagnostics.push_back({
+            {"severity", "error"}, {"recoverable", false},
+            {"stage", "structural_commit"}, {"code", "ENTITY_CREATE_FAILED"},
+            {"message", error.what()}, {"path", path},
+        });
+        return native_success({
+            {"ok", false}, {"status", "invalid_archive"}, {"path", path},
+            {"diagnostics", prepared.diagnostics},
+        });
     } catch (const std::exception& error) {
         prepared.diagnostics.push_back({
             {"severity", "error"}, {"recoverable", false},

@@ -232,15 +232,32 @@ def test_the_legacy_geometry_drain_is_gated_off_in_dag_mode():
         "GeometrySystem must use the gated legacy fallback, not the unconditional drain")
 
 
-def test_the_create_timeout_is_derived_from_the_configured_tick():
-    # Two frames of the real tick, not a hardcoded 120 Hz value: 30 Hz
-    # (CORONA_SYSTEMS_DAG_TICK accepts 30..480) would otherwise time out.
+def test_the_create_wait_is_liveness_based_not_wall_clock():
+    # Task 1c: waiting must be judged by "is the DAG advancing", not by a fixed budget.
+    # The two-frame value survives only as a diagnostic threshold, and the assembly still
+    # has to tell the channel the real frame period (it now only decides when a slow wait
+    # logs a warning). Failures are bounded by the no-progress budget (default 10 s).
     engine = read(ROOT / "src" / "engine.cpp")
     assert "set_tick_period(" in engine, (
         "engine.cpp must tell the structural command channel the real frame period")
     channel = read(ROOT / "include" / "corona" / "ecs" / "structural_commands.h")
-    assert "two_frame_timeout_ms" in channel
-    assert "set_tick_period" in channel
+    assert "two_frame_diagnostic_ms" in channel, (
+        "the old two-frame value must be demoted to a diagnostic threshold")
+    assert "two_frame_timeout_ms" not in channel, (
+        "the two-frame value must not be used as a wait limit again")
+    assert "publish_tick_boundary" in channel, (
+        "the tick boundary must publish a heartbeat for the liveness wait")
+    assert "no_progress_budget" in channel, (
+        "structural waits must be bounded by a no-progress budget, not a wall-clock timeout")
+    assert "kDefaultNoProgressBudgetMs = 10'000" in channel, (
+        "the default no-progress budget must be 10s")
+    # Every boundary applier goes through the beating applier; the legacy fallback must
+    # keep using it so a CORONA_SYSTEMS_DAG=0 run also advances the heartbeat.
+    assert "apply_pending_structural_commands_legacy_fallback()" in read(
+        ROOT / "src" / "systems" / "geometry" / "geometry_system.cpp"), (
+        "the legacy fallback boundary must still go through the beating applier")
+    assert "publish_tick_boundary()" in channel.split("bool apply_pending()")[1].split("}")[0], (
+        "apply_pending() must publish the heartbeat before draining")
 
     # Assembly must tell the channel that an owner is coming; before that, structural
     # requests apply on the calling thread (no second writer exists yet).

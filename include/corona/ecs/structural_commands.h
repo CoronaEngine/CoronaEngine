@@ -18,13 +18,19 @@
 ///
 /// ---- 四条不变量（缺一条就是回归）----
 /// 1. **结算**：每个入队请求都拿到结果（句柄或失败）。DAG 未运行 / 正在停止 /
-///    等待超时，调用方都**有界地**拿到失败，绝不无限等待。本仓库 Python 桥的
+///    边界真的卡死，调用方都**有界地**拿到失败，绝不无限等待。本仓库 Python 桥的
 ///    `submit_and_wait` 没有截止时间，一次漏结算就永久挂住一个线程 —— 这里不允许重演。
 /// 2. **重入**：调用方本身就是 DAG 线程（系统内部创建）时**直接应用**，
 ///    入队后等自己会自死锁。
-/// 3. **超时**：默认**两帧**，帧周期由装配方用 `set_tick_period()` 告知（DAG 模式取
-///    配置的 tick，降级模式取 Geometry 的更新周期），下限 17ms；
-///    `CORONA_ECS_STRUCTURAL_TIMEOUT_MS` 可覆盖。超时按失败返回并写诊断，不静默吞。
+/// 3. **存活，不是墙钟**（Task 1c，spec §5.1）：tick 边界每完成一次就发布一次
+///    **心跳**（`publish_tick_boundary()`），等待方只在两种情况下失败：
+///    DAG 已停止 / 正在关停；或**连续** `kNoProgressBudget`（默认 10s，可配置）内
+///    没有任何边界完成。**单个慢 tick 不失败**：项目加载期 Optics 的
+///    `render_dispatch` 会占住 DAG 3–4s（GPU 管线编译 + 128MiB shadow 分配，
+///    实测 PhaseWatchdog 3013ms / max_tick 3989ms），旧的 17ms 墙钟预算把这种
+///    "慢但活着"的边界判成超时，直接丢掉了 actor 实体。
+///    旧的两帧预算降级为**诊断阈值**：超过它只写一条 WARNING（保留 PhaseWatchdog
+///    给的可见性），绝不失败请求。
 /// 4. **停机**：DAG 停止时把队列里未消费的请求全部以失败结算
 ///    （与 Python 桥 `transition_and_cancel` 同一原则）。
 ///
@@ -62,43 +68,67 @@
 
 namespace Corona::Ecs {
 
-/// 自动超时的下限：两帧 @120Hz ≈ 17ms（旧默认值，保留为 floor）。
-inline constexpr std::int64_t kMinStructuralTimeoutMs = 17;
+/// 两帧诊断阈值的下限：两帧 @120Hz ≈ 17ms。
+///
+/// Task 1b 之前这是**超时**默认值。现在它只是"这条等待该报一次警告了"的界：
+/// 超过它写 WARNING，请求继续等（spec §5.1，Task 1c）。
+inline constexpr std::int64_t kMinSlowWaitDiagnosticMs = 17;
 
-/// 显式/自动超时的上限：再长也不该把一个 UI / 脚本线程挂住。
-inline constexpr std::int64_t kMaxStructuralTimeoutMs = 5000;
+/// 无进展预算默认值：**10s**（spec §5.1）。
+///
+/// 判据不是"等了多久"，而是"多久没有 tick 边界完成"。10s 远大于项目加载期实测的
+/// 最长单 tick（3989ms），所以慢 tick 一定能等到；同时又能让真正卡死的边界在
+/// 可接受的时间内把调用方结算掉。
+inline constexpr std::int64_t kDefaultNoProgressBudgetMs = 10'000;
 
+/// 显式覆盖的上限：再长也不该把一个 UI / 脚本线程挂死在一个卡住的 DAG 上。
+inline constexpr std::int64_t kMaxNoProgressBudgetMs = 120'000;
 
+/// 等待方检查存活的轮询粒度。
+///
+/// 心跳前进**不会**通知条件变量（心跳发布在 tick 边界上，而等待方各自有自己的
+/// condition_variable），所以等待按切片轮询：成功仍然由拥有者在结算时立即唤醒，
+/// 这个切片只决定"发现心跳没前进"的粒度。25ms 对检测 10s 预算的卡死完全够用，
+/// 对正常路径（结算唤醒）没有任何成本。
+inline constexpr std::int64_t kLivenessPollMs = 25;
 
 /// 装配方告知真实帧周期之前使用的保守假设（120Hz）。
 inline constexpr std::int64_t kDefaultFramePeriodUs = 8333;
 
-/// 环境覆盖（`CORONA_ECS_STRUCTURAL_TIMEOUT_MS`，毫秒）；0 表示未覆盖。
-/// 覆盖值优先于"两帧"的自动推导，语义与旧版一致。
-[[nodiscard]] inline std::int64_t structural_timeout_override_ms() noexcept {
-    if (const char* env = std::getenv("CORONA_ECS_STRUCTURAL_TIMEOUT_MS")) {
-        const long parsed = std::strtol(env, nullptr, 10);
-        if (parsed > 0 && parsed <= kMaxStructuralTimeoutMs) {
-            return parsed;
+/// 环境覆盖（毫秒）；0 表示未覆盖。
+///
+/// `CORONA_ECS_STRUCTURAL_NO_PROGRESS_MS` 是新的名字（语义 = 无进展预算）；
+/// 兼容旧名 `CORONA_ECS_STRUCTURAL_TIMEOUT_MS`，新名优先。
+[[nodiscard]] inline std::int64_t structural_no_progress_override_ms() noexcept {
+    for (const char* name : {"CORONA_ECS_STRUCTURAL_NO_PROGRESS_MS",
+                             "CORONA_ECS_STRUCTURAL_TIMEOUT_MS"}) {
+        if (const char* env = std::getenv(name)) {
+            const long parsed = std::strtol(env, nullptr, 10);
+            if (parsed > 0 && parsed <= kMaxNoProgressBudgetMs) {
+                return parsed;
+            }
         }
     }
     return 0;
 }
 
-/// 自动超时 = **两帧**（帧周期向上取整到毫秒），下限 `kMinStructuralTimeoutMs`。
+/// **诊断阈值** = 两帧（帧周期向上取整到毫秒），下限 `kMinSlowWaitDiagnosticMs`。
 ///
 /// 帧周期由装配方用 `set_tick_period()` 告知：DAG 模式取配置的 tick
 /// （`CORONA_SYSTEMS_DAG_TICK`，30..480Hz），降级模式取 Geometry 的更新周期。
-/// 写死 17ms 会在 30Hz（33.3ms/帧）下让近一半创建请求假超时。
-[[nodiscard]] inline std::int64_t two_frame_timeout_ms(std::int64_t frame_period_us) noexcept {
+/// 它只决定"多久算慢"（写 WARNING），**不再决定失败**。
+[[nodiscard]] inline std::int64_t two_frame_diagnostic_ms(std::int64_t frame_period_us) noexcept {
     const std::int64_t two_frames_ms = (frame_period_us * 2 + 999) / 1000;
-    return std::clamp(two_frames_ms, kMinStructuralTimeoutMs, kMaxStructuralTimeoutMs);
+    return std::max(two_frames_ms, kMinSlowWaitDiagnosticMs);
 }
 
 /// 一条结构请求的**结算槽**：等待方（任意线程）与拥有者（DAG 线程）共享。
 ///
-/// 关键点：拥有者在**持有槽锁**的状态下创建实体。等待方超时也需要先拿到槽锁，
+/// 关键点：拥有者在**持有槽锁**的状态下创建实体。等待方放弃也需要先拿到槽锁，
 /// 因此不会出现"等待方已放弃、拥有者却刚创建出一个无人签收的实体"的孤儿。
+///
+/// 等待策略不在这里：见 `StructuralCommandChannel::await()` —— 它需要通道的
+/// 心跳与停机状态，才能区分"慢 tick"与"卡死"。
 class StructuralRequest {
    public:
     struct Result {
@@ -111,18 +141,36 @@ class StructuralRequest {
 
     [[nodiscard]] std::uint64_t id() const noexcept { return id_; }
 
-    /// 等待方（任意线程）：最多等 `timeout`。超时把请求标记为已放弃，
-    /// 拥有者之后取到它也会跳过 —— 不会创建无人签收的实体。
-    [[nodiscard]] Result wait(std::chrono::milliseconds timeout) {
+    /// 等待方（任意线程）：等一个切片。返回 true = 已结算（成功或失败）。
+    ///
+    /// 切片只是"多久回头看一眼心跳"，不是截止时间：谁来唤醒、为什么超时由
+    /// `await()` 决定。
+    bool wait_slice(std::chrono::milliseconds slice) {
         std::unique_lock lock(mutex_);
-        if (!cv_.wait_for(lock, timeout, [this] { return settled_; })) {
+        return cv_.wait_for(lock, slice, [this] { return settled_; });
+    }
+
+    /// 已结算的结果副本（未结算时是默认构造的失败值）。
+    [[nodiscard]] Result result() const {
+        std::lock_guard lock(mutex_);
+        return result_;
+    }
+
+    /// 等待方放弃（边界卡死 / DAG 停机）：标记已放弃，拥有者之后取到它也会跳过 ——
+    /// 不会创建无人签收的实体。已结算时原样返回已结算的结果。
+    [[nodiscard]] Result abandon(std::string reason) {
+        {
+            std::lock_guard lock(mutex_);
+            if (settled_) {
+                return result_;
+            }
             settled_ = true;
             abandoned_ = true;
             result_.handle = 0;
-            result_.error = "timeout waiting for the systems DAG to apply the request";
-            return result_;
+            result_.error = std::move(reason);
         }
-        return result_;
+        cv_.notify_all();
+        return result();
     }
 
     /// 拥有者线程：持锁应用并结算。请求已被放弃 / 已结算时返回 false（跳过应用）。
@@ -473,7 +521,8 @@ class StructuralCommandChannel {
         std::uint64_t applied{0};         ///< 由 DAG 应用并成功结算的请求数
         std::uint64_t failed{0};          ///< 等待方拿到失败的请求数（每条只记一次）
         std::uint64_t rejected{0};        ///< 未入队就拒绝的请求数（停机/队列满）
-        std::uint64_t timeouts{0};        ///< 等待超时的请求数（failed 的子集）
+        std::uint64_t timeouts{0};        ///< 无进展预算耗尽而失败的请求数（failed 的子集）
+        std::uint64_t slow_waits{0};      ///< 超过两帧诊断阈值的等待数（成功/失败都算）
         std::uint64_t abandoned{0};       ///< 等待方放弃后拥有者跳过的命令数
         std::uint64_t settled_on_stop{0}; ///< 停机时批量结算的请求数（不计入 failed）
     };
@@ -495,37 +544,57 @@ class StructuralCommandChannel {
         return request_ids_.fetch_add(1, std::memory_order_relaxed) + 1;
     }
 
-    /// 当前等待上限：显式覆盖优先，否则 = 两帧（真实帧周期，下限 17ms）。
-    [[nodiscard]] std::chrono::milliseconds timeout() const noexcept {
-        const auto override_ms = timeout_override_ms_.load(std::memory_order_relaxed);
-        if (override_ms > 0) {
-            return std::chrono::milliseconds{override_ms};
-        }
+    /// 无进展预算：连续这么久**没有任何 tick 边界完成**，等待方就以失败结算。
+    /// 显式覆盖（env / `set_no_progress_budget()`）优先，否则用默认 10s。
+    [[nodiscard]] std::chrono::milliseconds no_progress_budget() const noexcept {
+        const auto override_ms = no_progress_override_ms_.load(std::memory_order_relaxed);
+        return std::chrono::milliseconds{override_ms > 0 ? override_ms
+                                                         : kDefaultNoProgressBudgetMs};
+    }
+
+    /// 诊断阈值 = 两帧（真实帧周期，下限 17ms）：超过它只写 WARNING，不失败。
+    [[nodiscard]] std::chrono::milliseconds slow_wait_diagnostic_threshold() const noexcept {
         return std::chrono::milliseconds{
-            two_frame_timeout_ms(frame_period_us_.load(std::memory_order_relaxed))};
+            two_frame_diagnostic_ms(frame_period_us_.load(std::memory_order_relaxed))};
     }
 
     /// 装配方告知真实帧周期（DAG tick / 降级模式下 Geometry 的更新周期），
-    /// 自动超时据此推导；显式 `set_timeout()` 与 env 覆盖不受影响。
+    /// 两帧**诊断阈值**据此推导；无进展预算与 env 覆盖不受影响。
     void set_tick_period(std::chrono::microseconds period) noexcept {
         const auto count = std::clamp<std::int64_t>(period.count(), 1, 1'000'000);
         frame_period_us_.store(count, std::memory_order_relaxed);
     }
 
-    /// 显式覆盖（测试与需要固定预算的集成方）；env 覆盖在构造时已生效。
-    void set_timeout(std::chrono::milliseconds value) noexcept {
-        const auto count = std::clamp<std::int64_t>(value.count(), 1, kMaxStructuralTimeoutMs);
-        timeout_override_ms_.store(count, std::memory_order_relaxed);
+    /// 显式覆盖无进展预算（测试与需要固定预算的集成方）；env 覆盖在构造时已生效。
+    void set_no_progress_budget(std::chrono::milliseconds value) noexcept {
+        const auto count = std::clamp<std::int64_t>(value.count(), 1, kMaxNoProgressBudgetMs);
+        no_progress_override_ms_.store(count, std::memory_order_relaxed);
     }
 
-    /// 清除显式覆盖，回到"两帧"自动推导（测试与运行时重配用）。
-    void clear_timeout_override() noexcept {
-        timeout_override_ms_.store(0, std::memory_order_relaxed);
+    /// 清除显式覆盖，回到默认 10s（测试与运行时重配用）。
+    void clear_no_progress_budget_override() noexcept {
+        no_progress_override_ms_.store(0, std::memory_order_relaxed);
     }
 
-    /// 是否由 env / `set_timeout()` 显式指定（诊断用）。
-    [[nodiscard]] bool timeout_is_override() const noexcept {
-        return timeout_override_ms_.load(std::memory_order_relaxed) > 0;
+    /// 是否由 env / `set_no_progress_budget()` 显式指定（诊断用）。
+    [[nodiscard]] bool no_progress_budget_is_override() const noexcept {
+        return no_progress_override_ms_.load(std::memory_order_relaxed) > 0;
+    }
+
+    // ------------------------------------------------------------ 心跳
+
+    /// **tick 边界心跳**：每完成一次边界 +1（单调，不回绕到 0 之前够用几百年）。
+    ///
+    /// 两个边界应用器都必须调用它：`apply_pending()`（DAG 边界钩子与降级兜底都走
+    /// 这里）在 drain 之前发一次。**即使队列为空也要发** —— 等待方要的是
+    /// "边界还在推进"这个事实，而不是"队列被消费过"。
+    void publish_tick_boundary() noexcept {
+        heartbeat_.fetch_add(1, std::memory_order_release);
+    }
+
+    /// 当前心跳序号。等待方用它判断"上次记录之后有没有边界完成"。
+    [[nodiscard]] std::uint64_t heartbeat() const noexcept {
+        return heartbeat_.load(std::memory_order_acquire);
     }
 
     // ------------------------------------------------------------ 生命周期
@@ -574,6 +643,10 @@ class StructuralCommandChannel {
 
     /// 应用入站结构命令（tick 边界阶段 / DAG 降级兜底）。返回是否真的应用了命令。
     bool apply_pending() {
+        // 心跳在 drain **之前**发布，而且**队列为空也发**：等待方要的是"边界在推进"
+        // 这个事实，不是"队列被消费过"。两个边界应用器（DAG 钩子 / 降级兜底）都
+        // 经由这里，因此它们都自动满足"必须 beat"的契约。
+        publish_tick_boundary();
         auto commands = commands_.drain();
         if (commands.empty()) {
             return false;
@@ -587,8 +660,8 @@ class StructuralCommandChannel {
                 const bool applied = request->apply(
                     [&command]() { return apply_structural_payload(command.payload); });
                 if (!applied && request->abandoned()) {
-                    // 等待方已超时放弃：命令被跳过，不创建无人签收的实体。
-                    // 成功与失败都由等待方在 wait() 返回时各记一次，这里不重复计数。
+                    // 等待方已放弃（卡死 / 停机）：命令被跳过，不创建无人签收的实体。
+                    // 成功与失败都由等待方结算时各记一次，这里不重复计数。
                     record_abandoned();
                 }
             } catch (const std::exception& error) {
@@ -623,6 +696,93 @@ class StructuralCommandChannel {
         return settled;
     }
 
+    // ------------------------------------------------------------ 等待（存活判据）
+
+    /// 按**存活性**等待一条请求结算（spec §5.1，Task 1c）。调用方线程执行。
+    ///
+    /// 失败只有两种原因：
+    /// 1. DAG 已经停止 / 正在关停（停机判定先于重入判定，见 `submit_structural_command`）；
+    /// 2. 连续 `no_progress_budget()` 内**没有任何 tick 边界完成**（心跳不前进）。
+    ///
+    /// **单个慢 tick 不失败**：项目加载期 Optics 的 `render_dispatch` 会占住 DAG
+    /// 3–4s，这段时间心跳确实不前进，但预算（默认 10s）远大于它，所以等待方继续等，
+    /// 边界恢复后的第一帧就拿到句柄。心跳每前进一次就把"无进展"计时器清零。
+    ///
+    /// 旧的两帧预算降级为诊断阈值：第一次越过它写一条 WARNING（保留 PhaseWatchdog
+    /// 给的可见性），然后继续等。
+    [[nodiscard]] StructuralRequest::Result await(StructuralRequest& request,
+                                                  std::string_view what) {
+        const auto budget = no_progress_budget();
+        const auto diagnostic = slow_wait_diagnostic_threshold();
+        const auto slice = std::min<std::chrono::milliseconds>(
+            std::chrono::milliseconds{kLivenessPollMs}, budget);
+        using Clock = std::chrono::steady_clock;
+        const auto started = Clock::now();
+        auto last_progress = started;
+        auto observed = heartbeat();
+        std::uint64_t boundaries_seen = 0;
+        bool warned = false;
+
+        for (;;) {
+            if (request.wait_slice(slice)) {
+                const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    Clock::now() - started);
+                if (waited >= diagnostic && !warned) {
+                    record_slow_wait();
+                    CFW_LOG_WARNING(
+                        "[Ecs/StructuralCommand] {} took {}ms to reach a tick boundary "
+                        "(two-frame diagnostic threshold {}ms); {} boundary/boundaries "
+                        "completed while waiting, heartbeat #{} - a slow tick, not a stall",
+                        what, waited.count(), diagnostic.count(), boundaries_seen,
+                        static_cast<unsigned long long>(observed));
+                }
+                return request.result();
+            }
+
+            const auto now = Clock::now();
+            if (stopped()) {
+                return request.abandon(
+                    "the systems DAG stopped while the request was still pending");
+            }
+
+            const auto current = heartbeat();
+            if (current != observed) {
+                observed = current;
+                last_progress = now;
+                ++boundaries_seen;
+            }
+
+            const auto idle = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - last_progress);
+            if (idle >= budget) {
+                record_slow_wait();
+                std::string reason = "no tick boundary completed for ";
+                reason += std::to_string(idle.count());
+                reason += "ms (no-progress budget ";
+                reason += std::to_string(budget.count());
+                reason += "ms, last heartbeat #";
+                reason += std::to_string(static_cast<unsigned long long>(observed));
+                reason += "): the systems DAG is not advancing";
+                return request.abandon(std::move(reason));
+            }
+
+            if (!warned && std::chrono::duration_cast<std::chrono::milliseconds>(now - started) >=
+                               diagnostic) {
+                warned = true;
+                record_slow_wait();
+                CFW_LOG_WARNING(
+                    "[Ecs/StructuralCommand] {} has been waiting {}ms for a tick boundary "
+                    "(two-frame diagnostic threshold {}ms, no-progress budget {}ms); {} "
+                    "boundary/boundaries completed while waiting, heartbeat #{} - still "
+                    "waiting, a slow tick keeps waiting",
+                    what,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now - started).count(),
+                    diagnostic.count(), budget.count(), boundaries_seen,
+                    static_cast<unsigned long long>(observed));
+            }
+        }
+    }
+
     // ------------------------------------------------------------ 诊断
 
     [[nodiscard]] Stats stats() const {
@@ -642,6 +802,7 @@ class StructuralCommandChannel {
     void record_applied() { note([](Stats& s) { ++s.applied; }); }
     void record_failed() { note([](Stats& s) { ++s.failed; }); }
     void record_timeout() { note([](Stats& s) { ++s.timeouts; ++s.failed; }); }
+    void record_slow_wait() { note([](Stats& s) { ++s.slow_waits; }); }
     void record_abandoned() { note([](Stats& s) { ++s.abandoned; }); }
 
    private:
@@ -659,9 +820,10 @@ class StructuralCommandChannel {
     std::atomic<bool> owner_expected_{false};     ///< 已有装配方承诺"会有人 drain"
     std::atomic<bool> boundary_installed_{false}; ///< DAG tick 边界钩子已安装
     std::atomic<std::uint64_t> request_ids_{0};
+    std::atomic<std::uint64_t> heartbeat_{0};     ///< tick 边界心跳（单调递增）
     std::atomic<std::int64_t> frame_period_us_{kDefaultFramePeriodUs};
 
-    std::atomic<std::int64_t> timeout_override_ms_{structural_timeout_override_ms()};
+    std::atomic<std::int64_t> no_progress_override_ms_{structural_no_progress_override_ms()};
     mutable std::mutex stats_mutex_;
     Stats stats_{};
 };
@@ -703,7 +865,8 @@ inline void on_dag_thread_stopping() {
 ///   落在一个马上要被拆掉的世界上。所以停机判定在重入判定之前。
 /// - 调用方就是 DAG 线程 → 直接应用（重入规则）；
 /// - 装配前（还没有拥有者） → 调用方直接应用（此时不存在第二个写者）；
-/// - 否则入队并同步等待，最多 `timeout()`；超时/停机/队列满都返回 0 并写诊断。
+/// - 否则入队并按**存活性**等待（`await()`）：DAG 停机 / 连续无进展预算内没有边界
+///   完成才失败；单个慢 tick 会继续等，然后成功。
 ///
 /// `loud` 决定失败时的日志级别：创建是 ERROR（调用方拿到的是无效句柄），销毁是
 /// WARNING（对象本来就在退出路径上，停机期拒绝销毁是预期行为）。
@@ -764,26 +927,25 @@ inline void on_dag_thread_stopping() {
     }
     channel.record_requested();
 
-    const auto timeout = channel.timeout();
-    const StructuralRequest::Result result = request->wait(timeout);
+    const StructuralRequest::Result result = channel.await(*request, what);
     if (!result.ok()) {
-        // 失败只在这里记一次（超时是它的子集），停机/异常路径不再重复计数。
+        // 失败只在这里记一次（无进展失败是它的子集），停机/异常路径不再重复计数。
         const bool abandoned = request->abandoned();
         if (abandoned) {
             channel.record_timeout();
             if (loud) {
                 CFW_LOG_ERROR(
-                    "[Ecs/StructuralCommand] {} timed out after {}ms: {}; owner thread {}; "
-                    "the late command is skipped, nothing is applied",
-                    what, timeout.count(), result.error,
+                    "[Ecs/StructuralCommand] {} abandoned: {}; owner thread {}; the late "
+                    "command is skipped, nothing is applied",
+                    what, result.error,
                     channel.affinity().bound()
-                        ? "is bound but did not drain the request"
+                        ? "is bound but did not complete a tick boundary"
                         : "has never drained this channel (DAG not running?)");
             } else {
                 CFW_LOG_WARNING(
-                    "[Ecs/StructuralCommand] {} timed out after {}ms: {}; the late command "
-                    "is skipped, nothing is applied",
-                    what, timeout.count(), result.error);
+                    "[Ecs/StructuralCommand] {} abandoned: {}; the late command is skipped, "
+                    "nothing is applied",
+                    what, result.error);
             }
         } else {
             channel.record_failed();

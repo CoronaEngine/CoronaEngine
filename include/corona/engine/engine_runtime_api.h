@@ -40,6 +40,16 @@ void set_default_surface(void* surface);
 [[nodiscard]] void* get_default_surface();
 
 // ============================================================================
+// 失败传播契约（Task 1c，spec §5.1）
+//
+// 下面这些类型都通过 tick 边界的结构命令创建实体（`Ecs::request_create_*`）。
+// 命令失败时（DAG 停机 / 无进展预算耗尽 / 队列满）**不会**有实体存在，句柄保持 0，
+// 构造函数的 CRITICAL/ERROR 日志说明原因；失败**必须**通过 `is_valid()` 报告给调用方，
+// 由调用方中止这条对象的装配。装载路径尤其不允许把无效实体加进场景：那会产出
+// "少一个 actor 但一切正常"的半装载结果（Task 1c 之前正是如此丢掉了 actor 实体）。
+// ============================================================================
+
+// ============================================================================
 // Geometry: 作为所有组件的锚点，存储位置/旋转/缩放和模型数据
 // ============================================================================
 class Geometry {
@@ -161,6 +171,8 @@ class Mechanics {
     void set_properties(const MechanicsProperties& properties);
     /// The single mechanics read entry point: one consistent snapshot of every field.
     [[nodiscard]] MechanicsState get_state() const;
+    /// 构造时的结构创建是否成功（失败时 handle_ = 0，见顶部失败传播契约）。
+    [[nodiscard]] bool is_valid() const;
 
     // 设置碰撞回调（参数为对方 actor 句柄、began(true=enter,false=exit)、法线、碰撞点）
     void set_collision_callback(std::function<void(EntityId, bool, const std::array<float, 3>&, const std::array<float, 3>&)> callback);
@@ -236,6 +248,8 @@ class Optics {
     void set_properties(const OpticsProperties& properties);
     /// The single optics read entry point: one consistent snapshot of every field.
     [[nodiscard]] OpticsState get_state() const;
+    /// 构造时的结构创建是否成功（失败时 handle_ = 0，见顶部失败传播契约）。
+    [[nodiscard]] bool is_valid() const;
 
    private:
     friend class Actor;
@@ -274,6 +288,8 @@ class Acoustics {
     void set_properties(const AcousticsProperties& properties);
     /// The single acoustics read entry point: one consistent snapshot of every field.
     [[nodiscard]] AcousticsState get_state() const;
+    /// 构造时的结构创建是否成功（失败时 handle_ = 0，见顶部失败传播契约）。
+    [[nodiscard]] bool is_valid() const;
     /// 在本组件（actor）的世界位置处播放绑定的音频
     void play(bool loop);
     /// 停止本组件的播放
@@ -317,6 +333,10 @@ class Actor {
     // Clear and rebind (or reload the scene) to refresh changed directory links.
 
     [[nodiscard]] EntityId get_handle() const;
+    /// 构造时的结构创建是否成功（失败时 handle_ = 0，见顶部失败传播契约）。
+    /// 装载路径必须在把 actor 加进场景之前检查它，否则会产出"少一个 actor 但一切正常"
+    /// 的半装载结果。
+    [[nodiscard]] bool is_valid() const;
 
    private:
     friend class Scene;
@@ -367,6 +387,8 @@ class Camera {
     void set(const std::array<float, 3>& position, const std::array<float, 3>& forward,
              const std::array<float, 3>& world_up, float fov);
     [[nodiscard]] EntityId get_handle() const;
+    /// 构造时的结构创建是否成功（失败时 handle_ = 0，见顶部失败传播契约）。
+    [[nodiscard]] bool is_valid() const;
     void set_surface(void* surface);
     [[nodiscard]] void* get_surface() const;
     void set_offscreen_capture_mode(bool enabled);
@@ -471,6 +493,8 @@ class Environment {
     void set_properties(const EnvironmentProperties& properties);
     /// The single environment read entry point: one consistent snapshot of every field.
     [[nodiscard]] EnvironmentState get_state() const;
+    /// 构造时的结构创建是否成功（失败时 handle_ = 0，见顶部失败传播契约）。
+    [[nodiscard]] bool is_valid() const;
 
    private:
     friend class Scene;
@@ -487,6 +511,9 @@ class Scene {
    public:
     Scene();
     ~Scene();
+
+    /// 构造时的结构创建是否成功（失败时 handle_ = 0，见顶部失败传播契约）。
+    [[nodiscard]] bool is_valid() const;
 
     // ========== Environment 管理 ==========
     void set_environment(Environment* env);

@@ -230,6 +230,10 @@ Corona::API::Scene::~Scene() {
     }
 }
 
+bool Corona::API::Scene::is_valid() const {
+    return handle_ != 0;
+}
+
 void Corona::API::Scene::set_environment(Environment* env) {
     if (handle_ == 0) {
         CFW_LOG_WARNING("[Scene::set_environment] Invalid scene handle");
@@ -636,6 +640,10 @@ void Corona::API::Environment::set_authored_lighting(const std::string& descript
 
 std::uintptr_t Corona::API::Environment::get_handle() const {
     return handle_;
+}
+
+bool Corona::API::Environment::is_valid() const {
+    return handle_ != 0;
 }
 
 
@@ -1164,6 +1172,10 @@ std::uintptr_t Corona::API::Optics::get_handle() const {
     return handle_;
 }
 
+bool Corona::API::Optics::is_valid() const {
+    return handle_ != 0;
+}
+
 Corona::API::Geometry* Corona::API::Optics::get_geometry() const {
     return geometry_;
 }
@@ -1368,6 +1380,10 @@ Corona::API::Mechanics::~Mechanics() {
 
 std::uintptr_t Corona::API::Mechanics::get_handle() const {
     return handle_;
+}
+
+bool Corona::API::Mechanics::is_valid() const {
+    return handle_ != 0;
 }
 
 Corona::API::Geometry* Corona::API::Mechanics::get_geometry() const {
@@ -1605,6 +1621,10 @@ void Corona::API::Acoustics::stop() {
 
 std::uintptr_t Corona::API::Acoustics::get_handle() const {
     return handle_;
+}
+
+bool Corona::API::Acoustics::is_valid() const {
+    return handle_ != 0;
 }
 
 Corona::API::Geometry* Corona::API::Acoustics::get_geometry() const {
@@ -1848,6 +1868,10 @@ std::uintptr_t Corona::API::Actor::get_handle() const {
     return handle_;
 }
 
+bool Corona::API::Actor::is_valid() const {
+    return handle_ != 0;
+}
+
 // ########################
 //          Camera
 // ########################
@@ -1996,6 +2020,10 @@ Corona::API::CameraPose Corona::API::Camera::get_pose() const {
 
 std::uintptr_t Corona::API::Camera::get_handle() const {
     return handle_;
+}
+
+bool Corona::API::Camera::is_valid() const {
+    return handle_ != 0;
 }
 
 void Corona::API::Camera::set_surface(void* surface) {

@@ -40,24 +40,25 @@ static Systems::UiSystem* g_ui_system_ = nullptr;
 // ============================================================================
 
 /**
- * @brief 把结构命令的默认等待上限对齐到真实帧周期。
+ * @brief 把结构命令的**两帧诊断阈值**对齐到真实帧周期。
  *
- * 结构命令是**同步应答**：调用方要等一次 tick 边界（spec §5.1）。预算写死 17ms
- * （两帧 @120Hz）在 `CORONA_SYSTEMS_DAG_TICK=30`（33.3ms/帧）下会让近一半创建
- * 请求假超时，所以帧周期必须取装配参数；`CORONA_ECS_STRUCTURAL_TIMEOUT_MS`
- * 仍是显式覆盖，优先于这里。
+ * 结构命令是**同步应答**：调用方要等一次 tick 边界（spec §5.1）。等待本身按
+ * **存活性**判定（无进展预算，默认 10s），帧周期只决定"多久算慢"的诊断阈值：
+ * 30Hz（CORONA_SYSTEMS_DAG_TICK 接受 30..480）下两帧是 67ms，120Hz 下是 17ms。
+ * 超过阈值写一条 WARNING，但请求继续等 —— 项目加载期 Optics 的 render_dispatch
+ * 会占住 DAG 3–4s，那是慢 tick，不是卡死。
+ * `CORONA_ECS_STRUCTURAL_NO_PROGRESS_MS`（兼容旧名 ..._TIMEOUT_MS）仍是显式覆盖。
  */
 static void configure_structural_command_frame_period(std::uint32_t tick_rate) {
     const std::uint32_t rate = tick_rate == 0 ? 120u : tick_rate;
     auto& channel = Corona::Ecs::StructuralCommandChannel::instance();
     channel.set_tick_period(std::chrono::microseconds{1'000'000 / rate});
-    if (channel.timeout_is_override()) {
-        CFW_LOG_NOTICE("[Ecs/StructuralCommand] create timeout = {}ms (explicit override; DAG tick {}Hz)",
-                       channel.timeout().count(), rate);
-    } else {
-        CFW_LOG_NOTICE("[Ecs/StructuralCommand] create timeout = {}ms (two frames at {}Hz)",
-                       channel.timeout().count(), rate);
-    }
+    CFW_LOG_NOTICE(
+        "[Ecs/StructuralCommand] wait policy: no-progress budget = {}{}, slow-wait diagnostic "
+        "threshold = {}ms (two frames at {}Hz)",
+        channel.no_progress_budget().count(),
+        channel.no_progress_budget_is_override() ? "ms (explicit override)" : "ms (default)",
+        channel.slow_wait_diagnostic_threshold().count(), rate);
 }
 
 /**
