@@ -53,18 +53,20 @@ struct Capture {
 };
 struct Counters{struct{uint y=0,z=0;}path;};
 struct HitContext{Counters*work_counters=nullptr;Interaction*it=nullptr;Capture*path_capture=nullptr;
-    bool restir_gi_sampling=false,restir_direct_split=true;Float3*Ld=nullptr,*bypass=nullptr;};
+    bool restir_direct_split=true;Float3*Ld=nullptr,*bypass=nullptr;};
 struct LightSampleContext{Float3 pos,ng;};
 struct LightEval{SampledSpectrum L=SampledSpectrum{7.f};float pdf=.25f;};
 struct LightSampler{LightSampler*operator->(){return this;}LightEval evaluate_hit_wi(LightSampleContext,const Interaction&,int){return{};}};
 struct Geometry{SampledSpectrum Tr(int,int,int,RayState){return{1.f};}};
 int scene(){return 0;}struct Renderer{int sampler(){return 0;}};Renderer renderer(){return{};}
 struct Spectrum{SampledSpectrum one(){return{1.f};}Float3 linear_srgb(SampledSpectrum s,int){return s.vec3();}};Spectrum*spectrum(){static Spectrum s;return&s;}
-template<int>float MIS_weight(float,float){return 1;}
-template<int>float MIS_weight_n(int,float,int,float){return 1;}
+template<int>float MIS_weight(float bsdf_pdf,float light_pdf){
+    if(bsdf_pdf!=.96f||light_pdf!=.25f)throw std::runtime_error("emitter MIS received the wrong PDFs");
+    return .5f;
+}
 float correct_bsdf_weight(float w,uint){return w;}
 void require(bool v,const char*m){if(!v)throw std::runtime_error(m);}
-int main(){try{
+void run(bool delta){
     // A null emissive boundary precedes a continuing non-emissive glass
     // interface, then a material emitter. No participating medium/phase is
     // installed, matching the GI compile-time requirement.
@@ -72,8 +74,8 @@ int main(){try{
     RayState rs;Capture capture;HitContext hc;hc.path_capture=&capture;
     unsigned calls=0,observed_hit=99,observed_bounce=99;Float3 observed=make_float3(0);
     capture.on_emission=[&](unsigned hit,Float3,uint b,Float3 L,Float3){++calls;observed_hit=hit;observed_bounce=b;observed+=L;};
-    LightSampler light_sampler;Geometry geometry;int swl=0;unsigned bounces=2,nee_full_samples=1;
-    std::optional<bool>gi_previous_delta=true;float scatter_pdf=.96f;bool include_emission=true;
+    LightSampler light_sampler;Geometry geometry;int swl=0;unsigned bounces=2;
+    std::optional<bool>gi_previous_delta=delta;float scatter_pdf=.96f;bool include_emission=true;
     const bool reflection_only_direct=false; // Actual ordinary PT host opt-out.
     SampledSpectrum throughput{1.f};Float3 spec_route=make_float3(1),ret=make_float3(0),prev_surface_ng=make_float3(0,0,1);
     auto route_spec=[](Float3,unsigned,Float3,float,bool){};
@@ -83,7 +85,11 @@ int main(){try{
     }
     require(rs.null_steps==1,"null boundary did not continue the sampled ray");
     require(calls==1&&observed_hit==2&&observed_bounce==3,"null emitter invoked callback or consumed a physical bounce");
-    require(observed.x==7&&ret.x==7,"material-emitter energy changed or null energy was removed");
+    const float expected=delta?7.f:3.5f;
+    require(observed.x==expected&&ret.x==expected,"material-emitter MIS weight changed");
+}
+int main(){try{
+    run(false);run(true);
     std::cout<<"PASS actual shared PT null-emitter skip, glass continuation, one material callback and unchanged energy\n";
     return 0;
 }catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}}

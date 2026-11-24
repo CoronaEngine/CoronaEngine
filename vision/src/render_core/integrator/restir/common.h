@@ -62,7 +62,6 @@ public:
     float theta{};
     float depth_threshold{};
     bool open{};
-    bool mis{};
 
 public:
     TemporalResamplingParam() = default;
@@ -72,8 +71,7 @@ public:
           theta(ps["theta"].as_float(35)),
           depth_threshold(ps["depth"].as_float(0.3)),
           open{ps["open"].as_bool(true)},
-          N{ps["N"].as_uint(9)},
-          mis{ps["mis"].as_bool(false)} {}
+          N{ps["N"].as_uint(9)} {}
 
     [[nodiscard]] float dot_threshold() const noexcept {
         return cosf(radians(theta));

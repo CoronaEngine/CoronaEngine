@@ -8,7 +8,6 @@
 #include "base/mgr/pipeline.h"
 #include "math/warp.h"
 #include "base/color/spectrum.h"
-#include "base/scattering/prepared_bsdf.h"
 #include "base/scattering/gi_principled_parameters.h"
 #include "base/scattering/gi_ideal_glass.h"
 #include "base/sampler.h"
@@ -31,11 +30,6 @@ Float3 pt_signal_specular_fraction(const Float3 &direct_fraction, const Bool &ba
     return emission ? suffix_fraction : ocarina::select(bounce == base_bounce, direct_fraction, suffix_fraction);
 }
 
-Float restir_gi_rr_probability(const Float3 &camera_beta, const Uint &surface_depth, const Uint &total_depth) {
-    Float terminate = saturate(0.85f - sqrt(max(luminance(camera_beta), 0.f)));
-    return saturate(terminate * terminate +
-        max((cast<float>(surface_depth) / cast<float>(total_depth) - 0.5f) * 1.2f, 0.f));
-}
 }// namespace
 
 double Integrator::cur_denoise_time() const noexcept { return denoise_timing_->elapsed_ms; }
@@ -335,14 +329,6 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         OC_ASSERT(!scene().process_mediums());
         OC_INFO("Ordinary PT NEE cost diagnostic: proposals retained, visibility and direct F/PDF skipped, no media");
     }
-    const char *nee_diagnostic = hc.restir_gi_sampling ? std::getenv("VISION_GI_NEE_DIAGNOSTIC") : nullptr;
-    const bool nee_one_by_one = nee_diagnostic && string_view(nee_diagnostic) == "1x1";
-    OC_ERROR_IF(nee_diagnostic && !nee_one_by_one, "GI NEE diagnostic supports only 1x1.");
-    const uint nee_candidates = nee_one_by_one ? 1u : 6u;
-    const uint nee_full_samples = nee_one_by_one ? 1u : 2u;
-    if (nee_one_by_one) {
-        OC_INFO("GI NEE diagnostic: 1x1, candidates=1, full_samples=1, visibility=true");
-    }
     Pipeline *rp = pipeline();
     TSampler &sampler = renderer().sampler();
     TLightSampler &light_sampler = renderer().light_sampler();
@@ -403,8 +389,6 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
     Bool delta_only = true;
     Bool continuation_ready = false;
     Uint continuation_depth = 0u;
-    Bool pending_rr_death = false;
-    Float pending_rr_boost = 1.f;
     optional<Bool> camera_hit_pending;
     if (!use_media && hc.path_capture && hc.path_capture->reuse_camera_hit) camera_hit_pending.emplace(true);
     auto mis_bsdf = [&](auto &bounces, bool inner) {
@@ -492,17 +476,13 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         if (use_media) missed &= !it.has_phase();
         $if(missed) {
             $if(include_emission) {
-                SampledSpectrum d = [&] {
-                    if (!hc.path_capture || !hc.path_capture->record_radiance) return evaluate_miss(rs, prev_surface_ng, scatter_pdf, bounces, swl,
-                                                              hc.restir_gi_sampling ? nee_full_samples : 1u,
-                                                              emission_delta) * throughput;
-                    auto incoming = evaluate_miss(rs, prev_surface_ng, scatter_pdf, bounces, swl, 1u,
-                                                  emission_delta);
+                auto incoming = evaluate_miss(rs, prev_surface_ng, scatter_pdf, bounces, swl, 1u, emission_delta);
+                if (hc.path_capture && hc.path_capture->record_radiance) {
                     $if(hc.path_capture->active && bounces > 1u) {
                         hc.path_capture->radiance += spectrum()->linear_srgb(incoming * SampledSpectrum{hc.path_capture->beta}, swl);
                     };
-                    return incoming * throughput;
-                }();
+                }
+                SampledSpectrum d = incoming * throughput;
                 Float3 lin = spectrum()->linear_srgb(d, swl);
                 if (hc.path_capture && hc.path_capture->on_emission) {
                     hc.path_capture->on_emission(hit, rs.direction(), bounces, lin,
@@ -576,9 +556,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             p_ref.ng = prev_surface_ng;
             LightEval eval = light_sampler->evaluate_hit_wi(p_ref, it, swl);
             SampledSpectrum tr = spectrum()->one();
-            Float weight = hc.restir_gi_sampling
-                ? select(ocarina::isinf(scatter_pdf), 1.f, MIS_weight_n<D>(1, scatter_pdf, int(nee_full_samples), eval.pdf))
-                : MIS_weight<D>(scatter_pdf, eval.pdf);
+            Float weight = MIS_weight<D>(scatter_pdf, eval.pdf);
             if (gi_previous_delta) weight = select(*gi_previous_delta, 1.f, weight);
             if (reflection_only_direct) weight = gi_camera_emission_bsdf_weight(weight,
                 hc.path_capture->first_scatter_transmission, hc.path_capture->first_reflection_covered_by_di, bounces);
@@ -614,12 +592,6 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
     $for(&bounces, 0, max_depth) {
         continuation_ready = false;
         mis_bsdf(bounces, true);
-        if (hc.restir_gi_sampling) {
-            // Native RR always visits the next emission/miss endpoint first.
-            $if(pending_rr_death) { $break; };
-            throughput *= pending_rr_boost;
-            pending_rr_boost = 1.f;
-        }
         Env::instance().set("bounces", bounces);
         comment("estimate direct lighting");
         comment("sample light");
@@ -628,25 +600,23 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         if (hc.restir_shadow_connections) light_sample_infinite.emplace(false);
         Bool occluded = false;
         SampledSpectrum tr = spectrum()->one();
-        if (!hc.restir_gi_sampling) {
-            if (hc.work_counters) hc.work_counters->bsdf.w += 1u;
+        if (hc.work_counters) hc.work_counters->bsdf.w += 1u;
+        if (hc.restir_shadow_connections) {
+            light_sample = restir_shadow::sample_light(*light_sampler, it, sampler, swl, *light_sample_infinite);
+        } else {
+            light_sample = light_sampler->sample_wi(it, sampler, swl);
+        }
+        if (!cost_skip_nee) {
+            RayState shadow_ray;
+            if (hc.work_counters) { hc.work_counters->trace.y += 1u; hc.work_counters->path.x += 1u; }
             if (hc.restir_shadow_connections) {
-                light_sample = restir_shadow::sample_light(*light_sampler, it, sampler, swl, *light_sample_infinite);
+                shadow_ray = it.spawn_ray_state(normalize(light_sample.p_light - it.pos));
+                shadow_ray.ray = restir_shadow::visibility_ray(it, light_sample.p_light, *light_sample_infinite);
+                occluded = geometry.trace_occlusion(shadow_ray.ray);
             } else {
-                light_sample = light_sampler->sample_wi(it, sampler, swl);
+                occluded = geometry.occluded(it, light_sample.p_light, &shadow_ray);
             }
-            if (!cost_skip_nee) {
-                RayState shadow_ray;
-                if (hc.work_counters) { hc.work_counters->trace.y += 1u; hc.work_counters->path.x += 1u; }
-                if (hc.restir_shadow_connections) {
-                    shadow_ray = it.spawn_ray_state(normalize(light_sample.p_light - it.pos));
-                    shadow_ray.ray = restir_shadow::visibility_ray(it, light_sample.p_light, *light_sample_infinite);
-                    occluded = geometry.trace_occlusion(shadow_ray.ray);
-                } else {
-                    occluded = geometry.occluded(it, light_sample.p_light, &shadow_ray);
-                }
-                if (use_media) tr = geometry.Tr(scene(), renderer().sampler(), swl, shadow_ray);
-            }
+            if (use_media) tr = geometry.Tr(scene(), renderer().sampler(), swl, shadow_ray);
         }
         comment("sample bsdf");
         BSDFSample bsdf_sample{swl};
@@ -655,101 +625,30 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
 
         Float3 albedo = make_float3(0.f);
 
-        // Preserve the PT framework's proposals, BSDF, visibility and Tr while
-        // using the GI branch's default of six candidates for each of two shadow samples.
         auto sample_lighting = [&](const MaterialEvaluator &evaluator) {
             if (hc.captured_secondary_normal) {
                 $if(bounces == 0u) { *hc.captured_secondary_normal = evaluator.shading_frame().normal(); };
             }
-            if (!hc.restir_gi_sampling) {
-                if (cost_skip_nee) {
-                    if (hc.work_counters) hc.work_counters->bsdf.x += 1u;
-                    bsdf_sample = evaluator.sample(it.wo, sampler);
-                    if (hc.path_capture) hc.path_capture->on_sample(it, hit, evaluator, bsdf_sample, bounces, throughput);
-                    return spectrum()->zero();
-                }
-                if (hc.work_counters) { hc.work_counters->bsdf.x += 1u; hc.work_counters->bsdf.y += 1u; hc.work_counters->bsdf.z += 1u; }
-                if (hc.path_capture) {
-                    auto direct = direct_light_mis(it, evaluator, light_sample, occluded, sampler, swl, bsdf_sample);
-                    hc.path_capture->on_sample(it, hit, evaluator, bsdf_sample, bounces, throughput);
-                    if (hc.path_capture->on_signal && hc.path_capture->evaluate_signal_direct_fraction) {
-                        // GI records direct-light signals only at secondary plane bases.
-                        $if(bounces > 0u && bounces == hc.path_capture->signal_bounce) {
-                            signal_direct_fraction = evaluator.specular_fraction_rgb(it.wo,
-                                normalize(light_sample.p_light - it.pos));
-                        };
-                    }
-                    return direct;
-                }
-                return direct_light_mis(it, evaluator, light_sample, occluded, sampler, swl, bsdf_sample);
+            if (cost_skip_nee) {
+                if (hc.work_counters) hc.work_counters->bsdf.x += 1u;
+                bsdf_sample = evaluator.sample(it.wo, sampler);
+                if (hc.path_capture) hc.path_capture->on_sample(it, hit, evaluator, bsdf_sample, bounces, throughput);
+                return spectrum()->zero();
             }
-            if (hc.work_counters) hc.work_counters->bsdf.x += 1u;
-            bsdf_sample = evaluator.sample(it.wo, sampler);
-            if (mis_mode_ == MISMode::EBSDF) return spectrum()->zero();
-            SampledSpectrum lighting = spectrum()->zero();
-            evaluator.with_prepared_evaluation(it.wo, [&](const PreparedMaterialEvaluator &prepared) {
-                $for(shadow_sample, nee_full_samples) {
-                    LightSample selected{swl.dimension()};
-                    optional<Bool> selected_infinite;
-                    if (hc.restir_shadow_connections) selected_infinite.emplace(false);
-                    Float total_weight = 0.f, selected_weight = 0.f;
-                    $for(candidate_index, nee_candidates) {
-                        if (hc.work_counters) hc.work_counters->bsdf.w += 1u;
-                        LightSample candidate{swl.dimension()};
-                        optional<Bool> candidate_infinite;
-                        if (hc.restir_shadow_connections) {
-                            candidate_infinite.emplace(false);
-                            candidate = restir_shadow::sample_light(*light_sampler, it, sampler, swl, *candidate_infinite);
-                        } else {
-                            candidate = light_sampler->sample_wi(it, sampler, swl);
-                        }
-                        Float proposal_pdf = abs(candidate.eval.pdf);
-                        Float target = 0.f;
-                        $if(candidate.valid() && proposal_pdf > 0.f) {
-                            Float3 direction = normalize(candidate.p_light - it.pos);
-                            if (hc.work_counters) hc.work_counters->bsdf.z += 1u;
-                            auto eval = prepared.evaluate(direction, MaterialEvalMode::PDF);
-                            Float3 incoming = spectrum()->linear_srgb(candidate.eval.L, swl) / proposal_pdf;
-                            target = max(max(incoming.x, incoming.y), incoming.z) * eval.pdf();
-                            target = max(ocarina::zero_if_nan_inf(target), 0.f);
-                        };
-                        total_weight += target;
-                        $if(sampler->next_1d() * total_weight < target) {
-                            selected = candidate;
-                            selected_weight = target;
-                            if (hc.restir_shadow_connections) *selected_infinite = *candidate_infinite;
-                        };
+            if (hc.work_counters) { hc.work_counters->bsdf.x += 1u; hc.work_counters->bsdf.y += 1u; hc.work_counters->bsdf.z += 1u; }
+            if (hc.path_capture) {
+                auto direct = direct_light_mis(it, evaluator, light_sample, occluded, sampler, swl, bsdf_sample);
+                hc.path_capture->on_sample(it, hit, evaluator, bsdf_sample, bounces, throughput);
+                if (hc.path_capture->on_signal && hc.path_capture->evaluate_signal_direct_fraction) {
+                    // GI records direct-light signals only at secondary plane bases.
+                    $if(bounces > 0u && bounces == hc.path_capture->signal_bounce) {
+                        signal_direct_fraction = evaluator.specular_fraction_rgb(it.wo,
+                            normalize(light_sample.p_light - it.pos));
                     };
-                    $if(selected_weight > 0.f) {
-                        Float3 direction = normalize(selected.p_light - it.pos);
-                        if (hc.work_counters) { hc.work_counters->bsdf.y += 1u; hc.work_counters->bsdf.z += 1u; }
-                        auto eval = prepared.evaluate(direction);
-                        $if(eval.valid()) {
-                            RayState selected_shadow;
-                            if (hc.work_counters) { hc.work_counters->trace.y += 1u; hc.work_counters->path.x += 1u; }
-                            Bool blocked = false;
-                            if (hc.restir_shadow_connections) {
-                                selected_shadow = it.spawn_ray_state(normalize(selected.p_light - it.pos));
-                                selected_shadow.ray = restir_shadow::visibility_ray(it, selected.p_light, *selected_infinite);
-                                blocked = geometry.trace_occlusion(selected_shadow.ray);
-                            } else {
-                                blocked = geometry.occluded(it, selected.p_light, &selected_shadow);
-                            }
-                            SampledSpectrum transmission = geometry.Tr(scene(), sampler, swl, selected_shadow);
-                            Float pdf = abs(selected.eval.pdf);
-                            Float mis = mis_mode_ == MISMode::ELight ? Float{1.f}
-                                : select(selected.eval.pdf < 0.f, 1.f, MIS_weight_n<D>(int(nee_full_samples), pdf, 1, eval.pdf()));
-                            Float ris_weight = total_weight / (float(nee_candidates) * selected_weight);
-                            $if(!blocked && pdf > 0.f) {
-                                lighting += selected.eval.L * eval.f * transmission * (ris_weight * mis / (float(nee_full_samples) * pdf));
-                            };
-                        };
-                        light_sample = selected;
-                        if (hc.restir_shadow_connections) *light_sample_infinite = *selected_infinite;
-                    };
-                };
-            }, MaterialEvalMode::All);
-            return lighting;
+                }
+                return direct;
+            }
+            return direct_light_mis(it, evaluator, light_sample, occluded, sampler, swl, bsdf_sample);
         };
 
         auto sample_surface = [&]() {
@@ -769,7 +668,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
                 MaterialEvaluator evaluator(lambert_it, swl);
                 evaluator.update_frame(shading);
                 evaluator.link(make_unique<DiffuseLobe>(SampledSpectrum{swl, .7f}, swl, shading));
-                if (cost_skip_nee && !hc.restir_gi_sampling) {
+                if (cost_skip_nee) {
                     if (hc.work_counters) hc.work_counters->bsdf.x += 1u;
                     bsdf_sample = evaluator.sample(it.wo, sampler);
                     Ld = spectrum()->zero();
@@ -897,34 +796,19 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         if (hc.rr_depth_offset) { rr_depth += *hc.rr_depth_offset; }
         Float rr_lum = lum;
         if (hc.rr_survival_scale) { rr_lum *= *hc.rr_survival_scale; }
-        if (hc.restir_gi_sampling) {
-            Uint surface_depth = rr_depth + 1u;
-            Uint total_depth = max_depth;
-            if (hc.rr_depth_offset) total_depth += *hc.rr_depth_offset;
-            $if(surface_depth > *min_depth_ && surface_depth < total_depth) {
-                Float3 camera_beta = spectrum()->linear_srgb(throughput, swl);
-                if (hc.rr_camera_throughput) camera_beta *= *hc.rr_camera_throughput;
-                if (hc.work_counters) hc.work_counters->rr.x += 1u;
-                Float terminate = restir_gi_rr_probability(camera_beta, surface_depth, total_depth);
-                pending_rr_death = sampler->next_1d() < terminate;
-                if (hc.work_counters) { $if(pending_rr_death) { hc.work_counters->rr.y += 1u; }; }
-                $if(!pending_rr_death) { pending_rr_boost = 1.f / (1.f - terminate); };
+        $if(eta_scale * rr_lum < *rr_threshold_ && rr_depth >= *min_depth_) {
+            if (hc.work_counters) hc.work_counters->rr.x += 1u;
+            Float q = min(0.95f, rr_lum);
+            Float rr = sampler->next_1d();
+            $if(q < rr) {
+                if (hc.work_counters) hc.work_counters->rr.y += 1u;
+                $break;
             };
-        } else {
-            $if(eta_scale * rr_lum < *rr_threshold_ && rr_depth >= *min_depth_) {
-                if (hc.work_counters) hc.work_counters->rr.x += 1u;
-                Float q = min(0.95f, rr_lum);
-                Float rr = sampler->next_1d();
-                $if(q < rr) {
-                    if (hc.work_counters) hc.work_counters->rr.y += 1u;
-                    $break;
-                };
-                throughput /= q;
-                if (hc.path_capture && hc.path_capture->record_radiance) {
-                    $if(hc.path_capture->active) { hc.path_capture->beta /= q; };
-                }
-            };
-        }
+            throughput /= q;
+            if (hc.path_capture && hc.path_capture->record_radiance) {
+                $if(hc.path_capture->active) { hc.path_capture->beta /= q; };
+            }
+        };
         scatter_pdf = bsdf_sample.eval.pdf();
         if (gi_previous_delta) *gi_previous_delta = BxDFFlag::is_specular(bsdf_sample.eval.flags);
         rs = it.spawn_ray_state(bsdf_sample.wi);

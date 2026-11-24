@@ -482,9 +482,6 @@ public:
     const Uint *rr_depth_offset{};
     // A caller may tune roulette without weighting the returned radiance.
     const Float *rr_survival_scale{};
-    // The shared PT loop handles ReSTIR GI suffix sampling.
-    bool restir_gi_sampling{false};
-    const Float3 *rr_camera_throughput{};
     Float3 *captured_secondary_normal{};
     // ReSTIR's direct channel also owns emission reached by its first BSDF ray.
     bool restir_direct_split{false};
