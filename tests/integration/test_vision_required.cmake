@@ -56,6 +56,7 @@ block()
             vision-rasterizer vision-rasterizer-cpu vision-ext-xatlas xatlas
             vision-radiancecache vision-radiancecache-sharc
             vision-upsampler vision-upsampler-bilateral vision-lightsampler-bvh
+            vision-sensor-pinhole vision-sensor-realistic
             vision-pipeline-customized vision-render_graph vision-pass
             vision-pass-integrate vision-pass-accumulate vision-pass-tonemapping
             vision-pass-gamma test-render_graph)

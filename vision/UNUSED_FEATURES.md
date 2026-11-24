@@ -2,7 +2,7 @@
 
 审计日期：2026-10-31。代码基线：`781907e59b6f6449082e5801c7e3a2d4f45b22b6`。
 
-后续状态：F02 双边上采样、F03 SHARC、F04 BVH 灯光采样器、F08 Postprocessor、F13 Customized/RenderGraph、F19 旧 JSON/BSON 文件读取器已移除；其余清单及数量保留上述审计基线口径。当前插件目标为 42 个、16 类。SHARC 的构建和回归结果见 [SHARC 移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)。
+后续状态：F02 双边上采样、F03 SHARC、F04 BVH 灯光采样器、F05 小孔和真实镜头相机插件、F08 Postprocessor、F13 Customized/RenderGraph、F19 旧 JSON/BSON 文件读取器已移除。其余清单及数量保留上述审计基线口径。当前插件目标为 40 个、16 类。SHARC 的构建和回归结果见 [SHARC 移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)。
 
 Vision 的闲置部分主要来自独立渲染器向 Corona 集成时遗留的入口、未完成的实验功能，以及仍会构造但不再参与输出的对象。最值得优先处理的是 **SSAT 模式未接入引擎场景创建、空实现插件、保存链路断开**。这些问题不能通过删除所有“非默认插件”解决。
 
@@ -73,15 +73,9 @@ F02/F04 初次移除验证：`examples-relwithdebinfo` 引擎及三个相关测�
 
 F02/F04 后续回归中的 28 项 Vision/LightField 测试全部通过，包括完整 ReSTIR 估计器、ReBLUR、ReLAX、引擎场景、共享显示和资源生命周期。整轮为 27 项通过、1 项因性能分析 Python 启动器依赖的 EXE 漏构建而启动失败；补建 `corona_switch_profile_scope_tests` 后该项重跑通过，没有修改其逻辑或断言。引擎已重建部署，`vision-base.dll` 和 47 个插件的构建/部署哈希一致。验证环境为 RTX 2080/Vulkan/RelWithDebInfo，Native NRD 未启用。详见 [后续验证汇总](E:/CoronaEngine/build/plugin-removal/regression-verification.json)、[整轮结果](E:/CoronaEngine/build/plugin-removal/regression-tests.xml)与 [补充重跑](E:/CoronaEngine/build/plugin-removal/profile-scope-tests.xml)。
 
-### F05 真实镜头相机
+### F05 小孔和真实镜头相机插件 已移除
 
-**判定：插件可构造，真实镜头功能未实现。**
-
-`RealisticCamera` 只有镜片数据结构和 `lens_element()`。静态 `lens_config` 没有装载入口，`simple_weighting_` 没有使用，没有覆盖 `generate_ray_in_local_space()`，实际继承的是基础针孔射线生成逻辑。
-
-证据：[镜片数据和相机](E:/CoronaEngine/vision/src/render_core/sensor/realistic.cpp:23)、[基础射线生成](E:/CoronaEngine/vision/src/base/sensor/sensor.cpp:58)。
-
-建议：标记为未实现或移入实验目标；不要以 `realistic` 名义向用户宣称真实镜头追迹。
+`pinhole` 和 `realistic` 都继承了基础透视射线生成逻辑。`realistic` 的镜片数据从未用于追迹。旧 Vision 场景若显式指定这两种相机，可将 `camera.type` 改为 `thin_lens`，使用默认的 `lens_radius = 0` 和 `focal_distance = 5` 即可获得小孔投影。需要景深时可调大镜头半径。见[薄透镜实现](src/render_core/sensor/thin_lens.cpp)。
 
 ### F06 PT 收敛自适应采样
 
@@ -276,7 +270,7 @@ F02/F04 后续回归中的 28 项 Vision/LightField 测试全部通过，包括�
 
 ## 全部插件状态
 
-下表保留初次审计时的 50 个插件目标及后续移除状态，当前剩余 42 个。主流程使用包含按材质、光源或降噪器选择而触发的路径，不意味着每帧都会实例化所有插件。
+下表保留初次审计时的 50 个插件目标及后续移除状态，当前剩余 40 个。主流程使用包含按材质、光源或降噪器选择而触发的路径，不意味着每帧都会实例化所有插件。
 
 | 类别 | 插件 | 当前状态 | 证据与说明 |
 | --- | --- | --- | --- |
@@ -311,8 +305,8 @@ F02/F04 后续回归中的 28 项 Vision/LightField 测试全部通过，包括�
 | radiancecache | `sharc` | 已移除 | [移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)；此表保留初次审计目标 |
 | sampler | `independent` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/sampler/CMakeLists.txt:2)；默认随机采样器；spp 参数另见 F20 |
 | sensor | `thin_lens` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/sensor/CMakeLists.txt:2)；默认 SensorDesc 和 Corona 相机适配 |
-| sensor | `pinhole` | 可选未选择 | [CMake](E:/CoronaEngine/vision/src/render_core/sensor/CMakeLists.txt:3)；生产使用 thin_lens；半径为零不等于加载 pinhole 插件 |
-| sensor | `realistic` | 未完成 | [CMake](E:/CoronaEngine/vision/src/render_core/sensor/CMakeLists.txt:4)；继承基础射线生成，没有真实镜片追迹；见 F05 |
+| sensor | `pinhole` | 已移除 | 零半径薄透镜提供小孔投影，见 F05 |
+| sensor | `realistic` | 已移除 | 未实现镜片追迹，见 F05 |
 | shadernode | `constant` | 可选兼容路径 | [CMake](E:/CoronaEngine/vision/src/render_core/shadernode/CMakeLists.txt:2)；保留在部分 ShaderNodeDesc 默认值中；常规数值适配使用 number，不能仅按显式字符串选择断言全局死代码 |
 | shadernode | `image` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/shadernode/CMakeLists.txt:3)；材质表达式适配器创建；converter 的部分工厂闲置 |
 | shadernode | `mix` | 主流程使用 | [CMake](E:/CoronaEngine/vision/src/render_core/shadernode/CMakeLists.txt:4)；材质表达式适配器创建；converter 的部分工厂闲置 |
