@@ -4,7 +4,7 @@
 #include "base/sampler.h"
 
 namespace vision::restir_shadow {
-// RTXPT uses an absolute endpoint exclusion and fixed directional travel.
+// Finite shadow rays exclude an absolute endpoint margin. Directional rays use a fixed distance.
 inline constexpr float finite_epsilon = 1e-4f;
 inline constexpr float directional_distance = 100000.f;
 

@@ -457,7 +457,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
             };
         }
         if (hc.lobe_hitdist && (!hc.path_capture || hc.path_capture->record_hit_distance)) {
-            // RTXPT StablePlaneAccumulateSampleHitT: start after the primary
+            // Accumulate hit distance starting after the primary
             // scatter, then allow a delta-only entry/exit pair (at most 3 segments).
             $if(bounces == 1u || (bounces > 1u && bounces <= 3u && delta_only)) {
                 Float segment_distance = scene().world_diameter();
@@ -656,7 +656,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         Float3 albedo = make_float3(0.f);
 
         // Preserve the PT framework's proposals, BSDF, visibility and Tr while
-        // matching RTXPT's six candidates per each of two shadow samples.
+        // using the GI branch's default of six candidates for each of two shadow samples.
         auto sample_lighting = [&](const MaterialEvaluator &evaluator) {
             if (hc.captured_secondary_normal) {
                 $if(bounces == 0u) { *hc.captured_secondary_normal = evaluator.shading_frame().normal(); };
@@ -870,7 +870,7 @@ Float3 IlluminationIntegrator::Li(RayState rs, Float scatter_pdf, const Uint &ma
         eta_scale *= sqr(bsdf_sample.eta);
         if (hc.lobe_hitdist) delta_only &= delta_scatter;
         if (hc.path_capture && hc.path_capture->on_signal) {
-            // RTXPT's delta-only flag is global; switching planes does not
+            // The delta-only flag spans the whole path. Switching planes does not
             // restore it after a rough prefix or receiver scatter.
             hc.path_capture->signal_delta_only &= BxDFFlag::is_specular(bsdf_sample.eval.flags);
         }

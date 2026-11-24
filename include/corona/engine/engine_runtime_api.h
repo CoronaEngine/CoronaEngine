@@ -492,8 +492,8 @@ class Environment {
     Environment();
     ~Environment();
     void set_authored_lighting(const std::string& description);
-    void set_vision_rtxpt_display(bool auto_exposure, float exposure_compensation,
-                                  float exposure_value, float min_ev, float max_ev, float bloom_intensity = 0.f);
+    void set_vision_display(bool auto_exposure, float exposure_compensation,
+                            float exposure_value, float min_ev, float max_ev, float bloom_intensity = 0.f);
 
     /// The single environment write entry point: one command carrying every field given.
     void set_properties(const EnvironmentProperties& properties);

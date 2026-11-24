@@ -590,7 +590,7 @@ Corona::API::EnvironmentState Corona::API::Environment::get_state() const {
 
 
 
-void Corona::API::Environment::set_vision_rtxpt_display(
+void Corona::API::Environment::set_vision_display(
     bool auto_exposure, float exposure_compensation, float exposure_value, float min_ev, float max_ev,
     float bloom_intensity) {
     const float exposure_gain = std::exp2(exposure_compensation - (auto_exposure ? 0.f : exposure_value));
@@ -598,13 +598,13 @@ void Corona::API::Environment::set_vision_rtxpt_display(
     const float maximum_auto_gain = std::exp2(max_ev);
     if (!std::isfinite(exposure_value) || !std::isfinite(exposure_gain * maximum_auto_gain) ||
         exposure_gain <= 0.f || minimum_auto_gain <= 0.f || !(minimum_auto_gain <= maximum_auto_gain)) {
-        throw std::invalid_argument("Invalid RTXPT display exposure settings");
+        throw std::invalid_argument("Invalid Vision display exposure settings");
     }
     if (!std::isfinite(bloom_intensity) || bloom_intensity < 0.f || bloom_intensity > 1.f) {
-        throw std::invalid_argument("Invalid RTXPT display bloom intensity");
+        throw std::invalid_argument("Invalid Vision display bloom intensity");
     }
     if (handle_ == 0) {
-        CFW_LOG_WARNING("[Environment::set_vision_rtxpt_display] Invalid environment handle");
+        CFW_LOG_WARNING("[Environment::set_vision_display] Invalid environment handle");
         return;
     }
     // 与其它环境字段同一条通道：tick 边界统一应用，外部线程不再写环境槽。

@@ -37,7 +37,7 @@ inline ocarina::Float3 composite_bloom(const ocarina::Float3& hdr, const ocarina
         return load_bloom(bloom, bloom_size, tap);
     });
     const Float3 blended = lerp(intensity, hdr, color);
-    // RTXPT stores the blend as RGBA16F before exposure and tone mapping.
+    // Round the blend to RGBA16F before exposure and tone mapping.
     return ::vision::unpack_storage_half4(::vision::pack_storage_half4(make_float4(blended, 1.f))).xyz();
 }
 
@@ -45,7 +45,7 @@ inline ocarina::Float3 blur_bloom(const ocarina::BufferVar<ocarina::uint2>& sour
                                   const ocarina::Uint2& size, const ocarina::Uint2& pixel,
                                   const ocarina::Bool& horizontal) {
     using namespace ocarina;
-    // RTXPT's radius of eight full-resolution pixels gives sigma two at quarter size.
+    // A radius of eight full-resolution pixels gives sigma two at quarter size.
     // The paired bilinear taps expand to these weights at integer offsets.
     constexpr float weights[] = {
         .1994711402f, .1760326634f, .1209853623f, .0647587978f, .0269954833f,

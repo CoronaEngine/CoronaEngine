@@ -9,7 +9,7 @@ from unittest import SkipTest
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'vision/src').is_dir())
 SOURCE = ROOT / 'vision/src/render_core/light/environments/spherical.cpp'
-TEMP = ROOT / '.workspace/tmp/rtxpt-corona-dsl-20261108/environment-importance-tests'
+TEMP = ROOT / '.workspace/tmp/optics-tests/environment-importance-grid'
 
 
 def _helper():

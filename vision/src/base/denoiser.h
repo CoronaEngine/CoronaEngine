@@ -14,7 +14,7 @@
 
 namespace vision {
 
-// ReSTIR+REBLUR matches RTXPT's centred primary rays without an extra coverage
+// ReSTIR+REBLUR uses centred primary rays without an extra coverage
 // filter. The old coverage-AA path remains a diagnostic comparison.
 [[nodiscard]] inline bool denoiser_coverage_aa_enabled(string_view integrator, string_view denoiser) noexcept {
     if (integrator != "rt" || denoiser != "ReBLUR") return true;

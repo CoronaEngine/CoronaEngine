@@ -14,7 +14,7 @@ from unittest import SkipTest
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'vision/src').is_dir())
 SOURCE = ROOT / 'vision/src/base/mgr/image_pool.cpp'
-TEMP = ROOT / '.workspace/tmp/rtxpt-corona-dsl-20261108/image-pool-unorm8-tests'
+TEMP = ROOT / '.workspace/tmp/optics-tests/image-pool-unorm8'
 
 
 def _helper():

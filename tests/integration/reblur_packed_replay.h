@@ -285,7 +285,7 @@ inline void run(Device &device, Stream &stream, uint warmup, uint pause_ms) {
     require(bool(metadata), "cannot write packed replay metadata");
     require(nonfinite == 0u, "nonfinite output component at a valid NRD pixel; see packed_replay.json");
     std::cout << "Input combined_fnv64=" << hash_text(hash) << " order=frame0..N(plane2,1,0)(CommonSettings,ReblurSettings,MV,Normal,Z,Diffuse,Specular,Mix)\n"
-              << "RTXPT oracle mismatch_components=" << mismatches << '\n'
+              << "Reference mismatch_components=" << mismatches << '\n'
               << "PASS: packed replay completed; three independent instances; no timed upload/readback\n";
 }
 } // namespace reblur_packed_replay

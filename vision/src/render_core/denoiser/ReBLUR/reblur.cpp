@@ -221,7 +221,7 @@ void ReBLUR::compile() noexcept {
             motion = plane->motion();
 #ifdef VISION_REBLUR_EDSL
             if (edsl_) {
-                // RTXPT relaxes disocclusion and roughness where extended
+                // The filter relaxes disocclusion and roughness where extended
                 // stable paths diverge. Store its R8 mix in spare validity bits.
                 $if(plane.depth > 0u && valid) {
                     Float divergence = 0.f;
