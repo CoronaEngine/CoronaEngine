@@ -73,7 +73,6 @@ public:
 
 protected:
     const LightType type_{LightType::Unset};
-    LightDesc source_desc_;
     EncodedData<float> scale_{1.f};
     EncodedData<uint> switch_{true};
 
@@ -104,9 +103,8 @@ protected:
 public:
     Light(LightType type) noexcept : type_(type) {}
     explicit Light(const LightDesc &desc, LightType light_type);
-    [[nodiscard]] const LightDesc& source_desc() const noexcept { return source_desc_; }
     [[nodiscard]] static TObject<Light, LightDesc> create_root(const LightDesc &desc) noexcept;
-    VS_HOTFIX_MAKE_RESTORE(Node, scale_, switch_, color_, strength_, index_, source_desc_)
+    VS_HOTFIX_MAKE_RESTORE(Node, scale_, switch_, color_, strength_, index_)
     OC_ENCODABLE_FUNC(Encodable, scale_, color_, strength_, switch_)
     void initialize_root(const Desc &desc) noexcept;
     void initialize_attached(const SP<ShaderGraph> &graph, const Desc &desc) noexcept;
@@ -181,6 +179,8 @@ public:
     template<typename T>
     void add_emission_reference(T shape_instance) noexcept {}
     [[nodiscard]] ShapeInstance *instance() const noexcept;
+    [[nodiscard]] virtual bool two_sided() const noexcept = 0;
+    [[nodiscard]] virtual LightDesc instance_desc(uint index) const noexcept = 0;
     void bind_instance(uint index) noexcept { inst_idx_ = index; }
 };
 

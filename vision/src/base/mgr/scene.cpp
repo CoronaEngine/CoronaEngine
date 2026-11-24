@@ -326,9 +326,7 @@ void Scene::fill_instances() {
         if (!instance->has_emission()) continue;
         auto light = instance->emission();
         if (!live_emissions.insert(light.get()).second) {
-            auto desc = light->source_desc();
-            desc.set_value("inst_id", i);
-            light = dynamic_object_cast<IAreaLight>(load_light(desc)).impl();
+            light = dynamic_object_cast<IAreaLight>(load_light(light->instance_desc(i))).impl();
             instance->set_emission(light);
             live_emissions.insert(light.get());
         }

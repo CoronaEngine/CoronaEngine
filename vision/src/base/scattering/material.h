@@ -154,9 +154,29 @@ public:
     using Desc = MaterialDesc;
     static constexpr auto precompute_sample_num = 2 << 20;
 
+    struct Parameters {
+        bool alpha_masked{false};
+        float alpha_cutoff{.5f};
+        optional<bool> has_base_texture;
+        string workflow;
+        optional<float> glossiness_factor;
+        // An explicit null uses GI's inferred value but counts as authored for material deduplication.
+        bool base_texture_specified{false};
+        bool glossiness_factor_specified{false};
+        // Older exports encode scaled textures as inline Multiply nodes.
+        bool color_inline_multiply{false};
+        bool spec_tint_inline_multiply{false};
+        bool roughness_weight_inline_multiply{false};
+
+        [[nodiscard]] uint64_t hash() const noexcept {
+            return hash64(alpha_masked, alpha_cutoff, base_texture_specified, has_base_texture.value_or(false),
+                          workflow, glossiness_factor_specified, glossiness_factor.value_or(0.f));
+        }
+    };
+
 protected:
     uint index_{InvalidUI32};
-    MaterialDesc source_desc_;
+    Parameters parameters_;
     VS_MAKE_SLOT(normal);
     /// use for integral albedo
     static uint exp_of_two_;
@@ -213,7 +233,7 @@ protected:
 
 public:
     Material() = default;
-    [[nodiscard]] const MaterialDesc& source_desc() const noexcept { return source_desc_; }
+    [[nodiscard]] const Parameters &parameters() const noexcept { return parameters_; }
     explicit Material(const MaterialDesc &desc);
     [[nodiscard]] static SP<Material> create_root(const Desc &desc) noexcept;
     void add_material_reference(SP<ShapeInstance> shape_instance) noexcept;

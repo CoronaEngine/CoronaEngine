@@ -434,6 +434,37 @@ BSDFSample MaterialEvaluator::sample(const Float3 &world_wo, TSampler &sampler,
 
 uint Material::exp_of_two_ = 10;
 
+namespace {
+[[nodiscard]] bool is_inline_multiply(const DataWrap &slot) {
+    const auto node = slot.find("node");
+    if (node == slot.end() || !node->is_object() || node->value("type", "") != "math") return false;
+    const auto param = node->find("param");
+    return param != node->end() && param->is_object() && param->value("op", "Multiply") == "Multiply";
+}
+
+[[nodiscard]] Material::Parameters read_material_parameters(const MaterialDesc &desc) {
+    Material::Parameters p;
+    p.alpha_masked = desc["alpha_mode"].as_string("OPAQUE") == "MASK";
+    if (p.alpha_masked) {
+        p.alpha_cutoff = desc["alpha_cutoff"].as_float(p.alpha_cutoff);
+        p.base_texture_specified = desc.contains("has_base_texture");
+        const auto base_texture = desc["has_base_texture"].data();
+        if (base_texture.is_boolean()) p.has_base_texture = base_texture.get<bool>();
+    }
+    p.workflow = desc["workflow"].as_string("");
+    p.glossiness_factor_specified = desc.contains("glossiness_factor");
+    const auto glossiness = desc["glossiness_factor"].data();
+    if (glossiness.is_number() || glossiness.is_boolean()) p.glossiness_factor = glossiness.get<float>();
+
+    p.color_inline_multiply = is_inline_multiply(desc["color"].data());
+    p.spec_tint_inline_multiply = is_inline_multiply(desc["spec_tint"].data());
+    const auto roughness = desc["roughness"].data();
+    static const DataWrap::json_pointer weight{"/node/param/t"};
+    p.roughness_weight_inline_multiply = roughness.contains(weight) && is_inline_multiply(roughness.at(weight));
+    return p;
+}
+}  // namespace
+
 Material::Material(const vision::MaterialDesc &desc) : Node(desc) {
 }
 
@@ -444,13 +475,15 @@ SP<Material> Material::create_root(const Desc &desc) noexcept {
 }
 
 void Material::initialize_root(const Desc &desc) noexcept {
-    source_desc_ = desc;
+    parameters_ = read_material_parameters(desc);
+    reset_hash();
     initialize_root_graph();
     initialize_slots(desc);
 }
 
 void Material::initialize_attached(const SP<ShaderGraph> &graph, const Desc &desc) noexcept {
-    source_desc_ = desc;
+    parameters_ = read_material_parameters(desc);
+    reset_hash();
     initialize_attached_graph(graph);
     initialize_slots(desc);
 }
@@ -483,8 +516,8 @@ void Material::initialize_(const NodeDesc &node_desc) noexcept {
 
 void Material::restore(vision::RuntimeObject *old_obj) noexcept {
     Node::restore(old_obj);
-    VS_HOTFIX_MOVE_ATTRS(index_, normal_)
-    source_desc_ = old_obj_->source_desc_;
+    VS_HOTFIX_MOVE_ATTRS(index_, normal_, parameters_)
+    reset_hash();
     slot_infos_ = old_obj_->slot_infos_;
     for (int i = 0; i < slot_num(); ++i) {
         ShaderNodeSlot &slot = get_slot(i);

@@ -33,7 +33,7 @@ void NativeLightSampler::prepare() {
     for (const auto &shape : scene().instances()) {
         if (!shape->has_emission()) continue;
         const auto *light = shape->emission().get();
-        if (light->impl_type() != "area" || light->source_desc()["two_sided"].as_bool(false))
+        if (light->impl_type() != "area" || light->two_sided())
             throw std::runtime_error("ReSTIR GI native light table requires one-sided triangle emitters");
         triangle_count += shape->mesh()->triangles().size();
     }

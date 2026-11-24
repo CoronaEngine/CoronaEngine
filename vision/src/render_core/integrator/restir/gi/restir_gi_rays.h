@@ -70,10 +70,9 @@ template<typename MaterialInputs>
 [[nodiscard]] inline TriangleHitVar native_trace_closest(const RayVar &input,
                                                         const MaterialInputs &materials,
                                                         const SampledWavelengths &swl,
-                                                        bool visibility = false,
                                                         Float *accepted_t = nullptr) noexcept {
     const auto &geometry = Toolkit::geometry();
-    if (!accepted_t && !materials.has_alpha_tested() && (!visibility || !materials.has_visibility_exclusions()))
+    if (!accepted_t && !materials.has_alpha_tested())
         return geometry.trace_closest(input);
     RayVar ray = input;
     TriangleHitVar hit;
@@ -85,13 +84,9 @@ template<typename MaterialInputs>
         $if(hit->is_miss()) { $break; };
         Uint material_id = geometry.data()->instances().read(hit.inst_id).mat_id;
         Bool skip = false;
-        if (visibility) skip = materials.exclude_from_nee(material_id);
-        Bool alpha_tested = materials.alpha_tested(material_id);
-        $if(skip || alpha_tested) {
+        $if(materials.alpha_tested(material_id)) {
             Interaction it = geometry.compute_surface_interaction(hit, false);
-            $if(!skip) {
-                skip = materials.opacity(it, swl) < materials.alpha_cutoff(material_id);
-            };
+            skip = materials.opacity(it, swl) < materials.alpha_cutoff(material_id);
         };
         Float distance = packed[1].x;
         $if(!skip) {
@@ -116,9 +111,8 @@ template<typename MaterialInputs>
                                           const MaterialInputs &materials,
                                           const SampledWavelengths &swl) noexcept {
     RayVar ray = native_visibility_ray(it, target);
-    if (!materials.has_alpha_tested() && !materials.has_visibility_exclusions())
-        return Toolkit::geometry().trace_occlusion(ray);
-    return native_trace_closest(ray, materials, swl, true)->is_hit();
+    if (!materials.has_alpha_tested()) return Toolkit::geometry().trace_occlusion(ray);
+    return native_trace_closest(ray, materials, swl)->is_hit();
 }
 
 }// namespace vision::restir_gi
