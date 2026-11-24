@@ -460,10 +460,6 @@ void test_camera_release_queue_is_fifo() {
     const auto second = hub.create_camera();
     CHECK(first != 0 && second != 0);
 
-    // 释放时要顺手清掉该相机的遥测
-    hub.publish_camera_frame_timing(first, 1.5, 0.5, Corona::CameraVisionRenderMode::PathTracing);
-    CHECK(hub.camera_frame_timing(first).has_value());
-
     hub.enqueue_camera_release({.camera_handle = first});
     hub.enqueue_camera_release({.camera_handle = second});
 
@@ -471,7 +467,6 @@ void test_camera_release_queue_is_fifo() {
     CHECK(releases.size() == 2);        // Fifo：不合并
     CHECK(releases[0].camera_handle == first);
     CHECK(releases[1].camera_handle == second);
-    CHECK(!hub.camera_frame_timing(first).has_value());
     CHECK(hub.drain_camera_releases().empty());  // 取空后不重复投递
 
     hub.destroy_camera(first);

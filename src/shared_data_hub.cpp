@@ -343,26 +343,6 @@ std::vector<EntityId> SharedDataHub::image_handles() {
     return handles;
 }
 
-void SharedDataHub::publish_camera_frame_timing(EntityId camera_handle, double render_ms, double denoise_ms,
-                                                CameraVisionRenderMode mode,
-                                                std::chrono::steady_clock::time_point completed_at) {
-    std::lock_guard<std::mutex> lock(camera_timing_mutex_);
-    double frame_ms = 0.0;
-    const auto previous = camera_timings_.find(camera_handle);
-    if (previous != camera_timings_.end() && previous->second.mode == mode) {
-        frame_ms = std::chrono::duration<double, std::milli>(
-            completed_at - previous->second.recorded_at).count();
-    }
-    camera_timings_[camera_handle] = {render_ms, denoise_ms, frame_ms, mode, completed_at};
-}
-
-std::optional<CameraFrameTiming> SharedDataHub::camera_frame_timing(
-    EntityId camera_handle) const {
-    std::lock_guard<std::mutex> lock(camera_timing_mutex_);
-    const auto it = camera_timings_.find(camera_handle);
-    return it == camera_timings_.end() ? std::nullopt : std::optional{it->second};
-}
-
 namespace {
 
 // CameraDevice -> 外部可读投影。只搬运"读者需要的字段"，内部状态（字符串设置、
@@ -1044,12 +1024,7 @@ void SharedDataHub::enqueue_camera_release(CameraReleaseCommand command) {
 }
 
 std::vector<CameraReleaseCommand> SharedDataHub::drain_camera_releases() {
-    auto releases = camera_releases_.drain();
-    if (!releases.empty()) {
-        std::lock_guard<std::mutex> lock(camera_timing_mutex_);
-        for (const auto& release : releases) camera_timings_.erase(release.camera_handle);
-    }
-    return releases;
+    return camera_releases_.drain();
 }
 
 void SharedDataHub::set_viewport_ui_mode(EntityId camera_handle, ViewportUiMode mode) {

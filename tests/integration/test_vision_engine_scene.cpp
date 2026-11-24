@@ -326,46 +326,6 @@ struct VisionEngineSceneTest {
         hub.drain_camera_releases();
         destroy_test_camera(handle);
     }
-    static void check_frame_timing() {
-        auto& hub = SharedDataHub::instance();
-        const auto first = create_test_camera();
-        const auto second = create_test_camera();
-        expect(!hub.camera_frame_timing(first), "new camera must not have stale frame timing");
-        const auto start = std::chrono::steady_clock::now();
-        hub.publish_camera_frame_timing(first, 24.9, 6.5, CameraVisionRenderMode::ReSTIR, start);
-        hub.publish_camera_frame_timing(second, 10.5, 0.0, CameraVisionRenderMode::PathTracing, start);
-        expect(hub.camera_frame_timing(first)->frame_ms == 0.0,
-               "first frame must not invent a total frame interval");
-        auto timing = hub.camera_frame_timing(first);
-        expect(timing && timing->render_ms == 24.9 && timing->denoise_ms == 6.5 &&
-                   timing->mode == CameraVisionRenderMode::ReSTIR,
-               "frame timing must retain per-camera render/denoise duration and mode");
-        hub.publish_camera_frame_timing(first, 12.3, 3.1, CameraVisionRenderMode::ReSTIR,
-                                       start + std::chrono::milliseconds(33));
-        expect(hub.camera_frame_timing(first)->frame_ms == 33.0 &&
-                   hub.camera_frame_timing(second)->frame_ms == 0.0,
-               "total frame interval must include waits and remain camera-local");
-        expect(hub.camera_frame_timing(first)->render_ms == 12.3 &&
-                   hub.camera_frame_timing(first)->denoise_ms == 3.1 &&
-                   hub.camera_frame_timing(second)->render_ms == 10.5 &&
-                   hub.camera_frame_timing(second)->denoise_ms == 0.0,
-               "publishing a frame must replace only that camera's latest timing");
-        hub.publish_camera_frame_timing(first, 8.0, 0.0, CameraVisionRenderMode::PathTracing,
-                                       start + std::chrono::milliseconds(70));
-        expect(hub.camera_frame_timing(first)->frame_ms == 0.0 && hub.camera_frame_timing(first)->denoise_ms == 0.0,
-               "render mode change must reset the frame interval baseline");
-        hub.publish_camera_frame_timing(first, 7.0, 0.0, CameraVisionRenderMode::PathTracing,
-                                       start + std::chrono::milliseconds(90));
-        expect(hub.camera_frame_timing(first)->frame_ms == 20.0,
-               "second frame after mode change must measure the new cadence");
-        hub.enqueue_camera_release({first});
-        hub.enqueue_camera_release({second});
-        hub.drain_camera_releases();
-        expect(!hub.camera_frame_timing(first) && !hub.camera_frame_timing(second),
-               "released camera timings must be discarded");
-        destroy_test_camera(first);
-        destroy_test_camera(second);
-    }
     static void check_stable_planes_api() {
         auto& hub = SharedDataHub::instance();
         const auto handle = create_test_camera();
@@ -1538,7 +1498,6 @@ int main(int argc, char** argv) {
         Corona::Systems::VisionEngineSceneTest::check_denoiser_api();
         Corona::Systems::VisionEngineSceneTest::check_reblur_settings_api();
         Corona::Systems::VisionEngineSceneTest::check_relax_settings_api();
-        Corona::Systems::VisionEngineSceneTest::check_frame_timing();
         if (argc == 2 && std::string(argv[1]) == "--cpu-only") return 0;
         Corona::Systems::VisionEngineSceneTest::run(
             argc == 2 && std::string(argv[1]) == "--shared-display");

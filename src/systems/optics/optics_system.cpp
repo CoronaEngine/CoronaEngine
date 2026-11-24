@@ -5841,11 +5841,6 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                     feedback.pt_effective = effective.dump();
                 }
                 const auto render_end = profile_now();
-                // display() already waits for GPU completion. Reuse its timing without
-                // adding a synchronization or including cross-API presentation work.
-                SharedDataHub::instance().publish_camera_frame_timing(
-                    cam_handle, pipeline->cur_render_time(),
-                    pipeline->renderer().integrator()->cur_denoise_time(), runtime.mode);
                 if (env_flag_enabled("CORONA_OPTICS_MEASURE_RENDER_TIME")) {
                     CFW_LOG_INFO("VisionRenderTiming camera={} extent={}x{} accumulated_frames={} render_ms={}",
                                  cam_handle, camera.width, camera.height,

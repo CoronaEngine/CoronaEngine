@@ -332,16 +332,6 @@ enum class CameraVisionRenderMode : uint8_t {
 
 enum class CameraVisionDenoiser : uint8_t { Scene, SVGF, ReBLUR, ReLAX };
 
-// Runtime telemetry only; never serialized into scene settings.
-struct CameraFrameTiming {
-    double render_ms{};
-    double denoise_ms{};
-    // Wall-clock cadence between completed frames of this camera, including waits.
-    double frame_ms{};
-    CameraVisionRenderMode mode{CameraVisionRenderMode::PathTracing};
-    std::chrono::steady_clock::time_point recorded_at{};
-};
-
 struct CameraDevice {
     void* surface{};
     bool follows_default_surface{true};
@@ -1068,12 +1058,6 @@ class SharedDataHub {
     /// 有效值 = 快照（已提交）+ 待处理命令（pending），用于 get_* 的读己之写
     [[nodiscard]] CameraSnapshotRow camera_view(EntityId camera_handle) const;
 
-    void publish_camera_frame_timing(EntityId camera_handle, double render_ms, double denoise_ms,
-                                     CameraVisionRenderMode mode,
-                                     std::chrono::steady_clock::time_point completed_at =
-                                         std::chrono::steady_clock::now());
-    [[nodiscard]] std::optional<CameraFrameTiming> camera_frame_timing(
-        EntityId camera_handle) const;
     void enqueue_camera_move(CameraMoveCommand command);
     std::vector<CameraMoveCommand> drain_camera_moves();
     void enqueue_camera_viewport_update(CameraViewportUpdateCommand command);
@@ -1144,8 +1128,6 @@ class SharedDataHub {
     };
     /// 仅发布方（Geometry，DAG 线程）访问，用来复用未变化的节点列表。
     std::unordered_map<EntityId, GeometrySceneCacheEntry> geometry_scene_cache_;
-    mutable std::mutex camera_timing_mutex_;
-    std::unordered_map<EntityId, CameraFrameTiming> camera_timings_;
     // 图像按句柄分锁：同一张图互斥，不同图可并行。用全局单锁会让
     // 同时持有 optics / ui 两张图写租约的 Display 线程自死锁。
     [[nodiscard]] std::shared_ptr<std::shared_mutex> image_lock_for(EntityId handle) const;
