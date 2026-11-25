@@ -3,7 +3,6 @@
 #include <corona/engine/engine_runtime_api.h>
 #include "base/mgr/global.h"
 #include "base/mgr/pipeline.h"
-#include "base/mgr/switch_profile.h"
 #include "base/scattering/material.h"
 #include "base/illumination/light.h"
 #include "base/sensor/sensor.h"

@@ -1,5 +1,4 @@
 add_executable(corona_switch_profile_scope_tests test_switch_profile_scope.cpp)
-target_include_directories(corona_switch_profile_scope_tests PRIVATE ${CMAKE_SOURCE_DIR}/vision/src)
 target_link_libraries(corona_switch_profile_scope_tests PRIVATE ocarina-include)
 add_test(NAME VisionSwitchProfileScopeTests
     COMMAND ${Python_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/tests/check_switch_profile_scope.py

@@ -6,7 +6,7 @@
 
 #include "GUI.h"
 #include "dsl/dsl.h"
-#include "GUI/widgets.h"
+#include "window/GUI/widgets.h"
 
 namespace vision {
 template<typename T>

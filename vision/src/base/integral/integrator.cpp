@@ -4,7 +4,7 @@
 
 #include "integrator.h"
 #include "restir_shadow.h"
-#include "base/mgr/switch_profile.h"
+#include "core/util/switch_profile.h"
 #include "base/mgr/pipeline.h"
 #include "math/warp.h"
 #include "base/color/spectrum.h"
@@ -137,7 +137,7 @@ void IlluminationIntegrator::apply_illumination_settings(const DataWrap &candida
 }
 
 void IlluminationIntegrator::prepare() noexcept {
-    switch_profile::Scope profile{"IlluminationIntegrator::prepare", "buffers"};
+    ocarina::switch_profile::Scope profile{"IlluminationIntegrator::prepare", "buffers"};
     encode_data();
     datas().reset_device_buffer_immediately(device(), "IlluminationIntegrator::encoded_data");
     datas().register_self();

@@ -4,7 +4,7 @@
 
 #include "scene.h"
 #include "pipeline.h"
-#include "switch_profile.h"
+#include "core/util/switch_profile.h"
 
 #include <optional>
 #include <unordered_set>
@@ -110,7 +110,7 @@ CommandBatch LightManager::upload(bool async) noexcept {
 // ========== Scene ==========
 
 void Scene::init(const SceneDesc &scene_desc) {
-    switch_profile::Scope profile{"Scene::init", "scene"};
+    ocarina::switch_profile::Scope profile{"Scene::init", "scene"};
     TIMER(init_scene);
     std::optional<Global::SceneGpuContextScope> scene_gpu_context;
     if (geometry().has_gpu_resource()) {
@@ -136,7 +136,7 @@ void Scene::init(const SceneDesc &scene_desc) {
 }
 
 void Scene::prepare() noexcept {
-    switch_profile::Scope profile{"scene.prepare", "scene"};
+    ocarina::switch_profile::Scope profile{"scene.prepare", "scene"};
     std::optional<Global::SceneGpuContextScope> scene_gpu_context;
     if (geometry().has_gpu_resource()) {
         scene_gpu_context.emplace(geometry().bindless_array(),
@@ -198,7 +198,7 @@ TLight Scene::load_light(const LightDesc &desc) noexcept {
 }
 
 void Scene::load_materials(const vector<MaterialDesc> &material_descs) {
-    switch_profile::Scope profile{"Scene::load_materials", "scene_materials"};
+    ocarina::switch_profile::Scope profile{"Scene::load_materials", "scene_materials"};
     for (const MaterialDesc &desc : material_descs) {
         auto material = Material::create_root(desc);
         add_material(ocarina::move(material));
@@ -310,7 +310,7 @@ void Scene::remove_shape(uint group_index, bool defer_world_bounds) noexcept {
 }
 
 void Scene::load_shapes(const vector<ShapeDesc> &descs) {
-    switch_profile::Scope profile{"Scene::load_shapes", "scene_shapes"};
+    ocarina::switch_profile::Scope profile{"Scene::load_shapes", "scene_shapes"};
     for (const auto &desc : descs) {
         SP<ShapeGroup> group = Node::create_shared<ShapeGroup>(desc);
         add_shape(group, desc);

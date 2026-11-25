@@ -405,7 +405,6 @@ SHARC 的 `constant.h` 已随 F03 移除；枚举和通用旗标没有直接消�
 
 - PT、ReSTIR direct/indirect/stable planes、SVGF、ReBLUR、ReLAX、每相机 view context、共享场景资源、零拷贝显示桥、相机同步和 actor picking 都有真实调用。
 - 黑体材质是 fallback；它与未使用的 Planck 黑体辐射公式 `black_body_impl()` 是两回事。
-- `GUI/decl.h`、`GUI/widgets.h`、`GUI/window.h` 是仍被 include 的兼容转发头，不是三套重复实现。
 - ReBLUR 的 CPU 调度器与 EDSL 内核均在仓库内；外部 SDK 原生后端及其构建和运行开关已移除，本地算法和测试继续保留。
 - `precomputed_table.h`、`dielectric_precompute.h`、`ltc_sheen_table.h`、`srgb2spec.h`、slot swizzle 生成头均有有效消费者。
 - `VISION_INTERACTIVE_AUX_WORK` 的根默认值是 ON，其打印回收有条件调用；不能因为头文件 fallback 为 0 就判为关闭或废弃。

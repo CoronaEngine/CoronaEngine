@@ -6,7 +6,7 @@
 
 #include "dsl/dsl.h"
 #include "node.h"
-#include "GUI/widgets.h"
+#include "window/GUI/widgets.h"
 #include "sensor/frame_buffer.h"
 #include "sensor/light_field_types.h"
 #include "base/using.h"

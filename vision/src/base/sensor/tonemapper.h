@@ -7,7 +7,7 @@
 #include "math/basic_types.h"
 #include "rhi/common.h"
 #include "dsl/dsl.h"
-#include "GUI/widgets.h"
+#include "window/GUI/widgets.h"
 #include "base/node.h"
 #include "base/using.h"
 

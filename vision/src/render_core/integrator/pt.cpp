@@ -5,6 +5,7 @@
 #include "base/integral/integrator.h"
 #include "base/mgr/pipeline.h"
 #include "base/mgr/evaluation_debug.h"
+#include "core/util/switch_profile.h"
 #include "base/sensor/light_field_types.h"
 #include "math/warp.h"
 #include "base/color/spectrum.h"
@@ -138,7 +139,7 @@ public:
     }
 
     void prepare() noexcept override {
-        switch_profile::Scope profile{"integrator.prepare", "buffers"};
+        ocarina::switch_profile::Scope profile{"integrator.prepare", "buffers"};
         IlluminationIntegrator::prepare();
 //        inspector_->prepare();
         if (!denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled()) {
@@ -160,7 +161,7 @@ public:
     }
 
     void compile() noexcept override {
-        switch_profile::Scope profile{"integrator.compile", "compile"};
+        ocarina::switch_profile::Scope profile{"integrator.compile", "compile"};
         OC_INFO_FORMAT("PathTracingIntegrator primary_jitter={}", jitter_primary_samples());
         ILightFieldFrameBuffer *lf_fb = dynamic_cast<ILightFieldFrameBuffer *>(&frame_buffer());
         bool denoiser_enabled = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();

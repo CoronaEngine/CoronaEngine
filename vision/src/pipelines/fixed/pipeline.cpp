@@ -3,7 +3,7 @@
 //
 
 #include "base/mgr/pipeline.h"
-#include "base/mgr/switch_profile.h"
+#include "core/util/switch_profile.h"
 
 namespace vision {
 
@@ -17,7 +17,7 @@ public:
         : Pipeline(desc), defer_base_compile_(desc["defer_base_compile"].as_bool(false)) {}
     VS_MAKE_PLUGIN_NAME_FUNC
     void prepare() noexcept override {
-        switch_profile::Scope profile{"pipeline.prepare", "resources"};
+        ocarina::switch_profile::Scope profile{"pipeline.prepare", "resources"};
         Pipeline::prepare(!defer_base_compile_);
         scene().prepare();
         renderer_.prepare(scene(), !defer_base_compile_);
@@ -46,7 +46,7 @@ public:
     }
 
     void compile() noexcept override {
-        switch_profile::Scope profile{"pipeline.compile", "compile"};
+        ocarina::switch_profile::Scope profile{"pipeline.compile", "compile"};
         // Geometry synchronization can request a rebuild before any camera has
         // rendered. Keep an unused base renderer deferred on that path too.
         if (active_renderer_ == &renderer_ && defer_base_compile_) {

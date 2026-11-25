@@ -7,7 +7,7 @@
 #include <utility>
 #include "base/import/param_schema.h"
 #include "base/mgr/pipeline.h"
-#include "GUI/widgets.h"
+#include "window/GUI/widgets.h"
 
 namespace vision {
 

@@ -6,7 +6,7 @@
 #include "pipeline.h"
 #include "global.h"
 #include "rhi/device.h"
-#include "switch_profile.h"
+#include "core/util/switch_profile.h"
 #include "dds_bc7.h"
 #include <cmath>
 #include <cstdint>
@@ -42,7 +42,7 @@ RegistrableTexture3D ImagePool::load_texture(const ShaderNodeDesc &desc,
     const auto hash = desc.hash();
     const auto cached = source_cache_ ? source_cache_->find(hash) : SourceCache::iterator{};
     if (source_cache_ && cached != source_cache_->end()) {
-        switch_profile::Scope profile{"ImagePool::reuse_source", "scene_reuse"};
+        ocarina::switch_profile::Scope profile{"ImagePool::reuse_source", "scene_reuse"};
         const auto &source = *cached->second;
         image_io = Image::create_empty(source.pixel_storage(), source.resolution());
         std::memcpy(image_io.pixel_ptr(), source.pixel_ptr(), source.size_in_bytes());
@@ -61,7 +61,7 @@ RegistrableTexture3D ImagePool::load_texture(const ShaderNodeDesc &desc,
         if (!fpath.is_absolute()) {
             fpath = Global::instance().scene_path() / fpath;
         }
-        switch_profile::Scope profile{"ImagePool::read_source", "scene_images"};
+        ocarina::switch_profile::Scope profile{"ImagePool::read_source", "scene_images"};
         image_io = Image::load(fpath, cs);
     }
     if (source_cache_ && cached == source_cache_->end()) {
@@ -149,7 +149,7 @@ RegistrableTexture3D &ImagePool::obtain_texture(const ShaderNodeDesc &desc,
 }
 
 void ImagePool::prepare(Stream &stream) noexcept {
-    switch_profile::Scope profile{"images.prepare", "images"};
+    ocarina::switch_profile::Scope profile{"images.prepare", "images"};
     for (auto &iter : textures_) {
         if (!is_compressed_texture(iter.first)) stream << iter.second.upload();
     }

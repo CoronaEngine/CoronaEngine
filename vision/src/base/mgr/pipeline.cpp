@@ -3,7 +3,7 @@
 //
 
 #include "pipeline.h"
-#include "switch_profile.h"
+#include "core/util/switch_profile.h"
 #include "interactive_runtime_switches.h"
 #include "base/sensor/photosensory.h"
 #include "base/color/spectrum.h"
@@ -113,7 +113,7 @@ void Pipeline::activate_global_context() noexcept {
 }
 
 bool Pipeline::create_view_context(uint64_t view_id, uint2 resolution, string_view denoiser_type) noexcept {
-    switch_profile::Scope profile{"view.create_context", "view"};
+    ocarina::switch_profile::Scope profile{"view.create_context", "view"};
     activate_global_context();
     if (view_id == 0u || view_contexts_.contains(view_id)) {
         return view_id != 0u;
@@ -230,7 +230,7 @@ void Pipeline::prepare() noexcept {
 }
 
 void Pipeline::prepare(bool allocate_framebuffer_pixels) noexcept {
-    switch_profile::Scope profile{"framebuffer.prepare", "buffers"};
+    ocarina::switch_profile::Scope profile{"framebuffer.prepare", "buffers"};
     activate_global_context();
     if (!scene_view_.geometry().has_gpu_resource()) {
         scene_view_.geometry().init(device());
@@ -333,7 +333,7 @@ void Pipeline::change_resolution(uint2 res) noexcept {
 }
 
 void Pipeline::prepare_geometry(bool geometry_changed) noexcept {
-    switch_profile::Scope profile{"geometry.prepare", "geometry"};
+    ocarina::switch_profile::Scope profile{"geometry.prepare", "geometry"};
     activate_global_context();
     scene_view_.update_geometry_instances();
     scene_view_.geometry().reset_device_buffer();
@@ -419,7 +419,7 @@ void Pipeline::clear_geometry() noexcept {
 }
 
 void Pipeline::upload_bindless_array() noexcept {
-    switch_profile::Scope profile{"bindless.upload", "upload"};
+    ocarina::switch_profile::Scope profile{"bindless.upload", "upload"};
     activate_global_context();
     stream_ << bindless_array_.update_slotSOA() << synchronize() << commit();
     stream_ << bindless_array_.upload_handles() << synchronize() << commit();

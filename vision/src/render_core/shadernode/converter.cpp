@@ -4,7 +4,7 @@
 
 #include "base/shader_graph/shader_graph.h"
 #include "base/import/param_schema.h"
-#include "GUI/widgets.h"
+#include "window/GUI/widgets.h"
 
 namespace vision {
 using namespace ocarina;

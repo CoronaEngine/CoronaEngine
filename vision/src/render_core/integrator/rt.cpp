@@ -4,7 +4,7 @@
 
 #include "base/integral/integrator.h"
 #include "base/mgr/pipeline.h"
-#include "base/mgr/switch_profile.h"
+#include "core/util/switch_profile.h"
 #include "base/mgr/evaluation_debug.h"
 #include "math/warp.h"
 #include "base/color/spectrum.h"
@@ -260,7 +260,7 @@ public:
         return frame_buffer().enable_accumulation() || (denoiser_enabled && (!di_settings_ || !di_settings_->open()));
     }
     void prepare() noexcept override {
-        switch_profile::Scope profile{"integrator.prepare", "buffers"};
+        ocarina::switch_profile::Scope profile{"integrator.prepare", "buffers"};
         IlluminationIntegrator::prepare();
         const bool denoiser_enabled = !denoiser_runtime_disabled() && denoiser_ && denoiser_->enabled();
         const bool precise_lobes = denoiser_enabled && denoiser_->requires_lobe_signals() && precise_lobes_requested();
@@ -341,7 +341,7 @@ public:
     }
 
     void compile() noexcept override {
-        switch_profile::Scope profile{"integrator.compile", "compile"};
+        ocarina::switch_profile::Scope profile{"integrator.compile", "compile"};
         const char *native_lambert = std::getenv("VISION_RESTIR_GI_NATIVE_ALIGNED_LAMBERT");
         if (native_lambert && native_lambert[0] != '\0' && native_lambert[0] != '0') {
             OC_ASSERT(!separate());
@@ -418,7 +418,7 @@ public:
             native_reblur_compose_ = device().compile(compose_native, "REBLUR-ComposePhysicalDI-PrivateGI");
         }
         {
-            switch_profile::Scope combine_profile{"combine.compile", "compile"};
+            ocarina::switch_profile::Scope combine_profile{"combine.compile", "compile"};
             combine_ = device().compile(kernel, "combine");
         }
     }

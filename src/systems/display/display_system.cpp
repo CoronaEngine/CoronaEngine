@@ -1,5 +1,4 @@
 #include "../common/render_resource_bindings.h"
-#include "aspect_fit.h"
 #include "presentation_surface.h"
 #include <corona/systems/display/display_frame_commands.h>
 #include <corona/events/display_system_events.h>

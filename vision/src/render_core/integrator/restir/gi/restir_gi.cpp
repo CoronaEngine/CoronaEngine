@@ -11,6 +11,7 @@
 #include "base/integral/integrator.h"
 #include "base/integral/path_work_capture.h"
 #include "base/scattering/gi_ideal_glass.h"
+#include "core/util/switch_profile.h"
 #include "math/base.h"
 #include <cstdlib>
 #include <filesystem>
@@ -855,7 +856,7 @@ ReSTIRGI::ReSTIRGI(IntegratorPtr integrator,
 }
 
 void ReSTIRGI::compile(bool refresh_lighting) noexcept {
-    switch_profile::Scope profile{"ReSTIR.GI.compile", "compile"};
+    ocarina::switch_profile::Scope profile{"ReSTIR.GI.compile", "compile"};
     backend_error_.clear();
     if (!unsupported_backend_.empty()) {
         backend_error_ = unsupported_backend_;
@@ -970,7 +971,7 @@ void ReSTIRGI::render_sub_UI(Widgets *widgets) noexcept {
 }
 
 void ReSTIRGI::compile_initial_samples() noexcept {
-    switch_profile::Scope profile{"GI.initial.compile", "compile"};
+    ocarina::switch_profile::Scope profile{"GI.initial.compile", "compile"};
     const char *nee_diagnostic = std::getenv("VISION_GI_NEE_DIAGNOSTIC");
     OC_ERROR_IF(nee_diagnostic && string_view(nee_diagnostic) != "1x1",
                 "Standard ReSTIR GI currently supports NEE 1x1 only.");
@@ -1530,7 +1531,7 @@ vector<float4> ReSTIRGI::download_radiance() const noexcept {
 }
 
 void ReSTIRGI::prepare(bool compact_radiance) noexcept {
-    switch_profile::Scope profile{"ReSTIRGI::prepare", "buffers"};
+    ocarina::switch_profile::Scope profile{"ReSTIRGI::prepare", "buffers"};
     Pipeline *rp = pipeline();
 
     set_compact_radiance(compact_radiance);

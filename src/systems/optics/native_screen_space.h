@@ -1,5 +1,5 @@
 #pragma once
-#include "native_render_policy.h"
+#include "shaders/native_policy.glsl"
 #include <algorithm>
 #include <cstdint>
 

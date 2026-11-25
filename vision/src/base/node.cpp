@@ -5,7 +5,7 @@
 #include "mgr/pipeline.h"
 #include "node.h"
 #include "mgr/global.h"
-#include "GUI/widgets.h"
+#include "window/GUI/widgets.h"
 
 namespace vision {
 
