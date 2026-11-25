@@ -7,7 +7,7 @@
 #include <optional>
 #include <vector>
 #include "native_lighting.h"
-#include "native_render_policy.h"
+#include "shaders/native_policy.glsl"
 
 namespace Corona::Systems::OpticsDetail {
 

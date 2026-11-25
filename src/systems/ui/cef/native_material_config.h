@@ -42,6 +42,19 @@ inline std::shared_ptr<const Corona::Materials::Principled> principled(const Jso
     if (!config.contains("principled")) return {};
     const auto& data = config.at("principled");
     if (!data.is_object() || data.size() > 32) throw std::invalid_argument("Invalid Principled material");
+    if (auto mode = data.find("alpha_mode"); mode != data.end() &&
+        *mode != "OPAQUE" && *mode != "MASK" && *mode != "BLEND")
+        throw std::invalid_argument("Principled alpha_mode must be OPAQUE, MASK, or BLEND");
+    if (auto workflow = data.find("workflow"); workflow != data.end() &&
+        *workflow != "" && *workflow != "metallic_roughness" && *workflow != "specular_glossiness")
+        throw std::invalid_argument("Principled workflow must be empty, metallic_roughness, or specular_glossiness");
+    for (const char* key : {"alpha_cutoff", "glossiness_factor"}) {
+        auto value = data.find(key);
+        if (value != data.end() && (!value->is_number() || !std::isfinite(value->get<float>())))
+            throw std::invalid_argument(std::string("Principled ") + key + " must be a finite number");
+    }
+    if (auto value = data.find("has_base_texture"); value != data.end() && !value->is_boolean())
+        throw std::invalid_argument("Principled has_base_texture must be boolean");
     auto result = std::make_shared<Corona::Materials::Principled>();
     auto scalar = [&](const char* key, float fallback) {
         if (!data.contains(key)) return fallback;

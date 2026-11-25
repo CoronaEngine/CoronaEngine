@@ -4,8 +4,8 @@ This plugin provides full-resolution RGB diffuse/specular REBLUR using the
 Ocarina C++ EDSL translation of NRD 4.14.3 and the CPU scheduler in this
 repository. The adapter prepares filter inputs and remodulates its
 outputs; it does not add receiver/material/path identity rejection to ReBLUR.
-Material classification is zero, matching RTXPT's preparation pass. Each of the
-three stable-plane denoisers retains its own history.
+The preparation pass sets material classification to zero. Each of the three
+stable-plane denoisers retains its own history.
 
 The external SDK backend, its HLSL shaders, dependency configuration, deployment
 rules and backend-selection switches have been removed. Building and running
@@ -316,7 +316,7 @@ Contribution routing uses the evaluated RGB BSDF ratio at the actual sampled
 direction; guide sampling uses component support. Demodulation uses directional
 Fresnel and diffuse attenuation in the appropriate lobe frame, including stable
 prefix throughput. Delta-only hit distances continue through up to three
-scattering segments, following the pinned RTXPT convention.
+scattering segments.
 
 ## Stages and reference
 

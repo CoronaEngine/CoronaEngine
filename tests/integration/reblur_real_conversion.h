@@ -73,7 +73,7 @@ inline PassShader compile_frontend(Device &device) {
         specular = make_float4(specular.xyz() * specular_factor_suppression.w, specular.w);
         normal_output.write_in_bounds(position, PackNormalRoughness(normal_roughness.xyz(), filtering_roughness, 0.f));
 
-        // The source clamp branches before dividing, exactly like RTXPT.
+        // Branch before dividing when clamping luminance.
         Float clamp_max = p.previous_view_depth_row.x;
         Float diffuse_luminance = _NRD_Luminance(diffuse.xyz());
         $if(diffuse_luminance > clamp_max) {
@@ -212,7 +212,7 @@ inline void run(Device &device, Stream &stream, uint warmup, uint measured_frame
                 hash((*nrd_outputs[layer])[slot]);
             }
         }
-        edsl_inputs[layer] = device.create_byte_buffer(pixels * 96u, "Canonical RTXPT frontend input");
+        edsl_inputs[layer] = device.create_byte_buffer(pixels * 96u, "REBLUR frontend input");
         stream << edsl_inputs[layer].upload(canonical[layer]->data());
         for (uint slot = 0u; slot != 6u; ++slot) {
             images[layer][slot] = device.create_texture2d(size, storage[slot], "Canonical frontend output");

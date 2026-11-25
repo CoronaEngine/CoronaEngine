@@ -416,8 +416,8 @@
     {
       "category": "sensor",
       "name": "pinhole",
-      "status": "可选未选择",
-      "note": "生产使用 thin_lens；半径为零不等于加载 pinhole 插件",
+      "status": "已移除",
+      "note": "零半径薄透镜提供小孔投影，evidence 为初次审计位置，见 F05",
       "evidence": {
         "path": "vision/src/render_core/sensor/CMakeLists.txt",
         "line": 3
@@ -426,8 +426,8 @@
     {
       "category": "sensor",
       "name": "realistic",
-      "status": "未完成",
-      "note": "继承基础射线生成，没有真实镜片追迹；见 F05",
+      "status": "已移除",
+      "note": "未实现镜片追迹，evidence 为初次审计位置，见 F05",
       "evidence": {
         "path": "vision/src/render_core/sensor/CMakeLists.txt",
         "line": 4
@@ -2303,6 +2303,23 @@
         "further_validation": "stopped at user request"
       },
       "evidence": "build/postprocessor-removal/verification.json"
+    },
+    {
+      "feature_id": "F05",
+      "status": "removed",
+      "date": "2026-11-24",
+      "report": "vision/UNUSED_FEATURES.md",
+      "removed_plugin_targets": ["vision-sensor-pinhole", "vision-sensor-realistic"],
+      "remaining_plugin_targets": 40,
+      "remaining_plugin_categories": 16
+    },
+    {
+      "feature_id": "F11",
+      "status": "removed",
+      "date": "2026-11-25",
+      "report": "vision/UNUSED_FEATURES.md",
+      "removed_standalone_files": 2,
+      "removed_interfaces": ["vision::ComplexIor", "vision::ComplexIorTable"]
     }
   ]
 }

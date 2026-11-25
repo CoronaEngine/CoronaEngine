@@ -1,220 +1,68 @@
-"""Production ReSTIR GI roulette probability and analytical transport protocols.
-
-The probability helper is extracted unchanged and compiled with CPU scalar DSL
-shims. Transport fixtures enumerate Bernoulli outcomes rather than sampling:
-current endpoint emission is unconditional, while downstream work receives the
-survivor weight. The fixtures specify that protocol; they do not run the PT loop.
-"""
-from functools import lru_cache
-from pathlib import Path
-import shutil
-import subprocess
-import tempfile
-from unittest import SkipTest
+"""Exercise the shared PT/ReSTIR GI roulette step with a deterministic sampler."""
+from _restir_cpu import ROOT, body, compile_run
 
 
-ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'vision/src').is_dir())
-SOURCE = ROOT / 'vision/src/base/integral/integrator.cpp'
-TEMP = ROOT / '.workspace/tmp/rtxpt-corona-dsl-20261108/rr-transport-tests'
-
-
-def _helper():
-    source = SOURCE.read_text(encoding='utf-8-sig')
-    signature = 'Float restir_gi_rr_probability('
-    assert signature in source, 'Production restir_gi_rr_probability helper is absent'
-    start = source.index(signature)
-    opening = source.index('{', start)
-    depth, end = 1, opening + 1
-    while depth:
-        depth += (source[end] == '{') - (source[end] == '}')
-        end += 1
-    return source[start:end]
-
-
-PROGRAM = r'''
+def test_shared_immediate_roulette():
+    source = (ROOT / 'vision/src/base/integral/integrator.cpp').read_text(encoding='utf-8-sig')
+    declaration, block = body(source, '$if(eta_scale * rr_lum <')
+    roulette = (declaration + block).replace('$if', 'if').replace('$break', 'break')
+    program = r"""
 #include <algorithm>
-#include <array>
 #include <cmath>
-#include <cstdint>
 #include <iostream>
 #include <stdexcept>
-#include <string>
 using Float = float;
-using Uint = std::uint32_t;
-using std::max;
-using std::sqrt;
-struct Float3 { float x, y, z; };
-Float3 make_float3(float value) { return {value, value, value}; }
-Float3 operator/(Float3 v, float d) { return {v.x / d, v.y / d, v.z / d}; }
-// Match Horizon/src/math/base.h's RGB luminance coefficients.
-float luminance(const Float3 &v) { return .212671f * v.x + .715160f * v.y + .072169f * v.z; }
-float saturate(float value) { return std::clamp(value, 0.f, 1.f); }
-template<class T, class U> T cast(U value) { return static_cast<T>(value); }
-namespace ocarina { using ::luminance; using ::saturate; using ::cast; using ::max; using ::sqrt; }
-__PRODUCTION_HELPER__
-void require(bool condition, const char *message) {
-    if (!condition) throw std::runtime_error(message);
+using std::min;
+struct Sampler {
+    float sample;
+    unsigned draws{};
+    float next_1d() { ++draws; return sample; }
+};
+struct Counters { struct { unsigned x{}, y{}; } rr; };
+struct Capture { bool record_radiance, active; float beta{2.f}; };
+struct HitContext { Counters *work_counters; Capture *path_capture; };
+struct Result { bool survived; float throughput, beta; unsigned draws, attempts, deaths; };
+
+Result step(float rr_lum, float sample, unsigned rr_depth = 3, float eta_scale = 1.f,
+            bool record = true, bool active = true) {
+    float threshold = 1.f;
+    unsigned min_depth = 3;
+    auto rr_threshold_ = &threshold;
+    auto min_depth_ = &min_depth;
+    Sampler rng{sample};
+    auto sampler = &rng;
+    Counters counters;
+    Capture capture{record, active};
+    HitContext hc{&counters, &capture};
+    float throughput = 1.f;
+    bool survived = false;
+    do {
+        __ROULETTE__
+        survived = true;
+    } while (false);
+    return {survived, throughput, capture.beta, rng.draws, counters.rr.x, counters.rr.y};
 }
-void near(double actual, double expected, double tolerance, const char *message) {
-    if (!std::isfinite(actual) || std::abs(actual - expected) > tolerance) {
-        std::cerr << message << ": actual=" << actual << " expected=" << expected << '\n';
-        throw std::runtime_error(message);
+void check(bool value, const char *message) {
+    if (!value) throw std::runtime_error(message);
+}
+int main() {
+    for (auto result : {step(.25f, 1.f, 2), step(.5f, 1.f, 3, 2.f)}) {
+        check(result.survived && result.draws == 0 && result.attempts == 0 && result.deaths == 0 &&
+              result.throughput == 1.f && result.beta == 2.f, "inactive roulette must consume no random number");
     }
+    const auto died = step(.25f, .3f);
+    check(!died.survived && died.draws == 1 && died.attempts == 1 && died.deaths == 1 &&
+          died.throughput == 1.f && died.beta == 2.f, "a losing draw must terminate before continuation");
+    const auto alive = step(.25f, .25f);
+    check(alive.survived && alive.draws == 1 && alive.attempts == 1 && alive.deaths == 0 &&
+          alive.throughput == 4.f && alive.beta == 8.f, "equality must survive and reweight both throughputs");
+    check(step(.25f, 0.f, 3, 1.f, false).beta == 2.f &&
+          step(.25f, 0.f, 3, 1.f, true, false).beta == 2.f,
+          "inactive or disabled path capture must retain its weight");
+    const auto capped = step(1.f, .95f, 3, .5f);
+    check(capped.survived && std::abs(capped.throughput * .95f - 1.f) < 1e-6f &&
+          !step(1.f, .96f, 3, .5f).survived, "survival probability must be capped at 0.95");
+    std::cout << "PASS shared immediate roulette thresholds, random draws, and transport compensation\n";
 }
-void probability_test() {
-    near(restir_gi_rr_probability(make_float3(0.f), 4u, 16u), .7225, 2e-7, "black early path probability");
-    near(restir_gi_rr_probability(make_float3(.25f), 8u, 16u), .1225, 2e-7, "quarter-throughput analytic probability");
-    near(restir_gi_rr_probability(make_float3(1.f), 8u, 16u), 0., 0., "bright path before tail ramp");
-    near(restir_gi_rr_probability(make_float3(1.f), 12u, 16u), .3, 1e-7, "three-quarter depth tail ramp");
-    near(restir_gi_rr_probability(make_float3(.25f), 12u, 16u), .4225, 2e-7, "brightness and tail terms combine");
-    near(restir_gi_rr_probability(make_float3(0.f), 12u, 16u), 1., 0., "dark late path saturates at certain termination");
-    near(restir_gi_rr_probability(make_float3(4.f), 16u, 16u), .6, 1e-7, "bright terminal depth probability helper");
-    near(restir_gi_rr_probability(make_float3(-1.f), 4u, 16u), .7225, 2e-7, "negative luminance clamps before sqrt");
-    const auto red = restir_gi_rr_probability({.25f / .212671f, 0.f, 0.f}, 8u, 16u);
-    const auto green = restir_gi_rr_probability({0.f, .25f / .715160f, 0.f}, 8u, 16u);
-    near(red, green, 2e-7, "equal-luminance colors must have equal roulette probability");
-    near(red, .1225, 2e-7, "roulette must use luminance rather than maximum component");
-    std::cout << "PASS analytic probability, luminance, depth ramp and clamp boundaries\n";
-}
-void range_test() {
-    unsigned cases = 0;
-    for (Uint total : {1u, 2u, 8u, 16u, 32u, 128u}) {
-        for (float brightness : {0.f, 1e-12f, .001f, .025f, .25f, 1.f, 10000.f}) {
-            float previous = -1.f;
-            for (Uint depth = 1u; depth <= total; ++depth) {
-                const auto q = restir_gi_rr_probability(make_float3(brightness), depth, total);
-                require(std::isfinite(q) && q >= 0.f && q <= 1.f, "roulette probability left [0,1]");
-                require(q >= previous, "fixed-throughput termination must not decrease with depth");
-                previous = q;
-                ++cases;
-            }
-        }
-        for (Uint depth = 1u; depth <= total; ++depth) {
-            float previous = 1.f;
-            for (float brightness : {0.f, 1e-12f, .001f, .025f, .25f, 1.f, 10000.f}) {
-                const auto q = restir_gi_rr_probability(make_float3(brightness), depth, total);
-                require(q <= previous + 1e-7f, "brighter camera throughput must not terminate more often");
-                previous = q;
-            }
-        }
-    }
-    std::cout << "PASS " << cases << " probability range/depth cases and brightness monotonicity\n";
-}
-struct Outcome { double radiance; bool downstream; };
-Outcome endpoint_first(double q, double uniform, double endpoint, double continuation) {
-    // Endpoints reached by the existing ray precede its RR decision. Only a
-    // survivor executes NEE/scattering and supplies the next ray's weight.
-    if (uniform < q || q == 1.) return {endpoint, false};
-    return {endpoint + continuation / (1. - q), true};
-}
-void expectation_test() {
-    unsigned fixtures = 0;
-    for (float brightness : {0.f, .025f, .25f, 1.f}) {
-        for (Uint depth : {4u, 8u, 9u, 11u}) {
-            const double q = restir_gi_rr_probability(make_float3(brightness), depth, 16u);
-            for (double endpoint : {0., .2, 3.}) for (double continuation : {0., .5, 7.}) {
-                if (q == 1.) continue;
-                const auto killed = endpoint_first(q, q * .5, endpoint, continuation);
-                const auto alive = endpoint_first(q, (1. + q) * .5, endpoint, continuation);
-                if (q > 0.) require(!killed.downstream && killed.radiance == endpoint, "terminated path lost/boosted endpoint or evaluated downstream");
-                require(alive.downstream, "surviving path omitted downstream work");
-                const double mean = q * killed.radiance + (1. - q) * alive.radiance;
-                const double expected = endpoint + continuation;
-                near(mean, expected, 2e-13 * max(1., expected), "endpoint-first RR changed transport expectation");
-                const double variance = q * std::pow(killed.radiance - mean, 2.)
-                    + (1. - q) * std::pow(alive.radiance - mean, 2.);
-                const double theory = q * continuation * continuation / (1. - q);
-                near(variance, theory, 3e-12 * max(1., theory), "endpoint-first RR variance is incorrect");
-                const double immediate_variance = q * expected * expected / (1. - q);
-                require(variance <= immediate_variance + 1e-11, "preserving endpoint introduced avoidable RR variance");
-                if (q > 0. && endpoint > 0.) require(variance < immediate_variance, "endpoint variance must differ from immediate roulette");
-                ++fixtures;
-            }
-        }
-    }
-    std::cout << "PASS " << fixtures << " exhaustive two-outcome means and variances versus immediate RR\n";
-}
-void boundaries_test() {
-    const double zero = restir_gi_rr_probability(make_float3(1.f), 8u, 16u);
-    const double one = restir_gi_rr_probability(make_float3(0.f), 12u, 16u);
-    require(zero == 0. && one == 1., "fixtures must exercise exact probability endpoints");
-    for (double uniform : {0., .25, .5, .999999999999}) {
-        const auto a = endpoint_first(zero, uniform, 2., 5.);
-        require(a.downstream && a.radiance == 7., "zero probability should preserve all work without compensation");
-        const auto b = endpoint_first(one, uniform, 2., 5.);
-        require(!b.downstream && b.radiance == 2., "certain termination must retain only the unboosted endpoint");
-    }
-    const double q = restir_gi_rr_probability(make_float3(.25f), 8u, 16u);
-    require(!endpoint_first(q, std::nextafter(q, 0.), 2., 5.).downstream, "sample below threshold should terminate");
-    require(endpoint_first(q, q, 2., 5.).downstream, "strict-less RR threshold equality should survive");
-    // Four leaves cover two decisions. Reweighted throughput determines the
-    // second probability; expectation remains unchanged at both vertices.
-    const double q0 = restir_gi_rr_probability(make_float3(.1f), 6u, 16u);
-    const double q1 = restir_gi_rr_probability(make_float3(.1f) / float(1. - q0), 10u, 16u);
-    double mean = 0.;
-    for (bool alive0 : {false, true}) for (bool alive1 : {false, true}) {
-        const double probability = (alive0 ? 1. - q0 : q0) * (alive1 ? 1. - q1 : q1);
-        double radiance = 2.;
-        if (alive0) radiance += (3. + (alive1 ? 7. / (1. - q1) : 0.)) / (1. - q0);
-        mean += probability * radiance;
-    }
-    near(mean, 12., 1e-12, "two-vertex endpoint-first transport lost expected radiance");
-    std::cout << "PASS q0/q1, strict threshold, no downstream at q1 and two-decision expectation\n";
-}
-int main(int argc, char **argv) {
-    try {
-        require(argc == 2, "one fixture name is required");
-        const std::string name = argv[1];
-        if (name == "probability") probability_test();
-        else if (name == "range") range_test();
-        else if (name == "expectation") expectation_test();
-        else if (name == "boundaries") boundaries_test();
-        else throw std::runtime_error("unknown fixture");
-        return 0;
-    } catch (const std::exception &error) {
-        std::cerr << error.what() << '\n';
-        return 1;
-    }
-}
-'''
-
-
-@lru_cache(maxsize=1)
-def _executable():
-    helper = _helper()
-    compiler = shutil.which('g++')
-    if not compiler:
-        raise SkipTest('g++ is required for the standalone ReSTIR GI RR fixture')
-    TEMP.mkdir(parents=True, exist_ok=True)
-    directory = Path(tempfile.mkdtemp(prefix='run-', dir=TEMP))
-    source = directory / 'restir_gi_rr_transport.cpp'
-    executable = directory / 'restir_gi_rr_transport.exe'
-    source.write_text(PROGRAM.replace('__PRODUCTION_HELPER__', helper), encoding='utf-8')
-    result = subprocess.run(
-        [compiler, '-std=c++20', '-O2', str(source), '-o', str(executable)],
-        text=True, capture_output=True, check=False,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return executable
-
-
-def _run(fixture):
-    result = subprocess.run([str(_executable()), fixture], text=True, capture_output=True, check=False)
-    assert result.returncode == 0, result.stdout + result.stderr
-    print(result.stdout, end='')
-
-
-def test_production_probability_matches_analytic_luminance_and_depth_cases():
-    _run('probability')
-
-
-def test_probability_range_and_depth_brightness_monotonicity():
-    _run('range')
-
-
-def test_endpoint_first_roulette_preserves_expectation_and_changes_variance():
-    _run('expectation')
-
-
-def test_probability_endpoints_threshold_and_repeated_transport():
-    _run('boundaries')
+"""
+    compile_run(program.replace('__ROULETTE__', roulette), 'gi-rr-transport')

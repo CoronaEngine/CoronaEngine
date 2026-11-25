@@ -72,6 +72,69 @@ inline vision::Device& world_bounds_test_device() {
     return device;
 }
 
+inline void check_shared_area_light_instances(vision::Pipeline& pipeline, const vision::SP<vision::Mesh>& mesh) {
+    using namespace vision;
+    auto& scene = pipeline.scene();
+    LightDesc desc;
+    desc.init(ParameterSet{DataWrap::parse(R"({
+        "type":"area", "name":"shared emitter",
+        "node_tab":{"radiance":{"type":"number","param":{"value":[2,4,8]}}},
+        "param":{"inst_id":0,"two_sided":true,"scale":3,
+                 "color":{"node":"radiance","channels":"xyz"},
+                 "strength":{"channels":"zyx","node":{"type":"image","param":{"fn":"test-strength.exr"}}}}
+    })")});
+    pipeline.image_pool().register_source(desc.slot("strength", make_float3(.5f), Number).node,
+        Image::pure_color(make_float4(.25f, .5f, .75f, 1.f), LINEAR));
+    auto owner = std::make_shared<ShaderGraph>();
+    owner->set_graph_blueprint(desc.node_map);
+    owner->initialize_root_graph();
+    auto constructor_desc = desc;
+    constructor_desc.node_map.clear();
+    auto source = Node::create_shared<IAreaLight>(constructor_desc);
+    source->initialize_attached(owner, desc);
+    scene.add_light(TLight{source});
+    auto first = std::make_shared<ShapeInstance>(mesh);
+    auto second = std::make_shared<ShapeInstance>(mesh);
+    first->set_o2w(make_float4x4(1.f));
+    second->set_o2w(scale<H>(make_float3(2.f)));
+    first->set_emission(source);
+    second->set_emission(source);
+    scene.instances().push_back(first);
+    scene.instances().push_back(second);
+    scene.fill_instances();
+
+    const auto expected_power = make_float3(2, 4, 8) * (3.f * 2.f * Pi * first->surface_areas()[0]);
+    auto check_clone = [&] {
+        auto light = second->emission();
+        expect(light != first->emission() && light->instance() == second.get() &&
+                   first->emission()->instance() == first.get() && first->handle().light_id != second->handle().light_id,
+               "shared emission must become independently bound lights with distinct encoded IDs");
+        expect(light->two_sided() && light->name() == "shared emitter" &&
+                   all(abs(light->power() - 4.f * expected_power) < make_float3(1e-3f)),
+               "cloned emission must preserve its name, sidedness and normalized radiance on the scaled instance");
+        const auto* strength = light->input_slot("strength");
+        expect(strength && strength->node()->impl_type() == "image" &&
+                   strength->average() == vector<float>{.75f,.5f,.25f},
+               "cloned emission must preserve the inline image and strength channel swizzle");
+        return light;
+    };
+    auto clone = check_clone();
+    expect(all(abs(source->power() - expected_power) < make_float3(1e-3f)), "source must retain its original power");
+    owner->get_node("radiance")->update_value({0.f, 0.f, 0.f});
+    expect(all(source->power() == make_float3(0.f)) && check_clone() == clone,
+           "editing the source graph must leave the cloned radiance independent");
+    scene.fill_instances();
+    expect(second->emission() == clone, "repeated instance binding must reuse an independent light");
+
+    const auto* factory = ModuleInterface::instance().find_constructor(source->class_name());
+    expect(factory != nullptr, "area light plugin must register its hotfix constructor");
+    scene.light_manager().update_runtime_object(factory);
+    expect(first->emission() != source && first->emission()->two_sided(), "restore must reconnect the two-sided emitter");
+    second->set_emission(first->emission());
+    scene.fill_instances();
+    check_clone();
+}
+
 inline void world_bounds_gpu_regressions() {
     using namespace vision;
     world_bounds_test_device();
@@ -126,6 +189,8 @@ inline void world_bounds_gpu_regressions() {
                "Vulkan power sampler PMF must use current world radius");
         expect(all(pipeline->scene().world_center() == center), "CPU world center must match current scene bounds");
         for (auto light : pipeline->scene().light_manager().lights()) {
+            if (light->match(LightType::Area))
+                expect(!static_cast<const IAreaLight*>(light.get())->two_sided(), "area lights must default to one-sided emission");
             if (!light->match(LightType::DeltaDirection)) continue;
             auto& encoded = pipeline->scene().light_manager().lights().get_datas(light.get());
             vector<buffer_ty> uploaded(encoded.host_buffer().size());
@@ -180,6 +245,7 @@ inline void world_bounds_gpu_regressions() {
            "empty-scene rebuild must remove area lights and retain the directional light");
     verify(1.f, make_float3(0), 0.f);
     pipeline->stream() << synchronize() << commit();
+    check_shared_area_light_instances(*pipeline, mesh);
     std::cout << "WorldBounds Vulkan radius and power-PMF regressions passed\n";
 }
 

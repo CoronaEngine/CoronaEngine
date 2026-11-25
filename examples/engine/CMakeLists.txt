@@ -48,6 +48,16 @@ add_custom_target(corona_engine_vision_runtime
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:corona_engine>"
     DEPENDS ${_vision_plugins} copy_slang_headers
 )
+# Old modules in either search directory can still be loaded by name after an incremental build.
+foreach(_sensor IN ITEMS pinhole realistic)
+    set(_retired_module "${CMAKE_SHARED_MODULE_PREFIX}vision-sensor-${_sensor}${CMAKE_SHARED_MODULE_SUFFIX}")
+    add_custom_command(TARGET corona_engine_vision_runtime POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_FILE_DIR:vision-sensor-thin_lens>/${_retired_module}"
+            "$<TARGET_FILE_DIR:corona_engine>/${_retired_module}"
+        VERBATIM
+    )
+endforeach()
 foreach(_plugin IN LISTS _vision_plugins)
     add_custom_command(TARGET corona_engine_vision_runtime POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different

@@ -7,7 +7,7 @@
 #include <utility>
 #include "core/stl.h"
 #include "UI/GUI.h"
-#include "GUI/widgets.h"
+#include "window/GUI/widgets.h"
 #include "base/import/node_desc.h"
 #include "rhi/context.h"
 #include "using.h"

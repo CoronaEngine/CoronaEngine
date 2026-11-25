@@ -3,7 +3,7 @@
 //
 
 #include "inspector.h"
-#include "GUI/widgets.h"
+#include "window/GUI/widgets.h"
 #include "base/mgr/pipeline.h"
 
 namespace vision {

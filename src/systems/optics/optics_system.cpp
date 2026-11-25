@@ -72,7 +72,7 @@
 #include "base/mgr/global.h"
 #include "hotfix_runtime/engine_hotfix.h"
 #include "base/mgr/pipeline.h"
-#include "base/mgr/switch_profile.h"
+#include "core/util/switch_profile.h"
 #include "base/mgr/scene.h"
 #include "base/scattering/material.h"
 #include "base/sensor/frame_buffer.h"
@@ -1909,7 +1909,7 @@ void bind_pipeline_scene_gpu_resource(
     vision::Pipeline& pipeline,
     Corona::Systems::Vision::VisionSceneResource& scene_resource,
     Corona::CameraVisionRenderMode mode) {
-    vision::switch_profile::Scope profile{"scene.bind_gpu_resource", "geometry"};
+    ocarina::switch_profile::Scope profile{"scene.bind_gpu_resource", "geometry"};
     if (!scene_resource.has_logical_scene()) {
         scene_resource.set_logical_scene(pipeline.shared_scene_data());
     }
@@ -2183,7 +2183,7 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
                                             const nlohmann::json& restir_settings,
                                             VisionCameraFeedback* deferred_feedback,
                                             std::size_t imported_media_count) {
-    vision::switch_profile::Scope profile{"view.prepare", "view"};
+    ocarina::switch_profile::Scope profile{"view.prepare", "view"};
     auto& pipeline = runtime.pipeline;
     if (!pipeline || camera_handle == 0) return false;
     VisionCameraFeedback feedback;

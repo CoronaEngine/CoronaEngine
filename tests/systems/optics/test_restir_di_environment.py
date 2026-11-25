@@ -15,7 +15,7 @@ from unittest import SkipTest
 ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'vision/src').is_dir())
 COMMON = ROOT / 'vision/src/render_core/integrator/restir/di/common.h'
 CANDIDATES = COMMON.with_name('candidates.h')
-TEMP = ROOT / '.workspace/tmp/rtxpt-corona-dsl-20261108/restir-di-environment-tests'
+TEMP = ROOT / '.workspace/tmp/optics-tests/restir-di-environment'
 
 
 def _definition(source, signature):

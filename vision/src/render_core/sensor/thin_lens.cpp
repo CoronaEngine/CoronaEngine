@@ -4,7 +4,7 @@
 
 #include "base/sensor/photosensory.h"
 #include "base/mgr/pipeline.h"
-#include "GUI/widgets.h"
+#include "window/GUI/widgets.h"
 
 namespace vision {
 class ThinLensCamera : public Sensor {

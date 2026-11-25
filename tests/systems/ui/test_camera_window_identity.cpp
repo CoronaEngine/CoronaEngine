@@ -8,6 +8,7 @@
 #include <corona/systems/ui/camera_viewport_manager.h>
 #include <corona/systems/script/python_runtime_coordinator.h>
 #include "cef/native_api_types.h"
+#include "cef/native_material_config.h"
 #include "cef/cef_editor_native_api_test_support.h"
 #include "cef/cef_window_operations.h"
 #include "cef/cef_scene_operations.h"
@@ -31,6 +32,30 @@ using Json = nlohmann::json;
 
 void require(bool condition, const char* message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+void test_principled_visibility_and_workflow_import() {
+    const auto validate = [](const Json& fields) {
+        NativeMaterialConfig::validate({{"principled", fields}});
+    };
+    for (const auto* workflow : {"", "metallic_roughness", "specular_glossiness"}) {
+        for (const auto* mode : {"OPAQUE", "MASK", "BLEND"}) {
+            validate({{"workflow", workflow}, {"alpha_mode", mode}, {"alpha_cutoff", 0.5},
+                      {"glossiness_factor", 1}, {"has_base_texture", false}});
+        }
+    }
+    for (const auto& invalid : std::vector<Json>{
+             {{"workflow", "pbr"}}, {{"workflow", nullptr}}, {{"alpha_mode", "TRANSPARENT"}}, {{"alpha_mode", 1}},
+             {{"alpha_cutoff", "0.5"}}, {{"alpha_cutoff", std::numeric_limits<double>::infinity()}},
+             {{"glossiness_factor", true}}, {{"glossiness_factor", std::numeric_limits<double>::quiet_NaN()}},
+             {{"has_base_texture", 0}}}) {
+        try {
+            validate(invalid);
+        } catch (const std::invalid_argument&) {
+            continue;
+        }
+        throw std::runtime_error("Accepted invalid Principled field " + invalid.dump());
+    }
 }
 
 void test_native_script_service_wait_does_not_hold_editor_state(bool queued_before_owner_wait) {
@@ -546,16 +571,17 @@ void test_optics_queue_merges_independent_fields() {
                 Corona::has_optics_field(owned[0].fields, Corona::OpticsField::Roughness),
             "new material ownership must discard old payloads while preserving independent scalars");
     Corona::OpticsDevice device;
+    Corona::Ecs::Visibility visibility;
     device.geometry_handle = 17; device.principled = previous_principled;
-    Corona::apply_optics_update(device, owned[0]);
+    Corona::apply_optics_update(device, visibility, owned[0]);
     require(device.principled == previous_principled && device.roughness == 0.25f,
             "a mismatched material guard must reject payloads without dropping independent scalars");
     device.geometry_handle = 18;
-    Corona::apply_optics_update(device, owned[0]);
+    Corona::apply_optics_update(device, visibility, owned[0]);
     require(device.principled == next_principled, "matching geometry must receive its material payload");
     next.principled.reset(); commands.push(next);
     const auto cleared = commands.drain();
-    Corona::apply_optics_update(device, cleared.front());
+    Corona::apply_optics_update(device, visibility, cleared.front());
     require(!device.principled, "a flagged null payload must explicitly clear the current material");
 }
 
@@ -673,6 +699,7 @@ int main() {
         }
     };
     try {
+        run("principled_visibility_and_workflow_import", test_principled_visibility_and_workflow_import);
         run("identity_lifetime", test_identity_lifetime);
         run("script_input_queue_owner", test_script_input_queue_has_one_owner_and_drops_retired_scopes);
         require(kernel.initialize(), "kernel initialization failed");

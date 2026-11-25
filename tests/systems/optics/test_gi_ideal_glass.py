@@ -13,7 +13,7 @@ from _restir_cpu import body
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'vision/src').is_dir())
 HEADER = ROOT / 'vision/src/base/scattering/gi_ideal_glass.h'
-TEMP = ROOT / '.workspace/tmp/rtxpt-glass-opt-20261115/transport'
+TEMP = ROOT / '.workspace/tmp/optics-tests/gi-ideal-glass'
 
 PROGRAM = r'''
 #include <algorithm>

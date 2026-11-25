@@ -4,7 +4,7 @@
 
 #include "frame_buffer.h"
 #include "base/mgr/pipeline.h"
-#include "base/mgr/switch_profile.h"
+#include "core/util/switch_profile.h"
 
 namespace vision {
 using namespace ocarina;
@@ -167,13 +167,13 @@ void FrameBuffer::init_screen_buffer(const SP<ScreenBuffer> &buffer) noexcept {
 }
 
 void FrameBuffer::prepare_screen_buffer(const SP<vision::ScreenBuffer> &buffer) noexcept {
-    switch_profile::Scope profile{"FrameBuffer::prepare_screen_buffer", "buffers"};
+    ocarina::switch_profile::Scope profile{"FrameBuffer::prepare_screen_buffer", "buffers"};
     init_screen_buffer(buffer);
     register_(buffer);
 }
 
 void FrameBuffer::compile_accumulation() noexcept {
-    switch_profile::Scope profile{"RGBFilm-accumulation.compile", "compile"};
+    ocarina::switch_profile::Scope profile{"RGBFilm-accumulation.compile", "compile"};
     Kernel kernel = [&](BufferVar<float4> input, BufferVar<float4> output, Uint frame_index) {
         Float4 accum_prev = output.read(dispatch_id());
         Float4 val = input.read(dispatch_id());
@@ -192,7 +192,7 @@ void FrameBuffer::update_device_data() noexcept {
 }
 
 void FrameBuffer::compile_tone_mapping() noexcept {
-    switch_profile::Scope profile{"RGBFilm-tone_mapping-tex.compile", "compile"};
+    ocarina::switch_profile::Scope profile{"RGBFilm-tone_mapping-tex.compile", "compile"};
     Kernel kernel_tex = [&](BufferVar<float4> input, Texture2DVar output, Float exposure) {
         Float4 val = input.read(dispatch_id());
         val = apply_exposure(exposure, val);
@@ -204,7 +204,7 @@ void FrameBuffer::compile_tone_mapping() noexcept {
 }
 
 void FrameBuffer::compile_gamma() noexcept {
-    switch_profile::Scope profile{"FrameBuffer-gamma_correction-tex.compile", "compile"};
+    ocarina::switch_profile::Scope profile{"FrameBuffer-gamma_correction-tex.compile", "compile"};
     Kernel kernel_tex = [&](Texture2DVar input, Texture2DVar output) {
         Float4 val = input.read<float4>(dispatch_idx().xy());
         val = linear_to_srgb(val);

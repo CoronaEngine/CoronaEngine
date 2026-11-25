@@ -44,10 +44,9 @@ std::shared_ptr<::vision::Material> create_vision_material(
 
     if (optics.principled && optics.principled->expressions) {
         const auto& p=*optics.principled->expressions;
-        // Preserve renderer-independent source metadata for GI's private native
-        // material adapter. Ordinary Principled slots and opacity stay unchanged.
-        if (p.contains("rtxpt_source"))
-            desc.set_value("rtxpt_source",vision_json(p["rtxpt_source"]));
+        for (const char* key : {"alpha_mode", "alpha_cutoff", "has_base_texture", "workflow", "glossiness_factor"}) {
+            if (p.contains(key)) desc.set_value(key, vision_json(p.at(key)));
+        }
         // Reflection sidedness is independent of the area light's sidedness.
         desc.set_value("two_sided", p.value("two_sided", false));
         const std::pair<const char*,const char*> slots[]={{"base_color","color"},{"metallic","metallic"},

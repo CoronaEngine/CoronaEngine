@@ -70,7 +70,7 @@ class ReSTIRDI final : private Toolkit {
             const auto &shape = instances[i];
             if (!shape->has_emission()) continue;
             const auto *light = shape->emission().get();
-            if (light->impl_type() != "area" || light->source_desc()["two_sided"].as_bool(false) || !light->color_)
+            if (light->impl_type() != "area" || light->two_sided() || !light->color_)
                 throw std::runtime_error("ReSTIR DI requires one-sided area lights");
             // Numeric and uniform graph radiance is spatially constant too.
             // The geometry pass refreshes the cached value every frame.

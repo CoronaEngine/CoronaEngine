@@ -191,9 +191,10 @@ int main(){try{
 
 def test_actual_shared_nee_fragment_uses_base_only_exact_light_direction():
     source = SOURCE.read_text(encoding='utf-8-sig')
-    token = 'if (hc.path_capture) {\n                    auto direct = direct_light_mis('
-    assert token in source, 'shared PT ordinary NEE capture fragment missing'
-    declaration, implementation = body(source, token)
+    direct_call = source.index('auto direct = direct_light_mis(')
+    token = 'if (hc.path_capture)'
+    start = source.rindex(token, 0, direct_call)
+    declaration, implementation = body(source[start:], token)
     fragment = declaration + implementation
     shim = r'''
 #include <functional>

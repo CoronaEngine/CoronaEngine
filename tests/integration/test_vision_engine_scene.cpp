@@ -3,7 +3,6 @@
 #include <corona/engine/engine_runtime_api.h>
 #include "base/mgr/global.h"
 #include "base/mgr/pipeline.h"
-#include "base/mgr/switch_profile.h"
 #include "base/scattering/material.h"
 #include "base/illumination/light.h"
 #include "base/sensor/sensor.h"
@@ -911,9 +910,9 @@ struct VisionEngineSceneTest {
         const auto applied = filter->reblur_settings();
         expect(applied == parameters,
                "all seventeen editor values must reach the actual REBLUR filter");
-        vision::DenoiserDesc source_desc{"ReBLUR"};
-        for (const auto& [key, value] : applied.items()) source_desc.set_value(key, value);
-        const auto source_filter = vision::Node::create_shared<vision::Denoiser>(source_desc);
+        vision::DenoiserDesc reblur_desc{"ReBLUR"};
+        for (const auto& [key, value] : applied.items()) reblur_desc.set_value(key, value);
+        const auto source_filter = vision::Node::create_shared<vision::Denoiser>(reblur_desc);
         expect(source_filter->reblur_settings() == applied,
                "scene descriptors must load all exposed parameters");
         source_filter->set_reblur_settings(vision::DataWrap::parse(R"({"max_history":7})"));

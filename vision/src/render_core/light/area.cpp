@@ -34,6 +34,15 @@ namespace vision {
  */
 class AreaLight final : public IAreaLight {
 private:
+    // Each emitting instance builds independent shader nodes from these inputs.
+    // Light::initialize_slots normalizes the live color and scale in place.
+    struct InstanceInputs {
+        string name;
+        DataWrap color;
+        DataWrap strength;
+        float scale{1.f};
+        bool two_sided{};
+    } instance_inputs_;
     EncodedData<uint> two_sided_{0u};
     SP<Warper> warper_{nullptr};
 
@@ -48,7 +57,25 @@ public:
     }
     VS_MAKE_PLUGIN_NAME_FUNC
     OC_ENCODABLE_FUNC(IAreaLight, two_sided_, *warper_)
-    VS_HOTFIX_MAKE_RESTORE(IAreaLight, two_sided_, warper_)
+    VS_HOTFIX_MAKE_RESTORE(IAreaLight, two_sided_, warper_, instance_inputs_, blueprint_)
+    void initialize_slots(const LightDesc &desc) noexcept override {
+        instance_inputs_ = {desc.name, desc["color"].data(), desc["strength"].data(),
+                            desc["scale"].as_float(1.f), desc["two_sided"].as_bool(false)};
+        Light::initialize_slots(desc);
+        // An attached light can be initialized with a different node table than its constructor used.
+        blueprint_ = GraphBuilder::build(desc.node_map);
+    }
+    [[nodiscard]] LightDesc instance_desc(uint index) const noexcept override {
+        LightDesc desc{"area"};
+        desc.name = instance_inputs_.name;
+        desc.node_map = blueprint_.node_map();
+        desc.set_value("inst_id", index);
+        desc.set_value("color", instance_inputs_.color);
+        desc.set_value("strength", instance_inputs_.strength);
+        if (instance_inputs_.scale != 1.f) desc.set_value("scale", instance_inputs_.scale);
+        if (instance_inputs_.two_sided) desc.set_value("two_sided", true);
+        return desc;
+    }
     void render_sub_UI(Widgets *widgets) noexcept override {
         IAreaLight::render_sub_UI(widgets);
         changed_ |= widgets->check_box("two sided",
@@ -73,7 +100,7 @@ public:
         return warper_->PMF(prim_id);
     }
 
-    [[nodiscard]] bool two_sided() const noexcept {
+    [[nodiscard]] bool two_sided() const noexcept override {
         return two_sided_.hv();
     }
 

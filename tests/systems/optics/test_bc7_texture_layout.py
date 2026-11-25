@@ -14,7 +14,7 @@ from unittest import SkipTest
 
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'Horizon/src').is_dir())
-TEMP = ROOT / '.workspace/tmp/rtxpt-corona-dsl-20261108/bc7-layout-tests'
+TEMP = ROOT / '.workspace/tmp/optics-tests/bc7-texture-layout'
 
 
 def _definition(source, signature, semicolon=False):

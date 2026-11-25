@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "GUI/widgets.h"
+#include "window/GUI/widgets.h"
 #include "core/util/element_trait.h"
 #include "math/transform.h"
 

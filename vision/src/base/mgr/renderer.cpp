@@ -3,7 +3,7 @@
 //
 
 #include "renderer.h"
-#include "switch_profile.h"
+#include "core/util/switch_profile.h"
 #include "scene.h"
 #include "base/scattering/interaction.h"
 
@@ -28,9 +28,9 @@ void Renderer::init(const RendererDesc &renderer_desc, Scene &scene) {
 }
 
 void Renderer::prepare(Scene &scene, bool prepare_integrator_resources) noexcept {
-    switch_profile::Scope profile{"renderer.prepare", "resources"};
+    ocarina::switch_profile::Scope profile{"renderer.prepare", "resources"};
     {
-        switch_profile::Scope sampler_profile{"sampler.prepare", "resources"};
+        ocarina::switch_profile::Scope sampler_profile{"sampler.prepare", "resources"};
         sampler_->prepare();
     }
     if (prepare_integrator_resources) {
@@ -52,7 +52,7 @@ void Renderer::tidy_up() noexcept {
 }
 
 void Renderer::prepare_lights(Scene &scene) noexcept {
-    switch_profile::Scope profile{"lights.prepare", "lights"};
+    ocarina::switch_profile::Scope profile{"lights.prepare", "lights"};
     OC_ASSERT(scene.geometry().has_gpu_resource());
     light_sampler_->prepare(scene.geometry().bindless_array(),
                             scene.geometry().gpu_resource()->device());

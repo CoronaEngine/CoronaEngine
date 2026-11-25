@@ -509,6 +509,11 @@ private:
             PRINCIPLED_SLOTS(PRINCIPLED_REGISTER_PARAM_)
 #undef PRINCIPLED_REGISTER_PARAM_
             ret.add_plain("two_sided", ParamType::Bool);
+            ret.add_plain("alpha_mode", ParamType::String);
+            ret.add_plain("alpha_cutoff", ParamType::Float);
+            ret.add_plain("has_base_texture", ParamType::Bool);
+            ret.add_plain("workflow", ParamType::String);
+            ret.add_plain("glossiness_factor", ParamType::Float);
             return ret;
         }();
         return schema;
@@ -529,7 +534,7 @@ protected:
     }
 
     [[nodiscard]] uint64_t compute_hash() const noexcept override {
-        return hash64(Material::compute_hash(), two_sided_);
+        return hash64(Material::compute_hash(), two_sided_, parameters_);
     }
 
     VS_MAKE_MATERIAL_EVALUATOR(PrincipledLobeSet)

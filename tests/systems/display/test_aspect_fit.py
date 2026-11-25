@@ -17,9 +17,9 @@ def test_fixed_image_is_maximally_fitted_without_stretching():
     if not compiler:
         pytest.skip("Standalone display placement check requires g++")
     code = r'''
-#include "src/systems/display/aspect_fit.h"
+#include "src/systems/common/aspect_fit.h"
 #include <cassert>
-using Corona::Systems::DisplayDetail::fit_image;
+using Corona::Systems::RenderDetail::fit_image;
 int main() {
     auto same=fit_image({0,0,1920,1080},1920,1080);
     assert(same.x==0 && same.y==0 && same.width==1920 && same.height==1080);

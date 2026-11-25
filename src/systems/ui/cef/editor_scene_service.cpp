@@ -661,10 +661,7 @@ NativeEditorScene& materialize_scene_snapshot_into_state(
         if (physics.contains("fixed_dt")) stored_physics.fixed_dt = physics["fixed_dt"].get<float>();
         scene.environment->set_properties(stored_physics);
         if (const auto display = environment.find("vision_display"); display != environment.end()) {
-            if (display->at("profile").get<std::string>() != "rtxpt") {
-                throw std::invalid_argument("Unsupported Vision display profile");
-            }
-            scene.environment->set_vision_rtxpt_display(
+            scene.environment->set_vision_display(
                 display->at("auto_exposure").get<bool>(), display->at("exposure_compensation").get<float>(),
                 display->at("exposure_value").get<float>(), display->at("min_ev").get<float>(),
                 display->at("max_ev").get<float>(), display->value("bloom_intensity", 0.f));

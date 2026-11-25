@@ -302,7 +302,7 @@ RELAX+guide+coverage 合计减少 38.1%。当前其余同步阶段为 Stable bui
 
 合并后的行包含额外写回，不能仅把该行的增加解释为算法变慢。JSON 同时保留原始 pass 名、每层数据和每次重复，便于重新求和。
 
-实现依据固定 RTXPT/NRD 4.14.3 的分离 guide 资源和永久/临时池调度：
+这一版沿用前述参考实现，分开存放 guide 资源，并调度永久池和临时池。
 
 - 当前 Guide 改为七列连续 float4：同样 112 bytes/pixel，identity 位转换，motion 保留 FP32。相邻线程读取相邻同类字段；不使用 FP16 或删除 guide 字段。
 - 后续 Atrous 的 diffuse/specular 共用八个邻域 tap 的 geometry/ownership 读取，保留各通道原来的算术、tap 顺序与平方权重方差传播。

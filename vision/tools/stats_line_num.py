@@ -31,7 +31,6 @@ renderer_skip_rules = [
     "cpplibs\\",
     "__pycache__\\",
     ".json",
-    "metal_ior.inl.h",
     "ltc_sheen_table.h",
     "precomputed_table.h",
     "stats_line_num.py",
