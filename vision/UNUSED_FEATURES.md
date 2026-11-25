@@ -2,7 +2,7 @@
 
 审计日期：2026-10-31。代码基线：`781907e59b6f6449082e5801c7e3a2d4f45b22b6`。
 
-后续状态：F02 双边上采样、F03 SHARC、F04 BVH 灯光采样器、F05 小孔和真实镜头相机插件、F08 Postprocessor、F13 Customized/RenderGraph、F19 旧 JSON/BSON 文件读取器已移除。其余清单及数量保留上述审计基线口径。当前插件目标为 40 个、16 类。SHARC 的构建和回归结果见 [SHARC 移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)。
+后续状态：F02 双边上采样、F03 SHARC、F04 BVH 灯光采样器、F05 小孔和真实镜头相机插件、F08 Postprocessor、F11 金属光谱 IOR 表、F13 Customized/RenderGraph、F19 旧 JSON/BSON 文件读取器已移除。其余清单及数量保留上述审计基线口径。当前插件目标为 40 个、16 类。SHARC 的构建和回归结果见 [SHARC 移除记录](E:/CoronaEngine/vision/SHARC_ANALYSIS.md)。
 
 Vision 的闲置部分主要来自独立渲染器向 Corona 集成时遗留的入口、未完成的实验功能，以及仍会构造但不再参与输出的对象。最值得优先处理的是 **SSAT 模式未接入引擎场景创建、空实现插件、保存链路断开**。这些问题不能通过删除所有“非默认插件”解决。
 
@@ -129,15 +129,9 @@ F02/F04 后续回归中的 28 项 Vision/LightField 测试全部通过，包括�
 
 建议：可整体隔离，或通过具体灯光类型接入；目前不能声称支持 IES 配光。
 
-### F11 金属光谱 IOR 表
+### F11 金属光谱 IOR 表 已移除
 
-**判定：孤立头文件和数据表。**
-
-`metal_ior.h` 没有 include 消费者，`metal_ior.inl.h` 仅由它 include；`ComplexIorTable` 和 `ComplexIor` 没有材质消费者。表中的 Ag、Al、Au、Cu 等数据不参与当前 principled 材质计算。
-
-证据：[孤立表入口](E:/CoronaEngine/vision/src/render_core/material/metal_ior.h:12)。
-
-建议：作为整组清理候选。不要连带删除正在使用的 `precomputed_table.h`、`ltc_sheen_table.h`、`srgb2spec.h` 或 `math/complex.h`。
+已删除 `metal_ior.h` 中的 `ComplexIor`、`ComplexIorTable`，以及只由该头文件包含的 `metal_ior.inl.h` 数据表。仓库中的材质均未使用这组数据。
 
 ### F12 材质预计算工具入口
 
@@ -415,7 +409,7 @@ SHARC 的 `constant.h` 已随 F03 移除；枚举和通用旗标没有直接消�
 
 1. **先修行为缺口**：F01 的 SSAT 入口、F09 保存请求、F20 失效配置；对空壳插件明确报不可用。
 2. **减少确定的无效工作**：F15 调试资源默认初始化（F02、F03、F08 已移除）。移除前同步调用者和插件部署列表。
-3. **清理独立闲置代码**：IES、金属 IOR 表、旧 TAA、无调用兼容包装；保持改动小并检查 ABI 使用范围。
+3. **清理独立闲置代码**：IES、旧 TAA、无调用兼容包装；保持改动小并检查 ABI 使用范围。
 4. **拆分实验和独立 viewer**：真实镜头、旧窗口与面板（SHARC、BVH、customized/render graph 已移除），不牵连当前主渲染链。
 5. **保留测试与可选能力**：Hero spectrum、PowerLightSampler、非默认滤波器，以及预计算表。先决定产品支持范围，再裁剪构建。
 

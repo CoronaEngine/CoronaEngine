@@ -2312,6 +2312,14 @@
       "removed_plugin_targets": ["vision-sensor-pinhole", "vision-sensor-realistic"],
       "remaining_plugin_targets": 40,
       "remaining_plugin_categories": 16
+    },
+    {
+      "feature_id": "F11",
+      "status": "removed",
+      "date": "2026-11-25",
+      "report": "vision/UNUSED_FEATURES.md",
+      "removed_standalone_files": 2,
+      "removed_interfaces": ["vision::ComplexIor", "vision::ComplexIorTable"]
     }
   ]
 }

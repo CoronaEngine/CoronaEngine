@@ -287,7 +287,7 @@ void ReSTIRGI::compile_temporal() noexcept {
         Uint index = pixel.x + pixel.y * resolution.x;
         Bool inside = all(pixel < resolution);
         initialize(frame, pixel);
-        Uint rng_state = restir_gi::resampling_seed(pixel, resolution, frame, 5u);
+        Uint rng_state = restir_gi::resampling_seed(pixel, frame, 5u);
         ReSTIRGIReservoirVar result;
         $if(inside) {
             auto surface = read_pt_surface(index, frame);
@@ -403,7 +403,7 @@ void ReSTIRGI::compile_spatial() noexcept {
         $if(any(pixel >= resolution)) { $return(); };
         Uint index = pixel.x + pixel.y * resolution.x;
         initialize(frame, pixel);
-        Uint rng_state = restir_gi::resampling_seed(pixel, resolution, frame, 6u);
+        Uint rng_state = restir_gi::resampling_seed(pixel, frame, 6u);
         auto surface = read_pt_surface(index, frame);
         auto input = read(index, 0u);
         ReSTIRGIReservoirVar result;
