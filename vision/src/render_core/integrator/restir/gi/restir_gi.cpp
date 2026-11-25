@@ -7,7 +7,6 @@
 #include "restir_gi_prefix_storage.h"
 #include "restir_gi_pt.h"
 #include "restir_gi_rays.h"
-#include "restir_gi_rng.h"
 #include "base/integral/integrator.h"
 #include "base/integral/path_work_capture.h"
 #include "base/scattering/gi_ideal_glass.h"
@@ -287,7 +286,8 @@ void ReSTIRGI::compile_temporal() noexcept {
         Uint index = pixel.x + pixel.y * resolution.x;
         Bool inside = all(pixel < resolution);
         initialize(frame, pixel);
-        Uint rng_state = restir_gi::resampling_seed(pixel, frame, 5u);
+        auto &sampler = renderer().sampler();
+        sampler->set_seed(pixel, frame, Dimension::ReSTIRGI_temporal);
         ReSTIRGIReservoirVar result;
         $if(inside) {
             auto surface = read_pt_surface(index, frame);
@@ -304,12 +304,12 @@ void ReSTIRGI::compile_temporal() noexcept {
                     Bool found = false, selected_history = false;
                     Uint max_age = param.max_age;
                     $if(param.temporal != 0u && param.restir_gi_vary_age != 0u) {
-                        max_age = cast<uint>(cast<float>(max_age) * (.5f + .5f * restir_gi::resampling_next(rng_state)));
+                        max_age = cast<uint>(cast<float>(max_age) * (.5f + .5f * sampler->next_1d()));
                     };
                     $if(param.temporal != 0u) {
                         // Corona stores current-minus-previous pixel motion.
                         SensorSample ss;
-                        renderer().sampler()->temporary([&](Sampler *s) {
+                        sampler->temporary([&](Sampler *s) {
                             s->set_seed(pixel, frame, Dimension::Camera);
                             ss = s->sensor_sample(pixel, scene().sensor()->filter(), param.camera_jitter != 0u);
                         });
@@ -319,7 +319,7 @@ void ReSTIRGI::compile_temporal() noexcept {
                         Int2 projected = make_int2(round(previous_reservoir_coord(ss.p_film, motion) - .5f));
                         Float depth_motion = f16tof32(packed_motion.y & 0xffffu);
                         Float expected = surface.depth + depth_motion;
-                        Int start = cast<int>(restir_gi::resampling_next(rng_state) * 8.f);
+                        Int start = cast<int>(sampler->next_1d() * 8.f);
                         Uint uniform = native_jenkins(frame);
                         // No discarded lane may leave before the group boiling barriers.
                         $for(i, 6u) {
@@ -352,7 +352,7 @@ void ReSTIRGI::compile_temporal() noexcept {
                         found &= history.age <= max_age;
                         $if(found) {
                             Float p = target(surface, history);
-                            selected_history = restir_gi::combine(result, history, restir_gi::resampling_next(rng_state), p);
+                            selected_history = restir_gi::combine(result, history, sampler->next_1d(), p);
                             selected_target = select(selected_history, p, selected_target);
                         };
                     };
@@ -403,7 +403,8 @@ void ReSTIRGI::compile_spatial() noexcept {
         $if(any(pixel >= resolution)) { $return(); };
         Uint index = pixel.x + pixel.y * resolution.x;
         initialize(frame, pixel);
-        Uint rng_state = restir_gi::resampling_seed(pixel, frame, 6u);
+        auto &sampler = renderer().sampler();
+        sampler->set_seed(pixel, frame, Dimension::ReSTIRGI_spatial);
         auto surface = read_pt_surface(index, frame);
         auto input = read(index, 0u);
         ReSTIRGIReservoirVar result;
@@ -415,7 +416,7 @@ void ReSTIRGI::compile_spatial() noexcept {
                 $if(input.M != 0u) { (void)restir_gi::combine(result, input, .5f, selected_target); };
                 Uint mask = 0u;
                 Int selected = -1;
-                Uint start = cast<uint>(restir_gi::resampling_next(rng_state) * 8191.f);
+                Uint start = cast<uint>(sampler->next_1d() * 8191.f);
                 Uint count = select(param.spatial != 0u, min(param.N, 32u), 0u);
                 auto neighbor_pixel = [&](const Uint &i) {
                     Float2 offset = neighbors_.read((start + i) & 8191u) * param.s_radius;
@@ -432,7 +433,7 @@ void ReSTIRGI::compile_spatial() noexcept {
                     Float p_hat = target(surface, neighbor);
                     $if(!restir_gi::validate_jacobian(J)) { $continue; };
                     mask |= 1u << i;
-                    Bool picked = restir_gi::combine(result, neighbor, restir_gi::resampling_next(rng_state), p_hat * J);
+                    Bool picked = restir_gi::combine(result, neighbor, sampler->next_1d(), p_hat * J);
                     selected = select(picked, cast<int>(i), selected);
                     selected_target = select(picked, p_hat, selected_target);
                 };
