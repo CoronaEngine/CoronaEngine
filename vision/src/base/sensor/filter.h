@@ -57,6 +57,6 @@ public:
     }
 };
 
-using TFilter = TObjectUI<Filter>;
+using TFilter = TObjectUI<vision::Filter>;
 
 }// namespace vision
