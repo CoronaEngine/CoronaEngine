@@ -144,7 +144,7 @@ class MechanicsSystem : public Kernel::SystemBase {
     /// 骨骼动画 GPU 蒙皮。CPU 推进 anim_time、求解 FK/IK 并生成 final 骨骼矩阵；
     /// Vulkan/Helicon EDSL 蒙皮并归约 AABB，通过 GPU 拷贝更新所有已驻留 LOD 的
     /// 顶点缓冲（LOD1..N 经 GeometrySystem::get_skinning_lod_targets 借出）。
-    /// 碰撞直接消费 GPU 顶点；仅活跃 Vision 相机请求 LOD0 回读。动态 AABB 写回 GeometryDevice。
+    /// 向碰撞和 Vision 发布 LOD0 GPU 顶点、姿态版本和动态 AABB。
     /// 在固定步进前等待该批完成，使物理消费同帧数据；GPU 错误向系统错误处理器传播。
     /// @param dt 本真实帧经过时间（秒），由 update() 测量并传入；首帧传 0。
     void update_skinned_geometry(float dt);

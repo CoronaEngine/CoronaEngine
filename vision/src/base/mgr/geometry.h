@@ -54,6 +54,7 @@ private:
 
     // mesh registry (merged from MeshRegistry)
     std::map<uint64_t, SP<Mesh>> mesh_map_;
+    std::map<Mesh *, SP<Mesh>> deformable_meshes_;
     vector<Mesh *> meshes_;
 
 public:
@@ -91,6 +92,8 @@ private:
     GeometryData data_;
     ocarina::Accel accel_;
     vector<uint> accel_mesh_ids_;
+    // Non-owning mesh command handles, invalidated whenever accel_ is cleared.
+    vector<ocarina::handle_ty> blas_meshes_;
     uint64_t build_count_{0};
     uint64_t visibility_revision_{0};
 
@@ -112,6 +115,7 @@ public:
     [[nodiscard]] const ocarina::Accel &accel() const noexcept { return accel_; }
     [[nodiscard]] vector<uint> &accel_mesh_ids() noexcept { return accel_mesh_ids_; }
     [[nodiscard]] const vector<uint> &accel_mesh_ids() const noexcept { return accel_mesh_ids_; }
+    [[nodiscard]] auto &blas_meshes() noexcept { return blas_meshes_; }
     [[nodiscard]] uint64_t build_count() const noexcept { return build_count_; }
     void record_build() noexcept { ++build_count_; }
     [[nodiscard]] uint64_t visibility_revision() const noexcept { return visibility_revision_; }
@@ -147,6 +151,7 @@ public:
     void reset_device_buffer();
     void build_accel(Stream &stream);
     void update_accel(Stream &stream);
+    void update_dynamic_geometry(Stream &stream, const vector<bool> &dirty_meshes, bool transforms_changed);
     void upload(Stream &stream);
     void upload_bindless_array(Stream &stream);
     void clear() noexcept;

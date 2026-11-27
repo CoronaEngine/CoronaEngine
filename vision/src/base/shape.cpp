@@ -71,6 +71,9 @@ vector<float> ShapeInstance::surface_areas() const noexcept {
 }
 
 Box3f ShapeInstance::compute_aabb() const noexcept {
+    if (const auto &bounds = mesh_->deformed_bounds()) {
+        return transform_box(o2w(), *bounds);
+    }
     Box3f box;
     for (const Triangle &tri : mesh_->triangles()) {
         float3 v0 = transform_point<H>(handle_.o2w(), mesh_->vertices()[tri.i].position());
@@ -140,13 +143,13 @@ uint64_t Mesh::compute_hash() const noexcept {
 
 void Mesh::upload_immediately() noexcept {
     upload_triangles_immediately(triangles_);
-    upload_vertices_immediately(vertices_);
+    if (!deformed_bounds_) upload_vertices_immediately(vertices_);
 }
 
 CommandBatch Mesh::upload() noexcept {
     CommandBatch ret;
     ret << upload_triangles(triangles_);
-    ret << upload_vertices(vertices_);
+    if (!deformed_bounds_) ret << upload_vertices(vertices_);
     return ret;
 }
 
@@ -155,6 +158,7 @@ void Mesh::update_data(Device &device, BindlessArray &bindless) noexcept {
 }
 
 Box3f Mesh::compute_aabb() const noexcept {
+    if (deformed_bounds_) return *deformed_bounds_;
     Box3f box;
     for (const Triangle &tri : triangles_) {
         float3 v0 = vertices_[tri.i].position();

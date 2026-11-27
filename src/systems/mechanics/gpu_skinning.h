@@ -41,6 +41,8 @@ public:
         // Opt in only when these render targets are exclusively written by this
         // pipeline. An identical palette can then reuse the completed pose.
         bool reuse_unchanged{};
+        // Optional actual dispatch destination (packed Resource::Vertex, Storage | TransferSrc).
+        Horizon::HardwareBuffer output_target;
     };
 
     struct Result {

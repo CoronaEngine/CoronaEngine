@@ -1445,6 +1445,8 @@ void GeometrySystem::release_actor_gpu_resources(std::uintptr_t actor) {
             // clear() 触发每个元素的析构 → HardwareBuffer/HardwareImage 析构 → GPU 显存归还
             // 注意：model_resource_handle 保留不删，以便 reload 时能找到模型资源条目
             if (auto geom_write = Corona::find_geometry(geom_handle)) {
+                std::lock_guard output_lock(hub.skinned_output_mutex);
+                geom_write->skinned_mesh_outputs.clear();
                 geom_write->mesh_handles.clear();
                 geom_write->mesh_instances.clear();
             }  // geom_write 析构时自动释放写锁
@@ -3113,13 +3115,15 @@ void GeometrySystem::process_pending_geometry_builds() {
                     current_model = model->model_id;
                 }
                 if (current_model == task.model_id) {
+                    std::lock_guard output_lock(hub.skinned_output_mutex);
+                    geom_write->skinned_mesh_outputs.clear();
                     geom_write->mesh_handles = std::move(gpu_data.mesh_devices);
                     geom_write->mesh_instances = std::move(gpu_data.mesh_instances);
-                geom_write->model_nodes = std::move(gpu_data.model_nodes);
-                geom_write->node_instance_prefix = gpu_data.node_instance_prefix;
-                geom_write->has_node_instance_prefix = gpu_data.has_node_instance_prefix;
-                geom_write->model_node_instances_mapped = false;
-                ModelNodes::apply_overrides(*geom_write);
+                    geom_write->model_nodes = std::move(gpu_data.model_nodes);
+                    geom_write->node_instance_prefix = gpu_data.node_instance_prefix;
+                    geom_write->has_node_instance_prefix = gpu_data.has_node_instance_prefix;
+                    geom_write->model_node_instances_mapped = false;
+                    ModelNodes::apply_overrides(*geom_write);
                     geom_write->gpu_build_state = GeometryDevice::GpuBuildState::Ready;
                     CFW_LOG_NOTICE("[GeometryUpload] published geometry={} meshes={} instances={} model={}",
                                    handle, geom_write->mesh_handles.size(),

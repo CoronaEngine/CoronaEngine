@@ -213,6 +213,7 @@ class OpticsSystem : public Kernel::SystemBase {
     Vision::VisionBuildResult rebuild_vision_scene(VisionPipelineRuntime& runtime);
 
     /// 去抖检测：若签名变化则触发（延迟）重建，覆盖导入/导出/参数调整等动态操作。
+    void sync_vision_scene_topology(VisionPipelineRuntime& runtime);
     void sync_vision_dynamic_scene(VisionPipelineRuntime& runtime);
     bool sync_engine_vision_lighting(VisionPipelineRuntime& runtime, const EnvironmentDevice& environment);
 

@@ -81,6 +81,7 @@
 #include "rhi/context.h"
 #include "vision/vision_geometry_adapter.h"
 #include "vision/vision_geometry_sync_policy.h"
+#include "vision/vision_skinning_bridge.h"
 #include "vision/vision_camera_adapter.h"
 #include "vision/vision_diagnostic_adapter.h"
 #include "vision/vision_light_adapter.h"
@@ -2004,6 +2005,18 @@ struct OpticsSystem::VisionPipelineRuntime {
     std::size_t pending_signature{0};
     uint32_t rebuild_retries{0};
     Vision::VisionGeometrySyncDebounce geometry_debounce;
+    std::unique_ptr<Vision::VisionSkinningBridge> skinning;
+    std::vector<Vision::VisionInstanceTransform> instance_transforms;
+    bool transforms_pending{};
+    bool skinning_ready{true};
+
+    void bind_dynamic_geometry(Vision::VisionBuildResult& result) {
+        instance_transforms = std::move(result.transforms);
+        transforms_pending = false;
+        auto& meshes = result.skinned_meshes;
+        skinning = meshes.empty() && instance_transforms.empty() ? nullptr : std::make_unique<Vision::VisionSkinningBridge>(pipeline->device(), std::move(meshes));
+        skinning_ready = true;
+    }
     std::optional<Vision::VisionLightingState> engine_lighting;
     std::chrono::steady_clock::time_point next_geometry_retry{};
 
@@ -5294,13 +5307,9 @@ std::size_t OpticsSystem::compute_vision_scene_signature(const SceneDevice* lock
                     mix(static_cast<std::size_t>(vbuf.get_element_count()));
                 }
 
-                // Hash the actual affine transform, including authored shear and
-                // reflection. TRS alone misses matrix-only external-scene edits.
-                if (auto transform = Corona::find_transform(geom->transform_handle)) {
-                    const auto matrix = transform->compute_matrix();
-                    for (int column = 0; column < 4; ++column)
-                        for (int row = 0; row < 4; ++row) mix_float(matrix[column][row]);
-                }
+                // The per-frame instance upload handles matrix changes. A different
+                // source entity still requires rebuilding its logical binding.
+                mix(static_cast<std::size_t>(geom->transform_handle));
             }
         }
     };
@@ -5344,6 +5353,7 @@ Vision::VisionBuildResult OpticsSystem::rebuild_vision_scene(VisionPipelineRunti
             runtime.scene_resource->mark_transforms_changed();
         }
         pipeline->prepare_geometry(true);
+        runtime.bind_dynamic_geometry(result);
         if (runtime.scene_resource) {
             runtime.scene_resource->mark_scene_gpu_transforms_uploaded();
             runtime.scene_gpu_transform_version =
@@ -5358,6 +5368,21 @@ Vision::VisionBuildResult OpticsSystem::rebuild_vision_scene(VisionPipelineRunti
 }
 
 void OpticsSystem::sync_vision_dynamic_scene(VisionPipelineRuntime& runtime) {
+    sync_vision_scene_topology(runtime);
+    if (!runtime.skinning || !runtime.engine_geometry_available) return;
+    try {
+        runtime.transforms_pending |= Vision::apply_vision_instance_transforms(runtime.pipeline->scene(),
+                                                                               runtime.instance_transforms);
+        runtime.skinning->update(*runtime.pipeline, runtime.transforms_pending);
+        runtime.transforms_pending = false;
+        runtime.skinning_ready = true;
+    } catch (const std::exception& e) {
+        if (runtime.skinning_ready) CFW_LOG_ERROR("Vision skinned geometry update failed: {}", e.what());
+        runtime.skinning_ready = false;
+    }
+}
+
+void OpticsSystem::sync_vision_scene_topology(VisionPipelineRuntime& runtime) {
     if (!vision_initialized_) return;
     const std::size_t sig = compute_vision_scene_signature();
     const bool revision_changed = sig != runtime.pending_signature;
@@ -5569,7 +5594,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
             }
             pipeline->activate_global_context();
 
-            if ((!runtime.engine_geometry_available ||
+            if ((!runtime.skinning_ready || !runtime.engine_geometry_available ||
                  (has_pending_screenshot(cam_handle) && !runtime.engine_geometry_ready))) return;
             active_contexts.insert(cam_handle);
             runtime.retained_contexts.erase(cam_handle);
@@ -6112,7 +6137,7 @@ bool OpticsSystem::initialize_engine_built_vision_runtime(VisionPipelineRuntime&
             Vision::configure_vision_media(scene, key.authored_media.get(), true);
         }
         const auto build_signature = compute_vision_scene_signature();
-        const auto build_result = Vision::build_vision_geometry(scene);
+        auto build_result = Vision::build_vision_geometry(scene);
         sync_logical_instances_from_pipeline_scene(*scene_resource, scene);
 
         const auto env = engine_vision_environment();
@@ -6124,6 +6149,7 @@ bool OpticsSystem::initialize_engine_built_vision_runtime(VisionPipelineRuntime&
         }
 
         runtime.reset_pipeline(std::move(pipeline), key.mode);
+        runtime.bind_dynamic_geometry(build_result);
         runtime.pipeline->activate_global_context();
         const auto current_signature = compute_vision_scene_signature();
         runtime.engine_geometry_available = build_result.complete();

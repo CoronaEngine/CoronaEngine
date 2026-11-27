@@ -123,6 +123,24 @@ struct ModelResource {
     std::uint64_t model_id;
 };
 
+namespace Systems::Vision { struct SkinningReadView; }
+
+// Runtime owners retain the export. Geometry only advertises a weak write target.
+// Read and replace targets under SharedDataHub::skinned_output_mutex.
+struct SkinnedMeshWriteTarget {
+    std::uint64_t model_id{};
+    std::shared_ptr<Systems::Vision::SkinningReadView> reader;
+    Horizon::HardwareBuffer vertices;
+    bool corona_owned{};
+};
+
+// Completed LOD0 skinning output in Resource::Vertex layout, in model space.
+struct SkinnedMeshOutput {
+    Horizon::HardwareBuffer vertices;
+    std::uint64_t model_id{}, revision{};
+    std::array<float, 3> min_xyz{}, max_xyz{};
+};
+
 struct GeometryDevice {
     Resource::ModelImportOptions import_options;
     // GPU 资源（mesh_handles）的生命周期状态。
@@ -163,14 +181,20 @@ struct GeometryDevice {
     // is_skinned：对应 Scene 带骨架（model_id 解析的 Scene::data.skeleton 有值）。
     //   GeometrySystem 在 mesh 构建/上传时探测并置位；非蒙皮几何此字段恒 false，零开销。
     // Player owns per-instance clip selection, asynchronous sources and local-TRS transitions.
-    // skinned_cpu_vertices：仅活跃 Vision 相机请求 GPU 蒙皮 LOD0 回读，每个 mesh 一份原始字节，
-    //   布局严格等同 Resource::Vertex 数组（pos[3]+normal[3]+uv[2]，32B）。
-    //   Vision 读取该副本；碰撞和光栅顶点缓冲直接使用 GPU 结果，
-    //   不依赖该回读副本重新上传。光栅模式及非蒙皮几何此容器为空。
     bool is_skinned{false};
     std::uint64_t skin_pose_revision = 0;
     std::shared_ptr<Resource::AnimationPlayer> animation_player{std::make_shared<Resource::AnimationPlayer>()};
-    std::vector<std::vector<std::byte>> skinned_cpu_vertices;
+    std::vector<SkinnedMeshOutput> skinned_mesh_outputs;
+    std::vector<std::weak_ptr<SkinnedMeshWriteTarget>> skinned_write_targets;
+
+    [[nodiscard]] Horizon::HardwareBuffer skinning_write_buffer(std::size_t mesh, std::uint64_t model,
+                                                                std::size_t bytes) const {
+        if (mesh >= skinned_write_targets.size()) return {};
+        const auto target = skinned_write_targets[mesh].lock();
+        if (!target || !target->corona_owned || target->model_id != model ||
+            target->vertices.get_byte_size() != bytes) return {};
+        return target->vertices;
+    }
 
     // 蒙皮动态 local AABB：每帧合并 GPU 蒙皮包围盒；混合静态子网格时根据完整
     // 碰撞网格补全包围盒（模型空间，已含首帧归一化）。
@@ -915,6 +939,10 @@ class ImageReadAccess {
 class SharedDataHub {
    public:
     static SharedDataHub& instance();
+
+    // The legacy scheduler can overlap Mechanics and Optics. Protect both the
+    // GPU overwrite and the copy of the corresponding published pose.
+    std::mutex skinned_output_mutex;
 
     ~SharedDataHub() = default;
 

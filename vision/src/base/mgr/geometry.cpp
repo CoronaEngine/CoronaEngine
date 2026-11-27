@@ -51,19 +51,26 @@ void update_accel_transforms(const GeometryData &data, Accel &accel) {
     }
 }
 
-void rebuild_accel(GeometryData &data, Device &device, BindlessArray &bindless_array,
-                   Stream &stream, Accel &accel) {
+void rebuild_accel(GeometryGpuResource &resource, Stream &stream) {
+    auto &data = resource.data();
+    auto &device = resource.device();
+    auto &bindless_array = resource.bindless_array();
+    auto &accel = resource.accel();
+    resource.blas_meshes().clear();
     accel.clear();
     if (data.instances().empty()) {
         return;
     }
 
+    vector<bool> deformable;
+    data.for_each_mesh([&](const Mesh *mesh, uint) { deformable.push_back(mesh->deformable()); });
     for (const auto &inst : data.instances()) {
         uint mesh_id = inst.mesh_id;
         const auto &mesh_handle = data.mesh_handles()[mesh_id];
         BufferView<Vertex> vert_buffer = bindless_array.buffer_view<Vertex>(mesh_handle.vertex_buffer);
         BufferView<Triangle> tri_buffer = bindless_array.buffer_view<Triangle>(mesh_handle.triangle_buffer);
-        ocarina::RHIMesh mesh = device.create_mesh(vert_buffer, tri_buffer);
+        ocarina::RHIMesh mesh = device.create_mesh(vert_buffer, tri_buffer, deformable[mesh_id] ? FAST_UPDATE : FAST_TRACE);
+        resource.blas_meshes().push_back(mesh.handle());
         stream << mesh.build_bvh();
         accel.add_instance(ocarina::move(mesh), inst.o2w());
     }
@@ -112,6 +119,13 @@ bool GeometryData::contain_mesh(uint64_t hash) noexcept {
 }
 
 SP<Mesh> GeometryData::register_mesh(SP<Mesh> mesh) noexcept {
+    if (mesh->deformable()) {
+        if (deformable_meshes_.try_emplace(mesh.get(), mesh).second) {
+            mesh->update_data(device(), bindless_array());
+            meshes_.push_back(mesh.get());
+        }
+        return mesh;
+    }
     uint64_t hash = mesh->hash();
     if (!contain_mesh(hash)) {
         mesh->update_data(device(), bindless_array());
@@ -122,6 +136,7 @@ SP<Mesh> GeometryData::register_mesh(SP<Mesh> mesh) noexcept {
 }
 
 SP<Mesh> GeometryData::register_mesh(Mesh mesh) noexcept {
+    if (mesh.deformable()) return register_mesh(make_shared<Mesh>(ocarina::move(mesh)));
     uint64_t hash = mesh.hash();
     if (!contain_mesh(hash)) {
         return register_mesh(make_shared<Mesh>(ocarina::move(mesh)));
@@ -149,7 +164,7 @@ bool GeometryData::remove_mesh(uint64_t hash) noexcept {
     for (auto iter = meshes_.cbegin();
          iter != meshes_.cend(); ++iter) {
         Mesh *mesh = *iter;
-        if (mesh->hash() == hash) {
+        if (!mesh->deformable() && mesh->hash() == hash) {
             meshes_.erase(iter);
             break;
         }
@@ -189,6 +204,7 @@ void GeometryData::tidy_up_meshes() noexcept {
 
 void GeometryData::clear_meshes() noexcept {
     mesh_map_.clear();
+    deformable_meshes_.clear();
     meshes_.clear();
 }
 
@@ -256,10 +272,11 @@ void Geometry::update_accel(Stream &stream) {
     if (geometry_data.instances().empty()) {
         accel.clear();
         accel_mesh_ids.clear();
+        resource.blas_meshes().clear();
         return;
     }
     if (!can_update_tlas(geometry_data, accel_mesh_ids, accel)) {
-        rebuild_accel(geometry_data, resource.device(), resource.bindless_array(), stream, accel);
+        rebuild_accel(resource, stream);
         accel_mesh_ids = ocarina::move(current_mesh_ids);
         return;
     }
@@ -271,11 +288,30 @@ void Geometry::update_accel(Stream &stream) {
     accel_mesh_ids = ocarina::move(current_mesh_ids);
 }
 
+void Geometry::update_dynamic_geometry(Stream &stream, const vector<bool> &dirty_meshes, bool transforms_changed) {
+    if (dirty_meshes.empty() && !transforms_changed) return;
+    auto &resource = *gpu_resource_;
+    if (!dirty_meshes.empty()) {
+        const auto &instances = resource.accel_mesh_ids();
+        for (size_t i = 0; i < instances.size(); ++i) {
+            if (dirty_meshes.at(instances[i])) {
+                stream << BLASBuildCommand::create(resource.blas_meshes().at(i));
+            }
+        }
+    }
+    if (transforms_changed) {
+        update_accel_transforms(resource.data(), resource.accel());
+        stream << resource.data().instances().upload();
+    }
+    stream << resource.accel().update_bvh() << synchronize() << commit();
+    resource.record_visibility_change();
+}
+
 void Geometry::build_accel(Stream &stream) {
     TIMER(build_accel);
     auto &resource = *gpu_resource_;
     resource.record_visibility_change();
-    rebuild_accel(resource.data(), resource.device(), resource.bindless_array(), stream, resource.accel());
+    rebuild_accel(resource, stream);
     resource.accel_mesh_ids() = collect_instance_mesh_ids(resource.data());
     resource.record_build();
 }
@@ -308,6 +344,7 @@ void Geometry::clear() noexcept {
     gpu_resource_->data().clear_all();
     gpu_resource_->accel().clear();
     gpu_resource_->accel_mesh_ids().clear();
+    gpu_resource_->blas_meshes().clear();
 }
 
 Interaction Geometry::compute_surface_interaction(const TriangleHitVar &hit, bool is_complete) const noexcept {

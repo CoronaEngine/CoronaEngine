@@ -4,23 +4,41 @@
 // transforms, per-mesh materials) into Vision ShapeGroup / ShapeInstance objects
 // and adds them to the Vision scene.
 
+#include "math/basic_types.h"
 #include <cstdint>
-
-namespace Corona {
-}
+#include <memory>
+#include <vector>
 
 // Forward declarations
 namespace vision {
 class Scene;
+class Mesh;
 }  // namespace vision
 
 namespace Corona::Systems::Vision {
+
+struct VisionInstanceTransform {
+    std::uintptr_t transform{};
+    std::uint32_t instance_index{};
+    ocarina::float4x4 local;
+};
+
+bool apply_vision_instance_transforms(::vision::Scene& scene, const std::vector<VisionInstanceTransform>& bindings);
+
+struct VisionSkinnedMesh {
+    std::uintptr_t geometry{};
+    std::uint64_t model{};
+    std::size_t mesh_index{};
+    std::shared_ptr<::vision::Mesh> mesh;
+};
 
 // Structured outcome of a geometry build pass. Lets callers distinguish a
 // genuinely empty scene (no candidate objects at all) from a transient
 // "data-not-ready" state (candidates existed but their CPU/GPU mesh data could
 // not be loaded yet), so dynamic-scene rebuilds can retry only when warranted.
 struct VisionBuildResult {
+    std::vector<VisionSkinnedMesh> skinned_meshes;
+    std::vector<VisionInstanceTransform> transforms;
     int instance_count = 0;   ///< ShapeInstances successfully added.
     int candidate_count = 0;  ///< Explicitly enabled objects with geometry (not raster visibility).
     int skipped_no_data = 0;  ///< Candidates skipped because mesh data was unavailable.

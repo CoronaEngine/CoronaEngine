@@ -79,14 +79,19 @@ class Mesh : public Hashable, public GPUMesh {
 protected:
     vector<Vertex> vertices_;
     vector<Triangle> triangles_;
+    bool deformable_{};
+    optional<Box3f> deformed_bounds_;
     uint index_{};
 
 protected:
     [[nodiscard]] uint64_t compute_hash() const noexcept override;
 
 public:
-    Mesh(vector<Vertex> vert, vector<Triangle> tri)
-        : vertices_(std::move(vert)), triangles_(std::move(tri)) {}
+    Mesh(vector<Vertex> vert, vector<Triangle> tri, bool deformable = false)
+        : vertices_(std::move(vert)), triangles_(std::move(tri)), deformable_(deformable) {}
+    [[nodiscard]] bool deformable() const noexcept { return deformable_; }
+    [[nodiscard]] const auto &deformed_bounds() const noexcept { return deformed_bounds_; }
+    void set_deformed_bounds(optional<Box3f> bounds) noexcept { deformed_bounds_ = bounds; }
     Mesh() = default;
     OC_MAKE_MEMBER_GETTER_SETTER(vertices, &)
     OC_MAKE_MEMBER_GETTER_SETTER(triangles, &)

@@ -8,6 +8,7 @@
 #include <Codegen/TypeAlias.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -248,6 +249,7 @@ struct MeshCache {
     H::HardwareBuffer bind, ids, weights, output, bounds[2];
     H::HardwareBuffer upload_bind, upload_ids, upload_weights;
     H::HardwareBuffer readback, bounds_readback;
+    bool shared_output{};
     bool pending_upload{true};
     bool pose_valid{}, readback_valid{};
     std::uint64_t pose_revision{};
@@ -265,8 +267,7 @@ struct MeshCache {
         bind = make_buffer(vertex_bytes, input_usage, H::CpuAccessMode::None, "mechanics.skin.bind");
         ids = make_buffer(influence_bytes, input_usage, H::CpuAccessMode::None, "mechanics.skin.ids");
         weights = make_buffer(influence_bytes, input_usage, H::CpuAccessMode::None, "mechanics.skin.weights");
-        output = make_buffer(vertex_bytes, H::BufferUsage_Storage | H::BufferUsage_TransferSrc,
-                             H::CpuAccessMode::None, "mechanics.skin.output");
+        bind_output(request);
         // First reduction reads positions directly from the skin output. No
         // duplicated per-vertex min/max image of the pose is necessary.
         const auto reduced_count = (request.vertices.size() + kBoundsFanIn - 1u) / kBoundsFanIn;
@@ -301,6 +302,21 @@ struct MeshCache {
         write_buffer(upload_bind, std::as_bytes(request.vertices));
         write_buffer(upload_ids, std::as_bytes(std::span(packed_ids)));
         write_buffer(upload_weights, std::as_bytes(std::span(packed_weights)));
+    }
+
+    void bind_output(const GpuSkinningPipeline::Request& request) {
+        if (request.output_target) {
+            if (request.output_target.same_resource(output)) return;
+            output = request.output_target;
+            shared_output = true;
+        } else {
+            if (output && !shared_output) return;
+            output = make_buffer(request.vertices.size_bytes(), H::BufferUsage_Storage | H::BufferUsage_TransferSrc,
+                                 H::CpuAccessMode::None, "mechanics.skin.output");
+            shared_output = false;
+        }
+        pose_valid = false;
+        readback_valid = false;
     }
 
     bool matches(const GpuSkinningPipeline::Request& request) const {
@@ -397,6 +413,8 @@ std::vector<GpuSkinningPipeline::Result> GpuSkinningPipeline::update_batch(
             if (request.vertices.size() > std::size_t(kThreads) * 65535u) {
                 throw std::invalid_argument("GPU skinning vertex count exceeds one-dimensional dispatch limit");
             }
+            if (request.output_target && request.output_target.get_byte_size() != request.vertices.size_bytes())
+                throw std::invalid_argument("GPU skinning output size differs from the mesh");
             for (const auto* target : {&request.vertex_buffer, &request.storage_buffer}) {
                 if (*target && target->get_byte_size() < request.vertices.size_bytes()) {
                     throw std::invalid_argument("GPU skinning render target is too small");
@@ -421,11 +439,12 @@ std::vector<GpuSkinningPipeline::Result> GpuSkinningPipeline::update_batch(
         if (request.vertices.empty()) continue;
         auto& cached = impl_->meshes[request.key];
         if (!cached || !cached->matches(request)) cached = std::make_unique<MeshCache>(request);
+        else cached->bind_output(request);
         item.skin = !request.reuse_unchanged || !cached->pose_valid ||
             !std::equal(item.finals.begin(), item.finals.end(), cached->finals.begin(), cached->finals.end());
-        item.copy_vertex = request.vertex_buffer &&
+        item.copy_vertex = request.vertex_buffer && !cached->output.same_resource(request.vertex_buffer) &&
             (item.skin || !request.vertex_buffer.same_resource(cached->vertex_target));
-        item.copy_storage = request.storage_buffer &&
+        item.copy_storage = request.storage_buffer && !cached->output.same_resource(request.storage_buffer) &&
             (item.skin || !request.storage_buffer.same_resource(cached->storage_target)) &&
             !(item.copy_vertex && request.storage_buffer.same_resource(request.vertex_buffer));
         item.copy_readback = request.readback && (item.skin || !cached->readback_valid);
@@ -538,7 +557,12 @@ std::vector<GpuSkinningPipeline::Result> GpuSkinningPipeline::update_batch(
         }
         results[i].output = cached.output;
         results[i].pose_changed = work[i].skin;
-        if (work[i].skin) ++cached.pose_revision;
+        if (work[i].skin) {
+            // An exported allocation can outlive this mesh cache or pipeline.
+            static std::atomic<std::uint64_t> shared_revision{};
+            cached.pose_revision = cached.shared_output ? shared_revision.fetch_add(1, std::memory_order_relaxed) + 1
+                                                       : cached.pose_revision + 1;
+        }
         results[i].pose_revision = cached.pose_revision;
         std::copy_n(cached.reduced_bounds.begin(), 3, results[i].min_xyz.begin());
         std::copy_n(cached.reduced_bounds.begin() + 3, 3, results[i].max_xyz.begin());

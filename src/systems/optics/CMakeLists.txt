@@ -27,6 +27,9 @@ corona_add_system(optics
         vision/vision_interop_lifetime.h
         vision/vision_auto_exposure.h
         vision/vision_display_sampling.h
+        vision/vision_skinning_bridge.cpp
+        vision/vision_skinning_bridge.h
+        vision/vision_shared_buffer.h
         vision/vision_zero_copy_bridge.cpp
         vision/vision_zero_copy_bridge.h
     DEPENDENCIES

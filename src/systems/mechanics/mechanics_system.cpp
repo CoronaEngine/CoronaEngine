@@ -1327,7 +1327,7 @@ void MechanicsSystem::update_physics(float fixed_dt) {
 //
 // 数据流：CPU 动画采样/FK/IK → 骨骼矩阵上传 → GPU 蒙皮/AABB 归约 →
 //         GPU 拷贝到 vertexBuffer/vertexStorageBuffer。绑定顶点和权重缓存在 GPU。
-//         LOD0 直接供 GPU 碰撞消费；仅活跃 Vision 相机请求 CPU 顶点副本。
+//         LOD0 GPU 输出同时供碰撞和 Vision 消费。
 //         GPU 失败直接向系统错误处理器传播，不发布该批结果或继续物理步进。
 //
 // LOD1..N 经 GeometrySystem::get_skinning_lod_targets() 借出引用计数句柄和源 LOD
@@ -1369,19 +1369,6 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     // The next physics step replaces it (also discarding earlier catch-up samples).
     const auto& pending_ik_updates = impl_->deferred_ik_target_updates;
 
-    // Vision still imports CPU geometry; rasterization and mechanics consume GPU buffers.
-    bool vision_readback = false;
-    for (const auto& enabled_scene : Corona::all_scenes()) {
-        if (!enabled_scene.enabled) continue;
-        for (auto camera_handle : enabled_scene.camera_handles) {
-            auto camera = Corona::find_camera(camera_handle);
-            if (camera && camera->surface && camera->render_backend == CameraRenderBackend::Vision) {
-                vision_readback = true;
-                break;
-            }
-        }
-        if (vision_readback) break;
-    }
     std::vector<std::uint64_t> active_gpu_keys;
     const auto invalidate_skin = [&](std::uintptr_t key) {
         impl_->skinned_collision_cache.erase(key);
@@ -1392,7 +1379,10 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         const bool had_skin = geometry->is_skinned || geometry->skeleton_cache_model_id != 0;
         geometry->is_skinned = false;
         geometry->skinned_aabb_valid = false;
-        geometry->skinned_cpu_vertices.clear();
+        {
+            std::lock_guard lock(hub.skinned_output_mutex);
+            geometry->skinned_mesh_outputs.clear();
+        }
         geometry->skeleton_cache_model_id = 0;
         geometry->bone_name_to_node_idx.clear();
         geometry->leaf_bone_names.clear();
@@ -1421,7 +1411,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         std::vector<Horizon::HardwareBuffer> vertex_targets, storage_targets;
         std::unordered_map<std::uint64_t, std::size_t> lod0_meshes;
         std::vector<GpuCollisionPipeline::VertexSource> collision_sources;
-        std::vector<std::vector<std::byte>> blobs;
+        std::vector<SkinnedMeshOutput> outputs;
         ktm::fvec3 bounds_min{}, bounds_max{};
         bool bounds_valid{}, collision_ready{};
     };
@@ -1591,7 +1581,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         const auto append_request = [&](std::size_t mi, std::size_t lod_index,
                                         const auto& vertices, const auto& weights,
                                         const Horizon::HardwareBuffer& vb,
-                                        const Horizon::HardwareBuffer& sb, bool readback) {
+                                        const Horizon::HardwareBuffer& sb) {
             if (vertices.empty() || weights.size() != vertices.size()) return;
             // Unloaded LODs have no GPU consumer and must not consume work/cache space.
             if (lod_index != 0 && !vb && !sb) return;
@@ -1599,20 +1589,20 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
             auto [entry, inserted] = impl_->gpu_skinning_keys.try_emplace(identity, 0);
             if (inserted) entry->second = impl_->next_gpu_skinning_key++;
             const auto key = entry->second;
-            job.requests.push_back({key, model_id, vertices, weights, vb, sb, readback, true});
+            job.requests.push_back({key, model_id, vertices, weights, vb, sb, false, true});
             if (lod_index == 0) job.lod0_meshes.emplace(key, mi);
         };
         for (std::size_t mi = 0; mi < mesh_count && mi < scene.data.meshes.size(); ++mi) {
             const auto& mesh = scene.data.meshes[mi];
             if (mesh.bone_weights.empty() || mesh.bone_weights.size() != mesh.vertices.size()) continue;
-            append_request(mi, 0, mesh.vertices, mesh.bone_weights, vbufs[mi], vstoragebufs[mi], vision_readback);
+            append_request(mi, 0, mesh.vertices, mesh.bone_weights, vbufs[mi], vstoragebufs[mi]);
             for (const auto& target : lod_targets[mi]) {
                 const std::size_t li = target.source_lod_index;
                 if (li >= mesh.lod_levels.size()) continue;
                 const auto& lod = mesh.lod_levels[li];
                 if (lod.vertices.empty() || lod.indices.empty()) continue;
                 append_request(mi, li + 1, lod.vertices, lod.bone_weights,
-                               target.vertex_buffer, target.storage_buffer, false);
+                               target.vertex_buffer, target.storage_buffer);
             }
         }
         frame_jobs.push_back(std::move(job));
@@ -1718,7 +1708,17 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     // held while recording, submitting or waiting.
     std::vector<GpuSkinningPipeline::Batch> skin_batches;
     skin_batches.reserve(frame_jobs.size());
-    for (const auto& job : frame_jobs) skin_batches.push_back({job.requests, job.finals});
+    std::unique_lock output_lock(hub.skinned_output_mutex);
+    for (auto& job : frame_jobs) {
+        if (const auto* geometry = Corona::find_geometry(job.geometry)) {
+            for (auto& request : job.requests) {
+                const auto mesh = job.lod0_meshes.find(request.key);
+                if (mesh == job.lod0_meshes.end()) continue;
+                request.output_target = geometry->skinning_write_buffer(mesh->second, job.model, request.vertices.size_bytes());
+            }
+        }
+        skin_batches.push_back({job.requests, job.finals});
+    }
     std::vector<GpuSkinningPipeline::Result> skin_results;
     if (!skin_batches.empty()) {
         Corona::Diagnostics::PhaseScope skin_phase{"Mechanics", "skinned:gpu_skinning"};
@@ -1731,14 +1731,12 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
     std::size_t result_offset = 0;
     for (auto& job : frame_jobs) {
         Corona::Diagnostics::PhaseScope job_phase{"Mechanics", "skinned:collision_refresh"};
-        std::unordered_map<std::size_t, GpuSkinningPipeline::Result> lod0_results;
-        job.blobs.resize(job.mesh_count);
+        job.outputs.resize(job.mesh_count);
         for (std::size_t i = 0; i < job.requests.size(); ++i) {
             auto& result = skin_results.at(result_offset++);
             const auto mesh = job.lod0_meshes.find(result.key);
             if (mesh == job.lod0_meshes.end()) continue;
-            job.blobs[mesh->second] = std::move(result.vertices);
-            lod0_results.emplace(mesh->second, std::move(result));
+            job.outputs[mesh->second] = {std::move(result.output), job.model, result.pose_revision, result.min_xyz, result.max_xyz};
         }
         { auto geometry = Corona::find_geometry(job.geometry);
           if (!geometry || !still_current(*geometry, job)) continue; }
@@ -1779,23 +1777,23 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
                 job.bounds_valid = true;
             };
             for (const auto& segment : sc.submeshes) {
-                const auto output = lod0_results.find(segment.source_mesh_index);
-                if (output == lod0_results.end()) {
+                if (segment.source_mesh_index >= job.outputs.size() || !job.outputs[segment.source_mesh_index].vertices) {
                     include_point(segment.bind_min);
                     include_point(segment.bind_max);
                     continue;
                 }
-                job.collision_sources.push_back({output->second.output, segment.vertex_base,
-                                                segment.vertex_count, segment.source_transform, output->second.pose_revision});
-                job.pose_revision ^= output->second.pose_revision + 0x9e3779b97f4a7c15ULL +
+                const auto& output = job.outputs[segment.source_mesh_index];
+                job.collision_sources.push_back({output.vertices, segment.vertex_base,
+                                                segment.vertex_count, segment.source_transform, output.revision});
+                job.pose_revision ^= output.revision + 0x9e3779b97f4a7c15ULL +
                     (job.pose_revision<<6) + (job.pose_revision>>2);
                 const auto matrix = make_fmat4x4_colmajor(segment.source_transform);
                 // Transform the GPU-reduced source box, never scan skinned CPU positions.
                 for (int corner = 0; corner < 8; ++corner) {
                     const auto p = matrix * make_fvec4(
-                        (corner & 1) ? output->second.max_xyz[0] : output->second.min_xyz[0],
-                        (corner & 2) ? output->second.max_xyz[1] : output->second.min_xyz[1],
-                        (corner & 4) ? output->second.max_xyz[2] : output->second.min_xyz[2], 1);
+                        (corner & 1) ? output.max_xyz[0] : output.min_xyz[0],
+                        (corner & 2) ? output.max_xyz[1] : output.min_xyz[1],
+                        (corner & 4) ? output.max_xyz[2] : output.min_xyz[2], 1);
                     include_point(make_fvec3(p.x, p.y, p.z));
                 }
             }
@@ -1803,11 +1801,18 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         }
     }
     std::vector<GpuCollisionPipeline::VertexUpdate> collision_updates;
-    for (const auto& job : frame_jobs)
-        if (job.collision_ready) collision_updates.push_back({job.geometry, job.collision_sources, dt});
+    bool shared_collision_input = false;
+    for (const auto& job : frame_jobs) {
+        if (!job.collision_ready) continue;
+        collision_updates.push_back({job.geometry, job.collision_sources, dt});
+        shared_collision_input = shared_collision_input || std::any_of(job.requests.begin(), job.requests.end(),
+            [](const auto& request) { return static_cast<bool>(request.output_target); });
+    }
     if (!collision_updates.empty()) {
         Corona::Diagnostics::PhaseScope collision_phase{"Mechanics", "skinned:gpu_collision"};
-        impl_->gpu_collision->update_vertices(collision_updates, false);
+        // A shared skin output can change queue-family ownership immediately after
+        // publication. Finish every collision read of it before releasing the lock.
+        impl_->gpu_collision->update_vertices(collision_updates, shared_collision_input);
     }
 
     // Publish only after both batches succeed. Revalidate identity because scene
@@ -1818,8 +1823,7 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
         {
             auto geometry = Corona::find_geometry(job.geometry);
             if (geometry && still_current(*geometry, job)) {
-                geometry->skinned_cpu_vertices = vision_readback
-                    ? std::move(job.blobs) : std::vector<std::vector<std::byte>>{};
+                geometry->skinned_mesh_outputs = std::move(job.outputs);
                 geometry->skinned_aabb_valid = job.bounds_valid;
                 geometry->skin_pose_revision = job.pose_revision;
                 if (job.bounds_valid) {
@@ -1829,6 +1833,8 @@ void MechanicsSystem::update_skinned_geometry(float dt) {
             }
         }
     }
+
+    output_lock.unlock();
 
     // Prepare one new resident mesh per animation update, including Phantom and
     // paused scenes. Never wait for background compilation just to do optional

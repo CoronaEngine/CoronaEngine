@@ -1,6 +1,7 @@
 // Vision zero-copy bridge implementation. See vision_zero_copy_bridge.h.
 
 #include "vision_zero_copy_bridge.h"
+#include "vision_shared_buffer.h"
 
 #include <stdexcept>
 #include <corona/shared_data_hub.h>
@@ -59,6 +60,37 @@ auto make_display_resolve_kernel() {
 }
 
 }  // namespace
+
+Horizon::HardwareBuffer import_vision_buffer(ocarina::Device& device, std::uint64_t buffer,
+                                             Horizon::HardwareBufferDesc desc) {
+    const uint64_t shareable_handle = device.export_handle(buffer);
+    // Importing an NT handle does not transfer handle ownership to Vulkan.
+    const std::unique_ptr<void, decltype(&CloseHandle)> exported_handle(
+        reinterpret_cast<HANDLE>(shareable_handle), &CloseHandle);
+    const uint64_t alloc_size = device.get_aligned_memory_size(buffer);
+    if (shareable_handle == 0 || alloc_size == 0) {
+        throw std::runtime_error("Vulkan buffer export returned an invalid handle or size");
+    }
+
+    auto handle = Corona::Horizon::ExternalMemoryHandle::win32(
+        reinterpret_cast<HANDLE>(shareable_handle),
+        alloc_size);
+    const auto metadata = device.buffer_export_metadata(buffer);
+    if (metadata.memory_type_index != ~0u) {
+        handle.memory_type_index = metadata.memory_type_index;
+        handle.vulkan_buffer_usage = metadata.usage;
+        handle.vulkan_queue_families.assign(metadata.queue_families.begin(), metadata.queue_families.end());
+        handle.device_uuid = metadata.device_uuid;
+        handle.driver_uuid = metadata.driver_uuid;
+        handle.memory_range = {0, desc.element_count * desc.element_size};
+    }
+
+    desc.dedicated = true;
+    desc.cpu_access = Horizon::CpuAccessMode::None;
+    auto imported = Horizon::HardwareBuffer::import_external(handle, desc);
+    if (!imported) throw std::runtime_error("Vision external buffer import failed");
+    return imported;
+}
 
 struct VisionZeroCopyBridge::Shared {
     ocarina::Buffer<ocarina::float4> output;
@@ -119,39 +151,9 @@ bool VisionZeroCopyBridge::ensure(::vision::Pipeline& pipeline, uint32_t width, 
         shared_->output = device.create_exported_buffer<ocarina::float4>(
             pixel_count, "VisionZeroCopyBridge::display");
 
-        const uint64_t shareable_handle = device.export_handle(shared_->output.handle());
-        // Importing an NT handle does not transfer handle ownership to Vulkan.
-        const std::unique_ptr<void, decltype(&CloseHandle)> exported_handle(
-            reinterpret_cast<HANDLE>(shareable_handle), &CloseHandle);
-        const uint64_t alloc_size = device.get_aligned_memory_size(shared_->output.handle());
-        if (shareable_handle == 0 || alloc_size == 0) {
-            throw std::runtime_error("Vulkan buffer export returned an invalid handle or size");
-        }
-
-        auto handle = Corona::Horizon::ExternalMemoryHandle::win32(
-            reinterpret_cast<HANDLE>(shareable_handle),
-            alloc_size);
-        const auto metadata = device.buffer_export_metadata(shared_->output.handle());
-        if (metadata.memory_type_index != ~0u) {
-            handle.memory_type_index = metadata.memory_type_index;
-            handle.vulkan_buffer_usage = metadata.usage;
-            handle.vulkan_queue_families.assign(metadata.queue_families.begin(), metadata.queue_families.end());
-            handle.device_uuid = metadata.device_uuid;
-            handle.driver_uuid = metadata.driver_uuid;
-            handle.memory_range = {0, pixel_count * sizeof(ocarina::float4)};
-        }
-
         auto desc = Corona::Horizon::HardwareBufferDesc::typed<ocarina::float4>(
-            pixel_count,
-            Corona::Horizon::BufferUsage_Storage,
-            "VisionZeroCopyBridge::imported");
-        desc.dedicated = true;
-        desc.cpu_access = Corona::Horizon::CpuAccessMode::None;
-
-        imported_ = Corona::Horizon::HardwareBuffer::import_external(handle, desc);
-        if (!imported_) {
-            throw std::runtime_error("Vulkan external buffer import returned an invalid buffer");
-        }
+            pixel_count, Corona::Horizon::BufferUsage_Storage, "VisionZeroCopyBridge::imported");
+        imported_ = import_vision_buffer(device, shared_->output.handle(), desc);
 
         width_ = width;
         height_ = height;
