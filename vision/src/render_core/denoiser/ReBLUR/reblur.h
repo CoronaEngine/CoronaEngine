@@ -53,7 +53,7 @@ OC_PARAM_STRUCT(vision::reblur, GuidePackParam, guide, pack) {};
 namespace vision::reblur {
 
 class ReBLUR : public Denoiser {
-    SP<Filter> filter_{make_shared<Filter>()};
+    SP<ReblurFilter> filter_{make_shared<ReblurFilter>()};
 #ifdef VISION_REBLUR_EDSL
     SP<EdslReblur> edsl_;
     NativeCameraParams native_camera_;

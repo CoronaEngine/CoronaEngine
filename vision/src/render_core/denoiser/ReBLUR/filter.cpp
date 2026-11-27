@@ -2,11 +2,11 @@
 #include <algorithm>
 
 namespace vision::reblur {
-void Filter::reset() noexcept {
+void ReblurFilter::reset() noexcept {
     for (auto &layer : layers_) layer.frame = InvalidUI32;
 }
 
-void Filter::prepare_native(Device &device, uint2 size, bool compact_guide) {
+void ReblurFilter::prepare_native(Device &device, uint2 size, bool compact_guide) {
     const bool resized = size_.x != size.x || size_.y != size.y;
     if (resized || history_.size() != 0u) {
         reset();
@@ -21,7 +21,7 @@ void Filter::prepare_native(Device &device, uint2 size, bool compact_guide) {
         guide_ = device.create_byte_buffer(guide_bytes, compact_guide ? "REBLUR compact remodulation SOA" : "REBLUR current geometry SOA");
 }
 
-void Filter::prepare(Device &device, uint2 size, uint layer_count) {
+void ReblurFilter::prepare(Device &device, uint2 size, uint layer_count) {
     const uint n = size.x * size.y;
     if (size_.x != size.x || size_.y != size.y || history_.size() != size_t(n) * sizeof(TemporalData)) {
         size_ = size;
@@ -45,7 +45,7 @@ void Filter::prepare(Device &device, uint2 size, uint layer_count) {
     }
 }
 
-void Filter::compile(Device &device) {
+void ReblurFilter::compile(Device &device) {
     compile_modulation(device);
     compile_prepass(device);
     compile_temporal(device);
@@ -55,7 +55,7 @@ void Filter::compile(Device &device) {
     reset();
 }
 
-FilterParam Filter::native_parameters(FilterParam p, uint layer) {
+FilterParam ReblurFilter::native_parameters(FilterParam p, uint layer) {
     auto &state = layers_[layer];
     p.size = size_;
     p.history_valid &= state.frame != InvalidUI32 && state.frame + 1u == p.frame;
@@ -64,7 +64,7 @@ FilterParam Filter::native_parameters(FilterParam p, uint layer) {
     return p;
 }
 
-CommandBatch Filter::dispatch(FilterParam p, uint layer) {
+CommandBatch ReblurFilter::dispatch(FilterParam p, uint layer) {
     auto &state = layers_[layer];
     p.size = size_;
     p.history_valid &= state.frame != InvalidUI32 && state.frame + 1u == p.frame;

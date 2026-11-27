@@ -1,7 +1,7 @@
 #include "utils.h"
 
 namespace vision::reblur {
-void Filter::compile_stabilization(Device &device) {
+void ReblurFilter::compile_stabilization(Device &device) {
     Kernel stabilization = [](Var<FilterParam> p) {
         ocarina::configure_block(16u, 8u);
         auto guides = guide_view(p.guide);

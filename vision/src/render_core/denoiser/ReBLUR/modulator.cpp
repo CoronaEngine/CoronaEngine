@@ -1,7 +1,7 @@
 #include "utils.h"
 
 namespace vision::reblur {
-void Filter::compile_modulation(Device &device) {
+void ReblurFilter::compile_modulation(Device &device) {
     Kernel pack = [](Var<FilterParam> p) {
         auto guides = guide_view(p.guide);
         // One warp packs a 16x16 tile and shares the validity reads with classification.

@@ -1,7 +1,7 @@
 #include "utils.h"
 
 namespace vision::reblur {
-void Filter::compile_prepass(Device &device) {
+void ReblurFilter::compile_prepass(Device &device) {
     Kernel reconstruction = [](Var<FilterParam> p) {
         auto guides = guide_view(p.guide);
         Uint i = dispatch_id(); Int2 pixel = make_int2(dispatch_idx().xy());

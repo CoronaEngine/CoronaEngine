@@ -1,7 +1,7 @@
 #include "utils.h"
 
 namespace vision::reblur {
-Shader<void(FilterParam)> Filter::compile_spatial_pass(Device &device, uint stage) {
+Shader<void(FilterParam)> ReblurFilter::compile_spatial_pass(Device &device, uint stage) {
     Kernel kernel = [stage](Var<FilterParam> p) {
         ocarina::configure_block(32u, 8u);
         auto guides = guide_view(p.guide);
@@ -174,7 +174,7 @@ Shader<void(FilterParam)> Filter::compile_spatial_pass(Device &device, uint stag
     };
     return device.compile(kernel, stage == 0u ? "REBLUR-PrePass" : stage == 1u ? "REBLUR-Blur" : "REBLUR-PostBlur");
 }
-void Filter::compile_spatial(Device &device) {
+void ReblurFilter::compile_spatial(Device &device) {
     blur_ = compile_spatial_pass(device, 1u);
     post_blur_ = compile_spatial_pass(device, 2u);
 }

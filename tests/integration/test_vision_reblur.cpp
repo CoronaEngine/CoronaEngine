@@ -55,7 +55,7 @@ void unpack_history(const ocarina::HostByteBuffer &bytes, reblur::TemporalData *
 
 void check_storage_budget(Device &device) {
     const size_t before = ocarina::MemoryStats::instance().buffer_size();
-    reblur::Filter filter;
+    reblur::ReblurFilter filter;
     const uint2 size = make_uint2(640u, 360u);
     filter.prepare(device, size, 3u);
     const size_t bytes = ocarina::MemoryStats::instance().buffer_size() - before;
@@ -156,7 +156,7 @@ void check_helpers(Device &device, Stream &stream) {
 
 
 void check_storage_precision(Device &device, Stream &stream) {
-    reblur::Filter filter;
+    reblur::ReblurFilter filter;
     filter.prepare(device, make_uint2(1u));
     filter.compile(device);
     auto input = device.create_buffer<float4>(1u);
@@ -202,7 +202,7 @@ void check_storage_precision(Device &device, Stream &stream) {
 }
 
 void check_filter(Device &device, Stream &stream) {
-    reblur::Filter filter;
+    reblur::ReblurFilter filter;
     const uint2 size = make_uint2(32u, 32u);
     const uint n = size.x * size.y;
     filter.prepare(device, size, 3u);
@@ -349,7 +349,7 @@ void check_filter(Device &device, Stream &stream) {
 }
 
 void check_curved_glossy_footprint(Device &device, Stream &stream) {
-    reblur::Filter filter;
+    reblur::ReblurFilter filter;
     const uint2 size = make_uint2(32u);
     const uint n = size.x * size.y;
     filter.prepare(device, size); filter.compile(device);
@@ -487,7 +487,7 @@ void check_curved_glossy_footprint(Device &device, Stream &stream) {
 }
 
 void check_sparse_tiles(Device &device, Stream &stream) {
-    reblur::Filter filter;
+    reblur::ReblurFilter filter;
     const uint2 size = make_uint2(49u, 33u);
     const uint n = size.x * size.y;
     filter.prepare(device, size);
@@ -557,7 +557,7 @@ void check_sparse_tiles(Device &device, Stream &stream) {
 }
 
 void check_packed_motion(Device &device, Stream &stream) {
-    reblur::Filter filter;
+    reblur::ReblurFilter filter;
     const uint2 size = make_uint2(17u, 19u);
     const uint n = size.x * size.y, center = 9u * size.x + 8u;
     filter.prepare(device, size);

@@ -98,7 +98,7 @@ Reprojected reproject(const Var<FilterParam> &p, const Var<Guide> &g, Float2 ras
 }
 }
 
-void Filter::compile_temporal(Device &device) {
+void ReblurFilter::compile_temporal(Device &device) {
     Kernel temporal = [](Var<FilterParam> p) {
         ocarina::configure_block(16u, 8u);
         auto guides = guide_view(p.guide);

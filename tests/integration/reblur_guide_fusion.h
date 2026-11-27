@@ -6,7 +6,7 @@ inline void check_reblur_guide_fusion() {
     using namespace vision;
     namespace fs = std::filesystem;
     {
-        reblur::Filter cache;
+        reblur::ReblurFilter cache;
         const auto size = make_uint2(13u, 9u);
         const size_t pixels = size_t(size.x) * size.y;
         cache.prepare_native(Global::instance().device(), size, true);

@@ -98,7 +98,7 @@ namespace vision::reblur {
 // The scene-independent shader stages are shared with the GPU integration tests.
 // Previous-frame data is immutable through temporal reprojection, then updated
 // by pointwise stabilization/output writes. Current data is shared.
-class Filter {
+class ReblurFilter {
     uint2 size_{};
     struct Layer {
         ocarina::ByteBuffer guide;
