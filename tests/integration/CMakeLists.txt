@@ -126,7 +126,8 @@ set_tests_properties(VisionHotfixRendererTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
     RUN_SERIAL TRUE TIMEOUT 300)
 add_test(NAME VisionImportedEmissionTests COMMAND corona_vision_engine_scene_tests --imported-emission)
-set_tests_properties(VisionCameraSettingsTests VisionSharedDisplayTests VisionSunDirectionTests VisionImportedEmissionTests PROPERTIES
+add_test(NAME VisionModelBaseColorTests COMMAND corona_vision_engine_scene_tests --model-base-color)
+set_tests_properties(VisionCameraSettingsTests VisionSharedDisplayTests VisionSunDirectionTests VisionImportedEmissionTests VisionModelBaseColorTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>"
     RUN_SERIAL TRUE TIMEOUT 300)
 set_tests_properties(VisionEngineSceneTests PROPERTIES

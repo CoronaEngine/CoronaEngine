@@ -9,7 +9,9 @@
 #include "hotfix/module_interface.h"
 #include "vision/vision_camera_adapter.h"
 #include "vision/vision_light_adapter.h"
+#include "vision/vision_material_adapter.h"
 #include <corona/resource/resource_manager.h>
+#include <corona/resource/types/image.h>
 #include <corona/resource/types/scene.h>
 #include <nlohmann/json.hpp>
 #include "vision/vision_zero_copy_bridge.h"
@@ -20,6 +22,7 @@
 #include <stdexcept>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
 #include <chrono>
 #include <limits>
 #include <array>
@@ -1439,8 +1442,32 @@ struct VisionEngineSceneTest {
         std::cout << "PASS: " << pipeline.renderer().integrator()->impl_type() << " sun direction, sampling/PDF and view histories\n";
     }
 
+    static void check_model_base_color_texture() {
+        auto image = std::make_shared<Resource::Image>("embedded-base-color-test");
+        unsigned char pixel[] = {128, 255, 0, 255};
+        image->set_data(pixel, 1, 1, 4);
+        auto& resources = Resource::ResourceManager::get_instance();
+        expect(resources.add_resource(image->get_uid(), image), "register the in-memory model texture");
+
+        auto imported = std::make_shared<MeshMaterialDevice>();
+        imported->source.albedo_texture = image->get_uid();
+        MeshDevice mesh{};
+        mesh.material = imported;
+        auto overrides = std::make_shared<Materials::Overrides>(1);
+        overrides->front().base_color = std::array{0.5f, 0.25f, 1.f, 1.f};
+        OpticsDevice optics{};
+        optics.material_overrides = overrides;
+        auto material = Vision::create_vision_material(optics, mesh);
+        const auto color = material->input_slot("color")->average();
+        // sRGB code 128 decodes to 0.21586 in linear space.
+        expect(color.size() == 3 && std::abs(color[0] - 0.10793f) < 1e-5f &&
+                   color[1] == 0.25f && color[2] == 0.f,
+               "model base color must multiply the decoded texture by the resolved factor");
+        resources.remove_cache(image->get_uid());
+    }
+
     static void run(bool shared_display_only = false, bool hotfix_only = false,
-                    bool imported_emission_only = false, bool sun_direction_only = false) {
+                    std::string_view material_test = {}, bool sun_direction_only = false) {
         namespace fs = std::filesystem;
         const auto base = fs::current_path() / "engine-scene-test-assets";
         fs::create_directories(base);
@@ -1469,7 +1496,7 @@ struct VisionEngineSceneTest {
         { auto* profiles = hub.try_profiles(actor); profiles->handles = {profile}; }
         { auto* w = hub.try_environment(environment); w->sun_intensity = 0; w->sky_intensity = 1; }
         { auto w = Corona::find_scene(scene); w->actor_handles = {actor}; w->environment = environment; }
-        if (imported_emission_only) {
+        if (material_test == "--imported-emission") {
             // Both external importers publish emission through Principled,
             // then materialization queues visibility for the same optics.
             auto material = std::make_shared<Materials::Principled>();
@@ -1512,7 +1539,9 @@ struct VisionEngineSceneTest {
             render(*pt, "Corona-PT");
             if (hotfix_only) {
                 check_hotfix_renderers(*pt);
-            } else if (imported_emission_only) {
+            } else if (material_test == "--model-base-color") {
+                check_model_base_color_texture();
+            } else if (material_test == "--imported-emission") {
                 unsigned area_lights = 0;
                 for (const auto& light : pt->scene().light_manager().lights()) {
                     if (light->match(vision::LightType::Area)) ++area_lights;
@@ -1565,7 +1594,7 @@ struct VisionEngineSceneTest {
         hub.destroy_geometry(geometry);
         hub.destroy_transform(transform);
         hub.destroy_model_resource(model);
-        if (!shared_display_only && !hotfix_only && !imported_emission_only && !sun_direction_only) {
+        if (!shared_display_only && !hotfix_only && material_test.empty() && !sun_direction_only) {
             // Exercise the embedded base fallback after removing the fixture's
             // geometry/environment, so its deterministic output is black.
             vision::Global::instance().set_device(&device);
@@ -1590,17 +1619,18 @@ int main(int argc, char** argv) {
     } runtime_cleanup;
     try {
         if (argc == 2 && std::string(argv[1]) == "--sun-direction") {
-            Corona::Systems::VisionEngineSceneTest::run(false, false, false, true);
+            Corona::Systems::VisionEngineSceneTest::run(false, false, {}, true);
             return 0;
         }
         if (argc == 2 && std::string(argv[1]) == "--hotfix") {
-            Corona::Systems::VisionEngineSceneTest::run(false, true, false);
+            Corona::Systems::VisionEngineSceneTest::run(false, true);
             return 0;
         }
         // Keep the imported-material regression independent of the camera API
         // contract suite; its fixture supplies the camera directly.
-        if (argc == 2 && std::string(argv[1]) == "--imported-emission") {
-            Corona::Systems::VisionEngineSceneTest::run(false, false, true);
+        if (argc == 2 && (std::string_view(argv[1]) == "--imported-emission" ||
+                          std::string_view(argv[1]) == "--model-base-color")) {
+            Corona::Systems::VisionEngineSceneTest::run(false, false, argv[1]);
             return 0;
         }
         Corona::Systems::VisionEngineSceneTest::check_atmospheric_lighting_state();
