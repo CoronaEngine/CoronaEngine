@@ -28,7 +28,7 @@ def offline_history_harness():
         pytest.skip("Standalone offline camera regression requires g++")
     source = (ROOT / "src/systems/optics/optics_system.cpp").read_text(encoding="utf-8")
     prefix_start = source.index("Vision::sync_vision_camera(*pipeline, camera);")
-    prefix_end = source.index("const bool diagnostic =", prefix_start)
+    prefix_end = source.index("const auto render_start =", prefix_start)
     prefix = source[prefix_start:prefix_end]
     check_start = source.index("const auto incompatible = [&]")
     check_end = source.index("if (incompatible()) return;", check_start)
@@ -78,10 +78,8 @@ struct Integrator {
 struct Renderer { Integrator* integrator() { return &::integrator; } } renderer;
 namespace ktm { struct fvec3 { float x{}, y{}, z{}; }; }
 enum class CameraVisionRenderMode { ReSTIR };
-struct CameraOutputMode { enum { FinalColor }; };
 struct Camera {
     ktm::fvec3 position{42.f,0.f,0.f}, forward{0.f,0.f,-1.f}, world_up{0.f,1.f,0.f};
-    int output_mode=0;
     int vision_restir_settings=0;
     bool surface=false;
 };
@@ -121,15 +119,12 @@ void sync_vision_camera(Pipeline& pipeline,const Camera& camera) {
     pipeline.current_camera=camera;
     ++pipeline.sync_calls;
 }
-struct VisionDiagnosticAdapter {
-    bool render(Pipeline& pipeline,int) { pipeline.display(0); return true; }
-};
 }
 struct Timings : std::ostringstream { bool is_open() const { return false; } };
 struct Phase { void set(const char*) {} };
 int failures=0;
 void fail_pending_screenshots(int) { ++failures; }
-void execute(Pipeline* pipeline,unsigned count,bool capturing,bool diagnostic,int expire_after,const char* output_path) {
+void execute(Pipeline* pipeline,unsigned count,bool capturing,int expire_after,const char* output_path) {
     Camera camera;
     Phase vision_phase;
     SYNC_PREFIX
@@ -141,7 +136,6 @@ void execute(Pipeline* pipeline,unsigned count,bool capturing,bool diagnostic,in
     if (capture && expire_after==0) capture->expires_at=std::chrono::steady_clock::time_point::min();
     int cam_handle=1;
     struct Runtime {
-        std::unordered_map<int,std::unique_ptr<Vision::VisionDiagnosticAdapter>> diagnostics;
         std::unordered_map<int,std::pair<std::string,bool>> incompatible_views;
         CameraVisionRenderMode mode=CameraVisionRenderMode::ReSTIR;
     } runtime;
@@ -158,13 +152,13 @@ void execute(Pipeline* pipeline,unsigned count,bool capturing,bool diagnostic,in
 }
 int main(int argc,char** argv) {
     Pipeline pipeline;
-    execute(&pipeline,std::atoi(argv[1]),std::atoi(argv[2])!=0,std::atoi(argv[3])!=0,std::atoi(argv[4]),argc>5?argv[5]:"");
+    execute(&pipeline,std::atoi(argv[1]),std::atoi(argv[2])!=0,std::atoi(argv[3]),argc>4?argv[4]:"");
     bool after_first_current=true;
     for (size_t i=1;i<pipeline.observed_previous.size();++i)
         after_first_current &= pipeline.observed_previous[i].position.x==42;
     std::cout << pipeline.uploads << ' ' << pipeline.observed_previous.size() << ' '
               << failures << ' ' << after_first_current << '\n';
-    if (argc>5) {
+    if (argc>4) {
         std::cout << std::setprecision(std::numeric_limits<float>::max_digits10);
         auto write_pose=[](const Camera& pose) {
             std::cout << ',' << pose.position.x << ',' << pose.position.y << ',' << pose.position.z
@@ -192,18 +186,17 @@ int main(int argc,char** argv) {
         yield executable
 
 
-@pytest.mark.parametrize("count,capturing,diagnostic,expire_after,rendered,failed", [
-    (64, True, False, -1, 64, 0),
-    (192, True, False, -1, 192, 0),
-    (1, False, False, -1, 1, 0),
-    (64, True, False, 0, 0, 1),
-    (64, True, False, 1, 1, 1),
-    (1, False, True, -1, 1, 0),
+@pytest.mark.parametrize("count,capturing,expire_after,rendered,failed", [
+    (64, True, -1, 64, 0),
+    (192, True, -1, 192, 0),
+    (1, False, -1, 1, 0),
+    (64, True, 0, 0, 1),
+    (64, True, 1, 1, 1),
 ])
 def test_each_render_observes_published_previous_camera(offline_history_harness, count, capturing,
-                                                       diagnostic, expire_after, rendered, failed):
+                                                       expire_after, rendered, failed):
     result = subprocess.run([str(offline_history_harness), str(count), str(int(capturing)),
-                             str(int(diagnostic)), str(expire_after)], capture_output=True, text=True,
+                             str(expire_after)], capture_output=True, text=True,
                             env=dict(os.environ, VISION_GI_GUIDE_REUSE_CAMERA_SEQUENCE=""))
     assert result.returncode == 0, result.stderr
     uploads, actual_rendered, actual_failed, after_first_current = map(int, result.stdout.split())
@@ -214,7 +207,7 @@ def test_each_render_observes_published_previous_camera(offline_history_harness,
 
 
 def test_incompatible_render_fails_pending_capture_before_the_next_frame(offline_history_harness):
-    result = subprocess.run([str(offline_history_harness), "64", "1", "0", "-1"],
+    result = subprocess.run([str(offline_history_harness), "64", "1", "-1"],
                             capture_output=True, text=True, check=True,
                             env=dict(os.environ, VISION_GI_GUIDE_REUSE_CAMERA_SEQUENCE="",
                                      TEST_INCOMPATIBLE_AFTER_DISPLAY="1"))
@@ -236,7 +229,7 @@ def test_scheduled_camera_sequence_keeps_previous_pose_and_frame_history(offline
         writer = csv.writer(stream)
         writer.writerow(("frame", "pos_x", "pos_y", "pos_z", "forward_x", "forward_y", "forward_z", "up_x", "up_y", "up_z"))
         writer.writerows((frame, *pose) for frame, pose in events.items())
-    result = subprocess.run([str(offline_history_harness), "192", "1", "0", "-1", str(directory / "image.png")],
+    result = subprocess.run([str(offline_history_harness), "192", "1", "-1", str(directory / "image.png")],
                             capture_output=True, text=True,
                             env=dict(os.environ, VISION_GI_GUIDE_REUSE_CAMERA_SEQUENCE=str(sequence)))
     assert result.returncode == 0, result.stderr

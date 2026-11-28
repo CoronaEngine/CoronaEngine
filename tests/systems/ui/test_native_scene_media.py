@@ -93,7 +93,7 @@ struct NativeEditorCamera { std::shared_ptr<EngineCamera> engine_camera; };
 struct NativeEditorScene {
     std::vector<int> actors; std::vector<NativeEditorCamera> cameras; std::size_t active_camera_index{};
     std::string route="scene", name="source", archive_session="session", project_root="project";
-    bool sun_enabled=false, floor_grid_enabled=false; std::array<float,3> sun_direction{};
+    bool sun_enabled=false; std::array<float,3> sun_direction{};
     std::string terrain_path, terrain_type, script_path;
     std::shared_ptr<const json> authored_media;
 } scene;

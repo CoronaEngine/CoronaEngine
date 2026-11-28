@@ -368,7 +368,6 @@ CameraSnapshotRow make_camera_row(EntityId handle, const CameraDevice& camera) {
     row.view_width = camera.view_width;
     row.view_height = camera.view_height;
     row.move_speed = camera.move_speed;
-    row.output_mode = camera.output_mode;
     row.vision_render_mode = camera.vision_render_mode;
     row.vision_denoise = camera.vision_denoise;
     row.vision_denoiser = camera.vision_denoiser;
@@ -504,9 +503,6 @@ CameraSnapshotRow SharedDataHub::camera_view(EntityId camera_handle) const {
                 view.height = update.height;
                 view.aspect = static_cast<float>(update.width) /
                               static_cast<float>(std::max(update.height, 1u));
-            }
-            if (has_camera_state_field(update.fields, CameraStateUpdateField::OutputMode)) {
-                view.output_mode = update.output_mode;
             }
             if (has_camera_state_field(update.fields, CameraStateUpdateField::VisionRenderMode)) {
                 view.vision_render_mode = update.vision_render_mode;
@@ -770,9 +766,6 @@ void SharedDataHub::enqueue_camera_state_update(CameraStateUpdateCommand command
     if (has_camera_state_field(command.fields, CameraStateUpdateField::Size)) {
         pending.width = command.width;
         pending.height = command.height;
-    }
-    if (has_camera_state_field(command.fields, CameraStateUpdateField::OutputMode)) {
-        pending.output_mode = command.output_mode;
     }
     if (has_camera_state_field(command.fields, CameraStateUpdateField::VisionRenderMode)) {
         pending.vision_render_mode = command.vision_render_mode;

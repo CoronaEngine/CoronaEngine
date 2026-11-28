@@ -508,7 +508,6 @@ Corona::API::Environment::Environment()
     payload.environment.sun_position.x = 1.0f;
     payload.environment.sun_position.y = 1.0f;
     payload.environment.sun_position.z = 1.0f;
-    payload.environment.floor_grid_enabled = 1;
     handle_ = Corona::Ecs::request_create_environment(std::move(payload));
     if (handle_ == 0) {
         CFW_LOG_CRITICAL("[Environment::Environment] Failed to create the environment entity "
@@ -546,10 +545,6 @@ void Corona::API::Environment::set_properties(const EnvironmentProperties& prope
         command.fields = command.fields | Corona::EnvironmentField::SkyIntensity;
         command.sky_intensity = *properties.sky_intensity;
     }
-    if (properties.floor_grid) {
-        command.fields = command.fields | Corona::EnvironmentField::FloorGrid;
-        command.floor_grid_enabled = *properties.floor_grid ? 1u : 0u;
-    }
     if (properties.gravity) {
         command.fields = command.fields | Corona::EnvironmentField::Gravity;
         command.gravity = ktm::fvec3{(*properties.gravity)[0], (*properties.gravity)[1],
@@ -578,7 +573,6 @@ Corona::API::EnvironmentState Corona::API::Environment::get_state() const {
     return {{view.sun_direction.x, view.sun_direction.y, view.sun_direction.z},
             view.sun_intensity,
             view.sky_intensity,
-            view.floor_grid_enabled != 0,
             {view.gravity.x, view.gravity.y, view.gravity.z},
             view.floor_y,
             view.floor_restitution,
@@ -2164,76 +2158,6 @@ bool Corona::API::Camera::save_screenshot_sync(const std::string& path) const {
         return false;
     }
     return future.get();
-}
-
-void Corona::API::Camera::set_output_mode(const std::string& mode) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Camera::set_output_mode] Invalid camera handle");
-        return;
-    }
-
-    CameraOutputMode output_mode = CameraOutputMode::FinalColor;
-    if (mode == "base_color") {
-        output_mode = CameraOutputMode::BaseColor;
-    } else if (mode == "normal") {
-        output_mode = CameraOutputMode::Normal;
-    } else if (mode == "position") {
-        output_mode = CameraOutputMode::WorldPosition;
-    } else if (mode == "object_id") {
-        output_mode = CameraOutputMode::ObjectID;
-    } else if (mode == "visibility_buffer") {
-        output_mode = CameraOutputMode::VisibilityBuffer;
-    } else if (mode == "ssao") {
-        output_mode = CameraOutputMode::SSAO;
-    } else if (mode == "ssao_raw") {
-        output_mode = CameraOutputMode::SSAORaw;
-    } else if (mode == "shadow_mask_raw") {
-        output_mode = CameraOutputMode::ShadowMaskRaw;
-    } else if (mode == "shadow_mask") {
-        output_mode = CameraOutputMode::ShadowMask;
-    } else if (mode != "final_color") {
-        CFW_LOG_WARNING("[Camera::set_output_mode] Unknown mode '{}', defaulting to final_color", mode);
-    }
-
-    CameraStateUpdateCommand command{};
-    command.camera_handle = handle_;
-    command.fields = CameraStateUpdateField::OutputMode;
-    command.output_mode = output_mode;
-    SharedDataHub::instance().enqueue_camera_state_update(command);
-}
-
-std::string Corona::API::Camera::get_output_mode() const {
-    if (handle_ == 0) {
-        return "final_color";
-    }
-
-    if (auto accessor = Corona::find_camera(handle_)) {
-        switch (accessor->output_mode) {
-            case CameraOutputMode::BaseColor:
-                return "base_color";
-            case CameraOutputMode::Normal:
-                return "normal";
-            case CameraOutputMode::WorldPosition:
-                return "position";
-            case CameraOutputMode::ObjectID:
-                return "object_id";
-            case CameraOutputMode::VisibilityBuffer:
-                return "visibility_buffer";
-            case CameraOutputMode::SSAO:
-                return "ssao";
-            case CameraOutputMode::SSAORaw:
-                return "ssao_raw";
-            case CameraOutputMode::ShadowMaskRaw:
-                return "shadow_mask_raw";
-            case CameraOutputMode::ShadowMask:
-                return "shadow_mask";
-            case CameraOutputMode::FinalColor:
-                [[fallthrough]];
-            default:
-                return "final_color";
-        }
-    }
-    return "final_color";
 }
 
 void Corona::API::Camera::set_vision_render_mode(const std::string& mode) {

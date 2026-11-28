@@ -256,8 +256,6 @@ def run_scene(scene, modes, args, output):
         camera = session.api("SceneTools.list_camera_views", [route])["cameras"][0]
         identity = camera.get("camera_id", camera["id"])
         session.api("SceneTools.update_camera_view", [route, identity, {"width": WIDTH, "height": HEIGHT}])
-        session.api("SceneTools.set_output_mode", [route, identity, "final_color"])
-        session.until("SceneTools.get_output_mode", [route, identity], lambda state: state.get("mode") == "final_color")
         session.api("SceneTools.set_vision_stable_planes", [route, identity, True])
         session.api("SceneTools.set_camera_pose", [route, identity, {
             **{key: camera[key] for key in ("position", "forward", "world_up", "fov", "projection_x_sign", "near_plane", "far_plane")},

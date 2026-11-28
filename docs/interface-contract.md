@@ -72,7 +72,7 @@
 | `scene` | `delete_actor` | capability | Removes an actor and reports what was removed. |
 | `scene` | `rebind_actor_resource` | capability | Points an actor at a different resource path. |
 | `scene` | `save` | capability | Writes the scene through the archive service and reports unresolved actors. |
-| `scene` | `read_environment` | capability | The scene environment: sun, grid, physics scalars. |
+| `scene` | `read_environment` | capability | Reads sun and physics settings. |
 | `scene` | `set_environment` | capability | Patches the environment. |
 | `scene` | `focus_actor` | capability | Moves a camera so it frames one actor. |
 | `scene` | `update_camera` | capability | Patches camera properties and pose. |

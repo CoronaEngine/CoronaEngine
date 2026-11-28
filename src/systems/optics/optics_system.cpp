@@ -78,7 +78,6 @@
 #include "vision/vision_geometry_sync_policy.h"
 #include "vision/vision_skinning_bridge.h"
 #include "vision/vision_camera_adapter.h"
-#include "vision/vision_diagnostic_adapter.h"
 #include "vision/vision_light_adapter.h"
 #include "vision/vision_medium_adapter.h"
 #include "vision/vision_render_mode_config.h"
@@ -467,10 +466,6 @@ std::vector<Corona::CameraStateUpdateCommand> apply_pending_camera_state_updates
                 camera->height = update.height;
                 camera->aspect = static_cast<float>(update.width) /
                                  static_cast<float>(update.height);
-            }
-            if (Corona::has_camera_state_field(
-                    update.fields, Corona::CameraStateUpdateField::OutputMode)) {
-                camera->output_mode = update.output_mode;
             }
             if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::VisionRenderMode)) {
@@ -1500,7 +1495,6 @@ struct OpticsSystem::VisionPipelineRuntime {
 
     // Per-view shared buffers carry Vision's resolved display pixels to Vulkan.
     std::unordered_map<std::uintptr_t, std::unique_ptr<Vision::VisionZeroCopyBridge>> bridges;
-    std::unordered_map<std::uintptr_t, std::unique_ptr<Vision::VisionDiagnosticAdapter>> diagnostics;
     std::unordered_map<std::uintptr_t, std::pair<std::string, bool>> incompatible_views;
     std::unordered_set<std::uintptr_t> retained_contexts;
     std::unordered_map<std::uintptr_t, bool> view_denoise_states;
@@ -1602,7 +1596,6 @@ struct OpticsSystem::VisionPipelineRuntime {
     }
 
     void clear_camera_runtime_state() noexcept {
-        diagnostics.clear();
         bridges.clear();
         incompatible_views.clear();
         retained_contexts.clear();
@@ -1698,7 +1691,6 @@ bool OpticsSystem::prepare_vision_camera_view(VisionPipelineRuntime& runtime,
         if (recreate) {
             pipeline->commit_command();
             runtime.wait_for_interop_submission(camera_handle, "view context recreation");
-            runtime.diagnostics.erase(camera_handle);
             runtime.bridges.erase(camera_handle);
             runtime.retained_contexts.erase(camera_handle);
             runtime.view_denoise_states.erase(camera_handle);
@@ -2904,7 +2896,6 @@ Vision::VisionBuildResult OpticsSystem::rebuild_vision_scene(VisionPipelineRunti
         auto& scene = pipeline->scene();
         result = Vision::build_vision_geometry(scene);
         if (!result.complete()) return result;
-        runtime.diagnostics.clear();
         if (runtime.scene_resource) {
             sync_logical_instances_from_pipeline_scene(*runtime.scene_resource, scene);
         }
@@ -3121,7 +3112,6 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
 
                 pipeline->commit_command();
                 runtime.wait_for_interop_submission(camera_handle, "inactive bridge release");
-                runtime.diagnostics.erase(camera_handle);
                 it = runtime.bridges.erase(it);
                 if (camera_exists) {
                     pipeline->invalidate_view_context(camera_handle);
@@ -3199,7 +3189,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                     const bool screenshot = has_pending_screenshot(cam_handle);
                     const bool fallback = runtime.mode == CameraVisionRenderMode::ReSTIR &&
                         view.vision_mode == runtime.mode && camera.surface &&
-                        camera.output_mode == CameraOutputMode::FinalColor && !screenshot &&
+                        !screenshot &&
                         integrator->allows_path_tracing_fallback();
                     auto& last = runtime.incompatible_views[cam_handle];
                     if (screenshot || last.first != reason || last.second != fallback) {
@@ -3229,7 +3219,6 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                 vision_phase.set("vision:camera_sync");
                 Vision::sync_vision_camera(*pipeline, camera);
                 vision_phase.set("vision:display");
-                const bool diagnostic = Vision::VisionDiagnosticAdapter::supports(camera.output_mode);
                 const auto render_start = profile_now();
                 std::optional<PendingScreenshot> capture;
                 {
@@ -3253,11 +3242,6 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
 #endif
                 };
                 if (capture) {
-                    if (diagnostic) {
-                        CFW_LOG_WARNING("OpticsSystem: Fixed-frame screenshots require final_color output");
-                        fail_pending_screenshots(cam_handle);
-                        return;
-                    }
                     if (!capture->timings_path.empty()) {
                         frame_timings.open(std::filesystem::u8path(capture->timings_path));
                         if (!frame_timings) throw std::runtime_error("Cannot open screenshot timing CSV");
@@ -3386,14 +3370,8 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                     }
                     const auto sequence_integrator_before = pipeline->frame_index();
                     pipeline->upload_data();
-                    if (diagnostic) {
-                        auto& adapter = runtime.diagnostics[cam_handle];
-                        if (!adapter) adapter = std::make_unique<Vision::VisionDiagnosticAdapter>();
-                        if (!adapter->render(*pipeline, camera.output_mode)) return;
-                    } else {
-                        pipeline->display(1.0 / 60.0);
-                        if (incompatible()) return;
-                    }
+                    pipeline->display(1.0 / 60.0);
+                    if (incompatible()) return;
                     runtime.incompatible_views.erase(cam_handle);
                     const auto frame_qpc_end = stage_timings.is_open() ? capture_profile_qpc() : 0u;
                     if (camera_sequence_audit.is_open()) {
@@ -3466,7 +3444,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
                 const auto& display = environment.vision_display_profile;
                 if (!bridge->ensure(*pipeline, w, h) ||
                     !bridge->render_display(*pipeline, environment.exposure,
-                                            display ? &*display : nullptr, diagnostic)) {
+                                            display ? &*display : nullptr)) {
                     // The bridge logs and latches failures before this frame is published.
                     return;
                 }
@@ -3597,7 +3575,6 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
             if (!locked || locked->camera.vision_render_mode != view.vision_mode ||
                 camera_uses_vision_media(locked->camera) != runtime.participating_media) return std::nullopt;
             if (previous_settings && (!locked->camera.surface || has_pending_screenshot(view.camera_handle) ||
-                locked->camera.output_mode != CameraOutputMode::FinalColor ||
                 locked->camera.vision_restir_settings != *previous_settings)) return std::nullopt;
             if (key.participating_media &&
                 (locked->scene->authored_media != key.authored_media ||

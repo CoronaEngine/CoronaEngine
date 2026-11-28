@@ -43,9 +43,6 @@ void test_validation() {
           "non-finite sun direction rejected");
     check(validate_patch(sun_patch(false)).empty(), "sun toggle alone accepted");
 
-    EnvironmentPatch grid;
-    grid.grid_enabled = false;
-    check(validate_patch(grid).empty(), "explicit false grid accepted");
 
     EnvironmentPatch empty_physics;
     empty_physics.physics = EnvironmentPhysicsPatch{};
@@ -70,35 +67,30 @@ void test_validation() {
     check(validate_patch(valid_floor).empty(), "finite floor_y accepted");
 }
 
-void test_sun_and_grid_application() {
+void test_sun_application() {
     EnvironmentScalars state;
     state.sun_enabled = true;
     state.sun_direction = {0.f, 1.f, 0.f};
-    state.grid_enabled = true;
 
-    apply_sun_and_grid(state, sun_patch(false));
+    apply_sun(state, sun_patch(false));
     check(state.sun_enabled == false, "sun disabled");
     check((state.sun_direction == std::array<float, 3>{0.f, 1.f, 0.f}), "direction untouched when absent");
 
     EnvironmentScalars promoted;
     promoted.sun_enabled = true;
     promoted.sun_direction = {0.f, 1.f, 0.f};
-    apply_sun_and_grid(promoted, sun_patch(std::nullopt, std::array<float, 3>{0.f, 0.f, 0.f}));
+    apply_sun(promoted, sun_patch(std::nullopt, std::array<float, 3>{0.f, 0.f, 0.f}));
     check((promoted.sun_direction == std::array<float, 3>{1.f, 1.f, 1.f}), "degenerate direction promoted to {1,1,1}");
 
     EnvironmentScalars disabled;
     disabled.sun_enabled = true;
     disabled.sun_direction = {0.f, 0.f, 0.f};
-    apply_sun_and_grid(disabled, sun_patch(false, std::array<float, 3>{0.f, 0.f, 0.f}));
+    apply_sun(disabled, sun_patch(false, std::array<float, 3>{0.f, 0.f, 0.f}));
     check((disabled.sun_direction == std::array<float, 3>{0.f, 0.f, 0.f}),
           "degenerate direction kept while the sun is disabled");
 
-    EnvironmentPatch grid;
-    grid.grid_enabled = false;
-    apply_sun_and_grid(state, grid);
-    check(state.grid_enabled == false, "grid toggle applied");
-    apply_sun_and_grid(state, EnvironmentPatch{});
-    check(state.grid_enabled == false && state.sun_enabled == false, "absent patch keeps state");
+    apply_sun(state, EnvironmentPatch{});
+    check(state.sun_enabled == false, "absent patch keeps state");
 }
 
 void test_physics_extraction() {
@@ -128,7 +120,7 @@ void test_physics_extraction() {
 
 int main() {
     test_validation();
-    test_sun_and_grid_application();
+    test_sun_application();
     test_physics_extraction();
     std::cout << "scene_environment_service: " << checks << " checks passed\n";
     return 0;

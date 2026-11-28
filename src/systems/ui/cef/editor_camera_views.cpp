@@ -85,7 +85,6 @@ NativeEditorCamera& create_native_camera_view(NativeEditorScene& scene, const st
 
     item.engine_camera = std::make_unique<Corona::API::Camera>(position, forward, world_up, fov);
     item.engine_camera->set_size(item.width, item.height);
-    item.engine_camera->set_output_mode("final_color");
     item.engine_camera->set_vision_render_mode("path_tracing");
     item.engine_camera->set_view({item.view_open, item.view_x, item.view_y,
                                   item.view_width, item.view_height, item.move_speed});

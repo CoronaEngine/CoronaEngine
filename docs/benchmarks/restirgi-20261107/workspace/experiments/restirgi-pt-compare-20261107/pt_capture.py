@@ -380,7 +380,6 @@ def run(c):
         session.api("SceneTools.update_camera_view", [route, identity, {"width": WIDTH, "height": HEIGHT}])
         session.api("SceneTools.set_render_backend", ["vision", route, identity])
         session.until("SceneTools.get_render_backend", [route, identity], lambda v: v.get("mode") == "vision")
-        session.api("SceneTools.set_output_mode", [route, identity, "final_color"])
         session.api("SceneTools.set_vision_render_mode", [route, identity, "path_tracing"])
         record["render_mode_before"] = session.until("SceneTools.get_vision_render_mode", [route, identity],
             lambda v: v.get("mode") == "path_tracing")

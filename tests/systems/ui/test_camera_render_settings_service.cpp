@@ -28,13 +28,13 @@ void test_identity() {
           "empty patch rejected");
 
     CameraRenderSettingsPatch no_scene{};
-    no_scene.output_mode = "final_color";
+    no_scene.vision_render_mode = "restir";
     check(static_cast<bool>(validate_patch(no_scene, SceneMethod::SetCameraRenderSettings, true)),
           "missing scene rejected");
 
     CameraRenderSettingsPatch no_archive{};
     no_archive.scene = "scene.ini";
-    no_archive.output_mode = "final_color";
+    no_archive.vision_render_mode = "restir";
     check(static_cast<bool>(validate_patch(no_archive, SceneMethod::SetCameraRenderSettings, false)),
           "missing archive rejected");
 
@@ -62,17 +62,6 @@ void test_whitelists() {
     check(validate_patch(bad_family, SceneMethod::SetCameraRenderSettings, true).message ==
           "Unsupported Vision settings family", "unknown family rejected");
 
-    for (const char* mode : {"final_color", "base_color", "normal", "position", "object_id",
-                             "visibility_buffer", "ssao", "ssao_raw", "shadow_mask_raw", "shadow_mask"}) {
-        auto value = patch;
-        value.output_mode = mode;
-        check(!validate_patch(value, SceneMethod::SetCameraRenderSettings, true), "known output mode accepted");
-    }
-    auto bad_output = patch;
-    bad_output.output_mode = "final";
-    check(validate_patch(bad_output, SceneMethod::SetCameraRenderSettings, true).message ==
-          "Unsupported camera output mode", "unknown output mode rejected");
-
     for (const char* mode : {"path_tracing", "restir", "progressive_path_tracing", "svgf", "ssat"}) {
         auto value = patch;
         value.vision_render_mode = mode;
@@ -97,9 +86,9 @@ void test_whitelists() {
     auto both_bad = patch;
     both_bad.family = "foo";
     both_bad.settings = {{"x", 1}};
-    both_bad.output_mode = "invalid";
+    both_bad.vision_render_mode = "invalid";
     check(validate_patch(both_bad, SceneMethod::SetCameraRenderSettings, true).message ==
-          "Unsupported Vision settings family", "family error precedes output mode error");
+          "Unsupported Vision settings family", "family error precedes render mode error");
 }
 
 }  // namespace

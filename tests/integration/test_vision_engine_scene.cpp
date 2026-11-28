@@ -1245,7 +1245,7 @@ struct VisionEngineSceneTest {
                 pipeline.upload_data();
                 pipeline.display(1.0 / 60.0);
                 expect(bridge.ensure(pipeline, resolution.x, resolution.y) &&
-                           bridge.render_display(pipeline, 1.f, nullptr, false),
+                           bridge.render_display(pipeline, 1.f, nullptr),
                        "consecutive Vision frames must transfer through the shared buffer");
                 expect(bridge.valid() && !bridge.failed() &&
                            bridge.imported().same_resource(imported),
@@ -1268,15 +1268,15 @@ struct VisionEngineSceneTest {
         expect(pick_center().is_miss(), "picking away from the receiver must clear the previous hit");
         expect(bridge.ensure(pipeline, resolution.x + 1, resolution.y),
                "shared buffer resize must reallocate and import successfully");
-        expect(!bridge.render_display(pipeline, 1.f, nullptr, false) && bridge.failed() && !bridge.valid(),
+        expect(!bridge.render_display(pipeline, 1.f, nullptr) && bridge.failed() && !bridge.valid(),
                "mismatched framebuffer must fail instead of publishing stale pixels");
         expect(!bridge.ensure(pipeline, resolution.x, resolution.y) &&
-                   !bridge.render_display(pipeline, 1.f, nullptr, false),
+                   !bridge.render_display(pipeline, 1.f, nullptr),
                "a failed bridge must remain stopped until view recreation");
 
         Vision::VisionZeroCopyBridge recreated;
         expect(recreated.ensure(pipeline, resolution.x, resolution.y) &&
-                   recreated.render_display(pipeline, 1.f, nullptr, false),
+                   recreated.render_display(pipeline, 1.f, nullptr),
                "view recreation must restore shared GPU display after a failure");
         Vision::VisionZeroCopyBridge empty;
         expect(!empty.ensure(pipeline, 0, resolution.y) && empty.failed() &&

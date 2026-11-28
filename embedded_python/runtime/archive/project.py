@@ -125,7 +125,7 @@ def create_project(request):
         config.read_dict({"format": {"type": "corona_scene_folder", "version": "1"},
                           "scene": {"name": request["name"] or target.name},
                           "sun": {"sun_direction": "1.0, 1.0, 1.0", "enabled": "true"},
-                          "grid": {"enabled": "true"}, "actors": {}, "scripts": {"path": ""},
+                          "actors": {}, "scripts": {"path": ""},
                           "terrain": {"type": "", "path": ""}})
         for section in ("world", "multiplayer"):
             if section in request:

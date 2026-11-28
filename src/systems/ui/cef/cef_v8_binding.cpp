@@ -615,7 +615,7 @@ bool read_camera_render_settings(const CefV8ValueList& arguments, SceneRequest& 
     patch.scene = arguments[0]->GetStringValue().ToString();
     patch.camera_id = arguments[1]->IsString() ? arguments[1]->GetStringValue().ToString() : std::string{};
     if (patch.scene.empty() ||
-        !object_keys(arguments[2], {"archive_session", "output_mode", "vision", "family", "settings"})) return false;
+        !object_keys(arguments[2], {"archive_session", "vision", "family", "settings"})) return false;
     const auto scope = arguments[2];
     const auto session = scope->GetValue("archive_session");
     if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
@@ -630,13 +630,6 @@ bool read_camera_render_settings(const CefV8ValueList& arguments, SceneRequest& 
         return settings && settings->IsObject() && v8_to_json(settings, patch.settings) && patch.settings.is_object() && !patch.settings.empty();
     }
     if (read_only) return false;
-    const auto text = [&](const char* key, std::optional<std::string>& out) {
-        if (!scope->HasValue(key)) return true;
-        const auto value = scope->GetValue(key);
-        if (!value || !value->IsString() || value->GetStringValue().empty()) return false;
-        out = value->GetStringValue().ToString(); return true;
-    };
-    if (!text("output_mode", patch.output_mode)) return false;
     if (scope->HasValue("vision")) {
         const auto vision = scope->GetValue("vision");
         if (!object_keys(vision, {"render_mode", "denoiser", "accumulation", "denoise", "stable_planes"})) return false;
@@ -697,7 +690,6 @@ CefRefPtr<CefV8Value> cameras_value(const CameraListSnapshot& snapshot) {
     for (size_t index = 0; index < snapshot.cameras.size(); ++index) {
         const auto& snapshot_camera = snapshot.cameras[index];
         auto camera = camera_properties_value(snapshot_camera.properties)->GetValue("camera");
-        set(camera, "output_mode", CefV8Value::CreateString(snapshot_camera.output_mode));
         set(camera, "vision_render_mode", CefV8Value::CreateString(snapshot_camera.vision_render_mode));
         set(camera, "vision_denoiser", CefV8Value::CreateString(snapshot_camera.vision_denoiser));
         set(camera, "vision_accumulation", CefV8Value::CreateBool(snapshot_camera.vision_accumulation));
@@ -719,7 +711,6 @@ CefRefPtr<CefV8Value> camera_render_settings_value(const CameraRenderSettingsSna
     set_text(result, "scene", snapshot.scene);
     set_text(result, "camera_id", snapshot.camera_id);
     set_text(result, "family", snapshot.family);
-    set_text(result, "output_mode", snapshot.output_mode);
     result->SetValue("pending", CefV8Value::CreateBool(snapshot.pending), V8_PROPERTY_ATTRIBUTE_NONE);
     auto vision = CefV8Value::CreateObject(nullptr, nullptr);
     set_text(vision, "render_mode", snapshot.vision_render_mode);
@@ -963,7 +954,7 @@ bool read_environment(const CefV8ValueList& arguments, SceneRequest& request) {
     request.environment.scene = arguments[0]->GetStringValue().ToString();
     const auto object = arguments[1];
     const bool write = request.method == SceneMethod::SetEnvironment;
-    if (!(write ? object_keys(object, {"archive_session", "sun", "grid", "physics"}) :
+    if (!(write ? object_keys(object, {"archive_session", "sun", "physics"}) :
                   object_keys(object, {"archive_session"}))) return false;
     const auto session = object->GetValue("archive_session");
     if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
@@ -986,11 +977,6 @@ bool read_environment(const CefV8ValueList& arguments, SceneRequest& request) {
         if (sun.empty()) return false;
         patch.sun = sun;
     }
-    if (object->HasValue("grid")) {
-        const auto value = object->GetValue("grid");
-        if (!object_keys(value, {"enabled"}) || !value->HasValue("enabled") || !value->GetValue("enabled")->IsBool()) return false;
-        patch.grid_enabled = value->GetValue("enabled")->GetBoolValue();
-    }
     if (object->HasValue("physics")) {
         const auto value = object->GetValue("physics");
         if (!object_keys(value, {"gravity", "floor_y", "floor_restitution", "fixed_dt"})) return false;
@@ -1012,7 +998,7 @@ bool read_environment(const CefV8ValueList& arguments, SceneRequest& request) {
             !scalar("fixed_dt", physics.fixed_dt) || physics.empty()) return false;
         patch.physics = physics;
     }
-    return patch.sun || patch.grid_enabled || patch.physics;
+    return patch.sun || patch.physics;
 }
 
 CefRefPtr<CefV8Value> environment_value(const EnvironmentSnapshot& snapshot) {
@@ -1031,9 +1017,6 @@ CefRefPtr<CefV8Value> environment_value(const EnvironmentSnapshot& snapshot) {
     set(sun, "enabled", CefV8Value::CreateBool(snapshot.sun_enabled));
     set(sun, "direction", vector(snapshot.sun_direction));
     set(result, "sun", sun);
-    auto grid = CefV8Value::CreateObject(nullptr, nullptr);
-    set(grid, "enabled", CefV8Value::CreateBool(snapshot.grid_enabled));
-    set(result, "grid", grid);
     auto physics = CefV8Value::CreateObject(nullptr, nullptr);
     set(physics, "gravity", vector(snapshot.physics.gravity));
     set(physics, "floor_y", CefV8Value::CreateDouble(snapshot.physics.floor_y));

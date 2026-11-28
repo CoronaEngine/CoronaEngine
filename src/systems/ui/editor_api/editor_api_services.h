@@ -195,7 +195,6 @@ namespace Corona::Systems::UI::SceneEnvironmentService {
 struct EnvironmentScalars {
     bool sun_enabled = true;
     std::array<float, 3> sun_direction{1.f, 1.f, 1.f};
-    bool grid_enabled = false;
 };
 
 // Physics values a SetEnvironment patch asks the caller to push into the
@@ -210,10 +209,10 @@ struct PhysicsUpdate {
 // otherwise the message reported with INVALID_ARGUMENT.
 std::string validate_patch(const EnvironmentPatch& patch);
 
-// Applies sun/grid to the editor-owned scalars. A degenerate sun direction is
+// Applies sun settings to the editor-owned scalars. A degenerate sun direction is
 // replaced with {1,1,1} only while the sun is enabled, mirroring the native
 // scene behaviour. Engine-side physics stays with the caller.
-void apply_sun_and_grid(EnvironmentScalars& scalars, const EnvironmentPatch& patch);
+void apply_sun(EnvironmentScalars& scalars, const EnvironmentPatch& patch);
 
 // Extracts the physics fields present in the patch.
 PhysicsUpdate physics_update(const EnvironmentPatch& patch);

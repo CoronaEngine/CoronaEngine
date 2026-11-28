@@ -33,6 +33,9 @@ def write_ini_sections(path, original, updates):
     chunks = re.split(r"(?m)^(?=[ \t]*\[)", text.replace("\r\n", "\n"))
     pending = {}
     for name in updates:
+        if not original.has_section(name):
+            pending[name] = ""
+            continue
         partial = configparser.ConfigParser(interpolation=None)
         partial.optionxform = original.optionxform
         partial[name] = dict(original.items(name, raw=True))

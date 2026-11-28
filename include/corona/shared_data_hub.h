@@ -321,19 +321,6 @@ struct ActorDevice {
     // pinned 已迁到 Ecs::StreamingPolicy 组件。
 };
 
-enum class CameraOutputMode : uint8_t {
-    FinalColor,
-    BaseColor,
-    Normal,
-    WorldPosition,
-    ObjectID,
-    VisibilityBuffer,
-    SSAO,
-    SSAORaw,
-    ShadowMaskRaw,
-    ShadowMask,
-};
-
 enum class CameraVisionRenderMode : uint8_t {
     PathTracing,
     SVGF,
@@ -359,7 +346,6 @@ struct CameraDevice {
     float projection_x_sign{1.0f};
     std::uint32_t width{1920};
     std::uint32_t height{1080};
-    CameraOutputMode output_mode{CameraOutputMode::FinalColor};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     // PT produces one sample per pixel per frame; REBLUR owns temporal history.
     bool vision_denoise{true};
@@ -446,7 +432,6 @@ struct CameraSnapshotRow {
     int view_width{960};
     int view_height{540};
     float move_speed{1.0f};
-    CameraOutputMode output_mode{CameraOutputMode::FinalColor};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{true};
     CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
@@ -680,7 +665,6 @@ enum class CameraStateUpdateField : std::uint32_t {
     None = 0,
     Surface = 1u << 0,
     Size = 1u << 1,
-    OutputMode = 1u << 2,
     ViewState = 1u << 4,
     VisionRenderMode = 1u << 5,
     VisionDenoise = 1u << 8,
@@ -719,7 +703,6 @@ struct CameraStateUpdateCommand {
     float projection_x_sign{1.0f};
     float near_plane{0.1f};
     float far_plane{100.0f};
-    CameraOutputMode output_mode{CameraOutputMode::FinalColor};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{true};
     CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
@@ -783,7 +766,6 @@ struct EnvironmentDevice {
     std::shared_ptr<const nlohmann::json> authored_lighting;
     std::size_t authored_lighting_revision{};
     ktm::fvec3 sun_position;
-    std::uint32_t floor_grid_enabled{1};
 
     // 统一光照参数（供 OpticsSystem lighting/sky/tonemap 共用）
     ktm::fvec3 sun_color{1.0f, 0.949f, 0.853f};  // ~5500K 日光色温

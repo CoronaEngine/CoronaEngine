@@ -963,7 +963,6 @@ Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会
 <tr><td class="f">surface</td><td class="t">void*</td><td class="c">nullptr</td><td class="s">仅 <code>Surface</code> 位有效。</td></tr>
 <tr><td class="f">width / height</td><td class="t">uint32</td><td class="c">1 / 1</td><td class="s">仅 <code>Size</code> 位有效。</td></tr>
 <tr><td class="f">projection_x_sign / near_plane / far_plane</td><td class="t">float</td><td class="c">1.0 / 0.1 / 100</td><td class="s">仅 <code>Projection</code> 位有效；<code>x_sign</code> 用于保留导入相机的镜像基。</td></tr>
-<tr><td class="f">output_mode</td><td class="t">CameraOutputMode</td><td class="c">FinalColor</td><td class="s">仅 <code>OutputMode</code> 位有效。</td></tr>
 <tr><td class="f">render_backend</td><td class="t">CameraRenderBackend</td><td class="c">Native</td><td class="s">仅 <code>RenderBackend</code> 位有效。</td></tr>
 <tr><td class="f">vision_render_mode</td><td class="t">CameraVisionRenderMode</td><td class="c">PathTracing</td><td class="s">仅 <code>VisionRenderMode</code> 位有效。</td></tr>
 <tr><td class="f">vision_denoise</td><td class="t">bool</td><td class="c">true</td><td class="s">仅 <code>VisionDenoise</code> 位有效。</td></tr>
@@ -990,7 +989,6 @@ Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会
 <tbody>
 <tr><td class="c">1&lt;&lt;0</td><td class="f">Surface</td><td class="s"><code>surface</code></td></tr>
 <tr><td class="c">1&lt;&lt;1</td><td class="f">Size</td><td class="s"><code>width</code>, <code>height</code></td></tr>
-<tr><td class="c">1&lt;&lt;2</td><td class="f">OutputMode</td><td class="s"><code>output_mode</code></td></tr>
 <tr><td class="c">1&lt;&lt;3</td><td class="f">RenderBackend</td><td class="s"><code>render_backend</code></td></tr>
 <tr><td class="c">1&lt;&lt;4</td><td class="f">ViewState</td><td class="s"><code>view_open</code></td></tr>
 <tr><td class="c">1&lt;&lt;5</td><td class="f">VisionRenderMode</td><td class="s"><code>vision_render_mode</code></td></tr>
@@ -1124,7 +1122,6 @@ Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会
 <tr><td class="f">view_open</td><td class="t">bool</td><td class="c">false</td><td class="s">编辑器视口是否可见。</td></tr>
 <tr><td class="f">view_x / view_y / view_width / view_height</td><td class="t">int</td><td class="c">120/120/960/540</td><td class="s">屏幕矩形。</td></tr>
 <tr><td class="f">move_speed</td><td class="t">float</td><td class="c">1.0</td><td class="s">编辑器相机飞行速度。</td></tr>
-<tr><td class="f">output_mode</td><td class="t">CameraOutputMode</td><td class="c">FinalColor</td><td class="s">输出通道选择（10 种，见 15 节）。</td></tr>
 <tr><td class="f">render_backend</td><td class="t">CameraRenderBackend</td><td class="c">Native</td><td class="s">光栅 or 路径追踪。</td></tr>
 <tr><td class="f">vision_render_mode</td><td class="t">CameraVisionRenderMode</td><td class="c">PathTracing</td><td class="s">PT / SVGF / SSAT / 渐进 PT / ReSTIR。</td></tr>
 <tr><td class="f">vision_denoise</td><td class="t">bool</td><td class="c">true</td><td class="s">是否降噪。</td></tr>
@@ -1421,7 +1418,6 @@ Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会
 <tr><td class="f">near_plane / far_plane</td><td class="t">float</td><td class="c">0.1 / 100</td><td class="s">裁剪面。</td></tr>
 <tr><td class="f">projection_x_sign</td><td class="t">float</td><td class="c">1.0</td><td class="s">乘到 <code>proj[0][0]</code>，保留导入相机的镜像基。</td></tr>
 <tr><td class="f">width / height</td><td class="t">uint32</td><td class="c">1920/1080</td><td class="s">渲染分辨率。</td></tr>
-<tr><td class="f">output_mode</td><td class="t">CameraOutputMode</td><td class="c">FinalColor</td><td class="s">10 选 1 的输出通道。</td></tr>
 <tr><td class="f">render_backend</td><td class="t">CameraRenderBackend</td><td class="c">Native</td><td class="s">光栅 or 路径追踪。</td></tr>
 <tr><td class="f">vision_render_mode</td><td class="t">CameraVisionRenderMode</td><td class="c">PathTracing</td><td class="s">PT 每帧 1 spp；ReBLUR 持有时间历史。</td></tr>
 <tr><td class="f">vision_denoise / vision_denoiser</td><td class="t">bool / enum</td><td class="c">true / ReBLUR</td><td class="s">降噪开关与算法。</td></tr>
@@ -1478,7 +1474,6 @@ Mechanics → Geometry → Optics 是<b>同一帧的因果链</b>；错相位会
 <thead><tr><th style="width:210px">枚举</th><th>取值与语义</th></tr></thead>
 <tbody>
 <tr><td class="f">BodyType</td><td class="s"><code>Dynamic</code> 受重力和冲量、与其他物体碰撞弹开 ｜ <code>Kinematic</code> 外部驱动，不受重力和碰撞冲量，但推开 Dynamic 并触发回调 ｜ <code>Static</code> 完全静止，不受任何力，仍触发回调 ｜ <code>Phantom</code> 完全不参与碰撞，不受力（纯视觉/音频）</td></tr>
-<tr><td class="f">CameraOutputMode</td><td class="s"><code>FinalColor / BaseColor / Normal / WorldPosition / ObjectID / VisibilityBuffer / SSAO / SSAORaw / ShadowMaskRaw / ShadowMask</code></td></tr>
 <tr><td class="f">CameraRenderBackend</td><td class="s"><code>Native</code>（Vulkan 光栅）｜ <code>Vision</code>（Vulkan 路径追踪，设备惰性初始化）</td></tr>
 <tr><td class="f">CameraVisionRenderMode</td><td class="s"><code>PathTracing / SVGF / SSAT / ProgressivePathTracing / ReSTIR</code></td></tr>
 <tr><td class="f">CameraVisionDenoiser</td><td class="s"><code>Scene / SVGF / ReBLUR / ReLAX</code></td></tr>
