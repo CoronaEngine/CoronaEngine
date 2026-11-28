@@ -462,7 +462,7 @@ try {
     console.log(`CEF smoke: ${stage}`);
     const cameraWorld = path.join(output, `camera-world-${Date.now()}`);
     await mkdir(path.join(cameraWorld, 'Assets'), { recursive: true });
-    await writeFile(path.join(cameraWorld, 'scene.ini'), `[format]\ntype=corona_scene_folder\nversion=1\n[scene]\nname=CEF camera smoke\n[world]\ntype=creative\n[actors]\n[scripts]\npath=\n[terrain]\ntype=\npath=\n[camera]\ncount=2\ncamera0.id=main-camera\ncamera1.id=smoke-camera\ncamera1.width=320\ncamera1.height=240\n`);
+    await writeFile(path.join(cameraWorld, 'scene.ini'), `[format]\ntype=corona_scene_folder\nversion=1\n[scene]\nname=CEF camera smoke\n[world]\ntype=creative\n[actors]\n[scripts]\npath=\n[terrain]\ntype=\npath=\n[camera]\ncount=2\ncamera0.id=main-camera\ncamera0.render_backend=native\ncamera1.id=smoke-camera\ncamera1.render_backend=vision\ncamera1.vision_render_mode=restir\ncamera1.width=320\ncamera1.height=240\n`);
     await writeFile(path.join(cameraWorld, 'assets.manifest.json'), '{"format":"corona_scene_assets","version":1,"bundles":[]}');
     const listCameras = async () => ({ data: await main.evaluate(`(async()=>{
       const state=await corona.scene.read_active();
@@ -543,6 +543,22 @@ try {
     const listed = await listCameras();
     const camera = listed.data.cameras.find(item => item.camera_id === 'smoke-camera');
     assert.ok(camera?.archive_session);
+    assert.ok(listed.data.cameras.every(item => !Object.hasOwn(item, 'render_backend')));
+    assert.equal(camera.vision_render_mode, 'restir');
+    assert.equal(await main.evaluate(`corona.scene.set_camera_render_settings('scene.ini','smoke-camera',{
+      archive_session:${JSON.stringify(camera.archive_session)},render_backend:'native'
+    }).catch(error=>error.code)`), 'INVALID_ARGUMENT');
+
+    assert.ok(listed.data.cameras.every(item => !Object.hasOwn(item, 'output_mode')));
+    const removedOutput = { archive_session: camera.archive_session, output_mode: 'final_color',
+      vision: { render_mode: 'path_tracing' } };
+    assert.equal(await main.evaluate(`corona.scene.set_camera_render_settings('scene.ini','smoke-camera',
+      ${JSON.stringify(removedOutput)}).catch(error=>error.code)`), 'INVALID_ARGUMENT');
+    const settings = await main.evaluate(`corona.scene.read_camera_render_settings('scene.ini','smoke-camera',
+      {archive_session:${JSON.stringify(camera.archive_session)},family:'restir'})`);
+    assert.equal(Object.hasOwn(settings, 'output_mode'), false);
+    assert.equal((await listCameras()).data.cameras.find(item => item.camera_id === 'smoke-camera').vision_render_mode,
+      'restir');
 
     const sceneRead = await main.evaluate('corona.scene.read_active()');
     const loadStatus = await main.evaluate('corona.project.get_project_load_status()');
@@ -879,36 +895,36 @@ try {
     assert.equal(originalEnvironment.scene, 'scene.ini');
     assert.equal('data' in originalEnvironment, false);
     assert.equal('authored_lighting' in originalEnvironment, false, 'authored lighting remains archive/resource data, separate from live controls');
-    const environmentPatch = { ...environmentScope, sun: { enabled: false, direction: [0, 0, 0] }, grid: { enabled: false },
+    const environmentPatch = { ...environmentScope, sun: { enabled: false, direction: [0, 0, 0] },
       physics: { gravity: [1, -8, 2], floor_y: 4, floor_restitution: 0.3, fixed_dt: 0.02 } };
     const appliedEnvironment = await main.evaluate(`corona.scene.set_environment('scene.ini',${JSON.stringify(environmentPatch)})`);
     assert.deepEqual(appliedEnvironment.sun, { enabled: false, direction: [0, 0, 0] });
-    assert.deepEqual(appliedEnvironment.grid, { enabled: false });
+    assert.equal('grid' in originalEnvironment, false);
+    assert.equal('grid' in appliedEnvironment, false);
     assert.deepEqual(appliedEnvironment.physics.gravity, [1, -8, 2]);
     assert.equal(appliedEnvironment.physics.floor_y, 4);
     assert.ok(Math.abs(appliedEnvironment.physics.fixed_dt - 0.02) < 1e-6);
     for (const invalid of ['null', '[]', '{}', '{grid:{enabled:true}}',
       `{archive_session:${JSON.stringify(camera.archive_session)}}`,
       ...['null', '{}', '{enabled:1}', '{direction:[1,2]}', '{direction:[1,2,Infinity]}', '{direction:[1,2,1e100]}', '{enabled:true,persist:false}']
-        .map(value => `{...${JSON.stringify(environmentScope)},grid:{enabled:true},sun:${value}}`),
-      ...['null', '{}', '{enabled:"false"}', '{enabled:false,extra:1}']
-        .map(value => `{...${JSON.stringify(environmentScope)},grid:${value}}`),
+        .map(value => `{...${JSON.stringify(environmentScope)},physics:{floor_y:0},sun:${value}}`),
+      `{...${JSON.stringify(environmentScope)},grid:{enabled:true}}`,
+      `{...${JSON.stringify(environmentScope)},sun:{enabled:true},grid:{enabled:false}}`,
       ...['null', '{}', '{gravity:[1,NaN,3]}', '{gravity:[1,2,3,4]}', '{floor_y:"3"}', '{fixed_dt:Infinity}', '{mass:3}']
-        .map(value => `{...${JSON.stringify(environmentScope)},grid:{enabled:true},physics:${value}}`),
+        .map(value => `{...${JSON.stringify(environmentScope)},sun:{enabled:true},physics:${value}}`),
       `{...${JSON.stringify(environmentScope)},floor_grid_enabled:true}`,
-      `{...${JSON.stringify(environmentScope)},grid:{enabled:true},authored_lighting:{}}`]) {
+      `{...${JSON.stringify(environmentScope)},sun:{enabled:true},authored_lighting:{}}`]) {
       assert.equal(await main.evaluate(`corona.scene.set_environment('scene.ini',${invalid}).catch(error=>error.code)`), 'INVALID_ARGUMENT', invalid);
     }
-    assert.equal(await main.evaluate("corona.scene.set_environment('scene.ini',{archive_session:'old',grid:{enabled:true}}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
+    assert.equal(await main.evaluate("corona.scene.set_environment('scene.ini',{archive_session:'old',sun:{enabled:true}}).catch(error=>error.code)"), 'PROJECT_CONTEXT_CHANGED');
     assert.equal(await main.evaluate(`corona.scene.read_environment('other.ini',${JSON.stringify(environmentScope)}).catch(error=>error.code)`), 'PROJECT_CONTEXT_CHANGED');
     assert.deepEqual(await read_environment(), appliedEnvironment, 'invalid mixed environment values cannot partly apply');
     const partialEnvironment = await main.evaluate(`corona.scene.set_environment('scene.ini',{...${JSON.stringify(environmentScope)},sun:{enabled:true}})`);
     assert.deepEqual(partialEnvironment.sun, { enabled: true, direction: [1, 1, 1] });
-    assert.deepEqual(partialEnvironment.grid, appliedEnvironment.grid);
     assert.deepEqual(partialEnvironment.physics, appliedEnvironment.physics);
     assert.equal(await main.evaluate('corona.scene.read_active().then(value=>value.tree_revision)'), sceneRead.tree_revision);
     await main.evaluate(`corona.scene.set_environment('scene.ini',${JSON.stringify({ ...environmentScope,
-      sun: originalEnvironment.sun, grid: originalEnvironment.grid, physics: originalEnvironment.physics })})`);
+      sun: originalEnvironment.sun, physics: originalEnvironment.physics })})`);
     evidence[0].environment = 'two direct V8 environment methods replace six Web routes: scoped live reads, mixed/partial patches, strict validation before any mutation, no JSON and no authored-lighting transport';
     assert.equal(sceneRead.scene, opened.scene.path);
     assert.equal(typeof sceneRead.tree_revision, 'string');
@@ -1404,7 +1420,7 @@ try {
     const original = beforeCameraPatch.find(value => value.camera_id === 'smoke-camera');
     assert.deepEqual(patched.forward, original.forward);
     assert.deepEqual(patched.world_up, original.world_up);
-    assert.equal(patched.output_mode, original.output_mode);
+    assert.equal(Object.hasOwn(patched, 'output_mode'), false);
     assert.deepEqual(afterCameraPatch.filter(value => value.camera_id !== 'smoke-camera'),
       beforeCameraPatch.filter(value => value.camera_id !== 'smoke-camera'));
     for (const invalid of ['null', '[]', '{}', '{archive_session:1}',

@@ -15,7 +15,6 @@
 
 #include <ktm/ktm.h>
 #include <corona/systems/geometry/model_node_state.h>
-#include <corona/systems/geometry/mesh_draw_bounds.h>
 
 #include <array>
 #include <atomic>
@@ -39,16 +38,12 @@ namespace Corona {
 class Model;
 
 struct MeshMaterialDevice {
-    enum Slot : std::size_t { BaseColor, Normal, Metallic, Roughness, Occlusion,
-                             Emissive, Specular, SpecularColor, Count };
     Resource::MaterialData source;
-    std::array<Horizon::HardwareImage, Count> textures;
-    std::array<std::shared_ptr<Memory::GpuMemToken>, Count> memory;
+    Horizon::HardwareImage base_color_texture;
+    std::shared_ptr<Memory::GpuMemToken> base_color_memory;
 };
 
 struct MeshDevice {
-    Geometry::MeshDrawClusters draw_clusters;
-    Horizon::HardwareBuffer shadowIndexBuffer;
     Horizon::HardwareBuffer indexBuffer;
     Horizon::HardwareBuffer vertexBuffer;
 
@@ -84,8 +79,6 @@ struct MeshDevice {
         if (this == &other) {
             return *this;
         }
-        draw_clusters = other.draw_clusters;
-        shadowIndexBuffer = other.shadowIndexBuffer;
         indexBuffer = other.indexBuffer;
         vertexBuffer = other.vertexBuffer;
         indexStorageBuffer = other.indexStorageBuffer;
@@ -328,24 +321,6 @@ struct ActorDevice {
     // pinned 已迁到 Ecs::StreamingPolicy 组件。
 };
 
-enum class CameraOutputMode : uint8_t {
-    FinalColor,
-    BaseColor,
-    Normal,
-    WorldPosition,
-    ObjectID,
-    VisibilityBuffer,
-    SSAO,
-    SSAORaw,
-    ShadowMaskRaw,
-    ShadowMask,
-};
-
-enum class CameraRenderBackend : uint8_t {
-    Native,
-    Vision,
-};
-
 enum class CameraVisionRenderMode : uint8_t {
     PathTracing,
     SVGF,
@@ -371,8 +346,6 @@ struct CameraDevice {
     float projection_x_sign{1.0f};
     std::uint32_t width{1920};
     std::uint32_t height{1080};
-    CameraOutputMode output_mode{CameraOutputMode::FinalColor};
-    CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     // PT produces one sample per pixel per frame; REBLUR owns temporal history.
     bool vision_denoise{true};
@@ -459,8 +432,6 @@ struct CameraSnapshotRow {
     int view_width{960};
     int view_height{540};
     float move_speed{1.0f};
-    CameraOutputMode output_mode{CameraOutputMode::FinalColor};
-    CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{true};
     CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
@@ -694,8 +665,6 @@ enum class CameraStateUpdateField : std::uint32_t {
     None = 0,
     Surface = 1u << 0,
     Size = 1u << 1,
-    OutputMode = 1u << 2,
-    RenderBackend = 1u << 3,
     ViewState = 1u << 4,
     VisionRenderMode = 1u << 5,
     VisionDenoise = 1u << 8,
@@ -734,8 +703,6 @@ struct CameraStateUpdateCommand {
     float projection_x_sign{1.0f};
     float near_plane{0.1f};
     float far_plane{100.0f};
-    CameraOutputMode output_mode{CameraOutputMode::FinalColor};
-    CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{true};
     CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
@@ -799,7 +766,6 @@ struct EnvironmentDevice {
     std::shared_ptr<const nlohmann::json> authored_lighting;
     std::size_t authored_lighting_revision{};
     ktm::fvec3 sun_position;
-    std::uint32_t floor_grid_enabled{1};
 
     // 统一光照参数（供 OpticsSystem lighting/sky/tonemap 共用）
     ktm::fvec3 sun_color{1.0f, 0.949f, 0.853f};  // ~5500K 日光色温
@@ -820,7 +786,6 @@ struct SceneDevice {
     bool simulation_enabled{false};
     EntityId environment{};
     std::vector<EntityId> actor_handles;
-    std::vector<EntityId> visible_actor_handles;
     std::vector<EntityId> camera_handles;
     EntityId active_camera_handle{};
     // Authored scene.media is retained even when the current renderer disables it.

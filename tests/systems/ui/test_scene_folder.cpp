@@ -483,7 +483,6 @@ void scene_document_store_commits_multiple_sections_in_one_snapshot() {
     SceneDocumentStore document(scene);
     std::map<std::string, std::vector<std::string>> sections;
     sections["sun"] = {"[sun]", "enabled = false", "sun_direction = 0, 1, 0"};
-    sections["grid"] = {"[grid]", "enabled = false"};
     sections["camera"] = {"[camera]", "count = 0"};
     std::vector<Diagnostic> diagnostics;
     expect(document.replace_sections(sections, diagnostics), "multi-section transaction should commit");

@@ -78,7 +78,8 @@ def _camera_section(state, previous):
     for key, value in previous.items():
         match = re.fullmatch(r"camera(\d+)\.(.+)", key)
         if match:
-            old.setdefault(int(match[1]), {})[match[2]] = value
+            if match[2] != "render_backend":
+                old.setdefault(int(match[1]), {})[match[2]] = value
         elif key not in {"count", "active_id"}:
             section[key] = value
     by_id = {fields.get("id", f'{state["id"]}#camera{index}'): fields for index, fields in old.items()}
@@ -86,8 +87,8 @@ def _camera_section(state, previous):
     for index, camera in enumerate(state["cameras"]):
         for suffix, value in by_id.get(camera["id"], {}).items():
             section[f"camera{index}.{suffix}"] = value
-        for key in ("id", "name", "deletable", "position", "forward", "world_up", "fov", "output_mode",
-                    "render_backend", "vision_render_mode", "vision_denoise", "vision_denoiser",
+        for key in ("id", "name", "deletable", "position", "forward", "world_up", "fov",
+                    "vision_render_mode", "vision_denoise", "vision_denoiser",
                     "vision_reblur_settings", "vision_pt_settings", "vision_restir_settings",
                     "vision_relax_settings", "vision_accumulation", "vision_stable_planes", "vision_spp",
                     "vision_max_depth", "width", "height", "move_speed", "view_open", "view_x", "view_y",
@@ -109,11 +110,13 @@ def save_scene(request):
     if not request.get("actors_only"):
         updates.update({
             "sun": {"enabled": _value(state["sun"]["enabled"]), "sun_direction": _vector(state["sun"]["direction"])},
-            "grid": {"enabled": _value(state["grid"]["enabled"])},
             "physics": {k: _vector(v) if k == "gravity" else format(v, ".6f") for k, v in state["physics"].items()},
             "camera": _camera_section(state, original["camera"] if "camera" in original else {}),
             "terrain": state["terrain"], "scripts": {"path": state["script"]},
         })
+        if original.has_section("grid") and original.remove_option("grid", "enabled"):
+            # Retire only the old switch. Preserve third-party keys in this section.
+            updates["grid"] = {} if original["grid"] else None
         if request.get("metadata"):
             updates["scene"] = request["metadata"]
     replace_sections(path, original, updates)
@@ -122,6 +125,9 @@ def save_scene(request):
 
 def replace_sections(path, original, updates):
     for name, fields in updates.items():
+        if fields is None:
+            original.remove_section(name)
+            continue
         # actors/camera are complete collections; deleted objects must disappear.
         if name in {"actors", "camera"}:
             original.remove_section(name)

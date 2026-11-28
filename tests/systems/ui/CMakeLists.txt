@@ -30,7 +30,7 @@ target_include_directories(corona_scene_model_node_service_tests
 target_link_libraries(corona_scene_model_node_service_tests PRIVATE nlohmann_json::nlohmann_json)
 add_test(NAME SceneModelNodeServiceTests COMMAND corona_scene_model_node_service_tests)
 
-# 环境域决策逻辑（WNC-013）：纯 DTO 校验/太阳-网格状态/物理字段提取，无 CEF 依赖。
+# 环境域决策逻辑（WNC-013）：纯 DTO 校验/太阳状态/物理字段提取，无 CEF 依赖。
 add_executable(corona_scene_environment_service_tests
     test_scene_environment_service.cpp
     ${PROJECT_SOURCE_DIR}/src/systems/ui/editor_api/scene_environment_service.cpp

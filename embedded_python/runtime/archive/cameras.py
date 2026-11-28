@@ -85,7 +85,6 @@ def perspective_camera(to_world, *, image_x_sign, fov, width, height,
         "move_speed": 1.0,
         "projection_x_sign": projection_x_sign,
         "near_plane": near_plane, "far_plane": far_plane,
-        "render_backend": "native", "output_mode": "final_color",
         "vision_render_mode": "path_tracing", "vision_denoise": True,
         "vision_denoiser": "reblur", "vision_accumulation": False,
     }

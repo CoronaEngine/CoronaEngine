@@ -302,8 +302,7 @@ void apply_native_scene_environment(NativeEditorScene& scene) {
 
     scene.environment->set_properties({.sun_direction = scene.sun_direction,
                                        .sun_intensity = scene.sun_enabled ? 10.0f : 0.0f,
-                                       .sky_intensity = scene.sun_enabled ? 20.0f : 0.0f,
-                                       .floor_grid = scene.floor_grid_enabled});
+                                       .sky_intensity = scene.sun_enabled ? 20.0f : 0.0f});
     scene.environment->set_authored_lighting(scene.authored_lighting.is_null() ? "" : scene.authored_lighting.dump());
 }
 
@@ -576,8 +575,6 @@ NativeEditorCamera materialize_camera_snapshot(NativeEditorScene& scene,
     item.engine_camera->set_projection(camera_data.value("projection_x_sign", 1.0f),
         camera_data.value("near_plane", 0.1f), camera_data.value("far_plane", 100.0f));
     item.engine_camera->set_size(item.width, item.height);
-    item.engine_camera->set_output_mode(camera_data.value("output_mode", std::string{"final_color"}));
-    item.engine_camera->set_render_backend(camera_data.value("render_backend", std::string{"native"}));
     const auto vision_mode = camera_data.value("vision_render_mode", std::string{"path_tracing"});
     item.engine_camera->set_vision_render_mode(vision_mode);
     item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{legacy_svgf_mode(vision_mode) ? "svgf" : "reblur"}));
@@ -636,7 +633,6 @@ NativeEditorScene& materialize_scene_snapshot_into_state(
     }
     scene.sun_direction = snapshot_float3(
         environment.value("sun_direction", nlohmann::json::array()), {1.0f, 1.0f, 1.0f});
-    scene.floor_grid_enabled = environment.value("floor_grid_enabled", true);
     try {
         scene.engine_scene = std::make_unique<Corona::API::Scene>();
         scene.environment = std::make_unique<Corona::API::Environment>();
@@ -1359,11 +1355,10 @@ SceneReply apply_native_environment(const SceneRequest& request) {
     } else scene = resolve_native_editor_scene_request(scene, normalize_route(patch.scene));
     if (!scene->environment) return fail("COMPONENT_NOT_FOUND", "Native scene environment is unavailable");
     if (request.method == SceneMethod::SetEnvironment) {
-        SceneEnvironmentService::EnvironmentScalars scalars{scene->sun_enabled, scene->sun_direction, scene->floor_grid_enabled};
-        SceneEnvironmentService::apply_sun_and_grid(scalars, patch);
+        SceneEnvironmentService::EnvironmentScalars scalars{scene->sun_enabled, scene->sun_direction};
+        SceneEnvironmentService::apply_sun(scalars, patch);
         scene->sun_enabled = scalars.sun_enabled;
         scene->sun_direction = scalars.sun_direction;
-        scene->floor_grid_enabled = scalars.grid_enabled;
         const auto physics = SceneEnvironmentService::physics_update(patch);
         scene->environment->set_properties({.gravity = physics.gravity,
                                            .floor_y = physics.floor_y,
@@ -1384,7 +1379,7 @@ NativeResult native_environment_result(const SceneRequest& request) {
 }
 
 // JSON decoding/encoding belongs exclusively to the non-Web contracts.
-// Sun, grid and physics adapters all enter the same typed environment operation.
+// Sun and physics adapters all enter the same typed environment operation.
 SceneReply apply_native_actor_focus(const SceneRequest& request) {
     SceneReply reply;
     const auto fail = [&](const char* code, const char* message) {
@@ -2444,7 +2439,7 @@ std::size_t seed_network_editor_state(
 }
 
 // Shared by live Web screenshots and the non-Web offscreen camera adapter.
-// Offscreen configuration remains at its caller; saving never changes pose or output mode.
+// The caller controls offscreen configuration. Capture uses the current camera pose.
 
 
 
@@ -2512,7 +2507,6 @@ bool camera_list_snapshot(const NativeEditorScene& scene, CameraListSnapshot& re
         CameraReadSnapshot value;
         value.properties = camera_properties_snapshot(scene, camera);
         const auto& engine = *camera.engine_camera;
-        value.output_mode = engine.get_output_mode(); value.render_backend = engine.get_render_backend();
         value.vision_render_mode = engine.get_vision_render_mode(); value.vision_denoiser = engine.get_vision_denoiser();
         value.vision_accumulation = engine.get_vision_accumulation(); value.vision_denoise = engine.get_vision_denoise();
         value.vision_stable_planes = engine.get_vision_stable_planes(); value.deletable = camera.deletable;
@@ -2722,17 +2716,13 @@ SceneReply apply_native_camera_render_settings(const SceneRequest& request) {
         result.pending = true;
         return reply;
     }
-    if (patch.output_mode) engine.set_output_mode(*patch.output_mode);
     if (patch.vision_render_mode) engine.set_vision_render_mode(*patch.vision_render_mode);
     if (patch.vision_denoiser) engine.set_vision_denoiser(*patch.vision_denoiser);
     if (patch.vision_accumulation) engine.set_vision_accumulation(*patch.vision_accumulation);
     if (patch.vision_denoise) engine.set_vision_denoise(*patch.vision_denoise);
     if (patch.vision_stable_planes) engine.set_vision_stable_planes(*patch.vision_stable_planes);
-    if (patch.render_backend) engine.set_render_backend(*patch.render_backend);
     auto& result = reply.read.camera_render_settings;
     result.archive_session = scene->archive_session; result.scene = scene->route; result.camera_id = found->camera_id;
-    result.render_backend = patch.render_backend.value_or(engine.get_render_backend());
-    result.output_mode = patch.output_mode.value_or(engine.get_output_mode());
     result.vision_render_mode = patch.vision_render_mode.value_or(engine.get_vision_render_mode());
     result.vision_denoiser = patch.vision_denoiser.value_or(engine.get_requested_vision_denoiser());
     result.vision_accumulation = patch.vision_accumulation.value_or(engine.get_requested_vision_accumulation());

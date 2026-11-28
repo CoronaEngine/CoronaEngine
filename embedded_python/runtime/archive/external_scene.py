@@ -90,7 +90,7 @@ class SceneBuilder:
             "source_camera_imported": bool(self.cameras),
             "scene": {"route": self.source.name, "name": self.source.parent.name,
                       "actors": self.actors, "cameras": self.cameras, "simulation_enabled": False,
-                      "environment": {"sun_enabled": False, "floor_grid_enabled": False,
+                      "environment": {"sun_enabled": False,
                                       "authored_lighting": self.lighting}},
             "diagnostics": list(self.diagnostics.values()), "geometry_counts": dict(self.counts),
         }

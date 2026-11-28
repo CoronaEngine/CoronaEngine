@@ -20,7 +20,7 @@ namespace {
 
 using namespace ocarina;
 
-constexpr uint kLegacy = 0u, kHableManual = 1u, kHableAuto = 2u, kDiagnostic = 3u;
+constexpr uint kLegacy = 0u, kHableManual = 1u, kHableAuto = 2u;
 
 Float3 aces_filmic(const Float3& x) {
     return clamp((x * (2.51f * x + 0.03f)) / (x * (2.43f * x + 0.59f) + 0.14f), 0.f, 1.f);
@@ -47,7 +47,7 @@ auto make_display_resolve_kernel() {
         $if(mode == kLegacy) {
             color = linear_to_srgb(aces_filmic(1.f - exp(-color * exposure)));
         }
-        $elif(mode != kDiagnostic) {
+        $else {
             $if(intensity > 0.f) {
                 color = display_detail::composite_bloom(color, pixel, extent, bloom, bloom_extent, intensity);
             };
@@ -167,7 +167,7 @@ bool VisionZeroCopyBridge::ensure(::vision::Pipeline& pipeline, uint32_t width, 
 }
 
 bool VisionZeroCopyBridge::render_display(::vision::Pipeline& pipeline, float exposure,
-                                         const VisionDisplayProfile* profile, bool diagnostic) {
+                                         const VisionDisplayProfile* profile) {
     if (failed_) {
         return false;
     }
@@ -195,13 +195,11 @@ bool VisionZeroCopyBridge::render_display(::vision::Pipeline& pipeline, float ex
         auto& device = pipeline.device();
         auto& display = *shared_;
         const uint2 extent = make_uint2(width_, height_);
-        const auto* settings = diagnostic ? nullptr : profile;
-        const bool auto_exposure = settings && settings->auto_exposure;
-        const float intensity = settings ? settings->bloom_intensity : 0.f;
+        const bool auto_exposure = profile && profile->auto_exposure;
+        const float intensity = profile ? profile->bloom_intensity : 0.f;
         const bool bloom = intensity > 0.f;
-        const uint mode = diagnostic ? kDiagnostic : auto_exposure ? kHableAuto :
-                          settings ? kHableManual : kLegacy;
-        if (settings) exposure = settings->exposure_gain;
+        const uint mode = auto_exposure ? kHableAuto : profile ? kHableManual : kLegacy;
+        if (profile) exposure = profile->exposure_gain;
 
         const uint2 half_extent = (extent + 1u) / 2u;
         const uint2 bloom_extent = (half_extent + 1u) / 2u;
@@ -244,7 +242,7 @@ bool VisionZeroCopyBridge::render_display(::vision::Pipeline& pipeline, float ex
         if (auto_exposure) {
             stream << display.exposure_shader(src, display.bloom_quarter, display.exposure_gain,
                                               extent, bloom_extent, intensity,
-                                              settings->minimum_auto_gain, settings->maximum_auto_gain).dispatch(64u);
+                                              profile->minimum_auto_gain, profile->maximum_auto_gain).dispatch(64u);
         }
         stream << display.resolve_shader(src, display.bloom_quarter, display.exposure_gain, display.output,
                                          extent, bloom_extent, intensity, exposure, mode).dispatch(extent)

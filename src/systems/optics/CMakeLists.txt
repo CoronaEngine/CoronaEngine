@@ -5,7 +5,6 @@
 corona_add_system(optics
     SOURCES
         optics_system.cpp
-        native_lighting.cpp
         retain_submission.cpp
         hardware.h
         vision/vision_material_adapter.cpp
@@ -16,8 +15,6 @@ corona_add_system(optics
         vision/vision_geometry_adapter.h
         vision/vision_camera_adapter.cpp
         vision/vision_camera_adapter.h
-        vision/vision_diagnostic_adapter.cpp
-        vision/vision_diagnostic_adapter.h
         vision/vision_light_adapter.cpp
         vision/vision_light_adapter.h
         vision/vision_render_mode_config.cpp
@@ -65,19 +62,6 @@ if(MSVC)
     )
 endif()
 
-
-
 helicon_compile_shaders(corona_optics_system
     OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_shaders"
 )
-
-# Native shader changes must invalidate the translation unit and hardcoded cache.
-file(GLOB OPTICS_SHADER_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/*.glsl")
-set_property(SOURCE optics_system.cpp APPEND PROPERTY OBJECT_DEPENDS "${OPTICS_SHADER_SOURCES}")
-
-# Helicon tracks entry files. Shared GLSL includes must also invalidate their
-# generated headers, otherwise a change can compile against stale SPIR-V.
-foreach(OPTICS_SCREEN_ENTRY lighting.comp.glsl screen_gi.comp.glsl screen_filter.comp.glsl shadow.vert.glsl shadow.frag.glsl)
-    add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated_shaders/shaders/${OPTICS_SCREEN_ENTRY}.hpp"
-        APPEND DEPENDS ${OPTICS_SHADER_SOURCES})
-endforeach()

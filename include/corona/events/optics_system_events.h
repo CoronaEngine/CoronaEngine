@@ -52,16 +52,4 @@ struct ScreenshotRequestEvent {
     std::string timings_path;
 };
 
-/**
- * @brief Request to switch the optics render backend (published by script API,
- *        consumed by OpticsSystem).
- *
- * backend: 0 = Native (Vulkan rasterization), 1 = Vision (Vulkan path tracing).
- * Vision initializes its device lazily when rendering is needed.
- */
-struct RenderBackendSwitchEvent {
-    int backend = 0;
-    EntityId camera_handle = 0;
-};
-
 }  // namespace Corona::Events

@@ -39,7 +39,7 @@ public:
     // Resolves the linear display source into shared float4 pixels on the Vision
     // stream, then synchronizes before handing ownership to the engine.
     bool render_display(::vision::Pipeline& pipeline, float exposure,
-                        const VisionDisplayProfile* profile, bool diagnostic);
+                        const VisionDisplayProfile* profile);
 
     // Source for the engine's image-store pass after render_display().
     [[nodiscard]] Corona::Horizon::HardwareBuffer& imported() noexcept { return imported_; }

@@ -142,17 +142,6 @@ add_test(NAME VisionWorldBoundsGpuTests
 set_tests_properties(VisionGeometryGpuResourceTests VisionWorldBoundsGpuTests PROPERTIES
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:vision-material-principled_bsdf>")
 
-add_executable(corona_optics_native_frame_throttle_tests
-    test_native_frame_throttle.cpp
-)
-target_include_directories(corona_optics_native_frame_throttle_tests
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/src/systems/optics
-)
-target_link_libraries(corona_optics_native_frame_throttle_tests PRIVATE Horizon)
-add_test(NAME OpticsNativeFrameThrottleTests
-         COMMAND corona_optics_native_frame_throttle_tests)
-
 add_executable(corona_optics_storage_snapshot_tests
     test_storage_snapshot.cpp
 )
@@ -175,27 +164,13 @@ target_include_directories(corona_optics_debug_label_tests
 add_test(NAME OpticsDebugLabelTests
          COMMAND corona_optics_debug_label_tests)
 
-add_executable(corona_native_diagnostics_tests
-    test_native_diagnostics.cpp
+add_executable(corona_diagnostic_env_tests
+    test_diagnostic_env.cpp
 )
-target_include_directories(corona_native_diagnostics_tests
+target_include_directories(corona_diagnostic_env_tests
     PRIVATE
         ${PROJECT_SOURCE_DIR}/src/systems/optics
         ${PROJECT_SOURCE_DIR}/src/systems/optics/..
 )
-add_test(NAME NativeDiagnosticsTests
-         COMMAND corona_native_diagnostics_tests)
-
-add_executable(corona_shadow_culling_tests
-    test_shadow_culling.cpp
-    ${CMAKE_SOURCE_DIR}/src/systems/geometry/frustum.cpp
-)
-target_include_directories(corona_shadow_culling_tests
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/include
-        ${PROJECT_SOURCE_DIR}/src/systems/optics
-)
-target_link_libraries(corona_shadow_culling_tests PRIVATE Horizon corona::resource::manager)
-add_test(NAME ShadowCullingTests
-         COMMAND corona_shadow_culling_tests)
-
+add_test(NAME DiagnosticEnvTests
+         COMMAND corona_diagnostic_env_tests)

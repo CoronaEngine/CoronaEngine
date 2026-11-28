@@ -399,10 +399,6 @@ class Camera {
     void save_screenshot(const std::string& path) const;
     bool save_screenshot_sync(const std::string& path) const;
 
-    void set_output_mode(const std::string& mode);
-    [[nodiscard]] std::string get_output_mode() const;
-    void set_render_backend(const std::string& mode);
-    [[nodiscard]] std::string get_render_backend() const;
     void set_vision_render_mode(const std::string& mode);
     [[nodiscard]] std::string get_vision_render_mode() const;
     void set_vision_denoise(bool enabled);
@@ -460,14 +456,13 @@ class Camera {
 
 /// One environment edit. Omitted fields are left untouched, so a single-field change reads as
 /// set_properties({.sky_intensity = 20.0f}) and a batch as several designated initializers.
-/// Replaces the eight set_sun_direction / set_sun_intensity / set_sky_intensity / set_floor_grid /
+/// Replaces the set_sun_direction / set_sun_intensity / set_sky_intensity /
 /// set_gravity / set_floor_y / set_floor_restitution / set_fixed_dt calls that had to be issued
 /// one field at a time.
 struct EnvironmentProperties {
     std::optional<std::array<float, 3>> sun_direction;
     std::optional<float> sun_intensity;
     std::optional<float> sky_intensity;
-    std::optional<bool> floor_grid;
     std::optional<std::array<float, 3>> gravity;
     std::optional<float> floor_y;
     std::optional<float> floor_restitution;
@@ -480,7 +475,6 @@ struct EnvironmentState {
     std::array<float, 3> sun_direction{0.0f, 1.0f, 0.0f};
     float sun_intensity{10.0f};
     float sky_intensity{20.0f};
-    bool floor_grid{true};
     std::array<float, 3> gravity{0.0f, -9.8f, 0.0f};
     float floor_y{0.0f};
     float floor_restitution{0.6f};
@@ -575,16 +569,6 @@ class Scene {
     bool enabled_{true};
     bool simulation_enabled_{false};
 };
-
-// ============================================================================
-// Render backend control (Native vs Vision)
-// ============================================================================
-/// 请求切换光学渲染后端。mode: "native" 或 "vision"。
-/// Vision 设备在需要渲染时延迟初始化。
-void set_render_backend(const std::string& mode, EntityId camera_handle = 0);
-
-/// 获取当前请求的渲染后端，返回 "native" 或 "vision"。
-[[nodiscard]] std::string get_render_backend(EntityId camera_handle = 0);
 
 /// Set the Vision algorithm without changing independent denoise/accumulation preferences.
 /// Legacy "svgf" selects "path_tracing" and enables denoise; "ssat" remains supported.

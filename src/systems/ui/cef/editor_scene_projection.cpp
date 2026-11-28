@@ -15,7 +15,7 @@ EnvironmentSnapshot native_environment_snapshot(const NativeEditorScene& scene) 
         throw std::runtime_error("Native scene environment is unavailable");
     }
     const auto physics = scene.environment->get_state();
-    return {scene.archive_session, scene.route, scene.sun_enabled, scene.floor_grid_enabled, scene.sun_direction,
+    return {scene.archive_session, scene.route, scene.sun_enabled, scene.sun_direction,
         {physics.gravity, physics.floor_y, physics.floor_restitution, physics.fixed_dt}};
 }
 
@@ -29,7 +29,6 @@ nlohmann::json native_scene_environment_payload(const NativeEditorScene& scene) 
             {"direction", value.sun_direction},
         }},
         {"authored_lighting", scene.authored_lighting},
-        {"grid", {{"enabled", value.grid_enabled}}},
         {"physics", {
             {"gravity", value.physics.gravity},
             {"floor_y", value.physics.floor_y},
@@ -68,8 +67,6 @@ nlohmann::json camera_to_json(const NativeEditorCamera& camera) {
     item["far_plane"] = projection[2];
     item["width"] = camera.width;
     item["height"] = camera.height;
-    item["output_mode"] = camera.engine_camera ? camera.engine_camera->get_output_mode() : "final_color";
-    item["render_backend"] = camera.engine_camera ? camera.engine_camera->get_render_backend() : "native";
     item["vision_render_mode"] = camera.engine_camera ? camera.engine_camera->get_vision_render_mode() : "path_tracing";
     item["vision_spp"] = camera.vision_spp;
     item["vision_max_depth"] = camera.vision_max_depth;
@@ -123,7 +120,6 @@ nlohmann::json scene_to_json(const NativeEditorScene& scene) {
         {"camera", active_camera},
         {"cameras", cameras},
         {"sun", {{"enabled", scene.sun_enabled}, {"direction", scene.sun_direction}}},
-        {"grid", {{"enabled", scene.floor_grid_enabled}}},
         {"terrain", {{"path", scene.terrain_path}, {"type", scene.terrain_type}}},
 
         {"script", scene.script_path},

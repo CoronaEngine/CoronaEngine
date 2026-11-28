@@ -3,14 +3,11 @@
 #include <cstdint>
 #include <array>
 
-// Lighting for Corona-built Vision scenes. Native atmosphere parameters are not
-// radiance values, so this bridge deliberately exposes a neutral geometry preview
-// until the two renderers share an atmospheric sky implementation. The sun uses
-// Vision's true delta-direction light, with Corona's direction and irradiance.
+// Engine lighting controls for Vision's spherical atmosphere and delta sun.
 
 // Forward declarations
 namespace vision {
-class Scene;
+class Pipeline;
 }  // namespace vision
 
 namespace Corona {
@@ -19,7 +16,7 @@ struct EnvironmentDevice;
 
 namespace Corona::Systems::Vision {
 
-enum class VisionLightingMode { None, NeutralPreview, Authored };
+enum class VisionLightingMode { None, Atmosphere, Authored };
 
 struct VisionLightingState {
     std::size_t authored_revision{};
@@ -28,23 +25,25 @@ struct VisionLightingState {
     std::array<float, 3> sun_direction{};
     std::array<float, 3> sun_color{};
     float sun_intensity{0.f};
+    float sky_intensity{0.f};
     bool operator==(const VisionLightingState&) const = default;
 };
 
 [[nodiscard]] VisionLightingState make_vision_lighting_state(const EnvironmentDevice& env) noexcept;
 
+[[nodiscard]] bool try_update_vision_sun_direction(::vision::Pipeline& pipeline, VisionLightingState previous,
+                                                   const VisionLightingState& current);
+
 struct VisionLightSetupResult {
     VisionLightingMode mode{VisionLightingMode::None};
-    float environment_radiance{0.f};
+    float environment_scale{0.f};
     std::uint32_t environment_count{0};
     std::uint32_t directional_light_count{0};
     std::uint32_t area_light_count{0};
     std::uint32_t punctual_light_count{0};
 };
 
-// A positive finite native sky intensity enables a unit-radiance neutral
-// preview. Zero/invalid sky intensity disables it. Solar illumination is
-// independent and uses the authored sun intensity. No atmosphere parity implied.
+// Authored environments take precedence over the procedural atmosphere.
 [[nodiscard]] VisionLightingMode vision_lighting_mode(const EnvironmentDevice& env) noexcept;
 [[nodiscard]] const char* vision_lighting_mode_name(VisionLightingMode mode) noexcept;
 
@@ -53,6 +52,6 @@ struct VisionLightSetupResult {
 // current miss and light-sampling paths require a registered environment.
 // Call on scene build or effective lighting-mode change, then prepare/upload the
 // scene light data and invalidate accumulated frames before rendering again.
-VisionLightSetupResult setup_vision_lights(::vision::Scene& scene, const EnvironmentDevice& env);
+VisionLightSetupResult setup_vision_lights(::vision::Pipeline& pipeline, const EnvironmentDevice& env);
 
 }  // namespace Corona::Systems::Vision

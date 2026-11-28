@@ -3,7 +3,7 @@
 /// Environment 的跨线程交互边界（P4：在 tick 边界阶段统一应用）。
 ///
 /// 为什么 Environment 不放在各自系统的 update() 里：
-/// - 它**跨两个消费者**：`sun_* / sky_intensity / floor_grid_enabled` 归 Optics，
+/// - 它**跨两个消费者**：`sun_* / sky_intensity` 归 Optics，
 ///   `gravity / floor_y / floor_restitution / fixed_dt` 归 Mechanics；
 /// - Mechanics 在 DAG 里排在 Optics 之前，若在 Optics 里应用，Mechanics 本 tick
 ///   就会晚一帧看到 `gravity / fixed_dt` 变更 —— 那是会改变模拟行为的隐性回归。
@@ -29,7 +29,6 @@ enum class EnvironmentField : std::uint32_t {
     SunDirection = 1u << 0,
     SunIntensity = 1u << 1,
     SkyIntensity = 1u << 2,
-    FloorGrid = 1u << 3,
     Gravity = 1u << 4,
     FloorY = 1u << 5,
     FloorRestitution = 1u << 6,
@@ -61,7 +60,6 @@ struct EnvironmentUpdateCommand {
     ktm::fvec3 sun_direction{0.0f, 1.0f, 0.0f};
     float sun_intensity{10.0f};
     float sky_intensity{20.0f};
-    std::uint32_t floor_grid_enabled{1};
     ktm::fvec3 gravity{0.0f, -9.8f, 0.0f};
     float floor_y{0.0f};
     float floor_restitution{0.6f};
@@ -84,7 +82,6 @@ struct EnvironmentUpdateKey {
         if (has_environment_field(next.fields, EnvironmentField::SunDirection)) pending.sun_direction = next.sun_direction;
         if (has_environment_field(next.fields, EnvironmentField::SunIntensity)) pending.sun_intensity = next.sun_intensity;
         if (has_environment_field(next.fields, EnvironmentField::SkyIntensity)) pending.sky_intensity = next.sky_intensity;
-        if (has_environment_field(next.fields, EnvironmentField::FloorGrid)) pending.floor_grid_enabled = next.floor_grid_enabled;
         if (has_environment_field(next.fields, EnvironmentField::Gravity)) pending.gravity = next.gravity;
         if (has_environment_field(next.fields, EnvironmentField::FloorY)) pending.floor_y = next.floor_y;
         if (has_environment_field(next.fields, EnvironmentField::FloorRestitution)) pending.floor_restitution = next.floor_restitution;
@@ -109,7 +106,6 @@ struct EnvironmentSnapshotRow {
     ktm::fvec3 sun_direction{0.0f, 1.0f, 0.0f};
     float sun_intensity{10.0f};
     float sky_intensity{20.0f};
-    std::uint32_t floor_grid_enabled{1};
     ktm::fvec3 gravity{0.0f, -9.8f, 0.0f};
     float floor_y{0.0f};
     float floor_restitution{0.6f};
@@ -152,7 +148,6 @@ inline EnvironmentSnapshotRow make_environment_row(EntityId handle,
     row.sun_direction = device.sun_position;
     row.sun_intensity = device.sun_intensity;
     row.sky_intensity = device.sky_intensity;
-    row.floor_grid_enabled = device.floor_grid_enabled;
     row.gravity = device.gravity;
     row.floor_y = device.floor_y;
     row.floor_restitution = device.floor_restitution;
@@ -202,9 +197,6 @@ inline bool apply_pending_environment_updates() {
             }
             if (has_environment_field(fields, EnvironmentField::SkyIntensity)) {
                 device->sky_intensity = command.sky_intensity;
-            }
-            if (has_environment_field(fields, EnvironmentField::FloorGrid)) {
-                device->floor_grid_enabled = command.floor_grid_enabled;
             }
             if (has_environment_field(fields, EnvironmentField::Gravity)) {
                 device->gravity = command.gravity;
@@ -273,7 +265,6 @@ inline bool apply_pending_environment_updates() {
         if (has_environment_field(fields, EnvironmentField::SunDirection)) view->sun_direction = pending->sun_direction;
         if (has_environment_field(fields, EnvironmentField::SunIntensity)) view->sun_intensity = pending->sun_intensity;
         if (has_environment_field(fields, EnvironmentField::SkyIntensity)) view->sky_intensity = pending->sky_intensity;
-        if (has_environment_field(fields, EnvironmentField::FloorGrid)) view->floor_grid_enabled = pending->floor_grid_enabled;
         if (has_environment_field(fields, EnvironmentField::Gravity)) view->gravity = pending->gravity;
         if (has_environment_field(fields, EnvironmentField::FloorY)) view->floor_y = pending->floor_y;
         if (has_environment_field(fields, EnvironmentField::FloorRestitution)) view->floor_restitution = pending->floor_restitution;

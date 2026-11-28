@@ -179,7 +179,7 @@ F02/F04 后续回归中的 28 项 Vision/LightField 测试全部通过，包括�
 
 证据：[资源初始化](E:/CoronaEngine/vision/src/base/sensor/frame_buffer.cpp:25)、[列表分配](E:/CoronaEngine/vision/src/base/sensor/visualizer.cpp:24)、[CPU 下载和绘制](E:/CoronaEngine/vision/src/base/sensor/frame_buffer.cpp:363)、[断开的 after_render](E:/CoronaEngine/vision/src/base/sensor/frame_buffer.cpp:433)。
 
-建议：将分配、采集、绘制一起置于明确调试能力后面；不要只移除绘制而留下资源初始化。现有 Corona diagnostic adapter 不属于该闲置链路。
+建议：将分配、采集、绘制一起置于明确调试能力后面；不要只移除绘制而留下资源初始化。
 
 ### F16 Beckmann 微表面分布
 

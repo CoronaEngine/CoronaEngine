@@ -70,12 +70,18 @@ std::shared_ptr<::vision::Material> create_vision_material(
     }
 
     if (mesh_dev.material) {
-        auto value=static_cast<Resource::MaterialParameters>(mesh_dev.material->source);
+        const auto& source=mesh_dev.material->source;
+        auto value=static_cast<Resource::MaterialParameters>(source);
         if (optics.material_overrides) for (bool specific:{false,true})
             for (const auto& row:*optics.material_overrides)
                 if ((row.index.has_value() || row.material!="*")==specific &&
-                    row.matches(mesh_dev.materialIndex,mesh_dev.material->source.name)) row.apply(value);
-        desc.set_value("color",::vision::DataWrap::array({value.base_color[0],value.base_color[1],value.base_color[2]}));
+                    row.matches(mesh_dev.materialIndex,source.name)) row.apply(value);
+        AppearanceJson color={value.base_color[0],value.base_color[1],value.base_color[2]};
+        if (source.albedo_texture!=Resource::InvalidTextureId) {
+            const AppearanceJson image={{"kind","image"},{"resource_id",source.albedo_texture}};
+            color=appearance_slot({{"kind","multiply"},{"a",image},{"b",color}});
+        }
+        desc.set_value("color",vision_json(color));
         desc.set_value("roughness",value.roughness);
         desc.set_value("metallic",value.metallic);
         desc.set_value("ior",std::max(1.0001f,value.ior));

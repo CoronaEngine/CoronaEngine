@@ -6,8 +6,7 @@
 ///   - **外部拥有**：enabled / simulation_enabled / environment /
 ///     actor_handles / camera_handles / active_camera_handle
 ///     （编辑器、脚本、网络增删成员）
-///   - **Geometry 拥有**：visible_actor_handles / min_world / max_world /
-///     center_world（剔除与包围盒的产物）
+///   - **Geometry 拥有**：min_world / max_world / center_world（场景包围盒）
 ///
 /// 这条通道只承载外部拥有的那部分。此前 `Scene::add_actor()` 等 11 个 setter
 /// 直接在调用者线程（CEF / 脚本 / 主线程）上 `acquire_write()` 写槽位，

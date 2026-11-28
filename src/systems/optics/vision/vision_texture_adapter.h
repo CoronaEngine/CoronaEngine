@@ -15,20 +15,16 @@ inline ::vision::DataWrap vision_json(const AppearanceJson& value) {
     return ::vision::DataWrap::parse(value.dump());
 }
 
-inline ocarina::Image appearance_image(const std::string& path, const std::string& encoding) {
-    auto& manager=Resource::ResourceManager::get_instance();
-    auto id=manager.import_sync(std::filesystem::u8path(path));
-    auto source=manager.acquire_read<Resource::Image>(id);
-    if (!source || source->get_width()<=0 || source->get_height()<=0)
-        throw std::runtime_error("Unable to read appearance image: "+path);
+inline ocarina::Image appearance_image(const Resource::Image& source, const std::string& path,
+                                      const std::string& encoding) {
     auto result=ocarina::Image::create_empty(ocarina::PixelStorage::FLOAT4,
-        ocarina::make_uint2(source->get_width(),source->get_height()));
+        ocarina::make_uint2(source.get_width(),source.get_height()));
     auto* pixels=result.pixel_ptr<float>();
-    const auto* floats=source->get_float_data();
-    const auto* bytes=source->get_data();
-    const unsigned channels=source->get_channels();
+    const auto* floats=source.get_float_data();
+    const auto* bytes=source.get_data();
+    const unsigned channels=source.get_channels();
     std::array<double,4> sums{};
-    const size_t count=size_t(source->get_width())*source->get_height();
+    const size_t count=size_t(source.get_width())*source.get_height();
     for (size_t i=0;i<count;++i) for (unsigned c=0;c<4;++c) {
         const unsigned channel = c < 3 && channels < 3 ? 0 : c == 3 && channels == 2 ? 1 : c;
         float value=channel>=channels ? (c==3?1.f:0.f) : floats ? floats[i*channels+channel] : bytes[i*channels+channel]/255.f;
@@ -40,6 +36,14 @@ inline ocarina::Image appearance_image(const std::string& path, const std::strin
     auto& average=result.average<4>();
     for (unsigned c=0;c<4;++c) average[c]=float(sums[c]/count);
     return result;
+}
+
+inline ocarina::Image appearance_image(const std::string& path, const std::string& encoding) {
+    auto& manager=Resource::ResourceManager::get_instance();
+    auto source=manager.acquire_read<Resource::Image>(manager.import_sync(std::filesystem::u8path(path)));
+    if (!source || source->get_width()<=0 || source->get_height()<=0)
+        throw std::runtime_error("Unable to read appearance image: "+path);
+    return appearance_image(*source,path,encoding);
 }
 
 inline void register_appearance_image(const AppearanceJson& node, ocarina::Image image) {
@@ -80,19 +84,29 @@ inline AppearanceJson appearance_slot(const AppearanceJson& value, unsigned chan
                                output_channels!="z" && output_channels!="w"))
                 throw std::runtime_error("Image channel must be x, y, z or w in a scalar slot");
         }
-        const auto path=value.at("path").get<std::string>();
+        const auto resource=value.find("resource_id");
+        const auto path=resource==value.end() ? value.at("path").get<std::string>()
+                                              : ":corona:image:"+std::to_string(resource->get<Resource::TResourceID>());
+        const auto encoding=value.value("encoding","srgb");
         node["param"]["fn"]=path;
         node["param"]["uv_transform"]=value.value("uv",AppearanceJson::array({1,0,0,0,1,0,0,0,1}));
         node["param"]["wrap"]=value.value("wrap","repeat");
         node["param"]["filter"]=value.value("filter","bilinear");
         // Include decoding in identity even though the supplied pixels are linear.
-        node["param"]["source_encoding"]=value.value("encoding","srgb");
+        node["param"]["source_encoding"]=encoding;
         if (value.contains("gpu_source")) node["param"]["gpu_source"]=value.at("gpu_source");
         ::vision::ShaderNodeDesc desc; desc.init(::vision::ParameterSet{vision_json(node)});
         auto* pipeline=::vision::Global::instance().pipeline();
         if (!pipeline) throw std::runtime_error("Image material requires an active Vision pipeline");
-        if (!pipeline->image_pool().is_contain(desc.hash()))
-            register_appearance_image(node,appearance_image(path,value.value("encoding","srgb")));
+        if (!pipeline->image_pool().is_contain(desc.hash())) {
+            if (resource==value.end()) {
+                register_appearance_image(node,appearance_image(path,encoding));
+            } else {
+                auto source=Resource::ResourceManager::get_instance().acquire_read<Resource::Image>(*resource);
+                if (!source || source->get_width()<=0 || source->get_height()<=0) return constant(1.f);
+                register_appearance_image(node,appearance_image(*source,path,encoding));
+            }
+        }
     } else if (kind=="checkerboard") {
         // Generated in memory, never written as a copied/baked source asset.
         node["param"]["fn"]="corona-checker-"+std::to_string(std::hash<std::string>{}(value.dump()));

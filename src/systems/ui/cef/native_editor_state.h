@@ -137,7 +137,6 @@ struct NativeEditorScene {
     bool sun_enabled{true};
     nlohmann::json authored_lighting;
     std::shared_ptr<const nlohmann::json> authored_media;
-    bool floor_grid_enabled{true};
     std::vector<NativeEditorActor> actors;
     std::vector<NativeEditorCamera> cameras;
     nlohmann::json load_diagnostics = nlohmann::json::array();

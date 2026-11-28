@@ -21,7 +21,7 @@ std::string validate_patch(const EnvironmentPatch& patch) {
     const auto invalid = [](const std::optional<std::array<float, 3>>& value) {
         return value && !finite_vector(*value);
     };
-    if ((!patch.sun && !patch.grid_enabled && !patch.physics) ||
+    if ((!patch.sun && !patch.physics) ||
         (patch.sun && (patch.sun->empty() || invalid(patch.sun->direction))) ||
         (patch.physics && (patch.physics->empty() || invalid(patch.physics->gravity) ||
                            (patch.physics->floor_y && !finite_scalar(*patch.physics->floor_y)) ||
@@ -32,7 +32,7 @@ std::string validate_patch(const EnvironmentPatch& patch) {
     return {};
 }
 
-void apply_sun_and_grid(EnvironmentScalars& scalars, const EnvironmentPatch& patch) {
+void apply_sun(EnvironmentScalars& scalars, const EnvironmentPatch& patch) {
     if (patch.sun) {
         if (patch.sun->enabled) scalars.sun_enabled = *patch.sun->enabled;
         if (patch.sun->direction) scalars.sun_direction = *patch.sun->direction;
@@ -42,7 +42,6 @@ void apply_sun_and_grid(EnvironmentScalars& scalars, const EnvironmentPatch& pat
             static_cast<double>(direction[2]) * direction[2];
         if (scalars.sun_enabled && length_sq < 1.0e-8) scalars.sun_direction = {1, 1, 1};
     }
-    if (patch.grid_enabled) scalars.grid_enabled = *patch.grid_enabled;
 }
 
 PhysicsUpdate physics_update(const EnvironmentPatch& patch) {

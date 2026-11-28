@@ -2,7 +2,7 @@
 // Created by Zero on 2023/8/7.
 //
 
-#include "base/illumination/light.h"
+#include "base/illumination/directional_light.h"
 #include "base/mgr/pipeline.h"
 #include "base/color/spectrum.h"
 
@@ -36,7 +36,7 @@ namespace vision {
      }
  }
  */
-class DirectionalLight final : public Environment {
+class DirectionalLight final : public IDirectionalLight {
 private:
     EncodedData<float3> direction_;
     EncodedData<float> world_radius_;
@@ -53,10 +53,11 @@ private:
 
 public:
     DirectionalLight()
-        : Environment(LightType::DeltaDirection | LightType::Infinite) {}
+        : IDirectionalLight(LightType::DeltaDirection | LightType::Infinite) {}
     explicit DirectionalLight(const LightDesc &desc)
-        : Environment(desc, LightType::DeltaDirection | LightType::Infinite),
+        : IDirectionalLight(desc, LightType::DeltaDirection | LightType::Infinite),
           direction_(desc["direction"].as_float3(make_float3(-1.f))) {}
+    void set_direction(float3 outgoing) noexcept override { direction_ = outgoing; }
     OC_ENCODABLE_FUNC(Environment, direction_, world_radius_, world_center_)
     VS_MAKE_PLUGIN_NAME_FUNC
     void prepare() noexcept override {

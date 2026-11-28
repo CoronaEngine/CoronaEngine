@@ -508,7 +508,6 @@ Corona::API::Environment::Environment()
     payload.environment.sun_position.x = 1.0f;
     payload.environment.sun_position.y = 1.0f;
     payload.environment.sun_position.z = 1.0f;
-    payload.environment.floor_grid_enabled = 1;
     handle_ = Corona::Ecs::request_create_environment(std::move(payload));
     if (handle_ == 0) {
         CFW_LOG_CRITICAL("[Environment::Environment] Failed to create the environment entity "
@@ -546,10 +545,6 @@ void Corona::API::Environment::set_properties(const EnvironmentProperties& prope
         command.fields = command.fields | Corona::EnvironmentField::SkyIntensity;
         command.sky_intensity = *properties.sky_intensity;
     }
-    if (properties.floor_grid) {
-        command.fields = command.fields | Corona::EnvironmentField::FloorGrid;
-        command.floor_grid_enabled = *properties.floor_grid ? 1u : 0u;
-    }
     if (properties.gravity) {
         command.fields = command.fields | Corona::EnvironmentField::Gravity;
         command.gravity = ktm::fvec3{(*properties.gravity)[0], (*properties.gravity)[1],
@@ -578,7 +573,6 @@ Corona::API::EnvironmentState Corona::API::Environment::get_state() const {
     return {{view.sun_direction.x, view.sun_direction.y, view.sun_direction.z},
             view.sun_intensity,
             view.sky_intensity,
-            view.floor_grid_enabled != 0,
             {view.gravity.x, view.gravity.y, view.gravity.z},
             view.floor_y,
             view.floor_restitution,
@@ -2147,10 +2141,8 @@ bool Corona::API::Camera::save_screenshot_sync(const std::string& path) const {
     auto promise = std::make_shared<std::promise<bool>>();
     auto future = promise->get_future();
 
-    // Cold captures may need shader compilation or a full-scene shadow BVH.
-    // Use the same deadline in caller and queue; native preparation can exceed
-    // the old 10-second limit even while GPU execution remains responsive.
-    const auto timeout = std::chrono::seconds(get_render_backend() == "vision" ? 120 : 30);
+    // The caller and the render queue share a deadline that allows for cold Vision compilation.
+    const auto timeout = std::chrono::seconds(120);
     const auto deadline = std::chrono::steady_clock::now() + timeout;
 
     if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
@@ -2166,84 +2158,6 @@ bool Corona::API::Camera::save_screenshot_sync(const std::string& path) const {
         return false;
     }
     return future.get();
-}
-
-void Corona::API::Camera::set_output_mode(const std::string& mode) {
-    if (handle_ == 0) {
-        CFW_LOG_WARNING("[Camera::set_output_mode] Invalid camera handle");
-        return;
-    }
-
-    CameraOutputMode output_mode = CameraOutputMode::FinalColor;
-    if (mode == "base_color") {
-        output_mode = CameraOutputMode::BaseColor;
-    } else if (mode == "normal") {
-        output_mode = CameraOutputMode::Normal;
-    } else if (mode == "position") {
-        output_mode = CameraOutputMode::WorldPosition;
-    } else if (mode == "object_id") {
-        output_mode = CameraOutputMode::ObjectID;
-    } else if (mode == "visibility_buffer") {
-        output_mode = CameraOutputMode::VisibilityBuffer;
-    } else if (mode == "ssao") {
-        output_mode = CameraOutputMode::SSAO;
-    } else if (mode == "ssao_raw") {
-        output_mode = CameraOutputMode::SSAORaw;
-    } else if (mode == "shadow_mask_raw") {
-        output_mode = CameraOutputMode::ShadowMaskRaw;
-    } else if (mode == "shadow_mask") {
-        output_mode = CameraOutputMode::ShadowMask;
-    } else if (mode != "final_color") {
-        CFW_LOG_WARNING("[Camera::set_output_mode] Unknown mode '{}', defaulting to final_color", mode);
-    }
-
-    CameraStateUpdateCommand command{};
-    command.camera_handle = handle_;
-    command.fields = CameraStateUpdateField::OutputMode;
-    command.output_mode = output_mode;
-    SharedDataHub::instance().enqueue_camera_state_update(command);
-}
-
-std::string Corona::API::Camera::get_output_mode() const {
-    if (handle_ == 0) {
-        return "final_color";
-    }
-
-    if (auto accessor = Corona::find_camera(handle_)) {
-        switch (accessor->output_mode) {
-            case CameraOutputMode::BaseColor:
-                return "base_color";
-            case CameraOutputMode::Normal:
-                return "normal";
-            case CameraOutputMode::WorldPosition:
-                return "position";
-            case CameraOutputMode::ObjectID:
-                return "object_id";
-            case CameraOutputMode::VisibilityBuffer:
-                return "visibility_buffer";
-            case CameraOutputMode::SSAO:
-                return "ssao";
-            case CameraOutputMode::SSAORaw:
-                return "ssao_raw";
-            case CameraOutputMode::ShadowMaskRaw:
-                return "shadow_mask_raw";
-            case CameraOutputMode::ShadowMask:
-                return "shadow_mask";
-            case CameraOutputMode::FinalColor:
-                [[fallthrough]];
-            default:
-                return "final_color";
-        }
-    }
-    return "final_color";
-}
-
-void Corona::API::Camera::set_render_backend(const std::string& mode) {
-    Corona::API::set_render_backend(mode, handle_);
-}
-
-std::string Corona::API::Camera::get_render_backend() const {
-    return Corona::API::get_render_backend(handle_);
 }
 
 void Corona::API::Camera::set_vision_render_mode(const std::string& mode) {
@@ -2475,37 +2389,6 @@ void set_default_surface(void* surface) {
 
 void* get_default_surface() {
     return g_default_surface.load(std::memory_order_relaxed);
-}
-
-void set_render_backend(const std::string& mode, EntityId camera_handle) {
-    const auto resolved_handle = resolve_camera_handle(camera_handle);
-    if (resolved_handle == 0) {
-        CFW_LOG_WARNING("[set_render_backend] No camera is available");
-        return;
-    }
-
-    const int backend = mode == "vision" ? 1 : 0;
-
-    CameraStateUpdateCommand command{};
-    command.camera_handle = resolved_handle;
-    command.fields = CameraStateUpdateField::RenderBackend;
-    command.render_backend =
-        backend == 1 ? CameraRenderBackend::Vision : CameraRenderBackend::Native;
-    SharedDataHub::instance().enqueue_camera_state_update(command);
-
-    if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
-        event_bus->publish<Events::RenderBackendSwitchEvent>({backend, resolved_handle});
-    }
-}
-
-std::string get_render_backend(EntityId camera_handle) {
-    const auto resolved_handle = resolve_camera_handle(camera_handle);
-    if (resolved_handle != 0) {
-        // 读快照 + 待处理命令（快照 ⊕ pending）：外部线程不再拿相机槽锁。
-        const auto camera_view = SharedDataHub::instance().camera_view(resolved_handle);
-        return camera_view.render_backend == CameraRenderBackend::Vision ? "vision" : "native";
-    }
-    return "native";
 }
 
 void set_vision_render_mode(const std::string& mode, EntityId camera_handle) {

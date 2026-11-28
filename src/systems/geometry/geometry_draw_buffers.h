@@ -1,13 +1,13 @@
 #pragma once
 #include <horizon.h>
+#include <vector>
+
 namespace Corona::Resource { struct Vertex; }
-#include <corona/systems/geometry/mesh_draw_bounds.h>
 
 namespace Corona::Systems::GeometryDetail {
 class UploadBatch;
 struct DrawBuffers {
-    Horizon::HardwareBuffer vertices, indices, shadow_indices;
-    Geometry::MeshDrawClusters clusters;
+    Horizon::HardwareBuffer vertices, indices;
     std::size_t byte_size{};
 };
 

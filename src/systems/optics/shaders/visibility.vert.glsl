@@ -8,11 +8,8 @@ out gl_PerVertex
 
 layout(push_constant) uniform PushConsts
 {
-    uint textureIndex;
-    uint uniformBufferIndex;
-    uint instanceID;
-    uint padding0;
     mat4 modelMatrix;
+    uint instanceID;
 } pushConsts;
 
 layout(location = 0) in vec3 inPosition;
