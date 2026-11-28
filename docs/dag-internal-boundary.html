@@ -1,4 +1,4 @@
-<!-- HISTORICAL-DOC: this page describes the tree as it was when it was written. The editor API handler has since been split; the scene service now lives in src/systems/ui/cef/editor_scene_service.cpp and the Python bridge in src/systems/ui/editor_api/python_service_bridge.{h,cpp}. -->
+﻿<!-- HISTORICAL-DOC: this page describes the tree as it was when it was written. The editor API handler has since been split; the scene service now lives in src/systems/ui/cef/editor_scene_service.cpp and the Python bridge in src/systems/ui/editor_api/python_service_bridge.{h,cpp}. -->
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -531,7 +531,7 @@ const DATA = {"stats":{"deviceFields":179,"boundary":149,"privateFields":25,"ext
       </ul>
     </div>
     <div class="card"><h4>数据来源</h4>
-      <p>字段清单来自 <code>include/corona/shared_data_hub.h</code>；读写参与方来自 <code>src/</code>、<code>include/</code>、<code>modules/</code> 的静态扫描（<code>-&gt;field</code> / <code>.field</code> 的赋值与读取），关键结构体（CameraDevice、GeometryDevice、MechanicsDevice、ActorPickDevice、*_handle）做了人工覆盖。访问路径由证据所在文件推断（EngineAPI / CEF bridge / sync_engine / camera_follow_controller / 主线程 UI）。</p>
+      <p>字段清单来自 <code>include/corona/shared_data_hub.h</code>；读写参与方来自 <code>src/</code>、<code>include/</code> 的静态扫描（<code>-&gt;field</code> / <code>.field</code> 的赋值与读取），关键结构体（CameraDevice、GeometryDevice、MechanicsDevice、ActorPickDevice、*_handle）做了人工覆盖。访问路径由证据所在文件推断（EngineAPI / CEF bridge / sync_engine / camera_follow_controller / 主线程 UI）。</p>
     </div>
     <div class="card"><h4>必须注意的偏差</h4>
       <ul>

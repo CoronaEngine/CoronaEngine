@@ -3,12 +3,13 @@
 This directory owns the tests for the engine code in `src/`:
 
 - `kernel/`: kernel lifecycle and system management.
+- `resource/`: resource import, cache, and animation-pose evaluation owned by `src/resource/`.
 - `systems/<module>/`: tests owned by one engine system, mirroring `src/systems/<module>/`.
 - `integration/`: collaboration, UI/display lifecycle, and embedded Vision workflows spanning systems.
 
 Keep a test's private helper headers beside that test. Introduce `support/` when
 multiple test suites need the same helper; do not move production headers into it.
-Editor, Vision, and `modules/corona_resource` keep their own test directories.
+Editor and Vision keep their own test directories.
 
 Each test directory defines its targets in a local `CMakeLists.txt`. The root
 build adds `tests/` after the production modules when `BUILD_CORONA_TESTING` or

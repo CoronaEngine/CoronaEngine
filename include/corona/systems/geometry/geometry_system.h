@@ -104,7 +104,7 @@ struct MemoryReport {
 // ========================================
 //
 // 网格简化由资源导入管线完成（使用 meshoptimizer 库，参见
-// modules/corona_resource 中的 parse_common.h）。
+// src/resource/types/parse_common.h）。
 // 导入时已生成多级 LOD 数据（MeshData::lod_levels），
 // 本系统负责：
 //   1. 将导入时生成的 CPU 端 LOD 数据上传为 GPU 缓冲（upload_lod_from_scene_data）

@@ -13,7 +13,6 @@ include(corona_options)             # Global build options (editor/examples/runt
 include(CTest)
 if(BUILD_CORONA_TESTING)
     enable_testing()
-    set(CORONA_RESOURCE_BUILD_TESTS ON CACHE BOOL "Build CoronaResource tests" FORCE)
 endif()
 
 include(corona_editor)              # Consume the editor workspace prepared by bootstrap
@@ -23,6 +22,7 @@ include(corona_nodejs)              # Install/check editor Node.js in the same C
 include(corona_msvc_dependencies)   # Stable Ninja header tracking across console encodings
 include(corona_compile_config)      # Compiler settings, standards, and shared definitions
 include(corona_third_party)         # Conan-provided external dependency targets
+include(corona_ffmpeg)              # corona::ffmpeg + resource runtime DLL copying
 include(corona_add_system)          # Helper for adding system modules
 include(corona_runtime_deps)        # Runtime dependency collection and copy helpers
 include(corona_cef)
@@ -30,8 +30,7 @@ include(corona_cef)
 # ------------------------------------------------------------------------------
 # Subdirectories
 # ------------------------------------------------------------------------------
-add_subdirectory(modules/corona_resource)  # Resource management module
-add_subdirectory(src)               # Core engine static library
+add_subdirectory(src)               # Core engine libraries (kernel, resource, systems)
 
 add_subdirectory(vision)            # Vision renderer module (local source)
 

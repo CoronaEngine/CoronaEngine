@@ -9,6 +9,10 @@
 # ------------------------------------------------------------------------------
 add_subdirectory(kernel)
 
+# 资源导入 / 缓存库（公共头在 include/corona/resource/）。各 system 都链接它，
+# 所以必须在系统模块之前定义。
+add_subdirectory(resource)
+
 message(STATUS "[CoronaEngine] Discovering system modules...")
 
 file(GLOB _CORONA_SYSTEM_DIRS LIST_DIRECTORIES true
@@ -80,6 +84,9 @@ endif()
 # 链接依赖
 target_link_libraries(CoronaEngine PUBLIC
         corona::engine::kernel
+        # engine.cpp 直接构造 / 注册 ResourceManager 的 parser，因此显式依赖资源库，
+        # 而不是只靠各 system 的传递依赖。
+        corona::resource::manager
         corona::system::acoustics
         corona::system::optics
         corona::system::mechanics

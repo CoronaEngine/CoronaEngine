@@ -3,7 +3,7 @@
 /// @file lru_cache.h
 /// @brief 生产级两级 LRU 缓存（内存 + 磁盘）— ResourceResidency 基础设施
 ///
-/// 从 modules/corona_resource/examples/lru_cache_example/ 提升并重构：
+/// 从早期的 lru_cache_example 示例提升并重构：
 /// - 命名空间收口到 Corona::Cache
 /// - 新增淘汰回调 (evict callback)，通知上层释放 GPU 资源
 /// - 磁盘目录策略强制：{root}/{key}.cache

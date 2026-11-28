@@ -1,5 +1,9 @@
+# ==============================================================================
 # CoronaResource - Scene Resource Manager
-# =============================================================================
+#
+# 引擎内唯一的资源导入 / 缓存 / 导出库。公共头在 include/corona/resource/，
+# 私有实现（parser、编解码胶水）留在本目录。
+# ==============================================================================
 
 set(CORONA_RESOURCE_MANAGER_SOURCE_FILES
     ### top-level source files ###
@@ -40,32 +44,54 @@ set(CORONA_RESOURCE_MANAGER_SOURCE_FILES
 
 set(CORONA_RESOURCE_MANAGER_HEADER_FILES
     ### top-level header files ###
-    ${CORONA_RESOURCE_ROOT}/include/corona/resource/resource.h
-    ${CORONA_RESOURCE_ROOT}/include/corona/resource/resource_manager.h
-    ${CORONA_RESOURCE_ROOT}/include/corona/resource/parser_registry.h
-    ${CORONA_RESOURCE_ROOT}/include/corona/resource/resource_cache.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/resource.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/resource_manager.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/resource_cache.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/parser_registry.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/model_import_options.h
+    ### cache ###
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/cache/lru_cache.h
     ### resource types ###
     # animation
-    ${CORONA_RESOURCE_ROOT}/include/corona/resource/types/animation.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/types/animation.h
     # skeletal animation runtime pose evaluation (P1)
-    ${CORONA_RESOURCE_ROOT}/include/corona/resource/types/animation_pose.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/types/animation_pose.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/types/animation_player.h
     # audio
-    ${CORONA_RESOURCE_ROOT}/include/corona/resource/types/audio.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/types/audio.h
     # binary
-    ${CORONA_RESOURCE_ROOT}/include/corona/resource/types/binary.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/types/binary.h
     # image
-    ${CORONA_RESOURCE_ROOT}/include/corona/resource/types/image.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/types/image.h
     # json
-    ${CORONA_RESOURCE_ROOT}/include/corona/resource/types/json.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/types/json.h
     # scene
-    ${CORONA_RESOURCE_ROOT}/include/corona/resource/types/scene.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/types/scene.h
     # video
-    ${CORONA_RESOURCE_ROOT}/include/corona/resource/types/video.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/types/video.h
     # text
-    ${CORONA_RESOURCE_ROOT}/include/corona/resource/types/text.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/types/text.h
     # model
-    ${CORONA_RESOURCE_ROOT}/include/corona/resource/types/model.h
+    ${PROJECT_SOURCE_DIR}/include/corona/resource/types/model.h
 )
+
+# Dependencies are resolved by Conan in build_tools/cmake/corona_third_party.cmake.
+# Assert them here so a missing package fails with the resource library's name.
+foreach(_corona_resource_dependency
+        ktm::ktm
+        assimp::assimp
+        stb_headers
+        miniaudio_headers
+        nlohmann_json::nlohmann_json
+        tinyexr_headers
+        meshoptimizer
+        astcenc-native-static)
+    if(NOT TARGET ${_corona_resource_dependency})
+        message(FATAL_ERROR
+            "[CoronaResource] Expected dependency target '${_corona_resource_dependency}'")
+    endif()
+endforeach()
+unset(_corona_resource_dependency)
 
 # Create static library
 add_library(CoronaResourceManager STATIC
@@ -80,9 +106,7 @@ target_compile_features(CoronaResourceManager PUBLIC cxx_std_20)
 # Configure include directories
 target_include_directories(CoronaResourceManager
     PUBLIC
-    $<BUILD_INTERFACE:${CORONA_RESOURCE_ROOT}/include>
-    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include/corona_resource/resource_manager>
+    ${PROJECT_SOURCE_DIR}/include
 )
 
 # Link dependencies

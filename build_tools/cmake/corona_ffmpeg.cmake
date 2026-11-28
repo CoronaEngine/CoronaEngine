@@ -1,8 +1,12 @@
 # =============================================================================
-# CoronaResource FFmpeg integration
+# FFmpeg integration
+#
+# Included by corona_project.cmake before any subdirectory is added, so both the
+# resource library (src/resource) and corona_add_example() can use it.
 #
 # FFmpeg is resolved by Conan. This module gathers the libav* component targets
-# behind the existing corona::ffmpeg aggregate.
+# behind the corona::ffmpeg aggregate and exposes corona_resource_copy_runtime_dlls()
+# for targets that must ship the versioned DLLs next to their executable.
 # =============================================================================
 
 include_guard(GLOBAL)

@@ -80,9 +80,9 @@ add_custom_command(TARGET corona_engine POST_BUILD
     VERBATIM
 )
 
-# corona_add_example() runs before modules/corona_resource and the CEF runtime helper are
-# usable from it, so the payload those helpers own is copied here instead: without it the
-# example links and then dies at startup with STATUS_DLL_NOT_FOUND, which is what the
+# corona_add_example() copies the CEF and FFmpeg runtime payload for ordinary examples,
+# but this target is configured directly, so the payload is copied here instead: without it
+# the example links and then dies at startup with STATUS_DLL_NOT_FOUND, which is what the
 # integration smokes hit first.
 corona_install_cef_runtime(corona_engine)
 corona_copy_target_runtime_dlls(corona_engine)
