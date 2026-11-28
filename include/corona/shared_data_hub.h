@@ -786,7 +786,6 @@ struct SceneDevice {
     bool simulation_enabled{false};
     EntityId environment{};
     std::vector<EntityId> actor_handles;
-    std::vector<EntityId> visible_actor_handles;
     std::vector<EntityId> camera_handles;
     EntityId active_camera_handle{};
     // Authored scene.media is retained even when the current renderer disables it.

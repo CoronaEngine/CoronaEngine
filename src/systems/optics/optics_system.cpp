@@ -2321,15 +2321,12 @@ void OpticsSystem::update() {
         return;
     }
 
-    static float frame_count = 0.0f;
     static uint64_t frame_index = 0;
 
-    float dt = delta_time();
-    frame_count += dt;
     ++frame_index;
 
     update_phase.set("render_dispatch");
-    optics_pipeline(frame_count, frame_index);
+    optics_pipeline(frame_index);
 }
 
 OpticsSystem::RenderFramePlan OpticsSystem::build_render_frame_plan() {
@@ -2367,7 +2364,7 @@ std::optional<OpticsSystem::LockedRenderView> OpticsSystem::lock_render_view(
     return LockedRenderView{scene, *camera};
 }
 
-void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
+void OpticsSystem::optics_pipeline(uint64_t frame_index) {
     fail_expired_pending_screenshots();
     fail_unrenderable_pending_screenshots();
 
@@ -2383,7 +2380,7 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
             next_vision_init_attempt_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
         }
         if (vision_initialized_) {
-            run_vision_frame(frame_count, frame_index, plan.views);
+            run_vision_frame(frame_index, plan.views);
         } else {
             for (const auto& view : plan.views) fail_pending_screenshots(view.camera_handle);
         }
@@ -3064,11 +3061,10 @@ bool OpticsSystem::init_vision_lazy() {
     }
 }
 
-void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
+void OpticsSystem::run_vision_frame(uint64_t frame_index,
                                    const std::vector<RenderView>& views) {
     if (views.empty() || !hardware_->visionDisplayPipeline) return;
     Corona::Diagnostics::PhaseScope vision_phase{"Optics", "vision:scene_sync"};
-    (void)frame_count;
 
     auto cleanup_runtime_contexts =
         [&](VisionPipelineRuntime& runtime,

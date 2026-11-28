@@ -852,8 +852,6 @@ void GeometrySystem::update() {
             scene_dev_write.min_world = root_aabb.min;
             scene_dev_write.max_world = root_aabb.max;
             scene_dev_write.center_world = root_aabb.center();
-            scene_dev_write.visible_actor_handles.assign(visible_actors.begin(),
-                                                         visible_actors.end());
         }
     }
 

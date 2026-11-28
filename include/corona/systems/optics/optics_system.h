@@ -115,7 +115,7 @@ class OpticsSystem : public Kernel::SystemBase {
     [[nodiscard]] RenderFramePlan build_render_frame_plan();
     [[nodiscard]] std::optional<LockedRenderView> lock_render_view(
         const RenderView& view);
-    void optics_pipeline(float frame_count, uint64_t frame_index);
+    void optics_pipeline(uint64_t frame_index);
     void process_pending_screenshots(EntityId camera_handle, Horizon::HardwareImage& render_target,
                                      uint32_t width, uint32_t height);
 
@@ -123,7 +123,7 @@ class OpticsSystem : public Kernel::SystemBase {
 
     // Vision 相关私有方法
     bool init_vision_lazy();  ///< 首次渲染时初始化 Vision
-    void run_vision_frame(float frame_count, uint64_t frame_index,
+    void run_vision_frame(uint64_t frame_index,
                          const std::vector<RenderView>& views);
 
     using VisionPipelineKey = Vision::VisionPipelineKey;
