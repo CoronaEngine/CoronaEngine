@@ -23,33 +23,62 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ------------------------------------------------------------------------------
-# Helper: convert path separators to backslashes
+# Helper: render a CMake path as a C string literal body
 #
-# `corona_to_backslash(INPUT out_var [ESCAPE_FOR_CSTRING])`
+# `corona_c_string_path(INPUT out_var)`
 #
-# Replaces forward slashes with backslashes. When `ESCAPE_FOR_CSTRING` is
-# provided, the result is escaped for use inside C string literals (each
-# backslash becomes `\\`).
+# CMake always stores paths with forward slashes, but a literal handed to Win32
+# through std::filesystem is expected in native form, so Windows also gets the
+# separator conversion. POSIX keeps its forward slashes and only needs escaping;
+# converting them would produce paths like "\usr\local" that no runtime accepts.
 # ------------------------------------------------------------------------------
-function(corona_to_backslash INPUT OUT_VAR)
+function(corona_c_string_path INPUT OUT_VAR)
     set(_val "${INPUT}")
 
-    string(REPLACE "/" "\\" _val "${_val}")
-
-    if(ARGC GREATER 2 AND ARGV2 STREQUAL "ESCAPE_FOR_CSTRING")
-        string(REPLACE "\\" "\\\\" _val "${_val}")
+    if(WIN32)
+        string(REPLACE "/" "\\" _val "${_val}")
     endif()
+
+    # Escape for a C string literal: backslashes first, then quotes.
+    string(REPLACE "\\" "\\\\" _val "${_val}")
+    string(REPLACE "\"" "\\\"" _val "${_val}")
 
     set(${OUT_VAR} "${_val}" PARENT_SCOPE)
 endfunction()
 
 # ------------------------------------------------------------------------------
 # Python path macro definitions
+#
+# CPython's on-disk layout is platform-specific: Windows keeps the standard
+# library in Lib/ and the extension modules in DLLs/, while POSIX keeps both
+# below lib/pythonX.Y/ (extension modules in lib-dynload/). The conda fallback
+# and a packaged runtime both follow the host's layout, so the values are
+# computed here instead of being fixed to the Windows names. The version comes
+# from the interpreter find_package(Python) already resolved.
 # ------------------------------------------------------------------------------
-corona_to_backslash("${Python_EXECUTABLE}" _CORONA_PY_EXE_ESC ESCAPE_FOR_CSTRING)
-corona_to_backslash("${Python_RUNTIME_LIBRARY_DIRS}" _CORONA_PY_HOME_ESC ESCAPE_FOR_CSTRING)
-corona_to_backslash("${Python_RUNTIME_LIBRARY_DIRS}/DLLs" _CORONA_PY_DLLS_ESC ESCAPE_FOR_CSTRING)
-corona_to_backslash("${Python_RUNTIME_LIBRARY_DIRS}/Lib" _CORONA_PY_LIB_ESC ESCAPE_FOR_CSTRING)
+set(_CORONA_PY_VERSION "${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}")
+
+# Python_RUNTIME_LIBRARY_DIRS is only defined on Windows; POSIX derives the same
+# environment root from Python_ROOT_DIR, which corona_python.cmake pins to the
+# conda environment.
+if(WIN32 AND DEFINED Python_RUNTIME_LIBRARY_DIRS AND NOT Python_RUNTIME_LIBRARY_DIRS STREQUAL "")
+    set(_CORONA_PY_HOME "${Python_RUNTIME_LIBRARY_DIRS}")
+else()
+    set(_CORONA_PY_HOME "${Python_ROOT_DIR}")
+endif()
+
+if(WIN32)
+    set(_CORONA_PY_STDLIB "${_CORONA_PY_HOME}/Lib")
+    set(_CORONA_PY_EXT_MODULES "${_CORONA_PY_HOME}/DLLs")
+else()
+    set(_CORONA_PY_STDLIB "${_CORONA_PY_HOME}/lib/python${_CORONA_PY_VERSION}")
+    set(_CORONA_PY_EXT_MODULES "${_CORONA_PY_STDLIB}/lib-dynload")
+endif()
+
+corona_c_string_path("${_CORONA_PY_HOME}" _CORONA_PY_HOME_ESC)
+corona_c_string_path("${_CORONA_PY_STDLIB}" _CORONA_PY_STDLIB_ESC)
+corona_c_string_path("${_CORONA_PY_EXT_MODULES}" _CORONA_PY_EXT_MODULES_ESC)
+corona_c_string_path("${_CORONA_PY_VERSION}" _CORONA_PY_VERSION_ESC)
 
 # ------------------------------------------------------------------------------
 # Global compile definitions
@@ -63,10 +92,10 @@ add_compile_definitions(
 
     ENTT_USE_ATOMIC
 
-    CORONA_PYTHON_EXE=\"${_CORONA_PY_EXE_ESC}\"
     CORONA_PYTHON_HOME_DIR=\"${_CORONA_PY_HOME_ESC}\"
-    CORONA_PYTHON_MODULE_DLL_DIR=\"${_CORONA_PY_DLLS_ESC}\"
-    CORONA_PYTHON_MODULE_LIB_DIR=\"${_CORONA_PY_LIB_ESC}\"
+    CORONA_PYTHON_STDLIB_DIR=\"${_CORONA_PY_STDLIB_ESC}\"
+    CORONA_PYTHON_EXT_MODULES_DIR=\"${_CORONA_PY_EXT_MODULES_ESC}\"
+    CORONA_PYTHON_VERSION=\"${_CORONA_PY_VERSION_ESC}\"
 )
 
 if(CORONA_BUILD_HARDWARE)

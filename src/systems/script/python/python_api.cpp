@@ -11,7 +11,9 @@
 #include <nanobind/stl/string.h>
 #include <nlohmann/json.hpp>
 #include "python_value.h"
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 #include <array>
 #include <iostream>
@@ -156,11 +158,21 @@ std::size_t PythonAPI::detach_python_objects_without_decref() {
 
 std::string PythonAPI::wstr2str(const std::wstring& wstr) {
     if (wstr.empty()) return {};
+#ifdef _WIN32
     int len = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
     if (len <= 0) return {};
     std::string out(static_cast<size_t>(len), '\0');
     WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), out.data(), len, nullptr, nullptr);
     return out;
+#else
+    // Py_EncodeLocale is CPython's own wchar_t -> filesystem-encoding conversion,
+    // so paths round-trip exactly like the interpreter sees them.
+    char* encoded = Py_EncodeLocale(wstr.c_str(), nullptr);
+    if (encoded == nullptr) return {};
+    std::string out(encoded);
+    PyMem_RawFree(encoded);
+    return out;
+#endif
 }
 
 bool PythonAPI::initializeInterpreterLocked() {
@@ -248,23 +260,23 @@ bool PythonAPI::initializeInterpreterLocked() {
 
     const auto bundled_home = PathCfg::python_home_dir();
     const auto bundled_stdlib = PathCfg::python_stdlib_zip();
-    const auto bundled_dlls = PathCfg::python_dll_dir();
-    const auto bundled_lib = PathCfg::python_lib_dir();
+    const auto bundled_ext_modules = PathCfg::python_ext_modules_dir();
+    const auto bundled_stdlib_dir = PathCfg::python_stdlib_dir();
     const auto bundled_site_packages = PathCfg::site_packages_dir();
     const auto bundled_editor = PathCfg::runtime_backend_abs();
     const auto bundled_root = PathCfg::engine_root();
 
     const auto bundled_stdlib_path = Utils::utf8_to_path(bundled_stdlib);
-    const auto bundled_dlls_path = Utils::utf8_to_path(bundled_dlls);
-    const auto bundled_lib_path = Utils::utf8_to_path(bundled_lib);
+    const auto bundled_ext_modules_path = Utils::utf8_to_path(bundled_ext_modules);
+    const auto bundled_stdlib_dir_path = Utils::utf8_to_path(bundled_stdlib_dir);
     const auto bundled_editor_main_path = Utils::utf8_to_path(bundled_editor) / "main.py";
     if ((!std::filesystem::exists(bundled_stdlib_path) &&
-         !std::filesystem::exists(bundled_lib_path)) ||
-        !std::filesystem::exists(bundled_dlls_path) ||
+         !std::filesystem::exists(bundled_stdlib_dir_path)) ||
+        !std::filesystem::exists(bundled_ext_modules_path) ||
         !std::filesystem::exists(bundled_editor_main_path)) {
         const std::string message =
-            "Bundled Python runtime is incomplete. Expected python stdlib zip or Lib directory, " +
-            bundled_dlls + ", and " + Utils::path_to_utf8(bundled_editor_main_path);
+            "Bundled Python runtime is incomplete. Expected the stdlib zip or stdlib directory, " +
+            bundled_ext_modules + ", and " + Utils::path_to_utf8(bundled_editor_main_path);
         lifecycle_.transition(PythonLifecycleState::Failed);
         {
             std::lock_guard lock(lifecycle_mtx_);
@@ -285,8 +297,8 @@ bool PythonAPI::initializeInterpreterLocked() {
     std::vector<std::string> module_paths{
         bundled_editor,
         bundled_root,
-        bundled_dlls,
-        bundled_lib,
+        bundled_ext_modules,
+        bundled_stdlib_dir,
         bundled_site_packages,
     };
     if (std::filesystem::exists(bundled_stdlib_path)) {
@@ -311,8 +323,8 @@ bool PythonAPI::initializeInterpreterLocked() {
         lifecycle_snapshot_.phase = "interpreter_ready";
     }
     CFW_LOG_INFO("event=python.lifecycle.state state=interpreter_ready");
-    CFW_LOG_INFO("event=python.interpreter.paths home={} lib={} dlls={} site_packages={}",
-                 bundled_home, bundled_lib, bundled_dlls, bundled_site_packages);
+    CFW_LOG_INFO("event=python.interpreter.paths home={} stdlib={} ext_modules={} site_packages={}",
+                 bundled_home, bundled_stdlib_dir, bundled_ext_modules, bundled_site_packages);
 
     return true;
 }
@@ -489,6 +501,7 @@ std::wstring PythonAPI::str2wstr(const std::string& str) {
     if (str.empty()) {
         return {};
     }
+#ifdef _WIN32
     int wlen = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), nullptr, 0);
     if (wlen <= 0) {
         return {};
@@ -496,6 +509,17 @@ std::wstring PythonAPI::str2wstr(const std::string& str) {
     std::wstring w(static_cast<size_t>(wlen), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), w.data(), wlen);
     return w;
+#else
+    // Py_DecodeLocale is usable before Py_Initialize and produces exactly the
+    // wchar_t form PyConfig expects for `home` and module search paths.
+    wchar_t* decoded = Py_DecodeLocale(str.c_str(), nullptr);
+    if (decoded == nullptr) {
+        return {};
+    }
+    std::wstring w(decoded);
+    PyMem_RawFree(decoded);
+    return w;
+#endif
 }
 
 }  // namespace Corona::Script::Python

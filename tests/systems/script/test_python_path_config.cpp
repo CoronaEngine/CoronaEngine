@@ -10,8 +10,12 @@
 #include <string_view>
 
 namespace fs = std::filesystem;
-using Corona::Script::Python::PathCfg::PackagedRuntimeIssue;
 using Corona::Script::Python::PathCfg::inspect_packaged_runtime;
+using Corona::Script::Python::PathCfg::PackagedRuntimeIssue;
+using Corona::Script::Python::PathCfg::platform_layout;
+using Corona::Script::Python::PathCfg::posix_layout;
+using Corona::Script::Python::PathCfg::PythonRuntimeLayout;
+using Corona::Script::Python::PathCfg::windows_layout;
 
 namespace {
 
@@ -21,6 +25,18 @@ void require(bool condition, std::string_view message) {
     }
     std::cerr << "PythonPathConfigTests failed: " << message << '\n';
     std::exit(1);
+}
+
+void set_env(const char* name, const char* value) {
+#ifdef _WIN32
+    _putenv_s(name, value);
+#else
+    if (value != nullptr && *value != '\0') {
+        setenv(name, value, 1);
+    } else {
+        unsetenv(name);
+    }
+#endif
 }
 
 std::string unique_root_name(std::string_view tag) {
@@ -34,12 +50,23 @@ void write_file(const fs::path& path, std::string_view content = "x") {
     out << content;
 }
 
-void make_complete_runtime(const fs::path& root) {
-    fs::create_directories(root / "Lib" / "encodings");
-    write_file(root / "Lib" / "site.py");
-    write_file(root / "Lib" / "os.py");
-    write_file(root / "Lib" / "encodings" / "__init__.py");
-    fs::create_directories(root / "DLLs");
+fs::path stdlib_path(const fs::path& root, const PythonRuntimeLayout& layout) {
+    return root / layout.stdlib_rel;
+}
+
+fs::path ext_modules_path(const fs::path& root, const PythonRuntimeLayout& layout) {
+    return root / layout.ext_modules_rel;
+}
+
+// A runtime tree shaped like the given layout: stdlib with site.py, encodings
+// and one module, plus the extension-module directory.
+void make_complete_runtime(const fs::path& root, const PythonRuntimeLayout& layout) {
+    const fs::path stdlib = stdlib_path(root, layout);
+    fs::create_directories(stdlib / "encodings");
+    write_file(stdlib / "site.py");
+    write_file(stdlib / "os.py");
+    write_file(stdlib / "encodings" / "__init__.py");
+    fs::create_directories(ext_modules_path(root, layout));
 }
 
 struct TempRoot {
@@ -60,96 +87,131 @@ struct TempRoot {
     TempRoot& operator=(const TempRoot&) = delete;
 };
 
-void test_missing_everything_reports_missing_lib() {
-    TempRoot root("empty");
-    const auto result = inspect_packaged_runtime(root.path);
-    require(result.issue == PackagedRuntimeIssue::MissingLib, "empty root must report missing Lib");
-    require(!result.available(), "empty root must not be available");
+// ---------------------------------------------------------------------------
+// The same five issues must be reported for every layout: the checks are about
+// the layout data, not about the host this test binary was built on.
+// ---------------------------------------------------------------------------
+
+void check_missing_everything_reports_missing_stdlib(const PythonRuntimeLayout& layout,
+                                                     std::string_view label) {
+    TempRoot root(std::string(label) + "_empty");
+    const auto result = inspect_packaged_runtime(root.path, layout);
+    require(result.issue == PackagedRuntimeIssue::MissingStdlib,
+            std::string(label) + ": empty root must report a missing stdlib directory");
+    require(!result.available(), std::string(label) + ": empty root must not be available");
 }
 
-void test_lib_without_dlls_reports_missing_dlls() {
-    TempRoot root("nodlls");
-    fs::create_directories(root.path / "Lib" / "encodings");
-    write_file(root.path / "Lib" / "site.py");
+void check_stdlib_without_ext_modules_reports_missing_ext_modules(const PythonRuntimeLayout& layout,
+                                                                  std::string_view label) {
+    TempRoot root(std::string(label) + "_noext");
+    const fs::path stdlib = stdlib_path(root.path, layout);
+    fs::create_directories(stdlib / "encodings");
+    write_file(stdlib / "site.py");
 
-    const auto result = inspect_packaged_runtime(root.path);
-    require(result.issue == PackagedRuntimeIssue::MissingDlls, "Lib without DLLs must report missing DLLs");
+    const auto result = inspect_packaged_runtime(root.path, layout);
+    require(result.issue == PackagedRuntimeIssue::MissingExtensionModules,
+            std::string(label) + ": stdlib without the extension-module directory must report it");
 }
 
-void test_lib_and_dlls_without_site_module_is_rejected() {
-    TempRoot root("nosite");
-    fs::create_directories(root.path / "Lib" / "encodings");
-    write_file(root.path / "Lib" / "os.py");
-    fs::create_directories(root.path / "DLLs");
+void check_stdlib_and_ext_modules_without_site_module_is_rejected(const PythonRuntimeLayout& layout,
+                                                                  std::string_view label) {
+    TempRoot root(std::string(label) + "_nosite");
+    const fs::path stdlib = stdlib_path(root.path, layout);
+    fs::create_directories(stdlib / "encodings");
+    write_file(stdlib / "os.py");
+    fs::create_directories(ext_modules_path(root.path, layout));
 
-    const auto result = inspect_packaged_runtime(root.path);
+    const auto result = inspect_packaged_runtime(root.path, layout);
     require(result.issue == PackagedRuntimeIssue::MissingSiteModule,
-            "runtime without Lib/site.py must be reported as missing site module");
-    require(!result.available(), "runtime without Lib/site.py must not be available");
+            std::string(label) + ": runtime without site.py must be reported as missing site module");
+    require(!result.available(), std::string(label) + ": runtime without site.py must not be available");
 }
 
-void test_missing_encodings_is_reported() {
-    TempRoot root("noencodings");
-    fs::create_directories(root.path / "Lib");
-    write_file(root.path / "Lib" / "site.py");
-    fs::create_directories(root.path / "DLLs");
+void check_missing_encodings_is_reported(const PythonRuntimeLayout& layout, std::string_view label) {
+    TempRoot root(std::string(label) + "_noencodings");
+    const fs::path stdlib = stdlib_path(root.path, layout);
+    fs::create_directories(stdlib);
+    write_file(stdlib / "site.py");
+    fs::create_directories(ext_modules_path(root.path, layout));
 
-    const auto result = inspect_packaged_runtime(root.path);
+    const auto result = inspect_packaged_runtime(root.path, layout);
     require(result.issue == PackagedRuntimeIssue::MissingEncodings,
-            "runtime without Lib/encodings must be reported as missing encodings");
+            std::string(label) + ": runtime without encodings must be reported as missing encodings");
 }
 
-void test_complete_runtime_is_available() {
-    TempRoot root("complete");
-    make_complete_runtime(root.path);
+void check_complete_runtime_is_available(const PythonRuntimeLayout& layout, std::string_view label) {
+    TempRoot root(std::string(label) + "_complete");
+    make_complete_runtime(root.path, layout);
 
-    const auto result = inspect_packaged_runtime(root.path);
-    require(result.available(), "complete runtime must be available");
-    require(result.issue == PackagedRuntimeIssue::None, "complete runtime must have no issue");
-    require(result.root == root.path, "inspection must report the inspected root");
+    const auto result = inspect_packaged_runtime(root.path, layout);
+    require(result.available(), std::string(label) + ": complete runtime must be available");
+    require(result.issue == PackagedRuntimeIssue::None,
+            std::string(label) + ": complete runtime must have no issue");
+    require(result.root == root.path, std::string(label) + ": inspection must report the inspected root");
 }
 
-void test_describe_is_actionable() {
-    TempRoot root("describe");
-    fs::create_directories(root.path / "Lib");
-    write_file(root.path / "Lib" / "os.py");
-    fs::create_directories(root.path / "DLLs");
+void check_describe_is_actionable(const PythonRuntimeLayout& layout, std::string_view label) {
+    TempRoot root(std::string(label) + "_describe");
+    const fs::path stdlib = stdlib_path(root.path, layout);
+    fs::create_directories(stdlib);
+    write_file(stdlib / "os.py");
+    fs::create_directories(ext_modules_path(root.path, layout));
 
-    const auto unavailable = inspect_packaged_runtime(root.path);
-    const std::string text = unavailable.describe();
+    const std::string text = inspect_packaged_runtime(root.path, layout).describe();
     require(text.find("site.py") != std::string::npos,
-            "describe() must name the missing piece (Lib/site.py) so the log is actionable");
+            std::string(label) + ": describe() must name the missing piece (site.py) so the log is actionable");
     require(text.find(root.path.filename().string()) != std::string::npos,
-            "describe() must include the inspected root path");
-
-    TempRoot ok_root("describe_ok");
-    make_complete_runtime(ok_root.path);
-    const std::string ok_text = inspect_packaged_runtime(ok_root.path).describe();
-    require(!ok_text.empty(), "describe() must also describe the usable case");
+            std::string(label) + ": describe() must include the inspected root path");
+    require(text.find(stdlib.filename().string()) != std::string::npos,
+            std::string(label) + ": describe() must name the layout's stdlib directory");
 }
+
+void check_describe_names_extension_modules_dir(const PythonRuntimeLayout& layout,
+                                                std::string_view label) {
+    TempRoot root(std::string(label) + "_describeext");
+    make_complete_runtime(root.path, layout);
+    fs::remove_all(ext_modules_path(root.path, layout));
+
+    const std::string text = inspect_packaged_runtime(root.path, layout).describe();
+    require(text.find(layout.ext_modules_rel.generic_string()) != std::string::npos,
+            std::string(label) + ": describe() must name the layout's extension-module directory");
+}
+
+void run_layout_suite(const PythonRuntimeLayout& layout, std::string_view label) {
+    check_missing_everything_reports_missing_stdlib(layout, label);
+    check_stdlib_without_ext_modules_reports_missing_ext_modules(layout, label);
+    check_stdlib_and_ext_modules_without_site_module_is_rejected(layout, label);
+    check_missing_encodings_is_reported(layout, label);
+    check_complete_runtime_is_available(layout, label);
+    check_describe_is_actionable(layout, label);
+    check_describe_names_extension_modules_dir(layout, label);
+}
+
+// ---------------------------------------------------------------------------
+// Layout-independent behaviour
+// ---------------------------------------------------------------------------
 
 void test_packaged_runtime_required_reads_env() {
     using Corona::Script::Python::PathCfg::packaged_runtime_required;
 
-    _putenv_s("CORONA_REQUIRE_PACKAGED_PYTHON", "");
+    set_env("CORONA_REQUIRE_PACKAGED_PYTHON", "");
     require(!packaged_runtime_required(), "unset env must not require the packaged runtime");
 
-    _putenv_s("CORONA_REQUIRE_PACKAGED_PYTHON", "0");
+    set_env("CORONA_REQUIRE_PACKAGED_PYTHON", "0");
     require(!packaged_runtime_required(), "env=0 must not require the packaged runtime");
 
-    _putenv_s("CORONA_REQUIRE_PACKAGED_PYTHON", "1");
+    set_env("CORONA_REQUIRE_PACKAGED_PYTHON", "1");
     require(packaged_runtime_required(), "env=1 must require the packaged runtime");
 
-    _putenv_s("CORONA_REQUIRE_PACKAGED_PYTHON", "");
+    set_env("CORONA_REQUIRE_PACKAGED_PYTHON", "");
 }
 
 void test_decision_prefers_packaged_runtime() {
-    using Corona::Script::Python::PathCfg::PackagedRuntimeDecision;
     using Corona::Script::Python::PathCfg::decide_packaged_runtime_usage;
-    using Corona::Script::Python::PathCfg::PackagedRuntimeInspection;
+    using Corona::Script::Python::PathCfg::PackagedRuntimeDecision;
 
     TempRoot root("decision_ok");
-    make_complete_runtime(root.path);
+    make_complete_runtime(root.path, platform_layout());
     const auto packaged = inspect_packaged_runtime(root.path);
 
     require(decide_packaged_runtime_usage(packaged, false, true) ==
@@ -161,12 +223,12 @@ void test_decision_prefers_packaged_runtime() {
 }
 
 void test_decision_falls_back_only_when_allowed_and_possible() {
-    using Corona::Script::Python::PathCfg::PackagedRuntimeDecision;
     using Corona::Script::Python::PathCfg::decide_packaged_runtime_usage;
+    using Corona::Script::Python::PathCfg::PackagedRuntimeDecision;
 
     TempRoot root("decision_fallback");
-    fs::create_directories(root.path / "Lib");
-    write_file(root.path / "Lib" / "site.py");
+    fs::create_directories(stdlib_path(root.path, platform_layout()));
+    write_file(stdlib_path(root.path, platform_layout()) / "site.py");
     const auto incomplete = inspect_packaged_runtime(root.path);
 
     require(decide_packaged_runtime_usage(incomplete, false, true) ==
@@ -186,6 +248,15 @@ void test_decision_falls_back_only_when_allowed_and_possible() {
 }  // namespace
 
 int main() {
+    // platform_layout() must be the host's layout, not an arbitrary default.
+#ifdef _WIN32
+    require(&platform_layout() == &windows_layout(),
+            "platform_layout() must be the Windows layout on Windows");
+#else
+    require(&platform_layout() == &posix_layout(),
+            "platform_layout() must be the POSIX layout on POSIX");
+#endif
+
     {
         TempRoot unrelated("unrelated_cwd");
         const auto previous = fs::current_path();
@@ -196,17 +267,17 @@ int main() {
         require(fs::u8path(engine_root()) == native_root, "Python root must be UTF-8");
         require(fs::u8path(editor_backend_abs()) == native_root / "CabbageEditor",
                 "editor imports must resolve beside the executable, including Unicode paths");
+#ifdef _WIN32
         if (const auto expected = _wgetenv(L"CORONA_TEST_EXPECTED_RUNTIME_ROOT")) {
             require(native_root == fs::path(expected), "long executable path must not be truncated");
         }
+#endif
         fs::current_path(previous);
     }
-    test_missing_everything_reports_missing_lib();
-    test_lib_without_dlls_reports_missing_dlls();
-    test_lib_and_dlls_without_site_module_is_rejected();
-    test_missing_encodings_is_reported();
-    test_complete_runtime_is_available();
-    test_describe_is_actionable();
+
+    run_layout_suite(windows_layout(), "windows");
+    run_layout_suite(posix_layout(), "posix");
+
     test_packaged_runtime_required_reads_env();
     test_decision_prefers_packaged_runtime();
     test_decision_falls_back_only_when_allowed_and_possible();
