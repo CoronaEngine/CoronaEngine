@@ -55,7 +55,6 @@ class VulkanBackend {
 
     // Publish `surface`'s render target to DisplaySystem (UIFrameReadyEvent).
     void present_surface(void* surface);
-    [[nodiscard]] bool first_present_ready(void* surface) const;
 
     // Recreate `surface`'s render target at the given pixel size (on window resize).
     void rebuild(void* surface, uint32_t pixel_w, uint32_t pixel_h);

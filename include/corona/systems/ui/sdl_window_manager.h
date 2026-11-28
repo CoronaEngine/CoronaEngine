@@ -19,9 +19,6 @@ struct ManagedWindow {
     SDL_WindowID window_id = 0;
     void* surface = nullptr;  // native handle (HWND/NSWindow*); DisplaySystem surface key
     bool is_main = false;
-    // A secondary window is adopted HIDDEN and revealed only after its first frame has been
-    // published to the DisplaySystem, to avoid a 1-frame white/black flash when it opens.
-    bool pending_show = false;
     bool removal_acknowledged = false;
 };
 
@@ -63,11 +60,6 @@ class SdlWindowManager {
     // Final destruction after Vulkan image state has been unregistered. Refuses to destroy
     // a window whose Display retirement was not acknowledged.
     bool destroy_secondary_window(void* surface);
-
-    // Deferred show: if `surface`'s window is still hidden awaiting its first frame, show it
-    // now (called after that surface's first UIFrameReadyEvent is published, eliminating the
-    // 1-frame white flash when a window opens). No-op if already shown or unknown surface.
-    void reveal_pending_window(void* surface);
 
 
    private:
