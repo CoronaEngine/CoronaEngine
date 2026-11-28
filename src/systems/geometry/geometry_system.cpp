@@ -1061,7 +1061,6 @@ void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {
                         if (!buf.ready) continue;
                         buf.vertex_buffer  = Horizon::HardwareBuffer{};
                         buf.index_buffer = Horizon::HardwareBuffer{};
-                        buf.shadow_index_buffer = Horizon::HardwareBuffer{};
                         buf.vertex_storage = Horizon::HardwareBuffer{};
                         buf.index_storage  = Horizon::HardwareBuffer{};
                         buf.mesh_mem       = Corona::Memory::GpuMemToken{};
@@ -1070,10 +1069,6 @@ void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {
 
                     cit->second.lod_spatially_evicted = true;
                     cit->second.committed_demand = 0;
-                    // 空间淘汰 LOD1..N 后，shadow 必须回退 LOD0，否则会引用已释放的缓冲
-                    cit->second.shadow_committed_demand = -1;
-                    cit->second.shadow_prev_committed   = -1;
-                    cit->second.shadow_swap_in_progress = false;
                     // 主视图 swap 状态也必须重置：prev_committed 可能指向已被释放的级，
                     // 残留的 swap_in_progress=true 会在恢复时阻止 prev_committed 正确更新
                     cit->second.swap_in_progress = false;
@@ -1085,11 +1080,10 @@ void GeometrySystem::evict_lods_for_actor(std::uintptr_t actor) {
                 // 会重新设 ready=true，撤销本次淘汰。
                 //
                 // 线程安全：evict_lods_for_actor 仅在几何线程 update() 中调用，
-                // pending_lod_builds/pending_shadow_lod_builds 的所有其他访问
+                // pending_lod_builds 的所有其他访问
                 // （reconcile 插入、process_pending_lod_builds 轮询/移除）也在
                 // 同一几何线程，无竞态，无需额外加锁。
                 impl_->pending_lod_builds.erase(lod_key);
-                impl_->pending_shadow_lod_builds.erase(lod_key);
                  }
         }
     }
@@ -2581,39 +2575,6 @@ GeometrySystem::RenderMeshBuffers GeometrySystem::select_render_buffers_for_inst
     return fallback;
 }
 
-GeometrySystem::RenderMeshBuffers GeometrySystem::select_shadow_render_buffers(
-    EntityId geometry_handle, uint32_t mesh_index,
-    float world_units_per_texel, float max_abs_scale,
-    const RenderMeshBuffers& fallback) const {
-    std::shared_lock lock(impl_->lod_cache_mutex);
-    auto it = impl_->lod_cache.find(Impl::make_lod_key(geometry_handle, mesh_index));
-    if (it == impl_->lod_cache.end() || it->second.levels.empty()) return fallback;
-    const auto& levels = it->second.levels;
-    int target = it->second.committed_demand;
-    if (world_units_per_texel > 0.0f && std::isfinite(world_units_per_texel)) {
-        target = 0;
-        const float scale = std::max(std::abs(max_abs_scale), 1.0e-6f);
-        for (int level = 0; level < static_cast<int>(levels.size()); ++level) {
-            const float error = levels[level].geometric_error * scale;
-            if (std::isfinite(error) && error <= world_units_per_texel) target = level;
-        }
-    }
-    target = std::clamp(target, 0, static_cast<int>(levels.size()) - 1);
-    // 阴影用的级同样是"需求"：并进共享实例资产的需求集合，避免阴影读到已卸载级。
-    if (it->second.shared_instances) {
-        it->second.frame_demand_mask.set(static_cast<std::uint32_t>(target));
-    }
-    for (int level = target; level >= 0; --level) {
-        const auto& candidate = levels[static_cast<size_t>(level)];
-        if (!candidate.ready || !candidate.vertex_buffer || !candidate.index_buffer) continue;
-        return RenderMeshBuffers{candidate.vertex_buffer, candidate.index_buffer,
-            candidate.vertex_storage ? candidate.vertex_storage : fallback.vertex_storage,
-            candidate.index_storage ? candidate.index_storage : fallback.index_storage,
-            candidate.vertex_count, candidate.index_count, candidate.max_index};
-    }
-    return fallback;
-}
-
 GeometrySystem::RenderMeshBuffers GeometrySystem::resident_render_buffers(
     EntityId           geometry_handle,
     uint32_t                 mesh_index,
@@ -3392,8 +3353,6 @@ void GeometrySystem::upload_lod_from_scene_data() {
             lod0.vertex_count     = static_cast<std::uint32_t>(mesh.vertices.size());
             lod0.index_count      = static_cast<std::uint32_t>(mesh.indices.size());
             lod0.max_index        = mesh_dev.max_index;
-            lod0.draw_clusters    = mesh_dev.draw_clusters;
-            lod0.shadow_index_buffer = mesh_dev.shadowIndexBuffer;
             // 宽限期从"创建这一帧"起算：last_demand_frame 默认 0，而全局帧号早已很大，
             // 若不在上传时写入当前帧号，新建条目会在第一次 reconcile 就被判定"超期未需求"
             // 而立即释放（实测导入完成 1ms 内 131 个 mesh 的 LOD0 被整批驱逐）。
@@ -3426,9 +3385,6 @@ void GeometrySystem::upload_lod_from_scene_data() {
                 lod_buf.vertex_count     = static_cast<std::uint32_t>(lod_data.vertices.size());
                 lod_buf.index_count      = static_cast<std::uint32_t>(lod_data.indices.size());
                 lod_buf.max_index        = lod_buf.vertex_count > 0 ? lod_buf.vertex_count - 1u : 0u;
-                lod_buf.draw_clusters = Geometry::make_draw_clusters(
-                    std::span<const Resource::Vertex>(lod_data.vertices),
-                    std::span<const std::uint16_t>(lod_data.indices));
                 lod_buf.source_lod_index = static_cast<std::uint32_t>(lod_idx);
                 // 同上：宽限期从创建帧起算，避免新建级刚登记就被判超期。
                 lod_buf.last_demand_frame = impl_->lod_frame_counter;
@@ -3528,8 +3484,8 @@ void GeometrySystem::reconcile_lod_residency() {
     std::vector<GeometrySystem::LodBudgetEntry> lod_budget_entries;
 
     // ---- 共享实例资产：集合式 LOD 驻留 ----
-    // 需求集合 = 本帧各实例（主视图 / 跟随相机 / 阴影）实际选中的 LOD 并集，由渲染
-    // 线程在 select_render_buffers_for_instance / select_shadow_render_buffers 中写入
+    // 需求集合 = 本帧各实例（主视图 / 跟随相机）实际选中的 LOD 并集，由渲染
+    // 线程在 select_render_buffers_for_instance 中写入
     // frame_demand_mask。这里只做两件事：
     //   1) 为并集里尚未驻留的级发起异步构建；
     //   2) 释放并集外、且已超过宽限帧的已驻留级（LOD0 也照常参与释放）。
@@ -3684,8 +3640,6 @@ void GeometrySystem::reconcile_lod_residency() {
                                     auto buffers = GeometryDetail::make_draw_buffers(verts, inds);
                                     r.vertex_buffer = r.vertex_storage = std::move(buffers.vertices);
                                     r.index_buffer = r.index_storage = std::move(buffers.indices);
-                                    r.shadow_index_buffer = std::move(buffers.shadow_indices);
-                                    r.draw_clusters = std::move(buffers.clusters);
                                     r.gpu_bytes = buffers.byte_size;
                                     r.ok = static_cast<bool>(r.vertex_buffer) &&
                                            static_cast<bool>(r.index_buffer);
@@ -3761,7 +3715,6 @@ void GeometrySystem::reconcile_lod_residency() {
                 lvl.ready          = false;
                 lvl.vertex_buffer  = Horizon::HardwareBuffer{};
                 lvl.index_buffer = Horizon::HardwareBuffer{};
-                lvl.shadow_index_buffer = Horizon::HardwareBuffer{};
                 lvl.vertex_storage = Horizon::HardwareBuffer{};
                 lvl.index_storage  = Horizon::HardwareBuffer{};
                 lvl.mesh_mem       = Corona::Memory::GpuMemToken{};
@@ -4022,30 +3975,6 @@ void GeometrySystem::reconcile_lod_residency() {
             lod_budget_entries.push_back({lod_key, world_center, demand,
                 static_cast<int>(level_count)});
 
-            int shadow_demand = -1;
-            int shadow_previous = -1;
-            if (!skip_lod_demand) {
-                std::unique_lock lock(impl_->lod_cache_mutex);
-                auto cit = impl_->lod_cache.find(lod_key);
-                if (cit != impl_->lod_cache.end() && cit->second.model_id == model_id) {
-                    if (this_frame > cit->second.shadow_last_request_frame &&
-                        this_frame - cit->second.shadow_last_request_frame >
-                            GeometryDetail::kShadowLodRequestTtlFrames) {
-                        cit->second.shadow_committed_demand = -1;
-                    }
-                    shadow_demand = cit->second.shadow_committed_demand;
-                    shadow_previous = cit->second.shadow_prev_committed;
-                    if (shadow_demand >= 0 &&
-                        static_cast<size_t>(shadow_demand) < cit->second.levels.size() &&
-                        !cit->second.levels[shadow_demand].ready) {
-                        cit->second.shadow_prev_committed =
-                            cit->second.committed_demand;
-                        cit->second.shadow_swap_in_progress = true;
-                        shadow_previous = cit->second.shadow_prev_committed;
-                    }
-                }
-            }
-
             // 限速反向（方案 D）：committed 直接跳到滞回目标，不再强制逐级移动。
             // 旧的"单帧最多移动一级"会逼着 committed 扫过每个中间级 → 每个中间级都被
             // 当成 demand 各 build 一次（哪怕只显示一帧）→ 相机平移时 GPU 上传抖动。
@@ -4094,8 +4023,6 @@ void GeometrySystem::reconcile_lod_residency() {
             // 一旦新级 ready（process_pending_lod_builds 完成 swap），守卫解除，下一帧即释放。
             bool need_build = false;
             std::uint32_t demand_src_idx = 0;
-            bool shadow_need_build = false;
-            std::uint32_t shadow_src_idx = 0;
             std::vector<int> to_free;
             {
                 std::shared_lock lock(impl_->lod_cache_mutex);
@@ -4104,11 +4031,6 @@ void GeometrySystem::reconcile_lod_residency() {
                 const auto& levels = cit->second.levels;
                 const bool  in_swap = cit->second.swap_in_progress;
                 const int   guarded = cit->second.prev_committed;
-                if (shadow_demand > 0 && static_cast<size_t>(shadow_demand) < levels.size() &&
-                    !levels[shadow_demand].ready) {
-                    shadow_need_build = true;
-                    shadow_src_idx = levels[shadow_demand].source_lod_index;
-                }
                 for (size_t i = 0; i < levels.size(); ++i) {
                     if (i == 0) continue;  // LOD0 remains the resident fallback.
                     if (static_cast<int>(i) == demand) {
@@ -4118,10 +4040,8 @@ void GeometrySystem::reconcile_lod_residency() {
                         }
                     } else if (levels[i].ready) {
                         // swap 保活：若该级是当前被替换的旧级，保留到新级 ready
-                    const bool is_swap_guarded = in_swap && (static_cast<int>(i) == guarded);
-                    const bool is_shadow_kept = static_cast<int>(i) == shadow_demand ||
-                                                static_cast<int>(i) == shadow_previous;
-                        if (!is_swap_guarded && !is_shadow_kept) {
+                        const bool is_swap_guarded = in_swap && (static_cast<int>(i) == guarded);
+                        if (!is_swap_guarded) {
                             to_free.push_back(static_cast<int>(i));
                         }
                     }
@@ -4167,8 +4087,6 @@ void GeometrySystem::reconcile_lod_residency() {
                                         auto buffers = GeometryDetail::make_draw_buffers(verts, inds);
                                         r.vertex_buffer = r.vertex_storage = std::move(buffers.vertices);
                                         r.index_buffer = r.index_storage = std::move(buffers.indices);
-                                        r.shadow_index_buffer = std::move(buffers.shadow_indices);
-                                        r.draw_clusters = std::move(buffers.clusters);
                                         r.gpu_bytes = buffers.byte_size;
                                         r.ok = static_cast<bool>(r.vertex_buffer)
                                                && static_cast<bool>(r.index_buffer);
@@ -4178,43 +4096,6 @@ void GeometrySystem::reconcile_lod_residency() {
                             ++impl_->diag_lod_build_launches;
                         }
                     }
-                    }
-                }
-            }
-
-            if (shadow_need_build && shadow_demand > 0) {
-                auto scene_read = resource_manager.acquire_read<Resource::Scene>(model_id);
-                ++impl_->diag_scene_acquires;
-                const auto* scene_ptr = scene_read.valid() ? &(*scene_read) : nullptr;
-                if (scene_ptr && mesh_idx < scene_ptr->data.meshes.size() &&
-                    shadow_src_idx < scene_ptr->data.meshes[mesh_idx].lod_levels.size()) {
-                    const auto& lod_data = scene_ptr->data.meshes[mesh_idx].lod_levels[shadow_src_idx];
-                    if (!lod_data.vertices.empty() && !lod_data.indices.empty()) {
-                        std::uint64_t epoch = 0;
-                        { std::shared_lock lk(impl_->lod_cache_mutex); auto cit = impl_->lod_cache.find(lod_key);
-                          if (cit != impl_->lod_cache.end() && cit->second.model_id == model_id) epoch = cit->second.residency_epoch; }
-                        auto pit = impl_->pending_shadow_lod_builds.find(lod_key);
-                        bool already = pit != impl_->pending_shadow_lod_builds.end() &&
-                            pit->second.level == shadow_demand && pit->second.model_id == model_id &&
-                            pit->second.residency_epoch == epoch && pit->second.future.valid();
-                        if (!already && pit != impl_->pending_shadow_lod_builds.end()) impl_->pending_shadow_lod_builds.erase(pit);
-                        if (!already && impl_->pending_shadow_lod_builds.size() < Impl::kMaxInflightLodBuilds) {
-                            auto verts = lod_data.vertices; auto inds = lod_data.indices;
-                            auto promise = std::make_shared<std::promise<Impl::LODBuildResult>>();
-                            impl_->pending_shadow_lod_builds[lod_key] =
-                                Impl::PendingLodBuild{model_id, epoch, shadow_demand, promise->get_future(), Impl::LodBuildPurpose::Shadow};
-                            impl_->lod_build_tasks.submit(Corona::Concurrency::TaskClass::Compute, [verts=std::move(verts), inds=std::move(inds), promise]() {
-                                Impl::LODBuildResult r; try {
-                                    auto buffers = GeometryDetail::make_draw_buffers(verts, inds);
-                                    r.vertex_buffer = r.vertex_storage = std::move(buffers.vertices);
-                                    r.index_buffer = r.index_storage = std::move(buffers.indices);
-                                    r.shadow_index_buffer = std::move(buffers.shadow_indices);
-                                    r.draw_clusters = std::move(buffers.clusters);
-                                    r.gpu_bytes=buffers.byte_size; r.ok=static_cast<bool>(r.vertex_buffer)&&static_cast<bool>(r.index_buffer);
-                                } catch (...) { r.ok=false; } promise->set_value(std::move(r));
-                            });
-                            ++impl_->diag_lod_build_launches;
-                        }
                     }
                 }
             }
@@ -4262,8 +4143,6 @@ void GeometrySystem::reconcile_lod_residency() {
                                         auto buffers = GeometryDetail::make_draw_buffers(verts, inds);
                                         r.vertex_buffer = r.vertex_storage = std::move(buffers.vertices);
                                         r.index_buffer = r.index_storage = std::move(buffers.indices);
-                                        r.shadow_index_buffer = std::move(buffers.shadow_indices);
-                                        r.draw_clusters = std::move(buffers.clusters);
                                         r.gpu_bytes = buffers.byte_size;
                                         r.ok = static_cast<bool>(r.vertex_buffer)
                                                && static_cast<bool>(r.index_buffer);
@@ -4293,7 +4172,6 @@ void GeometrySystem::reconcile_lod_residency() {
                         ++impl_->diag_lod_frees;
                         lvl.vertex_buffer  = Horizon::HardwareBuffer{};
                         lvl.index_buffer = Horizon::HardwareBuffer{};
-                        lvl.shadow_index_buffer = Horizon::HardwareBuffer{};
                         lvl.vertex_storage = Horizon::HardwareBuffer{};
                         lvl.index_storage  = Horizon::HardwareBuffer{};
                         lvl.mesh_mem       = Corona::Memory::GpuMemToken{};
@@ -4436,10 +4314,9 @@ void GeometrySystem::enforce_lod_budget(
                     lvl_bytes.push_back(levels[lvl].mesh_mem.bytes());
                 } else {
                     // 未构建级：根据顶点/索引数估算
-                    // Shared vertices, original indices and spatial shadow indices.
                     const std::size_t est =
                         levels[lvl].vertex_count * sizeof(Resource::Vertex)
-                        + 2u * levels[lvl].index_count * sizeof(std::uint16_t);
+                        + ((static_cast<std::size_t>(levels[lvl].index_count) + 1u) & ~std::size_t{1}) * sizeof(std::uint16_t);
                     lvl_bytes.push_back(est);
                 }
             }
@@ -4595,8 +4472,6 @@ void GeometrySystem::process_pending_lod_builds() {
         lvl.index_buffer   = std::move(r.index_buffer);
         lvl.vertex_storage = std::move(r.vertex_storage);
         lvl.index_storage  = std::move(r.index_storage);
-        lvl.draw_clusters = std::move(r.draw_clusters);
-        lvl.shadow_index_buffer = std::move(r.shadow_index_buffer);
         lvl.mesh_mem       = std::move(tok);
         lvl.ready          = true;
         lvl.last_demand_frame = impl_->lod_frame_counter;
@@ -4606,19 +4481,13 @@ void GeometrySystem::process_pending_lod_builds() {
         // ---- 变更 H：swap 完成检测 ----
         // 新级 ready 后立即释放被保活的旧级（prev_committed），最小化"2层共存"窗口。
         // 不等下一帧 reconcile：本帧 build 回写后即刻在同一 unique_lock 内完成 swap。
-        const bool shadow_task = task.purpose == Impl::LodBuildPurpose::Shadow;
-        if (shadow_task ? cit->second.shadow_swap_in_progress : cit->second.swap_in_progress) {
-            const int new_d   = shadow_task ? cit->second.shadow_committed_demand : cit->second.committed_demand;
-            const int old_lvl = shadow_task ? cit->second.shadow_prev_committed : cit->second.prev_committed;
+        if (cit->second.swap_in_progress) {
+            const int new_d   = cit->second.committed_demand;
+            const int old_lvl = cit->second.prev_committed;
             // 确认：刚回写的级正是 committed_demand（避免中途跳级时把错误级当新级）
             if (task.level == new_d && lvl.ready) {
-                if (shadow_task) {
-                    cit->second.shadow_swap_in_progress = false;
-                    cit->second.shadow_prev_committed = -1;
-                } else {
-                    cit->second.swap_in_progress = false;
-                    cit->second.prev_committed = -1;
-                }
+                cit->second.swap_in_progress = false;
+                cit->second.prev_committed = -1;
                 CFW_LOG_NOTICE("[LOD] swap complete: freed old level {} -> active level {}",
                                old_lvl, new_d);
                 // 释放旧保活级（old_lvl >= 1：永不从 lod_cache 移除 LOD0 的引用计数副本）
@@ -4629,7 +4498,6 @@ void GeometrySystem::process_pending_lod_builds() {
                     old.ready          = false;
                     old.vertex_buffer  = Horizon::HardwareBuffer{};
                     old.index_buffer = Horizon::HardwareBuffer{};
-                    old.shadow_index_buffer = Horizon::HardwareBuffer{};
                     old.vertex_storage = Horizon::HardwareBuffer{};
                     old.index_storage  = Horizon::HardwareBuffer{};
                     old.mesh_mem       = Corona::Memory::GpuMemToken{};
@@ -4639,13 +4507,6 @@ void GeometrySystem::process_pending_lod_builds() {
         }
     }
 
-    if (!impl_->pending_shadow_lod_builds.empty()) {
-        auto main_pending = std::move(impl_->pending_lod_builds);
-        impl_->pending_lod_builds = std::move(impl_->pending_shadow_lod_builds);
-        process_pending_lod_builds();
-        impl_->pending_shadow_lod_builds = std::move(impl_->pending_lod_builds);
-        impl_->pending_lod_builds = std::move(main_pending);
-    }
 }
 
 
@@ -4946,9 +4807,6 @@ build_mesh_slots(const GeometrySystem*        gs,
                  float                        camera_fov_deg,
                  const ktm::fvec3&            world_center,
                  float                        bounding_radius,
-                 bool                         use_shadow_lod = false,
-                 float                        shadow_texel = 0.0f,
-                 float                        shadow_scale = 1.0f,
                  const ktm::fmat4x4*          actor_transform = nullptr) {
     std::vector<GeometrySystem::MeshSlot> result;
     const bool has_instances = !geom.mesh_instances.empty();
@@ -4974,10 +4832,7 @@ build_mesh_slots(const GeometrySystem*        gs,
             m.vertex_count, m.index_count, m.max_index};
 
         GeometrySystem::RenderMeshBuffers geo = fallback;
-        if (use_shadow_lod) {
-            geo = gs->select_shadow_render_buffers(
-                geometry_handle, mesh_index, shadow_texel, shadow_scale, fallback);
-        } else if (use_camera) {
+        if (use_camera) {
             geo = (has_instances && actor_transform != nullptr)
                 ? gs->select_render_buffers_for_instance(
                       geometry_handle, mesh_index, camera_pos, camera_fov_deg,
@@ -5046,214 +4901,7 @@ GeometrySystem::query_mesh_slots(EntityId    geometry_handle,
     return build_mesh_slots(this, geometry_handle, *geom,
                             true, camera_pos, camera_fov_deg,
                             world_center, bounding_radius,
-                            false, 0.0f, 1.0f, actor_transform);
-}
-
-void GeometrySystem::request_shadow_lod(EntityId geometry_handle,
-                                        uint32_t mesh_index,
-                                        float world_units_per_texel,
-                                        float max_abs_scale,
-                                        std::uint64_t frame) const {
-    if (!(world_units_per_texel > 0.0f) || !std::isfinite(world_units_per_texel) ||
-        !std::isfinite(max_abs_scale)) return;
-    std::unique_lock lock(impl_->lod_cache_mutex);
-    auto it = impl_->lod_cache.find(Impl::make_lod_key(geometry_handle, mesh_index));
-    if (it == impl_->lod_cache.end() || it->second.levels.size() <= 1) return;
-    std::array<float, 8> errors{};
-    const int count = static_cast<int>(std::min<size_t>(it->second.levels.size(), errors.size()));
-    for (int i = 0; i < count; ++i) errors[static_cast<size_t>(i)] = it->second.levels[i].geometric_error;
-    const int target = GeometryDetail::choose_shadow_target(
-        errors, count, max_abs_scale, world_units_per_texel, 0);
-    if (it->second.shadow_last_request_frame != frame) {
-        it->second.shadow_committed_demand = target;
-    } else if (it->second.shadow_committed_demand < 0) {
-        it->second.shadow_committed_demand = target;
-    } else {
-        it->second.shadow_committed_demand = std::min(it->second.shadow_committed_demand, target);
-    }
-    it->second.shadow_last_request_frame = frame;
-}
-
-std::vector<GeometrySystem::MeshSlot>
-GeometrySystem::query_shadow_mesh_slots(EntityId geometry_handle,
-                                        float world_units_per_texel,
-                                        float max_abs_scale,
-                                        std::uint64_t frame) const {
-    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
-    auto geom = Corona::find_geometry(geometry_handle);
-    if (!geom || geom->mesh_handles.empty()) return {};
-
-    for (uint32_t mesh_index = 0;
-         mesh_index < static_cast<uint32_t>(geom->mesh_handles.size());
-         ++mesh_index) {
-        request_shadow_lod(geometry_handle, mesh_index, world_units_per_texel,
-                           max_abs_scale, frame);
-    }
-    return build_mesh_slots(this, geometry_handle, *geom,
-                            false, {}, 0.f, {}, 0.f,
-                            true, world_units_per_texel, max_abs_scale);
-}
-
-std::vector<std::vector<GeometrySystem::ShadowMeshSlot>>
-GeometrySystem::query_shadow_mesh_slots_batch(
-    EntityId geometry_handle,
-    std::span<const ShadowLodQuery> cascades,
-    float max_abs_scale,
-    std::uint64_t frame) const {
-    std::vector<std::vector<ShadowMeshSlot>> result(cascades.size());
-    if (cascades.empty()) return result;
-
-    auto geom_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
-    auto geom = Corona::find_geometry(geometry_handle);
-    if (!geom || geom->mesh_handles.empty()) return result;
-
-    std::vector<GeometryDetail::ShadowLodQueryInput> query_inputs;
-    query_inputs.reserve(cascades.size());
-    for (const auto& cascade : cascades) {
-        query_inputs.push_back({cascade.enabled, cascade.world_units_per_texel});
-    }
-    std::vector<int> targets(cascades.size(), -1);
-    for (std::size_t cascade = 0; cascade < cascades.size(); ++cascade) {
-        if (cascades[cascade].enabled) {
-            result[cascade].reserve(geom->mesh_handles.size());
-        }
-    }
-
-    std::unique_lock lod_lock(impl_->lod_cache_mutex);
-    for (uint32_t mesh_index = 0;
-         mesh_index < static_cast<uint32_t>(geom->mesh_handles.size());
-         ++mesh_index) {
-        const auto& mesh = geom->mesh_handles[mesh_index];
-        const RenderMeshBuffers fallback{
-            mesh.vertexBuffer, mesh.indexBuffer,
-            mesh.vertexStorageBuffer, mesh.indexStorageBuffer,
-            mesh.vertex_count, mesh.index_count, mesh.max_index};
-
-        auto cache_it = impl_->lod_cache.find(Impl::make_lod_key(geometry_handle, mesh_index));
-        const bool has_levels = cache_it != impl_->lod_cache.end() &&
-                                !cache_it->second.levels.empty();
-        int main_target = 0;
-        GeometryDetail::ShadowLodBatchDecision decision;
-        if (has_levels) {
-            auto& entry = cache_it->second;
-            main_target = std::clamp(entry.committed_demand, 0,
-                                     static_cast<int>(entry.levels.size()) - 1);
-            std::array<float, 8> errors{};
-            const int level_count = static_cast<int>(
-                std::min<std::size_t>(entry.levels.size(), errors.size()));
-            for (int level = 0; level < level_count; ++level) {
-                errors[static_cast<std::size_t>(level)] =
-                    entry.levels[static_cast<std::size_t>(level)].geometric_error;
-            }
-            decision = GeometryDetail::choose_shadow_targets(
-                errors, level_count, [&] {
-                    if (geom->mesh_instances.empty()) return max_abs_scale;
-                    float instance_scale = 0.0f;
-                    for (const auto& instance : geom->mesh_instances) {
-                        if (!instance.visible || instance.mesh_index != mesh_index) continue;
-                        const float scale = GeometryDetail::shadow_transform_scale(instance.transform);
-                        if (!std::isfinite(scale)) return scale;
-                        instance_scale = std::max(instance_scale, scale);
-                    }
-                    // Errors are measured in mesh-local units. The largest
-                    // visible instance determines the shared shadow LOD budget.
-                    return max_abs_scale * instance_scale;
-                }(), query_inputs, targets, main_target);
-            if (entry.levels.size() > 1 && decision.aggregated_demand >= 0) {
-                if (entry.shadow_last_request_frame != frame ||
-                    entry.shadow_committed_demand < 0) {
-                    entry.shadow_committed_demand = decision.aggregated_demand;
-                } else {
-                    entry.shadow_committed_demand = std::min(
-                        entry.shadow_committed_demand, decision.aggregated_demand);
-                }
-                entry.shadow_last_request_frame = frame;
-            }
-        } else {
-            for (std::size_t cascade = 0; cascade < cascades.size(); ++cascade) {
-                targets[cascade] = cascades[cascade].enabled ? main_target : -1;
-            }
-        }
-
-        for (std::size_t cascade = 0; cascade < cascades.size(); ++cascade) {
-            if (!cascades[cascade].enabled) continue;
-            RenderMeshBuffers selected = fallback;
-            float bounds_padding = 0.0f;
-            auto draw_clusters = mesh.draw_clusters;
-            if (has_levels) {
-                const auto& levels = cache_it->second.levels;
-                const int target = std::clamp(targets[cascade], 0,
-                                              static_cast<int>(levels.size()) - 1);
-                for (int level = target; level >= 0; --level) {
-                    const auto& candidate = levels[static_cast<std::size_t>(level)];
-                    if (!candidate.ready || !candidate.vertex_buffer ||
-                        !candidate.index_buffer) {
-                        continue;
-                    }
-                    selected = RenderMeshBuffers{
-                        candidate.vertex_buffer,
-                        candidate.index_buffer,
-                        candidate.vertex_storage ? candidate.vertex_storage
-                                                 : fallback.vertex_storage,
-                        candidate.index_storage ? candidate.index_storage
-                                                : fallback.index_storage,
-                        candidate.vertex_count,
-                        candidate.index_count,
-                        candidate.max_index};
-                    bounds_padding = candidate.geometric_error;
-                    draw_clusters = candidate.draw_clusters;
-                    break;
-                }
-            }
-
-            auto append_shadow_slot = [&](uint32_t instance_index,
-                                          const MeshInstanceDevice* instance) {
-                ShadowMeshSlot slot;
-                slot.texture = mesh.textureBuffer;
-                slot.material = mesh.material;
-                slot.material_index = mesh.materialIndex;
-                slot.material_color = mesh.materialColor;
-                if (!geom->is_skinned) slot.draw_clusters = draw_clusters;
-                slot.mesh_index = mesh_index;
-                slot.instance_index = instance_index;
-                if (instance != nullptr) {
-                    slot.object_id = instance->object_id;
-                    slot.instance_transform = instance->transform;
-                    if (!geom->is_skinned && std::isfinite(bounds_padding) && bounds_padding >= 0.0f) {
-                        slot.bounds_valid = true;
-                        for (std::size_t axis = 0; axis < 3; ++axis) {
-                            slot.bounds_min[axis] = instance->local_bounds_min[axis] - bounds_padding;
-                            slot.bounds_max[axis] = instance->local_bounds_max[axis] + bounds_padding;
-                            slot.bounds_valid = slot.bounds_valid &&
-                                std::isfinite(slot.bounds_min[axis]) && std::isfinite(slot.bounds_max[axis]) &&
-                                slot.bounds_min[axis] <= slot.bounds_max[axis];
-                        }
-                    }
-                }
-                slot.geo = selected;
-                // RSM evaluates UVs and normals. Position-only shadow indices
-                // weld attribute seams and cannot be used for reflective flux.
-                slot.vertex_count = slot.geo.vertex_count;
-                slot.index_count = slot.geo.index_count;
-                slot.max_index = slot.geo.max_index;
-                slot.valid = render_mesh_buffers_valid(slot.geo);
-                result[cascade].push_back(std::move(slot));
-            };
-
-            if (geom->mesh_instances.empty()) {
-                append_shadow_slot(0, nullptr);
-            } else {
-                for (uint32_t instance_index = 0;
-                     instance_index < static_cast<uint32_t>(geom->mesh_instances.size());
-                     ++instance_index) {
-                    const auto& instance = geom->mesh_instances[instance_index];
-                    if (!instance.visible || instance.mesh_index != mesh_index) continue;
-                    append_shadow_slot(instance_index, &instance);
-                }
-            }
-        }
-    }
-    return result;
+                            actor_transform);
 }
 
 void GeometrySystem::update_cpu_resource_ledger() {
@@ -5445,10 +5093,7 @@ void GeometrySystem::estimate_actor_memory(std::uintptr_t actor,
                 mesh_count = static_cast<uint32_t>(geom->mesh_handles.size());
                 for (const auto& md : geom->mesh_handles) {
                     out_gpu_bytes += md.mesh_mem.bytes();
-                    if (md.material) {
-                        for (const auto& token : md.material->memory)
-                            if (token && visited_textures.insert(token.get()).second) out_gpu_bytes += token->bytes();
-                    } else if (md.tex_mem && visited_textures.insert(md.tex_mem.get()).second) {
+                    if (md.tex_mem && visited_textures.insert(md.tex_mem.get()).second) {
                         out_gpu_bytes += md.tex_mem->bytes();
                     }
                 }

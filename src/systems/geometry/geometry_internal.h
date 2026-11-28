@@ -6,7 +6,6 @@
 #include <corona/systems/geometry/geometry_mesh_builder.h>
 #include <corona/systems/geometry/geometry_system.h>
 #include <corona/resource/types/scene.h>
-#include "shadow_lod_state.h"
 
 #include <corona/concurrency/thread_pool.h>
 
@@ -199,10 +198,6 @@ struct GeometrySystem::Impl {
         int  prev_committed    = -1;    // ≥0 表示保活中的旧简化级；-1 表示无保活
         bool swap_in_progress  = false; // true = 正在等待新级 build 完成
 
-        int shadow_committed_demand = -1;
-        std::uint64_t shadow_last_request_frame = 0;
-        int shadow_prev_committed = -1;
-        bool shadow_swap_in_progress = false;
 
         // 条目身份版本（方案 C 异步构建 ABA 守卫）：upload 每次 (重)建本条目时自增。
         // 异步构建任务捕获发起时的 epoch；回写时比对，防止 evict→erase→重载同 model_id
@@ -230,7 +225,7 @@ struct GeometrySystem::Impl {
         // ---- 共享实例资产的集合式驻留（GPU 只保留被需求的 LOD）----
         // 多实例资产（同一 MeshData 被多个 MeshInstanceData 引用）不能再按单个
         // committed_demand 选级：不同实例距离不同，各自需要的 LOD 也不同。
-        // 渲染线程在 select_render_buffers_for_instance / select_shadow_render_buffers
+        // 渲染线程在 select_render_buffers_for_instance
         // 里把每个实例实际选中的级写进 frame_demand_mask；reconcile 每帧 take() 取走，
         // 于是驻留集合 = 需求集合 = 各实例选中级的并集：
         //   只构建并集里的级，只释放并集外的级（带逐级宽限帧，防边界抖动）。
@@ -272,8 +267,6 @@ struct GeometrySystem::Impl {
     // GpuMemToken 不在 worker 构建（回避 ledger 线程安全问题）：worker 只产出缓冲 +
     // 字节数，令牌在回写时于几何线程构建。
     struct LODBuildResult {
-        Horizon::HardwareBuffer shadow_index_buffer;
-        Geometry::MeshDrawClusters draw_clusters;
         Horizon::HardwareBuffer vertex_buffer;
         Horizon::HardwareBuffer index_buffer;
         Horizon::HardwareBuffer vertex_storage;
@@ -283,16 +276,13 @@ struct GeometrySystem::Impl {
     };
 
     // 每个 (geom,mesh) 至多一个在途任务（committed 是单值）。仅几何线程访问，无需加锁。
-    enum class LodBuildPurpose : std::uint8_t { Main, Shadow };
     struct PendingLodBuild {
         std::uint64_t               model_id        = 0;  // ABA 守卫（防 slot 复用）
         std::uint64_t               residency_epoch = 0;  // ABA 守卫（防同 model_id 重建）
         int                         level           = 0;  // 目标缓存级下标
         std::future<LODBuildResult> future;
-        LodBuildPurpose purpose = LodBuildPurpose::Main;
     };
     std::unordered_map<uint64_t /*lod_key*/, PendingLodBuild> pending_lod_builds;
-    std::unordered_map<uint64_t /*lod_key*/, PendingLodBuild> pending_shadow_lod_builds;
 
     // 引擎统一线程池的任务组（不新建线程）；shutdown 时 wait() 排空。
     Corona::Concurrency::TaskGroup lod_build_tasks;

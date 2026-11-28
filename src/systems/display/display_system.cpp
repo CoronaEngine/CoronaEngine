@@ -883,19 +883,6 @@ void DisplaySystem::update() {
             }
         }
 
-        // Backpressure is acknowledged after present; the input read dependency
-        // was already published before releasing its image handle above.
-        if (use_optics_layer) {
-            if (optics_receipt_ptr != nullptr && optics_receipt_ptr->serial != 0) {
-                if (auto* event_bus = context()->event_bus()) {
-                    event_bus->publish(Events::OpticsFrameConsumedEvent{
-                        surface,
-                        state.optics.frame_index,
-                        optics_receipt_ptr->serial,
-                    });
-                }
-            }
-        }
     }
 }
 

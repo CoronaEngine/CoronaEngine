@@ -108,27 +108,26 @@ bool upload_geometry_texture(Horizon::HardwareImage& texture,
     return true;
 }
 
-// Cache colour/data views separately, but share MR/AO and repeated materials.
-const SceneGpuTextureCache::Entry& load_material_image(
-    SceneGpuTextureCache& cache, std::uint64_t id, bool srgb,
+const SceneGpuTextureCache::Entry& load_base_color_image(
+    SceneGpuTextureCache& cache, std::uint64_t id,
     GeometryDetail::UploadBatch& uploads) {
-    auto& entries = srgb ? cache.entries : cache.linear_entries;
+    auto& entries = cache.entries;
     if (auto found = entries.find(id); found != entries.end()) return found->second;
     SceneGpuTextureCache::Entry entry;
     auto image = Resource::ResourceManager::get_instance().acquire_read<Resource::Image>(id);
     if (image && image->get_width() > 0 && image->get_height() > 0) {
         const auto width = static_cast<std::uint32_t>(image->get_width());
         const auto height = static_cast<std::uint32_t>(image->get_height());
-        auto format = srgb ? Horizon::Format::SRGBA8_UNORM : Horizon::Format::RGBA8_UNORM;
+        auto format = Horizon::Format::SRGBA8_UNORM;
         std::vector<unsigned char> rgba;
         std::span<const std::byte> bytes;
         if (image->is_compressed()) {
             const auto& compressed = image->get_compressed_data();
             if (compressed.format == Resource::CompressedData::Format::BC1) {
-                format = srgb ? Horizon::Format::BC1_UNORM_SRGB : Horizon::Format::BC1_UNORM;
+                format = Horizon::Format::BC1_UNORM_SRGB;
                 bytes = std::as_bytes(std::span(compressed.data));
             } else if (compressed.format == Resource::CompressedData::Format::BC3) {
-                format = srgb ? Horizon::Format::BC3_UNORM_SRGB : Horizon::Format::BC3_UNORM;
+                format = Horizon::Format::BC3_UNORM_SRGB;
                 bytes = std::as_bytes(std::span(compressed.data));
             }
         } else if (const auto* src = image->get_data()) {
@@ -146,7 +145,7 @@ const SceneGpuTextureCache::Entry& load_material_image(
         }
         if (!bytes.empty()) {
             entry.image = make_geometry_texture(width, height, format,
-                srgb ? "geometry.material.srgb" : "geometry.material.linear");
+                "geometry.material.srgb");
             if (upload_geometry_texture(entry.image, bytes, "material", uploads)) {
                 entry.valid = true;
                 entry.gpu_bytes = gpu_texture_bytes(format, width, height);
@@ -156,7 +155,7 @@ const SceneGpuTextureCache::Entry& load_material_image(
     }
     if (!entry.valid) {
         entry.image = {};
-        CFW_LOG_WARNING("[GeometryMeshBuilder] Material texture unavailable (id={}, srgb={}); using authored factor", id, srgb);
+        CFW_LOG_WARNING("[GeometryMeshBuilder] Base color texture unavailable (id={}); using authored factor", id);
     }
     return entries.emplace(id, std::move(entry)).first->second;
 }
@@ -167,17 +166,10 @@ std::shared_ptr<const MeshMaterialDevice> make_material(
     if (auto found = cache.materials.find(index); found != cache.materials.end()) return found->second;
     auto material = std::make_shared<MeshMaterialDevice>();
     if (index < scene.data.materials.size()) material->source = scene.data.materials[index];
-    const auto& source = material->source;
-    const std::array ids{source.albedo_texture, source.normal_texture,
-        source.metallic_texture, source.roughness_texture, source.occlusion_texture,
-        source.emissive_texture, source.specular_texture, source.specular_color_texture};
-    for (std::size_t slot = 0; slot < ids.size(); ++slot) {
-        if (ids[slot] == Resource::InvalidTextureId) continue;
-        const bool colour = slot == MeshMaterialDevice::BaseColor ||
-            slot == MeshMaterialDevice::Emissive || slot == MeshMaterialDevice::SpecularColor;
-        const auto& image = load_material_image(cache, ids[slot], colour, uploads);
-        material->textures[slot] = image.image;
-        material->memory[slot] = image.mem;
+    if (material->source.albedo_texture != Resource::InvalidTextureId) {
+        const auto& image = load_base_color_image(cache, material->source.albedo_texture, uploads);
+        material->base_color_texture = image.image;
+        material->base_color_memory = image.mem;
     }
     cache.materials.emplace(index, material);
     return material;
@@ -261,19 +253,16 @@ std::vector<MeshDevice> build_mesh_devices_from_scene_range(
         dev.index_count = static_cast<std::uint32_t>(indices.size());
         dev.max_index = max_index;
         auto buffers = GeometryDetail::make_draw_buffers(vertices, indices, uploads);
-        dev.draw_clusters = std::move(buffers.clusters);
         dev.vertexBuffer = dev.vertexStorageBuffer = std::move(buffers.vertices);
         dev.indexBuffer = dev.indexStorageBuffer = std::move(buffers.indices);
-        dev.shadowIndexBuffer = std::move(buffers.shadow_indices);
-        // One shared vertex allocation, original indices, spatial shadow indices.
         dev.mesh_mem = Corona::Memory::GpuMemToken(Corona::Memory::ResKind::Mesh,
             buffers.byte_size);
 
         dev.materialIndex = mesh.material_index;
         dev.material = make_material(scene, mesh.material_index, texture_cache, uploads);
         dev.materialColor = dev.material->source.base_color;
-        dev.textureBuffer = dev.material->textures[MeshMaterialDevice::BaseColor];
-        dev.tex_mem = dev.material->memory[MeshMaterialDevice::BaseColor];
+        dev.textureBuffer = dev.material->base_color_texture;
+        dev.tex_mem = dev.material->base_color_memory;
         const bool texture_created = static_cast<bool>(dev.textureBuffer);
         if (!dev.textureBuffer) dev.textureBuffer = placeholder_texture;
 

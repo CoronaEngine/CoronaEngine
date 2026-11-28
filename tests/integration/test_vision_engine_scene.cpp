@@ -1231,7 +1231,7 @@ struct VisionEngineSceneTest {
         render(*engine_return, "Engine-ReSTIR-return", false);
         engine_restir.reset(); engine_pt.reset(); engine_return.reset();
     }
-    static void check_shared_display(vision::Pipeline& pipeline) {
+    static void check_shared_display(vision::Pipeline& pipeline, CameraDevice camera) {
         const auto resolution = pipeline.frame_buffer()->resolution();
         Vision::VisionZeroCopyBridge bridge;
         expect(bridge.ensure(pipeline, resolution.x, resolution.y),
@@ -1252,6 +1252,20 @@ struct VisionEngineSceneTest {
                        "steady-state display must reuse its shared allocation");
             }
         }
+        // Exercise the same GPU hit query as Pipeline::on_touch on the displayed scene.
+        const auto pick_center = [&] {
+            auto* fb = pipeline.frame_buffer();
+            auto& hits = fb->hit_buffer();
+            pipeline.stream() << fb->compute_hit(0, {resolution.x / 2, resolution.y / 2})
+                              << hits.download(0, 1) << ocarina::synchronize() << ocarina::commit();
+            return hits[0];
+        };
+        auto hit = pick_center();
+        expect(!hit.is_miss() && hit.inst_id == 0, "center pixel must pick the receiver instance");
+        camera.forward = {0, 0, -1};
+        Vision::sync_vision_camera(pipeline, camera);
+        pipeline.upload_data();
+        expect(pick_center().is_miss(), "picking away from the receiver must clear the previous hit");
         expect(bridge.ensure(pipeline, resolution.x + 1, resolution.y),
                "shared buffer resize must reallocate and import successfully");
         expect(!bridge.render_display(pipeline, 1.f, nullptr, false) && bridge.failed() && !bridge.valid(),
@@ -1559,7 +1573,7 @@ struct VisionEngineSceneTest {
                 Vision::sync_vision_camera(*restir, camera);
                 check_sun_direction_update(system, *restir, *hub.try_environment(environment));
             } else if (shared_display_only) {
-                check_shared_display(*pt);
+                check_shared_display(*pt, camera);
             } else {
                 check_pt_settings(system, *pt);
                 check_independent_denoiser(system, *pt, "pt");

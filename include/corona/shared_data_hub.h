@@ -15,7 +15,6 @@
 
 #include <ktm/ktm.h>
 #include <corona/systems/geometry/model_node_state.h>
-#include <corona/systems/geometry/mesh_draw_bounds.h>
 
 #include <array>
 #include <atomic>
@@ -39,16 +38,12 @@ namespace Corona {
 class Model;
 
 struct MeshMaterialDevice {
-    enum Slot : std::size_t { BaseColor, Normal, Metallic, Roughness, Occlusion,
-                             Emissive, Specular, SpecularColor, Count };
     Resource::MaterialData source;
-    std::array<Horizon::HardwareImage, Count> textures;
-    std::array<std::shared_ptr<Memory::GpuMemToken>, Count> memory;
+    Horizon::HardwareImage base_color_texture;
+    std::shared_ptr<Memory::GpuMemToken> base_color_memory;
 };
 
 struct MeshDevice {
-    Geometry::MeshDrawClusters draw_clusters;
-    Horizon::HardwareBuffer shadowIndexBuffer;
     Horizon::HardwareBuffer indexBuffer;
     Horizon::HardwareBuffer vertexBuffer;
 
@@ -84,8 +79,6 @@ struct MeshDevice {
         if (this == &other) {
             return *this;
         }
-        draw_clusters = other.draw_clusters;
-        shadowIndexBuffer = other.shadowIndexBuffer;
         indexBuffer = other.indexBuffer;
         vertexBuffer = other.vertexBuffer;
         indexStorageBuffer = other.indexStorageBuffer;

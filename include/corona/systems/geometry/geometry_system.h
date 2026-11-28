@@ -11,7 +11,6 @@ namespace Corona { struct MeshMaterialDevice; }
 #include <corona/kernel/event/i_event_stream.h>
 #include <corona/kernel/system/system_base.h>
 #include <corona/math/frustum.h>
-#include <corona/systems/geometry/mesh_draw_bounds.h>
 #include <corona/memory/gpu_mem_ledger.h>
 #include <corona/spatial/aabb.h>
 
@@ -121,8 +120,6 @@ struct MemoryReport {
  *
  */
 struct LODMeshBuffers {
-    Horizon::HardwareBuffer shadow_index_buffer;
-    Geometry::MeshDrawClusters draw_clusters;
     Horizon::HardwareBuffer vertex_buffer;    // GPU 顶点缓冲（Vertex Shader 读取）
     Horizon::HardwareBuffer index_buffer;     // GPU 索引缓冲（组装三角形）
     Horizon::HardwareBuffer vertex_storage;   // GPU 顶点 StorageBuffer（Compute Shader 用）
@@ -388,34 +385,6 @@ class GeometrySystem : public Kernel::SystemBase {
         std::uint32_t          max_index = 0;
     };
 
-    struct ShadowLodQuery {
-        bool enabled = false;
-        float world_units_per_texel = 0.0f;
-    };
-
-    /// Solar shadow/RSM draw handles. Material resources are retained references;
-    /// geometry and texture contents are never copied into a scene snapshot.
-    struct ShadowMeshSlot {
-        Geometry::MeshDrawClusters draw_clusters;
-        Horizon::HardwareImage texture;
-        std::shared_ptr<const MeshMaterialDevice> material;
-        std::uint32_t material_index = 0;
-        std::array<float,4> material_color{1.f,1.f,1.f,1.f};
-        uint32_t          mesh_index = 0;
-        uint32_t          instance_index = 0;
-        uint32_t          object_id = 0;
-        ktm::fmat4x4      instance_transform{ktm::fmat4x4::from_eye()};
-        RenderMeshBuffers geo;
-        bool              valid = false;
-        std::uint32_t     vertex_count = 0;
-        std::uint32_t     index_count = 0;
-        std::uint32_t     max_index = 0;
-        // Mesh-local conservative bounds. Deforming meshes remain uncullable
-        // until a bound for the same pose is available.
-        std::array<float, 3> bounds_min{}, bounds_max{};
-        bool bounds_valid = false;
-    };
-
     /// 查询一个 geometry 的所有 MeshSlot（常驻路由，无相机上下文）。
     ///
     /// 适用：V-buffer 收集、Vision BVH 构建、MechanicsSystem 蒙皮、无相机的通用遍历。
@@ -448,28 +417,6 @@ class GeometrySystem : public Kernel::SystemBase {
         const ktm::fmat4x4& instance_transform,
         const RenderMeshBuffers& fallback) const;
 
-    /// Shadow-pass routing: selects the coarsest ready level whose geometric
-    /// error fits within one shadow texel, never falling back to a coarser
-    /// level than the requested target.
-    [[nodiscard]] std::vector<MeshSlot> query_shadow_mesh_slots(
-        EntityId geometry_handle,
-        float world_units_per_texel,
-        float max_abs_scale,
-        std::uint64_t frame = 0) const;
-
-    /// Batch shadow routing for all cascades. Acquires Geometry Storage and the
-    /// LOD cache once, aggregates demand once per mesh, and returns one slot
-    /// vector per input cascade. Disabled cascades return an empty vector.
-    [[nodiscard]] std::vector<std::vector<ShadowMeshSlot>> query_shadow_mesh_slots_batch(
-        EntityId geometry_handle,
-        std::span<const ShadowLodQuery> cascades,
-        float max_abs_scale,
-        std::uint64_t frame = 0) const;
-
-    void request_shadow_lod(EntityId geometry_handle, uint32_t mesh_index,
-                            float world_units_per_texel, float max_abs_scale,
-                            std::uint64_t frame) const;
-
     /// 一站式渲染缓冲选择（渲染线程调用，线程安全）。
     ///
     /// 内部流程：compute_screen_ratio() → 选 LOD 级别 → 降级到已就绪级别，
@@ -490,13 +437,6 @@ class GeometrySystem : public Kernel::SystemBase {
         float                   camera_fov_deg,
         const ktm::fvec3&       world_center,
         float                   bounding_radius,
-        const RenderMeshBuffers& fallback) const;
-
-    [[nodiscard]] RenderMeshBuffers select_shadow_render_buffers(
-        EntityId geometry_handle,
-        uint32_t mesh_index,
-        float world_units_per_texel,
-        float max_abs_scale,
         const RenderMeshBuffers& fallback) const;
 
     /// 驻留路由（渲染线程调用，线程安全，**不做屏幕占比选级**）。

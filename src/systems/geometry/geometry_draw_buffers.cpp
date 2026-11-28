@@ -41,20 +41,7 @@ DrawBuffers make_draw_buffers(const std::vector<Resource::Vertex>& vertices,
     if (packed_indices.size() & 1u) packed_indices.push_back(0);
     result.indices = device_buffer(std::as_bytes(std::span(packed_indices)),
         sizeof(std::uint16_t), shared | Horizon::BufferUsage_Index, "geometry.indices.shared");
-    auto shadow = Geometry::make_shadow_draw_data(std::span<const Resource::Vertex>(vertices),
-                                                  std::span<const std::uint16_t>(indices));
-    // Horizon's transfer command requires a four-byte copy size. Bounds and
-    // draw counts still describe the original, unpadded triangle stream.
-    if (shadow.indices.size() & 1u) shadow.indices.push_back(0);
-    result.shadow_indices = shadow.indices.empty() ? result.indices :
-        device_buffer(std::as_bytes(std::span(shadow.indices)), sizeof(std::uint16_t),
-                      Horizon::BufferUsage_Index, "geometry.shadow_indices.spatial");
-    // from_bytes() creates host-preferred allocations. Only these one-shot
-    // staging buffers should use it: raster/VBuffer reads must stay on the GPU.
-    // The caller completes the shared batch before publishing any resident mesh.
-    result.clusters = std::move(shadow.clusters);
-    result.byte_size = result.vertices.get_byte_size() + result.indices.get_byte_size() +
-        (result.shadow_indices.same_resource(result.indices) ? 0 : result.shadow_indices.get_byte_size());
+    result.byte_size = result.vertices.get_byte_size() + result.indices.get_byte_size();
     return result;
 }
 } // namespace Corona::Systems::GeometryDetail

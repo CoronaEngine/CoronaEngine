@@ -2,7 +2,6 @@
 
 #include "horizon.h"
 #include <corona/events/optics_system_events.h>
-#include <corona/events/scene_system_events.h>
 #include <corona/kernel/event/i_event_bus.h>
 #include <corona/kernel/event/i_event_stream.h>
 #include <corona/kernel/system/system_base.h>
@@ -12,12 +11,10 @@
 #include <corona/systems/optics/vision_scene_resource.h>
 
 #include <chrono>
-#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -93,31 +90,7 @@ class OpticsSystem : public Kernel::SystemBase {
     void apply_camera_and_transform_updates();
     bool initialize_hardware_resources();
     bool initialize_render_pipelines();
-    bool ensure_native_render_resources();
-    void release_native_render_resources();
-
-    /// Make capacity available in the native frame throttle before recording a view.
-    ///
-    /// Display's `OpticsFrameConsumedEvent` is the fast path, but it is only
-    /// published when a surface is presented *with an optics layer*; surfaces that
-    /// were removed, presented as skipped/failed, or lost with the device drop
-    /// their acknowledgement.  Because the throttle is engine-global while the
-    /// acknowledgement is per-surface, two dropped acknowledgements used to stop
-    /// native rendering for every camera, silently and permanently.  When the
-    /// throttle is full the oldest submission is retired by waiting for its own
-    /// GPU completion, and the stall is reported (throttled) instead of invisible.
-    ///
-    /// @return true when a slot is available for a new submission
-    [[nodiscard]] bool ensure_native_frame_slot();
-
-    void bind_native_view_resources(EntityId camera_handle,
-                                    uint32_t width,
-                                    uint32_t height,
-                                    uint64_t frame_index);
-    void evict_idle_native_view_resources(uint64_t frame_index);
-    /// 确保给定相机拥有 per-camera 的 UI visibility/depth 图（必要时创建/扩缩），
-    /// 并把 hardware_->uiVisibilityImage/uiDepthImage 绑定到它们。Native 与 Vision
-    /// 两条路径共用此入口，保证 UI overlay 资源单一来源。不修改 gbufferSize。
+    /// Allocate visibility and depth targets for camera-follow UI meshes.
     void ensure_ui_view_resources(EntityId camera_handle,
                                   uint32_t width,
                                   uint32_t height,
@@ -143,9 +116,8 @@ class OpticsSystem : public Kernel::SystemBase {
     [[nodiscard]] std::optional<LockedRenderView> lock_render_view(
         const RenderView& view);
     void optics_pipeline(float frame_count, uint64_t frame_index);
-    void run_native_frame(float frame_count, uint64_t frame_index,
-                          const std::vector<RenderView>& views);
-    void process_pending_screenshots(EntityId camera_handle, Horizon::HardwareImage& render_target);
+    void process_pending_screenshots(EntityId camera_handle, Horizon::HardwareImage& render_target,
+                                     uint32_t width, uint32_t height);
 
 
 
@@ -228,9 +200,7 @@ class OpticsSystem : public Kernel::SystemBase {
     // ========================================================================
     // Each surface has its own final image and shared-storage handle so rendering
     // cameras to different surfaces does not overwrite their outputs. DisplaySystem
-    // composites each surface independently. Per-camera visibility/depth resources
-    // avoid rebuilding a global GBuffer for different resolutions within one frame.
-    // The scene and UI passes use separate visibility/depth resources.
+    // composites each surface independently.
     struct SurfaceRenderTarget {
         Detail::PublishedImage published_image;
         Horizon::HardwareImage final_output;        ///< RGBA16F final output owned by this surface.
@@ -260,8 +230,7 @@ class OpticsSystem : public Kernel::SystemBase {
     /// 在 background 上渲染 follow-camera UI actor + 可选柱镜 warp + composite。
     /// 仅在 hardware_->executor 上“记录”pass，不 commit。有 follow-camera 实例时
     /// 就地合成至 background；调用方负责 commit + publish。
-    /// 前置条件：调用方已设 hardware_->gbufferSize={w,h}、已 ensure_ui_view_resources
-    /// 绑定 uiVisibility/uiDepth，且 background 的生产 pass 已在同一 executor 上记录。
+    /// Record after the background pass on the same stream.
     Horizon::HardwareImage* compose_surface_ui_overlay(Horizon::HardwareStream& stream,
                                                        EntityId camera_handle,
                                                        const CameraDevice& camera,
@@ -286,34 +255,18 @@ class OpticsSystem : public Kernel::SystemBase {
     };
     std::unordered_map<std::uintptr_t, UiPassLogState> ui_pass_log_states_;
 
-    struct NativeViewResources;
-    std::unordered_map<std::uintptr_t, std::unique_ptr<NativeViewResources>>
-        native_view_resources_;
-    static constexpr uint64_t kNativeViewIdleEvictFrames = 240;
-
-    /// per-camera 的 UI overlay visibility/depth 中间产物，Native 与 Vision 共用。
     struct UiViewResources;
     std::unordered_map<std::uintptr_t, std::unique_ptr<UiViewResources>>
         ui_view_resources_;
     static constexpr uint64_t kUiViewIdleEvictFrames = 240;
 
     std::unique_ptr<Hardware> hardware_;
-    double pending_native_throttle_wait_ms_{0.0};
-    std::atomic<std::uint64_t> pending_native_consumed_serial_{0};
-    /// Rate limit for the "native frame throttle saturated" report.
-    std::chrono::steady_clock::time_point last_native_throttle_report_{};
     std::chrono::steady_clock::duration explicit_render_interval_{};
     std::chrono::steady_clock::time_point next_render_update_{};
 
     // LOD 系统引用（渲染时查询 LOD 缓冲）
     GeometrySystem* geometry_system_ = nullptr;
     bool geometry_system_queried_ = false;  // 避免每帧重试失败的获取
-
-    // 天空驱动环境光 (SH9)：仅当环境光照签名（sun_dir + sky_intensity）变化时
-    // 才重新把大气天空投影到 9 个球谐系数，结果常驻 skyIrradianceSHBuffer 供
-    // lighting pass 逐像素求值。静态光照下摊销成本接近零。
-    std::size_t sky_sh_signature_{0};
-    bool sky_sh_initialized_{false};
 
     // Vision 后端状态
     bool vision_initialized_{false};
@@ -348,12 +301,6 @@ class OpticsSystem : public Kernel::SystemBase {
     void fail_expired_pending_screenshots();
     void fail_unrenderable_pending_screenshots();
     Kernel::EventId screenshot_request_sub_id_ = 0;
-    Kernel::EventId residency_sub_id_ = 0;
-    Kernel::EventId native_frame_consumed_sub_id_ = 0;
-
-    // ActorResidencyChangedEvent 驱动的驻留集合（Loaded actor 在此）
-    mutable std::shared_mutex residency_mtx_;
-    std::unordered_set<std::uintptr_t> resident_actors_;
 };
 
 }  // namespace Corona::Systems
