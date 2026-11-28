@@ -88,14 +88,12 @@ bool SdlWindowManager::adopt_platform_window(SDL_Window* window) {
     managed.window = window;
     managed.window_id = id;
     managed.surface = surface;
-    managed.pending_show = true;
     windows_[id] = managed;
     if (auto* bus = Kernel::KernelContext::instance().event_bus()) {
         // Platform creation runs on the UI thread. Display may be busy compiling
         // a scene, and native surface creation may need this thread to dispatch
-        // OS messages. Enqueue registration without blocking it. Display drains
-        // surface commands before UI frames; the existing first-present ticket
-        // keeps this window hidden until registration and presentation succeed.
+        // OS messages. Enqueue registration without blocking it: Display drains
+        // surface commands before UI frames.
         Corona::DisplaySurfaceCommand surface_command{};
         surface_command.kind = Corona::DisplaySurfaceCommand::Kind::Changed;
         surface_command.surface = surface;
@@ -209,19 +207,6 @@ bool SdlWindowManager::destroy_secondary_window(void* surface) {
     CFW_LOG_INFO("SdlWindowManager: secondary window destroyed (id={}, surface={})",
                  window_id, surface);
     return true;
-}
-
-void SdlWindowManager::reveal_pending_window(void* surface) {
-    if (surface == nullptr) {
-        return;
-    }
-    for (auto& [id, managed] : windows_) {
-        if (managed.surface == surface && managed.pending_show) {
-            SDL_ShowWindow(managed.window);
-            managed.pending_show = false;
-            return;
-        }
-    }
 }
 
 }  // namespace Corona::Systems::UI

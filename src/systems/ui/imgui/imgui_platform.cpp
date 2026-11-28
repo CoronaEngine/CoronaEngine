@@ -1,6 +1,7 @@
 #include "imgui_platform.h"
 #include <corona/systems/ui/vulkan_backend.h>
 #include <corona/systems/ui/sdl_window_manager.h>
+#include <horizon/core/logging.h>
 #include <imgui.h>
 #include <memory>
 #include <vector>
@@ -9,8 +10,8 @@ namespace Corona::Systems::UI {
 namespace {
 VulkanBackend* renderer = nullptr;
 void (*sdl_destroy)(ImGuiViewport*) = nullptr;
-void (*sdl_show)(ImGuiViewport*) = nullptr;
 std::vector<std::unique_ptr<ImGuiViewport>> retired;
+
 SDL_Window* window_of(ImGuiViewport* viewport) {
     return SDL_GetWindowFromID(static_cast<SDL_WindowID>(reinterpret_cast<std::uintptr_t>(viewport->PlatformHandle)));
 }
@@ -42,11 +43,16 @@ void destroy_platform(ImGuiViewport* viewport) {
 }
 void create_renderer(ImGuiViewport* viewport) {
     auto* window = window_of(viewport);
+    const auto surface = native_surface_from_sdl_window(window);
     if (SdlWindowManager::instance().adopt_platform_window(window) &&
-        renderer->register_surface(native_surface_from_sdl_window(window), window))
+        renderer->register_surface(surface, window)) {
         viewport->RendererUserData = renderer;
-    else
-        viewport->PlatformRequestClose = true;
+        return;
+    }
+    // Closing the window is the only option left, and it used to happen without a word.
+    CFW_LOG_WARNING(
+        "[UI/PlatformWindow] secondary window was not adopted (surface={}); closing it", surface);
+    viewport->PlatformRequestClose = true;
 }
 }
 
@@ -54,9 +60,11 @@ void install_imgui_platform(VulkanBackend& backend) {
     renderer = &backend;
     auto& platform = ImGui::GetPlatformIO();
     sdl_destroy = platform.Platform_DestroyWindow;
-    sdl_show = platform.Platform_ShowWindow;
     platform.Platform_DestroyWindow = destroy_platform;
-    platform.Platform_ShowWindow = [](ImGuiViewport*) {}; // wait for actual first present
+    // Platform_ShowWindow is deliberately left alone: ImGui shows a new platform window
+    // itself (imgui.cpp, UpdatePlatformWindows) once it has been created. Deferring that
+    // show until Display acknowledged the surface's first frame deadlocked every secondary
+    // window, because Display does not present a hidden window.
     platform.Renderer_CreateWindow = create_renderer;
     platform.Renderer_DestroyWindow = [](ImGuiViewport* viewport) { viewport->RendererUserData = nullptr; };
     platform.Renderer_SetWindowSize = [](ImGuiViewport*, ImVec2) {};
@@ -81,11 +89,6 @@ void render_imgui_platform_windows(VulkanBackend& backend) {
         if (!SDL_GetWindowSizeInPixels(window, &width, &height) || width <= 0 || height <= 0) continue;
         backend.render_imgui(surface, *viewport->DrawData, width, height);
         backend.present_surface(surface);
-        const auto* managed = SdlWindowManager::instance().find_by_surface(surface);
-        if (managed && managed->pending_show && backend.first_present_ready(surface)) {
-            sdl_show(viewport);
-            SdlWindowManager::instance().reveal_pending_window(surface);
-        }
     }
 }
 }
