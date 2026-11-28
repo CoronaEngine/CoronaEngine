@@ -577,7 +577,6 @@ NativeEditorCamera materialize_camera_snapshot(NativeEditorScene& scene,
         camera_data.value("near_plane", 0.1f), camera_data.value("far_plane", 100.0f));
     item.engine_camera->set_size(item.width, item.height);
     item.engine_camera->set_output_mode(camera_data.value("output_mode", std::string{"final_color"}));
-    item.engine_camera->set_render_backend(camera_data.value("render_backend", std::string{"native"}));
     const auto vision_mode = camera_data.value("vision_render_mode", std::string{"path_tracing"});
     item.engine_camera->set_vision_render_mode(vision_mode);
     item.engine_camera->set_vision_denoiser(camera_data.value("vision_denoiser", std::string{legacy_svgf_mode(vision_mode) ? "svgf" : "reblur"}));
@@ -2512,7 +2511,7 @@ bool camera_list_snapshot(const NativeEditorScene& scene, CameraListSnapshot& re
         CameraReadSnapshot value;
         value.properties = camera_properties_snapshot(scene, camera);
         const auto& engine = *camera.engine_camera;
-        value.output_mode = engine.get_output_mode(); value.render_backend = engine.get_render_backend();
+        value.output_mode = engine.get_output_mode();
         value.vision_render_mode = engine.get_vision_render_mode(); value.vision_denoiser = engine.get_vision_denoiser();
         value.vision_accumulation = engine.get_vision_accumulation(); value.vision_denoise = engine.get_vision_denoise();
         value.vision_stable_planes = engine.get_vision_stable_planes(); value.deletable = camera.deletable;
@@ -2728,10 +2727,8 @@ SceneReply apply_native_camera_render_settings(const SceneRequest& request) {
     if (patch.vision_accumulation) engine.set_vision_accumulation(*patch.vision_accumulation);
     if (patch.vision_denoise) engine.set_vision_denoise(*patch.vision_denoise);
     if (patch.vision_stable_planes) engine.set_vision_stable_planes(*patch.vision_stable_planes);
-    if (patch.render_backend) engine.set_render_backend(*patch.render_backend);
     auto& result = reply.read.camera_render_settings;
     result.archive_session = scene->archive_session; result.scene = scene->route; result.camera_id = found->camera_id;
-    result.render_backend = patch.render_backend.value_or(engine.get_render_backend());
     result.output_mode = patch.output_mode.value_or(engine.get_output_mode());
     result.vision_render_mode = patch.vision_render_mode.value_or(engine.get_vision_render_mode());
     result.vision_denoiser = patch.vision_denoiser.value_or(engine.get_requested_vision_denoiser());

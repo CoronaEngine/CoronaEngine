@@ -229,7 +229,7 @@ struct DeletedCameraSnapshot {
 
 struct CameraReadSnapshot {
     CameraPropertiesSnapshot properties;
-    std::string output_mode, render_backend, vision_render_mode, vision_denoiser;
+    std::string output_mode, vision_render_mode, vision_denoiser;
     bool vision_accumulation = false, vision_denoise = true, vision_stable_planes = true, deletable = true;
 };
 struct CameraListSnapshot {
@@ -240,16 +240,16 @@ struct CameraRenderSettingsPatch {
     std::string scene, camera_id;
     std::optional<std::string> family;
     nlohmann::json settings;
-    std::optional<std::string> render_backend, output_mode, vision_render_mode, vision_denoiser;
+    std::optional<std::string> output_mode, vision_render_mode, vision_denoiser;
     std::optional<bool> vision_accumulation, vision_denoise, vision_stable_planes;
     bool empty() const {
         if (family) return !settings.is_object() || settings.empty();
-        return !render_backend && !output_mode && !vision_render_mode && !vision_denoiser &&
+        return !output_mode && !vision_render_mode && !vision_denoiser &&
             !vision_accumulation && !vision_denoise && !vision_stable_planes;
     }
 };
 struct CameraRenderSettingsSnapshot {
-    std::string archive_session, scene, camera_id, render_backend, output_mode, vision_render_mode, vision_denoiser;
+    std::string archive_session, scene, camera_id, output_mode, vision_render_mode, vision_denoiser;
     std::string family;
     nlohmann::json settings;
     bool vision_accumulation = false, vision_denoise = true, vision_stable_planes = true;

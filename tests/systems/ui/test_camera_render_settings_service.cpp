@@ -28,13 +28,13 @@ void test_identity() {
           "empty patch rejected");
 
     CameraRenderSettingsPatch no_scene{};
-    no_scene.render_backend = "vision";
+    no_scene.output_mode = "final_color";
     check(static_cast<bool>(validate_patch(no_scene, SceneMethod::SetCameraRenderSettings, true)),
           "missing scene rejected");
 
     CameraRenderSettingsPatch no_archive{};
     no_archive.scene = "scene.ini";
-    no_archive.render_backend = "vision";
+    no_archive.output_mode = "final_color";
     check(static_cast<bool>(validate_patch(no_archive, SceneMethod::SetCameraRenderSettings, false)),
           "missing archive rejected");
 
@@ -50,23 +50,13 @@ void test_identity() {
 void test_whitelists() {
     CameraRenderSettingsPatch patch{};
     patch.scene = "scene.ini";
-    patch.render_backend = "vision";
-    check(!validate_patch(patch, SceneMethod::SetCameraRenderSettings, true), "valid backend accepted");
-
-    auto bad_backend = patch;
-    bad_backend.render_backend = "vulkan";
-    check(validate_patch(bad_backend, SceneMethod::SetCameraRenderSettings, true).message ==
-          "Unsupported render backend", "unknown backend rejected");
-
     for (const char* family : {"pt", "restir", "reblur", "relax"}) {
         auto value = patch;
-        value.render_backend.reset();
         value.family = family;
         value.settings = {{"x", 1}};
         check(!validate_patch(value, SceneMethod::SetCameraRenderSettings, true), "known family accepted");
     }
     auto bad_family = patch;
-    bad_family.render_backend.reset();
     bad_family.family = "foo";
     bad_family.settings = {{"x", 1}};
     check(validate_patch(bad_family, SceneMethod::SetCameraRenderSettings, true).message ==
@@ -107,9 +97,9 @@ void test_whitelists() {
     auto both_bad = patch;
     both_bad.family = "foo";
     both_bad.settings = {{"x", 1}};
-    both_bad.render_backend = "vulkan";
+    both_bad.output_mode = "invalid";
     check(validate_patch(both_bad, SceneMethod::SetCameraRenderSettings, true).message ==
-          "Unsupported Vision settings family", "family error precedes backend error");
+          "Unsupported Vision settings family", "family error precedes output mode error");
 }
 
 }  // namespace

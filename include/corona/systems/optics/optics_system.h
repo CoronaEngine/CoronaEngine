@@ -46,12 +46,6 @@ class VisionZeroCopyBridge;  // 定义见 vision/vision_zero_copy_bridge.h
  * 运行在独立线程，以 120 FPS 渲染场景。
  */
 
-/// 渲染后端枚举
-enum class RenderBackend : int {
-    Native = 0,  ///< 默认 Vulkan/光栅化管线
-    Vision = 1,  ///< Vision Vulkan 路径追踪后端
-};
-
 class OpticsSystem : public Kernel::SystemBase {
    public:
     OpticsSystem();
@@ -97,7 +91,6 @@ class OpticsSystem : public Kernel::SystemBase {
     friend struct VisionDeviceLifetimeTest;
     /// Apply a frame's camera/transform commands and publish committed camera state.
     void apply_camera_and_transform_updates();
-    bool initialize_vision_backend_if_enabled();
     bool initialize_hardware_resources();
     bool initialize_render_pipelines();
     bool ensure_native_render_resources();
@@ -143,13 +136,12 @@ class OpticsSystem : public Kernel::SystemBase {
         CameraDevice camera;
     };
     struct RenderFramePlan {
-        std::vector<RenderView> native_views;
-        std::vector<RenderView> vision_views;
-        bool has_vision_cameras{false};
+        std::vector<RenderView> views;
+        bool has_cameras{false};
     };
     [[nodiscard]] RenderFramePlan build_render_frame_plan();
     [[nodiscard]] std::optional<LockedRenderView> lock_render_view(
-        const RenderView& view, CameraRenderBackend backend);
+        const RenderView& view);
     void optics_pipeline(float frame_count, uint64_t frame_index);
     void run_native_frame(float frame_count, uint64_t frame_index,
                           const std::vector<RenderView>& views);
@@ -158,7 +150,7 @@ class OpticsSystem : public Kernel::SystemBase {
 
 
     // Vision 相关私有方法
-    bool init_vision_lazy();  ///< 首次切换到 Vision 时的 lazy 初始化
+    bool init_vision_lazy();  ///< 首次渲染时初始化 Vision
     void run_vision_frame(float frame_count, uint64_t frame_index,
                          const std::vector<RenderView>& views);
 
@@ -325,6 +317,7 @@ class OpticsSystem : public Kernel::SystemBase {
 
     // Vision 后端状态
     bool vision_initialized_{false};
+    std::chrono::steady_clock::time_point next_vision_init_attempt_{};
 
     // ---- Vision 动态场景同步（脏标记 + 去抖全量重建）----
     static constexpr uint32_t kVisionRebuildDebounceFrames = 3;  ///< 稳定该帧数后才重建
@@ -355,7 +348,6 @@ class OpticsSystem : public Kernel::SystemBase {
     void fail_expired_pending_screenshots();
     void fail_unrenderable_pending_screenshots();
     Kernel::EventId screenshot_request_sub_id_ = 0;
-    Kernel::EventId backend_switch_sub_id_ = 0;
     Kernel::EventId residency_sub_id_ = 0;
     Kernel::EventId native_frame_consumed_sub_id_ = 0;
 

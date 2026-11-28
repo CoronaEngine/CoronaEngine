@@ -333,7 +333,6 @@ def _parse_camera(
         "view_height": integer("view_height", "540"),
         "move_speed": finite_float("move_speed", "1"),
         "output_mode": get("output_mode", "final_color"),
-        "render_backend": get("render_backend", "native"),
         "vision_render_mode": "path_tracing" if legacy_svgf or legacy_progressive else vision_mode,
         "vision_spp": get("vision_spp", ""),
         "vision_max_depth": get("vision_max_depth", ""),

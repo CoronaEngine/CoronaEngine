@@ -401,8 +401,6 @@ class Camera {
 
     void set_output_mode(const std::string& mode);
     [[nodiscard]] std::string get_output_mode() const;
-    void set_render_backend(const std::string& mode);
-    [[nodiscard]] std::string get_render_backend() const;
     void set_vision_render_mode(const std::string& mode);
     [[nodiscard]] std::string get_vision_render_mode() const;
     void set_vision_denoise(bool enabled);
@@ -575,16 +573,6 @@ class Scene {
     bool enabled_{true};
     bool simulation_enabled_{false};
 };
-
-// ============================================================================
-// Render backend control (Native vs Vision)
-// ============================================================================
-/// 请求切换光学渲染后端。mode: "native" 或 "vision"。
-/// Vision 设备在需要渲染时延迟初始化。
-void set_render_backend(const std::string& mode, EntityId camera_handle = 0);
-
-/// 获取当前请求的渲染后端，返回 "native" 或 "vision"。
-[[nodiscard]] std::string get_render_backend(EntityId camera_handle = 0);
 
 /// Set the Vision algorithm without changing independent denoise/accumulation preferences.
 /// Legacy "svgf" selects "path_tracing" and enables denoise; "ssat" remains supported.

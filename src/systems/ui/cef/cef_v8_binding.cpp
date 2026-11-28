@@ -615,7 +615,7 @@ bool read_camera_render_settings(const CefV8ValueList& arguments, SceneRequest& 
     patch.scene = arguments[0]->GetStringValue().ToString();
     patch.camera_id = arguments[1]->IsString() ? arguments[1]->GetStringValue().ToString() : std::string{};
     if (patch.scene.empty() ||
-        !object_keys(arguments[2], {"archive_session", "render_backend", "output_mode", "vision", "family", "settings"})) return false;
+        !object_keys(arguments[2], {"archive_session", "output_mode", "vision", "family", "settings"})) return false;
     const auto scope = arguments[2];
     const auto session = scope->GetValue("archive_session");
     if (!session || !session->IsString() || session->GetStringValue().empty()) return false;
@@ -636,7 +636,7 @@ bool read_camera_render_settings(const CefV8ValueList& arguments, SceneRequest& 
         if (!value || !value->IsString() || value->GetStringValue().empty()) return false;
         out = value->GetStringValue().ToString(); return true;
     };
-    if (!text("render_backend", patch.render_backend) || !text("output_mode", patch.output_mode)) return false;
+    if (!text("output_mode", patch.output_mode)) return false;
     if (scope->HasValue("vision")) {
         const auto vision = scope->GetValue("vision");
         if (!object_keys(vision, {"render_mode", "denoiser", "accumulation", "denoise", "stable_planes"})) return false;
@@ -698,7 +698,6 @@ CefRefPtr<CefV8Value> cameras_value(const CameraListSnapshot& snapshot) {
         const auto& snapshot_camera = snapshot.cameras[index];
         auto camera = camera_properties_value(snapshot_camera.properties)->GetValue("camera");
         set(camera, "output_mode", CefV8Value::CreateString(snapshot_camera.output_mode));
-        set(camera, "render_backend", CefV8Value::CreateString(snapshot_camera.render_backend));
         set(camera, "vision_render_mode", CefV8Value::CreateString(snapshot_camera.vision_render_mode));
         set(camera, "vision_denoiser", CefV8Value::CreateString(snapshot_camera.vision_denoiser));
         set(camera, "vision_accumulation", CefV8Value::CreateBool(snapshot_camera.vision_accumulation));
@@ -720,7 +719,6 @@ CefRefPtr<CefV8Value> camera_render_settings_value(const CameraRenderSettingsSna
     set_text(result, "scene", snapshot.scene);
     set_text(result, "camera_id", snapshot.camera_id);
     set_text(result, "family", snapshot.family);
-    set_text(result, "render_backend", snapshot.render_backend);
     set_text(result, "output_mode", snapshot.output_mode);
     result->SetValue("pending", CefV8Value::CreateBool(snapshot.pending), V8_PROPERTY_ATTRIBUTE_NONE);
     auto vision = CefV8Value::CreateObject(nullptr, nullptr);

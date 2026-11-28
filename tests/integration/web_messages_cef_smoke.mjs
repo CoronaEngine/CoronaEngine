@@ -462,7 +462,7 @@ try {
     console.log(`CEF smoke: ${stage}`);
     const cameraWorld = path.join(output, `camera-world-${Date.now()}`);
     await mkdir(path.join(cameraWorld, 'Assets'), { recursive: true });
-    await writeFile(path.join(cameraWorld, 'scene.ini'), `[format]\ntype=corona_scene_folder\nversion=1\n[scene]\nname=CEF camera smoke\n[world]\ntype=creative\n[actors]\n[scripts]\npath=\n[terrain]\ntype=\npath=\n[camera]\ncount=2\ncamera0.id=main-camera\ncamera1.id=smoke-camera\ncamera1.width=320\ncamera1.height=240\n`);
+    await writeFile(path.join(cameraWorld, 'scene.ini'), `[format]\ntype=corona_scene_folder\nversion=1\n[scene]\nname=CEF camera smoke\n[world]\ntype=creative\n[actors]\n[scripts]\npath=\n[terrain]\ntype=\npath=\n[camera]\ncount=2\ncamera0.id=main-camera\ncamera0.render_backend=native\ncamera1.id=smoke-camera\ncamera1.render_backend=vision\ncamera1.vision_render_mode=restir\ncamera1.width=320\ncamera1.height=240\n`);
     await writeFile(path.join(cameraWorld, 'assets.manifest.json'), '{"format":"corona_scene_assets","version":1,"bundles":[]}');
     const listCameras = async () => ({ data: await main.evaluate(`(async()=>{
       const state=await corona.scene.read_active();
@@ -543,6 +543,11 @@ try {
     const listed = await listCameras();
     const camera = listed.data.cameras.find(item => item.camera_id === 'smoke-camera');
     assert.ok(camera?.archive_session);
+    assert.ok(listed.data.cameras.every(item => !Object.hasOwn(item, 'render_backend')));
+    assert.equal(camera.vision_render_mode, 'restir');
+    assert.equal(await main.evaluate(`corona.scene.set_camera_render_settings('scene.ini','smoke-camera',{
+      archive_session:${JSON.stringify(camera.archive_session)},render_backend:'native'
+    }).catch(error=>error.code)`), 'INVALID_ARGUMENT');
 
     const sceneRead = await main.evaluate('corona.scene.read_active()');
     const loadStatus = await main.evaluate('corona.project.get_project_load_status()');

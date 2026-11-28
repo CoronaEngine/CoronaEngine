@@ -624,10 +624,6 @@ std::vector<Corona::CameraStateUpdateCommand> apply_pending_camera_state_updates
                 camera->output_mode = update.output_mode;
             }
             if (Corona::has_camera_state_field(
-                    update.fields, Corona::CameraStateUpdateField::RenderBackend)) {
-                camera->render_backend = update.render_backend;
-            }
-            if (Corona::has_camera_state_field(
                     update.fields, Corona::CameraStateUpdateField::VisionRenderMode)) {
                 camera->vision_render_mode = update.vision_render_mode;
             }
@@ -1677,70 +1673,6 @@ void add_vision_media_feedback(vision::DataWrap& settings, std::size_t imported_
     return vision_environment_for_scene(Corona::SceneDevice{});
 }
 
-// The Vision path tracer keeps an acceleration structure and material/device state
-// in addition to the native renderer's resources.  It is intended for previewing
-// modest scenes; expanding a highly-instanced glTF scene here can exhaust memory
-// and starve the editor frame loop.  Native rendering still supports picking and
-// model-node editing, so it is the safe interactive fallback above this limit.
-constexpr std::size_t kVisionInteractiveInstanceLimit = 1024;
-
-void fallback_large_scenes_to_native_renderer() {
-    auto& hub = Corona::SharedDataHub::instance();
-    auto geometry_storage = Corona::Ecs::all_components<Corona::GeometryDevice>();
-    auto camera_storage = Corona::Ecs::all_components<Corona::CameraDevice>();
-
-    for (const auto& scene : Corona::all_scenes()) {
-        if (!scene.enabled) continue;
-        const bool has_vision_camera = std::any_of(scene.camera_handles.begin(), scene.camera_handles.end(),
-            [&](auto handle) {
-                const auto camera = Corona::find_camera(handle);
-                return camera && camera->render_backend == Corona::CameraRenderBackend::Vision;
-            });
-        if (!has_vision_camera) continue;
-
-        std::size_t instance_count = 0;
-        for (const auto actor_handle : scene.actor_handles) {
-            const auto actor = Corona::find_actor(actor_handle);
-            if (!actor) continue;
-            const auto* actor_profiles = Corona::find_profiles(actor_handle);
-            if (actor_profiles == nullptr) continue;
-            for (const auto profile_handle : actor_profiles->handles) {
-                const auto profile = Corona::find_profile(profile_handle);
-            if (!profile || profile->optics_handle == 0) continue;
-                const auto optics = Corona::find_optics(profile->optics_handle);
-                const auto geometry = optics ? Corona::find_geometry(optics->geometry_handle)
-                                             : decltype(Corona::find_geometry(0)){};
-                const auto* optics_visibility = Corona::find_visibility(profile->optics_handle);
-                if (!optics || optics_visibility == nullptr || !optics_visibility->visible ||
-                    !geometry) continue;
-                if (!geometry->mesh_instances.empty()) {
-                    instance_count += geometry->mesh_instances.size();
-                } else if (!geometry->mesh_handles.empty()) {
-                    instance_count += geometry->mesh_handles.size();
-                } else if (auto model = Corona::find_model_resource(geometry->model_resource_handle)) {
-                    if (auto resource = Corona::Resource::ResourceManager::get_instance()
-                            .acquire_read<Corona::Resource::Scene>(model->model_id)) {
-                        instance_count += resource->data.mesh_instances.empty()
-                            ? resource->data.meshes.size() : resource->data.mesh_instances.size();
-                    }
-                }
-                if (instance_count > kVisionInteractiveInstanceLimit) break;
-            }
-            if (instance_count > kVisionInteractiveInstanceLimit) break;
-        }
-        if (instance_count <= kVisionInteractiveInstanceLimit) continue;
-
-        for (const auto camera_handle : scene.camera_handles) {
-            const auto camera = Corona::find_camera(camera_handle);
-            if (!camera || camera->render_backend != Corona::CameraRenderBackend::Vision) continue;
-            camera->render_backend = Corona::CameraRenderBackend::Native;
-            CFW_LOG_WARNING(
-                "OpticsSystem: switched camera {} to Native rendering because scene has more than {} instances (observed={})",
-                camera_handle, kVisionInteractiveInstanceLimit, instance_count);
-        }
-    }
-}
-
 [[nodiscard]] VisionModeSelection select_visible_vision_render_mode(
     const std::function<bool(std::uintptr_t)>& pending_capture = {}) {
     VisionModeSelection selection;
@@ -1750,7 +1682,7 @@ void fallback_large_scenes_to_native_renderer() {
         for (const auto camera_handle : scene.camera_handles) {
             auto camera =
                 Corona::find_camera(camera_handle);
-            if (!camera || camera->render_backend != Corona::CameraRenderBackend::Vision ||
+            if (!camera ||
                 (camera->surface == nullptr && (!pending_capture || !pending_capture(camera_handle)))) {
                 continue;
             }
@@ -2397,8 +2329,7 @@ void OpticsSystem::evict_idle_vision_runtimes(uint64_t frame_index) {
             runtime->view_denoise_states.begin(), runtime->view_denoise_states.end(),
             [](const auto& view) {
                 auto camera = Corona::find_camera(view.first);
-                return camera && camera->surface != nullptr &&
-                       camera->render_backend == CameraRenderBackend::Vision;
+                return camera && camera->surface != nullptr;
             });
         if (has_open_view) {
             ++it;
@@ -2500,11 +2431,6 @@ OpticsSystem::OpticsSystem() {
 }
 
 OpticsSystem::~OpticsSystem() = default;
-
-bool OpticsSystem::initialize_vision_backend_if_enabled() {
-    // Vision backend is lazily initialized on first switch to Vision mode.
-    return true;
-}
 
 bool OpticsSystem::initialize_hardware_resources() {
     try {
@@ -2938,10 +2864,6 @@ void OpticsSystem::evict_idle_offscreen_screenshot_targets(uint64_t frame_index)
 bool OpticsSystem::initialize(Kernel::ISystemContext* ctx) {
     (void)ctx;
 
-    if (!initialize_vision_backend_if_enabled()) {
-        return false;
-    }
-
     if (!initialize_hardware_resources()) {
         return false;
     }
@@ -2978,21 +2900,6 @@ bool OpticsSystem::initialize(Kernel::ISystemContext* ctx) {
                      event.file_path,
                      event.completion_promise,
                      expires_at, event.render_frames, event.warmup_frames, event.timings_path});
-            });
-
-        backend_switch_sub_id_ = event_bus->subscribe<Events::RenderBackendSwitchEvent>(
-            [this](const Events::RenderBackendSwitchEvent& event) {
-                if (event.camera_handle == 0) {
-                    return;
-                }
-                CameraStateUpdateCommand command{};
-                command.camera_handle = event.camera_handle;
-                command.fields = CameraStateUpdateField::RenderBackend;
-                command.render_backend =
-                    event.backend == static_cast<int>(RenderBackend::Vision)
-                        ? CameraRenderBackend::Vision
-                        : CameraRenderBackend::Native;
-                SharedDataHub::instance().enqueue_camera_state_update(command);
             });
 
         residency_sub_id_ = event_bus->subscribe<Events::ActorResidencyChangedEvent>(
@@ -3145,8 +3052,6 @@ void OpticsSystem::update() {
         if (consumed_serial != 0) {
             hardware_->native_frame_throttle.acknowledge_consumed(consumed_serial);
         }
-        // Native backpressure belongs to native view submission only. It must
-        // not delay camera commands (including backend switches) or Vision.
     }
     update_phase.set("camera_commands");
     // Setters enqueue camera changes before publishing their screenshot request.
@@ -3163,46 +3068,6 @@ void OpticsSystem::update() {
         if (auto* sys_mgr = kernel.system_manager()) {
             auto sys = sys_mgr->get_system("Geometry");
             geometry_system_ = dynamic_cast<GeometrySystem*>(sys ? sys.get() : nullptr);
-        }
-    }
-
-    fallback_large_scenes_to_native_renderer();
-    std::vector<std::uintptr_t> requested_vision_cameras;
-    bool native_view_requested = false;
-    for (const auto& scene : Corona::all_scenes()) {
-        if (!scene.enabled) {
-            continue;
-        }
-        for (const auto camera_handle : scene.camera_handles) {
-            if (auto camera =
-                    Corona::find_camera(camera_handle);
-                camera) {
-                if (camera->render_backend == CameraRenderBackend::Vision &&
-                    (camera->surface != nullptr || has_pending_screenshot(camera_handle))) {
-                    requested_vision_cameras.push_back(camera_handle);
-                }
-                native_view_requested |= camera->render_backend == CameraRenderBackend::Native &&
-                    (camera->surface != nullptr || has_pending_screenshot(camera_handle));
-            }
-        }
-    }
-    if (!requested_vision_cameras.empty() && !native_view_requested) {
-        update_phase.set("native_resource_release");
-        release_native_render_resources();
-    }
-
-    // Another camera waiting for its native window must not stall a ready
-    // Vision view. Requested cameras already have a surface or capture request.
-    if (!requested_vision_cameras.empty() && !vision_initialized_) {
-        update_phase.set("vision_initialize");
-        if (!init_vision_lazy()) {
-            CFW_LOG_WARNING("OpticsSystem: Vision init failed, falling back affected cameras to Native");
-            for (const auto camera_handle : requested_vision_cameras) {
-                if (auto camera =
-                        Corona::find_camera(camera_handle)) {
-                    camera->render_backend = CameraRenderBackend::Native;
-                }
-            }
         }
     }
 
@@ -3236,21 +3101,17 @@ OpticsSystem::RenderFramePlan OpticsSystem::build_render_frame_plan() {
         for (const auto handle : scene.camera_handles) {
             auto camera = Corona::find_camera(handle);
             if (!camera) continue;
-            plan.has_vision_cameras |= camera->render_backend == CameraRenderBackend::Vision;
+            plan.has_cameras = true;
             if (!camera->surface && !has_pending_screenshot(handle)) continue;
             if (!scheduled.insert(handle).second) continue;
-            auto& views = camera->render_backend == CameraRenderBackend::Vision
-                ? plan.vision_views : plan.native_views;
-            const bool media = camera->render_backend == CameraRenderBackend::Vision &&
-                               camera_uses_vision_media(*camera);
-            views.push_back({scene_handle, handle, camera->vision_render_mode, media});
+            plan.views.push_back({scene_handle, handle, camera->vision_render_mode, camera_uses_vision_media(*camera)});
         }
     }
     return plan;
 }
 
 std::optional<OpticsSystem::LockedRenderView> OpticsSystem::lock_render_view(
-    const RenderView& view, CameraRenderBackend backend) {
+    const RenderView& view) {
     // Scene structure stays locked, while camera values are copied under a
     // short read lock. UI presentation and input must not wait for a GPU frame.
     auto scene = Corona::find_scene(view.scene_handle);
@@ -3258,7 +3119,7 @@ std::optional<OpticsSystem::LockedRenderView> OpticsSystem::lock_render_view(
         std::find(scene->camera_handles.begin(), scene->camera_handles.end(), view.camera_handle) ==
             scene->camera_handles.end()) return std::nullopt;
     auto camera = Corona::find_camera(view.camera_handle);
-    if (!camera || camera->render_backend != backend ||
+    if (!camera ||
         (!camera->surface && !has_pending_screenshot(view.camera_handle))) return std::nullopt;
     return LockedRenderView{scene, *camera};
 }
@@ -3271,16 +3132,21 @@ void OpticsSystem::optics_pipeline(float frame_count, uint64_t frame_index) {
     // only small camera/environment values are copied for a coherent frame.
     const auto plan = build_render_frame_plan();
     if (env_flag_enabled("CORONA_OPTICS_MEASURE_RENDER_TIME")) {
-        CFW_LOG_INFO("OpticsFrameRoutes frame={} native_views={} vision_views={}",
-                     frame_index, plan.native_views.size(), plan.vision_views.size());
+        CFW_LOG_INFO("OpticsFrameRoutes frame={} vision_views={}", frame_index, plan.views.size());
     }
-    if (!plan.native_views.empty()) run_native_frame(frame_count, frame_index, plan.native_views);
-    if (!plan.vision_views.empty() && vision_initialized_) {
-        run_vision_frame(frame_count, frame_index, plan.vision_views);
+    if (!plan.views.empty()) {
+        if (!vision_initialized_ && std::chrono::steady_clock::now() >= next_vision_init_attempt_ &&
+            !init_vision_lazy()) {
+            next_vision_init_attempt_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        }
+        if (vision_initialized_) {
+            run_vision_frame(frame_count, frame_index, plan.views);
+        } else {
+            for (const auto& view : plan.views) fail_pending_screenshots(view.camera_handle);
+        }
     } else if (vision_initialized_) {
-        // Native-only frames must not load, synchronize or render a Vision scene.
         // Keep on-demand capture resources until the next requested capture.
-        if (!plan.has_vision_cameras && active_vision_runtime_key_) {
+        if (!plan.has_cameras && active_vision_runtime_key_) {
             clear_vision_runtimes();
         } else {
             evict_idle_vision_runtimes(frame_index);
@@ -3307,7 +3173,7 @@ void OpticsSystem::run_native_frame(float frame_count, uint64_t frame_index,
     auto& tonemap = *hardware_->tonemapPipeline;
     for (const auto& view : views) {
         if (!ensure_native_frame_slot()) continue;
-        auto locked = lock_render_view(view, CameraRenderBackend::Native);
+        auto locked = lock_render_view(view);
         if (!locked) continue;
         const auto cam_handle = view.camera_handle;
         const CameraDevice* camera = &locked->camera;
@@ -5165,9 +5031,6 @@ void OpticsSystem::shutdown() {
         if (screenshot_request_sub_id_ != 0) {
             event_bus->unsubscribe(screenshot_request_sub_id_);
         }
-        if (backend_switch_sub_id_ != 0) {
-            event_bus->unsubscribe(backend_switch_sub_id_);
-        }
 
         if (residency_sub_id_ != 0) {
             event_bus->unsubscribe(residency_sub_id_);
@@ -6025,7 +5888,7 @@ void OpticsSystem::run_vision_frame(float frame_count, uint64_t frame_index,
         VisionCameraFeedback feedback;
         std::optional<std::string> fallback_settings;
         {
-            auto locked = lock_render_view(view, CameraRenderBackend::Vision);
+            auto locked = lock_render_view(view);
             if (profile_frame) acquired = std::chrono::steady_clock::now();
             if (!locked || locked->camera.vision_render_mode != view.vision_mode ||
                 camera_uses_vision_media(locked->camera) != runtime.participating_media) return std::nullopt;

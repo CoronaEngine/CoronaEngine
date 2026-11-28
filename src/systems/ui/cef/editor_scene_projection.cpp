@@ -69,7 +69,6 @@ nlohmann::json camera_to_json(const NativeEditorCamera& camera) {
     item["width"] = camera.width;
     item["height"] = camera.height;
     item["output_mode"] = camera.engine_camera ? camera.engine_camera->get_output_mode() : "final_color";
-    item["render_backend"] = camera.engine_camera ? camera.engine_camera->get_render_backend() : "native";
     item["vision_render_mode"] = camera.engine_camera ? camera.engine_camera->get_vision_render_mode() : "path_tracing";
     item["vision_spp"] = camera.vision_spp;
     item["vision_max_depth"] = camera.vision_max_depth;

@@ -2147,10 +2147,8 @@ bool Corona::API::Camera::save_screenshot_sync(const std::string& path) const {
     auto promise = std::make_shared<std::promise<bool>>();
     auto future = promise->get_future();
 
-    // Cold captures may need shader compilation or a full-scene shadow BVH.
-    // Use the same deadline in caller and queue; native preparation can exceed
-    // the old 10-second limit even while GPU execution remains responsive.
-    const auto timeout = std::chrono::seconds(get_render_backend() == "vision" ? 120 : 30);
+    // The caller and the render queue share a deadline that allows for cold Vision compilation.
+    const auto timeout = std::chrono::seconds(120);
     const auto deadline = std::chrono::steady_clock::now() + timeout;
 
     if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
@@ -2236,14 +2234,6 @@ std::string Corona::API::Camera::get_output_mode() const {
         }
     }
     return "final_color";
-}
-
-void Corona::API::Camera::set_render_backend(const std::string& mode) {
-    Corona::API::set_render_backend(mode, handle_);
-}
-
-std::string Corona::API::Camera::get_render_backend() const {
-    return Corona::API::get_render_backend(handle_);
 }
 
 void Corona::API::Camera::set_vision_render_mode(const std::string& mode) {
@@ -2475,37 +2465,6 @@ void set_default_surface(void* surface) {
 
 void* get_default_surface() {
     return g_default_surface.load(std::memory_order_relaxed);
-}
-
-void set_render_backend(const std::string& mode, EntityId camera_handle) {
-    const auto resolved_handle = resolve_camera_handle(camera_handle);
-    if (resolved_handle == 0) {
-        CFW_LOG_WARNING("[set_render_backend] No camera is available");
-        return;
-    }
-
-    const int backend = mode == "vision" ? 1 : 0;
-
-    CameraStateUpdateCommand command{};
-    command.camera_handle = resolved_handle;
-    command.fields = CameraStateUpdateField::RenderBackend;
-    command.render_backend =
-        backend == 1 ? CameraRenderBackend::Vision : CameraRenderBackend::Native;
-    SharedDataHub::instance().enqueue_camera_state_update(command);
-
-    if (auto* event_bus = Kernel::KernelContext::instance().event_bus()) {
-        event_bus->publish<Events::RenderBackendSwitchEvent>({backend, resolved_handle});
-    }
-}
-
-std::string get_render_backend(EntityId camera_handle) {
-    const auto resolved_handle = resolve_camera_handle(camera_handle);
-    if (resolved_handle != 0) {
-        // 读快照 + 待处理命令（快照 ⊕ pending）：外部线程不再拿相机槽锁。
-        const auto camera_view = SharedDataHub::instance().camera_view(resolved_handle);
-        return camera_view.render_backend == CameraRenderBackend::Vision ? "vision" : "native";
-    }
-    return "native";
 }
 
 void set_vision_render_mode(const std::string& mode, EntityId camera_handle) {

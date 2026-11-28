@@ -341,11 +341,6 @@ enum class CameraOutputMode : uint8_t {
     ShadowMask,
 };
 
-enum class CameraRenderBackend : uint8_t {
-    Native,
-    Vision,
-};
-
 enum class CameraVisionRenderMode : uint8_t {
     PathTracing,
     SVGF,
@@ -372,7 +367,6 @@ struct CameraDevice {
     std::uint32_t width{1920};
     std::uint32_t height{1080};
     CameraOutputMode output_mode{CameraOutputMode::FinalColor};
-    CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     // PT produces one sample per pixel per frame; REBLUR owns temporal history.
     bool vision_denoise{true};
@@ -460,7 +454,6 @@ struct CameraSnapshotRow {
     int view_height{540};
     float move_speed{1.0f};
     CameraOutputMode output_mode{CameraOutputMode::FinalColor};
-    CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{true};
     CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
@@ -695,7 +688,6 @@ enum class CameraStateUpdateField : std::uint32_t {
     Surface = 1u << 0,
     Size = 1u << 1,
     OutputMode = 1u << 2,
-    RenderBackend = 1u << 3,
     ViewState = 1u << 4,
     VisionRenderMode = 1u << 5,
     VisionDenoise = 1u << 8,
@@ -735,7 +727,6 @@ struct CameraStateUpdateCommand {
     float near_plane{0.1f};
     float far_plane{100.0f};
     CameraOutputMode output_mode{CameraOutputMode::FinalColor};
-    CameraRenderBackend render_backend{CameraRenderBackend::Native};
     CameraVisionRenderMode vision_render_mode{CameraVisionRenderMode::PathTracing};
     bool vision_denoise{true};
     CameraVisionDenoiser vision_denoiser{CameraVisionDenoiser::ReBLUR};
