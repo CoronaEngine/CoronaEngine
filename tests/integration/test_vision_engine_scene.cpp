@@ -8,6 +8,7 @@
 #include "base/sensor/sensor.h"
 #include "hotfix/module_interface.h"
 #include "vision/vision_camera_adapter.h"
+#include "vision/vision_light_adapter.h"
 #include <corona/resource/resource_manager.h>
 #include <corona/resource/types/scene.h>
 #include <nlohmann/json.hpp>
@@ -99,6 +100,27 @@ struct VisionEngineSceneTest {
         expect(!hub.camera_row(camera) && hub.camera_row(other).has_value(),
                "the next published snapshot must remove released cameras");
         destroy_test_camera(other);
+    }
+    static void check_atmospheric_lighting_state() {
+        EnvironmentDevice env{};
+        env.sun_position = {0.f, 0.f, 2.f};
+        env.sun_intensity = 0.f;
+        env.sky_intensity = 3.f;
+        const auto sky = Vision::make_vision_lighting_state(env);
+        expect(sky.mode == Vision::VisionLightingMode::Atmosphere && sky.sky_intensity == 3.f &&
+                   sky.sun_direction == std::array<float, 3>{0.f, 0.f, 1.f},
+               "sky-only lighting must retain the transformed sun direction and sky scale");
+        env.sky_intensity = 4.f;
+        expect(Vision::make_vision_lighting_state(env) != sky, "sky intensity changes must reach the lighting update");
+        env.sky_intensity = 3.f;
+        env.sun_position.z = -2.f;
+        expect(Vision::make_vision_lighting_state(env) != sky, "moving a disabled sun must update an active sky");
+        env.sky_intensity = 0.f;
+        expect(Vision::vision_lighting_mode(env) == Vision::VisionLightingMode::None, "zero sky must disable the atmosphere");
+        env.sky_intensity = 3.f;
+        env.authored_lighting = std::make_shared<const nlohmann::json>(nlohmann::json::object());
+        expect(Vision::vision_lighting_mode(env) == Vision::VisionLightingMode::Authored,
+               "authored lighting must take precedence over the procedural sky");
     }
     static void check_mode_api() {
         auto& hub = SharedDataHub::instance();
@@ -1336,8 +1358,89 @@ struct VisionEngineSceneTest {
         pipeline.remove_view_context(402u);
         std::cout << "PASS: hotfix rebuilds base and camera GPU kernels while retaining view state\n";
     }
+    static void check_sun_direction_update(OpticsSystem& system, vision::Pipeline& pipeline, EnvironmentDevice env) {
+        using namespace vision;
+        using namespace ocarina;
+        auto& runtime = system.active_vision_runtime();
+        auto sync = [&] { expect(system.sync_engine_vision_lighting(runtime, env), "lighting update failed"); };
+        env.sun_position = {1.f, .4f, 0.f};
+        env.sun_intensity = 10.f;
+        sync();
+        const bool accumulate = pipeline.renderer().integrator()->impl_type() == "pt";
+        for (auto id : {701u, 702u}) {
+            expect(system.prepare_vision_camera_view(runtime, id, 16, 16, false, accumulate), "prepare sun direction test view");
+            render(pipeline, "sun-direction-before-edit");
+        }
+        pipeline.activate_view_context(0u);
+        auto compile_probe = [&] {
+            const auto& sampler = pipeline.renderer().light_sampler();
+            const auto sky = sampler->env_index();
+            expect(sampler->light_num() == 2u, "fixture needs one sun and one environment");
+            ocarina::Kernel kernel = [&](BufferVar<float4> out) {
+                SampledWavelengths swl{3u};
+                auto n = make_float3(0.f, 1.f, 0.f);
+                LightSampleContext ref{make_float3(0.f), n, n};
+                auto u = make_float2(.34f, .68f);
+                auto sun = sampler->sample_wi(SampledLight{1u - sky, 1.f}, ref, u, swl);
+                auto sample = sampler->sample_wi(SampledLight{sky, 1.f}, ref, u, swl);
+                auto miss = sampler->evaluate_miss_wi(ref, normalize(make_float3(1.f, .4f, 0.f)), swl);
+                out.write(0u, make_float4(normalize(sun.p_light - ref.pos), miss.pdf));
+                out.write(1u, make_float4(miss.L.vec3(), sample.eval.pdf));
+                out.write(2u, make_float4(normalize(sample.p_light - ref.pos), 1.f));
+            };
+            return pipeline.device().compile(kernel, "sun-direction-probe");
+        };
+        auto output = pipeline.device().create_buffer<float4>(3);
+        auto read = [&](auto& shader) {
+            std::array<float4, 3> values{};
+            pipeline.stream() << shader(output).dispatch(1u) << output.download(values.data()) << synchronize() << commit();
+            return values;
+        };
+        auto shader = compile_probe();
+        auto before = read(shader);
+        auto original_sky = pipeline.scene().light_manager().env_light();
+        env.sun_position.x = -1.f;
+        sync();
+        expect(pipeline.scene().light_manager().env_light() == original_sky, "direction edit must preserve the sky");
+        for (auto id : {701u, 702u}) {
+            expect(pipeline.activate_view_context(id) && pipeline.frame_index() == 0u, "each view must discard old lighting");
+        }
+        // Compare the first rendered frame, with the pre-edit reservoirs still allocated.
+        auto first_frame = [&] {
+            expect(pipeline.activate_view_context(701u) && pipeline.frame_index() == 0u, "expected fresh view history");
+            pipeline.upload_data();
+            pipeline.display(1.0 / 60.0);
+            std::vector<float4> pixels(pipeline.pixel_num());
+            pipeline.stream() << pipeline.frame_buffer()->rt_buffer().device_buffer().download(pixels.data())
+                              << synchronize() << commit();
+            pipeline.activate_view_context(0u);
+            return pixels;
+        };
+        const auto live_pixels = first_frame();
+        auto after = read(shader);
+        expect(before[0].x > .9f && after[0].x < -.9f && before[0].w > after[0].w &&
+                   before[1].x > after[1].x, "compiled shader must see the rotated sun, radiance and sky PDF");
+        // Force a topology change and compare against fresh tables, including sampling at a fixed random variate.
+        const float sky_scale = env.sky_intensity;
+        env.sky_intensity = 0.f;
+        sync();
+        env.sky_intensity = sky_scale;
+        sync();
+        auto fresh_shader = compile_probe();
+        auto fresh = read(fresh_shader);
+        for (size_t i = 0; i < fresh.size(); ++i)
+            for (size_t c = 0; c < 4; ++c)
+                expect(std::abs(fresh[i][c] - after[i][c]) < 1e-5f, "live lighting must match fully rebuilt lighting");
+        const auto rebuilt_pixels = first_frame();
+        for (size_t i = 0; i < live_pixels.size(); ++i)
+            for (size_t c = 0; c < 3; ++c)
+                expect(std::abs(live_pixels[i][c] - rebuilt_pixels[i][c]) < 1e-5f,
+                       "first frame after the edit must match fully rebuilt lighting");
+        std::cout << "PASS: " << pipeline.renderer().integrator()->impl_type() << " sun direction, sampling/PDF and view histories\n";
+    }
+
     static void run(bool shared_display_only = false, bool hotfix_only = false,
-                    bool imported_emission_only = false) {
+                    bool imported_emission_only = false, bool sun_direction_only = false) {
         namespace fs = std::filesystem;
         const auto base = fs::current_path() / "engine-scene-test-assets";
         fs::create_directories(base);
@@ -1363,7 +1466,7 @@ struct VisionEngineSceneTest {
         { auto w = Corona::find_geometry(geometry); w->model_resource_handle = model; w->transform_handle = transform; }
         { auto w = Corona::find_optics(optics); w->geometry_handle = geometry; }
         { auto w = hub.try_profile(profile); w->geometry_handle = geometry; w->optics_handle = optics; }
-        { auto w = Corona::find_actor(actor); w->profile_handles = {profile}; }
+        { auto* profiles = hub.try_profiles(actor); profiles->handles = {profile}; }
         { auto* w = hub.try_environment(environment); w->sun_intensity = 0; w->sky_intensity = 1; }
         { auto w = Corona::find_scene(scene); w->actor_handles = {actor}; w->environment = environment; }
         if (imported_emission_only) {
@@ -1390,7 +1493,7 @@ struct VisionEngineSceneTest {
             queue.push(visible);
             for (const auto& update : queue.drain()) {
                 auto w = Corona::find_optics(update.optics_handle);
-                apply_optics_update(*w, update);
+                apply_optics_update(*w, *hub.try_visibility(update.optics_handle), update);
             }
             auto* env = hub.try_environment(environment);
             env->sky_intensity = 0.f;
@@ -1420,6 +1523,12 @@ struct VisionEngineSceneTest {
                 Vision::sync_vision_camera(*restir, camera);
                 render(*restir, "Imported-emission-ReSTIR");
                 std::cout << "PASS: imported emission survives visibility and lights PT/ReSTIR without a sky\n";
+            } else if (sun_direction_only) {
+                check_sun_direction_update(system, *pt, *hub.try_environment(environment));
+                system.apply_vision_render_mode(CameraVisionRenderMode::ReSTIR);
+                auto restir = vision::Global::instance().pipeline_shared();
+                Vision::sync_vision_camera(*restir, camera);
+                check_sun_direction_update(system, *restir, *hub.try_environment(environment));
             } else if (shared_display_only) {
                 check_shared_display(*pt);
             } else {
@@ -1456,7 +1565,7 @@ struct VisionEngineSceneTest {
         hub.destroy_geometry(geometry);
         hub.destroy_transform(transform);
         hub.destroy_model_resource(model);
-        if (!shared_display_only && !hotfix_only && !imported_emission_only) {
+        if (!shared_display_only && !hotfix_only && !imported_emission_only && !sun_direction_only) {
             // Exercise the embedded base fallback after removing the fixture's
             // geometry/environment, so its deterministic output is black.
             vision::Global::instance().set_device(&device);
@@ -1480,6 +1589,10 @@ int main(int argc, char** argv) {
         }
     } runtime_cleanup;
     try {
+        if (argc == 2 && std::string(argv[1]) == "--sun-direction") {
+            Corona::Systems::VisionEngineSceneTest::run(false, false, false, true);
+            return 0;
+        }
         if (argc == 2 && std::string(argv[1]) == "--hotfix") {
             Corona::Systems::VisionEngineSceneTest::run(false, true, false);
             return 0;
@@ -1490,6 +1603,7 @@ int main(int argc, char** argv) {
             Corona::Systems::VisionEngineSceneTest::run(false, false, true);
             return 0;
         }
+        Corona::Systems::VisionEngineSceneTest::check_atmospheric_lighting_state();
         Corona::Systems::VisionEngineSceneTest::check_camera_command_snapshots();
         Corona::Systems::VisionEngineSceneTest::check_mode_api();
         Corona::Systems::VisionEngineSceneTest::check_accumulation_api();

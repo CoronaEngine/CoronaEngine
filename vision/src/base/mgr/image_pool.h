@@ -11,6 +11,8 @@
 #include <set>
 
 namespace vision {
+class AtmosphericSky;
+class Pipeline;
 class ImagePool {
 public:
     // Source-scoped CPU images. Descriptor hashes include decoding options;
@@ -21,6 +23,7 @@ private:
     map<uint64_t, RegistrableTexture3D> textures_;
     std::set<uint64_t> compressed_textures_;
     SP<SourceCache> source_cache_;
+    SP<AtmosphericSky> atmospheric_sky_;
     static ImagePool *s_image_pool;
     ImagePool(const ImagePool &) = delete;
     ImagePool(ImagePool &&) = delete;
@@ -32,6 +35,7 @@ public:
     void set_source_cache(SP<SourceCache> cache) { source_cache_ = ocarina::move(cache); }
     // Engine bridges may supply already decoded images from their resource cache.
     void register_source(const ShaderNodeDesc& desc, Image image);
+    [[nodiscard]] DataWrap atmospheric_sky_slot(Pipeline &pipeline, float3 toward_sun);
     static ImagePool &instance();
     static void destroy_instance();
     [[nodiscard]] RegistrableTexture3D load_texture(const ShaderNodeDesc &desc,

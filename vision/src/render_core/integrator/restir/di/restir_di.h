@@ -46,6 +46,8 @@ class ReSTIRDI final : private Toolkit {
     Buffer<float> probabilities_;
     Buffer<uint> light_bases_;
     Buffer<uint2> light_alias_;
+    vector<float> lit_environment_probabilities_;
+    bool environment_lit_{};
     Shader<void()> prepare_light_geometry_;
     Shader<void(uint)> prepare_surface_, presample_;
     Shader<void(uint, uint)> candidates_, shade_;
@@ -58,14 +60,34 @@ class ReSTIRDI final : private Toolkit {
         return result;
     }
 
+    void upload_environment_selection(bool lit) {
+        auto probabilities = lit_environment_probabilities_;
+        if (!lit && probabilities.back() < 1.f) {
+            const float emitter_mass = 1.f - probabilities.back();
+            probabilities.back() = 0.f;
+            for (float &p : probabilities) p /= emitter_mass;
+        }
+        AliasTable alias(pipeline()->bindless_array());
+        alias.build(probabilities);
+        vector<uint2> entries;
+        for (const auto &entry : alias.host_table())
+            entries.push_back(make_uint2(bit_cast<uint>(entry.prob), entry.alias));
+        probabilities_.upload_immediately(probabilities.data());
+        light_alias_.upload_immediately(entries.data());
+        environment_lit_ = lit;
+    }
+
     void prepare_lights() {
         const auto &instances = scene().instances();
         vector<uint> bases(instances.size(), InvalidUI32);
         vector<uint4> primitives;
         vector<float> probabilities;
         const auto *environment = scene().light_manager().env_light();
-        const bool has_environment = environment && !environment->match(LightType::DeltaDirection) &&
-                                     any(environment->average() != make_float3(0.f));
+        const bool eligible = environment && !environment->match(LightType::DeltaDirection);
+        const bool lit = eligible && any(environment->average() != make_float3(0.f));
+        // A textured sky can become entirely dark and brighten again in the same binding.
+        const bool has_environment = lit || (eligible && environment->scale_.hv() > 0.f &&
+                                              !environment->color_->is_uniform());
         for (uint i = 0; i < instances.size(); ++i) {
             const auto &shape = instances[i];
             if (!shape->has_emission()) continue;
@@ -93,23 +115,20 @@ class ReSTIRDI final : private Toolkit {
             ++directional_light_count_;
         }
         probabilities = restir_di::light_selection_probabilities(probabilities, has_environment);
+        light_count_ = static_cast<uint>(probabilities.size());
         if (has_environment) {
             environment_index_ = static_cast<uint>(primitives.size());
             primitives.push_back(make_uint4(InvalidUI32));
-            // Reuse the framework's CPU alias builder; the uploaded snapshot owns
-            // its entries after this temporary builder is destroyed.
-            AliasTable alias(pipeline()->bindless_array());
-            alias.build(probabilities);
-            vector<uint2> entries;
-            for (const auto &entry : alias.host_table())
-                entries.push_back(make_uint2(bit_cast<uint>(entry.prob), entry.alias));
-            light_alias_ = uploaded(entries, "ReSTIR DI light selection alias");
+            lit_environment_probabilities_ = std::move(probabilities);
+            light_alias_ = device().create_buffer<uint2>(light_count_, "ReSTIR DI light selection alias");
+            probabilities_ = device().create_buffer<float>(light_count_, "ReSTIR DI light probabilities");
+            upload_environment_selection(lit);
+        } else {
+            probabilities_ = uploaded(probabilities, "ReSTIR DI light probabilities");
         }
-        light_count_ = static_cast<uint>(probabilities.size());
         light_primitives_ = uploaded(primitives, "ReSTIR DI emitter primitive IDs");
         light_geometry_ = device().create_buffer<restir_di::LightTriangleGeometry>(
             light_count_, "ReSTIR DI emitter geometry cache");
-        probabilities_ = uploaded(probabilities, "ReSTIR DI light probabilities");
         light_bases_ = uploaded(bases, "ReSTIR DI emitter offsets");
     }
 
@@ -440,6 +459,10 @@ public:
     }
 
     [[nodiscard]] CommandBatch dispatch(uint frame) {
+        if (frame == 0u && environment_index_ != InvalidUI32) {
+            const bool lit = any(scene().light_manager().env_light()->average() != make_float3(0.f));
+            if (lit != environment_lit_) upload_environment_selection(lit);
+        }
         const uint current = 1u + (frame & 1u);
         const uint3 slices = make_uint3(0u, 3u - current, current);
         const bool has_history = previous_frame_ != InvalidUI32 && frame > 0u && previous_frame_ + 1u == frame;

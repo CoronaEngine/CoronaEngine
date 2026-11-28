@@ -86,7 +86,7 @@ void AliasTable::prepare() noexcept {
 }
 void AliasTable::build(vector<float> weights) noexcept {
     double sum = std::reduce(weights.cbegin(), weights.cend(), 0.0);
-    double ratio = static_cast<double>(weights.size()) / sum;
+    double ratio = sum > 0.0 ? static_cast<double>(weights.size()) / sum : 0.0;
     static thread_local vector<uint> over;
     static thread_local vector<uint> under;
     over.clear();

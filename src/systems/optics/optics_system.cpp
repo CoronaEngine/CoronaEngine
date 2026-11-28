@@ -5342,7 +5342,7 @@ Vision::VisionBuildResult OpticsSystem::rebuild_vision_scene(VisionPipelineRunti
         // Rebind the engine's infinite lighting after a complete topology
         // replacement; light buffers/sampler state must be prepared together.
         const auto env = engine_vision_environment();
-        Vision::setup_vision_lights(scene, env);
+        Vision::setup_vision_lights(*pipeline, env);
         runtime.engine_lighting = Vision::make_vision_lighting_state(env);
 
         // Keep framebuffer/sensor allocations intact during topology changes.
@@ -5431,14 +5431,23 @@ bool OpticsSystem::sync_engine_vision_lighting(VisionPipelineRuntime& runtime, c
         runtime.wait_for_geometry_users();
         pipeline.activate_view_context(0u);
         auto& scene = pipeline.scene();
-        Vision::setup_vision_lights(scene, env);
-        scene.prepare();
-        // Force the existing all-view resource refresh even when bounds did not
-        // change: new light tables must be uploaded before any view recompiles.
-        pipeline.refresh_world_bounds_dependents(true);
+        const bool supports_sun_update = runtime.mode == CameraVisionRenderMode::PathTracing ||
+                                         runtime.mode == CameraVisionRenderMode::ProgressivePathTracing ||
+                                         runtime.mode == CameraVisionRenderMode::ReSTIR;
+        if (supports_sun_update && runtime.engine_lighting &&
+            Vision::try_update_vision_sun_direction(pipeline, *runtime.engine_lighting, lighting)) {
+            pipeline.invalidate();
+            pipeline.invalidate_all_view_contexts();
+        } else {
+            Vision::setup_vision_lights(pipeline, env);
+            scene.prepare();
+            pipeline.refresh_world_bounds_dependents(true);
+        }
         runtime.engine_lighting = lighting;
         return true;
     } catch (const std::exception& e) {
+        // A partial upload must be rebuilt even if the next request restores the old direction.
+        runtime.engine_lighting.reset();
         CFW_LOG_ERROR("Vision environment synchronization failed: {}", e.what());
         return false;
     }
@@ -6141,7 +6150,7 @@ bool OpticsSystem::initialize_engine_built_vision_runtime(VisionPipelineRuntime&
         sync_logical_instances_from_pipeline_scene(*scene_resource, scene);
 
         const auto env = engine_vision_environment();
-        Vision::setup_vision_lights(scene, env);
+        Vision::setup_vision_lights(*pipeline, env);
         pipeline->prepare();
         // Camera GPU buffers exist only after prepare().
         if (const auto camera = active_scene_camera_values()) {

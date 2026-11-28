@@ -72,12 +72,15 @@ public:
         conditional_v_weights_.upload_immediately();
     }
     void allocate(uint2 res) noexcept override {
-        marginal_.allocate(res.y);
         uint num = res.x * res.y;
+        // A change of radiance at the same grid size only replaces the contents.
+        if (conditional_v_weights_.has_registered() && conditional_v_weights_.length().hv() == num &&
+            marginal_.func_.length().hv() == res.y) return;
+        marginal_.allocate(res.y);
         conditional_v_tables_.device_buffer() = pipeline()->device().create_buffer<AliasEntry>(num, "AliasTable2D::conditional_v_tables_");
         conditional_v_weights_.device_buffer() = pipeline()->device().create_buffer<float>(num, "AliasTable2D::conditional_v_weights_");
         conditional_v_tables_.register_self();
-        conditional_v_tables_.register_self();
+        conditional_v_weights_.register_self();
     }
     void prepare() noexcept override {
         marginal_.prepare();

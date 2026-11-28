@@ -4,6 +4,7 @@
 
 #include "image_pool.h"
 #include "pipeline.h"
+#include "base/illumination/atmospheric_sky.h"
 #include "global.h"
 #include "rhi/device.h"
 #include "core/util/switch_profile.h"
@@ -33,6 +34,35 @@ bool pack_lossless_unorm8(const float *source, size_t count, uint8_t *target = n
 void ImagePool::register_source(const ShaderNodeDesc& desc, Image image) {
     if (!source_cache_) source_cache_=std::make_shared<SourceCache>();
     source_cache_->try_emplace(desc.hash(),std::make_shared<const Image>(std::move(image)));
+}
+
+DataWrap ImagePool::atmospheric_sky_slot(Pipeline &pipeline, float3 toward_sun) {
+    const DataWrap node{{"type", "image"}, {"param", {{"fn", ":vision:atmospheric-sky"}, {"color_space", "linear"}}}};
+    ShaderNodeDesc desc;
+    desc.init(ParameterSet{node});
+    const auto hash = desc.hash();
+    if (!atmospheric_sky_) atmospheric_sky_ = make_shared<AtmosphericSky>();
+    auto &geometry = pipeline.geometry();
+    auto &bindings = geometry.has_gpu_resource() ? geometry.bindless_array() : pipeline.bindless_array();
+    const bool bake = !atmospheric_sky_->matches(toward_sun);
+    const auto current = textures_.find(hash);
+    const bool resident = current != textures_.end() && current->second.bindless_array() == &bindings;
+    if (bake || !resident) {
+        if (bake) {
+            auto image = std::make_shared<const Image>(atmospheric_sky_->bake(pipeline, toward_sun));
+            if (!source_cache_) source_cache_ = std::make_shared<SourceCache>();
+            source_cache_->insert_or_assign(hash, image);
+            if (resident) {
+                auto &host = current->second.host_tex();
+                std::memcpy(host.pixel_ptr(), image->pixel_ptr(), image->size_in_bytes());
+                host.average<4>() = image->average<4>();
+            }
+        }
+        auto &texture = obtain_texture(desc, bindings, pipeline.device());
+        texture.upload_immediately();
+        atmospheric_sky_->mark_baked(toward_sun);
+    }
+    return DataWrap{{"channels", "xyz"}, {"node", node}};
 }
 
 RegistrableTexture3D ImagePool::load_texture(const ShaderNodeDesc &desc,
